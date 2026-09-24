@@ -3,7 +3,8 @@
 // selection is picked up on entry. A comment on the picked cells is sent to the
 // agent (via window.ipc, keyed by cell UUID) with the same keys as the chat box:
 // Enter sends (queued if the agent is busy), Cmd+Enter sends now, Shift+Enter
-// is a newline.
+// is a newline. Only Cmd+Shift+E toggles the mode: Esc is reserved for stopping
+// the agent, so a stray Esc never does two things.
 (() => {
   if (window.__annotate) return;
 
@@ -45,7 +46,7 @@
     bar.innerHTML = `
       <div class="row"><span class="status"></span></div>
       <textarea placeholder="Comment for Claude on the selected cells…"></textarea>
-      <div class="row"><span class="status">↩ send · ⌘↩ send now · ⇧↩ newline · Esc exit</span>
+      <div class="row"><span class="status">↩ send · ⌘↩ send now · ⇧↩ newline · ⌘⇧E exit</span>
         <button class="exit">Done</button><button class="primary send">Send</button></div>`;
     document.head.append(style);
     document.body.append(frame, bar);
@@ -104,7 +105,6 @@
       (e) => {
         if (e.key.toLowerCase() === "e" && e.metaKey && e.shiftKey) return (e.preventDefault(), set(!on()));
         if (!on()) return;
-        if (e.key === "Escape") return (e.preventDefault(), set(false));
         if (!bar.contains(e.target)) return;
         // Typing a comment must never trigger notebook shortcuts; defaults (newline) still apply.
         e.stopPropagation();

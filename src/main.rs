@@ -489,7 +489,7 @@ impl Render for Workspace {
                                     .child(
                                         button("annotate-toggle")
                                             .when(self.annotating, |d| d.bg(rgb(0x8a6d1f)))
-                                            .child(if self.annotating { "◉ Annotating (Esc exits)" } else { "◎ Annotate (⌘⇧E)" })
+                                            .child(if self.annotating { "◉ Annotating (⌘⇧E exits)" } else { "◎ Annotate (⌘⇧E)" })
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.toggle_annotation(&ToggleAnnotation, window, cx)
                                             })),
