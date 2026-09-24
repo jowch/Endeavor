@@ -1,14 +1,13 @@
 //! Endeavor: app-owned Julia running Pluto + PlutoMCP, the live Pluto frontend in a
 //! child webview, and an ACP agent panel wired to the same Pluto session over MCP.
 
-use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
-use std::process::{Child, Command, Stdio};
+use std::time::Duration;
 
 mod agent;
 mod annotate;
 mod outbox;
 mod pluto;
+mod runtime;
 
 use agent::AgentEvent;
 use agent_client_protocol::Responder;
@@ -27,54 +26,7 @@ use gpui_component::text::TextView;
 use gpui_component::{Root, Theme, ThemeMode};
 use gpui_wry::WebView;
 use raw_window_handle::HasWindowHandle;
-
-struct Runtime {
-    // Holding the child holds its stdin; boot.jl exits when stdin closes.
-    _julia: Child,
-    pluto_url: String,
-    mcp_url: String,
-}
-
-/// Start the app-owned Julia and block until boot.jl reports `READY`.
-fn startruntime() -> Result<Runtime, String> {
-    // ponytail: dev-tree paths; resolve from the .app bundle's resources when packaging.
-    let root = env!("CARGO_MANIFEST_DIR");
-    // ponytail: ENDEAVOR_JULIA is the "use my Julia" opt-in; the managed download (§11) comes next.
-    let julia = std::env::var("ENDEAVOR_JULIA").unwrap_or_else(|_| "julia".into());
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    // Trailing ':' stacks the default depots (~/.julia) read-only behind ours.
-    let depot = format!("{home}/Library/Application Support/endeavor/depot:");
-
-    // Hold both listeners at once so the OS can't hand out the same port twice.
-    let pluto = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let mcp = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let ports = [&pluto, &mcp].map(|l| l.local_addr().unwrap().port().to_string());
-    drop((pluto, mcp));
-
-    let mut child = Command::new(&julia)
-        .arg(format!("--project={root}/runtime"))
-        .arg(format!("{root}/runtime/boot.jl"))
-        .args(ports)
-        .env("JULIA_DEPOT_PATH", depot)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|e| format!("couldn't start {julia}: {e}"))?;
-
-    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-    for line in lines.by_ref() {
-        let line = line.map_err(|e| e.to_string())?;
-        if let Some((pluto_url, mcp_url)) = line.strip_prefix("READY ").and_then(|r| r.split_once(' ')) {
-            let (pluto_url, mcp_url) = (pluto_url.to_owned(), mcp_url.to_owned());
-            // Keep draining stdout so a chatty Julia never blocks on a full pipe.
-            std::thread::spawn(move || lines.map_while(Result::ok).for_each(|l| println!("{l}")));
-            return Ok(Runtime { _julia: child, pluto_url, mcp_url });
-        }
-        println!("{line}");
-    }
-    Err("Julia exited before reporting READY (see stderr)".into())
-}
+use runtime::Runtime;
 
 enum Entry {
     User(SharedString),
@@ -116,6 +68,13 @@ struct Workspace {
     outbox: Outbox,
     annotating: bool,
     runtime: Option<Runtime>,
+    /// Booting or restarting Julia.
+    starting: bool,
+    /// Ports of the runtime that died, reused on restart so the agent reconnects.
+    last_ports: Option<[u16; 2]>,
+    /// Open notebooks (id, path) as last seen, to reopen after a restart.
+    last_notebooks: Vec<(String, String)>,
+    died_tx: UnboundedSender<String>,
 }
 
 impl Workspace {
@@ -157,27 +116,87 @@ impl Workspace {
         })
         .detach();
 
-        // First run instantiates + precompiles (~1 min); later launches are seconds.
-        let boot = cx.background_executor().spawn(async { startruntime() });
+        let (died_tx, mut died_rx) = futures::channel::mpsc::unbounded::<String>();
         cx.spawn(async move |this, cx| {
-            let runtime = match boot.await {
-                Ok(runtime) => runtime,
-                Err(e) => {
-                    let _ = this.update(cx, |this, cx| this.note(format!("Runtime failed: {e}"), cx));
-                    return;
+            while let Some(reason) = died_rx.next().await {
+                if this.update(cx, |this, cx| this.on_runtime_died(reason, cx)).is_err() {
+                    break;
                 }
-            };
-            let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
-            let (prompts, mut events) = agent::start(runtime.mcp_url.clone(), cwd);
-            let ok = this.update(cx, |this, cx| {
-                this.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
-                this.note(format!("Pluto ready · MCP {}\nConnecting to Claude…", runtime.mcp_url), cx);
-                this.prompts = Some(prompts);
-                this.runtime = Some(runtime);
-            });
-            if ok.is_err() {
-                return;
             }
+        })
+        .detach();
+
+        // Keep the open-notebook list fresh so a restart can reopen them.
+        // ponytail: 10 s poll of a loopback call; a Pluto open/close event would be exact.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(10)).await;
+            let Ok(url) = this.update(cx, |this, _| this.runtime.as_ref().map(|r| r.mcp_url.clone())) else { break };
+            let Some(url) = url else { continue };
+            let list = cx
+                .background_executor()
+                .spawn(async move { pluto::call_tool(&url, "list_notebooks", serde_json::json!({})) })
+                .await;
+            if let Ok(list) = list {
+                let _ = this.update(cx, |this, _| this.remember_notebooks(&list));
+            }
+        })
+        .detach();
+
+        let mut this = Self {
+            webview,
+            input,
+            scroll: ScrollHandle::new(),
+            entries: Vec::new(),
+            prompts: None,
+            outbox: Outbox::default(),
+            annotating: false,
+            runtime: None,
+            starting: false,
+            last_ports: None,
+            last_notebooks: Vec::new(),
+            died_tx,
+        };
+        this.boot(None, cx);
+        this
+    }
+
+    /// Start Julia, or restart it on the previous ports.
+    fn boot(&mut self, ports: Option<[u16; 2]>, cx: &mut Context<Self>) {
+        self.starting = true;
+        self.note(if ports.is_some() { "Restarting Julia…" } else { "Starting Julia…" }, cx);
+        let died = self.died_tx.clone();
+        // First run instantiates + precompiles (~1 min); later launches are seconds.
+        let boot = cx.background_executor().spawn(async move { runtime::start(ports, died) });
+        cx.spawn(async move |this, cx| {
+            let result = boot.await;
+            let _ = this.update(cx, |this, cx| this.on_booted(result, cx));
+        })
+        .detach();
+    }
+
+    fn on_booted(&mut self, result: Result<Runtime, String>, cx: &mut Context<Self>) {
+        self.starting = false;
+        let runtime = match result {
+            Ok(runtime) => runtime,
+            Err(e) => return self.note(format!("⚠ {e}"), cx),
+        };
+        self.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
+        let mcp_url = runtime.mcp_url.clone();
+        self.runtime = Some(runtime);
+        if self.prompts.is_none() {
+            self.note(format!("Pluto ready · MCP {mcp_url}\nConnecting to Claude…"), cx);
+            self.start_agent(mcp_url, cx);
+        } else {
+            self.note("Julia restarted.", cx);
+            self.reopen_notebooks(cx);
+        }
+    }
+
+    fn start_agent(&mut self, mcp_url: String, cx: &mut Context<Self>) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+        let (prompts, mut events) = agent::start(mcp_url, cwd);
+        self.prompts = Some(prompts);
+        cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
                 if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
                     break;
@@ -185,17 +204,52 @@ impl Workspace {
             }
         })
         .detach();
+    }
 
-        Self {
-            webview,
-            input,
-            scroll: ScrollHandle::new(),
-            entries: vec![Entry::Note("Starting Julia…".into())],
-            prompts: None,
-            outbox: Outbox::default(),
-            annotating: false,
-            runtime: None,
-        }
+    fn on_runtime_died(&mut self, reason: String, cx: &mut Context<Self>) {
+        self.last_ports = self.runtime.take().map(|r| r.ports);
+        self.note(format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts."), cx);
+    }
+
+    fn remember_notebooks(&mut self, list: &serde_json::Value) {
+        self.last_notebooks = list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|nb| Some((nb["notebook_id"].as_str()?.to_owned(), nb["path"].as_str()?.to_owned())))
+            .collect();
+    }
+
+    /// Reopen the notebooks that were open when Julia died, and show the one the
+    /// user was viewing. Pluto saves on every change, so the files are current.
+    fn reopen_notebooks(&mut self, cx: &mut Context<Self>) {
+        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        let url = self.webview.read(cx).raw().url().unwrap_or_default();
+        let viewed = viewed_notebook_id(&url).map(str::to_owned);
+        let viewed_path = self.last_notebooks.iter().find(|(id, _)| Some(id) == viewed.as_ref()).map(|(_, p)| p.clone());
+        let paths: Vec<String> = self.last_notebooks.iter().map(|(_, p)| p.clone()).collect();
+        let reopen = cx.background_executor().spawn(async move {
+            paths
+                .into_iter()
+                .filter_map(|path| {
+                    let result = pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path })).ok()?;
+                    Some((result["notebook_id"].as_str()?.to_owned(), path))
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let reopened = reopen.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some((id, _)) = reopened.iter().find(|(_, p)| Some(p) == viewed_path.as_ref()) {
+                    this.show_notebook(&id.clone(), cx);
+                }
+                if !reopened.is_empty() {
+                    this.note(format!("Reopened {} notebook(s) in safe preview.", reopened.len()), cx);
+                }
+                this.last_notebooks = reopened;
+            });
+        })
+        .detach();
     }
 
     /// Which notebook the user is looking at, so "the notebook" is unambiguous.
@@ -289,6 +343,7 @@ impl Workspace {
             // ponytail: a failed check stays silent; it's advisory, and a dead runtime reports itself.
             let Ok(list) = list.await else { return };
             let _ = this.update(cx, |this, cx| {
+                this.remember_notebooks(&list);
                 for warning in pluto::run_warnings(&list) {
                     this.note(format!("⚠ {warning}"), cx);
                 }
@@ -520,6 +575,14 @@ impl Render for Workspace {
                                             })),
                                     )
                                     .child(div().flex_1())
+                                    .when(self.runtime.is_none() && !self.starting, |d| {
+                                        d.child(
+                                            button("restart")
+                                                .bg(rgb(0x3a3a3c))
+                                                .child("↻ Restart Julia")
+                                                .on_click(cx.listener(|this, _, _, cx| this.boot(this.last_ports, cx))),
+                                        )
+                                    })
                                     .when(self.outbox.busy, |d| {
                                         d.child(
                                             button("stop")
