@@ -1,0 +1,13 @@
+[package]
+name = "endeavor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.6" }
+# runtime_shaders: compile Metal shaders at launch so builds don't need full Xcode.
+# font-kit: without it the macOS backend uses a no-op text system (no text renders).
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["runtime_shaders", "font-kit"] }
+gpui-wry = "=0.6.6"
+wry = { package = "lb-wry", version = "0.53.3" }
+raw-window-handle = "0.6"
