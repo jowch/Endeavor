@@ -18,6 +18,24 @@ use futures::{FutureExt, StreamExt};
 
 // ponytail: pinned adapter fetched by npx; ship it with the app when packaging.
 const AGENT_CMD: &str = "npx -y @agentclientprotocol/claude-agent-acp@0.81.2";
+// ponytail: dev-tree path; resolve from the .app bundle's resources when packaging.
+const PLUGIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/plugin");
+
+/// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
+/// skills and guards) always; the project's settings and CLAUDE.md (from the
+/// working directory) always; the user's personal setup (user settings, their MCP
+/// servers) only when they opt in with ENDEAVOR_PERSONAL_CLAUDE=1.
+// ponytail: env-var opt-in; becomes an app setting once there's a settings UI.
+fn session_options(personal: bool, plugin_dir: &str) -> serde_json::Value {
+    let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
+    serde_json::json!({
+        "claudeCode": { "options": {
+            "settingSources": sources,
+            "strictMcpConfig": !personal,
+            "plugins": [{ "type": "local", "path": plugin_dir }],
+        } }
+    })
+}
 
 pub enum Command {
     /// Start a turn. The UI sends this only when idle.
@@ -95,15 +113,10 @@ async fn run(
                 .and_then(|m| m.get("steering")?.get("supported")?.as_bool())
                 .unwrap_or(false);
             let pluto = McpServer::Sse(McpServerSse::new("pluto", mcp_url));
-            // The app's agent is its own environment, not the user's personal Claude
-            // Code setup: no user/project/local settings (hooks, output styles,
-            // plugins, CLAUDE.md) and no MCP servers beyond the ones passed here.
-            let isolated = serde_json::json!({
-                "claudeCode": { "options": { "settingSources": [], "strictMcpConfig": true } }
-            });
+            let personal = std::env::var_os("ENDEAVOR_PERSONAL_CLAUDE").is_some_and(|v| v == "1");
             let request = NewSessionRequest::new(cwd)
                 .mcp_servers(vec![pluto])
-                .meta(isolated.as_object().cloned());
+                .meta(session_options(personal, PLUGIN_DIR).as_object().cloned());
             let session = connection
                 .send_request(request)
                 .block_task()
@@ -169,4 +182,22 @@ async fn run(
             Ok(())
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_options;
+
+    #[test]
+    fn personal_setup_is_opt_in_and_the_app_plugin_always_loads() {
+        let default = &session_options(false, "/p")["claudeCode"]["options"];
+        assert_eq!(default["settingSources"], serde_json::json!(["project", "local"]));
+        assert_eq!(default["strictMcpConfig"], true);
+        assert_eq!(default["plugins"][0]["path"], "/p");
+
+        let personal = &session_options(true, "/p")["claudeCode"]["options"];
+        assert_eq!(personal["settingSources"], serde_json::json!(["user", "project", "local"]));
+        assert_eq!(personal["strictMcpConfig"], false);
+        assert_eq!(personal["plugins"][0]["path"], "/p");
+    }
 }
