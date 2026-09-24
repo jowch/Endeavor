@@ -39,6 +39,11 @@ pub fn pluto_tool(title: &str) -> Option<&str> {
 pub struct CellCodes(HashMap<String, String>);
 
 impl CellCodes {
+    /// The code last seen for a cell.
+    pub fn get(&self, cell_id: &str) -> Option<&str> {
+        self.0.get(cell_id).map(String::as_str)
+    }
+
     /// Learn cells' current code from a completed read.
     pub fn observe(&mut self, tool: &str, output: &Value) {
         match tool {

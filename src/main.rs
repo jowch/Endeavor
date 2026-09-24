@@ -6,6 +6,7 @@ use std::time::Duration;
 mod agent;
 mod annotate;
 mod celldiff;
+mod gate;
 mod outbox;
 mod pluto;
 mod runtime;
@@ -44,7 +45,15 @@ enum Entry {
     },
     Thought { text: String, expanded: bool },
     Plan(Vec<PlanEntry>),
-    Permission { title: String, options: Vec<PermissionOption>, responder: Option<Responder<RequestPermissionResponse>> },
+    Permission {
+        title: String,
+        /// Code the call would run, when known.
+        code: Option<String>,
+        options: Vec<PermissionOption>,
+        responder: Option<Responder<RequestPermissionResponse>>,
+        /// Raised by the execution gate (a pluto call that runs code).
+        runs_code: bool,
+    },
     Note(SharedString),
 }
 
@@ -70,6 +79,8 @@ struct Workspace {
     outbox: Outbox,
     /// Each cell's code as last seen in the agent's reads and edits, for diffs.
     cell_codes: celldiff::CellCodes,
+    /// "Allow & stop asking": approve the agent's runs for the rest of this session.
+    run_without_asking: bool,
     annotating: bool,
     runtime: Option<Runtime>,
     /// Booting or restarting Julia.
@@ -154,6 +165,7 @@ impl Workspace {
             prompts: None,
             outbox: Outbox::default(),
             cell_codes: celldiff::CellCodes::default(),
+            run_without_asking: false,
             annotating: false,
             runtime: None,
             starting: false,
@@ -398,11 +410,29 @@ impl Workspace {
                 let next = self.outbox.unsent();
                 return self.dispatch(next, cx);
             }
-            AgentEvent::Permission(request, responder) => self.entries.push(Entry::Permission {
-                title: request.tool_call.fields.title.unwrap_or_else(|| "Tool call".into()),
-                options: request.options,
-                responder: Some(responder),
-            }),
+            AgentEvent::Permission(request, responder) => {
+                let fields = &request.tool_call.fields;
+                let title = fields.title.clone().unwrap_or_else(|| "Tool call".into());
+                let runs_code = gate::is_pluto(&title);
+                if runs_code && self.run_without_asking {
+                    if let Some(allow) = option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
+                        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
+                        let _ = responder.respond(RequestPermissionResponse::new(outcome));
+                        return self.note(format!("▶ Ran without asking: {title}"), cx);
+                    }
+                }
+                let input = fields.raw_input.clone().unwrap_or_default();
+                let code = input["code"].as_str().map(str::to_owned).or_else(|| {
+                    input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned)
+                });
+                self.entries.push(Entry::Permission {
+                    title,
+                    code,
+                    options: request.options,
+                    responder: Some(responder),
+                    runs_code,
+                });
+            }
             AgentEvent::Update(SessionUpdate::AgentMessageChunk(chunk)) => {
                 if let ContentBlock::Text(t) = chunk.content {
                     match self.entries.last_mut() {
@@ -491,14 +521,17 @@ impl Workspace {
         }
     }
 
-    fn answer(&mut self, ix: usize, option: &PermissionOption, cx: &mut Context<Self>) {
+    /// Answer a permission request; `stop_asking` approves later runs this session.
+    fn answer(&mut self, ix: usize, option: &PermissionOption, stop_asking: bool, cx: &mut Context<Self>) {
         let Some(Entry::Permission { title, responder, .. }) = self.entries.get_mut(ix) else {
             return;
         };
         if let Some(responder) = responder.take() {
             let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
             let _ = responder.respond(RequestPermissionResponse::new(outcome));
-            self.entries[ix] = Entry::Note(format!("{}: {}", option.name, title).into());
+            let verb = if stop_asking { "Allowed (won't ask again this session)" } else { option.name.as_str() };
+            self.entries[ix] = Entry::Note(format!("{verb}: {title}").into());
+            self.run_without_asking |= stop_asking;
             cx.notify();
         }
     }
@@ -561,28 +594,50 @@ impl Workspace {
                     div().flex().gap_2().child(div().text_color(color).child(mark)).child(e.content.clone())
                 }))
                 .into_any_element(),
-            Entry::Permission { title, options, .. } => div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(0xc8a040))
-                .child(format!("Allow {title}?"))
-                .child(div().flex().gap_2().children(options.iter().enumerate().map(|(i, option)| {
-                    let option = option.clone();
-                    let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
-                    div()
-                        .id(("perm", ix * 16 + i))
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .bg(if allow { rgb(0x2f5d3a) } else { rgb(0x5d2f2f) })
-                        .child(option.name.clone())
-                        .on_click(cx.listener(move |this, _, _, cx| this.answer(ix, &option, cx)))
-                })))
-                .into_any_element(),
+            Entry::Permission { title, code, options, runs_code, .. } => {
+                // Run approvals: Allow / Allow & stop asking / Deny. Anything else: the agent's own options.
+                let mut buttons: Vec<(String, PermissionOption, bool)> = Vec::new();
+                if *runs_code {
+                    if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
+                        buttons.push(("Allow".into(), allow.clone(), false));
+                        buttons.push(("Allow & stop asking".into(), allow.clone(), true));
+                    }
+                    if let Some(deny) = option_of_kind(options, PermissionOptionKind::RejectOnce) {
+                        buttons.push(("Deny".into(), deny.clone(), false));
+                    }
+                }
+                if buttons.is_empty() {
+                    buttons = options.iter().map(|o| (o.name.clone(), o.clone(), false)).collect();
+                }
+                let heading = match celldiff::pluto_tool(title) {
+                    Some(tool) if *runs_code => format!("Run code? · {tool}"),
+                    _ => format!("Allow {title}?"),
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0xc8a040))
+                    .child(heading)
+                    .children(code.as_ref().map(|code| {
+                        div().p_1().rounded_sm().bg(rgb(0x252526)).font_family("Menlo").text_xs().child(code.clone())
+                    }))
+                    .child(div().flex().gap_2().children(buttons.into_iter().enumerate().map(|(i, (label, option, stop))| {
+                        let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
+                        div()
+                            .id(("perm", ix * 16 + i))
+                            .px_2()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .bg(if allow { rgb(0x2f5d3a) } else { rgb(0x5d2f2f) })
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, _, cx| this.answer(ix, &option, stop, cx)))
+                    })))
+                    .into_any_element()
+            }
         }
     }
 
@@ -617,6 +672,10 @@ impl Workspace {
                 })
         }))
     }
+}
+
+fn option_of_kind(options: &[PermissionOption], kind: PermissionOptionKind) -> Option<&PermissionOption> {
+    options.iter().find(|o| o.kind == kind)
 }
 
 /// A cell edit as colored lines.
@@ -722,6 +781,17 @@ impl Render for Workspace {
                                                 this.toggle_annotation(&ToggleAnnotation, window, cx)
                                             })),
                                     )
+                                    .when(self.run_without_asking, |d| {
+                                        d.child(
+                                            button("ask-again")
+                                                .bg(rgb(0x3a3a3c))
+                                                .child("▶ Runs without asking ✕")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.run_without_asking = false;
+                                                    this.note("Will ask before running code again.", cx);
+                                                })),
+                                        )
+                                    })
                                     .child(div().flex_1())
                                     .when(self.runtime.is_none() && !self.starting, |d| {
                                         d.child(
@@ -748,6 +818,10 @@ impl Render for Workspace {
 }
 
 fn main() {
+    // Claude Code runs the plugin's execution-gate hook as `endeavor hook-pretool`.
+    if std::env::args().nth(1).as_deref() == Some("hook-pretool") {
+        gate::run_pretool_hook();
+    }
     gpui_platform::application().run(|cx: &mut App| {
         gpui_component::init(cx);
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.

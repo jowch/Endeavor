@@ -81,7 +81,10 @@ async fn run(
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<AgentEvent>,
 ) -> Result<(), agent_client_protocol::Error> {
-    let agent = AcpAgent::from_str(AGENT_CMD)?;
+    // The plugin's execution-gate hook calls back into this binary (see gate.rs).
+    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+    let command = format!("env ENDEAVOR_BIN='{}' {AGENT_CMD}", exe.replace('\'', r"'\''"));
+    let agent = AcpAgent::from_str(&command)?;
     let (notify, permit) = (events.clone(), events.clone());
 
     agent_client_protocol::Client

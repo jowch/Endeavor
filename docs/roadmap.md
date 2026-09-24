@@ -30,6 +30,11 @@ process running Pluto + PlutoMCP.
 - **Agent environment.** Endeavor's own Claude Code plugin (`plugin/`: the
   styx Pluto skills, ported) plus project settings; the user's personal Claude
   Code setup is opt-in (`ENDEAVOR_PERSONAL_CLAUDE=1`).
+- **Execution gate.** The agent asks before running notebook code
+  (`execute_cell`, `submit_changes`, `run_all_cells`, `allow_execution`,
+  `delete_cell`, `run_after=true`): a plugin PreToolUse hook (`endeavor
+  hook-pretool`) answers "ask", and the panel offers Allow / Allow & stop
+  asking (this session) / Deny. Other ACP agents would need their own gate.
 - **Context the agent gets for free.** Which notebook is on screen; an
   end-of-turn warning when edited cells were left unrun or still running.
 
@@ -50,18 +55,13 @@ In priority order.
    Also still unconfirmed from the first spike: **window resize** keeping the
    webview inside its pane (§7.1). Window screenshots currently fail (macOS
    Screen Recording permission); restore that or check by hand.
-2. **Decide the execution gate.** Safe preview only covers notebooks opened
-   from files; the agent can `execute_cell` / `submit_changes` in a notebook
-   that is already running without asking. Options: rely on Claude Code's
-   permission prompts for those MCP tools, gate them in the app's permission
-   flow, or a per-notebook "agent may run code" toggle.
-3. **Where notebooks live.** `new_notebook` without a path lands in the app's
+2. **Where notebooks live.** `new_notebook` without a path lands in the app's
    depot (`~/Library/Application Support/endeavor/depot/pluto_notebooks`),
    which users won't find. Default to the project folder instead.
-4. **Project folder.** The agent's working directory (and so which project
+3. **Project folder.** The agent's working directory (and so which project
    CLAUDE.md applies) is wherever the app was launched. Add an explicit
    "open folder", like an editor, and use it for new notebooks too.
-5. **Session persistence.** Keep the transcript across launches and resume
+4. **Session persistence.** Keep the transcript across launches and resume
    the agent session (the adapter supports `loadSession`/resume).
 
 ## Before sharing the app
@@ -75,7 +75,8 @@ Everything here is a known `ponytail:` shortcut that's fine for one developer.
 - **`.app` bundle:** move dev-tree paths (`runtime/`, `plugin/`) to bundle
   resources; code signing and notarization.
 - **Settings UI:** personal Claude Code setup opt-in, Julia path, and the
-  execution gate from Next #2, replacing environment variables.
+  execution gate's "stop asking" (per session today), replacing environment
+  variables.
 
 ## Later
 
