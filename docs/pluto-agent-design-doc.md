@@ -146,12 +146,12 @@ Verified directly against styx's own repo contents and the ACP schema.
 |---|---|---|
 | `mcp.json` → `pluto` server (PlutoMCP.jl via `pluto-mcp-launcher.sh`) | **Already portable.** It's a standard MCP server with zero Cursor-specific glue. | None — reuse as-is. |
 | "Glass" browser tools (`browser_navigate`, `browser_snapshot`, `browser_lock`, `browser_tabs`) | **Not portable.** Confirmed absent from `mcp.json` — these are Cursor's own native built-in browser tool, not a bundled MCP server. | Build a new browser-automation MCP server (Chrome DevTools MCP / Playwright MCP as a base), adding the missing `lock`/`viewId` primitive. |
-| `hooks.json` guards (`guard-write.py`, `check-design-mode.py`) | No ACP-wide hook/middleware concept exists. | Reimplement as: (a) server-side checks inside the pluto/browser MCP servers, (b) client-side deny on ACP's tool-call permission-request flow. |
+| `hooks.json` guards (`guard-write.py`, `check-design-mode.py`) | No ACP-wide hook/middleware concept exists. | **Done/dropped:** PlutoMCP enforces read-before-edit server-side (`read_required`/`stale_read`), so `guard-write` is redundant; `check-design-mode` guarded Cursor's shared browser, which Endeavor's agent can't drive. |
 | `hooks.json` loggers (`record-read.py`, `record-glass-view.py`) | ACP's `session/prompt` reports tool calls to the client as standard behavior. | Reimplement client-side: log every `session/update` tool-call notification the GPUI app receives. |
 | `warn-pending-run.py` (runs on Cursor's "stop" hook) | No ACP "stop" hook equivalent. | Reimplement client-side: after `PromptResponse` returns, query pluto MCP for pending/running cells and surface a warning in the GPUI UI. |
-| `skills/pluto-{semantics,session,workflow}` (`SKILL.md` progressive disclosure) | Not a standardized ACP or cross-agent concept. | Fold content into plain `ContentBlock::Text`/`Resource` sent as session-start context, not as an agent-specific "skill." |
-| `rules/` (Cursor auto-attached context) | Cursor-specific. | Same treatment as skills — plain prompt context. |
-| `commands/` (Cursor slash commands) | Cursor-specific UX. | Reimplement as GPUI-side UI shortcuts that prepend fixed text to a prompt. |
+| `skills/pluto-{semantics,session,workflow}` (`SKILL.md` progressive disclosure) | Not a standardized ACP concept, but the Claude adapter forwards a `plugins` option. | **Done:** ported into Endeavor's own Claude Code plugin (`plugin/skills/`), loaded into every session with progressive disclosure intact; rewritten for Endeavor (no Glass/browser tools; `new_notebook`; annotation mode). Other ACP agents would need the plain-prompt-context fallback. |
+| `rules/` (Cursor auto-attached context) | Cursor-specific. | **Done:** routing folded into the plugin skills' descriptions and bodies. |
+| `commands/` (Cursor slash commands) | Cursor-specific UX. | Dropped for now (they drove Cursor's Glass/session setup, which the app does itself); plugin `commands/` can carry new ones once the panel lists them. |
 | `.cursor-plugin/plugin.json` manifest | Cursor-specific packaging. | No equivalent needed — the GPUI app itself is the "plugin host." |
 
 **ACP mechanics that do the heavy lifting:**
