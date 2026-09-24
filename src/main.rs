@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 mod agent;
 mod annotate;
 mod outbox;
+mod pluto;
 
 use agent::AgentEvent;
 use agent_client_protocol::Responder;
@@ -35,7 +36,7 @@ struct Runtime {
 }
 
 /// Start the app-owned Julia and block until boot.jl reports `READY`.
-fn start_runtime() -> Result<Runtime, String> {
+fn startruntime() -> Result<Runtime, String> {
     // ponytail: dev-tree paths; resolve from the .app bundle's resources when packaging.
     let root = env!("CARGO_MANIFEST_DIR");
     // ponytail: ENDEAVOR_JULIA is the "use my Julia" opt-in; the managed download (§11) comes next.
@@ -114,7 +115,7 @@ struct Workspace {
     prompts: Option<UnboundedSender<agent::Command>>,
     outbox: Outbox,
     annotating: bool,
-    _runtime: Option<Runtime>,
+    runtime: Option<Runtime>,
 }
 
 impl Workspace {
@@ -157,7 +158,7 @@ impl Workspace {
         .detach();
 
         // First run instantiates + precompiles (~1 min); later launches are seconds.
-        let boot = cx.background_executor().spawn(async { start_runtime() });
+        let boot = cx.background_executor().spawn(async { startruntime() });
         cx.spawn(async move |this, cx| {
             let runtime = match boot.await {
                 Ok(runtime) => runtime,
@@ -172,7 +173,7 @@ impl Workspace {
                 this.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
                 this.note(format!("Pluto ready · MCP {}\nConnecting to Claude…", runtime.mcp_url), cx);
                 this.prompts = Some(prompts);
-                this._runtime = Some(runtime);
+                this.runtime = Some(runtime);
             });
             if ok.is_err() {
                 return;
@@ -193,7 +194,7 @@ impl Workspace {
             prompts: None,
             outbox: Outbox::default(),
             annotating: false,
-            _runtime: None,
+            runtime: None,
         }
     }
 
@@ -278,8 +279,26 @@ impl Workspace {
         let _ = self.webview.read(cx).raw().evaluate_script(&format!("window.__annotate && ({{ {js} }})"));
     }
 
+    /// After the agent goes idle, say if it left edited cells unrun or still running.
+    fn check_run_state(&mut self, cx: &mut Context<Self>) {
+        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        let list = cx
+            .background_executor()
+            .spawn(async move { pluto::call_tool(&mcp_url, "list_notebooks", serde_json::json!({})) });
+        cx.spawn(async move |this, cx| {
+            // ponytail: a failed check stays silent; it's advisory, and a dead runtime reports itself.
+            let Ok(list) = list.await else { return };
+            let _ = this.update(cx, |this, cx| {
+                for warning in pluto::run_warnings(&list) {
+                    this.note(format!("⚠ {warning}"), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     fn show_notebook(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(runtime) = &self._runtime else { return };
+        let Some(runtime) = &self.runtime else { return };
         // pluto_url is `http://host:port/?secret=…`; keep the secret app-side.
         let url = runtime.pluto_url.replacen("/?", &format!("/edit?id={id}&"), 1);
         self.webview.update(cx, |w, _| w.load_url(&url));
@@ -303,7 +322,12 @@ impl Workspace {
                     self.note(format!("Turn ended: {reason:?}"), cx);
                 }
                 let next = self.outbox.turn_ended();
-                return self.dispatch(next, cx);
+                let idle = next.is_none();
+                self.dispatch(next, cx);
+                if idle {
+                    self.check_run_state(cx);
+                }
+                return;
             }
             AgentEvent::Steered => {
                 if let Some(label) = self.outbox.steered() {
