@@ -33,16 +33,12 @@ process running Pluto + PlutoMCP.
 - **Context the agent gets for free.** Which notebook is on screen; an
   end-of-turn warning when edited cells were left unrun or still running.
 
-**In flight**
-
-- PlutoMCP PRs on the fork, each with an author agent answering `review-pr`:
-  [#10](https://github.com/jowch/PlutoMCP.jl/pull/10) `new_notebook`,
-  [#11](https://github.com/jowch/PlutoMCP.jl/pull/11) run state in
-  `list_notebooks` (stacked on #10),
-  [#12](https://github.com/jowch/PlutoMCP.jl/pull/12) `view_cell_output`
-  (agent sees plots as PNG).
-- Endeavor is pinned to the fork's `integration/endeavor` branch (all three
-  merged). **When they land:** pin `main`, delete the integration branch.
+**PlutoMCP (fork, `jowch/PlutoMCP.jl`)** carries the tools Endeavor relies on,
+merged to `main` after paired `review-pr` / author-agent review:
+[#10](https://github.com/jowch/PlutoMCP.jl/pull/10) `new_notebook`,
+[#11](https://github.com/jowch/PlutoMCP.jl/pull/11) run state in `list_notebooks`,
+[#12](https://github.com/jowch/PlutoMCP.jl/pull/12) `view_cell_output` (the agent sees plots as PNG).
+Endeavor pins `main` (`runtime/Project.toml`).
 
 ## Next
 
