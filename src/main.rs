@@ -6,6 +6,7 @@ use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 
 mod agent;
+mod glass;
 
 use agent::AgentEvent;
 use agent_client_protocol::Responder;
@@ -16,6 +17,7 @@ use agent_client_protocol::schema::v1::{
 };
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedSender;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{Root, Theme, ThemeMode};
@@ -86,8 +88,7 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
         return None;
     }
     let id = query.split('&').find_map(|kv| kv.strip_prefix("id="))?;
-    let is_uuid = id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
-    is_uuid.then_some(id)
+    glass::is_uuid(id).then_some(id)
 }
 
 /// Notebook id from a PlutoMCP `open_notebook`/`new_notebook` result (`{"notebook_id": "<uuid>", …}`,
@@ -96,7 +97,7 @@ fn opened_notebook_id(raw: &serde_json::Value) -> Option<String> {
     let text = raw.to_string();
     let rest = &text[text.find("notebook_id")?..];
     rest.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
-        .find(|t| t.len() == 36 && t.matches('-').count() == 4)
+        .find(|t| glass::is_uuid(t))
         .map(str::to_owned)
 }
 
@@ -107,25 +108,41 @@ struct Workspace {
     entries: Vec<Entry>,
     prompts: Option<UnboundedSender<Vec<ContentBlock>>>,
     busy: bool,
+    annotations: Vec<glass::Annotation>,
+    glass_on: bool,
     _runtime: Option<Runtime>,
 }
 
 impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (glass_tx, mut glass_rx) = futures::channel::mpsc::unbounded::<String>();
         let webview = cx.new(|cx| {
             let handle = window.window_handle().expect("window handle");
             let webview = wry::WebViewBuilder::new()
                 .with_devtools(true)
+                .with_initialization_script(glass::SCRIPT)
+                .with_ipc_handler(move |request| {
+                    let _ = glass_tx.unbounded_send(request.into_body());
+                })
                 .build_as_child(&handle)
                 .expect("child webview");
             WebView::new(webview, window, cx)
         });
 
+        cx.spawn(async move |this, cx| {
+            while let Some(body) = glass_rx.next().await {
+                if this.update(cx, |this, cx| this.on_glass(&body, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Ask Claude about the notebook…"));
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { secondary: false, .. } = event {
                 let text = input.read(cx).value().trim().to_string();
-                if !text.is_empty() && this.send(text, cx) {
+                if this.send(text, cx) {
                     input.update(cx, |s, cx| s.set_value("", window, cx));
                     cx.notify();
                 }
@@ -169,12 +186,18 @@ impl Workspace {
             entries: vec![Entry::Note("Starting Julia…".into())],
             prompts: None,
             busy: false,
+            annotations: Vec::new(),
+            glass_on: false,
             _runtime: None,
         }
     }
 
-    /// Queue a prompt; false if the agent isn't ready or is mid-turn.
+    /// Queue a prompt with any pending annotations; false if there's nothing to
+    /// send, or the agent isn't ready or is mid-turn.
     fn send(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+        if text.is_empty() && self.annotations.is_empty() {
+            return false;
+        }
         let Some(prompts) = self.prompts.as_ref().filter(|_| !self.busy) else {
             return false;
         };
@@ -186,13 +209,34 @@ impl Workspace {
                  Unless they say otherwise, \"the notebook\" means this one."
             ))));
         }
-        prompt.push(ContentBlock::Text(TextContent::new(text.clone())));
+        prompt.extend(glass::prompt_blocks(&self.annotations));
+        let ask = if text.is_empty() { "Please address the annotations above." } else { &text };
+        prompt.push(ContentBlock::Text(TextContent::new(ask)));
         self.busy = prompts.unbounded_send(prompt).is_ok();
         if self.busy {
-            self.entries.push(Entry::User(text.into()));
+            let shown = match self.annotations.len() {
+                0 => text,
+                n => format!("{ask}\n(+{n} annotation{})", if n > 1 { "s" } else { "" }),
+            };
+            self.entries.push(Entry::User(shown.into()));
+            self.annotations.clear();
+            self.glass_script("__glass.clearBadges(); __glass.set(false)", cx);
             self.scroll.scroll_to_bottom();
         }
         self.busy
+    }
+
+    fn on_glass(&mut self, body: &str, cx: &mut Context<Self>) {
+        match glass::parse(body) {
+            Some(glass::Message::Mode(on)) => self.glass_on = on,
+            Some(glass::Message::Annotation(a)) => self.annotations.push(a),
+            None => return,
+        }
+        cx.notify();
+    }
+
+    fn glass_script(&self, js: &str, cx: &mut Context<Self>) {
+        let _ = self.webview.read(cx).raw().evaluate_script(&format!("window.__glass && ({{ {js} }})"));
     }
 
     fn show_notebook(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -345,7 +389,51 @@ impl Render for Workspace {
                             .gap_3()
                             .children(entries),
                     )
-                    .child(div().p_3().border_t_1().border_color(rgb(0x333333)).child(Input::new(&self.input))),
+                    .child(
+                        div()
+                            .p_3()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .border_t_1()
+                            .border_color(rgb(0x333333))
+                            .children(self.annotations.iter().enumerate().map(|(i, a)| {
+                                let comment = if a.comment.is_empty() { "(no comment)" } else { a.comment.as_str() };
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .text_sm()
+                                    .child(div().text_color(rgb(0xc8a040)).child(format!("✎ {} cell(s)", a.cells.len())))
+                                    .child(div().flex_1().child(comment.to_string()))
+                                    .child(
+                                        div()
+                                            .id(("unqueue", i))
+                                            .cursor_pointer()
+                                            .text_color(rgb(0x8a8a8a))
+                                            .child("✕")
+                                            // ponytail: the page's ✎ badge stays until the next send clears them all.
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.annotations.remove(i);
+                                                cx.notify();
+                                            })),
+                                    )
+                            }))
+                            .child(
+                                div()
+                                    .id("glass-toggle")
+                                    .px_2()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .when(self.glass_on, |d| d.bg(rgb(0x8a6d1f)))
+                                    .child(if self.glass_on { "◉ Glass mode on — click cells (Esc to exit)" } else { "◎ Glass mode (⌘⇧G)" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let js = if this.glass_on { "__glass.set(false)" } else { "__glass.set(true)" };
+                                        this.glass_script(js, cx);
+                                    })),
+                            )
+                            .child(Input::new(&self.input)),
+                    ),
             )
             .child(div().flex_1().h_full().child(self.webview.clone()))
     }
