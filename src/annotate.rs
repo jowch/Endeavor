@@ -16,14 +16,14 @@ pub struct Annotation {
     pub notebook: String,
     pub cells: Vec<String>,
     pub comment: String,
+    /// Cmd+Enter: join the running turn instead of waiting in the queue.
+    pub now: bool,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Message {
     Mode(bool),
     Annotation(Annotation),
-    /// Send everything queued now.
-    Send,
 }
 
 pub fn is_uuid(s: &str) -> bool {
@@ -35,7 +35,6 @@ pub fn parse(body: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     match v.get("type")?.as_str()? {
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
-        "send" => Some(Message::Send),
         "annotation" => {
             let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
             let cells: Vec<String> = v
@@ -45,8 +44,9 @@ pub fn parse(body: &str) -> Option<Message> {
                 .map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned))
                 .collect::<Option<_>>()?;
             let comment: String = v.get("comment")?.as_str()?.chars().take(MAX_COMMENT).collect();
+            let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
             (!cells.is_empty() && cells.len() <= MAX_CELLS)
-                .then_some(Message::Annotation(Annotation { notebook, cells, comment }))
+                .then_some(Message::Annotation(Annotation { notebook, cells, comment, now }))
         }
         _ => None,
     }
@@ -56,8 +56,8 @@ pub fn cell_uri(notebook: &str, cell: &str) -> String {
     format!("pluto://notebook/{notebook}/cell/{cell}")
 }
 
-/// Prompt blocks for queued annotations: one explanatory preface, then per
-/// annotation a `ResourceLink` per cell followed by the user's comment.
+/// Prompt blocks for annotations: one explanatory preface, then per annotation
+/// a `ResourceLink` per cell followed by the user's comment.
 pub fn prompt_blocks(annotations: &[Annotation]) -> Vec<ContentBlock> {
     if annotations.is_empty() {
         return Vec::new();
@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn parses_valid_messages() {
         assert_eq!(parse(r#"{"type":"mode","on":true}"#), Some(Message::Mode(true)));
-        assert_eq!(parse(r#"{"type":"send"}"#), Some(Message::Send));
+        assert_eq!(parse(r#"{"type":"send"}"#), None);
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"why so slow?"}}"#);
         let Some(Message::Annotation(a)) = parse(&body) else { panic!("rejected valid annotation") };
         assert_eq!((a.notebook.as_str(), a.cells.len(), a.comment.as_str()), (NB, 1, "why so slow?"));
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn prompt_blocks_link_each_cell_then_comment() {
-        let a = Annotation { notebook: NB.into(), cells: vec![C1.into()], comment: "".into() };
+        let a = Annotation { notebook: NB.into(), cells: vec![C1.into()], comment: "".into(), now: false };
         let blocks = prompt_blocks(&[a]);
         assert_eq!(blocks.len(), 3);
         let ContentBlock::ResourceLink(link) = &blocks[1] else { panic!("expected link") };

@@ -1,7 +1,9 @@
 // Annotation mode, injected into the Pluto page by Endeavor (design doc §4.2).
-// In annotation mode, clicks pick cells instead of editing them; Pluto's own selection
-// is picked up on entry. Cmd+Enter sends a comment on the picked cells to the
-// agent (via window.ipc, keyed by cell UUID); "Queue comment" batches several.
+// In annotation mode, clicks pick cells instead of editing them; Pluto's own
+// selection is picked up on entry. A comment on the picked cells is sent to the
+// agent (via window.ipc, keyed by cell UUID) with the same keys as the chat box:
+// Enter sends (queued if the agent is busy), Cmd+Enter sends now, Shift+Enter
+// is a newline.
 (() => {
   if (window.__annotate) return;
 
@@ -9,10 +11,6 @@
     body.annotating pluto-cell { cursor: crosshair; }
     body.annotating pluto-cell:hover { outline: 2px dashed #c8a040; outline-offset: 4px; }
     body.annotating pluto-cell.annotate-picked { outline: 2px solid #c8a040; outline-offset: 4px; }
-    pluto-cell[data-annotate-count]::after {
-      content: "✎ " attr(data-annotate-count); position: absolute; right: -2.6rem; top: 0;
-      font: 600 11px system-ui; color: #c8a040;
-    }
     #annotate-frame { position: fixed; inset: 0; pointer-events: none; z-index: 9999;
       box-shadow: inset 0 0 0 3px #c8a040; display: none; }
     #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
@@ -47,21 +45,20 @@
     bar.innerHTML = `
       <div class="row"><span class="status"></span></div>
       <textarea placeholder="Comment for Claude on the selected cells…"></textarea>
-      <div class="row"><span class="status">⌘↩ send · Esc exit</span>
-        <button class="exit">Done</button><button class="add">Queue comment</button>
-        <button class="primary send">Send to Claude</button></div>`;
+      <div class="row"><span class="status">↩ send · ⌘↩ send now · ⇧↩ newline · Esc exit</span>
+        <button class="exit">Done</button><button class="primary send">Send</button></div>`;
     document.head.append(style);
     document.body.append(frame, bar);
 
     const status = bar.querySelector(".status");
     const text = bar.querySelector("textarea");
-    const add = bar.querySelector(".add");
+    const sendButton = bar.querySelector(".send");
 
     function refresh() {
       status.textContent = picked.size
         ? `${picked.size} cell${picked.size > 1 ? "s" : ""} selected`
         : "Click cells to select them";
-      add.disabled = picked.size === 0;
+      sendButton.disabled = picked.size === 0;
       for (const c of cells()) c.classList.toggle("annotate-picked", picked.has(c.id));
     }
 
@@ -77,19 +74,12 @@
       post({ type: "mode", on: enable });
     }
 
-    // Queue whatever is picked, then ask Endeavor to send everything queued.
-    function send() {
-      queue();
-      post({ type: "send" });
-    }
-
-    function queue() {
+    // Stays in annotation mode afterwards, ready for the next comment.
+    function send(now) {
       if (!picked.size) return;
       const ids = cells().map((c) => c.id).filter((id) => picked.has(id)); // notebook order
       const notebook = new URLSearchParams(location.search).get("id");
-      post({ type: "annotation", notebook, cells: ids, comment: text.value.trim() });
-      for (const c of cells())
-        if (picked.has(c.id)) c.dataset.annotateCount = String(Number(c.dataset.annotateCount || 0) + 1);
+      post({ type: "annotation", notebook, cells: ids, comment: text.value.trim(), now });
       text.value = "";
       picked.clear();
       refresh();
@@ -108,26 +98,24 @@
     };
     for (const type of ["pointerdown", "mousedown", "click"]) document.addEventListener(type, swallow, true);
 
-    document.addEventListener(
+    // Window capture runs before Pluto's own shortcuts (e.g. Shift+Enter runs a cell).
+    window.addEventListener(
       "keydown",
       (e) => {
         if (e.key.toLowerCase() === "g" && e.metaKey && e.shiftKey) return (e.preventDefault(), set(!on()));
         if (!on()) return;
         if (e.key === "Escape") return (e.preventDefault(), set(false));
-        if (e.key === "Enter" && e.metaKey) return (e.preventDefault(), send());
+        if (!bar.contains(e.target)) return;
+        // Typing a comment must never trigger notebook shortcuts; defaults (newline) still apply.
+        e.stopPropagation();
+        if (e.key === "Enter" && !e.shiftKey) return (e.preventDefault(), send(e.metaKey));
       },
       true
     );
-    add.onclick = queue;
-    bar.querySelector(".send").onclick = send;
+    sendButton.onclick = () => send(false);
     bar.querySelector(".exit").onclick = () => set(false);
 
-    window.__annotate = {
-      set,
-      clearBadges() {
-        for (const c of document.querySelectorAll("pluto-cell[data-annotate-count]")) delete c.dataset.annotateCount;
-      },
-    };
+    window.__annotate = { set };
   }
 
   document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", init) : init();

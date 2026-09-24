@@ -7,6 +7,7 @@ use std::process::{Child, Command, Stdio};
 
 mod agent;
 mod annotate;
+mod outbox;
 
 use agent::AgentEvent;
 use agent_client_protocol::Responder;
@@ -17,9 +18,10 @@ use agent_client_protocol::schema::v1::{
 };
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedSender;
+use outbox::{Dispatch, Outbox, Queued};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{InputEvent, Textarea, TextareaState};
 use gpui_component::{Root, Theme, ThemeMode};
 use gpui_wry::WebView;
 use raw_window_handle::HasWindowHandle;
@@ -101,14 +103,15 @@ fn opened_notebook_id(raw: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+actions!(endeavor, [Interrupt]);
+
 struct Workspace {
     webview: Entity<WebView>,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     scroll: ScrollHandle,
     entries: Vec<Entry>,
-    prompts: Option<UnboundedSender<Vec<ContentBlock>>>,
-    busy: bool,
-    annotations: Vec<annotate::Annotation>,
+    prompts: Option<UnboundedSender<agent::Command>>,
+    outbox: Outbox,
     annotating: bool,
     _runtime: Option<Runtime>,
 }
@@ -138,10 +141,16 @@ impl Workspace {
         })
         .detach();
 
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Ask Claude about the notebook…"));
+        // Enter sends (queued while Claude works), Cmd+Enter sends now, Shift+Enter is a newline.
+        let input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Ask Claude about the notebook…")
+                .submit_on_enter(true)
+                .auto_grow(1, 8)
+        });
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { secondary: false, .. } = event {
-                this.submit(input, window, cx);
+            if let InputEvent::PressEnter { secondary, shift: false } = event {
+                this.submit(input, *secondary, window, cx);
             }
         })
         .detach();
@@ -181,63 +190,73 @@ impl Workspace {
             scroll: ScrollHandle::new(),
             entries: vec![Entry::Note("Starting Julia…".into())],
             prompts: None,
-            busy: false,
-            annotations: Vec::new(),
+            outbox: Outbox::default(),
             annotating: false,
             _runtime: None,
         }
     }
 
-    /// Send the chat box text (plus queued annotations) and clear the box.
-    fn submit(&mut self, input: &Entity<InputState>, window: &mut Window, cx: &mut Context<Self>) {
+    /// Which notebook the user is looking at, so "the notebook" is unambiguous.
+    fn viewing_context(&self, cx: &mut Context<Self>) -> Option<ContentBlock> {
+        let url = self.webview.read(cx).raw().url().unwrap_or_default();
+        let id = viewed_notebook_id(&url)?;
+        Some(ContentBlock::Text(TextContent::new(format!(
+            "[Endeavor] The user is viewing Pluto notebook {id} in the notebook pane. \
+             Unless they say otherwise, \"the notebook\" means this one."
+        ))))
+    }
+
+    fn submit(&mut self, input: &Entity<TextareaState>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
         let text = input.read(cx).value().trim().to_string();
-        if self.send(text, cx) {
+        if text.is_empty() {
+            return;
+        }
+        let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
+        blocks.push(ContentBlock::Text(TextContent::new(text.clone())));
+        if self.enqueue(Queued::new(text.clone(), Some(text), blocks), now, cx) {
             input.update(cx, |s, cx| s.set_value("", window, cx));
-            cx.notify();
         }
     }
 
-    /// Queue a prompt with any pending annotations; false if there's nothing to
-    /// send, or the agent isn't ready or is mid-turn.
-    fn send(&mut self, text: String, cx: &mut Context<Self>) -> bool {
-        if text.is_empty() && self.annotations.is_empty() {
+    /// Send or queue a message; false if Claude isn't connected.
+    fn enqueue(&mut self, message: Queued, now: bool, cx: &mut Context<Self>) -> bool {
+        if self.prompts.is_none() {
+            self.note("Claude isn't connected yet.", cx);
             return false;
         }
-        let Some(prompts) = self.prompts.as_ref().filter(|_| !self.busy) else {
-            return false;
-        };
-        let mut prompt = Vec::new();
-        let url = self.webview.read(cx).raw().url().unwrap_or_default();
-        if let Some(id) = viewed_notebook_id(&url) {
-            prompt.push(ContentBlock::Text(TextContent::new(format!(
-                "[Endeavor] The user is viewing Pluto notebook {id} in the notebook pane. \
-                 Unless they say otherwise, \"the notebook\" means this one."
-            ))));
+        let dispatch = self.outbox.submit(message, now);
+        self.dispatch(dispatch, cx);
+        cx.notify();
+        true
+    }
+
+    fn dispatch(&mut self, dispatch: Option<Dispatch>, cx: &mut Context<Self>) {
+        let Some(Dispatch { command, shown }) = dispatch else { return };
+        if let Some(prompts) = &self.prompts {
+            let _ = prompts.unbounded_send(command);
         }
-        prompt.extend(annotate::prompt_blocks(&self.annotations));
-        let ask = if text.is_empty() { "Please address the annotations above." } else { &text };
-        prompt.push(ContentBlock::Text(TextContent::new(ask)));
-        self.busy = prompts.unbounded_send(prompt).is_ok();
-        if self.busy {
-            let shown = match self.annotations.len() {
-                0 => text,
-                n => format!("{ask}\n(+{n} annotation{})", if n > 1 { "s" } else { "" }),
-            };
-            self.entries.push(Entry::User(shown.into()));
-            self.annotations.clear();
-            self.page_script("__annotate.clearBadges(); __annotate.set(false)", cx);
+        if let Some(label) = shown {
+            self.entries.push(Entry::User(label.into()));
             self.scroll.scroll_to_bottom();
         }
-        self.busy
+        cx.notify();
+    }
+
+    fn interrupt(&mut self, _: &Interrupt, _: &mut Window, _: &mut Context<Self>) {
+        if let Some(prompts) = self.prompts.as_ref().filter(|_| self.outbox.busy) {
+            let _ = prompts.unbounded_send(agent::Command::Cancel);
+        }
     }
 
     fn on_page_message(&mut self, body: &str, cx: &mut Context<Self>) {
         match annotate::parse(body) {
             Some(annotate::Message::Mode(on)) => self.annotating = on,
-            Some(annotate::Message::Annotation(a)) => self.annotations.push(a),
-            // The page can't reach the chat box, so this sends annotations only.
-            Some(annotate::Message::Send) => {
-                self.send(String::new(), cx);
+            Some(annotate::Message::Annotation(a)) => {
+                let comment = if a.comment.is_empty() { "(no comment)" } else { a.comment.as_str() };
+                let label = format!("✎ {} cell{}: {comment}", a.cells.len(), if a.cells.len() > 1 { "s" } else { "" });
+                let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
+                blocks.extend(annotate::prompt_blocks(std::slice::from_ref(&a)));
+                self.enqueue(Queued::new(label, None, blocks), a.now, cx);
             }
             None => return,
         }
@@ -265,14 +284,24 @@ impl Workspace {
         match event {
             AgentEvent::Ready => return self.note("Claude connected with the pluto MCP server.", cx),
             AgentEvent::Failed(e) => {
-                self.busy = true; // no more prompts
+                self.prompts = None; // no more prompts
                 return self.note(format!("Agent stopped: {e}"), cx);
             }
             AgentEvent::TurnEnded(reason) => {
-                self.busy = false;
                 if reason != StopReason::EndTurn {
-                    return self.note(format!("Turn ended: {reason:?}"), cx);
+                    self.note(format!("Turn ended: {reason:?}"), cx);
                 }
+                let next = self.outbox.turn_ended();
+                return self.dispatch(next, cx);
+            }
+            AgentEvent::Steered => {
+                if let Some(label) = self.outbox.steered() {
+                    self.entries.push(Entry::User(format!("{label}\n↳ sent into the running turn").into()));
+                }
+            }
+            AgentEvent::Unsent => {
+                let next = self.outbox.unsent();
+                return self.dispatch(next, cx);
             }
             AgentEvent::Permission(request, responder) => self.entries.push(Entry::Permission {
                 title: request.tool_call.fields.title.unwrap_or_else(|| "Tool call".into()),
@@ -368,12 +397,47 @@ impl Workspace {
                 .into_any_element(),
         }
     }
+
+    /// Messages waiting for Claude: click ✎ to pull one back into the input, ✕ to drop it.
+    fn render_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = rgb(0x8a8a8a);
+        div().flex().flex_col().gap_1().children(self.outbox.items.iter().enumerate().map(|(i, q)| {
+            div()
+                .flex()
+                .gap_2()
+                .text_sm()
+                .text_color(muted)
+                .child(div().flex_1().overflow_hidden().child(q.label.clone()))
+                .when(q.in_flight(), |d| d.child("sending now…"))
+                .when(!q.in_flight() && q.editable.is_some(), |d| {
+                    d.child(div().id(("edit", i)).cursor_pointer().child("✎").on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            if let Some(text) = this.outbox.take(i).and_then(|q| q.editable) {
+                                this.input.update(cx, |s, cx| s.set_value(text, window, cx));
+                                cx.notify();
+                            }
+                        },
+                    )))
+                })
+                .when(!q.in_flight(), |d| {
+                    d.child(div().id(("drop", i)).cursor_pointer().child("✕").on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.outbox.take(i);
+                            cx.notify();
+                        },
+                    )))
+                })
+        }))
+    }
 }
 
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entries: Vec<_> = self.entries.iter().enumerate().map(|(i, e)| self.render_entry(i, e, cx)).collect();
+        let button = |id: &'static str| div().id(id).px_2().rounded_sm().cursor_pointer().text_sm();
         div()
+            .key_context("Workspace")
+            .on_action(cx.listener(Self::interrupt))
             .flex()
             .size_full()
             .bg(rgb(0x1e1e1e))
@@ -406,61 +470,35 @@ impl Render for Workspace {
                             .gap_2()
                             .border_t_1()
                             .border_color(rgb(0x333333))
-                            .children(self.annotations.iter().enumerate().map(|(i, a)| {
-                                let comment = if a.comment.is_empty() { "(no comment)" } else { a.comment.as_str() };
+                            .child(self.render_queue(cx))
+                            .child(
                                 div()
                                     .flex()
                                     .gap_2()
-                                    .text_sm()
-                                    .child(div().text_color(rgb(0xc8a040)).child(format!("✎ {} cell(s)", a.cells.len())))
-                                    .child(div().flex_1().child(comment.to_string()))
                                     .child(
-                                        div()
-                                            .id(("unqueue", i))
-                                            .cursor_pointer()
-                                            .text_color(rgb(0x8a8a8a))
-                                            .child("✕")
-                                            // ponytail: the page's ✎ badge stays until the next send clears them all.
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.annotations.remove(i);
-                                                cx.notify();
+                                        button("annotate-toggle")
+                                            .when(self.annotating, |d| d.bg(rgb(0x8a6d1f)))
+                                            .child(if self.annotating {
+                                                "◉ Annotation mode on — click cells (Esc to exit)"
+                                            } else {
+                                                "◎ Annotation mode (⌘⇧G)"
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                let js = if this.annotating { "__annotate.set(false)" } else { "__annotate.set(true)" };
+                                                this.page_script(js, cx);
                                             })),
                                     )
-                            }))
-                            .when(!self.annotations.is_empty(), |d| {
-                                let n = self.annotations.len();
-                                d.child(
-                                    div()
-                                        .id("annotate-send")
-                                        .px_2()
-                                        .py_1()
-                                        .rounded_sm()
-                                        .cursor_pointer()
-                                        .text_sm()
-                                        .bg(rgb(0x2f5d3a))
-                                        .when(self.busy, |d| d.opacity(0.5))
-                                        .child(format!("Send {n} annotation{} to Claude", if n > 1 { "s" } else { "" }))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            let input = this.input.clone();
-                                            this.submit(&input, window, cx);
-                                        })),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .id("annotate-toggle")
-                                    .px_2()
-                                    .rounded_sm()
-                                    .cursor_pointer()
-                                    .text_sm()
-                                    .when(self.annotating, |d| d.bg(rgb(0x8a6d1f)))
-                                    .child(if self.annotating { "◉ Annotation mode on — click cells (Esc to exit)" } else { "◎ Annotation mode (⌘⇧G)" })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        let js = if this.annotating { "__annotate.set(false)" } else { "__annotate.set(true)" };
-                                        this.page_script(js, cx);
-                                    })),
+                                    .child(div().flex_1())
+                                    .when(self.outbox.busy, |d| {
+                                        d.child(
+                                            button("stop")
+                                                .bg(rgb(0x5d2f2f))
+                                                .child("■ Stop (Esc)")
+                                                .on_click(cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx))),
+                                        )
+                                    }),
                             )
-                            .child(Input::new(&self.input)),
+                            .child(Textarea::new(&self.input)),
                     ),
             )
             .child(div().flex_1().h_full().child(self.webview.clone()))
@@ -470,6 +508,8 @@ impl Render for Workspace {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         gpui_component::init(cx);
+        // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
+        cx.bind_keys([KeyBinding::new("escape", Interrupt, None)]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         cx.open_window(
             WindowOptions {
