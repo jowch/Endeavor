@@ -22,6 +22,8 @@ pub struct Annotation {
 pub enum Message {
     Mode(bool),
     Annotation(Annotation),
+    /// Send everything queued now.
+    Send,
 }
 
 pub fn is_uuid(s: &str) -> bool {
@@ -33,6 +35,7 @@ pub fn parse(body: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     match v.get("type")?.as_str()? {
         "glass" => Some(Message::Mode(v.get("on")?.as_bool()?)),
+        "send" => Some(Message::Send),
         "annotation" => {
             let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
             let cells: Vec<String> = v
@@ -90,6 +93,7 @@ mod tests {
     #[test]
     fn parses_valid_messages() {
         assert_eq!(parse(r#"{"type":"glass","on":true}"#), Some(Message::Mode(true)));
+        assert_eq!(parse(r#"{"type":"send"}"#), Some(Message::Send));
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"why so slow?"}}"#);
         let Some(Message::Annotation(a)) = parse(&body) else { panic!("rejected valid annotation") };
         assert_eq!((a.notebook.as_str(), a.cells.len(), a.comment.as_str()), (NB, 1, "why so slow?"));

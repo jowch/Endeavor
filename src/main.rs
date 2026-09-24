@@ -141,11 +141,7 @@ impl Workspace {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Ask Claude about the notebook…"));
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { secondary: false, .. } = event {
-                let text = input.read(cx).value().trim().to_string();
-                if this.send(text, cx) {
-                    input.update(cx, |s, cx| s.set_value("", window, cx));
-                    cx.notify();
-                }
+                this.submit(input, window, cx);
             }
         })
         .detach();
@@ -192,6 +188,15 @@ impl Workspace {
         }
     }
 
+    /// Send the chat box text (plus queued annotations) and clear the box.
+    fn submit(&mut self, input: &Entity<InputState>, window: &mut Window, cx: &mut Context<Self>) {
+        let text = input.read(cx).value().trim().to_string();
+        if self.send(text, cx) {
+            input.update(cx, |s, cx| s.set_value("", window, cx));
+            cx.notify();
+        }
+    }
+
     /// Queue a prompt with any pending annotations; false if there's nothing to
     /// send, or the agent isn't ready or is mid-turn.
     fn send(&mut self, text: String, cx: &mut Context<Self>) -> bool {
@@ -230,6 +235,10 @@ impl Workspace {
         match glass::parse(body) {
             Some(glass::Message::Mode(on)) => self.glass_on = on,
             Some(glass::Message::Annotation(a)) => self.annotations.push(a),
+            // The page can't reach the chat box, so this sends annotations only.
+            Some(glass::Message::Send) => {
+                self.send(String::new(), cx);
+            }
             None => return,
         }
         cx.notify();
@@ -418,6 +427,25 @@ impl Render for Workspace {
                                             })),
                                     )
                             }))
+                            .when(!self.annotations.is_empty(), |d| {
+                                let n = self.annotations.len();
+                                d.child(
+                                    div()
+                                        .id("glass-send")
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_sm()
+                                        .cursor_pointer()
+                                        .text_sm()
+                                        .bg(rgb(0x2f5d3a))
+                                        .when(self.busy, |d| d.opacity(0.5))
+                                        .child(format!("Send {n} annotation{} to Claude", if n > 1 { "s" } else { "" }))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            let input = this.input.clone();
+                                            this.submit(&input, window, cx);
+                                        })),
+                                )
+                            })
                             .child(
                                 div()
                                     .id("glass-toggle")

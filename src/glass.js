@@ -47,8 +47,9 @@
     bar.innerHTML = `
       <div class="row"><span class="status"></span></div>
       <textarea placeholder="Comment for Claude on the selected cells…"></textarea>
-      <div class="row"><span class="status">⌘↩ queue · Esc exit</span>
-        <button class="exit">Done</button><button class="primary add">Queue comment</button></div>`;
+      <div class="row"><span class="status">⌘↩ queue · ⌘⇧↩ send · Esc exit</span>
+        <button class="exit">Done</button><button class="add">Queue comment</button>
+        <button class="primary send">Send to Claude</button></div>`;
     document.head.append(style);
     document.body.append(frame, bar);
 
@@ -74,6 +75,12 @@
       }
       refresh();
       post({ type: "glass", on: enable });
+    }
+
+    // Queue whatever is picked, then ask Endeavor to send everything queued.
+    function send() {
+      queue();
+      post({ type: "send" });
     }
 
     function queue() {
@@ -107,11 +114,13 @@
         if (e.key.toLowerCase() === "g" && e.metaKey && e.shiftKey) return (e.preventDefault(), set(!on()));
         if (!on()) return;
         if (e.key === "Escape") return (e.preventDefault(), set(false));
+        if (e.key === "Enter" && e.metaKey && e.shiftKey) return (e.preventDefault(), send());
         if (e.key === "Enter" && e.metaKey && bar.contains(e.target)) return (e.preventDefault(), queue());
       },
       true
     );
     add.onclick = queue;
+    bar.querySelector(".send").onclick = send;
     bar.querySelector(".exit").onclick = () => set(false);
 
     window.__glass = {
