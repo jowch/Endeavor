@@ -12,7 +12,7 @@ use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v1::{
     ContentBlock, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionUpdate, StopReason,
-    ToolCallId, ToolCallStatus,
+    TextContent, ToolCallId, ToolCallStatus,
 };
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedSender;
@@ -78,12 +78,24 @@ enum Entry {
     Note(SharedString),
 }
 
+/// Notebook id from a Pluto `/edit?id=…` URL. Only the id is used: the URL also
+/// carries Pluto's secret, which must never reach the agent.
+fn viewed_notebook_id(url: &str) -> Option<&str> {
+    let (path, query) = url.split_once('?')?;
+    if !path.ends_with("/edit") {
+        return None;
+    }
+    let id = query.split('&').find_map(|kv| kv.strip_prefix("id="))?;
+    let is_uuid = id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    is_uuid.then_some(id)
+}
+
 struct Workspace {
     webview: Entity<WebView>,
     input: Entity<InputState>,
     scroll: ScrollHandle,
     entries: Vec<Entry>,
-    prompts: Option<UnboundedSender<String>>,
+    prompts: Option<UnboundedSender<Vec<ContentBlock>>>,
     busy: bool,
     _runtime: Option<Runtime>,
 }
@@ -103,7 +115,7 @@ impl Workspace {
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { secondary: false, .. } = event {
                 let text = input.read(cx).value().trim().to_string();
-                if !text.is_empty() && this.send(text) {
+                if !text.is_empty() && this.send(text, cx) {
                     input.update(cx, |s, cx| s.set_value("", window, cx));
                     cx.notify();
                 }
@@ -152,11 +164,20 @@ impl Workspace {
     }
 
     /// Queue a prompt; false if the agent isn't ready or is mid-turn.
-    fn send(&mut self, text: String) -> bool {
+    fn send(&mut self, text: String, cx: &mut Context<Self>) -> bool {
         let Some(prompts) = self.prompts.as_ref().filter(|_| !self.busy) else {
             return false;
         };
-        self.busy = prompts.unbounded_send(text.clone()).is_ok();
+        let mut prompt = Vec::new();
+        let url = self.webview.read(cx).raw().url().unwrap_or_default();
+        if let Some(id) = viewed_notebook_id(&url) {
+            prompt.push(ContentBlock::Text(TextContent::new(format!(
+                "[Endeavor] The user is viewing Pluto notebook {id} in the notebook pane. \
+                 Unless they say otherwise, \"the notebook\" means this one."
+            ))));
+        }
+        prompt.push(ContentBlock::Text(TextContent::new(text.clone())));
+        self.busy = prompts.unbounded_send(prompt).is_ok();
         if self.busy {
             self.entries.push(Entry::User(text.into()));
             self.scroll.scroll_to_bottom();
@@ -325,4 +346,18 @@ fn main() {
         cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::viewed_notebook_id;
+
+    #[test]
+    fn notebook_id_from_pluto_url() {
+        let id = "6a1b2c3d-0000-4000-8000-1234567890ab";
+        let url = format!("http://127.0.0.1:1234/edit?secret=s3cr3t&id={id}");
+        assert_eq!(viewed_notebook_id(&url), Some(id));
+        assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/?secret=s3cr3t"), None);
+        assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/edit?id=../../secret"), None);
+    }
 }

@@ -1,5 +1,5 @@
 //! ACP connection to Claude Code, run on its own thread. The UI talks to it over
-//! two channels: prompts in, [`AgentEvent`]s out.
+//! two channels: prompts (content blocks) in, [`AgentEvent`]s out.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -8,7 +8,7 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     ContentBlock, InitializeRequest, McpServer, McpServerSse, NewSessionRequest, PromptRequest,
     RequestPermissionRequest, RequestPermissionResponse, SessionNotification, SessionUpdate,
-    StopReason, TextContent,
+    StopReason,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder};
 use futures::StreamExt;
@@ -27,7 +27,7 @@ pub enum AgentEvent {
 }
 
 /// Start the agent with the app's PlutoMCP bridge (`mcp_url`, legacy SSE) attached.
-pub fn start(mcp_url: String, cwd: PathBuf) -> (UnboundedSender<String>, UnboundedReceiver<AgentEvent>) {
+pub fn start(mcp_url: String, cwd: PathBuf) -> (UnboundedSender<Vec<ContentBlock>>, UnboundedReceiver<AgentEvent>) {
     let (prompt_tx, prompt_rx) = unbounded();
     let (event_tx, event_rx) = unbounded();
     std::thread::spawn(move || {
@@ -45,7 +45,7 @@ pub fn start(mcp_url: String, cwd: PathBuf) -> (UnboundedSender<String>, Unbound
 async fn run(
     mcp_url: String,
     cwd: PathBuf,
-    mut prompts: UnboundedReceiver<String>,
+    mut prompts: UnboundedReceiver<Vec<ContentBlock>>,
     events: UnboundedSender<AgentEvent>,
 ) -> Result<(), agent_client_protocol::Error> {
     let agent = AcpAgent::from_str(AGENT_CMD)?;
@@ -82,8 +82,7 @@ async fn run(
             let _ = events.unbounded_send(AgentEvent::Ready);
 
             // ponytail: one turn at a time and no session/cancel yet.
-            while let Some(text) = prompts.next().await {
-                let prompt = vec![ContentBlock::Text(TextContent::new(text))];
+            while let Some(prompt) = prompts.next().await {
                 let response = connection
                     .send_request(PromptRequest::new(session.session_id.clone(), prompt))
                     .block_task()
