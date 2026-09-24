@@ -90,7 +90,7 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
     is_uuid.then_some(id)
 }
 
-/// Notebook id from a PlutoMCP `open_notebook` result (`{"notebook_id": "<uuid>", …}`,
+/// Notebook id from a PlutoMCP `open_notebook`/`new_notebook` result (`{"notebook_id": "<uuid>", …}`,
 /// possibly nested as JSON text inside the MCP content array).
 fn opened_notebook_id(raw: &serde_json::Value) -> Option<String> {
     let text = raw.to_string();
@@ -252,7 +252,8 @@ impl Workspace {
                         *status = s;
                     }
                     // Follow the agent: show notebooks it opens in the pane.
-                    let opened = title.contains("pluto") && title.contains("open_notebook");
+                    let opened = title.contains("pluto")
+                        && (title.contains("open_notebook") || title.contains("new_notebook"));
                     if opened && *status == ToolCallStatus::Completed {
                         if let Some(id) = update.fields.raw_output.as_ref().and_then(opened_notebook_id) {
                             self.show_notebook(&id, cx);
