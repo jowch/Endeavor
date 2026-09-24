@@ -95,8 +95,17 @@ async fn run(
                 .and_then(|m| m.get("steering")?.get("supported")?.as_bool())
                 .unwrap_or(false);
             let pluto = McpServer::Sse(McpServerSse::new("pluto", mcp_url));
+            // The app's agent is its own environment, not the user's personal Claude
+            // Code setup: no user/project/local settings (hooks, output styles,
+            // plugins, CLAUDE.md) and no MCP servers beyond the ones passed here.
+            let isolated = serde_json::json!({
+                "claudeCode": { "options": { "settingSources": [], "strictMcpConfig": true } }
+            });
+            let request = NewSessionRequest::new(cwd)
+                .mcp_servers(vec![pluto])
+                .meta(isolated.as_object().cloned());
             let session = connection
-                .send_request(NewSessionRequest::new(cwd).mcp_servers(vec![pluto]))
+                .send_request(request)
                 .block_task()
                 .await?
                 .session_id;

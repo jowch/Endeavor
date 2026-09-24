@@ -22,6 +22,7 @@ use outbox::{Dispatch, Outbox, Queued};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
+use gpui_component::text::TextView;
 use gpui_component::{Root, Theme, ThemeMode};
 use gpui_wry::WebView;
 use raw_window_handle::HasWindowHandle;
@@ -376,7 +377,7 @@ impl Workspace {
         let muted = rgb(0x8a8a8a);
         match entry {
             Entry::User(text) => div().p_2().rounded_md().bg(rgb(0x2d2d30)).child(text.clone()).into_any_element(),
-            Entry::Agent(text) => div().child(text.clone()).into_any_element(),
+            Entry::Agent(text) => TextView::markdown(("agent", ix), text.clone()).into_any_element(),
             Entry::Note(text) => div().text_sm().text_color(muted).child(text.clone()).into_any_element(),
             Entry::Tool { title, status, .. } => div()
                 .text_sm()
