@@ -1,11 +1,24 @@
-//! Spike (design doc §10.1 + §11): app-owned Julia running Pluto + PlutoMCP,
-//! with the live Pluto frontend embedded as a child webview beside a native panel.
+//! Endeavor: app-owned Julia running Pluto + PlutoMCP, the live Pluto frontend in a
+//! child webview, and an ACP agent panel wired to the same Pluto session over MCP.
 
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 
+mod agent;
+
+use agent::AgentEvent;
+use agent_client_protocol::Responder;
+use agent_client_protocol::schema::v1::{
+    ContentBlock, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionUpdate, StopReason,
+    ToolCallId, ToolCallStatus,
+};
+use futures::StreamExt;
+use futures::channel::mpsc::UnboundedSender;
 use gpui::*;
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{Root, Theme, ThemeMode};
 use gpui_wry::WebView;
 use raw_window_handle::HasWindowHandle;
 
@@ -57,9 +70,21 @@ fn start_runtime() -> Result<Runtime, String> {
     Err("Julia exited before reporting READY (see stderr)".into())
 }
 
+enum Entry {
+    User(SharedString),
+    Agent(String),
+    Tool { id: ToolCallId, title: String, status: ToolCallStatus },
+    Permission { title: String, options: Vec<PermissionOption>, responder: Option<Responder<RequestPermissionResponse>> },
+    Note(SharedString),
+}
+
 struct Workspace {
     webview: Entity<WebView>,
-    status: SharedString,
+    input: Entity<InputState>,
+    scroll: ScrollHandle,
+    entries: Vec<Entry>,
+    prompts: Option<UnboundedSender<String>>,
+    busy: bool,
     _runtime: Option<Runtime>,
 }
 
@@ -74,35 +99,181 @@ impl Workspace {
             WebView::new(webview, window, cx)
         });
 
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Ask Claude about the notebook…"));
+        cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { secondary: false, .. } = event {
+                let text = input.read(cx).value().trim().to_string();
+                if !text.is_empty() && this.send(text) {
+                    input.update(cx, |s, cx| s.set_value("", window, cx));
+                    cx.notify();
+                }
+            }
+        })
+        .detach();
+
         // First run instantiates + precompiles (~1 min); later launches are seconds.
         let boot = cx.background_executor().spawn(async { start_runtime() });
         cx.spawn(async move |this, cx| {
-            let result = boot.await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(runtime) => {
-                        this.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
-                        this.status = format!("Pluto ready\nMCP: {}", runtime.mcp_url).into();
-                        this._runtime = Some(runtime);
-                    }
-                    Err(e) => this.status = format!("Runtime failed: {e}").into(),
+            let runtime = match boot.await {
+                Ok(runtime) => runtime,
+                Err(e) => {
+                    let _ = this.update(cx, |this, cx| this.note(format!("Runtime failed: {e}"), cx));
+                    return;
                 }
-                cx.notify();
-            })
-            .ok();
+            };
+            let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+            let (prompts, mut events) = agent::start(runtime.mcp_url.clone(), cwd);
+            let ok = this.update(cx, |this, cx| {
+                this.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
+                this.note(format!("Pluto ready · MCP {}\nConnecting to Claude…", runtime.mcp_url), cx);
+                this.prompts = Some(prompts);
+                this._runtime = Some(runtime);
+            });
+            if ok.is_err() {
+                return;
+            }
+            while let Some(event) = events.next().await {
+                if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
+                    break;
+                }
+            }
         })
         .detach();
 
         Self {
             webview,
-            status: "Starting Julia…".into(),
+            input,
+            scroll: ScrollHandle::new(),
+            entries: vec![Entry::Note("Starting Julia…".into())],
+            prompts: None,
+            busy: false,
             _runtime: None,
+        }
+    }
+
+    /// Queue a prompt; false if the agent isn't ready or is mid-turn.
+    fn send(&mut self, text: String) -> bool {
+        let Some(prompts) = self.prompts.as_ref().filter(|_| !self.busy) else {
+            return false;
+        };
+        self.busy = prompts.unbounded_send(text.clone()).is_ok();
+        if self.busy {
+            self.entries.push(Entry::User(text.into()));
+            self.scroll.scroll_to_bottom();
+        }
+        self.busy
+    }
+
+    fn note(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.entries.push(Entry::Note(text.into()));
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    fn on_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
+        match event {
+            AgentEvent::Ready => return self.note("Claude connected with the pluto MCP server.", cx),
+            AgentEvent::Failed(e) => {
+                self.busy = true; // no more prompts
+                return self.note(format!("Agent stopped: {e}"), cx);
+            }
+            AgentEvent::TurnEnded(reason) => {
+                self.busy = false;
+                if reason != StopReason::EndTurn {
+                    return self.note(format!("Turn ended: {reason:?}"), cx);
+                }
+            }
+            AgentEvent::Permission(request, responder) => self.entries.push(Entry::Permission {
+                title: request.tool_call.fields.title.unwrap_or_else(|| "Tool call".into()),
+                options: request.options,
+                responder: Some(responder),
+            }),
+            AgentEvent::Update(SessionUpdate::AgentMessageChunk(chunk)) => {
+                if let ContentBlock::Text(t) = chunk.content {
+                    match self.entries.last_mut() {
+                        Some(Entry::Agent(text)) => text.push_str(&t.text),
+                        _ => self.entries.push(Entry::Agent(t.text)),
+                    }
+                }
+            }
+            AgentEvent::Update(SessionUpdate::ToolCall(call)) => self.entries.push(Entry::Tool {
+                id: call.tool_call_id,
+                title: call.title,
+                status: call.status,
+            }),
+            AgentEvent::Update(SessionUpdate::ToolCallUpdate(update)) => {
+                let tool = self.entries.iter_mut().rev().find_map(|e| match e {
+                    Entry::Tool { id, title, status } if *id == update.tool_call_id => Some((title, status)),
+                    _ => None,
+                });
+                if let Some((title, status)) = tool {
+                    if let Some(t) = update.fields.title {
+                        *title = t;
+                    }
+                    if let Some(s) = update.fields.status {
+                        *status = s;
+                    }
+                }
+            }
+            // ponytail: thoughts, plans, modes, usage not shown yet.
+            AgentEvent::Update(_) => return,
+        }
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    fn answer(&mut self, ix: usize, option: &PermissionOption, cx: &mut Context<Self>) {
+        let Some(Entry::Permission { title, responder, .. }) = self.entries.get_mut(ix) else {
+            return;
+        };
+        if let Some(responder) = responder.take() {
+            let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
+            let _ = responder.respond(RequestPermissionResponse::new(outcome));
+            self.entries[ix] = Entry::Note(format!("{}: {}", option.name, title).into());
+            cx.notify();
+        }
+    }
+
+    fn render_entry(&self, ix: usize, entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
+        let muted = rgb(0x8a8a8a);
+        match entry {
+            Entry::User(text) => div().p_2().rounded_md().bg(rgb(0x2d2d30)).child(text.clone()).into_any_element(),
+            Entry::Agent(text) => div().child(text.clone()).into_any_element(),
+            Entry::Note(text) => div().text_sm().text_color(muted).child(text.clone()).into_any_element(),
+            Entry::Tool { title, status, .. } => div()
+                .text_sm()
+                .text_color(muted)
+                .child(format!("⚙ {title} · {status:?}"))
+                .into_any_element(),
+            Entry::Permission { title, options, .. } => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_2()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0xc8a040))
+                .child(format!("Allow {title}?"))
+                .child(div().flex().gap_2().children(options.iter().enumerate().map(|(i, option)| {
+                    let option = option.clone();
+                    let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
+                    div()
+                        .id(("perm", ix * 16 + i))
+                        .px_2()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .bg(if allow { rgb(0x2f5d3a) } else { rgb(0x5d2f2f) })
+                        .child(option.name.clone())
+                        .on_click(cx.listener(move |this, _, _, cx| this.answer(ix, &option, cx)))
+                })))
+                .into_any_element(),
         }
     }
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let entries: Vec<_> = self.entries.iter().enumerate().map(|(i, e)| self.render_entry(i, e, cx)).collect();
         div()
             .flex()
             .size_full()
@@ -110,16 +281,25 @@ impl Render for Workspace {
             .text_color(rgb(0xdddddd))
             .child(
                 div()
-                    .w(px(360.))
+                    .w(px(420.))
                     .h_full()
                     .flex()
                     .flex_col()
-                    .gap_2()
-                    .p_4()
                     .border_r_1()
                     .border_color(rgb(0x333333))
-                    .child("Agent panel")
-                    .child(div().text_sm().text_color(rgb(0x999999)).child(self.status.clone())),
+                    .child(
+                        div()
+                            .id("transcript")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .p_3()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .children(entries),
+                    )
+                    .child(div().p_3().border_t_1().border_color(rgb(0x333333)).child(Input::new(&self.input))),
             )
             .child(div().flex_1().h_full().child(self.webview.clone()))
     }
@@ -127,13 +307,18 @@ impl Render for Workspace {
 
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
+        gpui_component::init(cx);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| Workspace::new(window, cx)),
+            |window, cx| {
+                Theme::change(ThemeMode::Dark, Some(window), cx);
+                let workspace = cx.new(|cx| Workspace::new(window, cx));
+                cx.new(|cx| Root::new(workspace, window, cx))
+            },
         )
         .unwrap();
         // Quitting closes Julia's stdin, which shuts the runtime down.
