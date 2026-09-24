@@ -5,6 +5,7 @@ use std::time::Duration;
 
 mod agent;
 mod annotate;
+mod celldiff;
 mod outbox;
 mod pluto;
 mod runtime;
@@ -13,8 +14,8 @@ use agent::AgentEvent;
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v1::{
     ContentBlock, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionUpdate, StopReason,
-    TextContent, ToolCallId, ToolCallStatus,
+    PlanEntry, PlanEntryStatus, RequestPermissionResponse, SelectedPermissionOutcome, SessionUpdate,
+    StopReason, TextContent, ToolCallId, ToolCallStatus,
 };
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedSender;
@@ -31,7 +32,18 @@ use runtime::Runtime;
 enum Entry {
     User(SharedString),
     Agent(String),
-    Tool { id: ToolCallId, title: String, status: ToolCallStatus },
+    Tool {
+        id: ToolCallId,
+        title: String,
+        status: ToolCallStatus,
+        input: Option<serde_json::Value>,
+        output: Option<serde_json::Value>,
+        /// Cell edits made by this call, shown inline.
+        diffs: Vec<celldiff::CellDiff>,
+        expanded: bool,
+    },
+    Thought { text: String, expanded: bool },
+    Plan(Vec<PlanEntry>),
     Permission { title: String, options: Vec<PermissionOption>, responder: Option<Responder<RequestPermissionResponse>> },
     Note(SharedString),
 }
@@ -47,16 +59,6 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
     annotate::is_uuid(id).then_some(id)
 }
 
-/// Notebook id from a PlutoMCP `open_notebook`/`new_notebook` result (`{"notebook_id": "<uuid>", …}`,
-/// possibly nested as JSON text inside the MCP content array).
-fn opened_notebook_id(raw: &serde_json::Value) -> Option<String> {
-    let text = raw.to_string();
-    let rest = &text[text.find("notebook_id")?..];
-    rest.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
-        .find(|t| annotate::is_uuid(t))
-        .map(str::to_owned)
-}
-
 actions!(endeavor, [Interrupt, ToggleAnnotation]);
 
 struct Workspace {
@@ -66,6 +68,8 @@ struct Workspace {
     entries: Vec<Entry>,
     prompts: Option<UnboundedSender<agent::Command>>,
     outbox: Outbox,
+    /// Each cell's code as last seen in the agent's reads and edits, for diffs.
+    cell_codes: celldiff::CellCodes,
     annotating: bool,
     runtime: Option<Runtime>,
     /// Booting or restarting Julia.
@@ -149,6 +153,7 @@ impl Workspace {
             entries: Vec::new(),
             prompts: None,
             outbox: Outbox::default(),
+            cell_codes: celldiff::CellCodes::default(),
             annotating: false,
             runtime: None,
             starting: false,
@@ -406,38 +411,84 @@ impl Workspace {
                     }
                 }
             }
+            AgentEvent::Update(SessionUpdate::AgentThoughtChunk(chunk)) => {
+                if let ContentBlock::Text(t) = chunk.content {
+                    match self.entries.last_mut() {
+                        Some(Entry::Thought { text, .. }) => text.push_str(&t.text),
+                        _ => self.entries.push(Entry::Thought { text: t.text, expanded: false }),
+                    }
+                }
+            }
+            // One plan per turn, updated in place.
+            AgentEvent::Update(SessionUpdate::Plan(plan)) => {
+                let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
+                match self.entries[turn_start..].iter_mut().find(|e| matches!(e, Entry::Plan(_))) {
+                    Some(existing) => *existing = Entry::Plan(plan.entries),
+                    None => self.entries.push(Entry::Plan(plan.entries)),
+                }
+            }
             AgentEvent::Update(SessionUpdate::ToolCall(call)) => self.entries.push(Entry::Tool {
                 id: call.tool_call_id,
                 title: call.title,
                 status: call.status,
+                input: call.raw_input,
+                output: call.raw_output,
+                diffs: Vec::new(),
+                expanded: false,
             }),
             AgentEvent::Update(SessionUpdate::ToolCallUpdate(update)) => {
-                let tool = self.entries.iter_mut().rev().find_map(|e| match e {
-                    Entry::Tool { id, title, status } if *id == update.tool_call_id => Some((title, status)),
-                    _ => None,
-                });
-                if let Some((title, status)) = tool {
-                    if let Some(t) = update.fields.title {
-                        *title = t;
-                    }
-                    if let Some(s) = update.fields.status {
-                        *status = s;
-                    }
+                if let Some(opened) = self.on_tool_update(update) {
                     // Follow the agent: show notebooks it opens in the pane.
-                    let opened = title.contains("pluto")
-                        && (title.contains("open_notebook") || title.contains("new_notebook"));
-                    if opened && *status == ToolCallStatus::Completed {
-                        if let Some(id) = update.fields.raw_output.as_ref().and_then(opened_notebook_id) {
-                            self.show_notebook(&id, cx);
-                        }
-                    }
+                    self.show_notebook(&opened, cx);
                 }
             }
-            // ponytail: thoughts, plans, modes, usage not shown yet.
+            // ponytail: modes, usage, available commands not shown yet.
             AgentEvent::Update(_) => return,
         }
         self.scroll.scroll_to_bottom();
         cx.notify();
+    }
+
+    /// Apply a tool-call update; on a completed pluto call, learn cell code and
+    /// diff edits. Returns a notebook id the agent just opened or created.
+    fn on_tool_update(&mut self, update: agent_client_protocol::schema::v1::ToolCallUpdate) -> Option<String> {
+        let ix = self
+            .entries
+            .iter()
+            .rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
+        let Entry::Tool { title, status, input, output, diffs, .. } = &mut self.entries[ix] else { return None };
+        let fields = update.fields;
+        if let Some(t) = fields.title {
+            *title = t;
+        }
+        if let Some(s) = fields.status {
+            *status = s;
+        }
+        if fields.raw_input.is_some() {
+            *input = fields.raw_input;
+        }
+        if fields.raw_output.is_some() {
+            *output = fields.raw_output;
+        }
+        let tool = celldiff::pluto_tool(title).filter(|_| *status == ToolCallStatus::Completed)?;
+        let result = output.as_ref().and_then(celldiff::tool_json)?;
+        if result.get("error").is_some() {
+            return None;
+        }
+        self.cell_codes.observe(tool, &result);
+        if let Some(input) = input {
+            *diffs = self.cell_codes.diff(tool, input);
+        }
+        matches!(tool, "open_notebook" | "new_notebook")
+            .then(|| result["notebook_id"].as_str().map(str::to_owned))
+            .flatten()
+    }
+
+    fn toggle(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(Entry::Tool { expanded, .. } | Entry::Thought { expanded, .. }) = self.entries.get_mut(ix) {
+            *expanded = !*expanded;
+            cx.notify();
+        }
     }
 
     fn answer(&mut self, ix: usize, option: &PermissionOption, cx: &mut Context<Self>) {
@@ -458,10 +509,57 @@ impl Workspace {
             Entry::User(text) => div().p_2().rounded_md().bg(rgb(0x2d2d30)).child(text.clone()).into_any_element(),
             Entry::Agent(text) => TextView::markdown(("agent", ix), text.clone()).into_any_element(),
             Entry::Note(text) => div().text_sm().text_color(muted).child(text.clone()).into_any_element(),
-            Entry::Tool { title, status, .. } => div()
+            Entry::Tool { title, status, input, output, diffs, expanded, .. } => {
+                let arrow = if *expanded { "▾" } else { "▸" };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .text_sm()
+                    .child(
+                        div()
+                            .id(("tool", ix))
+                            .cursor_pointer()
+                            .text_color(muted)
+                            .child(format!("{arrow} ⚙ {title} · {status:?}"))
+                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(ix, cx))),
+                    )
+                    .children(diffs.iter().map(render_diff))
+                    .when(*expanded, |d| {
+                        d.children(input.as_ref().map(|v| detail("input", v)))
+                            .children(output.as_ref().map(|v| detail("result", &celldiff::tool_json(v).unwrap_or_else(|| v.clone()))))
+                    })
+                    .into_any_element()
+            }
+            Entry::Thought { text, expanded } => div()
+                .flex()
+                .flex_col()
+                .gap_1()
                 .text_sm()
                 .text_color(muted)
-                .child(format!("⚙ {title} · {status:?}"))
+                .child(
+                    div()
+                        .id(("thought", ix))
+                        .cursor_pointer()
+                        .child(if *expanded { "▾ Thinking" } else { "▸ Thinking" })
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle(ix, cx))),
+                )
+                .when(*expanded, |d| d.child(div().italic().child(text.clone())))
+                .into_any_element(),
+            Entry::Plan(entries) => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_sm()
+                .child(div().text_color(muted).child("Plan"))
+                .children(entries.iter().map(|e| {
+                    let (mark, color) = match e.status {
+                        PlanEntryStatus::Completed => ("☑", rgb(0x6a9955)),
+                        PlanEntryStatus::InProgress => ("◐", rgb(0xc8a040)),
+                        _ => ("☐", rgb(0xaaaaaa)),
+                    };
+                    div().flex().gap_2().child(div().text_color(color).child(mark)).child(e.content.clone())
+                }))
                 .into_any_element(),
             Entry::Permission { title, options, .. } => div()
                 .flex()
@@ -519,6 +617,56 @@ impl Workspace {
                 })
         }))
     }
+}
+
+/// A cell edit as colored lines.
+fn render_diff(diff: &celldiff::CellDiff) -> impl IntoElement + use<> {
+    use celldiff::Change;
+    // ponytail: long diffs are cut, not scrollable; expand the tool call for its input.
+    const MAX_LINES: usize = 60;
+    div()
+        .flex()
+        .flex_col()
+        .rounded_sm()
+        .border_1()
+        .border_color(rgb(0x333333))
+        .font_family("Menlo")
+        .text_xs()
+        .child(div().px_2().text_color(rgb(0x8a8a8a)).child(diff.label.clone()))
+        .children(diff.lines.iter().take(MAX_LINES).map(|(change, line)| {
+            let (sign, bg) = match change {
+                Change::Added => ("+", Some(rgb(0x1f3a26))),
+                Change::Removed => ("-", Some(rgb(0x4a2226))),
+                Change::Same => (" ", None),
+            };
+            div()
+                .px_2()
+                .when_some(bg, |d, bg| d.bg(bg))
+                .child(format!("{sign} {line}"))
+        }))
+        .when(diff.lines.len() > MAX_LINES, |d| {
+            d.child(div().px_2().text_color(rgb(0x8a8a8a)).child(format!("… {} more lines", diff.lines.len() - MAX_LINES)))
+        })
+}
+
+/// A tool call's input or result, pretty-printed and truncated.
+fn detail(label: &str, value: &serde_json::Value) -> impl IntoElement + use<> {
+    const MAX_CHARS: usize = 2000;
+    let text = serde_json::to_string_pretty(value).unwrap_or_default();
+    let text = match text.char_indices().nth(MAX_CHARS) {
+        Some((cut, _)) => format!("{}\n…", &text[..cut]),
+        None => text,
+    };
+    div()
+        .flex()
+        .flex_col()
+        .rounded_sm()
+        .bg(rgb(0x252526))
+        .p_2()
+        .font_family("Menlo")
+        .text_xs()
+        .child(div().text_color(rgb(0x8a8a8a)).child(label.to_string()))
+        .child(text)
 }
 
 impl Render for Workspace {
@@ -628,7 +776,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{opened_notebook_id, viewed_notebook_id};
+    use super::viewed_notebook_id;
 
     #[test]
     fn notebook_id_from_pluto_url() {
@@ -637,14 +785,5 @@ mod tests {
         assert_eq!(viewed_notebook_id(&url), Some(id));
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/?secret=s3cr3t"), None);
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/edit?id=../../secret"), None);
-    }
-
-    #[test]
-    fn notebook_id_from_open_notebook_result() {
-        let id = "6a1b2c3d-0000-4000-8000-1234567890ab";
-        let inner = format!(r#"{{"path":"/tmp/a.jl","notebook_id":"{id}","ran":false}}"#);
-        let raw = serde_json::json!([{ "type": "text", "text": inner }]);
-        assert_eq!(opened_notebook_id(&raw).as_deref(), Some(id));
-        assert_eq!(opened_notebook_id(&serde_json::json!({"error": "file_not_found"})), None);
     }
 }
