@@ -6,7 +6,7 @@ use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 
 mod agent;
-mod glass;
+mod annotate;
 
 use agent::AgentEvent;
 use agent_client_protocol::Responder;
@@ -88,7 +88,7 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
         return None;
     }
     let id = query.split('&').find_map(|kv| kv.strip_prefix("id="))?;
-    glass::is_uuid(id).then_some(id)
+    annotate::is_uuid(id).then_some(id)
 }
 
 /// Notebook id from a PlutoMCP `open_notebook`/`new_notebook` result (`{"notebook_id": "<uuid>", …}`,
@@ -97,7 +97,7 @@ fn opened_notebook_id(raw: &serde_json::Value) -> Option<String> {
     let text = raw.to_string();
     let rest = &text[text.find("notebook_id")?..];
     rest.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
-        .find(|t| glass::is_uuid(t))
+        .find(|t| annotate::is_uuid(t))
         .map(str::to_owned)
 }
 
@@ -108,21 +108,21 @@ struct Workspace {
     entries: Vec<Entry>,
     prompts: Option<UnboundedSender<Vec<ContentBlock>>>,
     busy: bool,
-    annotations: Vec<glass::Annotation>,
-    glass_on: bool,
+    annotations: Vec<annotate::Annotation>,
+    annotating: bool,
     _runtime: Option<Runtime>,
 }
 
 impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (glass_tx, mut glass_rx) = futures::channel::mpsc::unbounded::<String>();
+        let (page_tx, mut page_rx) = futures::channel::mpsc::unbounded::<String>();
         let webview = cx.new(|cx| {
             let handle = window.window_handle().expect("window handle");
             let webview = wry::WebViewBuilder::new()
                 .with_devtools(true)
-                .with_initialization_script(glass::SCRIPT)
+                .with_initialization_script(annotate::SCRIPT)
                 .with_ipc_handler(move |request| {
-                    let _ = glass_tx.unbounded_send(request.into_body());
+                    let _ = page_tx.unbounded_send(request.into_body());
                 })
                 .build_as_child(&handle)
                 .expect("child webview");
@@ -130,8 +130,8 @@ impl Workspace {
         });
 
         cx.spawn(async move |this, cx| {
-            while let Some(body) = glass_rx.next().await {
-                if this.update(cx, |this, cx| this.on_glass(&body, cx)).is_err() {
+            while let Some(body) = page_rx.next().await {
+                if this.update(cx, |this, cx| this.on_page_message(&body, cx)).is_err() {
                     break;
                 }
             }
@@ -183,7 +183,7 @@ impl Workspace {
             prompts: None,
             busy: false,
             annotations: Vec::new(),
-            glass_on: false,
+            annotating: false,
             _runtime: None,
         }
     }
@@ -214,7 +214,7 @@ impl Workspace {
                  Unless they say otherwise, \"the notebook\" means this one."
             ))));
         }
-        prompt.extend(glass::prompt_blocks(&self.annotations));
+        prompt.extend(annotate::prompt_blocks(&self.annotations));
         let ask = if text.is_empty() { "Please address the annotations above." } else { &text };
         prompt.push(ContentBlock::Text(TextContent::new(ask)));
         self.busy = prompts.unbounded_send(prompt).is_ok();
@@ -225,18 +225,18 @@ impl Workspace {
             };
             self.entries.push(Entry::User(shown.into()));
             self.annotations.clear();
-            self.glass_script("__glass.clearBadges(); __glass.set(false)", cx);
+            self.page_script("__annotate.clearBadges(); __annotate.set(false)", cx);
             self.scroll.scroll_to_bottom();
         }
         self.busy
     }
 
-    fn on_glass(&mut self, body: &str, cx: &mut Context<Self>) {
-        match glass::parse(body) {
-            Some(glass::Message::Mode(on)) => self.glass_on = on,
-            Some(glass::Message::Annotation(a)) => self.annotations.push(a),
+    fn on_page_message(&mut self, body: &str, cx: &mut Context<Self>) {
+        match annotate::parse(body) {
+            Some(annotate::Message::Mode(on)) => self.annotating = on,
+            Some(annotate::Message::Annotation(a)) => self.annotations.push(a),
             // The page can't reach the chat box, so this sends annotations only.
-            Some(glass::Message::Send) => {
+            Some(annotate::Message::Send) => {
                 self.send(String::new(), cx);
             }
             None => return,
@@ -244,8 +244,8 @@ impl Workspace {
         cx.notify();
     }
 
-    fn glass_script(&self, js: &str, cx: &mut Context<Self>) {
-        let _ = self.webview.read(cx).raw().evaluate_script(&format!("window.__glass && ({{ {js} }})"));
+    fn page_script(&self, js: &str, cx: &mut Context<Self>) {
+        let _ = self.webview.read(cx).raw().evaluate_script(&format!("window.__annotate && ({{ {js} }})"));
     }
 
     fn show_notebook(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -431,7 +431,7 @@ impl Render for Workspace {
                                 let n = self.annotations.len();
                                 d.child(
                                     div()
-                                        .id("glass-send")
+                                        .id("annotate-send")
                                         .px_2()
                                         .py_1()
                                         .rounded_sm()
@@ -448,16 +448,16 @@ impl Render for Workspace {
                             })
                             .child(
                                 div()
-                                    .id("glass-toggle")
+                                    .id("annotate-toggle")
                                     .px_2()
                                     .rounded_sm()
                                     .cursor_pointer()
                                     .text_sm()
-                                    .when(self.glass_on, |d| d.bg(rgb(0x8a6d1f)))
-                                    .child(if self.glass_on { "◉ Glass mode on — click cells (Esc to exit)" } else { "◎ Glass mode (⌘⇧G)" })
+                                    .when(self.annotating, |d| d.bg(rgb(0x8a6d1f)))
+                                    .child(if self.annotating { "◉ Annotation mode on — click cells (Esc to exit)" } else { "◎ Annotation mode (⌘⇧G)" })
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        let js = if this.glass_on { "__glass.set(false)" } else { "__glass.set(true)" };
-                                        this.glass_script(js, cx);
+                                        let js = if this.annotating { "__annotate.set(false)" } else { "__annotate.set(true)" };
+                                        this.page_script(js, cx);
                                     })),
                             )
                             .child(Input::new(&self.input)),

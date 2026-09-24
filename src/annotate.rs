@@ -1,9 +1,9 @@
-//! Glass design mode, Rust side: messages from `glass.js` and the prompt blocks
+//! Annotation mode, Rust side: messages from `annotate.js` and the prompt blocks
 //! queued annotations turn into (design doc §4.2–4.3).
 
 use agent_client_protocol::schema::v1::{ContentBlock, ResourceLink, TextContent};
 
-pub const SCRIPT: &str = include_str!("glass.js");
+pub const SCRIPT: &str = include_str!("annotate.js");
 
 /// Upper bounds on page-supplied data. The page also runs notebook output JS,
 /// so any of these messages may be forged; the user sees every annotation in
@@ -34,7 +34,7 @@ pub fn is_uuid(s: &str) -> bool {
 pub fn parse(body: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     match v.get("type")?.as_str()? {
-        "glass" => Some(Message::Mode(v.get("on")?.as_bool()?)),
+        "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "send" => Some(Message::Send),
         "annotation" => {
             let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
@@ -63,7 +63,7 @@ pub fn prompt_blocks(annotations: &[Annotation]) -> Vec<ContentBlock> {
         return Vec::new();
     }
     let mut blocks = vec![ContentBlock::Text(TextContent::new(
-        "[Endeavor] The user annotated notebook cells in glass mode. Each \
+        "[Endeavor] The user annotated notebook cells in annotation mode. Each \
          pluto://notebook/{notebook_id}/cell/{cell_id} link names a cell; read its current \
          code and output with the pluto MCP tools (the links are not fetchable URLs).",
     ))];
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn parses_valid_messages() {
-        assert_eq!(parse(r#"{"type":"glass","on":true}"#), Some(Message::Mode(true)));
+        assert_eq!(parse(r#"{"type":"mode","on":true}"#), Some(Message::Mode(true)));
         assert_eq!(parse(r#"{"type":"send"}"#), Some(Message::Send));
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"why so slow?"}}"#);
         let Some(Message::Annotation(a)) = parse(&body) else { panic!("rejected valid annotation") };

@@ -1,39 +1,39 @@
-// Glass design mode, injected into the Pluto page by Endeavor (design doc §4.2).
-// In glass mode, clicks pick cells instead of editing them; Pluto's own selection
+// Annotation mode, injected into the Pluto page by Endeavor (design doc §4.2).
+// In annotation mode, clicks pick cells instead of editing them; Pluto's own selection
 // is picked up on entry. Cmd+Enter sends a comment on the picked cells to the
 // agent (via window.ipc, keyed by cell UUID); "Queue comment" batches several.
 (() => {
-  if (window.__glass) return;
+  if (window.__annotate) return;
 
   const css = `
-    body.glass pluto-cell { cursor: crosshair; }
-    body.glass pluto-cell:hover { outline: 2px dashed #c8a040; outline-offset: 4px; }
-    body.glass pluto-cell.glass-picked { outline: 2px solid #c8a040; outline-offset: 4px; }
-    pluto-cell[data-glass-count]::after {
-      content: "✎ " attr(data-glass-count); position: absolute; right: -2.6rem; top: 0;
+    body.annotating pluto-cell { cursor: crosshair; }
+    body.annotating pluto-cell:hover { outline: 2px dashed #c8a040; outline-offset: 4px; }
+    body.annotating pluto-cell.annotate-picked { outline: 2px solid #c8a040; outline-offset: 4px; }
+    pluto-cell[data-annotate-count]::after {
+      content: "✎ " attr(data-annotate-count); position: absolute; right: -2.6rem; top: 0;
       font: 600 11px system-ui; color: #c8a040;
     }
-    #glass-frame { position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+    #annotate-frame { position: fixed; inset: 0; pointer-events: none; z-index: 9999;
       box-shadow: inset 0 0 0 3px #c8a040; display: none; }
-    #glass-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
       z-index: 10000; display: none; flex-direction: column; gap: 8px;
       width: min(640px, 90vw); padding: 12px; border-radius: 12px;
       background: rgba(28, 28, 30, 0.72); color: #ddd; font: 13px system-ui;
       backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
       box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); }
-    body.glass #glass-bar, body.glass #glass-frame { display: flex; }
-    #glass-bar textarea { resize: vertical; min-height: 3.5em; padding: 6px 8px; border-radius: 6px;
+    body.annotating #annotate-bar, body.annotating #annotate-frame { display: flex; }
+    #annotate-bar textarea { resize: vertical; min-height: 3.5em; padding: 6px 8px; border-radius: 6px;
       border: 1px solid #555; background: rgba(0, 0, 0, 0.35); color: #eee; font: 13px system-ui; }
-    #glass-bar .row { display: flex; gap: 8px; align-items: center; }
-    #glass-bar .status { flex: 1; color: #aaa; }
-    #glass-bar button { padding: 4px 10px; border-radius: 6px; border: 0; cursor: pointer;
+    #annotate-bar .row { display: flex; gap: 8px; align-items: center; }
+    #annotate-bar .status { flex: 1; color: #aaa; }
+    #annotate-bar button { padding: 4px 10px; border-radius: 6px; border: 0; cursor: pointer;
       background: #3a3a3c; color: #eee; font: 13px system-ui; }
-    #glass-bar button.primary { background: #8a6d1f; }
-    #glass-bar button:disabled { opacity: 0.4; cursor: default; }
+    #annotate-bar button.primary { background: #8a6d1f; }
+    #annotate-bar button:disabled { opacity: 0.4; cursor: default; }
   `;
 
   const picked = new Set();
-  const on = () => document.body.classList.contains("glass");
+  const on = () => document.body.classList.contains("annotating");
   const cells = () => [...document.querySelectorAll("pluto-cell")];
   const post = (msg) => window.ipc && window.ipc.postMessage(JSON.stringify(msg));
 
@@ -41,9 +41,9 @@
     const style = document.createElement("style");
     style.textContent = css;
     const frame = document.createElement("div");
-    frame.id = "glass-frame";
+    frame.id = "annotate-frame";
     const bar = document.createElement("div");
-    bar.id = "glass-bar";
+    bar.id = "annotate-bar";
     bar.innerHTML = `
       <div class="row"><span class="status"></span></div>
       <textarea placeholder="Comment for Claude on the selected cells…"></textarea>
@@ -62,19 +62,19 @@
         ? `${picked.size} cell${picked.size > 1 ? "s" : ""} selected`
         : "Click cells to select them";
       add.disabled = picked.size === 0;
-      for (const c of cells()) c.classList.toggle("glass-picked", picked.has(c.id));
+      for (const c of cells()) c.classList.toggle("annotate-picked", picked.has(c.id));
     }
 
     function set(enable) {
       if (enable === on()) return;
-      document.body.classList.toggle("glass", enable);
+      document.body.classList.toggle("annotating", enable);
       picked.clear();
       if (enable) {
         for (const c of document.querySelectorAll("pluto-cell.selected")) picked.add(c.id);
         text.focus();
       }
       refresh();
-      post({ type: "glass", on: enable });
+      post({ type: "mode", on: enable });
     }
 
     // Queue whatever is picked, then ask Endeavor to send everything queued.
@@ -89,7 +89,7 @@
       const notebook = new URLSearchParams(location.search).get("id");
       post({ type: "annotation", notebook, cells: ids, comment: text.value.trim() });
       for (const c of cells())
-        if (picked.has(c.id)) c.dataset.glassCount = String(Number(c.dataset.glassCount || 0) + 1);
+        if (picked.has(c.id)) c.dataset.annotateCount = String(Number(c.dataset.annotateCount || 0) + 1);
       text.value = "";
       picked.clear();
       refresh();
@@ -122,10 +122,10 @@
     bar.querySelector(".send").onclick = send;
     bar.querySelector(".exit").onclick = () => set(false);
 
-    window.__glass = {
+    window.__annotate = {
       set,
       clearBadges() {
-        for (const c of document.querySelectorAll("pluto-cell[data-glass-count]")) delete c.dataset.glassCount;
+        for (const c of document.querySelectorAll("pluto-cell[data-annotate-count]")) delete c.dataset.annotateCount;
       },
     };
   }

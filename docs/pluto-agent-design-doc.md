@@ -10,7 +10,7 @@ already relies on today: **PlutoMCP.jl + styx (Cursor plugin) + Cursor's
 built-in "glass" browser tool**. That combination is known-good in practice;
 the job is not to redesign the workflow, it's to extract it from Cursor.
 
-Core new capability beyond today's styx setup: a **"glass design mode"** —
+Core new capability beyond today's styx setup: an **"annotation mode"** —
 a translucent annotation overlay on the live notebook view that lets the user
 point at one or more cells, attach a comment, and inject that as precise,
 structured context into the agent's next prompt turn.
@@ -22,7 +22,7 @@ structured context into the agent's next prompt turn.
   CLI, Cursor CLI, etc.), not just Cursor.
 - Split-screen: native agent panel + a real, live-rendered Pluto notebook
   side by side in one app.
-- Glass design mode: point-and-comment annotation on individual cells or
+- Annotation mode: point-and-comment annotation on individual cells or
   Pluto's native multi-cell selections, queued and batch-sent as context.
 - Preserve everything that already works: PlutoMCP.jl session semantics,
   styx's safety guards, its audit trail.
@@ -44,7 +44,7 @@ structured context into the agent's next prompt turn.
 │ │ Agent Panel        │   │ Notebook Surface                 │   │
 │ │ (ACP client)        │   │ (embedded webview: real Pluto    │   │
 │ │ - transcript        │   │  frontend, wry-based)             │   │
-│ │ - diffs             │   │ - Glass overlay (injected JS/CSS) │   │
+│ │ - diffs             │   │ - Annotation overlay (injected JS)│   │
 │ │ - permission prompts│   │ - cell hover/click/select         │   │
 │ │ - tool-call log      │   │ - pending annotation tray         │   │
 │ └─────────┬──────────┘   └───────────┬───────────────────────┘   │
@@ -82,7 +82,7 @@ frontend/server — a second, independent connection to the same session.
 - No native reimplementation of cell rendering, plots, LaTeX, etc. — get
   that for free from Pluto's own JS frontend.
 
-### 4.2 Glass Design Mode (annotation overlay)
+### 4.2 Annotation Mode (overlay)
 - Implemented as injected JS/CSS inside the webview via
   `WebViewBuilder::with_initialization_script`, not as a native GPUI overlay
   — avoids cross-engine (native+web) compositing entirely.
@@ -105,7 +105,7 @@ frontend/server — a second, independent connection to the same session.
   agent-harness UI and needs no novel design.
 
 ### 4.3 Context Injection Pipeline
-1. User clicks/selects cell(s) in the glass overlay → overlay captures cell
+1. User clicks/selects cell(s) in the annotation overlay → overlay captures cell
    UUID(s) + optional comment text via `window.ipc.postMessage`.
 2. GPUI app resolves each UUID through the **pluto MCP server**, which
    returns authoritative source, current output, and dependency-graph
@@ -212,7 +212,7 @@ Verified directly against styx's own repo contents and the ACP schema.
 - `notebook-model`: backend-agnostic trait (`CellId`, `Topology`,
   `run_cell`, `get_output`, `bond_values`) — `pluto` impl now, stub
   `jupyter` impl later.
-- `glass-overlay`: the injected JS/CSS annotation layer + IPC handling +
+- `annotation-overlay`: the injected JS/CSS annotation layer + IPC handling +
   pending-annotation queue.
 - `pluto-mcp-bridge`: thin Rust wrapper around the existing PlutoMCP.jl
   server (reuse, don't rewrite).
@@ -239,10 +239,10 @@ window fallback) remains a legitimate pivot.
 1. Spike: embed `wry` as a child view in a minimal GPUI window; validate
    resize/focus/z-order behavior.
 2. Stand up `acp-client` against a real ACP agent with `session/new`
-   supplying the existing `pluto` MCP server only (no glass yet).
+   supplying the existing `pluto` MCP server only (no annotation mode yet).
 3. Build the browser-automation MCP server + lock primitive; wire into
    `session/new`.
-4. Build the glass overlay: hover/click/select on `pluto-cell`, read
+4. Build the annotation overlay: hover/click/select on `pluto-cell`, read
    Pluto's own `selected_cells` state, pending-annotation tray.
 5. Wire the context-injection pipeline: DOM click → UUID → MCP resolve →
    ACP content block → batched `session/prompt`.
