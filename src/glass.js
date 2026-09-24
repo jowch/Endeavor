@@ -1,7 +1,7 @@
 // Glass design mode, injected into the Pluto page by Endeavor (design doc §4.2).
 // In glass mode, clicks pick cells instead of editing them; Pluto's own selection
-// is picked up on entry. A comment on the picked cells is queued in Endeavor's
-// panel (via window.ipc) and sent with the next prompt, keyed by cell UUID.
+// is picked up on entry. Cmd+Enter sends a comment on the picked cells to the
+// agent (via window.ipc, keyed by cell UUID); "Queue comment" batches several.
 (() => {
   if (window.__glass) return;
 
@@ -47,7 +47,7 @@
     bar.innerHTML = `
       <div class="row"><span class="status"></span></div>
       <textarea placeholder="Comment for Claude on the selected cells…"></textarea>
-      <div class="row"><span class="status">⌘↩ queue · ⌘⇧↩ send · Esc exit</span>
+      <div class="row"><span class="status">⌘↩ send · Esc exit</span>
         <button class="exit">Done</button><button class="add">Queue comment</button>
         <button class="primary send">Send to Claude</button></div>`;
     document.head.append(style);
@@ -114,8 +114,7 @@
         if (e.key.toLowerCase() === "g" && e.metaKey && e.shiftKey) return (e.preventDefault(), set(!on()));
         if (!on()) return;
         if (e.key === "Escape") return (e.preventDefault(), set(false));
-        if (e.key === "Enter" && e.metaKey && e.shiftKey) return (e.preventDefault(), send());
-        if (e.key === "Enter" && e.metaKey && bar.contains(e.target)) return (e.preventDefault(), queue());
+        if (e.key === "Enter" && e.metaKey) return (e.preventDefault(), send());
       },
       true
     );
