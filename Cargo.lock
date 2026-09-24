@@ -1780,6 +1780,7 @@ dependencies = [
  "gpui-wry",
  "lb-wry",
  "raw-window-handle",
+ "serde_json",
 ]
 
 [[package]]

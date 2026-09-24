@@ -90,6 +90,16 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
     is_uuid.then_some(id)
 }
 
+/// Notebook id from a PlutoMCP `open_notebook` result (`{"notebook_id": "<uuid>", …}`,
+/// possibly nested as JSON text inside the MCP content array).
+fn opened_notebook_id(raw: &serde_json::Value) -> Option<String> {
+    let text = raw.to_string();
+    let rest = &text[text.find("notebook_id")?..];
+    rest.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
+        .find(|t| t.len() == 36 && t.matches('-').count() == 4)
+        .map(str::to_owned)
+}
+
 struct Workspace {
     webview: Entity<WebView>,
     input: Entity<InputState>,
@@ -185,6 +195,13 @@ impl Workspace {
         self.busy
     }
 
+    fn show_notebook(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(runtime) = &self._runtime else { return };
+        // pluto_url is `http://host:port/?secret=…`; keep the secret app-side.
+        let url = runtime.pluto_url.replacen("/?", &format!("/edit?id={id}&"), 1);
+        self.webview.update(cx, |w, _| w.load_url(&url));
+    }
+
     fn note(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.entries.push(Entry::Note(text.into()));
         self.scroll.scroll_to_bottom();
@@ -233,6 +250,13 @@ impl Workspace {
                     }
                     if let Some(s) = update.fields.status {
                         *status = s;
+                    }
+                    // Follow the agent: show notebooks it opens in the pane.
+                    let opened = title.contains("pluto") && title.contains("open_notebook");
+                    if opened && *status == ToolCallStatus::Completed {
+                        if let Some(id) = update.fields.raw_output.as_ref().and_then(opened_notebook_id) {
+                            self.show_notebook(&id, cx);
+                        }
                     }
                 }
             }
@@ -350,7 +374,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::viewed_notebook_id;
+    use super::{opened_notebook_id, viewed_notebook_id};
 
     #[test]
     fn notebook_id_from_pluto_url() {
@@ -359,5 +383,14 @@ mod tests {
         assert_eq!(viewed_notebook_id(&url), Some(id));
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/?secret=s3cr3t"), None);
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/edit?id=../../secret"), None);
+    }
+
+    #[test]
+    fn notebook_id_from_open_notebook_result() {
+        let id = "6a1b2c3d-0000-4000-8000-1234567890ab";
+        let inner = format!(r#"{{"path":"/tmp/a.jl","notebook_id":"{id}","ran":false}}"#);
+        let raw = serde_json::json!([{ "type": "text", "text": inner }]);
+        assert_eq!(opened_notebook_id(&raw).as_deref(), Some(id));
+        assert_eq!(opened_notebook_id(&serde_json::json!({"error": "file_not_found"})), None);
     }
 }
