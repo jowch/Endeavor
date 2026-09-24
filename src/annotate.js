@@ -102,7 +102,7 @@
     window.addEventListener(
       "keydown",
       (e) => {
-        if (e.key.toLowerCase() === "g" && e.metaKey && e.shiftKey) return (e.preventDefault(), set(!on()));
+        if (e.key.toLowerCase() === "e" && e.metaKey && e.shiftKey) return (e.preventDefault(), set(!on()));
         if (!on()) return;
         if (e.key === "Escape") return (e.preventDefault(), set(false));
         if (!bar.contains(e.target)) return;

@@ -103,7 +103,7 @@ fn opened_notebook_id(raw: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-actions!(endeavor, [Interrupt]);
+actions!(endeavor, [Interrupt, ToggleAnnotation]);
 
 struct Workspace {
     webview: Entity<WebView>,
@@ -261,6 +261,16 @@ impl Workspace {
             None => return,
         }
         cx.notify();
+    }
+
+    /// Cmd+Shift+E from the panel (the page handles it when the notebook has focus).
+    fn toggle_annotation(&mut self, _: &ToggleAnnotation, _: &mut Window, cx: &mut Context<Self>) {
+        let enable = !self.annotating;
+        if enable {
+            // Move keyboard focus into the notebook so the comment box takes typing.
+            let _ = self.webview.read(cx).raw().focus();
+        }
+        self.page_script(if enable { "__annotate.set(true)" } else { "__annotate.set(false)" }, cx);
     }
 
     fn page_script(&self, js: &str, cx: &mut Context<Self>) {
@@ -438,6 +448,7 @@ impl Render for Workspace {
         div()
             .key_context("Workspace")
             .on_action(cx.listener(Self::interrupt))
+            .on_action(cx.listener(Self::toggle_annotation))
             .flex()
             .size_full()
             .bg(rgb(0x1e1e1e))
@@ -478,14 +489,9 @@ impl Render for Workspace {
                                     .child(
                                         button("annotate-toggle")
                                             .when(self.annotating, |d| d.bg(rgb(0x8a6d1f)))
-                                            .child(if self.annotating {
-                                                "◉ Annotation mode on — click cells (Esc to exit)"
-                                            } else {
-                                                "◎ Annotation mode (⌘⇧G)"
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                let js = if this.annotating { "__annotate.set(false)" } else { "__annotate.set(true)" };
-                                                this.page_script(js, cx);
+                                            .child(if self.annotating { "◉ Annotating (Esc exits)" } else { "◎ Annotate (⌘⇧E)" })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.toggle_annotation(&ToggleAnnotation, window, cx)
                                             })),
                                     )
                                     .child(div().flex_1())
@@ -509,7 +515,10 @@ fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         gpui_component::init(cx);
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
-        cx.bind_keys([KeyBinding::new("escape", Interrupt, None)]);
+        cx.bind_keys([
+            KeyBinding::new("escape", Interrupt, None),
+            KeyBinding::new("cmd-shift-e", ToggleAnnotation, None),
+        ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         cx.open_window(
             WindowOptions {
