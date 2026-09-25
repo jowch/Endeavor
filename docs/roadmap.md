@@ -2,6 +2,8 @@
 
 Living plan; update it as items land. Design rationale lives in
 [pluto-agent-design-doc.md](pluto-agent-design-doc.md) (section numbers below refer to it).
+Ideas still being explored (review in place, proposals, modes) live in
+[design-notes.md](design-notes.md).
 
 _Last updated: 2026-09-24_
 
