@@ -22,3 +22,6 @@ target
 
 # Playwright MCP snapshots and logs
 .playwright-mcp/
+
+# Agent worktrees (e.g. the design agent's)
+.claude/worktrees/
