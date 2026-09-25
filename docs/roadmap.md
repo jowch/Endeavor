@@ -87,7 +87,12 @@ Endeavor pins `main` (`runtime/Project.toml`).
 
 ## Next
 
-In priority order. Nothing queued: the next work is the packaging list below.
+In priority order.
+
+1. **Own runtime package** replacing the PlutoMCP fork, in this repo; staged
+   plan in [design-notes.md](design-notes.md#runtime-our-own-replacement-for-plutomcp)
+   (parity, auth on the tool channel, pushed events, derived staleness, policy
+   in the server, proposals).
 
 ## Before sharing the app
 

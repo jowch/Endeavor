@@ -112,6 +112,48 @@ may still be worth it later.
   (shared types with the app's `annotate.rs` messages) is cheaper to get by
   mirroring small message shapes.
 
+## Runtime: our own replacement for PlutoMCP
+
+**Decided (2026-09-25):** Endeavor gets its own Julia runtime package, seeded
+from the PlutoMCP fork (MIT; keep its copyright notice with copied code) and
+living in this repo (e.g. `runtime/EndeavorRuntime/`, a path dependency). It's
+Endeavor-only for now; anything generally useful can go back to PlutoMCP.jl
+later. App and runtime change in the same commit: no fork PR, merge and pin
+cycle, and no protocol to keep backward-compatible.
+
+What changes relative to PlutoMCP (~3,400 lines, 29 tools):
+
+- **Keep:** tool behaviour (read/edit/add/move/delete/validate/search/run,
+  `view_cell_output`), the dependency graph, notebook summaries, and the test
+  cases that encode Pluto quirks.
+- **Drop:** attaching to a Pluto the user started, start/stop tools, binding
+  files and health checks (~1,000 lines). Endeavor owns the process.
+- **Replace:** the unauthenticated SSE bridge and `/call` with an authenticated
+  channel (token or Unix socket), and the `pending_run` side table with
+  staleness derived from Pluto's state.
+- **Add:** pushed events via Pluto's `on_event` hook (`StateChangeEvent`,
+  `NotebookExecutionDoneEvent`, open/shutdown), run policy and approvals in the
+  server (agent-agnostic, replacing the Claude hook), cell versions (code
+  hashes), proposals and attribution.
+
+No Pluto changes are needed: the runtime creates Pluto's session, so it sets
+`on_event` and reads cell state directly. The cost is depending on Pluto
+internals, so pin Pluto and keep the Pluto-touching code in one module.
+
+Staged, each step shippable:
+
+1. **Parity:** move the fork's code into the in-repo package, same tools and
+   behaviour; `boot.jl` switches over. Port the tests.
+2. **Security:** token or socket on the tool channel (the agent's MCP config
+   can carry a header). Closes the shared-host hole.
+3. **Events:** push cell/notebook changes to the app; drop the 10 s poll and
+   the post-turn run-state check.
+4. **Derived staleness:** "edited, not run" from edit time vs
+   `last_run_timestamp`, so a run from Pluto's button clears it.
+5. **Policy in the server:** Auto/Edit/Propose per session; approvals pushed to
+   the app; retire the Claude plugin hook.
+6. **Versions and proposals:** the backend for review in place.
+
 ## Open questions
 
 - Native Pluto "edited" look vs a distinct Claude look?
@@ -121,8 +163,10 @@ may still be worth it later.
 
 ## Suggested order
 
+Runtime steps 1–4 above come first; the UI work builds on them.
+
 1. TypeScript + esbuild frontend.
-2. Edited-but-not-run marking, with the PlutoMCP run-from-anywhere fix.
+2. Edited-but-not-run marking (on runtime step 4).
 3. Fix with Claude / Explain.
 4. Proposals: inline diffs, per-hunk accept/reject.
 5. Ghost cells.
