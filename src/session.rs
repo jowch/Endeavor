@@ -3,7 +3,9 @@
 //! applied here; anything that needs the workspace (sending to the agent, driving
 //! the notebook pane, checking run state) comes back as an [`Effect`].
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v1::{
@@ -74,7 +76,14 @@ pub struct Session {
     pub run_without_asking: bool,
     /// The notebook this session was last looking at.
     pub notebook: Option<String>,
-    pub scroll: ScrollHandle,
+    /// The transcript as a virtualized list: only visible entries are laid out,
+    /// and it follows new content unless the user has scrolled up to read.
+    pub list: ListState,
+    /// Entries the list knows about, and the lowest index changed since (see `sync_list`).
+    list_len: Cell<usize>,
+    dirty_from: Cell<Option<usize>>,
+    /// When the current turn started, for the "Working · 12s" indicator.
+    pub busy_since: Option<Instant>,
     /// Reopening a past session: its history is replaying.
     replaying: bool,
     /// Notebook file the replayed history last opened, reopened once loading ends.
@@ -132,7 +141,14 @@ impl Session {
             cell_codes: CellCodes::default(),
             run_without_asking: false,
             notebook: None,
-            scroll: ScrollHandle::new(),
+            list: {
+                let list = ListState::new(0, ListAlignment::Top, px(1000.));
+                list.set_follow_mode(FollowMode::Tail);
+                list
+            },
+            list_len: Cell::new(0),
+            dirty_from: Cell::new(None),
+            busy_since: None,
             replaying: false,
             replayed_path: None,
             failed: None,
@@ -144,6 +160,7 @@ impl Session {
         let (message, cli_live) = failure_message(error);
         self.failed = Some(Failure { message, can_copy: cli_live || self.replaying });
         self.outbox.busy = false;
+        self.busy_since = None;
         self.replaying = false;
     }
 
@@ -151,6 +168,7 @@ impl Session {
     pub fn reopen_as_copy(&mut self) -> Option<SessionId> {
         self.failed.take()?;
         self.entries.clear();
+        self.mark(0);
         self.outbox = Outbox::waiting();
         self.replaying = true;
         self.title = format!("{} (copy)", self.title);
@@ -173,8 +191,27 @@ impl Session {
     }
 
     pub fn note(&mut self, text: impl Into<SharedString>) {
-        self.entries.push(Entry::Note(text.into()));
-        self.scroll.scroll_to_bottom();
+        self.push(Entry::Note(text.into()));
+    }
+
+    fn push(&mut self, entry: Entry) {
+        self.mark(self.entries.len());
+        self.entries.push(entry);
+    }
+
+    /// Entry `ix` (and anything after it) changed; the list re-measures it.
+    fn mark(&self, ix: usize) {
+        let from = self.dirty_from.get().map_or(ix, |d| d.min(ix));
+        self.dirty_from.set(Some(from));
+    }
+
+    /// Bring the virtual list up to date with `entries` (called before rendering).
+    pub fn sync_list(&self) {
+        let Some(from) = self.dirty_from.take() else { return };
+        let old = self.list_len.get();
+        let from = from.min(old);
+        self.list.splice(from..old, self.entries.len() - from);
+        self.list_len.set(self.entries.len());
     }
 
     /// The agent created this session: send whatever was queued meanwhile.
@@ -210,8 +247,10 @@ impl Session {
         let Some(Dispatch { turn, shown }) = dispatch else { return };
         effects.push(Effect::Send(turn));
         if let Some(label) = shown {
-            self.entries.push(Entry::User(label.into()));
-            self.scroll.scroll_to_bottom();
+            self.push(Entry::User(label.into()));
+            self.busy_since.get_or_insert_with(Instant::now);
+            // Sending jumps back to the bottom even if the user had scrolled up.
+            self.list.set_follow_mode(FollowMode::Tail);
         }
     }
 
@@ -230,7 +269,7 @@ impl Session {
             }
             SessionEvent::Steered => {
                 if let Some(label) = self.outbox.steered() {
-                    self.entries.push(Entry::User(format!("{label}\n↳ sent into the running turn").into()));
+                    self.push(Entry::User(format!("{label}\n↳ sent into the running turn").into()));
                 }
             }
             SessionEvent::Unsent => {
@@ -254,17 +293,19 @@ impl Session {
                     .as_str()
                     .map(str::to_owned)
                     .or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned));
-                self.entries.push(Entry::Permission { title, code, options: request.options, responder: Some(responder), runs_code });
+                self.push(Entry::Permission { title, code, options: request.options, responder: Some(responder), runs_code });
             }
             SessionEvent::Update(update) => self.apply_update(update, &mut effects),
         }
-        self.scroll.scroll_to_bottom();
         effects
     }
 
     fn turn_ended(&mut self, effects: &mut Vec<Effect>) {
         let next = self.outbox.turn_ended();
         let idle = next.is_none();
+        if idle {
+            self.busy_since = None;
+        }
         self.dispatch(next, effects);
         if idle {
             effects.push(Effect::CheckRunState);
@@ -284,34 +325,40 @@ impl Session {
                 };
                 match self.entries.last_mut() {
                     Some(Entry::User(existing)) => *existing = format!("{existing}\n{text}").into(),
-                    _ => self.entries.push(Entry::User(text.into())),
+                    _ => self.push(Entry::User(text.into())),
                 }
+                self.mark(self.entries.len() - 1);
             }
             SessionUpdate::AgentMessageChunk(chunk) => {
                 if let ContentBlock::Text(t) = chunk.content {
                     match self.entries.last_mut() {
                         Some(Entry::Agent(text)) => text.push_str(&t.text),
-                        _ => self.entries.push(Entry::Agent(t.text)),
+                        _ => self.push(Entry::Agent(t.text)),
                     }
+                    self.mark(self.entries.len() - 1);
                 }
             }
             SessionUpdate::AgentThoughtChunk(chunk) => {
                 if let ContentBlock::Text(t) = chunk.content {
                     match self.entries.last_mut() {
                         Some(Entry::Thought { text, .. }) => text.push_str(&t.text),
-                        _ => self.entries.push(Entry::Thought { text: t.text, expanded: false }),
+                        _ => self.push(Entry::Thought { text: t.text, expanded: false }),
                     }
+                    self.mark(self.entries.len() - 1);
                 }
             }
             // One plan per turn, updated in place.
             SessionUpdate::Plan(plan) => {
                 let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
-                match self.entries[turn_start..].iter_mut().find(|e| matches!(e, Entry::Plan(_))) {
-                    Some(existing) => *existing = Entry::Plan(plan.entries),
-                    None => self.entries.push(Entry::Plan(plan.entries)),
+                match self.entries[turn_start..].iter().position(|e| matches!(e, Entry::Plan(_))) {
+                    Some(offset) => {
+                        self.entries[turn_start + offset] = Entry::Plan(plan.entries);
+                        self.mark(turn_start + offset);
+                    }
+                    None => self.push(Entry::Plan(plan.entries)),
                 }
             }
-            SessionUpdate::ToolCall(call) => self.entries.push(Entry::Tool {
+            SessionUpdate::ToolCall(call) => self.push(Entry::Tool {
                 id: call.tool_call_id,
                 title: call.title,
                 status: call.status,
@@ -339,6 +386,7 @@ impl Session {
     /// diff edits. Returns the id (and file path) of a notebook the agent just opened or created.
     fn on_tool_update(&mut self, update: ToolCallUpdate) -> Option<(String, Option<String>)> {
         let ix = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
+        self.mark(ix);
         let Entry::Tool { title, status, input, output, diffs, .. } = &mut self.entries[ix] else { return None };
         let fields = update.fields;
         if let Some(t) = fields.title {
@@ -372,6 +420,7 @@ impl Session {
     pub fn toggle(&mut self, ix: usize) {
         if let Some(Entry::Tool { expanded, .. } | Entry::Thought { expanded, .. }) = self.entries.get_mut(ix) {
             *expanded = !*expanded;
+            self.mark(ix);
         }
     }
 
@@ -383,6 +432,7 @@ impl Session {
             let _ = responder.respond(RequestPermissionResponse::new(outcome));
             let verb = if stop_asking { "Allowed (won't ask again this session)" } else { option.name.as_str() };
             self.entries[ix] = Entry::Note(format!("{verb}: {title}").into());
+            self.mark(ix);
             self.run_without_asking |= stop_asking;
         }
     }
@@ -397,17 +447,64 @@ fn option_of_kind(options: &[PermissionOption], kind: PermissionOptionKind) -> O
 // ---------------------------------------------------------------------------
 
 pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
-    let entries: Vec<_> = session.entries.iter().enumerate().map(|(i, e)| render_entry(session.key, i, e, cx)).collect();
-    div()
-        .id(("transcript", session.key as usize))
-        .flex_1()
-        .overflow_y_scroll()
-        .track_scroll(&session.scroll)
-        .p_3()
-        .flex()
-        .flex_col()
-        .gap_3()
-        .children(entries)
+    session.sync_list();
+    let key = session.key;
+    let workspace = cx.entity().downgrade();
+    list(session.list.clone(), move |ix, _window, cx| {
+        workspace
+            .update(cx, |this, cx| {
+                let Some(entry) = this.sessions.iter().find(|s| s.key == key).and_then(|s| s.entries.get(ix)) else {
+                    return div().into_any_element();
+                };
+                div().px_3().pb_3().child(render_entry(key, ix, entry, cx)).into_any_element()
+            })
+            .unwrap_or_else(|_| div().into_any_element())
+    })
+    .flex_1()
+    .pt_3()
+}
+
+/// "Working · 12s" with a rocket crossing a dotted track, or a note that the
+/// session is waiting on the user.
+pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
+    let since = session.busy_since?;
+    let muted = rgb(0x8a8a8a);
+    if session.needs_approval() {
+        return Some(div().px_3().pb_2().text_sm().text_color(rgb(0xc8a040)).child("Waiting for your approval").into_any_element());
+    }
+    let secs = since.elapsed().as_secs();
+    let elapsed = if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) };
+    // Matches the width of the dotted track below.
+    const TRACK: f32 = 78.;
+    Some(
+        div()
+            .px_3()
+            .pb_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_sm()
+            .text_color(muted)
+            .child(
+                div()
+                    .relative()
+                    .w(px(TRACK + 16.))
+                    .h(px(18.))
+                    .child(div().absolute().top(px(4.)).text_xs().text_color(rgb(0x4a4a4a)).child("· · · · · · · · · · · · ·"))
+                    .child(
+                        div()
+                            .absolute()
+                            .child("🚀")
+                            .with_animation(
+                                ElementId::NamedInteger("rocket".into(), session.key),
+                                Animation::new(std::time::Duration::from_millis(2400)).repeat().with_easing(ease_in_out),
+                                |rocket, t| rocket.left(px(t * TRACK)),
+                            ),
+                    ),
+            )
+            .child(format!("Working · {elapsed}"))
+            .into_any_element(),
+    )
 }
 
 fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>) -> AnyElement {
@@ -666,6 +763,34 @@ more" }"#);
         assert_eq!(super::short_title("plot sin"), "plot sin");
         let long = "Reply with one word: what is the capital of France? Use no tools.";
         assert_eq!(super::short_title(long), "Reply with one word: what is the capital of…");
+    }
+
+    #[test]
+    fn the_virtual_list_tracks_entries_through_pushes_edits_and_clears() {
+        let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old".into());
+        s.note("a");
+        s.note("b");
+        s.sync_list();
+        assert_eq!(s.list.item_count(), 2);
+        s.toggle(0); // in-place edit: count unchanged
+        s.note("c");
+        s.sync_list();
+        assert_eq!(s.list.item_count(), 3);
+        s.fail("Error: is running as a background session");
+        s.reopen_as_copy(); // clears the transcript
+        s.sync_list();
+        assert_eq!(s.list.item_count(), 0);
+    }
+
+    #[test]
+    fn busy_time_runs_from_sending_until_idle() {
+        let mut s = Session::new(1, "/tmp".into());
+        s.started(SessionId::new("abc"));
+        assert!(s.busy_since.is_none());
+        s.submit(text("hi"), false);
+        assert!(s.busy_since.is_some());
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert!(s.busy_since.is_none());
     }
 
     #[test]

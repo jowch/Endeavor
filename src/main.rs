@@ -167,6 +167,16 @@ impl Workspace {
         })
         .detach();
 
+        // Tick the "Working · 12s" timers once a second while any session is busy.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let Ok(busy) = this.update(cx, |this, _| this.sessions.iter().any(|s| s.busy_since.is_some())) else { break };
+            if busy {
+                let _ = this.update(cx, |_, cx| cx.notify());
+            }
+        })
+        .detach();
+
         let (agent_tx, agent_rx) = futures::channel::mpsc::unbounded();
         let mut recent = load_recent();
         if recent.is_empty() {
@@ -821,6 +831,7 @@ impl Workspace {
                     })
             }))
             .child(session::render_transcript(session, cx))
+            .children(session::render_activity(session))
             .child(
                 div()
                     .p_3()
