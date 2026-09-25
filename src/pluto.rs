@@ -2,7 +2,7 @@
 //! JSON-RPC). Used for app-side checks that shouldn't depend on the agent, like
 //! the end-of-turn run-state warning.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::time::Duration;
@@ -20,13 +20,30 @@ pub fn bridge_token() -> &'static str {
     })
 }
 
+/// `127.0.0.1:PORT` from the bridge URL `http://127.0.0.1:PORT/sse`.
+fn host_of(mcp_url: &str) -> Result<&str, String> {
+    mcp_url.strip_prefix("http://").and_then(|rest| rest.split('/').next()).ok_or_else(|| format!("bad MCP url {mcp_url}"))
+}
+
+/// Follow the runtime's notebook list (`GET /events`, the `list_notebooks` shape):
+/// `on_list` gets it now and after every change, until the runtime goes away.
+pub fn watch_notebooks(mcp_url: &str, mut on_list: impl FnMut(Value)) -> Result<(), String> {
+    let host = host_of(mcp_url)?;
+    let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
+    write!(stream, "GET /events HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge_token())
+        .map_err(|e| e.to_string())?;
+    for line in std::io::BufReader::new(stream).lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if let Some(list) = line.strip_prefix("data: ").and_then(|json| serde_json::from_str(json).ok()) {
+            on_list(list);
+        }
+    }
+    Ok(())
+}
+
 /// Call a runtime tool and return its decoded JSON result.
 pub fn call_tool(mcp_url: &str, tool: &str, arguments: Value) -> Result<Value, String> {
-    // mcp_url is `http://127.0.0.1:PORT/sse`.
-    let host = mcp_url
-        .strip_prefix("http://")
-        .and_then(|rest| rest.split('/').next())
-        .ok_or_else(|| format!("bad MCP url {mcp_url}"))?;
+    let host = host_of(mcp_url)?;
     let body = json!({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": { "name": tool, "arguments": arguments },

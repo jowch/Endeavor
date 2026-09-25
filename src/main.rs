@@ -158,6 +158,8 @@ pub struct Workspace {
     last_ports: Option<[u16; 2]>,
     /// Open notebooks (id, path) as last seen, to reopen after a restart.
     last_notebooks: Vec<(String, String)>,
+    /// The runtime's notebook list as last pushed (`list_notebooks` shape).
+    notebooks: serde_json::Value,
     died_tx: UnboundedSender<String>,
 }
 
@@ -214,22 +216,6 @@ impl Workspace {
         })
         .detach();
 
-        // Keep the open-notebook list fresh so a restart can reopen them.
-        // ponytail: 10 s poll of a loopback call; a Pluto open/close event would be exact.
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(Duration::from_secs(10)).await;
-            let Ok(url) = this.update(cx, |this, _| this.runtime.as_ref().map(|r| r.mcp_url.clone())) else { break };
-            let Some(url) = url else { continue };
-            let list = cx
-                .background_executor()
-                .spawn(async move { pluto::call_tool(&url, "list_notebooks", serde_json::json!({})) })
-                .await;
-            if let Ok(list) = list {
-                let _ = this.update(cx, |this, _| this.remember_notebooks(&list));
-            }
-        })
-        .detach();
-
         // Tick the "Working · 12s" timers once a second while any session is busy.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
@@ -274,6 +260,7 @@ impl Workspace {
             starting: false,
             last_ports: None,
             last_notebooks: Vec::new(),
+            notebooks: serde_json::Value::Null,
             died_tx,
         };
         // The webview is a native view over the window; hide it behind the setup screen.
@@ -837,11 +824,13 @@ impl Workspace {
         self.follow_folder();
         if let Some(commands) = self.agent_rx.take() {
             self.on_progress(Progress::new(Step::Agent, "Pluto ready · starting Claude…"), cx);
-            self.start_agent(mcp_url, commands, cx);
+            self.start_agent(mcp_url.clone(), commands, cx);
         } else {
             self.status = "Julia restarted.".into();
+            // Captures the notebooks to reopen before the new list starts arriving.
             self.reopen_notebooks(cx);
         }
+        self.watch_notebooks(mcp_url, cx);
         cx.notify();
     }
 
@@ -851,13 +840,35 @@ impl Workspace {
         cx.notify();
     }
 
-    fn remember_notebooks(&mut self, list: &serde_json::Value) {
+    /// Follow the runtime's notebook list (pushed on every change) for the
+    /// end-of-turn run check and for reopening notebooks after a crash.
+    fn watch_notebooks(&self, mcp_url: String, cx: &mut Context<Self>) {
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<serde_json::Value>();
+        // A long-lived blocking read: its own thread, not the executor's pool. It ends
+        // when Julia goes away; the next boot starts a new one.
+        std::thread::spawn(move || {
+            let _ = pluto::watch_notebooks(&mcp_url, |list| {
+                let _ = tx.unbounded_send(list);
+            });
+        });
+        cx.spawn(async move |this, cx| {
+            while let Some(list) = rx.next().await {
+                if this.update(cx, |this, _| this.remember_notebooks(list)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn remember_notebooks(&mut self, list: serde_json::Value) {
         self.last_notebooks = list
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|nb| Some((nb["notebook_id"].as_str()?.to_owned(), nb["path"].as_str()?.to_owned())))
             .collect();
+        self.notebooks = list;
     }
 
     /// Reopen the notebooks that were open when Julia died, and point each session
@@ -901,21 +912,9 @@ impl Workspace {
 
     /// After a session goes idle, say if it left edited cells unrun or still running.
     fn check_run_state(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
-        let list = cx
-            .background_executor()
-            .spawn(async move { pluto::call_tool(&mcp_url, "list_notebooks", serde_json::json!({})) });
-        cx.spawn(async move |this, cx| {
-            // ponytail: a failed check stays silent; it's advisory, and a dead runtime reports itself.
-            let Ok(list) = list.await else { return };
-            let _ = this.update(cx, |this, cx| {
-                this.remember_notebooks(&list);
-                // ponytail: warns about every open notebook, not only the ones this session touched.
-                let warnings = pluto::run_warnings(&list);
-                this.with_session(key, cx, |s| warnings.into_iter().for_each(|w| s.note(format!("⚠ {w}"))));
-            });
-        })
-        .detach();
+        // ponytail: warns about every open notebook, not only the ones this session touched.
+        let warnings = pluto::run_warnings(&self.notebooks);
+        self.with_session(key, cx, |s| warnings.into_iter().for_each(|w| s.note(format!("⚠ {w}"))));
     }
 
     // -----------------------------------------------------------------------

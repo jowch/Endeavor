@@ -116,8 +116,12 @@ Staged, each step shippable:
    Julia's environment before notebooks start; the agent's MCP config carries
    the header). Closes the shared-host hole. Pluto's own port stays protected
    by its secret. Still open: SSH remote sessions (forward both ports).
-3. **Events:** push cell/notebook changes to the app; drop the 10 s poll and
-   the post-turn run-state check.
+3. **Events (done 2026-09-25):** `GET /events` (server-sent events, same token)
+   pushes the `list_notebooks` summary whenever it changes, driven by Pluto's
+   `StateChangeEvent` / `NotebookExecutionDoneEvent` / open / shutdown and by
+   every tool call. The app follows it for crash reopen and the end-of-turn
+   run warning; the 10 s poll and the post-turn call are gone. Cell-level
+   events (for the spec's cell states) extend this stream.
 4. **Derived staleness:** the unrun set from edit time vs
    `last_run_timestamp`, pushed with the events.
 5. **Policy in the server:** Plan / Ask to run / Auto per session; approvals

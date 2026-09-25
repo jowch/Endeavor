@@ -91,9 +91,9 @@ In priority order.
 
 1. **Own runtime package** replacing the PlutoMCP fork: `runtime/EndeavorRuntime`,
    staged plan in [design-notes.md](design-notes.md#runtime-our-own-replacement-for-plutomcp).
-   Steps 1 (parity) and 2 (token auth on the tool channel) done; next:
-   pushed events, derived staleness, policy in the server, versions and
-   attribution.
+   Steps 1 (parity), 2 (token auth on the tool channel) and 3 (pushed
+   notebook events) done; next: derived staleness, policy in the server,
+   versions and attribution.
 
 ## Before sharing the app
 
@@ -133,8 +133,6 @@ Deliberate simplifications with their upgrade path (search the code for
 
 | Where | Shortcut | Upgrade when |
 |---|---|---|
-| `main.rs` notebook list | 10 s poll of `list_notebooks` to know what to reopen after a crash | a Pluto open/close event is exposed |
-| `main.rs` run-state check | failures are silent | it matters that the warning was skipped |
 | `main.rs` transcript | long diffs are cut at 60 lines, not scrollable | real notebooks hit it |
 | `main.rs` events | modes, usage, available commands ignored | the panel grows those features |
 | PlutoMCP `view_cell_output` | no timeout when the worker is busy | a long run blocks it in practice |
