@@ -24,6 +24,8 @@ pub struct Annotation {
 
 #[derive(Debug, PartialEq)]
 pub enum Message {
+    /// The page script loaded and wants the current cell states.
+    Ready,
     Mode(bool),
     Annotation(Annotation),
 }
@@ -36,6 +38,7 @@ pub fn is_uuid(s: &str) -> bool {
 pub fn parse(body: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     match v.get("type")?.as_str()? {
+        "ready" => Some(Message::Ready),
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "annotation" => {
             let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
@@ -95,6 +98,7 @@ mod tests {
     #[test]
     fn parses_valid_messages() {
         assert_eq!(parse(r#"{"type":"mode","on":true}"#), Some(Message::Mode(true)));
+        assert_eq!(parse(r#"{"type":"ready"}"#), Some(Message::Ready));
         assert_eq!(parse(r#"{"type":"send"}"#), None);
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"why so slow?"}}"#);
         let Some(Message::Annotation(a)) = parse(&body) else { panic!("rejected valid annotation") };

@@ -5,11 +5,18 @@
 
 /** Messages the page sends the app. */
 export type ToApp =
+  | { type: "ready" }
   | { type: "mode"; on: boolean }
   | { type: "annotation"; notebook: string | null; cells: string[]; comment: string; now: boolean };
 
+/** One cell's state, from the runtime's events (see runtime Events.jl). */
+export type CellState = { cell_id: string; running: boolean; errored: boolean; unrun: boolean; author: "agent" | "user" | null };
+
 /** Messages the app sends the page. */
-export type ToPage = { type: "annotate"; on: boolean };
+export type ToPage =
+  | { type: "annotate"; on: boolean }
+  // The shown notebook's cells, whenever they change and after `ready`.
+  | { type: "cells"; cells: CellState[] };
 
 declare global {
   interface Window {

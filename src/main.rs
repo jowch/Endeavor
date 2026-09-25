@@ -217,6 +217,8 @@ pub struct Workspace {
     last_notebooks: Vec<(String, String)>,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
     notebooks: serde_json::Value,
+    /// Per-notebook cell states as last pushed ({notebook_id: [state]}).
+    cells: serde_json::Value,
     /// The composer's placeholder as last set (it changes while Claude works).
     placeholder: &'static str,
     /// Bumped when Julia boots or dies, so an old runtime's event reader stops.
@@ -322,6 +324,7 @@ impl Workspace {
             last_ports: None,
             last_notebooks: Vec::new(),
             notebooks: serde_json::Value::Null,
+            cells: serde_json::Value::Null,
             placeholder: "Type / for commands",
             runtime_generation: Arc::new(AtomicU64::new(0)),
             died_tx,
@@ -716,6 +719,7 @@ impl Workspace {
 
     fn on_page_message(&mut self, body: &str, cx: &mut Context<Self>) {
         match annotate::parse(body) {
+            Some(annotate::Message::Ready) => self.push_cells(cx),
             Some(annotate::Message::Mode(on)) => self.annotating = on,
             Some(annotate::Message::Annotation(a)) => {
                 let Some(key) = self.active else { return };
@@ -929,6 +933,7 @@ impl Workspace {
         // Stop following the dead runtime; `last_notebooks` stays for the reopen.
         self.runtime_generation.fetch_add(1, Ordering::SeqCst);
         self.notebooks = serde_json::Value::Null;
+        self.cells = serde_json::Value::Null;
         self.status = format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts.").into();
         cx.notify();
     }
@@ -943,22 +948,33 @@ impl Workspace {
         // stream drops it reconnects, until this runtime is replaced or dies.
         std::thread::spawn(move || {
             while generation.load(Ordering::SeqCst) == mine {
-                // ponytail: per-cell states ("cells") arrive too; the notebook pane's cell
-                // marking (spec phase 2) will read them.
-                let _ = pluto::watch_notebooks(&mcp_url, |mut event| {
-                    let _ = tx.unbounded_send(event["notebooks"].take());
+                let _ = pluto::watch_notebooks(&mcp_url, |event| {
+                    let _ = tx.unbounded_send(event);
                 });
                 std::thread::sleep(Duration::from_secs(1));
             }
         });
         cx.spawn(async move |this, cx| {
-            while let Some(list) = rx.next().await {
-                if this.update(cx, |this, _| this.remember_notebooks(list)).is_err() {
+            while let Some(mut event) = rx.next().await {
+                let updated = this.update(cx, |this, cx| {
+                    this.remember_notebooks(event["notebooks"].take());
+                    this.cells = event["cells"].take();
+                    this.push_cells(cx);
+                });
+                if updated.is_err() {
                     break;
                 }
             }
         })
         .detach();
+    }
+
+    /// Mark the shown notebook's cells in the page (unrun, author).
+    fn push_cells(&self, cx: &mut Context<Self>) {
+        let url = self.webview.read(cx).raw().url().unwrap_or_default();
+        let Some(id) = viewed_notebook_id(&url) else { return };
+        let cells = self.cells.get(id).cloned().unwrap_or_else(|| serde_json::json!([]));
+        self.send_to_page(&serde_json::json!({ "type": "cells", "cells": cells }), cx);
     }
 
     fn remember_notebooks(&mut self, list: serde_json::Value) {

@@ -2,9 +2,14 @@
 // page (src/annotate.rs embeds the built dist/page.js).
 
 import { initAnnotate } from "./annotate";
+import { send } from "./bridge";
+import { initCells } from "./cells";
 
 function init() {
   initAnnotate();
+  initCells();
+  // Ask for the current state: this page may have loaded after it last changed.
+  send({ type: "ready" });
 }
 
 document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", init) : init();

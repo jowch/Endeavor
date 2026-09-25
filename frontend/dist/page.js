@@ -116,9 +116,55 @@
     on("annotate", (msg) => set(msg.on));
   }
 
+  // src/cells.ts
+  var css2 = `
+  pluto-cell { position: relative; }
+  pluto-cell[data-endeavor="unrun"]::before, pluto-cell.code_differs::before {
+    content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
+    border-radius: 2px; pointer-events: none;
+    background: repeating-linear-gradient(-45deg, #CC3F00 0 3px, rgba(204, 63, 0, 0.3) 3px 6px);
+  }
+  pluto-cell[data-endeavor="unrun"][data-author="user"]::before, pluto-cell.code_differs::before {
+    background: repeating-linear-gradient(-45deg, #9A9A9A 0 3px, rgba(154, 154, 154, 0.25) 3px 6px);
+  }
+  pluto-cell[data-endeavor="unrun"] > pluto-output { opacity: 0.4; }
+`;
+  var states = /* @__PURE__ */ new Map();
+  function apply() {
+    for (const cell of document.querySelectorAll("pluto-cell")) {
+      const state = states.get(cell.id);
+      setAttr(cell, "data-endeavor", state?.unrun ? "unrun" : null);
+      setAttr(cell, "data-author", state?.author ?? null);
+    }
+  }
+  function setAttr(el, name, value) {
+    if (value === null) {
+      if (el.hasAttribute(name)) el.removeAttribute(name);
+    } else if (el.getAttribute(name) !== value) {
+      el.setAttribute(name, value);
+    }
+  }
+  function initCells() {
+    const style = document.createElement("style");
+    style.textContent = css2;
+    document.head.append(style);
+    on("cells", (msg) => {
+      states = new Map(msg.cells.map((c) => [c.cell_id, c]));
+      apply();
+    });
+    let queued = false;
+    new MutationObserver((records) => {
+      if (queued || records.every((r) => r.type === "attributes" && r.attributeName?.startsWith("data-"))) return;
+      queued = true;
+      queueMicrotask(() => (queued = false, apply()));
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
   // src/main.ts
   function init() {
     initAnnotate();
+    initCells();
+    send({ type: "ready" });
   }
   document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", init) : init();
 })();
