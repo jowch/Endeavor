@@ -87,8 +87,12 @@ Everything here is a known `ponytail:` shortcut that's fine for one developer.
 - **Logo and style system.** The setup screen's rocket + wordmark and the
   app's inline colors are placeholders for the designed logo and UI style
   system (in progress separately).
-- **Claude login.** The app assumes Claude Code is already logged in on the
-  Mac; a new user needs a sign-in step (ACP `authenticate`).
+- **Claude login: finish testing.** Signed out, the setup screen (or the
+  session bar) offers Claude subscription / Anthropic Console sign-in, which
+  runs the bundled CLI's `auth login` (browser). The signed-out screen is
+  verified; the click → browser → signed-in path still needs a manual run.
+  Sign-in is checked at startup only; a login that expires mid-use shows up
+  as failed turns.
 - **Logs.** Launched from Finder, stderr goes nowhere; write a log file and
   offer "Show logs".
 

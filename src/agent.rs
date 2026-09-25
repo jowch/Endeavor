@@ -4,7 +4,7 @@
 //! the UI (so they're editable and agent-agnostic); this side only runs turns.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
@@ -41,12 +41,51 @@ const NODE_TARBALL: (&str, &str, u64, &str) = (
     "node-v24.21.0-darwin-x64",
 );
 
+/// Where the app's Node and the pinned adapter's entry point live (installed or not).
+fn adapter_paths() -> Result<(PathBuf, PathBuf), String> {
+    let app = crate::install::app_dir()?;
+    let manifest = std::fs::read_to_string(crate::install::resources().join("adapter/package.json")).map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| e.to_string())?;
+    let version = manifest["dependencies"][ADAPTER_PACKAGE].as_str().ok_or("adapter/package.json has no adapter version")?;
+    let node = app.join(format!("node-v{NODE_VERSION}/bin/node"));
+    let entry = app.join(format!("adapter-{version}/node_modules/{ADAPTER_PACKAGE}/dist/index.js"));
+    Ok((node, entry))
+}
+
+/// The Claude Code CLI bundled with the adapter (`claude <args>`).
+fn claude_cli(args: &[&str]) -> Result<std::process::Command, String> {
+    let (node, entry) = adapter_paths()?;
+    let mut command = std::process::Command::new(node);
+    command.arg(entry).arg("--cli").args(args).stdin(std::process::Stdio::null());
+    Ok(command)
+}
+
+/// Whether Claude Code is signed in on this Mac.
+pub fn signed_in() -> Result<bool, String> {
+    let out = claude_cli(&["auth", "status"])?.output().map_err(|e| e.to_string())?;
+    let status: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("Couldn't read Claude's sign-in status: {e}"))?;
+    status["loggedIn"].as_bool().ok_or_else(|| "Couldn't read Claude's sign-in status.".into())
+}
+
+/// Sign in to Claude: the CLI opens the browser and waits for it to finish.
+/// `console` picks Anthropic Console (API billing) over a Claude subscription.
+// ponytail: no cancel; closing the browser leaves the CLI waiting until it gives up.
+pub fn sign_in(console: bool) -> Result<(), String> {
+    let method = if console { "--console" } else { "--claudeai" };
+    let out = claude_cli(&["auth", "login", method])?.output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("Sign-in didn't finish: {}", err.lines().last().unwrap_or("unknown error").trim()));
+    }
+    if signed_in()? { Ok(()) } else { Err("Sign-in didn't finish. Try again.".into()) }
+}
+
 /// The command that runs the ACP adapter: the app's own Node and a `npm ci` of
 /// the pinned lockfile (integrity-checked), both installed on first launch.
 fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     let app = crate::install::app_dir()?;
-    let node_dir = app.join(format!("node-v{NODE_VERSION}"));
-    let node = node_dir.join("bin/node");
+    let (node, entry) = adapter_paths()?;
+    let node_dir = node.parent().and_then(Path::parent).ok_or("bad Node path")?.to_path_buf();
     if !node.exists() {
         let (url, sha, size, top) = NODE_TARBALL;
         crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), &|detail, fraction| {
@@ -55,11 +94,8 @@ fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     }
 
     let pinned = crate::install::resources().join("adapter");
-    let manifest = std::fs::read_to_string(pinned.join("package.json")).map_err(|e| e.to_string())?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| e.to_string())?;
-    let version = manifest["dependencies"][ADAPTER_PACKAGE].as_str().ok_or("adapter/package.json has no adapter version")?;
-    let adapter = app.join(format!("adapter-{version}"));
-    let entry = adapter.join(format!("node_modules/{ADAPTER_PACKAGE}/dist/index.js"));
+    // entry = <adapter>/node_modules/<package>/dist/index.js
+    let adapter = entry.ancestors().nth(5).ok_or("bad adapter path")?.to_path_buf();
     if !entry.exists() {
         progress(Progress::new(Step::Agent, "Installing the Claude agent…"));
         // Install beside the target, then rename, so a partial install is never used.
@@ -158,6 +194,8 @@ pub enum AgentEvent {
     Session(SessionId, SessionEvent),
     /// Setup progress (installing Node and the adapter, then connecting).
     Setup(Progress),
+    /// Whether Claude Code is signed in, checked before connecting.
+    SignedIn(bool),
     /// The connection is gone; no session works any more.
     Failed(String),
 }
@@ -172,6 +210,10 @@ pub fn start(mcp_url: String, commands: UnboundedReceiver<Command>) -> Unbounded
             let _ = events.unbounded_send(AgentEvent::Setup(p));
         });
         let _ = events.unbounded_send(AgentEvent::Setup(Progress::new(Step::Claude, "Connecting…")));
+        // ponytail: checked at startup only; a login that expires mid-use shows up as failed turns.
+        if let (true, Ok(signed_in)) = (command.is_ok(), signed_in()) {
+            let _ = events.unbounded_send(AgentEvent::SignedIn(signed_in));
+        }
         let reason = match command {
             Err(e) => e,
             Ok(command) => match futures::executor::block_on(run(command, mcp_url, commands, event_tx)) {

@@ -86,7 +86,8 @@ impl Setup {
 }
 
 // ponytail: placeholder logo and inline colors until the logo and the style system land.
-pub fn render(setup: &Setup, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
+/// `extra` goes under the steps (e.g. the sign-in panel).
+pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     const BAR: f32 = 360.;
     let muted = rgb(0x8a8a8a);
     let steps = Step::ALL.map(|step| {
@@ -130,6 +131,7 @@ pub fn render(setup: &Setup, cx: &mut Context<Workspace>) -> impl IntoElement + 
                 .child(div().h_full().rounded_full().bg(rgb(0x2f5d3a)).w(px(BAR * setup.overall()))),
         )
         .child(div().w(px(BAR)).flex().flex_col().gap_2().text_sm().children(steps))
+        .children(extra.map(|e| div().w(px(BAR)).child(e)))
         .children(setup.error.clone().map(|error| {
             div()
                 .w(px(BAR))

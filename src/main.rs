@@ -137,6 +137,13 @@ pub struct Workspace {
     settings_open: bool,
     /// First launch: the setup screen covers the window until setup finishes.
     setup: Option<Setup>,
+    /// The agent connected (setup's last step).
+    agent_ready: bool,
+    /// Claude Code's sign-in state, checked when the agent starts.
+    signed_in: Option<bool>,
+    /// A browser sign-in is under way.
+    signing_in: bool,
+    sign_in_error: Option<String>,
     agent_tx: UnboundedSender<Command>,
     /// Handed to the agent thread once Julia is up (it needs the MCP URL).
     agent_rx: Option<UnboundedReceiver<Command>>,
@@ -254,6 +261,10 @@ impl Workspace {
             settings: Settings::load(),
             settings_open: false,
             setup: Setup::needed().then(Setup::default),
+            agent_ready: false,
+            signed_in: None,
+            signing_in: false,
+            sign_in_error: None,
             agent_tx,
             agent_rx: Some(agent_rx),
             status: "".into(),
@@ -560,15 +571,20 @@ impl Workspace {
         match event {
             AgentEvent::Ready => {
                 self.status = "Claude connected.".into();
-                if self.setup.take().is_some() {
-                    Setup::finish();
-                    let _ = self.webview.read(cx).raw().set_visible(true);
-                }
+                self.agent_ready = true;
+                self.finish_setup(cx);
                 for cwd in &self.recent {
                     let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
                 }
             }
             AgentEvent::Setup(p) => self.on_progress(p, cx),
+            AgentEvent::SignedIn(signed_in) => {
+                self.signed_in = Some(signed_in);
+                if !signed_in {
+                    self.on_progress(Progress::new(Step::Claude, "Sign in to continue"), cx);
+                    self.status = "Not signed in to Claude.".into();
+                }
+            }
             AgentEvent::Listed { cwd, sessions } => {
                 self.past.insert(cwd, sessions);
             }
@@ -699,6 +715,78 @@ impl Workspace {
             setup.apply(p);
         }
         cx.notify();
+    }
+
+    /// Setup is done once the agent is up and Claude is signed in.
+    fn finish_setup(&mut self, cx: &mut Context<Self>) {
+        if self.setup.is_some() && self.agent_ready && self.signed_in != Some(false) {
+            self.setup = None;
+            Setup::finish();
+            let _ = self.webview.read(cx).raw().set_visible(true);
+            cx.notify();
+        }
+    }
+
+    fn sign_in(&mut self, console: bool, cx: &mut Context<Self>) {
+        self.signing_in = true;
+        self.sign_in_error = None;
+        let signing = cx.background_executor().spawn(async move { agent::sign_in(console) });
+        cx.spawn(async move |this, cx| {
+            let result = signing.await;
+            let _ = this.update(cx, |this, cx| {
+                this.signing_in = false;
+                match result {
+                    Ok(()) => {
+                        this.signed_in = Some(true);
+                        this.status = "Signed in to Claude.".into();
+                        this.finish_setup(cx);
+                    }
+                    Err(e) => this.sign_in_error = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Shown while Claude isn't signed in: on the setup screen, else in the session bar.
+    fn render_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.signed_in != Some(false) {
+            return None;
+        }
+        let muted = rgb(0x8a8a8a);
+        let button = |id: &'static str, label: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_sm()
+                .bg(if primary { rgb(0x2f5d3a) } else { rgb(0x3a3a3c) })
+                .child(label)
+        };
+        let waiting = self.signing_in.then(|| div().text_xs().text_color(muted).child("Waiting for you to finish in your browser…"));
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_2()
+                .rounded_md()
+                .bg(rgb(0x252526))
+                .child(div().text_sm().child("Sign in to Claude"))
+                .child(div().text_xs().text_color(muted).child("Endeavor runs Claude Code with your account. Sign-in opens in your browser."))
+                .child(button("sign-in-claude", "Claude subscription", true).on_click(cx.listener(|this, _, _, cx| this.sign_in(false, cx))))
+                .child(
+                    button("sign-in-console", "Anthropic Console (API billing)", false)
+                        .on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx))),
+                )
+                .children(waiting)
+                .children(self.sign_in_error.clone().map(|e| div().text_xs().text_color(rgb(0xd16969)).child(e)))
+                .into_any_element(),
+        )
     }
 
     /// Retry the failed setup step: start Julia again, or the agent once Julia is up.
@@ -1009,6 +1097,7 @@ impl Workspace {
                     })),
             )
             .child(div().text_xs().text_color(muted).child(self.status.clone()))
+            .children(self.render_sign_in(cx))
             .when(self.runtime.is_none() && !self.starting, |d| {
                 d.child(
                     div()
@@ -1252,7 +1341,8 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(setup) = &self.setup {
-            return div().size_full().bg(rgb(0x1e1e1e)).text_color(rgb(0xdddddd)).child(splash::render(setup, cx)).into_any_element();
+            let sign_in = self.render_sign_in(cx);
+            return div().size_full().bg(rgb(0x1e1e1e)).text_color(rgb(0xdddddd)).child(splash::render(setup, sign_in, cx)).into_any_element();
         }
         let chat = match self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key)) {
             _ if self.settings_open => self.render_settings(cx).into_any_element(),
