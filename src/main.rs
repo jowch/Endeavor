@@ -2,7 +2,7 @@
 //! child webview, and ACP agent sessions (a session bar, one chat pane) wired to the
 //! same Pluto session over MCP.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -42,22 +42,27 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
 
 actions!(endeavor, [Interrupt, ToggleAnnotation]);
 
-/// Recently used working folders, most recent first, kept across launches.
-fn recent_file() -> Option<PathBuf> {
+/// A small JSON file in Endeavor's Application Support folder.
+fn app_file(name: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(Path::new(&home).join("Library/Application Support/endeavor/recent.json"))
+    Some(Path::new(&home).join("Library/Application Support/endeavor").join(name))
 }
 
-fn load_recent() -> Vec<PathBuf> {
-    let text = recent_file().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
-    serde_json::from_str::<Vec<PathBuf>>(&text).unwrap_or_default().into_iter().filter(|p| p.is_dir()).collect()
+fn load_json<T: serde::de::DeserializeOwned + Default>(name: &str) -> T {
+    let text = app_file(name).and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_default()
 }
 
-fn save_recent(recent: &[PathBuf]) {
-    // ponytail: best effort; losing the recent list only costs a folder pick.
-    if let (Some(file), Ok(json)) = (recent_file(), serde_json::to_string_pretty(recent)) {
+fn save_json(name: &str, value: &impl serde::Serialize) {
+    // ponytail: best effort; losing these lists only costs a folder pick or a filter.
+    if let (Some(file), Ok(json)) = (app_file(name), serde_json::to_string_pretty(value)) {
         let _ = std::fs::create_dir_all(file.parent().unwrap()).and_then(|_| std::fs::write(file, json));
     }
+}
+
+/// Recently used working folders, most recent first, kept across launches.
+fn load_recent() -> Vec<PathBuf> {
+    load_json::<Vec<PathBuf>>("recent.json").into_iter().filter(|p| p.is_dir()).collect()
 }
 
 pub struct Workspace {
@@ -74,6 +79,9 @@ pub struct Workspace {
     recent: Vec<PathBuf>,
     /// Past sessions per folder, from the agent's history.
     past: HashMap<PathBuf, Vec<SessionInfo>>,
+    /// Ids of sessions Endeavor created (persisted). Only these are listed: Claude
+    /// Code's history for a folder also holds CLI sessions, which aren't ours.
+    ours: HashSet<String>,
     agent_tx: UnboundedSender<Command>,
     /// Handed to the agent thread once Julia is up (it needs the MCP URL).
     agent_rx: Option<UnboundedReceiver<Command>>,
@@ -173,6 +181,7 @@ impl Workspace {
             new_cwd: recent.first().cloned(),
             recent,
             past: HashMap::new(),
+            ours: load_json("sessions.json"),
             agent_tx,
             agent_rx: Some(agent_rx),
             status: "".into(),
@@ -235,7 +244,7 @@ impl Workspace {
         self.next_key += 1;
         self.recent.retain(|p| p != &cwd);
         self.recent.insert(0, cwd.clone());
-        save_recent(&self.recent);
+        save_json("recent.json", &self.recent);
         if !self.past.contains_key(&cwd) {
             let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
         }
@@ -386,6 +395,10 @@ impl Workspace {
                 let Some(session) = self.session_mut(key) else { return };
                 match result {
                     Ok(id) => {
+                        if self.ours.insert(id.to_string()) {
+                            save_json("sessions.json", &self.ours);
+                        }
+                        let Some(session) = self.session_mut(key) else { return };
                         let effects = session.started(id);
                         self.apply_effects(key, effects, cx);
                     }
@@ -616,12 +629,13 @@ impl Workspace {
                 // Past sessions not already open, newest first.
                 // ponytail: capped at 8 per folder; add "show more" if people want older ones.
                 let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
+                let shown = |info: &SessionInfo| self.ours.contains(&info.session_id.to_string());
                 let past: Vec<_> = self
                     .past
                     .get(folder)
                     .into_iter()
                     .flatten()
-                    .filter(|info| !is_open(info))
+                    .filter(|info| !is_open(info) && shown(info))
                     .take(8)
                     .enumerate()
                     .map(|(i, info)| {

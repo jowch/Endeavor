@@ -28,8 +28,9 @@ process running Pluto + PlutoMCP.
 - **Sessions.** Session bar | chat | notebook. Launch shows a new-session
   screen (working folder via picker or recent folders, optional first
   message). Sessions run in parallel on one ACP connection, grouped by folder
-  with busy / needs-approval marks; each folder's past sessions (Claude Code's
-  history, including CLI sessions there) reopen with their transcript. The
+  with busy / needs-approval marks; each folder's past Endeavor sessions
+  (tracked in Application Support's `sessions.json`; other Claude Code
+  sessions in the folder are not listed) reopen with their transcript. The
   folder sets the agent's working directory and project settings, and new
   notebooks are created there. The notebook pane follows the active session.
 - **Annotation mode (§4.2).** ⌘⇧E; click cells, comment, send as
@@ -66,8 +67,7 @@ In priority order.
    sessions have different folders). Options: point it at the active
    session's folder when sessions switch, or steer users to asking the agent.
 3. **Session polish:** rename, close, and delete sessions; use the agent's
-   own session titles; "show more" for older sessions; a warning when
-   reopening a session that is still open in the Claude Code CLI.
+   own session titles; "show more" for older sessions.
 
 ## Before sharing the app
 
