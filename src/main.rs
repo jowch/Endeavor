@@ -4,6 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 mod agent;
@@ -161,6 +163,8 @@ pub struct Workspace {
     last_notebooks: Vec<(String, String)>,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
     notebooks: serde_json::Value,
+    /// Bumped when Julia boots or dies, so an old runtime's event reader stops.
+    runtime_generation: Arc<AtomicU64>,
     died_tx: UnboundedSender<String>,
 }
 
@@ -262,6 +266,7 @@ impl Workspace {
             last_ports: None,
             last_notebooks: Vec::new(),
             notebooks: serde_json::Value::Null,
+            runtime_generation: Arc::new(AtomicU64::new(0)),
             died_tx,
         };
         // The webview is a native view over the window; hide it behind the setup screen.
@@ -515,6 +520,7 @@ impl Workspace {
                     }
                 }
                 Effect::CheckRunState => self.check_run_state(key, cx),
+                Effect::SetPolicy(policy) => self.send_policy(key, policy, cx),
                 Effect::SetMode(mode) => {
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
                         let _ = self.agent_tx.unbounded_send(Command::SetMode(id, mode));
@@ -554,11 +560,17 @@ impl Workspace {
         input.update(cx, |s, cx| s.set_value("", window, cx));
     }
 
+    fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
+        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        // ponytail: a failed send leaves the runtime's policy stale until the next change.
+        cx.background_executor().spawn(async move { pluto::set_policy(&mcp_url, key, policy) }).detach();
+    }
+
     /// ⇧⇥: the active session's next mode (e.g. default → plan → auto).
     fn cycle_mode(&mut self, _: &CycleMode, _: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.active else { return };
-        if let Some(effect) = self.session_mut(key).and_then(Session::cycle_mode) {
-            self.apply_effects(key, vec![effect], cx);
+        if let Some(effects) = self.session_mut(key).map(Session::cycle_mode) {
+            self.apply_effects(key, effects, cx);
         }
     }
 
@@ -844,6 +856,11 @@ impl Workspace {
             self.status = "Julia restarted.".into();
             // Captures the notebooks to reopen before the new list starts arriving.
             self.reopen_notebooks(cx);
+            // The new runtime starts with every session on "ask".
+            let planning: Vec<u64> = self.sessions.iter().filter(|s| s.policy() == "plan").map(|s| s.key).collect();
+            for key in planning {
+                self.send_policy(key, "plan", cx);
+            }
         }
         self.watch_notebooks(mcp_url, cx);
         cx.notify();
@@ -851,6 +868,9 @@ impl Workspace {
 
     fn on_runtime_died(&mut self, reason: String, cx: &mut Context<Self>) {
         self.last_ports = self.runtime.take().map(|r| r.ports);
+        // Stop following the dead runtime; `last_notebooks` stays for the reopen.
+        self.runtime_generation.fetch_add(1, Ordering::SeqCst);
+        self.notebooks = serde_json::Value::Null;
         self.status = format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts.").into();
         cx.notify();
     }
@@ -859,14 +879,19 @@ impl Workspace {
     /// end-of-turn run check and for reopening notebooks after a crash.
     fn watch_notebooks(&self, mcp_url: String, cx: &mut Context<Self>) {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<serde_json::Value>();
-        // A long-lived blocking read: its own thread, not the executor's pool. It ends
-        // when Julia goes away; the next boot starts a new one.
+        let generation = self.runtime_generation.clone();
+        let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
+        // A long-lived blocking read: its own thread, not the executor's pool. If the
+        // stream drops it reconnects, until this runtime is replaced or dies.
         std::thread::spawn(move || {
-            // ponytail: per-cell states ("cells") arrive too; the notebook pane's cell
-            // marking (spec phase 2) will read them.
-            let _ = pluto::watch_notebooks(&mcp_url, |mut event| {
-                let _ = tx.unbounded_send(event["notebooks"].take());
-            });
+            while generation.load(Ordering::SeqCst) == mine {
+                // ponytail: per-cell states ("cells") arrive too; the notebook pane's cell
+                // marking (spec phase 2) will read them.
+                let _ = pluto::watch_notebooks(&mcp_url, |mut event| {
+                    let _ = tx.unbounded_send(event["notebooks"].take());
+                });
+                std::thread::sleep(Duration::from_secs(1));
+            }
         });
         cx.spawn(async move |this, cx| {
             while let Some(list) = rx.next().await {

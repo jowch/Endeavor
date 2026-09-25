@@ -44,12 +44,23 @@ pub fn watch_notebooks(mcp_url: &str, mut on_event: impl FnMut(Value)) -> Result
 
 /// Call a runtime tool and return its decoded JSON result.
 pub fn call_tool(mcp_url: &str, tool: &str, arguments: Value) -> Result<Value, String> {
+    let rpc = rpc(mcp_url, "tools/call", json!({ "name": tool, "arguments": arguments }))?;
+    let text = rpc["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or_else(|| format!("tool error: {}", rpc["result"]))?;
+    serde_json::from_str(text).map_err(|e| format!("bad tool result: {e}"))
+}
+
+/// Set an agent session's policy in the runtime ("plan" refuses its notebook
+/// writes and runs); `owner` is the session's key, sent as its MCP header.
+pub fn set_policy(mcp_url: &str, owner: u64, policy: &str) -> Result<(), String> {
+    rpc(mcp_url, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy })).map(|_| ())
+}
+
+/// One JSON-RPC request to the bridge's app-only `/call` endpoint.
+fn rpc(mcp_url: &str, method: &str, params: Value) -> Result<Value, String> {
     let host = host_of(mcp_url)?;
-    let body = json!({
-        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": { "name": tool, "arguments": arguments },
-    })
-    .to_string();
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
 
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
     stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
@@ -66,11 +77,7 @@ pub fn call_tool(mcp_url: &str, tool: &str, arguments: Value) -> Result<Value, S
     stream.read_to_string(&mut response).map_err(|e| e.to_string())?;
 
     let (_, payload) = response.split_once("\r\n\r\n").ok_or("malformed HTTP response")?;
-    let rpc: Value = serde_json::from_str(payload).map_err(|e| format!("bad JSON-RPC reply: {e}"))?;
-    let text = rpc["result"]["content"][0]["text"]
-        .as_str()
-        .ok_or_else(|| format!("tool error: {}", rpc["result"]))?;
-    serde_json::from_str(text).map_err(|e| format!("bad tool result: {e}"))
+    serde_json::from_str(payload).map_err(|e| format!("bad JSON-RPC reply: {e}"))
 }
 
 /// Warnings for notebooks left with edited-but-unrun or still-running cells,

@@ -65,6 +65,8 @@ pub enum Effect {
     CheckRunState,
     /// Ask the agent to switch mode.
     SetMode(SessionModeId),
+    /// Tell the runtime this session's policy changed ("plan" | "ask").
+    SetPolicy(&'static str),
 }
 
 pub struct Session {
@@ -105,6 +107,8 @@ pub struct Session {
     pub usage: Option<(u64, u64)>,
     /// Slash commands the agent offers.
     pub commands: Vec<AvailableCommand>,
+    /// The policy last sent to the runtime.
+    policy_sent: &'static str,
 }
 
 pub struct Failure {
@@ -172,6 +176,7 @@ impl Session {
             config: Vec::new(),
             usage: None,
             commands: Vec::new(),
+            policy_sent: "ask",
         }
     }
 
@@ -213,12 +218,33 @@ impl Session {
 
     /// Switch to the next mode (⇧⇥), showing it at once; the agent confirms with
     /// a mode update.
-    pub fn cycle_mode(&mut self) -> Option<Effect> {
-        let modes = self.modes.as_mut()?;
+    pub fn cycle_mode(&mut self) -> Vec<Effect> {
+        let Some(modes) = self.modes.as_mut() else { return Vec::new() };
         let at = modes.available_modes.iter().position(|m| m.id == modes.current_mode_id).unwrap_or(0);
-        let next = modes.available_modes.get((at + 1) % modes.available_modes.len().max(1))?.id.clone();
+        let Some(next) = modes.available_modes.get((at + 1) % modes.available_modes.len().max(1)).map(|m| m.id.clone()) else {
+            return Vec::new();
+        };
         modes.current_mode_id = next.clone();
-        Some(Effect::SetMode(next))
+        let mut effects = vec![Effect::SetMode(next)];
+        self.sync_policy(&mut effects);
+        effects
+    }
+
+    /// The runtime policy for the current mode: plan mode is read-only there too
+    /// (Claude's plan mode only restricts its own tools, not ours).
+    pub fn policy(&self) -> &'static str {
+        match &self.modes {
+            Some(m) if m.current_mode_id.to_string() == "plan" => "plan",
+            _ => "ask",
+        }
+    }
+
+    fn sync_policy(&mut self, effects: &mut Vec<Effect>) {
+        let policy = self.policy();
+        if policy != self.policy_sent {
+            self.policy_sent = policy;
+            effects.push(Effect::SetPolicy(policy));
+        }
     }
 
     /// Waiting on the user to approve something.
@@ -257,6 +283,7 @@ impl Session {
         self.config = started.config;
         self.replaying = false;
         let mut effects: Vec<Effect> = self.replayed_path.take().map(Effect::ReopenNotebook).into_iter().collect();
+        self.sync_policy(&mut effects);
         let next = self.outbox.turn_ended();
         self.dispatch(next, &mut effects);
         effects
@@ -419,6 +446,7 @@ impl Session {
                 if let Some(modes) = &mut self.modes {
                     modes.current_mode_id = update.current_mode_id;
                 }
+                self.sync_policy(effects);
             }
             SessionUpdate::ConfigOptionUpdate(update) => {
                 self.config = update.config_options;
@@ -426,6 +454,7 @@ impl Session {
                 if let (Some(modes), Some(mode)) = (&mut self.modes, config_value(&self.config, "mode")) {
                     modes.current_mode_id = mode.to_string().into();
                 }
+                self.sync_policy(effects);
             }
             SessionUpdate::UsageUpdate(usage) => self.usage = Some((usage.used, usage.size)),
             SessionUpdate::AvailableCommandsUpdate(update) => self.commands = update.available_commands,
@@ -777,10 +806,11 @@ mod tests {
         assert_eq!(s.mode_name(), Some("Ask to run"));
 
         // ⇧⇥ moves on at once and asks the agent; it wraps around.
-        assert!(matches!(s.cycle_mode(), Some(Effect::SetMode(m)) if m.to_string() == "plan"));
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan")] if m.to_string() == "plan"));
         assert_eq!(s.mode_name(), Some("Plan"));
-        s.cycle_mode();
-        assert!(matches!(s.cycle_mode(), Some(Effect::SetMode(m)) if m.to_string() == "default"));
+        // Leaving plan tells the runtime too.
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(_), Effect::SetPolicy("ask")]));
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m)] if m.to_string() == "default"));
 
         // The agent's own updates win.
         s.apply(SessionEvent::Update(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("auto"))));
@@ -793,7 +823,7 @@ mod tests {
 
         // No modes offered: nothing to cycle.
         let mut plain = Session::new(2, "/tmp/project".into());
-        assert!(plain.cycle_mode().is_none() && plain.mode_name().is_none());
+        assert!(plain.cycle_mode().is_empty() && plain.mode_name().is_none());
     }
 
     fn text(s: &str) -> Queued {

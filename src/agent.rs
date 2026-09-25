@@ -290,8 +290,12 @@ async fn run(
                 .as_ref()
                 .and_then(|m| m.get("steering")?.get("supported")?.as_bool())
                 .unwrap_or(false);
-            let auth = HttpHeader::new("Authorization", format!("Bearer {}", crate::pluto::bridge_token()));
-            let pluto = McpServer::Sse(McpServerSse::new("pluto", mcp_url).headers(vec![auth]));
+            // Each session's tool calls carry its key, so the runtime applies its policy.
+            let pluto = |key: u64| {
+                let auth = HttpHeader::new("Authorization", format!("Bearer {}", crate::pluto::bridge_token()));
+                let owner = HttpHeader::new("X-Endeavor-Session", key.to_string());
+                McpServer::Sse(McpServerSse::new("pluto", mcp_url.clone()).headers(vec![auth, owner]))
+            };
             // Read per session, so a Settings change applies to the next one.
             let plugin = crate::install::resources().join("plugin").display().to_string();
             let options = || session_options(crate::settings::Settings::load().personal_claude, &plugin).as_object().cloned();
@@ -337,7 +341,7 @@ async fn run(
                             Ok(id) => {
                                 let _ = events.unbounded_send(AgentEvent::Forked { key, id: id.clone() });
                                 // Load the copy so its history replays into the new session.
-                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options());
+                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto(key)]).meta(options());
                                 let loaded = connection.send_request(request).block_task();
                                 pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
                             }
@@ -353,17 +357,17 @@ async fn run(
                 };
                 match command {
                     Command::NewSession { key, cwd } => {
-                        let request = NewSessionRequest::new(cwd).mcp_servers(vec![pluto.clone()]).meta(options());
+                        let request = NewSessionRequest::new(cwd).mcp_servers(vec![pluto(key)]).meta(options());
                         let started = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, started.await.map(|r| Started::new(r.session_id, r.modes, r.config_options))) }.boxed_local());
                     }
                     Command::LoadSession { key, id, cwd } => {
-                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options());
+                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto(key)]).meta(options());
                         let loaded = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
                     }
                     Command::ForkSession { key, source, cwd } => {
-                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![pluto.clone()]).meta(options());
+                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![pluto(key)]).meta(options());
                         let forked = connection.send_request(request).block_task();
                         pending.push(async move { Done::Forked(key, cwd, forked.await.map(|r| r.session_id)) }.boxed_local());
                     }
