@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use agent_client_protocol::Responder;
+use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v1::{
     ContentBlock, PermissionOption, PermissionOptionKind, PlanEntry, PlanEntryStatus,
     RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
@@ -68,6 +69,8 @@ pub struct Session {
     pub id: Option<SessionId>,
     pub cwd: PathBuf,
     pub title: String,
+    /// The user named it; the agent's titles no longer replace it.
+    pub named: bool,
     pub entries: Vec<Entry>,
     pub outbox: Outbox,
     /// Each cell's code as last seen in the agent's reads and edits, for diffs.
@@ -135,6 +138,7 @@ impl Session {
             key,
             id: None,
             title: "New session".into(),
+            named: false,
             cwd,
             entries: Vec::new(),
             outbox: Outbox::waiting(),
@@ -375,6 +379,11 @@ impl Session {
                     } else {
                         effects.push(Effect::ShowNotebook(id));
                     }
+                }
+            }
+            SessionUpdate::SessionInfoUpdate(info) => {
+                if let (MaybeUndefined::Value(title), false) = (info.title, self.named) {
+                    self.title = title;
                 }
             }
             // ponytail: modes, usage, available commands not shown yet.

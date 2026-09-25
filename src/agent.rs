@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, ForkSessionRequest, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
+    CancelNotification, CloseSessionRequest, ContentBlock, DeleteSessionRequest, ForkSessionRequest, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
     McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionId, SessionInfo, SessionNotification, SessionUpdate, StopReason,
 };
@@ -62,6 +62,10 @@ pub enum Command {
     ForkSession { key: u64, source: SessionId, cwd: PathBuf },
     /// Past sessions in `cwd`; answered by [`AgentEvent::Listed`].
     ListSessions { cwd: PathBuf },
+    /// Stop a session (cancelling its turn); it stays in the folder's history.
+    CloseSession(SessionId),
+    /// Stop a session and delete its history.
+    DeleteSession(SessionId),
     Turn(SessionId, Turn),
 }
 
@@ -232,6 +236,15 @@ async fn run(
                         // ponytail: first page only; a folder with a long history shows its newest sessions.
                         let listed = connection.send_request(ListSessionsRequest::new().cwd(cwd.clone())).block_task();
                         pending.push(async move { Done::Listed(cwd, listed.await.map(|r| r.sessions)) }.boxed_local());
+                    }
+                    // ponytail: fire and forget; a failed close or delete only leaves the file behind.
+                    Command::CloseSession(session) => {
+                        running.remove(&session);
+                        connection.send_request(CloseSessionRequest::new(session)).on_receiving_result(async |_| Ok(()))?;
+                    }
+                    Command::DeleteSession(session) => {
+                        running.remove(&session);
+                        connection.send_request(DeleteSessionRequest::new(session)).on_receiving_result(async |_| Ok(()))?;
                     }
                     Command::Turn(session, Turn::Prompt(prompt) | Turn::SendNow(prompt)) if !running.contains(&session) => {
                         running.insert(session.clone());

@@ -16,13 +16,13 @@ mod runtime;
 mod session;
 
 use agent::{AgentEvent, Command};
-use agent_client_protocol::schema::v1::{ContentBlock, SessionInfo, TextContent};
+use agent_client_protocol::schema::v1::{ContentBlock, SessionId, SessionInfo, TextContent};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{InputEvent, Textarea, TextareaState};
-use gpui_component::{Root, Theme, ThemeMode};
+use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_component::{Root, Sizable, Theme, ThemeMode};
 use gpui_wry::WebView;
 use outbox::Queued;
 use raw_window_handle::HasWindowHandle;
@@ -60,6 +60,26 @@ fn save_json(name: &str, value: &impl serde::Serialize) {
     }
 }
 
+/// Past sessions listed per folder before "Show more".
+const PAST_SHOWN: usize = 8;
+
+/// A small button that appears when the pointer is over its row (`group`).
+fn hover_button(
+    id: impl Into<ElementId>,
+    group: SharedString,
+    label: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_1()
+        .text_color(gpui::transparent_black())
+        .group_hover(group, |s| s.text_color(rgb(0x8a8a8a)))
+        .hover(|s| s.text_color(rgb(0xe0e0e0)))
+        .child(label)
+        .on_click(on_click)
+}
+
 /// Recently used working folders, most recent first, kept across launches.
 fn load_recent() -> Vec<PathBuf> {
     load_json::<Vec<PathBuf>>("recent.json").into_iter().filter(|p| p.is_dir()).collect()
@@ -82,6 +102,14 @@ pub struct Workspace {
     /// Ids of sessions Endeavor created (persisted). Only these are listed: Claude
     /// Code's history for a folder also holds CLI sessions, which aren't ours.
     ours: HashSet<String>,
+    /// Session names the user gave, by session id (persisted).
+    titles: HashMap<String, String>,
+    /// The open session being renamed, and its name box.
+    renaming: Option<(u64, Entity<InputState>)>,
+    /// A past session whose delete button was clicked once; the second click deletes.
+    confirm_delete: Option<SessionId>,
+    /// Folders showing all their past sessions, not just the newest.
+    expanded: HashSet<PathBuf>,
     agent_tx: UnboundedSender<Command>,
     /// Handed to the agent thread once Julia is up (it needs the MCP URL).
     agent_rx: Option<UnboundedReceiver<Command>>,
@@ -192,6 +220,10 @@ impl Workspace {
             recent,
             past: HashMap::new(),
             ours: load_json("sessions.json"),
+            titles: load_json("titles.json"),
+            renaming: None,
+            confirm_delete: None,
+            expanded: HashSet::new(),
             agent_tx,
             agent_rx: Some(agent_rx),
             status: "".into(),
@@ -276,10 +308,84 @@ impl Workspace {
         }
         let key = self.next_key;
         self.next_key += 1;
-        let title = info.title.clone().unwrap_or_else(|| "Earlier session".into());
+        let named = self.titles.get(&info.session_id.to_string()).cloned();
+        let title = named.clone().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into());
         let _ = self.agent_tx.unbounded_send(Command::LoadSession { key, id: info.session_id.clone(), cwd: info.cwd.clone() });
-        self.sessions.push(Session::loading(key, info.session_id, info.cwd, title));
+        let mut session = Session::loading(key, info.session_id, info.cwd, title);
+        session.named = named.is_some();
+        self.sessions.push(session);
         self.activate(key, cx);
+    }
+
+    /// Stop an open session; it goes back to its folder's history.
+    fn close_session(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(ix) = self.sessions.iter().position(|s| s.key == key) else { return };
+        let session = self.sessions.remove(ix);
+        if let Some(id) = session.id {
+            let _ = self.agent_tx.unbounded_send(Command::CloseSession(id));
+        }
+        let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: session.cwd });
+        if self.renaming.as_ref().is_some_and(|(k, _)| *k == key) {
+            self.renaming = None;
+        }
+        if self.active == Some(key) {
+            match self.sessions.get(ix.min(self.sessions.len().saturating_sub(1))).map(|s| s.key) {
+                Some(next) => self.activate(next, cx),
+                None => self.active = None,
+            }
+        }
+        cx.notify();
+    }
+
+    /// Delete a past session's history; the first click only asks to confirm.
+    fn delete_past(&mut self, id: SessionId, cwd: PathBuf, cx: &mut Context<Self>) {
+        if self.confirm_delete.as_ref() != Some(&id) {
+            self.confirm_delete = Some(id);
+            return cx.notify();
+        }
+        self.confirm_delete = None;
+        let _ = self.agent_tx.unbounded_send(Command::DeleteSession(id.clone()));
+        if let Some(past) = self.past.get_mut(&cwd) {
+            past.retain(|info| info.session_id != id);
+        }
+        self.ours.remove(&id.to_string());
+        save_json("sessions.json", &self.ours);
+        if self.titles.remove(&id.to_string()).is_some() {
+            save_json("titles.json", &self.titles);
+        }
+        cx.notify();
+    }
+
+    fn start_rename(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = self.sessions.iter().find(|s| s.key == key).map(|s| s.title.clone()) else { return };
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(title));
+        input.update(cx, |s, cx| {
+            s.focus(window, cx);
+            s.select_all(window, cx);
+        });
+        cx.subscribe_in(&input, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                this.finish_rename(cx);
+            }
+        })
+        .detach();
+        self.renaming = Some((key, input));
+        cx.notify();
+    }
+
+    /// Keep the typed name (an empty one leaves the title as it was).
+    fn finish_rename(&mut self, cx: &mut Context<Self>) {
+        let Some((key, input)) = self.renaming.take() else { return };
+        let name = input.read(cx).value().trim().to_string();
+        if let (false, Some(session)) = (name.is_empty(), self.session_mut(key)) {
+            session.title = name.clone();
+            session.named = true;
+            if let Some(id) = session.id.as_ref().map(ToString::to_string) {
+                self.titles.insert(id, name);
+                save_json("titles.json", &self.titles);
+            }
+        }
+        cx.notify();
     }
 
     /// Continue a session that couldn't be reopened (e.g. live in the CLI) as a copy.
@@ -316,6 +422,7 @@ impl Workspace {
     /// Show a session; the notebook pane follows it to the notebook it last viewed.
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         self.active = Some(key);
+        self.confirm_delete = None;
         self.follow_folder();
         if let Some(notebook) = self.active_session().and_then(|s| s.notebook.clone()) {
             self.load_notebook(&notebook, cx);
@@ -418,6 +525,11 @@ impl Workspace {
                     Ok(id) => {
                         if self.ours.insert(id.to_string()) {
                             save_json("sessions.json", &self.ours);
+                        }
+                        // Renamed before the agent assigned an id.
+                        if let Some(name) = self.session_mut(key).filter(|s| s.named).map(|s| s.title.clone()) {
+                            self.titles.insert(id.to_string(), name);
+                            save_json("titles.json", &self.titles);
                         }
                         let Some(session) = self.session_mut(key) else { return };
                         let effects = session.started(id);
@@ -634,9 +746,16 @@ impl Workspace {
                         } else {
                             ("○", rgb(0x6a6a6a))
                         };
+                        let row: SharedString = format!("session-{key}").into();
+                        let title = match &self.renaming {
+                            Some((k, input)) if *k == key => div().flex_1().child(Input::new(input).xsmall()),
+                            _ => div().flex_1().overflow_hidden().child(s.title.clone()),
+                        };
                         div()
                             .id(ElementId::NamedInteger("session".into(), key))
+                            .group(row.clone())
                             .flex()
+                            .items_center()
                             .gap_2()
                             .px_2()
                             .py_1()
@@ -645,28 +764,45 @@ impl Workspace {
                             .text_sm()
                             .when(self.active == Some(key), |d| d.bg(rgb(0x2d2d30)))
                             .child(div().text_color(color).child(dot))
-                            .child(div().flex_1().overflow_hidden().child(s.title.clone()))
-                            .on_click(cx.listener(move |this, _, _, cx| this.activate(key, cx)))
+                            .child(title)
+                            .child(hover_button(("close", key), row, "×", cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.close_session(key, cx);
+                            })))
+                            // Double-click renames.
+                            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                if e.click_count() >= 2 {
+                                    this.start_rename(key, window, cx);
+                                } else {
+                                    this.activate(key, cx);
+                                }
+                            }))
                     })
                     .collect();
-                // Past sessions not already open, newest first.
-                // ponytail: capped at 8 per folder; add "show more" if people want older ones.
+                // Past sessions not already open, newest first; the newest few unless expanded.
                 let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
                 let shown = |info: &SessionInfo| self.ours.contains(&info.session_id.to_string());
-                let past: Vec<_> = self
-                    .past
-                    .get(folder)
-                    .into_iter()
-                    .flatten()
-                    .filter(|info| !is_open(info) && shown(info))
-                    .take(8)
+                let all: Vec<_> = self.past.get(folder).into_iter().flatten().filter(|info| !is_open(info) && shown(info)).collect();
+                let expanded = self.expanded.contains(folder);
+                let limit = if expanded { all.len() } else { PAST_SHOWN };
+                let past: Vec<_> = all
+                    .iter()
+                    .take(limit)
                     .enumerate()
                     .map(|(i, info)| {
-                        let title = info.title.clone().unwrap_or_else(|| "Earlier session".into());
+                        let id = info.session_id.to_string();
+                        let title = self.titles.get(&id).cloned().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into());
                         let date = info.updated_at.as_deref().map(|d| d.chars().take(10).collect::<String>()).unwrap_or_default();
-                        let info = info.clone();
+                        let row: SharedString = format!("past-{}-{i}", folder.display()).into();
+                        let confirming = self.confirm_delete.as_ref() == Some(&info.session_id);
+                        let (open, delete, cwd) = ((*info).clone(), info.session_id.clone(), folder.clone());
+                        let delete = cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.delete_past(delete.clone(), cwd.clone(), cx);
+                        });
                         div()
-                            .id(ElementId::Name(format!("past-{}-{i}", folder.display()).into()))
+                            .id(ElementId::Name(row.clone()))
+                            .group(row.clone())
                             .flex()
                             .gap_2()
                             .px_2()
@@ -676,9 +812,34 @@ impl Workspace {
                             .text_color(muted)
                             .child(div().flex_1().overflow_hidden().child(title))
                             .child(date)
-                            .on_click(cx.listener(move |this, _, _, cx| this.open_past(info.clone(), cx)))
+                            .map(|d| {
+                                if confirming {
+                                    let id = ElementId::Name(format!("{row}-confirm").into());
+                                    d.child(div().id(id).text_color(rgb(0xd16969)).child("Delete?").on_click(delete))
+                                } else {
+                                    d.child(hover_button(ElementId::Name(format!("{row}-delete").into()), row, "×", delete))
+                                }
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_past(open.clone(), cx)))
                     })
                     .collect();
+                let more = (all.len() > PAST_SHOWN).then(|| {
+                    let label = if expanded { "Show fewer".to_string() } else { format!("Show {} more", all.len() - PAST_SHOWN) };
+                    let folder = folder.clone();
+                    div()
+                        .id(ElementId::Name(format!("more-{}", folder.display()).into()))
+                        .px_2()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(rgb(0x6a8fb5))
+                        .child(label)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !this.expanded.remove(&folder) {
+                                this.expanded.insert(folder.clone());
+                            }
+                            cx.notify();
+                        }))
+                });
                 div()
                     .flex()
                     .flex_col()
@@ -686,6 +847,7 @@ impl Workspace {
                     .child(div().px_2().text_xs().text_color(muted).child(folder_name(folder)))
                     .children(open)
                     .children(past)
+                    .children(more)
             })
             .collect();
 

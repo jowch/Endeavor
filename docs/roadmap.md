@@ -35,6 +35,9 @@ process running Pluto + PlutoMCP.
   notebooks are created there. The notebook pane follows the active session.
   Pluto's own "new notebook" starts unsaved in Pluto's scratch folder (its
   usual behavior); its "Save notebook" box suggests the active session's folder.
+  Sessions take the agent's generated titles; double-click to rename (names
+  kept in `titles.json`); × closes an open session (it stays in history) or,
+  with a confirm, deletes a past one (`session/delete`); "Show more" past 8.
 - **Annotation mode (§4.2).** ⌘⇧E; click cells, comment, send as
   `pluto://notebook/{id}/cell/{uuid}` links through the same queue.
 - **Agent environment.** Endeavor's own Claude Code plugin (`plugin/`: the
@@ -61,10 +64,7 @@ Endeavor pins `main` (`runtime/Project.toml`).
 
 ## Next
 
-In priority order.
-
-1. **Session polish:** rename, close, and delete sessions; use the agent's
-   own session titles; "show more" for older sessions.
+In priority order. Nothing queued: the next work is the packaging list below.
 
 ## Before sharing the app
 
