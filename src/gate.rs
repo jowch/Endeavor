@@ -42,11 +42,6 @@ pub fn run_pretool_hook() -> ! {
     std::process::exit(0);
 }
 
-/// Is this permission request one the gate raised (a pluto tool)?
-pub fn is_pluto(title: &str) -> bool {
-    title.starts_with("mcp__pluto__")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

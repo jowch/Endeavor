@@ -145,6 +145,7 @@ fn session_options(personal: bool, plugin_dir: &str) -> serde_json::Value {
     })
 }
 
+
 /// What to do with a session's turn. Produced by the UI's outbox.
 pub enum Turn {
     /// Start a turn. The UI sends this only when the session is idle.

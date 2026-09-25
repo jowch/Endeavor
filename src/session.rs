@@ -344,7 +344,10 @@ impl Session {
             SessionEvent::Permission(request, responder) => {
                 let fields = &request.tool_call.fields;
                 let title = fields.title.clone().unwrap_or_else(|| "Tool call".into());
-                let runs_code = gate::is_pluto(&title);
+                // Only runs get the run card ("Allow & stop asking"); other pluto
+                // prompts (e.g. plan mode asking before a read) get the agent's options.
+                let input = fields.raw_input.clone().unwrap_or_default();
+                let runs_code = title.strip_prefix("mcp__pluto__").is_some_and(|tool| gate::runs_code(tool, &input));
                 if runs_code && self.run_without_asking {
                     if let Some(allow) = option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
                         let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
@@ -691,7 +694,8 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
                 .children(code.as_ref().map(|code| {
                     div().p_1().rounded_sm().bg(theme::bg_card()).font_family("Menlo").text_xs().child(code.clone())
                 }))
-                .child(div().flex().gap_2().children(buttons.into_iter().enumerate().map(|(i, (label, option, stop))| {
+                // Wrap: the agent's own option labels can be long.
+                .child(div().flex().flex_wrap().gap_2().children(buttons.into_iter().enumerate().map(|(i, (label, option, stop))| {
                     let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
                     div()
                         .id(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)))
