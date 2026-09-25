@@ -122,8 +122,10 @@ Staged, each step shippable:
    every tool call. The app follows it for crash reopen and the end-of-turn
    run warning; the 10 s poll and the post-turn call are gone. Cell-level
    events (for the spec's cell states) extend this stream.
-4. **Derived staleness:** the unrun set from edit time vs
-   `last_run_timestamp`, pushed with the events.
+4. **Derived staleness (done 2026-09-25):** each agent edit records its time;
+   a cell is pending until Pluto's `last_run_timestamp` for it is newer, so a
+   run from anywhere (Pluto's button included) clears it, and the events stream
+   reflects that. Verified in the app: edit, run with Pluto's button, no warning.
 5. **Policy in the server:** Plan / Ask to run / Auto per session; approvals
    (with the dependents count) pushed to the app; retire the Claude plugin hook.
 6. **Versions and attribution:** code-hash versions (conflict detection when
