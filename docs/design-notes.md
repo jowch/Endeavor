@@ -107,8 +107,10 @@ internals, so pin Pluto and keep the Pluto-touching code in one module.
 
 Staged, each step shippable:
 
-1. **Parity:** move the fork's code into the in-repo package, same tools and
-   behaviour; `boot.jl` switches over. Port the tests.
+1. **Parity (done 2026-09-25):** `runtime/EndeavorRuntime`, seeded from the fork
+   at 918e75d: 25 tools (start/stop session and `resolve_pluto_context` dropped),
+   no binding, eval-log or external-client entry points (~1,900 lines fewer);
+   tests ported (290 passing) and made to use a temp copy of their fixture.
 2. **Security:** token or socket on the tool channel (the agent's MCP config
    can carry a header). Closes the shared-host hole (any local user can reach
    the port today).

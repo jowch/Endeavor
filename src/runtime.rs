@@ -1,4 +1,4 @@
-//! The app-owned Julia process (design doc §11): starts Pluto + PlutoMCP via
+//! The app-owned Julia process (design doc §11): starts Pluto + EndeavorRuntime (runtime/EndeavorRuntime) via
 //! runtime/boot.jl, explains failures in plain terms, and reports if it dies.
 
 use std::collections::VecDeque;
@@ -192,7 +192,7 @@ fn hint(log: &str) -> Option<&'static str> {
         .iter()
         .any(|p| log.contains(p))
     {
-        Some("It couldn't download packages; check the internet connection (the first launch installs Pluto and PlutoMCP).")
+        Some("It couldn't download packages; check the internet connection (the first launch installs Pluto and its packages).")
     } else if log.contains("Unsatisfiable requirements") {
         Some("Package versions in Endeavor's runtime environment conflict.")
     } else if log.contains("EADDRINUSE") || log.contains("Address already in use") {

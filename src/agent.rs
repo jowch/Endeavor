@@ -200,7 +200,7 @@ pub enum AgentEvent {
     Failed(String),
 }
 
-/// Start the agent with the app's PlutoMCP bridge (`mcp_url`, legacy SSE) attached
+/// Start the agent with the runtime's MCP bridge (`mcp_url`, legacy SSE) attached
 /// to every session. Commands sent before the connection is up wait in `commands`.
 pub fn start(mcp_url: String, commands: UnboundedReceiver<Command>) -> UnboundedReceiver<AgentEvent> {
     let (event_tx, event_rx) = unbounded();

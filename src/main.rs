@@ -1,4 +1,4 @@
-//! Endeavor: app-owned Julia running Pluto + PlutoMCP, the live Pluto frontend in a
+//! Endeavor: app-owned Julia running Pluto + EndeavorRuntime, the live Pluto frontend in a
 //! child webview, and ACP agent sessions (a session bar, one chat pane) wired to the
 //! same Pluto session over MCP.
 

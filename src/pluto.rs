@@ -1,4 +1,4 @@
-//! The app's own line to PlutoMCP: its bridge's loopback `/call` endpoint (MCP
+//! The app's own line to the runtime's tools: its bridge's loopback `/call` endpoint (MCP
 //! JSON-RPC). Used for app-side checks that shouldn't depend on the agent, like
 //! the end-of-turn run-state warning.
 
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-/// Call a PlutoMCP tool and return its decoded JSON result.
+/// Call a runtime tool and return its decoded JSON result.
 pub fn call_tool(mcp_url: &str, tool: &str, arguments: Value) -> Result<Value, String> {
     // mcp_url is `http://127.0.0.1:PORT/sse`.
     let host = mcp_url

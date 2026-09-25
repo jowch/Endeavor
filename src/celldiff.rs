@@ -1,4 +1,4 @@
-//! Cell edits as diffs. PlutoMCP enforces read-before-edit, so every edit follows
+//! Cell edits as diffs. The runtime enforces read-before-edit, so every edit follows
 //! a read of that cell in the same tool stream: remember each cell's code from
 //! the agent's reads (and its own edits), and diff the next edit against it.
 
@@ -23,7 +23,7 @@ pub struct CellDiff {
     pub lines: Vec<(Change, String)>,
 }
 
-/// The JSON a PlutoMCP tool returned, from an ACP `rawOutput`: the MCP content
+/// The JSON a runtime tool returned, from an ACP `rawOutput`: the MCP content
 /// array (`[{type: "text", text}]`) or, for some results, the text itself.
 pub fn tool_json(raw: &Value) -> Option<Value> {
     let text = raw.get(0).and_then(|c| c["text"].as_str()).or_else(|| raw.as_str())?;

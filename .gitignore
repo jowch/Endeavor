@@ -25,3 +25,6 @@ target
 
 # Agent worktrees (e.g. the design agent's)
 .claude/worktrees/
+
+# Resolved by Pkg.test() for the runtime package; the app uses runtime/Manifest.toml
+runtime/EndeavorRuntime/Manifest.toml
