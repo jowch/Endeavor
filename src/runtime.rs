@@ -36,7 +36,7 @@ impl Runtime {
 
 /// The Julia the app installs on first run (design doc §11), pinned with the
 /// official tarballs' SHA-256 and size (bump all three per release).
-const JULIA_VERSION: &str = "1.12.6";
+pub const JULIA_VERSION: &str = "1.12.6";
 #[cfg(target_arch = "aarch64")]
 const JULIA_TARBALL: (&str, &str, u64) = (
     "https://julialang-s3.julialang.org/bin/mac/aarch64/1.12/julia-1.12.6-macaarch64.tar.gz",
@@ -51,11 +51,11 @@ const JULIA_TARBALL: (&str, &str, u64) = (
 );
 
 
-/// The julia binary to run: ENDEAVOR_JULIA ("use my Julia"), else the app's own,
+/// The julia binary to run: the user's (Settings), else the app's own,
 /// downloaded and verified on first run. `progress` gets status lines meanwhile.
 fn julia_binary(progress: &dyn Fn(String)) -> Result<String, String> {
-    if let Ok(julia) = std::env::var("ENDEAVOR_JULIA") {
-        return Ok(julia);
+    if let Some(julia) = crate::settings::Settings::load().julia {
+        return Ok(julia.display().to_string());
     }
     let dir = crate::install::app_dir()?.join(format!("julia-{JULIA_VERSION}"));
     let bin = dir.join("bin/julia");
@@ -144,8 +144,8 @@ fn check_version(julia: &str) -> Result<(), String> {
     let output = Command::new(julia).arg("--version").output().map_err(|e| {
         if e.kind() == ErrorKind::NotFound {
             format!(
-                "Julia wasn't found at `{julia}` (from ENDEAVOR_JULIA). Point it at a julia binary, \
-                 or unset it to use Endeavor's own Julia."
+                "Julia wasn't found at `{julia}`. In Settings, choose a julia binary \
+                 or switch back to Endeavor's own Julia."
             )
         } else {
             format!("Couldn't run {julia}: {e}")
@@ -155,7 +155,7 @@ fn check_version(julia: &str) -> Result<(), String> {
     match parse_version(&text) {
         Some(v) if v < MIN_JULIA => Err(format!(
             "Endeavor needs Julia {}.{} or newer; `{julia}` is {}.{}. Update it (e.g. `juliaup update`) \
-             or set ENDEAVOR_JULIA to a newer julia.",
+             or choose a newer julia in Settings.",
             MIN_JULIA.0, MIN_JULIA.1, v.0, v.1
         )),
         _ => Ok(()),
@@ -259,12 +259,8 @@ fn live_die_and_restart() {
 
 #[cfg(test)]
 #[test]
-#[ignore]
-fn live_missing_julia() {
-    // SAFETY: ignored test, run on its own; nothing else reads the environment concurrently.
-    unsafe { std::env::set_var("ENDEAVOR_JULIA", "/nonexistent/julia") };
-    let (died, _) = futures::channel::mpsc::unbounded();
-    let err = start(None, died, &|_| {}).err().expect("should fail");
+fn a_missing_julia_points_to_settings() {
+    let err = check_version("/nonexistent/julia").unwrap_err();
     println!("{err}");
-    assert!(err.contains("wasn't found") && err.contains("ENDEAVOR_JULIA"));
+    assert!(err.contains("wasn't found") && err.contains("Settings"));
 }

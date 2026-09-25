@@ -15,6 +15,7 @@ mod outbox;
 mod pluto;
 mod runtime;
 mod session;
+mod settings;
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, SessionId, SessionInfo, TextContent};
@@ -23,12 +24,14 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_component::radio::Radio;
 use gpui_component::{Root, Sizable, Theme, ThemeMode};
 use gpui_wry::WebView;
 use outbox::Queued;
 use raw_window_handle::HasWindowHandle;
 use runtime::Runtime;
 use session::{Effect, Session, folder_name};
+use settings::Settings;
 
 /// Notebook id from a Pluto `/edit?id=…` URL. Only the id is used: the URL also
 /// carries Pluto's secret, which must never reach the agent.
@@ -59,6 +62,22 @@ fn save_json(name: &str, value: &impl serde::Serialize) {
     if let (Some(file), Ok(json)) = (app_file(name), serde_json::to_string_pretty(value)) {
         let _ = std::fs::create_dir_all(file.parent().unwrap()).and_then(|_| std::fs::write(file, json));
     }
+}
+
+/// A checkbox row. Drawn here: gpui-component's Checkbox needs an icon asset set
+/// for its check mark, which the app doesn't ship.
+fn check_row(id: &'static str, checked: bool, label: &'static str) -> Stateful<Div> {
+    let mark = div()
+        .size_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .border_1()
+        .border_color(rgb(0x6a6a6a))
+        .text_xs()
+        .when(checked, |d| d.bg(rgb(0x2f5d3a)).border_color(rgb(0x2f5d3a)).child("✓"));
+    div().id(id).flex().items_center().gap_2().cursor_pointer().child(mark).child(label)
 }
 
 /// Past sessions listed per folder before "Show more".
@@ -111,6 +130,9 @@ pub struct Workspace {
     confirm_delete: Option<SessionId>,
     /// Folders showing all their past sessions, not just the newest.
     expanded: HashSet<PathBuf>,
+    settings: Settings,
+    /// The Settings screen is in the chat pane.
+    settings_open: bool,
     agent_tx: UnboundedSender<Command>,
     /// Handed to the agent thread once Julia is up (it needs the MCP URL).
     agent_rx: Option<UnboundedReceiver<Command>>,
@@ -225,6 +247,8 @@ impl Workspace {
             renaming: None,
             confirm_delete: None,
             expanded: HashSet::new(),
+            settings: Settings::load(),
+            settings_open: false,
             agent_tx,
             agent_rx: Some(agent_rx),
             status: "".into(),
@@ -260,6 +284,27 @@ impl Workspace {
         self.active.and_then(|key| self.sessions.iter().find(|s| s.key == key))
     }
 
+    fn update_settings(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Settings)) {
+        f(&mut self.settings);
+        self.settings.save();
+        cx.notify();
+    }
+
+    fn choose_julia(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Use this julia".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = picked.await {
+                let _ = this.update(cx, |this, cx| this.update_settings(cx, |s| s.julia = paths.pop()));
+            }
+        })
+        .detach();
+    }
+
     fn choose_folder(&mut self, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -292,7 +337,9 @@ impl Workspace {
             let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
         }
         let _ = self.agent_tx.unbounded_send(Command::NewSession { key, cwd: cwd.clone() });
-        self.sessions.push(Session::new(key, cwd));
+        let mut session = Session::new(key, cwd);
+        session.run_without_asking = self.settings.run_without_asking;
+        self.sessions.push(session);
         self.active = Some(key);
         self.follow_folder();
         let text = self.input.read(cx).value().trim().to_string();
@@ -314,6 +361,7 @@ impl Workspace {
         let _ = self.agent_tx.unbounded_send(Command::LoadSession { key, id: info.session_id.clone(), cwd: info.cwd.clone() });
         let mut session = Session::loading(key, info.session_id, info.cwd, title);
         session.named = named.is_some();
+        session.run_without_asking = self.settings.run_without_asking;
         self.sessions.push(session);
         self.activate(key, cx);
     }
@@ -423,6 +471,7 @@ impl Workspace {
     /// Show a session; the notebook pane follows it to the notebook it last viewed.
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         self.active = Some(key);
+        self.settings_open = false;
         self.confirm_delete = None;
         self.follow_folder();
         if let Some(notebook) = self.active_session().and_then(|s| s.notebook.clone()) {
@@ -892,10 +941,27 @@ impl Workspace {
                     .child("+ New session")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active = None;
+                        this.settings_open = false;
                         cx.notify();
                     })),
             )
             .child(div().id("sessions").flex_1().overflow_y_scroll().flex().flex_col().gap_3().children(groups))
+            .child(
+                div()
+                    .id("settings")
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_sm()
+                    .text_color(muted)
+                    .when(self.settings_open, |d| d.bg(rgb(0x2d2d30)).text_color(rgb(0xdddddd)))
+                    .child("⚙ Settings")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.settings_open = true;
+                        cx.notify();
+                    })),
+            )
             .child(div().text_xs().text_color(muted).child(self.status.clone()))
             .when(self.runtime.is_none() && !self.starting, |d| {
                 d.child(
@@ -977,6 +1043,69 @@ impl Workspace {
                     .child("Start session  ↩")
                     .on_click(cx.listener(|this, _, window, cx| this.start_session(window, cx))),
             )
+    }
+
+    fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let muted = rgb(0x8a8a8a);
+        let s = &self.settings;
+        let heading = |text: &'static str| div().mt_2().text_sm().child(text);
+        let note = |text: String| div().pl_6().text_xs().text_color(muted).child(text);
+        let own = s.julia.is_none();
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_4()
+            .child(div().text_lg().child("Settings"))
+            .child(heading("Claude"))
+            .child(check_row("personal-claude", s.personal_claude, "Use my Claude Code setup").on_click(
+                cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.personal_claude = !s.personal_claude)),
+            ))
+            .child(note(
+                "Adds your user settings and MCP servers to Endeavor's plugin and the project's settings. Applies to new sessions."
+                    .into(),
+            ))
+            .child(check_row("run-without-asking", s.run_without_asking, "Run notebook code without asking").on_click(
+                cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking)),
+            ))
+            .child(note(
+                "New sessions start as if you'd chosen \"Allow & stop asking\". Applies to new and reopened sessions.".into(),
+            ))
+            .child(heading("Julia"))
+            .child(
+                Radio::new("julia-own")
+                    .checked(own)
+                    .label(format!("Endeavor's Julia ({})", runtime::JULIA_VERSION))
+                    .on_click(cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.julia = None))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Radio::new("julia-mine")
+                            .checked(!own)
+                            .label("My julia")
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_julia(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("choose-julia")
+                            .px_2()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .text_sm()
+                            .bg(rgb(0x3a3a3c))
+                            .child("Choose…")
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_julia(cx))),
+                    ),
+            )
+            .children(s.julia.as_ref().map(|p| note(p.display().to_string())))
+            // ponytail: no live switch; restarting Julia under running sessions needs
+            // the old process gone before its ports are reused.
+            .child(note("Takes effect the next time Julia starts (relaunching Endeavor, or Restart Julia).".into()))
     }
 
     fn render_chat(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1077,6 +1206,7 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let chat = match self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key)) {
+            _ if self.settings_open => self.render_settings(cx).into_any_element(),
             Some(ix) => self.render_chat(&self.sessions[ix], cx).into_any_element(),
             None => self.render_new_session(cx).into_any_element(),
         };

@@ -15,7 +15,7 @@ process running Pluto + PlutoMCP.
 
 - **Runtime (§11).** App-owned Julia: Julia 1.12.6 is downloaded on first
   launch (progress in the status line, resumable) into Application Support,
-  checked against a pinned SHA-256; `ENDEAVOR_JULIA` uses your own julia
+  checked against a pinned SHA-256; Settings can switch to your own julia
   instead. The ACP adapter is installed the same way: pinned Node.js 24.21.0
   (SHA-256) plus `npm ci` of `adapter/package-lock.json` (integrity-checked),
   so no system Node or `npx`. Stacked private depot; `boot.jl`
@@ -43,11 +43,16 @@ process running Pluto + PlutoMCP.
   Sessions take the agent's generated titles; double-click to rename (names
   kept in `titles.json`); × closes an open session (it stays in history) or,
   with a confirm, deletes a past one (`session/delete`); "Show more" past 8.
+- **Settings** (session bar): use my Claude Code setup, run notebook code
+  without asking in new sessions, and Endeavor's Julia vs. a chosen julia
+  (applies when Julia next starts). Kept in `settings.json`.
+- **Packaging.** `scripts/bundle.sh` builds `Endeavor.app` with its resources
+  in `Contents/Resources`.
 - **Annotation mode (§4.2).** ⌘⇧E; click cells, comment, send as
   `pluto://notebook/{id}/cell/{uuid}` links through the same queue.
 - **Agent environment.** Endeavor's own Claude Code plugin (`plugin/`: the
   styx Pluto skills, ported) plus project settings; the user's personal Claude
-  Code setup is opt-in (`ENDEAVOR_PERSONAL_CLAUDE=1`).
+  Code setup is opt-in (Settings).
 - **Execution gate.** The agent asks before running notebook code
   (`execute_cell`, `submit_changes`, `run_all_cells`, `allow_execution`,
   `delete_cell`, `run_after=true`): a plugin PreToolUse hook (`endeavor
@@ -78,9 +83,6 @@ Everything here is a known `ponytail:` shortcut that's fine for one developer.
 - **Signing and notarization.** `scripts/bundle.sh` builds an ad-hoc signed
   `Endeavor.app` (resources in `Contents/Resources`); sharing it needs a
   Developer ID signature, hardened runtime, and notarization.
-- **Settings UI:** personal Claude Code setup opt-in, Julia path, and the
-  execution gate's "stop asking" (per session today), replacing environment
-  variables.
 
 ## Later
 
@@ -110,7 +112,6 @@ Deliberate simplifications with their upgrade path (search the code for
 | `main.rs` transcript | long diffs are cut at 60 lines, not scrollable | real notebooks hit it |
 | `main.rs` events | modes, usage, available commands ignored | the panel grows those features |
 | PlutoMCP `view_cell_output` | no timeout when the worker is busy | a long run blocks it in practice |
-| `agent.rs`, `runtime.rs` | env-var opt-ins | a settings UI (above) |
 | `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download | an upgrade, or overlapping launches bite |
 
 Also noted: SIGTERM can leave Julia hung mid-exit. The app never sends it

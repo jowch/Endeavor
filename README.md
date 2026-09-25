@@ -8,5 +8,6 @@ See [docs/roadmap.md](docs/roadmap.md) for status and
 - Build the app: `scripts/bundle.sh` → `target/release/Endeavor.app` (ad-hoc signed)
 
 On first launch the app downloads and verifies Julia and Node.js and installs
-the pinned ACP adapter into `~/Library/Application Support/endeavor/`. Set
-`ENDEAVOR_JULIA` to use your own julia instead.
+the pinned ACP adapter into `~/Library/Application Support/endeavor/`. Settings
+(bottom of the session bar) switch to your own julia, load your personal Claude
+Code setup, or let new sessions run notebook code without asking.

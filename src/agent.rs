@@ -91,8 +91,7 @@ fn adapter_command(progress: &dyn Fn(String)) -> Result<Vec<String>, String> {
 /// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
 /// skills and guards) always; the project's settings and CLAUDE.md (from the
 /// working directory) always; the user's personal setup (user settings, their MCP
-/// servers) only when they opt in with ENDEAVOR_PERSONAL_CLAUDE=1.
-// ponytail: env-var opt-in; becomes an app setting once there's a settings UI.
+/// servers) only when they opt in (Settings).
 fn session_options(personal: bool, plugin_dir: &str) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
     serde_json::json!({
@@ -227,8 +226,9 @@ async fn run(
                 .and_then(|m| m.get("steering")?.get("supported")?.as_bool())
                 .unwrap_or(false);
             let pluto = McpServer::Sse(McpServerSse::new("pluto", mcp_url));
-            let personal = std::env::var_os("ENDEAVOR_PERSONAL_CLAUDE").is_some_and(|v| v == "1");
-            let options = session_options(personal, &crate::install::resources().join("plugin").display().to_string()).as_object().cloned();
+            // Read per session, so a Settings change applies to the next one.
+            let plugin = crate::install::resources().join("plugin").display().to_string();
+            let options = || session_options(crate::settings::Settings::load().personal_claude, &plugin).as_object().cloned();
             let _ = events.unbounded_send(AgentEvent::Ready);
 
             let mut pending: FuturesUnordered<LocalBoxFuture<'_, Done>> = FuturesUnordered::new();
@@ -271,7 +271,7 @@ async fn run(
                             Ok(id) => {
                                 let _ = events.unbounded_send(AgentEvent::Forked { key, id: id.clone() });
                                 // Load the copy so its history replays into the new session.
-                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options.clone());
+                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options());
                                 let loaded = connection.send_request(request).block_task();
                                 pending.push(async move { Done::Started(key, loaded.await.map(|_| id)) }.boxed_local());
                             }
@@ -287,17 +287,17 @@ async fn run(
                 };
                 match command {
                     Command::NewSession { key, cwd } => {
-                        let request = NewSessionRequest::new(cwd).mcp_servers(vec![pluto.clone()]).meta(options.clone());
+                        let request = NewSessionRequest::new(cwd).mcp_servers(vec![pluto.clone()]).meta(options());
                         let started = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, started.await.map(|r| r.session_id)) }.boxed_local());
                     }
                     Command::LoadSession { key, id, cwd } => {
-                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options.clone());
+                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options());
                         let loaded = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, loaded.await.map(|_| id)) }.boxed_local());
                     }
                     Command::ForkSession { key, source, cwd } => {
-                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![pluto.clone()]).meta(options.clone());
+                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![pluto.clone()]).meta(options());
                         let forked = connection.send_request(request).block_task();
                         pending.push(async move { Done::Forked(key, cwd, forked.await.map(|r| r.session_id)) }.boxed_local());
                     }
