@@ -71,8 +71,11 @@ Before-text per cell is already kept for the chat's diffs (`celldiff.rs`).
 
 ## Frontend tech
 
-- Today: one injected script, `src/annotate.js` (122 lines), embedded with
-  `include_str!`, plus fire-and-forget `evaluate_script`.
+- **Done (2026-09-25):** `frontend/` (TypeScript, esbuild → committed
+  `dist/page.js`, embedded by `src/annotate.rs`). `bridge.ts` is the two-way
+  channel: page → app over `window.ipc` (typed `ToApp`), app → page through
+  `window.__endeavor.receive(msg)` (typed `ToPage`; Rust `send_to_page`).
+  Annotation mode is ported unchanged; `npm test` runs it in jsdom.
 - The spec's bundle (gutter diffs, pointing overlay, ⌘K prompt, agent "+"
   button, overview rail, user-edit reporting) and the two-way Rust↔JS channel
   make this real frontend work: **TypeScript + esbuild** (`frontend/src/*.ts` →

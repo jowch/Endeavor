@@ -28,3 +28,6 @@ target
 
 # Resolved by Pkg.test() for the runtime package; the app uses runtime/Manifest.toml
 runtime/EndeavorRuntime/Manifest.toml
+
+# Frontend build tools (the built frontend/dist/page.js is committed)
+frontend/node_modules/

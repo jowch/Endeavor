@@ -1,9 +1,11 @@
-//! Annotation mode, Rust side: messages from `annotate.js` and the prompt blocks
-//! queued annotations turn into (design doc §4.2–4.3).
+//! Annotation mode, Rust side: messages from the page script and the prompt
+//! blocks queued annotations turn into (design doc §4.2–4.3).
 
 use agent_client_protocol::schema::v1::{ContentBlock, ResourceLink, TextContent};
 
-pub const SCRIPT: &str = include_str!("annotate.js");
+/// The page script (frontend/, built with `npm run build`; the bundle is committed
+/// so building the app needs no Node).
+pub const SCRIPT: &str = include_str!("../frontend/dist/page.js");
 
 /// Upper bounds on page-supplied data. The page also runs notebook output JS,
 /// so any of these messages may be forged; the user sees every annotation in

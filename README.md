@@ -6,6 +6,9 @@ See [docs/roadmap.md](docs/roadmap.md) for status and
 
 - Run from source: `cargo run`
 - Build the app: `scripts/bundle.sh` → `target/release/Endeavor.app` (ad-hoc signed)
+- Page script (the code injected into the notebook page): `frontend/`, TypeScript.
+  After changing it: `cd frontend && npm install && npm test` (builds
+  `dist/page.js`, which is committed so `cargo build` needs no Node).
 
 On first launch the app downloads and verifies Julia and Node.js and installs
 the pinned ACP adapter into `~/Library/Application Support/endeavor/`. Settings

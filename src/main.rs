@@ -739,12 +739,13 @@ impl Workspace {
             // Move keyboard focus into the notebook so the comment box takes typing.
             let _ = self.webview.read(cx).raw().focus();
         }
-        self.page_script(if enable { "__annotate.set(true)" } else { "__annotate.set(false)" }, cx);
+        self.send_to_page(&serde_json::json!({ "type": "annotate", "on": enable }), cx);
     }
 
-    fn page_script(&self, js: &str, cx: &mut Context<Self>) {
-        // A statement block, not `({ … })`, which would parse as an object literal.
-        let _ = self.webview.read(cx).raw().evaluate_script(&format!("if (window.__annotate) {{ {js} }}"));
+    /// A message to the page script (frontend/src/bridge.ts, `ToPage`).
+    fn send_to_page(&self, msg: &serde_json::Value, cx: &mut Context<Self>) {
+        // JSON is a JS expression, so the message goes in as a literal.
+        let _ = self.webview.read(cx).raw().evaluate_script(&format!("window.__endeavor && window.__endeavor.receive({msg})"));
     }
 
     // -----------------------------------------------------------------------

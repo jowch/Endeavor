@@ -1,0 +1,15 @@
+{
+  "name": "endeavor-frontend",
+  "private": true,
+  "description": "Endeavor's script for the notebook page. Built to dist/page.js (committed; the app embeds it).",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=iife --target=safari16 --outfile=dist/page.js",
+    "check": "tsc --noEmit",
+    "test": "npm run -s build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "jsdom": "^26.1.0",
+    "typescript": "5.9.3"
+  }
+}
