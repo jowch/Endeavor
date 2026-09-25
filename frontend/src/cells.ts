@@ -5,6 +5,7 @@
 // the grey stripe. Pluto redraws cells, so the attributes are re-applied.
 
 import { on, type CellState } from "./bridge";
+import { redrawRail } from "./rail";
 import { onRedraw } from "./redraw";
 
 const css = `
@@ -45,6 +46,7 @@ export function initCells(): void {
   on("cells", (msg) => {
     states = new Map(msg.cells.map((c) => [c.cell_id, c]));
     apply();
+    redrawRail();
   });
   onRedraw(apply);
 }

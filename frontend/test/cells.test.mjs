@@ -30,6 +30,14 @@ test("unrun and author marks follow the app and survive redraws", async () => {
   assert.equal(cell(B).getAttribute("data-endeavor"), null);
   assert.equal(cell(B).getAttribute("data-author"), "user");
 
+  // The overview rail has a mark for the unrun cell only; clicking scrolls to it.
+  const marks = [...window.document.querySelectorAll("#endeavor-rail a")];
+  assert.deepEqual(marks.map((m) => m.dataset.cell), [A]);
+  let scrolled = null;
+  cell(A).scrollIntoView = () => (scrolled = A);
+  marks[0].click();
+  assert.equal(scrolled, A);
+
   // Pluto replaces a cell's element: the mark comes back.
   const fresh = window.document.createElement("pluto-cell");
   fresh.id = A;

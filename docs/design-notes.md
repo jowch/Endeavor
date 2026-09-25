@@ -79,9 +79,9 @@ Before-text per cell is already kept for the chat's diffs (`celldiff.rs`).
 - **Also done (2026-09-25), not yet seen on screen:** cell marking
   (`cells.ts`: data-endeavor / data-author + striped gutter and stale output
   from the runtime's per-cell events) and Fix with Claude / Explain on error
-  boxes (`errors.ts`, Pluto's "Fix with AI" hidden). Remaining spec phase 2:
-  Pluto theme CSS (colour variables, hidden chrome, forced dark), the overview
-  rail, the per-notebook-type adapter.
+  boxes (`errors.ts`, Pluto's "Fix with AI" hidden), and the overview rail
+  (`rail.ts`). Remaining spec phase 2: Pluto theme CSS (colour variables,
+  hidden chrome, forced dark) and the per-notebook-type adapter.
 - The spec's bundle (gutter diffs, pointing overlay, ⌘K prompt, agent "+"
   button, overview rail, user-edit reporting) and the two-way Rust↔JS channel
   make this real frontend work: **TypeScript + esbuild** (`frontend/src/*.ts` →

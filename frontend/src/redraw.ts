@@ -1,6 +1,7 @@
 // Pluto redraws cells and outputs freely; features that decorate them re-run
-// on each redraw (batched to one pass per microtask). Attribute changes of our
-// own (data-*) don't count, so decorating never loops.
+// on each redraw (batched to one pass per microtask). Our own changes don't
+// count, so decorating never loops: data-* attributes, and anything inside an
+// element marked data-endeavor-ui (e.g. the rail, which redraws its marks).
 
 const hooks: Array<() => void> = [];
 let queued = false;
@@ -12,7 +13,10 @@ export function onRedraw(hook: () => void): void {
 
 export function watchRedraws(): void {
   new MutationObserver((records) => {
-    if (queued || records.every((r) => r.type === "attributes" && r.attributeName?.startsWith("data-"))) return;
+    const ours = (r: MutationRecord) =>
+      (r.type === "attributes" && !!r.attributeName?.startsWith("data-")) ||
+      (r.target instanceof Element && !!r.target.closest("[data-endeavor-ui]"));
+    if (queued || records.every(ours)) return;
     queued = true;
     queueMicrotask(() => {
       queued = false;
