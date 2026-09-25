@@ -18,7 +18,9 @@ export type CellState = { cell_id: string; running: boolean; errored: boolean; u
 export type ToPage =
   | { type: "annotate"; on: boolean }
   // The shown notebook's cells, whenever they change and after `ready`.
-  | { type: "cells"; cells: CellState[] };
+  | { type: "cells"; cells: CellState[] }
+  // The notebook theme (Settings), after `ready` and on change.
+  | { type: "theme"; name: "endeavor" | "pluto" };
 
 declare global {
   interface Window {

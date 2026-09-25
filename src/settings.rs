@@ -16,6 +16,38 @@ pub struct Settings {
     pub julia: Option<PathBuf>,
     /// New sessions run notebook code without asking first.
     pub run_without_asking: bool,
+    /// Light or dark (only the notebook follows it so far; the app is dark).
+    pub appearance: Appearance,
+    pub notebook_theme: NotebookTheme,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+    /// Follow macOS.
+    System,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotebookTheme {
+    /// Pluto's colours mapped to Endeavor's (dark only for now).
+    #[default]
+    Endeavor,
+    /// Pluto's own look.
+    Pluto,
+}
+
+impl NotebookTheme {
+    pub fn name(self) -> &'static str {
+        match self {
+            NotebookTheme::Endeavor => "endeavor",
+            NotebookTheme::Pluto => "pluto",
+        }
+    }
 }
 
 impl Settings {
@@ -31,4 +63,19 @@ impl Settings {
             let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(FILE), json));
         }
     }
+}
+
+/// Make the notebook webview light, dark, or follow macOS: Pluto's own themes
+/// switch on the page's `prefers-color-scheme`, which follows the view's appearance.
+#[cfg(target_os = "macos")]
+pub fn set_webview_appearance(webview: &wry::WebView, appearance: Appearance) {
+    use objc2_app_kit::{NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua};
+    use wry::WebViewExtMacOS;
+    let name = match appearance {
+        Appearance::Dark => Some(unsafe { NSAppearanceNameDarkAqua }),
+        Appearance::Light => Some(unsafe { NSAppearanceNameAqua }),
+        Appearance::System => None,
+    };
+    let look = name.and_then(NSAppearance::appearanceNamed);
+    webview.webview().setAppearance(look.as_deref());
 }

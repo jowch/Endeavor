@@ -6,9 +6,11 @@ import { send } from "./bridge";
 import { initCells } from "./cells";
 import { initErrors } from "./errors";
 import { initRail } from "./rail";
+import { initTheme } from "./theme";
 import { watchRedraws } from "./redraw";
 
 function init() {
+  initTheme();
   initAnnotate();
   initCells();
   initErrors();

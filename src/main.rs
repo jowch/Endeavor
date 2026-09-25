@@ -36,7 +36,7 @@ use outbox::Queued;
 use raw_window_handle::HasWindowHandle;
 use runtime::Runtime;
 use session::{Effect, Session, folder_name};
-use settings::Settings;
+use settings::{Appearance, NotebookTheme, Settings};
 use splash::{Progress, Setup, Step};
 
 /// Notebook id from a Pluto `/edit?id=…` URL. Only the id is used: the URL also
@@ -329,6 +329,7 @@ impl Workspace {
             runtime_generation: Arc::new(AtomicU64::new(0)),
             died_tx,
         };
+        settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
         // The webview is a native view over the window; hide it behind the setup screen.
         if this.setup.is_some() {
             let _ = this.webview.read(cx).raw().set_visible(false);
@@ -719,7 +720,10 @@ impl Workspace {
 
     fn on_page_message(&mut self, body: &str, cx: &mut Context<Self>) {
         match annotate::parse(body) {
-            Some(annotate::Message::Ready) => self.push_cells(cx),
+            Some(annotate::Message::Ready) => {
+                self.push_cells(cx);
+                self.apply_look(cx);
+            }
             Some(annotate::Message::Mode(on)) => self.annotating = on,
             Some(annotate::Message::Annotation(a)) => {
                 let Some(key) = self.active else { return };
@@ -967,6 +971,12 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    /// The notebook's appearance and theme, from Settings.
+    fn apply_look(&self, cx: &mut Context<Self>) {
+        settings::set_webview_appearance(self.webview.read(cx).raw(), self.settings.appearance);
+        self.send_to_page(&serde_json::json!({ "type": "theme", "name": self.settings.notebook_theme.name() }), cx);
     }
 
     /// Mark the shown notebook's cells in the page (unrun, author).
@@ -1299,6 +1309,34 @@ impl Workspace {
             .child(note(
                 "New sessions start as if you'd chosen \"Allow & stop asking\". Applies to new and reopened sessions.".into(),
             ))
+            .child(heading("Appearance"))
+            .child(
+                div()
+                    .flex()
+                    .gap_4()
+                    .children([(Appearance::Dark, "Dark"), (Appearance::Light, "Light"), (Appearance::System, "Match system")].map(
+                        |(value, label)| {
+                            Radio::new(label).checked(s.appearance == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
+                                this.update_settings(cx, |s| s.appearance = value);
+                                this.apply_look(cx);
+                            }))
+                        },
+                    )),
+            )
+            .child(note("Only the notebook follows it for now; Endeavor itself stays dark.".into()))
+            .child(heading("Notebook theme"))
+            .child(
+                div()
+                    .flex()
+                    .gap_4()
+                    .children([(NotebookTheme::Endeavor, "Endeavor"), (NotebookTheme::Pluto, "Pluto")].map(|(value, label)| {
+                        Radio::new(label).checked(s.notebook_theme == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
+                            this.update_settings(cx, |s| s.notebook_theme = value);
+                            this.apply_look(cx);
+                        }))
+                    })),
+            )
+            .child(note("Endeavor matches the notebook to the app in dark mode; in light mode both use Pluto's light theme.".into()))
             .child(heading("Julia"))
             .child(
                 Radio::new("julia-own")
