@@ -1,0 +1,6 @@
+[       5ms] [LOG] Waiting for socket to open... 9:00:12 PM @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[    3370ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:52461/' failed: Error during WebSocket handshake: Unexpected response code: 403 @ http://127.0.0.1:52461/frontend.4541b03a.js:20
+[    3370ms] [ERROR] Socket did an oopsie - error 9:00:15 PM was open: false Event @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[    3370ms] [WARNING] Socket did an oopsie - close 9:00:15 PM was open: false CloseEvent @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[    3370ms] [ERROR] connect() failed CloseEvent @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[    3423ms] [ERROR] Failed to load resource: the server responded with a status of 403 (Forbidden) @ http://127.0.0.1:52461/auth-check:0

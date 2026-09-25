@@ -15,11 +15,23 @@ const STDERR_TAIL: usize = 40;
 
 pub struct Runtime {
     // boot.jl exits when its stdin closes, so this handle is Julia's lifetime.
-    _stdin: ChildStdin,
+    stdin: ChildStdin,
     pub pluto_url: String,
     pub mcp_url: String,
     /// Reused on restart so the agent's MCP connection to the bridge reconnects.
     pub ports: [u16; 2],
+}
+
+impl Runtime {
+    /// Make `dir` the folder Pluto suggests when saving a new notebook.
+    pub fn suggest_folder(&mut self, dir: &std::path::Path) {
+        use std::io::Write;
+        let dir = dir.display().to_string();
+        if !dir.contains('\n') {
+            // ponytail: a dead Julia is reported by the crash watcher, not here.
+            let _ = writeln!(self.stdin, "folder {dir}");
+        }
+    }
 }
 
 /// Start Julia and block until boot.jl reports `READY`. `ports` pins the Pluto
@@ -85,7 +97,7 @@ pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>) -> Result<R
             let hint = hint(&tail_text().join("\n")).map(|h| format!(" {h}")).unwrap_or_default();
             let _ = died.unbounded_send(format!("Julia exited ({status}).{hint}"));
         });
-        return Ok(Runtime { _stdin: stdin, pluto_url, mcp_url, ports });
+        return Ok(Runtime { stdin, pluto_url, mcp_url, ports });
     }
     let status = child.wait().map(|s| s.to_string()).unwrap_or_default();
     Err(format!("Julia stopped before Pluto was ready ({status}). {}", diagnose(&tail_text())))

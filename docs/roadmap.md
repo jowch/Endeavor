@@ -33,6 +33,8 @@ process running Pluto + PlutoMCP.
   sessions in the folder are not listed) reopen with their transcript. The
   folder sets the agent's working directory and project settings, and new
   notebooks are created there. The notebook pane follows the active session.
+  Pluto's own "new notebook" starts unsaved in Pluto's scratch folder (its
+  usual behavior); its "Save notebook" box suggests the active session's folder.
 - **Annotation mode (§4.2).** ⌘⇧E; click cells, comment, send as
   `pluto://notebook/{id}/cell/{uuid}` links through the same queue.
 - **Agent environment.** Endeavor's own Claude Code plugin (`plugin/`: the
@@ -61,11 +63,7 @@ Endeavor pins `main` (`runtime/Project.toml`).
 
 In priority order.
 
-1. **Pluto's own "Create a new notebook" button** still saves to the app's
-   internal folder (Pluto's new-notebook folder is one global setting, and
-   sessions have different folders). Options: point it at the active
-   session's folder when sessions switch, or steer users to asking the agent.
-2. **Session polish:** rename, close, and delete sessions; use the agent's
+1. **Session polish:** rename, close, and delete sessions; use the agent's
    own session titles; "show more" for older sessions.
 
 ## Before sharing the app

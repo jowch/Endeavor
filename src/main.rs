@@ -261,6 +261,7 @@ impl Workspace {
         let _ = self.agent_tx.unbounded_send(Command::NewSession { key, cwd: cwd.clone() });
         self.sessions.push(Session::new(key, cwd));
         self.active = Some(key);
+        self.follow_folder();
         let text = self.input.read(cx).value().trim().to_string();
         if !text.is_empty() {
             self.submit(&self.input.clone(), false, window, cx);
@@ -315,10 +316,20 @@ impl Workspace {
     /// Show a session; the notebook pane follows it to the notebook it last viewed.
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         self.active = Some(key);
+        self.follow_folder();
         if let Some(notebook) = self.active_session().and_then(|s| s.notebook.clone()) {
             self.load_notebook(&notebook, cx);
         }
         cx.notify();
+    }
+
+    /// Pluto's new notebooks start unsaved; point its "Save notebook" suggestion
+    /// at the active session's folder (the page picks it up on its next load).
+    fn follow_folder(&mut self) {
+        let Some(cwd) = self.active_session().map(|s| s.cwd.clone()) else { return };
+        if let Some(runtime) = &mut self.runtime {
+            runtime.suggest_folder(&cwd);
+        }
     }
 
     fn apply_effects(&mut self, key: u64, effects: Vec<Effect>, cx: &mut Context<Self>) {
@@ -500,6 +511,7 @@ impl Workspace {
         self.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
         let mcp_url = runtime.mcp_url.clone();
         self.runtime = Some(runtime);
+        self.follow_folder();
         if let Some(commands) = self.agent_rx.take() {
             self.status = "Pluto ready · connecting to Claude…".into();
             let mut events = agent::start(mcp_url, commands);

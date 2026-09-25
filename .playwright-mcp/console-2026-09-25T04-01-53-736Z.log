@@ -1,0 +1,24 @@
+[       8ms] [LOG] Pluto.jl, by Fons van der Plas (https://github.com/fonsp), Mikołaj Bochenski (https://github.com/malyvsen), Michiel Dral (https://github.com/dralletje), Παναγιώτης (Panagiotis) Γεωργακόπουλος (https://github.com/pankgeorg), Paul Berg (https://github.com/Pangoraw) and friends 🌈 @ http://127.0.0.1:52461/edit?id=cd78bc5a-b895-11f1-9380-db409f81ed46:16
+[     213ms] [LOG] Launch parameters:  {featured_direct_html_links: false, featured_sources: undefined, featured_source_url: undefined, featured_source_integrity: undefined, pluto_server_url: undefined} @ http://127.0.0.1:52461/frontend.a6aec328.js:106
+[     223ms] [LOG] Waiting for socket to open... 9:01:53 PM @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[     239ms] [LOG] Socket opened 9:01:53 PM @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[     239ms] [LOG] Hello? @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[     363ms] [LOG] Sources: {pluto website: Object} @ http://127.0.0.1:52461/frontend.a6aec328.js:90
+[     397ms] [LOG] Sources: {pluto website: Object, featured pluto: Object} @ http://127.0.0.1:52461/frontend.a6aec328.js:90
+[    1051ms] [LOG] Hello! @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[    1051ms] [LOG] Client object:  {version_info: Object, notebook_exists: false, message_log: n, send: , kill: } @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[    1355ms] [LOG] Pluto version v1.0.3 @ http://127.0.0.1:52461/frontend.a6aec328.js:106
+[   24308ms] [WARNING] Socket did an oopsie - close 9:02:18 PM was open: true CloseEvent @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   24308ms] [LOG] Starting new websocket 9:02:18 PM @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   24809ms] [LOG] Waiting for socket to open... 9:02:18 PM @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   24810ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:52461/?secret=AdVqXCBN' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:52461/frontend.4541b03a.js:20
+[   24810ms] [ERROR] Socket did an oopsie - error 9:02:18 PM was open: false Event @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   24810ms] [WARNING] Socket did an oopsie - close 9:02:18 PM was open: false CloseEvent @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   24810ms] [ERROR] connect() failed CloseEvent @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   24811ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:52461/auth-check:0
+[   29811ms] [LOG] Waiting for socket to open... 9:02:23 PM @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   30714ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:52461/?secret=AdVqXCBN' failed: Error during WebSocket handshake: Unexpected response code: 403 @ http://127.0.0.1:52461/frontend.4541b03a.js:20
+[   30714ms] [ERROR] Socket did an oopsie - error 9:02:24 PM was open: false Event @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   30714ms] [WARNING] Socket did an oopsie - close 9:02:24 PM was open: false CloseEvent @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   30714ms] [ERROR] connect() failed CloseEvent @ http://127.0.0.1:52461/frontend.4541b03a.js:34
+[   31391ms] [ERROR] Failed to load resource: the server responded with a status of 403 (Forbidden) @ http://127.0.0.1:52461/auth-check:0
