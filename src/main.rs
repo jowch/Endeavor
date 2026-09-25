@@ -50,7 +50,7 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
     annotate::is_uuid(id).then_some(id)
 }
 
-actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode, ToggleSidebar]);
+actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode, ToggleSidebar, OpenSettings, Quit]);
 
 /// A small JSON file in Endeavor's Application Support folder.
 fn app_file(name: &str) -> Option<PathBuf> {
@@ -671,6 +671,11 @@ impl Workspace {
     }
 
     /// ⇧⇥: the active session's next mode (e.g. default → plan → auto).
+    fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        self.settings_open = true;
+        cx.notify();
+    }
+
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         self.sidebar_open = !self.sidebar_open;
         cx.notify();
@@ -1300,10 +1305,7 @@ impl Workspace {
                             .when(self.settings_open, |d| d.bg(theme::row_active()))
                             .hover(|s| s.text_color(theme::text_primary()))
                             .child("⚙")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.settings_open = true;
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(|this, _, window, cx| this.open_settings(&OpenSettings, window, cx))),
                     ),
             )
     }
@@ -1638,6 +1640,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_annotation))
             .on_action(cx.listener(Self::cycle_mode))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::open_settings))
             .on_mouse_move(cx.listener(Self::drag_divider))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.resizing = None))
             .flex()
@@ -1687,6 +1690,27 @@ fn main() {
             KeyBinding::new("shift-tab", CycleMode, None),
             KeyBinding::new("cmd-b", ToggleSidebar, Some("Input")),
             KeyBinding::new("cmd-b", ToggleSidebar, None),
+            KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("cmd-q", Quit, None),
+        ]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        // Edit's items send the native cut:/copy:/paste:/selectAll: selectors, which
+        // the notebook's web view needs for the clipboard; in our own text boxes
+        // they become the input's actions.
+        use gpui_component::input::{Copy, Cut, Paste, SelectAll};
+        let menu = |name: &str, items| Menu { name: name.to_string().into(), items, disabled: false };
+        cx.set_menus(vec![
+            menu("Endeavor", vec![MenuItem::action("Settings…", OpenSettings), MenuItem::separator(), MenuItem::action("Quit Endeavor", Quit)]),
+            menu(
+                "Edit",
+                vec![
+                    MenuItem::os_action("Cut", Cut, OsAction::Cut),
+                    MenuItem::os_action("Copy", Copy, OsAction::Copy),
+                    MenuItem::os_action("Paste", Paste, OsAction::Paste),
+                    MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+                ],
+            ),
+            menu("View", vec![MenuItem::action("Toggle Sidebar", ToggleSidebar)]),
         ]);
         let bounds = Bounds::centered(None, size(px(1560.), px(900.)), cx);
         cx.open_window(
@@ -1704,6 +1728,24 @@ fn main() {
             |window, cx| {
                 Theme::change(ThemeMode::Dark, Some(window), cx);
                 let workspace = cx.new(|cx| Workspace::new(window, cx));
+                // Menu items and shortcuts pressed while the notebook has the keyboard reach
+                // no focused GPUI element; these app-wide handlers forward them.
+                let ws = workspace.downgrade();
+                cx.on_action(move |_: &OpenSettings, cx| {
+                    ws.update(cx, |this, cx| {
+                        this.settings_open = true;
+                        cx.notify();
+                    })
+                    .ok();
+                });
+                let ws = workspace.downgrade();
+                cx.on_action(move |_: &ToggleSidebar, cx| {
+                    ws.update(cx, |this, cx| {
+                        this.sidebar_open = !this.sidebar_open;
+                        cx.notify();
+                    })
+                    .ok();
+                });
                 cx.new(|cx| Root::new(workspace, window, cx))
             },
         )
