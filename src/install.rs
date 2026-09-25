@@ -5,6 +5,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+/// The app's own files (`runtime/`, `plugin/`, `adapter/`): Contents/Resources
+/// inside Endeavor.app, else the source tree (`cargo run`).
+pub fn resources() -> PathBuf {
+    let bundled = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.parent()?.join("Resources")));
+    bundled.filter(|r| r.join("runtime").is_dir()).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
 /// Endeavor's folder in Application Support (runtimes, Julia depot, app state).
 pub fn app_dir() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|e| e.to_string())?;

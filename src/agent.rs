@@ -18,10 +18,8 @@ use futures::future::{Either, LocalBoxFuture, select};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 
-// ponytail: dev-tree paths; resolve from the .app bundle's resources when packaging.
-const PLUGIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/plugin");
-/// package.json + package-lock.json pinning the ACP adapter and its dependencies.
-const ADAPTER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/adapter");
+/// In the app's resources, `adapter/` holds package.json + package-lock.json
+/// pinning the ACP adapter and its dependencies.
 const ADAPTER_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
 
 /// The Node.js the adapter runs on, installed on first launch like Julia.
@@ -52,7 +50,8 @@ fn adapter_command(progress: &dyn Fn(String)) -> Result<Vec<String>, String> {
         crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), progress)?;
     }
 
-    let manifest = std::fs::read_to_string(format!("{ADAPTER_DIR}/package.json")).map_err(|e| e.to_string())?;
+    let pinned = crate::install::resources().join("adapter");
+    let manifest = std::fs::read_to_string(pinned.join("package.json")).map_err(|e| e.to_string())?;
     let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| e.to_string())?;
     let version = manifest["dependencies"][ADAPTER_PACKAGE].as_str().ok_or("adapter/package.json has no adapter version")?;
     let adapter = app.join(format!("adapter-{version}"));
@@ -64,7 +63,7 @@ fn adapter_command(progress: &dyn Fn(String)) -> Result<Vec<String>, String> {
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
         for file in ["package.json", "package-lock.json"] {
-            std::fs::copy(format!("{ADAPTER_DIR}/{file}"), staging.join(file)).map_err(|e| e.to_string())?;
+            std::fs::copy(pinned.join(file), staging.join(file)).map_err(|e| e.to_string())?;
         }
         let npm = node_dir.join("lib/node_modules/npm/bin/npm-cli.js");
         let path = format!("{}:{}", node_dir.join("bin").display(), std::env::var("PATH").unwrap_or_default());
@@ -229,7 +228,7 @@ async fn run(
                 .unwrap_or(false);
             let pluto = McpServer::Sse(McpServerSse::new("pluto", mcp_url));
             let personal = std::env::var_os("ENDEAVOR_PERSONAL_CLAUDE").is_some_and(|v| v == "1");
-            let options = session_options(personal, PLUGIN_DIR).as_object().cloned();
+            let options = session_options(personal, &crate::install::resources().join("plugin").display().to_string()).as_object().cloned();
             let _ = events.unbounded_send(AgentEvent::Ready);
 
             let mut pending: FuturesUnordered<LocalBoxFuture<'_, Done>> = FuturesUnordered::new();

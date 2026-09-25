@@ -75,8 +75,9 @@ In priority order. Nothing queued: the next work is the packaging list below.
 
 Everything here is a known `ponytail:` shortcut that's fine for one developer.
 
-- **`.app` bundle:** move dev-tree paths (`runtime/`, `plugin/`, `adapter/`) to bundle
-  resources; code signing and notarization.
+- **Signing and notarization.** `scripts/bundle.sh` builds an ad-hoc signed
+  `Endeavor.app` (resources in `Contents/Resources`); sharing it needs a
+  Developer ID signature, hardened runtime, and notarization.
 - **Settings UI:** personal Claude Code setup opt-in, Julia path, and the
   execution gate's "stop asking" (per session today), replacing environment
   variables.
@@ -109,7 +110,7 @@ Deliberate simplifications with their upgrade path (search the code for
 | `main.rs` transcript | long diffs are cut at 60 lines, not scrollable | real notebooks hit it |
 | `main.rs` events | modes, usage, available commands ignored | the panel grows those features |
 | PlutoMCP `view_cell_output` | no timeout when the worker is busy | a long run blocks it in practice |
-| `agent.rs`, `runtime.rs` | dev-tree paths (`runtime/`, `plugin/`, `adapter/`), env-var opt-ins | packaging (above) |
+| `agent.rs`, `runtime.rs` | env-var opt-ins | a settings UI (above) |
 | `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download | an upgrade, or overlapping launches bite |
 
 Also noted: SIGTERM can leave Julia hung mid-exit. The app never sends it

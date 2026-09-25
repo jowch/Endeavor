@@ -70,8 +70,7 @@ fn julia_binary(progress: &dyn Fn(String)) -> Result<String, String> {
 /// and MCP ports (restart); `died` gets a message if Julia exits afterwards;
 /// `progress` gets status lines during a first-run install.
 pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: &dyn Fn(String)) -> Result<Runtime, String> {
-    // ponytail: dev-tree paths; resolve from the .app bundle's resources when packaging.
-    let root = env!("CARGO_MANIFEST_DIR");
+    let root = crate::install::resources().display().to_string();
     let julia = julia_binary(progress)?;
     check_version(&julia)?;
     // Trailing ':' stacks the default depots (~/.julia) read-only behind ours.
