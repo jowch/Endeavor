@@ -122,6 +122,47 @@ Staged, each step shippable:
    user and agent edit the same cell), author per change, and the before-text
    an undo would restore (the spec's open undo decision).
 
+## Provenance and reproducibility (to revisit)
+
+Idea (2026-09-25): the notebook, not an execution log, as the record of AI-assisted
+analysis. JSONL/ipython-style logs record what ran, but humans can't verify them
+without an LLM, and they separate artifacts (figures, tables) from the code that
+made them. A Pluto notebook is reactive (what's on screen is a pure function of
+the code on screen: no hidden or out-of-order state), embeds its package
+environment, and keeps outputs next to the code. What it lacks is the *why* and
+the *history*, which the runtime's events and attribution start to capture.
+Handling this bookkeeping early and well is evidence for how the work was done.
+
+Ideas, roughly by value for effort:
+
+1. **Turn-level history in git.** After each agent turn (and on user saves),
+   commit the notebook to a history branch or `.endeavor/history`: message = the
+   prompt, body = cells changed and runs. Readable with ordinary tools; abandoned
+   attempts stay in history. Built on runtime events + attribution.
+2. **Cell provenance on hover.** Who changed the cell, when, and why (the turn's
+   request, linked), with the previous version. Runtime step 6 + a turn link.
+3. **Figures that carry provenance.** Exported figures/tables stamped (PNG text
+   chunks, SVG/PDF metadata) with notebook path, cell, history commit,
+   environment hash and input-data hashes, so an artifact outside the notebook
+   still traces back to exact code, environment and data.
+4. **Reproduce button.** Re-run in a fresh process from the embedded environment
+   and compare every output with the record (exact for text/tables, tolerance for
+   numbers, hash for images). Catches unseeded randomness and outside
+   dependencies. Reactivity makes "the same notebook" well defined.
+5. **Data inputs.** Record files each cell read (content hash, size) at run time,
+   and warn when they change. Cheap: static detection of literal paths via
+   Pluto's parsed cell code; robust: a `data("…")` helper the agent uses.
+6. **Results that can't drift.** Have the agent write findings as interpolated
+   markdown (`md"Km = $(round(Km; digits=2))"`) instead of pasted numbers (a line
+   in the Pluto skills); the runtime can flag prose with hardcoded numbers that
+   also appear in outputs.
+7. **Lab-notebook log.** A readable, append-only per-notebook record (request,
+   what changed, what ran, which outputs changed), generated from events with no
+   LLM: the readable companion to the git history.
+
+1, 2 and 7 rest on runtime steps 3 and 6; 3 and 4 are what an outside reviewer
+would find most convincing.
+
 ## Open questions
 
 - Chat-panel radius and undo granularity (from the spec).
