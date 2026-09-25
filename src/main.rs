@@ -50,7 +50,7 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
     annotate::is_uuid(id).then_some(id)
 }
 
-actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode]);
+actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode, ToggleSidebar]);
 
 /// A small JSON file in Endeavor's Application Support folder.
 fn app_file(name: &str) -> Option<PathBuf> {
@@ -86,7 +86,39 @@ fn check_row(id: &'static str, checked: bool, label: &'static str) -> Stateful<D
     div().id(id).flex().items_center().gap_2().cursor_pointer().child(mark).child(label)
 }
 
+/// Pane widths: the default, and the range a divider can drag them to.
 const SIDEBAR_WIDTH: f32 = 232.;
+const SIDEBAR_RANGE: (f32, f32) = (180., 400.);
+const CHAT_MIN: f32 = 320.;
+const NOTEBOOK_MIN: f32 = 360.;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Divider {
+    Sidebar,
+    Chat,
+}
+
+/// The ⌘B button: a small drawn sidebar glyph. It sits in a header, so it stops
+/// the mouse-down that would otherwise start a window move.
+fn sidebar_toggle(cx: &mut Context<Workspace>) -> impl IntoElement {
+    div()
+        .id("sidebar-toggle")
+        .p(px(4.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::row_active()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(&ToggleSidebar, window, cx)))
+        .child(
+            div()
+                .w(px(15.))
+                .h(px(12.))
+                .rounded(px(3.))
+                .border_1()
+                .border_color(theme::text_muted())
+                .child(div().w(px(5.)).h_full().border_r_1().border_color(theme::text_muted())),
+        )
+}
 
 /// A 24px composer-toolbar button.
 fn tool_button(id: &'static str) -> Stateful<Div> {
@@ -101,6 +133,8 @@ fn tool_button(id: &'static str) -> Stateful<Div> {
         .hover(|s| s.bg(theme::row_active()))
 }
 const CHAT_WIDTH: f32 = 440.;
+/// Room the traffic lights take at the start of a header.
+const TRAFFIC_LIGHTS: f32 = 84.;
 
 /// A 44px column header: the window's drag area (the title bar is transparent),
 /// double-click zooms like a title bar.
@@ -191,6 +225,11 @@ pub struct Workspace {
     /// Folders showing all their past sessions, not just the newest.
     expanded: HashSet<PathBuf>,
     settings: Settings,
+    sidebar_open: bool,
+    sidebar_width: f32,
+    chat_width: f32,
+    /// The divider being dragged.
+    resizing: Option<Divider>,
     /// The Settings screen is in the chat pane.
     settings_open: bool,
     /// First launch: the setup screen covers the window until setup finishes.
@@ -310,6 +349,10 @@ impl Workspace {
             expanded: HashSet::new(),
             settings: Settings::load(),
             settings_open: false,
+            sidebar_open: true,
+            sidebar_width: SIDEBAR_WIDTH,
+            chat_width: CHAT_WIDTH,
+            resizing: None,
             setup: Setup::needed().then(Setup::default),
             agent_ready: false,
             signed_in: None,
@@ -628,6 +671,56 @@ impl Workspace {
     }
 
     /// ⇧⇥: the active session's next mode (e.g. default → plan → auto).
+    fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar_open = !self.sidebar_open;
+        cx.notify();
+    }
+
+    /// A 1px column divider with a wider invisible grip for dragging. The grip
+    /// sits left of the line: the notebook's web view covers anything to its right.
+    fn divider(&self, which: Divider, color: Rgba, cx: &mut Context<Self>) -> impl IntoElement {
+        let id = if which == Divider::Sidebar { "sidebar-divider" } else { "chat-divider" };
+        div().w(px(1.)).h_full().flex_shrink_0().bg(color).relative().child(
+            div()
+                .id(id)
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(-6.))
+                .w(px(7.))
+                .cursor(CursorStyle::ResizeLeftRight)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.resizing = Some(which);
+                        cx.stop_propagation();
+                    }),
+                ),
+        )
+    }
+
+    /// Drags go on reaching us over the notebook: AppKit sends them to the view
+    /// that got the mouse-down.
+    fn drag_divider(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(which) = self.resizing else { return };
+        if e.pressed_button != Some(MouseButton::Left) {
+            self.resizing = None;
+            return;
+        }
+        let x = e.position.x.as_f32();
+        match which {
+            // Dragging well past the minimum collapses the sidebar, like ⌘B.
+            Divider::Sidebar if x < SIDEBAR_RANGE.0 / 2. => self.sidebar_open = false,
+            Divider::Sidebar => (self.sidebar_open, self.sidebar_width) = (true, x.clamp(SIDEBAR_RANGE.0, SIDEBAR_RANGE.1)),
+            Divider::Chat => {
+                let start = if self.sidebar_open { self.sidebar_width + 1. } else { 0. };
+                let max = (window.viewport_size().width.as_f32() - start - NOTEBOOK_MIN).max(CHAT_MIN);
+                self.chat_width = (x - start).clamp(CHAT_MIN, max);
+            }
+        }
+        cx.notify();
+    }
+
     fn cycle_mode(&mut self, _: &CycleMode, _: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.active else { return };
         if let Some(effects) = self.session_mut(key).map(Session::cycle_mode) {
@@ -1155,18 +1248,16 @@ impl Workspace {
             .collect();
 
         div()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.sidebar_width))
             .flex_shrink_0()
             .h_full()
             .flex()
             .flex_col()
             .px(px(6.))
             .pb(px(10.))
-            .border_r_1()
-            .border_color(theme::sidebar_edge())
             .bg(theme::bg_sidebar())
             // The traffic lights sit in this header (see TitlebarOptions in main()).
-            .child(column_header("sidebar-header").mx(px(-6.)))
+            .child(column_header("sidebar-header").mx(px(-6.)).justify_end().px(px(10.)).child(sidebar_toggle(cx)))
             .child(
                 sidebar_row("new-session".into(), false)
                     .text_color(theme::text_new())
@@ -1531,6 +1622,7 @@ impl Render for Workspace {
             None => ("New session".into(), None),
         };
         let chat_header = column_header("chat-header")
+            .when(!self.sidebar_open, |d| d.pl(px(TRAFFIC_LIGHTS)).child(sidebar_toggle(cx)))
             .child(div().text_size(px(13.5)).overflow_hidden().whitespace_nowrap().child(title))
             .children(folder.map(|f| {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family("Menlo").text_size(px(11.)).child(f)
@@ -1545,23 +1637,25 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::interrupt))
             .on_action(cx.listener(Self::toggle_annotation))
             .on_action(cx.listener(Self::cycle_mode))
+            .on_action(cx.listener(Self::toggle_sidebar))
+            .on_mouse_move(cx.listener(Self::drag_divider))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.resizing = None))
             .flex()
             .size_full()
             .bg(theme::bg_page())
             .text_color(theme::text_primary())
-            .child(self.render_session_bar(cx))
+            .when(self.sidebar_open, |d| d.child(self.render_session_bar(cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
             .child(
                 div()
-                    .w(px(CHAT_WIDTH))
+                    .w(px(self.chat_width))
                     .flex_shrink_0()
                     .h_full()
                     .flex()
                     .flex_col()
-                    .border_r_1()
-                    .border_color(theme::divider())
                     .child(chat_header)
                     .child(chat),
             )
+            .child(self.divider(Divider::Chat, theme::divider(), cx))
             .child(
                 div()
                     .flex_1()
@@ -1591,6 +1685,8 @@ fn main() {
             // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).
             KeyBinding::new("shift-tab", CycleMode, Some("Input")),
             KeyBinding::new("shift-tab", CycleMode, None),
+            KeyBinding::new("cmd-b", ToggleSidebar, Some("Input")),
+            KeyBinding::new("cmd-b", ToggleSidebar, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1560.), px(900.)), cx);
         cx.open_window(
