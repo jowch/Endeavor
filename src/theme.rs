@@ -13,8 +13,15 @@ pub fn bg_card() -> Rgba { rgb(0x1C1C1F) }
 pub fn bg_raised() -> Rgba { rgb(0x26262A) }
 /// The active sidebar row.
 pub fn row_active() -> Rgba { rgb(0x1E1E21) }
+/// Tags (the chat header's folder, inline code).
+pub fn bg_tag() -> Rgba { rgb(0x222225) }
+pub fn text_tag() -> Rgba { rgb(0x9A9A9A) }
 /// Card and composer outlines.
 pub fn border() -> Rgba { rgb(0x2A2A2E) }
+/// The sidebar's right edge.
+pub fn sidebar_edge() -> Rgba { rgb(0x1C1C1F) }
+/// The composer's outline.
+pub fn composer_edge() -> Rgba { rgb(0x3A3A40) }
 /// Column dividers.
 pub fn divider() -> Rgba { rgb(0x1F1F22) }
 
@@ -22,6 +29,10 @@ pub fn divider() -> Rgba { rgb(0x1F1F22) }
 pub fn text_primary() -> Rgba { rgb(0xECECEC) }
 /// Cell names, model/effort.
 pub fn text_secondary() -> Rgba { rgb(0xBDBDBD) }
+/// The active sidebar row's text.
+pub fn text_row_active() -> Rgba { rgb(0xD4D4D4) }
+/// "New session" in the sidebar.
+pub fn text_new() -> Rgba { rgb(0xA3A3A3) }
 /// Sidebar rows.
 pub fn text_muted() -> Rgba { rgb(0x8C8C8C) }
 /// Tool lines, timestamps.

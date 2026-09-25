@@ -86,6 +86,60 @@ fn check_row(id: &'static str, checked: bool, label: &'static str) -> Stateful<D
     div().id(id).flex().items_center().gap_2().cursor_pointer().child(mark).child(label)
 }
 
+const SIDEBAR_WIDTH: f32 = 232.;
+
+/// A 24px composer-toolbar button.
+fn tool_button(id: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .px(px(5.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::row_active()))
+}
+const CHAT_WIDTH: f32 = 440.;
+
+/// A 44px column header: the window's drag area (the title bar is transparent),
+/// double-click zooms like a title bar.
+fn column_header(id: impl Into<ElementId>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(44.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_4()
+        .on_mouse_down(MouseButton::Left, |e, window, _| {
+            if e.click_count >= 2 {
+                window.titlebar_double_click();
+            } else {
+                window.start_window_move();
+            }
+        })
+}
+
+/// A 28px sidebar row (sessions, "New session").
+fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(28.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px(px(10.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .text_size(px(12.5))
+        .text_color(if active { theme::text_row_active() } else { theme::text_muted() })
+        .when(active, |d| d.bg(theme::row_active()))
+        .hover(|s| s.bg(theme::row_active()))
+}
+
 /// Past sessions listed per folder before "Show more".
 const PAST_SHOWN: usize = 8;
 
@@ -163,6 +217,8 @@ pub struct Workspace {
     last_notebooks: Vec<(String, String)>,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
     notebooks: serde_json::Value,
+    /// The composer's placeholder as last set (it changes while Claude works).
+    placeholder: &'static str,
     /// Bumped when Julia boots or dies, so an old runtime's event reader stops.
     runtime_generation: Arc<AtomicU64>,
     died_tx: UnboundedSender<String>,
@@ -196,7 +252,7 @@ impl Workspace {
         // Enter sends (queued while Claude works), Cmd+Enter sends now, Shift+Enter is a newline.
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Ask Claude about the notebook…")
+                .placeholder("Type / for commands")
                 .submit_on_enter(true)
                 .auto_grow(1, 8)
         });
@@ -266,6 +322,7 @@ impl Workspace {
             last_ports: None,
             last_notebooks: Vec::new(),
             notebooks: serde_json::Value::Null,
+            placeholder: "Type / for commands",
             runtime_generation: Arc::new(AtomicU64::new(0)),
             died_tx,
         };
@@ -964,7 +1021,6 @@ impl Workspace {
     // -----------------------------------------------------------------------
 
     fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = theme::text_muted();
         // Folders: recent ones, then any other folder with an open session.
         let mut folders: Vec<&PathBuf> = self.recent.iter().collect();
         for s in &self.sessions {
@@ -981,34 +1037,25 @@ impl Workspace {
                     .filter(|s| &s.cwd == folder)
                     .map(|s| {
                         let key = s.key;
-                        let (dot, color) = if s.failed.is_some() {
-                            ("×", theme::text_faint())
-                        } else if s.needs_approval() {
-                            ("!", theme::accent())
-                        } else if s.outbox.busy {
-                            ("●", theme::accent())
-                        } else {
-                            ("○", theme::text_faint())
-                        };
+                        let active = self.active == Some(key) && !self.settings_open;
                         let row: SharedString = format!("session-{key}").into();
                         let title = match &self.renaming {
                             Some((k, input)) if *k == key => div().flex_1().child(Input::new(input).xsmall()),
-                            _ => div().flex_1().overflow_hidden().child(s.title.clone()),
+                            _ => div().flex_1().overflow_hidden().whitespace_nowrap().child(s.title.clone()),
                         };
-                        div()
-                            .id(ElementId::NamedInteger("session".into(), key))
+                        // Status at the row's end: a ring waits for you, a dot is working.
+                        let mark = if s.needs_approval() {
+                            Some(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()))
+                        } else if s.outbox.busy {
+                            Some(div().size(px(6.)).rounded_full().bg(theme::accent()))
+                        } else {
+                            None
+                        };
+                        sidebar_row(ElementId::NamedInteger("session".into(), key), active)
                             .group(row.clone())
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .text_sm()
-                            .when(self.active == Some(key), |d| d.bg(theme::row_active()))
-                            .child(div().text_color(color).child(dot))
+                            .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
                             .child(title)
+                            .children(mark)
                             .child(hover_button(("close", key), row, "×", cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.close_session(key, cx);
@@ -1036,7 +1083,6 @@ impl Workspace {
                     .map(|(i, info)| {
                         let id = info.session_id.to_string();
                         let title = self.titles.get(&id).cloned().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into());
-                        let date = info.updated_at.as_deref().map(|d| d.chars().take(10).collect::<String>()).unwrap_or_default();
                         let row: SharedString = format!("past-{}-{i}", folder.display()).into();
                         let confirming = self.confirm_delete.as_ref() == Some(&info.session_id);
                         let (open, delete, cwd) = ((*info).clone(), info.session_id.clone(), folder.clone());
@@ -1044,18 +1090,9 @@ impl Workspace {
                             cx.stop_propagation();
                             this.delete_past(delete.clone(), cwd.clone(), cx);
                         });
-                        div()
-                            .id(ElementId::Name(row.clone()))
+                        sidebar_row(ElementId::Name(row.clone()), false)
                             .group(row.clone())
-                            .flex()
-                            .gap_2()
-                            .px_2()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(div().flex_1().overflow_hidden().child(title))
-                            .child(date)
+                            .child(div().flex_1().overflow_hidden().whitespace_nowrap().child(title))
                             .map(|d| {
                                 if confirming {
                                     let id = ElementId::Name(format!("{row}-confirm").into());
@@ -1070,12 +1107,8 @@ impl Workspace {
                 let more = (all.len() > PAST_SHOWN).then(|| {
                     let label = if expanded { "Show fewer".to_string() } else { format!("Show {} more", all.len() - PAST_SHOWN) };
                     let folder = folder.clone();
-                    div()
-                        .id(ElementId::Name(format!("more-{}", folder.display()).into()))
-                        .px_2()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(theme::accent_text())
+                    sidebar_row(ElementId::Name(format!("more-{}", folder.display()).into()), false)
+                        .text_color(theme::text_faint())
                         .child(label)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if !this.expanded.remove(&folder) {
@@ -1087,8 +1120,7 @@ impl Workspace {
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .child(div().px_2().text_xs().text_color(muted).child(folder_name(folder)))
+                    .child(div().mt(px(18.)).px(px(10.)).pb_1().text_size(px(11.5)).text_color(theme::text_section()).child(folder_name(folder)))
                     .children(open)
                     .children(past)
                     .children(more)
@@ -1096,63 +1128,66 @@ impl Workspace {
             .collect();
 
         div()
-            .w(px(220.))
+            .w(px(SIDEBAR_WIDTH))
+            .flex_shrink_0()
             .h_full()
             .flex()
             .flex_col()
-            .gap_3()
-            .p_2()
+            .px(px(6.))
+            .pb(px(10.))
             .border_r_1()
-            .border_color(theme::divider())
+            .border_color(theme::sidebar_edge())
             .bg(theme::bg_sidebar())
+            // The traffic lights sit in this header (see TitlebarOptions in main()).
+            .child(column_header("sidebar-header").mx(px(-6.)))
             .child(
-                div()
-                    .id("new-session")
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_sm()
-                    .bg(theme::row_active())
-                    .child("+ New session")
+                sidebar_row("new-session".into(), false)
+                    .text_color(theme::text_new())
+                    .child(div().text_color(theme::text_faint()).child("+"))
+                    .child("New session")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active = None;
                         this.settings_open = false;
                         cx.notify();
                     })),
             )
-            .child(div().id("sessions").flex_1().overflow_y_scroll().flex().flex_col().gap_3().children(groups))
-            .child(
-                div()
-                    .id("settings")
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(muted)
-                    .when(self.settings_open, |d| d.bg(theme::row_active()).text_color(theme::text_primary()))
-                    .child("⚙ Settings")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.settings_open = true;
-                        cx.notify();
-                    })),
-            )
-            .child(div().text_xs().text_color(muted).child(self.status.clone()))
+            .child(div().id("sessions").flex_1().overflow_y_scroll().flex().flex_col().children(groups))
             .children(self.render_sign_in(cx))
             .when(self.runtime.is_none() && !self.starting, |d| {
                 d.child(
-                    div()
-                        .id("restart")
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_sm()
-                        .bg(theme::bg_raised())
+                    sidebar_row("restart".into(), false)
+                        .text_color(theme::accent_text())
                         .child("↻ Restart Julia")
                         .on_click(cx.listener(|this, _, _, cx| this.boot(this.last_ports, cx))),
                 )
             })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .pt(px(6.))
+                    .px_1()
+                    .child(div().flex_1().pl(px(6.)).text_size(px(11.5)).text_color(theme::text_section()).child(self.status.clone()))
+                    .child(
+                        div()
+                            .id("settings")
+                            .size(px(28.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_color(if self.settings_open { theme::text_primary() } else { theme::text_faint() })
+                            .when(self.settings_open, |d| d.bg(theme::row_active()))
+                            .hover(|s| s.text_color(theme::text_primary()))
+                            .child("⚙")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.settings_open = true;
+                                cx.notify();
+                            })),
+                    ),
+            )
     }
 
     fn render_new_session(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1185,7 +1220,6 @@ impl Workspace {
             .flex_col()
             .gap_3()
             .p_4()
-            .child(div().text_lg().child("New session"))
             .child(div().text_sm().text_color(muted).child("Working folder: where Claude works, whose CLAUDE.md applies, and where new notebooks go."))
             .child(
                 div()
@@ -1234,7 +1268,6 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .p_4()
-            .child(div().text_lg().child("Settings"))
             .child(heading("Claude"))
             .child(check_row("personal-claude", s.personal_claude, "Use my Claude Code setup").on_click(
                 cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.personal_claude = !s.personal_claude)),
@@ -1301,22 +1334,11 @@ impl Workspace {
 
     fn render_chat(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let key = session.key;
-        let button = |id: &'static str| div().id(id).px_2().rounded_sm().cursor_pointer().text_sm();
         div()
             .flex_1()
             .flex()
             .flex_col()
             .min_h_0()
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(theme::divider())
-                    .text_sm()
-                    .child(session.title.clone())
-                    .child(div().text_xs().text_color(theme::text_muted()).child(session.cwd.display().to_string())),
-            )
             .children(session.failed.as_ref().map(|failure| {
                 div()
                     .m_3()
@@ -1347,37 +1369,69 @@ impl Workspace {
             .children(session::render_activity(session))
             .child(
                 div()
-                    .p_3()
+                    .px_4()
+                    .pb(px(11.))
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .border_t_1()
-                    .border_color(theme::divider())
                     .child(session::render_queue(session, cx))
+                    // One-line box: Enter sends; the glyph becomes Stop while Claude works.
                     .child(
                         div()
                             .flex()
-                            // Wrap rather than clip when the chips and Stop don't fit.
-                            .flex_wrap()
+                            .items_center()
                             .gap_2()
+                            .min_h(px(38.))
+                            .px(px(10.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(theme::composer_edge())
+                            .bg(theme::bg_card())
+                            .child(div().flex_1().child(Textarea::new(&self.input).appearance(false)))
+                            .child(if session.outbox.busy && session.id.is_some() {
+                                div()
+                                    .id("stop")
+                                    .size(px(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.))
+                                    .cursor_pointer()
+                                    .bg(theme::bg_raised())
+                                    .text_size(px(10.))
+                                    .child("■")
+                                    .on_click(cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx)))
+                                    .into_any_element()
+                            } else {
+                                div().text_color(theme::text_faint()).child("↵").into_any_element()
+                            }),
+                    )
+                    // Toolbar under the box: point, mode · model, effort, context.
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.))
+                            .h(px(24.))
+                            .text_size(px(12.))
+                            .text_color(theme::text_new())
                             .child(
-                                button("annotate-toggle")
-                                    .when(self.annotating, |d| d.bg(theme::accent()))
-                                    .child(if self.annotating { "◉ Annotating (⌘⇧E exits)" } else { "◎ Annotate (⌘⇧E)" })
+                                tool_button("point")
+                                    .when(self.annotating, |d| d.text_color(theme::accent_text()))
+                                    .child("↖ Point")
                                     .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&ToggleAnnotation, window, cx))),
                             )
-                            // ponytail: plain label until the spec's composer toolbar (phase 1).
                             .children(session.mode_name().map(|name| {
-                                button("mode")
-                                    .text_color(if name.to_lowercase().contains("plan") { theme::accent_text() } else { theme::text_muted() })
-                                    .child(format!("{name} (⇧⇥)"))
+                                tool_button("mode")
+                                    .when(name.to_lowercase().contains("plan"), |d| d.text_color(theme::accent_text()))
+                                    .child(name.to_string())
                                     .on_click(cx.listener(|this, _, window, cx| this.cycle_mode(&CycleMode, window, cx)))
                             }))
                             .when(session.run_without_asking, |d| {
                                 d.child(
-                                    button("ask-again")
-                                        .bg(theme::bg_raised())
-                                        .child("▶ Runs without asking ✕")
+                                    tool_button("ask-again")
+                                        .text_color(theme::text_faint())
+                                        .child("runs without asking ✕")
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.with_session(key, cx, |s| {
                                                 s.run_without_asking = false;
@@ -1387,31 +1441,50 @@ impl Workspace {
                                 )
                             })
                             .child(div().flex_1())
-                            .when(session.outbox.busy && session.id.is_some(), |d| {
-                                d.child(
-                                    button("stop")
-                                        .bg(theme::bg_raised())
-                                        .child("■ Stop (Esc)")
-                                        .on_click(cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx))),
-                                )
-                            }),
-                    )
-                    .child(Textarea::new(&self.input)),
+                            .children(session.config_label("model").map(|m| div().px(px(5.)).text_color(theme::text_secondary()).child(m)))
+                            .children(session.config_label("effort").map(|e| div().px(px(5.)).text_color(theme::text_secondary()).child(e)))
+                            .children(session.usage.filter(|(_, size)| *size > 0).map(|(used, size)| {
+                                div().px(px(5.)).text_color(theme::text_faint()).child(format!("{}%", used * 100 / size))
+                            })),
+                    ),
             )
     }
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(setup) = &self.setup {
             let sign_in = self.render_sign_in(cx);
             return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).child(splash::render(setup, sign_in, cx)).into_any_element();
         }
-        let chat = match self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key)) {
+        let active = self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key));
+        let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
+        let placeholder = if working { "Queue a message, or ⌘⏎ to steer" } else { "Type / for commands" };
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            self.input.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
+        }
+        let chat = match active {
             _ if self.settings_open => self.render_settings(cx).into_any_element(),
             Some(ix) => self.render_chat(&self.sessions[ix], cx).into_any_element(),
             None => self.render_new_session(cx).into_any_element(),
         };
+        // Chat header: the session and its folder; the notebook header: its file.
+        let (title, folder) = match active {
+            _ if self.settings_open => ("Settings".into(), None),
+            Some(ix) => (self.sessions[ix].title.clone(), Some(folder_name(&self.sessions[ix].cwd))),
+            None => ("New session".into(), None),
+        };
+        let chat_header = column_header("chat-header")
+            .child(div().text_size(px(13.5)).overflow_hidden().whitespace_nowrap().child(title))
+            .children(folder.map(|f| {
+                div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family("Menlo").text_size(px(11.)).child(f)
+            }));
+        let notebook_file = self.active_session().and_then(|s| s.notebook.as_ref()).and_then(|id| {
+            self.last_notebooks.iter().find(|(nid, _)| nid == id).map(|(_, path)| folder_name(Path::new(path)))
+        });
+        let notebook_header = column_header("notebook-header")
+            .children(notebook_file.map(|f| div().font_family("Menlo").text_size(px(12.)).text_color(theme::text_muted()).child(f)));
         div()
             .key_context("Workspace")
             .on_action(cx.listener(Self::interrupt))
@@ -1424,15 +1497,26 @@ impl Render for Workspace {
             .child(self.render_session_bar(cx))
             .child(
                 div()
-                    .w(px(420.))
+                    .w(px(CHAT_WIDTH))
+                    .flex_shrink_0()
                     .h_full()
                     .flex()
                     .flex_col()
                     .border_r_1()
                     .border_color(theme::divider())
+                    .child(chat_header)
                     .child(chat),
             )
-            .child(div().flex_1().h_full().child(self.webview.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(notebook_header)
+                    .child(div().flex_1().min_h_0().child(self.webview.clone())),
+            )
             .into_any_element()
     }
 }
@@ -1457,6 +1541,13 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // No title bar: each column has its own 44px header, the traffic
+                // lights sit in the sidebar's.
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Endeavor".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(16.), px(16.))),
+                }),
                 ..Default::default()
             },
             |window, cx| {

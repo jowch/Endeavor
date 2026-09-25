@@ -11,7 +11,7 @@ use agent_client_protocol::Responder;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v1::{
     AvailableCommand, ContentBlock, PermissionOption, PermissionOptionKind, PlanEntry, PlanEntryStatus,
-    RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
+    RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
     SessionConfigValueId, SessionId,
     SessionModeId, SessionModeState, SessionUpdate, StopReason, ToolCallId, ToolCallStatus, ToolCallUpdate,
 };
@@ -208,6 +208,19 @@ impl Session {
         session.title = title;
         session.replaying = true;
         session
+    }
+
+    /// The current choice of a select config option, by its display name (e.g.
+    /// "model" → "Opus 5.5").
+    pub fn config_label(&self, id: &str) -> Option<String> {
+        let option = self.config.iter().find(|c| c.id.to_string() == id)?;
+        let SessionConfigKind::Select(select) = &option.kind else { return None };
+        let options: Vec<&SessionConfigSelectOption> = match &select.options {
+            SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+            SessionConfigSelectOptions::Grouped(groups) => groups.iter().flat_map(|g| &g.options).collect(),
+            _ => Vec::new(),
+        };
+        options.iter().find(|o| o.value == select.current_value).map(|o| o.name.clone())
     }
 
     /// The agent's name for the current mode.
@@ -553,7 +566,7 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
                 let Some(entry) = this.sessions.iter().find(|s| s.key == key).and_then(|s| s.entries.get(ix)) else {
                     return div().into_any_element();
                 };
-                div().px_3().pb_3().child(render_entry(key, ix, entry, cx)).into_any_element()
+                div().px_4().pb_4().child(render_entry(key, ix, entry, cx)).into_any_element()
             })
             .unwrap_or_else(|_| div().into_any_element())
     })
@@ -608,28 +621,55 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
     let muted = theme::text_muted();
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), (key as u64) << 32 | ix as u64);
     match entry {
-        Entry::User(text) => div().p_2().rounded_md().bg(theme::bg_raised()).child(text.clone()).into_any_element(),
+        Entry::User(text) => div()
+            .flex()
+            .justify_end()
+            .child(div().max_w(px(300.)).px_3().py_2().rounded(px(8.)).bg(theme::bg_raised()).child(text.clone()))
+            .into_any_element(),
         Entry::Agent(text) => TextView::markdown(id("agent"), text.clone()).into_any_element(),
         Entry::Note(text) => div().text_sm().text_color(muted).child(text.clone()).into_any_element(),
         Entry::Tool { title, status, input, output, diffs, expanded, .. } => {
-            let arrow = if *expanded { "▾" } else { "▸" };
+            // One line: grey verb, the cells in mono, ± counts, › to expand (the diff).
+            let names: Vec<String> = diffs.iter().map(cell_name).collect();
+            let (added, removed) = diffs.iter().flat_map(|d| &d.lines).fold((0, 0), |(a, r), (change, _)| match change {
+                celldiff::Change::Added => (a + 1, r),
+                celldiff::Change::Removed => (a, r + 1),
+                celldiff::Change::Same => (a, r),
+            });
+            let mono = |text: String, color: Rgba| div().font_family("Menlo").text_size(px(12.)).text_color(color).child(text);
+            let state = match status {
+                ToolCallStatus::Failed => Some(div().text_color(theme::danger()).child("failed")),
+                ToolCallStatus::Pending | ToolCallStatus::InProgress => Some(div().child("…")),
+                _ => None,
+            };
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .text_sm()
+                .gap_2()
                 .child(
                     div()
                         .id(id("tool"))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
                         .cursor_pointer()
-                        .text_color(muted)
-                        .child(format!("{arrow} ⚙ {title} · {status:?}"))
+                        .text_size(px(13.))
+                        .text_color(theme::text_faint())
+                        .hover(|s| s.text_color(theme::text_secondary()))
+                        .child(div().overflow_hidden().whitespace_nowrap().child(tool_verb(title)))
+                        .when(!names.is_empty(), |d| d.child(mono(names.join(", "), theme::text_secondary())))
+                        .when(added > 0, |d| d.child(mono(format!("+{added}"), theme::diff_add())))
+                        .when(removed > 0, |d| d.child(mono(format!("−{removed}"), theme::diff_del())))
+                        .children(state)
+                        .child(if *expanded { "⌄" } else { "›" })
                         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle(ix)))),
                 )
-                .children(diffs.iter().map(render_diff))
                 .when(*expanded, |d| {
-                    d.children(input.as_ref().map(|v| detail("input", v)))
-                        .children(output.as_ref().map(|v| detail("result", &celldiff::tool_json(v).unwrap_or_else(|| v.clone()))))
+                    d.children(diffs.iter().map(render_diff))
+                        .when(diffs.is_empty(), |d| {
+                            d.children(input.as_ref().map(|v| detail("input", v)))
+                                .children(output.as_ref().map(|v| detail("result", &celldiff::tool_json(v).unwrap_or_else(|| v.clone()))))
+                        })
                 })
                 .into_any_element()
         }
@@ -772,6 +812,40 @@ fn render_diff(diff: &celldiff::CellDiff) -> impl IntoElement + use<> {
         })
 }
 
+/// A tool call as a verb: "Edited", "Ran", …; other tools keep their own title.
+fn tool_verb(title: &str) -> String {
+    let Some(tool) = celldiff::pluto_tool(title) else { return title.to_string() };
+    match tool {
+        "read_cell" | "read_notebook_code" => "Read",
+        "edit_cell" | "edit_cells" => "Edited",
+        "add_cell" => "Added",
+        "delete_cell" => "Deleted",
+        "move_cell" => "Moved",
+        "execute_cell" | "submit_changes" | "run_all_cells" => "Ran",
+        "allow_execution" => "Allowed running",
+        "open_notebook" => "Opened notebook",
+        "new_notebook" => "Created notebook",
+        "list_notebooks" => "Listed notebooks",
+        "view_cell_output" => "Viewed output",
+        "search_code" => "Searched",
+        other => other,
+    }
+    .to_string()
+}
+
+/// A cell's name for the transcript: what it defines (`model(S, p) = …` → `model`,
+/// `x = …` → `x`), else its label.
+fn cell_name(diff: &celldiff::CellDiff) -> String {
+    let first = diff.lines.iter().find(|(c, l)| !matches!(c, celldiff::Change::Removed) && !l.trim().is_empty());
+    let defined = first.and_then(|(_, line)| {
+        let lhs = line.split_once('=').map(|(lhs, _)| lhs).unwrap_or(line.as_str());
+        let lhs = lhs.trim().trim_start_matches("function ").trim_start_matches("const ");
+        let name: String = lhs.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '!').collect();
+        (!name.is_empty() && line.contains('=')).then_some(name)
+    });
+    defined.unwrap_or_else(|| diff.label.clone())
+}
+
 /// A tool call's input or result, pretty-printed and truncated.
 fn detail(label: &str, value: &serde_json::Value) -> impl IntoElement + use<> {
     const MAX_CHARS: usize = 2000;
@@ -801,6 +875,19 @@ mod tests {
         AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, SessionId, SessionMode, SessionModeState, SessionUpdate,
         StopReason, UsageUpdate,
     };
+
+    #[test]
+    fn cells_are_named_by_what_they_define() {
+        use crate::celldiff::{CellDiff, Change};
+        let diff = |lines: &[(Change, &str)]| CellDiff {
+            label: "cell 47ce3f7e".into(),
+            lines: lines.iter().map(|(c, l)| (match c { Change::Added => Change::Added, Change::Removed => Change::Removed, Change::Same => Change::Same }, l.to_string())).collect(),
+        };
+        assert_eq!(super::cell_name(&diff(&[(Change::Added, "x = 5 + 5")])), "x");
+        assert_eq!(super::cell_name(&diff(&[(Change::Removed, "old = 1"), (Change::Added, "model(S, p) = p[1] * S")])), "model");
+        assert_eq!(super::cell_name(&diff(&[(Change::Added, "function fit!(p) = 1")])), "fit!");
+        assert_eq!(super::cell_name(&diff(&[(Change::Added, "scatter(data.S, r)")])), "cell 47ce3f7e");
+    }
 
     #[test]
     fn modes_usage_and_commands_follow_the_agent() {
