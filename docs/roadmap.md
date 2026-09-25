@@ -43,6 +43,10 @@ process running Pluto + PlutoMCP.
   Sessions take the agent's generated titles; double-click to rename (names
   kept in `titles.json`); × closes an open session (it stays in history) or,
   with a confirm, deletes a past one (`session/delete`); "Show more" past 8.
+- **Claude sign-in.** Signed out, the setup screen (or, later, the session
+  bar) offers Claude subscription / Anthropic Console sign-in via the bundled
+  CLI's `auth login` in the browser; setup finishes once signed in.
+  Verified end to end with a throwaway config folder.
 - **First-launch setup screen** (`splash.rs`): placeholder logo, the setup
   steps (Julia, Pluto packages, Claude agent, connecting) with a progress bar
   and live detail, and Retry on failure. Shown until setup finishes once
@@ -87,12 +91,9 @@ Everything here is a known `ponytail:` shortcut that's fine for one developer.
 - **Logo and style system.** The setup screen's rocket + wordmark and the
   app's inline colors are placeholders for the designed logo and UI style
   system (in progress separately).
-- **Claude login: finish testing.** Signed out, the setup screen (or the
-  session bar) offers Claude subscription / Anthropic Console sign-in, which
-  runs the bundled CLI's `auth login` (browser). The signed-out screen is
-  verified; the click → browser → signed-in path still needs a manual run.
-  Sign-in is checked at startup only; a login that expires mid-use shows up
-  as failed turns.
+- **Sign-in expiring mid-use.** Sign-in is checked at startup only; a login
+  that expires while the app runs shows up as failed turns, not the sign-in
+  panel.
 - **Logs.** Launched from Finder, stderr goes nowhere; write a log file and
   offer "Show logs".
 
