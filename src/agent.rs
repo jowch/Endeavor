@@ -5,7 +5,6 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
@@ -19,10 +18,76 @@ use futures::future::{Either, LocalBoxFuture, select};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 
-// ponytail: pinned adapter fetched by npx; ship it with the app when packaging.
-const AGENT_CMD: &str = "npx -y @agentclientprotocol/claude-agent-acp@0.81.2";
-// ponytail: dev-tree path; resolve from the .app bundle's resources when packaging.
+// ponytail: dev-tree paths; resolve from the .app bundle's resources when packaging.
 const PLUGIN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/plugin");
+/// package.json + package-lock.json pinning the ACP adapter and its dependencies.
+const ADAPTER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/adapter");
+const ADAPTER_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
+
+/// The Node.js the adapter runs on, installed on first launch like Julia.
+const NODE_VERSION: &str = "24.21.0";
+#[cfg(target_arch = "aarch64")]
+const NODE_TARBALL: (&str, &str, u64, &str) = (
+    "https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.gz",
+    "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057",
+    52_909_993,
+    "node-v24.21.0-darwin-arm64",
+);
+#[cfg(target_arch = "x86_64")]
+const NODE_TARBALL: (&str, &str, u64, &str) = (
+    "https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-x64.tar.gz",
+    "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097",
+    54_203_979,
+    "node-v24.21.0-darwin-x64",
+);
+
+/// The command that runs the ACP adapter: the app's own Node and a `npm ci` of
+/// the pinned lockfile (integrity-checked), both installed on first launch.
+fn adapter_command(progress: &dyn Fn(String)) -> Result<Vec<String>, String> {
+    let app = crate::install::app_dir()?;
+    let node_dir = app.join(format!("node-v{NODE_VERSION}"));
+    let node = node_dir.join("bin/node");
+    if !node.exists() {
+        let (url, sha, size, top) = NODE_TARBALL;
+        crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), progress)?;
+    }
+
+    let manifest = std::fs::read_to_string(format!("{ADAPTER_DIR}/package.json")).map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| e.to_string())?;
+    let version = manifest["dependencies"][ADAPTER_PACKAGE].as_str().ok_or("adapter/package.json has no adapter version")?;
+    let adapter = app.join(format!("adapter-{version}"));
+    let entry = adapter.join(format!("node_modules/{ADAPTER_PACKAGE}/dist/index.js"));
+    if !entry.exists() {
+        progress("Installing the Claude agent (first launch)…".into());
+        // Install beside the target, then rename, so a partial install is never used.
+        let staging = app.join("adapter.installing");
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+        for file in ["package.json", "package-lock.json"] {
+            std::fs::copy(format!("{ADAPTER_DIR}/{file}"), staging.join(file)).map_err(|e| e.to_string())?;
+        }
+        let npm = node_dir.join("lib/node_modules/npm/bin/npm-cli.js");
+        let path = format!("{}:{}", node_dir.join("bin").display(), std::env::var("PATH").unwrap_or_default());
+        let out = std::process::Command::new(&node)
+            .arg(npm)
+            .args(["ci", "--ignore-scripts", "--no-audit", "--no-fund"])
+            .current_dir(&staging)
+            .env("PATH", path)
+            .output()
+            .map_err(|e| format!("Couldn't run npm: {e}"))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let tail: Vec<_> = err.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect();
+            return Err(format!("Couldn't install the Claude agent. Check the internet connection and restart.\n{}", tail.join("\n")));
+        }
+        let _ = std::fs::remove_dir_all(&adapter);
+        std::fs::rename(&staging, &adapter).map_err(|e| e.to_string())?;
+    }
+
+    // The plugin's execution-gate hook calls back into this binary (see gate.rs).
+    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+    Ok(vec![format!("ENDEAVOR_BIN={exe}"), node.display().to_string(), entry.display().to_string()])
+}
 
 /// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
 /// skills and guards) always; the project's settings and CLAUDE.md (from the
@@ -89,6 +154,8 @@ pub enum AgentEvent {
     /// The copy made by `ForkSession` exists; its history replays next.
     Forked { key: u64, id: SessionId },
     Session(SessionId, SessionEvent),
+    /// First-launch install progress, for the status line.
+    Status(String),
     /// The connection is gone; no session works any more.
     Failed(String),
 }
@@ -99,10 +166,15 @@ pub fn start(mcp_url: String, commands: UnboundedReceiver<Command>) -> Unbounded
     let (event_tx, event_rx) = unbounded();
     std::thread::spawn(move || {
         let events = event_tx.clone();
-        let result = futures::executor::block_on(run(mcp_url, commands, event_tx));
-        let reason = match result {
-            Ok(()) => "agent connection closed".to_string(),
-            Err(e) => e.to_string(),
+        let command = adapter_command(&|line| {
+            let _ = events.unbounded_send(AgentEvent::Status(line));
+        });
+        let reason = match command {
+            Err(e) => e,
+            Ok(command) => match futures::executor::block_on(run(command, mcp_url, commands, event_tx)) {
+                Ok(()) => "agent connection closed".to_string(),
+                Err(e) => e.to_string(),
+            },
         };
         let _ = events.unbounded_send(AgentEvent::Failed(reason));
     });
@@ -118,14 +190,12 @@ enum Done {
 }
 
 async fn run(
+    command: Vec<String>,
     mcp_url: String,
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<AgentEvent>,
 ) -> Result<(), agent_client_protocol::Error> {
-    // The plugin's execution-gate hook calls back into this binary (see gate.rs).
-    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-    let command = format!("env ENDEAVOR_BIN='{}' {AGENT_CMD}", exe.replace('\'', r"'\''"));
-    let agent = AcpAgent::from_str(&command)?;
+    let agent = AcpAgent::from_args(command)?;
     let (notify, permit) = (events.clone(), events.clone());
 
     agent_client_protocol::Client

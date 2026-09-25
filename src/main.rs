@@ -10,6 +10,7 @@ mod agent;
 mod annotate;
 mod celldiff;
 mod gate;
+mod install;
 mod outbox;
 mod pluto;
 mod runtime;
@@ -505,6 +506,7 @@ impl Workspace {
                     let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
                 }
             }
+            AgentEvent::Status(line) => self.status = line.into(),
             AgentEvent::Listed { cwd, sessions } => {
                 self.past.insert(cwd, sessions);
             }

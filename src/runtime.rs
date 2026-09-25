@@ -4,8 +4,6 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -52,11 +50,6 @@ const JULIA_TARBALL: (&str, &str, u64) = (
     271_518_180,
 );
 
-/// Endeavor's folder in Application Support (Julia, its depot, app state).
-fn app_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    Ok(PathBuf::from(home).join("Library/Application Support/endeavor"))
-}
 
 /// The julia binary to run: ENDEAVOR_JULIA ("use my Julia"), else the app's own,
 /// downloaded and verified on first run. `progress` gets status lines meanwhile.
@@ -64,71 +57,14 @@ fn julia_binary(progress: &dyn Fn(String)) -> Result<String, String> {
     if let Ok(julia) = std::env::var("ENDEAVOR_JULIA") {
         return Ok(julia);
     }
-    let dir = app_dir()?.join(format!("julia-{JULIA_VERSION}"));
+    let dir = crate::install::app_dir()?.join(format!("julia-{JULIA_VERSION}"));
     let bin = dir.join("bin/julia");
     if !bin.exists() {
-        install_julia(&dir, JULIA_TARBALL, progress)?;
+        crate::install::tarball(&dir, &format!("Julia {JULIA_VERSION}"), &format!("julia-{JULIA_VERSION}"), JULIA_TARBALL, progress)?;
     }
     Ok(bin.display().to_string())
 }
 
-/// Download the pinned tarball (resuming a partial one), check its SHA-256, and
-/// unpack it to `dir`. Uses macOS's own curl, shasum and tar.
-fn install_julia(dir: &Path, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String)) -> Result<(), String> {
-    let parent = dir.parent().unwrap();
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let tarball = parent.join(format!("julia-{JULIA_VERSION}.tar.gz.part"));
-
-    // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
-    // fails the SHA check and starts over. Kill it on quit if that bites.
-    let mut curl = Command::new("curl")
-        .args(["-fsSL", "--retry", "3", "-C", "-", "-o"])
-        .arg(&tarball)
-        .arg(url)
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Couldn't start curl to download Julia: {e}"))?;
-    let status = loop {
-        if let Some(status) = curl.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        let got = std::fs::metadata(&tarball).map(|m| m.len()).unwrap_or(0);
-        progress(format!("Downloading Julia {JULIA_VERSION} (first launch)… {}%", got * 100 / size));
-        std::thread::sleep(Duration::from_millis(500));
-    };
-    if !status.success() {
-        let mut err = String::new();
-        let _ = std::io::Read::read_to_string(&mut curl.stderr.take().unwrap(), &mut err);
-        return Err(format!(
-            "Couldn't download Julia ({}). Check the internet connection and restart; the download resumes. \
-             Or set ENDEAVOR_JULIA to a julia you have.",
-            err.trim()
-        ));
-    }
-
-    progress(format!("Checking Julia {JULIA_VERSION}…"));
-    let out = Command::new("shasum").args(["-a", "256"]).arg(&tarball).output().map_err(|e| e.to_string())?;
-    let got = String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned();
-    if got != sha256 {
-        let _ = std::fs::remove_file(&tarball);
-        return Err(format!("The Julia download was corrupt or tampered with (SHA-256 {got}); it was deleted. Restart to try again."));
-    }
-
-    // Unpack beside the target, then rename, so a half-unpacked Julia is never used.
-    progress(format!("Unpacking Julia {JULIA_VERSION}…"));
-    let staging = parent.join("julia-unpacking");
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    let untar = Command::new("tar").arg("-xzf").arg(&tarball).arg("-C").arg(&staging).status().map_err(|e| e.to_string())?;
-    let unpacked = staging.join(format!("julia-{JULIA_VERSION}"));
-    if !untar.success() || !unpacked.join("bin/julia").exists() {
-        return Err(format!("Couldn't unpack Julia ({untar})."));
-    }
-    std::fs::rename(&unpacked, dir).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_dir_all(&staging);
-    let _ = std::fs::remove_file(&tarball);
-    Ok(())
-}
 
 /// Start Julia and block until boot.jl reports `READY`. `ports` pins the Pluto
 /// and MCP ports (restart); `died` gets a message if Julia exits afterwards;
@@ -139,7 +75,7 @@ pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: &
     let julia = julia_binary(progress)?;
     check_version(&julia)?;
     // Trailing ':' stacks the default depots (~/.julia) read-only behind ours.
-    let depot = format!("{}/depot:", app_dir()?.display());
+    let depot = format!("{}/depot:", crate::install::app_dir()?.display());
     let ports = match ports {
         Some(ports) => ports,
         None => free_ports()?,
@@ -332,30 +268,4 @@ fn live_missing_julia() {
     let err = start(None, died, &|_| {}).err().expect("should fail");
     println!("{err}");
     assert!(err.contains("wasn't found") && err.contains("ENDEAVOR_JULIA"));
-}
-
-#[cfg(test)]
-#[test]
-fn installs_a_verified_tarball_and_rejects_a_bad_one() {
-    let tmp = std::env::temp_dir().join(format!("endeavor-install-{}", std::process::id()));
-    let src = tmp.join(format!("src/julia-{JULIA_VERSION}/bin"));
-    std::fs::create_dir_all(&src).unwrap();
-    std::fs::write(src.join("julia"), "#!/bin/sh\n").unwrap();
-    let tarball = tmp.join("julia.tar.gz");
-    let ok = Command::new("tar").arg("-czf").arg(&tarball).arg("-C").arg(tmp.join("src")).arg(format!("julia-{JULIA_VERSION}")).status().unwrap();
-    assert!(ok.success());
-    let out = Command::new("shasum").args(["-a", "256"]).arg(&tarball).output().unwrap();
-    let sha = String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap().to_owned();
-    let url = format!("file://{}", tarball.display());
-    let size = std::fs::metadata(&tarball).unwrap().len();
-
-    let bad = tmp.join("app/julia-bad");
-    let err = install_julia(&bad, (&url, &"0".repeat(64), size), &|_| {}).unwrap_err();
-    assert!(err.contains("corrupt"), "{err}");
-    assert!(!bad.exists() && !tmp.join(format!("app/julia-{JULIA_VERSION}.tar.gz.part")).exists());
-
-    let good = tmp.join("app/julia-good");
-    install_julia(&good, (&url, &sha, size), &|_| {}).unwrap();
-    assert!(good.join("bin/julia").exists());
-    let _ = std::fs::remove_dir_all(&tmp);
 }

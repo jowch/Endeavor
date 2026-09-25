@@ -16,7 +16,9 @@ process running Pluto + PlutoMCP.
 - **Runtime (§11).** App-owned Julia: Julia 1.12.6 is downloaded on first
   launch (progress in the status line, resumable) into Application Support,
   checked against a pinned SHA-256; `ENDEAVOR_JULIA` uses your own julia
-  instead. Stacked private depot; `boot.jl`
+  instead. The ACP adapter is installed the same way: pinned Node.js 24.21.0
+  (SHA-256) plus `npm ci` of `adapter/package-lock.json` (integrity-checked),
+  so no system Node or `npx`. Stacked private depot; `boot.jl`
   reports the Pluto URL and MCP bridge; Julia exits when the app closes its
   stdin. Plain-language startup errors, crash detection, and **Restart Julia**
   on the same ports (the agent's MCP connection reconnects; open notebooks are
@@ -73,9 +75,7 @@ In priority order. Nothing queued: the next work is the packaging list below.
 
 Everything here is a known `ponytail:` shortcut that's fine for one developer.
 
-- **Bundle the ACP adapter.** It's fetched with `npx` on first launch (~85 s
-  over VPN) and needs Node installed; ship it (and a runtime) with the app.
-- **`.app` bundle:** move dev-tree paths (`runtime/`, `plugin/`) to bundle
+- **`.app` bundle:** move dev-tree paths (`runtime/`, `plugin/`, `adapter/`) to bundle
   resources; code signing and notarization.
 - **Settings UI:** personal Claude Code setup opt-in, Julia path, and the
   execution gate's "stop asking" (per session today), replacing environment
@@ -109,8 +109,8 @@ Deliberate simplifications with their upgrade path (search the code for
 | `main.rs` transcript | long diffs are cut at 60 lines, not scrollable | real notebooks hit it |
 | `main.rs` events | modes, usage, available commands ignored | the panel grows those features |
 | PlutoMCP `view_cell_output` | no timeout when the worker is busy | a long run blocks it in practice |
-| `agent.rs`, `runtime.rs` | dev-tree paths, `npx` adapter, env-var opt-ins | packaging (above) |
-| `runtime.rs` Julia install | pinned 1.12.6 (bump URL, SHA-256, size per release); curl outlives a quit mid-download | a Julia upgrade, or overlapping launches bite |
+| `agent.rs`, `runtime.rs` | dev-tree paths (`runtime/`, `plugin/`, `adapter/`), env-var opt-ins | packaging (above) |
+| `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download | an upgrade, or overlapping launches bite |
 
 Also noted: SIGTERM can leave Julia hung mid-exit. The app never sends it
 (quitting closes stdin and `boot.jl` exits itself), but anything that manages

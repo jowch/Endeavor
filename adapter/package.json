@@ -1,0 +1,8 @@
+{
+  "name": "endeavor-adapter",
+  "private": true,
+  "description": "The ACP adapter Endeavor installs on first launch (npm ci against package-lock.json).",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.81.2"
+  }
+}
