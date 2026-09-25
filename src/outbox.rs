@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 
 use agent_client_protocol::schema::v1::ContentBlock;
 
-use crate::agent::Command;
+use crate::agent::Turn;
 
 pub struct Queued {
     /// Shown in the queue and, once sent, in the transcript.
@@ -31,7 +31,7 @@ impl Queued {
 /// What to hand the agent, and the label to add to the transcript (None while a
 /// SendNow's outcome is still unknown).
 pub struct Dispatch {
-    pub command: Command,
+    pub turn: Turn,
     pub shown: Option<String>,
 }
 
@@ -42,17 +42,23 @@ pub struct Outbox {
 }
 
 impl Outbox {
+    /// For a session that doesn't exist yet: messages queue until `turn_ended()`
+    /// is called once it's up, which sends the first of them.
+    pub fn waiting() -> Self {
+        Self { items: VecDeque::new(), busy: true }
+    }
+
     pub fn submit(&mut self, mut q: Queued, now: bool) -> Option<Dispatch> {
         if !self.busy && self.items.is_empty() {
             self.busy = true;
-            return Some(Dispatch { command: Command::Prompt(q.blocks), shown: Some(q.label) });
+            return Some(Dispatch { turn: Turn::Prompt(q.blocks), shown: Some(q.label) });
         }
         // One SendNow at a time: its fallback needs the front slot.
         if now && self.busy && !self.front_in_flight() {
             q.in_flight = true;
-            let command = Command::SendNow(q.blocks.clone());
+            let turn = Turn::SendNow(q.blocks.clone());
             self.items.push_front(q);
-            return Some(Dispatch { command, shown: None });
+            return Some(Dispatch { turn, shown: None });
         }
         self.items.push_back(q);
         self.next()
@@ -96,7 +102,7 @@ impl Outbox {
         }
         let q = self.items.pop_front()?;
         self.busy = true;
-        Some(Dispatch { command: Command::Prompt(q.blocks), shown: Some(q.label) })
+        Some(Dispatch { turn: Turn::Prompt(q.blocks), shown: Some(q.label) })
     }
 }
 
@@ -110,7 +116,7 @@ mod tests {
 
     fn prompt_label(d: Option<Dispatch>) -> Option<String> {
         match d? {
-            Dispatch { command: Command::Prompt(_), shown } => shown,
+            Dispatch { turn: Turn::Prompt(_), shown } => shown,
             _ => panic!("expected a Prompt"),
         }
     }
@@ -133,7 +139,7 @@ mod tests {
         o.submit(msg("a"), false);
         o.submit(msg("queued"), false);
         let d = o.submit(msg("urgent"), true).unwrap();
-        assert!(matches!(d.command, Command::SendNow(_)) && d.shown.is_none());
+        assert!(matches!(d.turn, Turn::SendNow(_)) && d.shown.is_none());
         assert_eq!(o.steered().as_deref(), Some("urgent"));
         assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("queued"));
     }
@@ -149,6 +155,14 @@ mod tests {
         assert_eq!(prompt_label(o.unsent()).as_deref(), Some("urgent"));
         assert!(o.steered().is_none());
         assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("queued"));
+    }
+
+    #[test]
+    fn a_new_session_holds_messages_until_it_starts() {
+        let mut o = Outbox::waiting();
+        assert!(o.submit(msg("first"), false).is_none());
+        assert!(o.submit(msg("second"), false).is_none());
+        assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("first"));
     }
 
     #[test]

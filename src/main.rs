@@ -1,6 +1,8 @@
 //! Endeavor: app-owned Julia running Pluto + PlutoMCP, the live Pluto frontend in a
-//! child webview, and an ACP agent panel wired to the same Pluto session over MCP.
+//! child webview, and ACP agent sessions (a session bar, one chat pane) wired to the
+//! same Pluto session over MCP.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 mod agent;
@@ -10,52 +12,21 @@ mod gate;
 mod outbox;
 mod pluto;
 mod runtime;
+mod session;
 
-use agent::AgentEvent;
-use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v1::{
-    ContentBlock, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
-    PlanEntry, PlanEntryStatus, RequestPermissionResponse, SelectedPermissionOutcome, SessionUpdate,
-    StopReason, TextContent, ToolCallId, ToolCallStatus,
-};
+use agent::{AgentEvent, Command};
+use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
 use futures::StreamExt;
-use futures::channel::mpsc::UnboundedSender;
-use outbox::{Dispatch, Outbox, Queued};
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
-use gpui_component::text::TextView;
 use gpui_component::{Root, Theme, ThemeMode};
 use gpui_wry::WebView;
+use outbox::Queued;
 use raw_window_handle::HasWindowHandle;
 use runtime::Runtime;
-
-enum Entry {
-    User(SharedString),
-    Agent(String),
-    Tool {
-        id: ToolCallId,
-        title: String,
-        status: ToolCallStatus,
-        input: Option<serde_json::Value>,
-        output: Option<serde_json::Value>,
-        /// Cell edits made by this call, shown inline.
-        diffs: Vec<celldiff::CellDiff>,
-        expanded: bool,
-    },
-    Thought { text: String, expanded: bool },
-    Plan(Vec<PlanEntry>),
-    Permission {
-        title: String,
-        /// Code the call would run, when known.
-        code: Option<String>,
-        options: Vec<PermissionOption>,
-        responder: Option<Responder<RequestPermissionResponse>>,
-        /// Raised by the execution gate (a pluto call that runs code).
-        runs_code: bool,
-    },
-    Note(SharedString),
-}
+use session::{Effect, Session, folder_name};
 
 /// Notebook id from a Pluto `/edit?id=…` URL. Only the id is used: the URL also
 /// carries Pluto's secret, which must never reach the agent.
@@ -70,17 +41,23 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
 
 actions!(endeavor, [Interrupt, ToggleAnnotation]);
 
-struct Workspace {
+pub struct Workspace {
     webview: Entity<WebView>,
-    input: Entity<TextareaState>,
-    scroll: ScrollHandle,
-    entries: Vec<Entry>,
-    prompts: Option<UnboundedSender<agent::Command>>,
-    outbox: Outbox,
-    /// Each cell's code as last seen in the agent's reads and edits, for diffs.
-    cell_codes: celldiff::CellCodes,
-    /// "Allow & stop asking": approve the agent's runs for the rest of this session.
-    run_without_asking: bool,
+    /// The chat box; on the new-session screen it holds the optional first message.
+    pub input: Entity<TextareaState>,
+    sessions: Vec<Session>,
+    /// The session in the chat pane; None shows the new-session screen.
+    active: Option<u64>,
+    next_key: u64,
+    /// New-session screen: the chosen working folder.
+    new_cwd: Option<PathBuf>,
+    /// Folders used this run, most recent first.
+    recent: Vec<PathBuf>,
+    agent_tx: UnboundedSender<Command>,
+    /// Handed to the agent thread once Julia is up (it needs the MCP URL).
+    agent_rx: Option<UnboundedReceiver<Command>>,
+    /// App-level status (Julia, agent connection), shown under the session bar.
+    status: SharedString,
     annotating: bool,
     runtime: Option<Runtime>,
     /// Booting or restarting Julia.
@@ -126,7 +103,11 @@ impl Workspace {
         });
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { secondary, shift: false } = event {
-                this.submit(input, *secondary, window, cx);
+                if this.active.is_some() {
+                    this.submit(input, *secondary, window, cx);
+                } else {
+                    this.start_session(window, cx);
+                }
             }
         })
         .detach();
@@ -157,15 +138,19 @@ impl Workspace {
         })
         .detach();
 
+        let (agent_tx, agent_rx) = futures::channel::mpsc::unbounded();
+        let launch_dir = std::env::current_dir().ok();
         let mut this = Self {
             webview,
             input,
-            scroll: ScrollHandle::new(),
-            entries: Vec::new(),
-            prompts: None,
-            outbox: Outbox::default(),
-            cell_codes: celldiff::CellCodes::default(),
-            run_without_asking: false,
+            sessions: Vec::new(),
+            active: None,
+            next_key: 1,
+            new_cwd: launch_dir.clone(),
+            recent: launch_dir.into_iter().collect(),
+            agent_tx,
+            agent_rx: Some(agent_rx),
+            status: "".into(),
             annotating: false,
             runtime: None,
             starting: false,
@@ -173,106 +158,107 @@ impl Workspace {
             last_notebooks: Vec::new(),
             died_tx,
         };
+        // Julia boots while the user picks a folder on the new-session screen.
         this.boot(None, cx);
         this
     }
 
-    /// Start Julia, or restart it on the previous ports.
-    fn boot(&mut self, ports: Option<[u16; 2]>, cx: &mut Context<Self>) {
-        self.starting = true;
-        self.note(if ports.is_some() { "Restarting Julia…" } else { "Starting Julia…" }, cx);
-        let died = self.died_tx.clone();
-        // First run instantiates + precompiles (~1 min); later launches are seconds.
-        let boot = cx.background_executor().spawn(async move { runtime::start(ports, died) });
-        cx.spawn(async move |this, cx| {
-            let result = boot.await;
-            let _ = this.update(cx, |this, cx| this.on_booted(result, cx));
-        })
-        .detach();
+    // -----------------------------------------------------------------------
+    // Sessions
+    // -----------------------------------------------------------------------
+
+    pub fn session_mut(&mut self, key: u64) -> Option<&mut Session> {
+        self.sessions.iter_mut().find(|s| s.key == key)
     }
 
-    fn on_booted(&mut self, result: Result<Runtime, String>, cx: &mut Context<Self>) {
-        self.starting = false;
-        let runtime = match result {
-            Ok(runtime) => runtime,
-            Err(e) => return self.note(format!("⚠ {e}"), cx),
-        };
-        self.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
-        let mcp_url = runtime.mcp_url.clone();
-        self.runtime = Some(runtime);
-        if self.prompts.is_none() {
-            self.note(format!("Pluto ready · MCP {mcp_url}\nConnecting to Claude…"), cx);
-            self.start_agent(mcp_url, cx);
-        } else {
-            self.note("Julia restarted.", cx);
-            self.reopen_notebooks(cx);
+    /// Run `f` on a session and repaint (for clicks in the transcript).
+    pub fn with_session(&mut self, key: u64, cx: &mut Context<Self>, f: impl FnOnce(&mut Session)) {
+        if let Some(session) = self.session_mut(key) {
+            f(session);
+            cx.notify();
         }
     }
 
-    fn start_agent(&mut self, mcp_url: String, cx: &mut Context<Self>) {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
-        let (prompts, mut events) = agent::start(mcp_url, cwd);
-        self.prompts = Some(prompts);
+    fn active_session(&self) -> Option<&Session> {
+        self.active.and_then(|key| self.sessions.iter().find(|s| s.key == key))
+    }
+
+    fn choose_folder(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose folder".into()),
+        });
         cx.spawn(async move |this, cx| {
-            while let Some(event) = events.next().await {
-                if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
-                    break;
+            if let Ok(Ok(Some(mut paths))) = picked.await {
+                if let Some(path) = paths.pop() {
+                    let _ = this.update(cx, |this, cx| {
+                        this.new_cwd = Some(path);
+                        cx.notify();
+                    });
                 }
             }
         })
         .detach();
     }
 
-    fn on_runtime_died(&mut self, reason: String, cx: &mut Context<Self>) {
-        self.last_ports = self.runtime.take().map(|r| r.ports);
-        self.note(format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts."), cx);
+    /// Start a session in the chosen folder, with the input's text (if any) as its first message.
+    fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(cwd) = self.new_cwd.clone() else { return };
+        let key = self.next_key;
+        self.next_key += 1;
+        self.recent.retain(|p| p != &cwd);
+        self.recent.insert(0, cwd.clone());
+        let _ = self.agent_tx.unbounded_send(Command::NewSession { key, cwd: cwd.clone() });
+        self.sessions.push(Session::new(key, cwd));
+        self.active = Some(key);
+        let text = self.input.read(cx).value().trim().to_string();
+        if !text.is_empty() {
+            self.submit(&self.input.clone(), false, window, cx);
+        }
+        cx.notify();
     }
 
-    fn remember_notebooks(&mut self, list: &serde_json::Value) {
-        self.last_notebooks = list
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|nb| Some((nb["notebook_id"].as_str()?.to_owned(), nb["path"].as_str()?.to_owned())))
-            .collect();
+    /// Show a session; the notebook pane follows it to the notebook it last viewed.
+    fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
+        self.active = Some(key);
+        if let Some(notebook) = self.active_session().and_then(|s| s.notebook.clone()) {
+            self.load_notebook(&notebook, cx);
+        }
+        cx.notify();
     }
 
-    /// Reopen the notebooks that were open when Julia died, and show the one the
-    /// user was viewing. Pluto saves on every change, so the files are current.
-    fn reopen_notebooks(&mut self, cx: &mut Context<Self>) {
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
-        let url = self.webview.read(cx).raw().url().unwrap_or_default();
-        let viewed = viewed_notebook_id(&url).map(str::to_owned);
-        let viewed_path = self.last_notebooks.iter().find(|(id, _)| Some(id) == viewed.as_ref()).map(|(_, p)| p.clone());
-        let paths: Vec<String> = self.last_notebooks.iter().map(|(_, p)| p.clone()).collect();
-        let reopen = cx.background_executor().spawn(async move {
-            paths
-                .into_iter()
-                .filter_map(|path| {
-                    let result = pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path })).ok()?;
-                    Some((result["notebook_id"].as_str()?.to_owned(), path))
-                })
-                .collect::<Vec<_>>()
-        });
-        cx.spawn(async move |this, cx| {
-            let reopened = reopen.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Some((id, _)) = reopened.iter().find(|(_, p)| Some(p) == viewed_path.as_ref()) {
-                    this.show_notebook(&id.clone(), cx);
+    fn apply_effects(&mut self, key: u64, effects: Vec<Effect>, cx: &mut Context<Self>) {
+        for effect in effects {
+            match effect {
+                Effect::Send(turn) => {
+                    if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
+                        let _ = self.agent_tx.unbounded_send(Command::Turn(id, turn));
+                    }
                 }
-                if !reopened.is_empty() {
-                    this.note(format!("Reopened {} notebook(s) in safe preview.", reopened.len()), cx);
+                Effect::ShowNotebook(id) => {
+                    if let Some(session) = self.session_mut(key) {
+                        session.notebook = Some(id.clone());
+                    }
+                    if self.active == Some(key) {
+                        self.load_notebook(&id, cx);
+                    }
                 }
-                this.last_notebooks = reopened;
-            });
-        })
-        .detach();
+                Effect::CheckRunState => self.check_run_state(key, cx),
+            }
+        }
+        cx.notify();
     }
 
     /// Which notebook the user is looking at, so "the notebook" is unambiguous.
-    fn viewing_context(&self, cx: &mut Context<Self>) -> Option<ContentBlock> {
+    /// Also remembered as the active session's notebook.
+    fn viewing_context(&mut self, cx: &mut Context<Self>) -> Option<ContentBlock> {
         let url = self.webview.read(cx).raw().url().unwrap_or_default();
-        let id = viewed_notebook_id(&url)?;
+        let id = viewed_notebook_id(&url)?.to_owned();
+        if let Some(session) = self.active.and_then(|key| self.session_mut(key)) {
+            session.notebook = Some(id.clone());
+        }
         Some(ContentBlock::Text(TextContent::new(format!(
             "[Endeavor] The user is viewing Pluto notebook {id} in the notebook pane. \
              Unless they say otherwise, \"the notebook\" means this one."
@@ -280,56 +266,78 @@ impl Workspace {
     }
 
     fn submit(&mut self, input: &Entity<TextareaState>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.active else { return };
         let text = input.read(cx).value().trim().to_string();
         if text.is_empty() {
             return;
         }
         let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
         blocks.push(ContentBlock::Text(TextContent::new(text.clone())));
-        if self.enqueue(Queued::new(text.clone(), Some(text), blocks), now, cx) {
-            input.update(cx, |s, cx| s.set_value("", window, cx));
+        let Some(session) = self.session_mut(key) else { return };
+        let effects = session.submit(Queued::new(text.clone(), Some(text), blocks), now);
+        self.apply_effects(key, effects, cx);
+        input.update(cx, |s, cx| s.set_value("", window, cx));
+    }
+
+    fn interrupt(&mut self, _: &Interrupt, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.active else { return };
+        if let Some(effect) = self.active_session().and_then(Session::interrupt) {
+            self.apply_effects(key, vec![effect], cx);
         }
     }
 
-    /// Send or queue a message; false if Claude isn't connected.
-    fn enqueue(&mut self, message: Queued, now: bool, cx: &mut Context<Self>) -> bool {
-        if self.prompts.is_none() {
-            self.note("Claude isn't connected yet.", cx);
-            return false;
+    fn on_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
+        match event {
+            AgentEvent::Ready => self.status = "Claude connected.".into(),
+            AgentEvent::Failed(e) => {
+                self.status = format!("⚠ Agent stopped: {e}").into();
+                for session in &mut self.sessions {
+                    session.note(format!("⚠ Agent stopped: {e}"));
+                }
+            }
+            AgentEvent::Started { key, result } => {
+                let Some(session) = self.session_mut(key) else { return };
+                match result {
+                    Ok(id) => {
+                        let effects = session.started(id);
+                        self.apply_effects(key, effects, cx);
+                    }
+                    Err(e) => session.note(format!("⚠ Couldn't start the session: {e}")),
+                }
+            }
+            AgentEvent::Session(id, event) => {
+                let Some(session) = self.sessions.iter_mut().find(|s| s.id.as_ref() == Some(&id)) else { return };
+                let key = session.key;
+                let effects = session.apply(event);
+                self.apply_effects(key, effects, cx);
+            }
         }
-        let dispatch = self.outbox.submit(message, now);
-        self.dispatch(dispatch, cx);
         cx.notify();
-        true
     }
 
-    fn dispatch(&mut self, dispatch: Option<Dispatch>, cx: &mut Context<Self>) {
-        let Some(Dispatch { command, shown }) = dispatch else { return };
-        if let Some(prompts) = &self.prompts {
-            let _ = prompts.unbounded_send(command);
-        }
-        if let Some(label) = shown {
-            self.entries.push(Entry::User(label.into()));
-            self.scroll.scroll_to_bottom();
-        }
-        cx.notify();
-    }
+    // -----------------------------------------------------------------------
+    // Notebook pane and annotation mode
+    // -----------------------------------------------------------------------
 
-    fn interrupt(&mut self, _: &Interrupt, _: &mut Window, _: &mut Context<Self>) {
-        if let Some(prompts) = self.prompts.as_ref().filter(|_| self.outbox.busy) {
-            let _ = prompts.unbounded_send(agent::Command::Cancel);
-        }
+    fn load_notebook(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(runtime) = &self.runtime else { return };
+        // pluto_url is `http://host:port/?secret=…`; keep the secret app-side.
+        let url = runtime.pluto_url.replacen("/?", &format!("/edit?id={id}&"), 1);
+        self.webview.update(cx, |w, _| w.load_url(&url));
     }
 
     fn on_page_message(&mut self, body: &str, cx: &mut Context<Self>) {
         match annotate::parse(body) {
             Some(annotate::Message::Mode(on)) => self.annotating = on,
             Some(annotate::Message::Annotation(a)) => {
+                let Some(key) = self.active else { return };
                 let comment = if a.comment.is_empty() { "(no comment)" } else { a.comment.as_str() };
                 let label = format!("✎ {} cell{}: {comment}", a.cells.len(), if a.cells.len() > 1 { "s" } else { "" });
                 let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
                 blocks.extend(annotate::prompt_blocks(std::slice::from_ref(&a)));
-                self.enqueue(Queued::new(label, None, blocks), a.now, cx);
+                let Some(session) = self.session_mut(key) else { return };
+                let effects = session.submit(Queued::new(label, None, blocks), a.now);
+                self.apply_effects(key, effects, cx);
             }
             None => return,
         }
@@ -350,8 +358,111 @@ impl Workspace {
         let _ = self.webview.read(cx).raw().evaluate_script(&format!("window.__annotate && ({{ {js} }})"));
     }
 
-    /// After the agent goes idle, say if it left edited cells unrun or still running.
-    fn check_run_state(&mut self, cx: &mut Context<Self>) {
+    // -----------------------------------------------------------------------
+    // Julia runtime
+    // -----------------------------------------------------------------------
+
+    /// Start Julia, or restart it on the previous ports.
+    fn boot(&mut self, ports: Option<[u16; 2]>, cx: &mut Context<Self>) {
+        self.starting = true;
+        self.status = if ports.is_some() { "Restarting Julia…" } else { "Starting Julia…" }.into();
+        let died = self.died_tx.clone();
+        // First run instantiates + precompiles (~1 min); later launches are seconds.
+        let boot = cx.background_executor().spawn(async move { runtime::start(ports, died) });
+        cx.spawn(async move |this, cx| {
+            let result = boot.await;
+            let _ = this.update(cx, |this, cx| this.on_booted(result, cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn on_booted(&mut self, result: Result<Runtime, String>, cx: &mut Context<Self>) {
+        self.starting = false;
+        let runtime = match result {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                self.status = format!("⚠ {e}").into();
+                return cx.notify();
+            }
+        };
+        self.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
+        let mcp_url = runtime.mcp_url.clone();
+        self.runtime = Some(runtime);
+        if let Some(commands) = self.agent_rx.take() {
+            self.status = "Pluto ready · connecting to Claude…".into();
+            let mut events = agent::start(mcp_url, commands);
+            cx.spawn(async move |this, cx| {
+                while let Some(event) = events.next().await {
+                    if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        } else {
+            self.status = "Julia restarted.".into();
+            self.reopen_notebooks(cx);
+        }
+        cx.notify();
+    }
+
+    fn on_runtime_died(&mut self, reason: String, cx: &mut Context<Self>) {
+        self.last_ports = self.runtime.take().map(|r| r.ports);
+        self.status = format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts.").into();
+        cx.notify();
+    }
+
+    fn remember_notebooks(&mut self, list: &serde_json::Value) {
+        self.last_notebooks = list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|nb| Some((nb["notebook_id"].as_str()?.to_owned(), nb["path"].as_str()?.to_owned())))
+            .collect();
+    }
+
+    /// Reopen the notebooks that were open when Julia died, and point each session
+    /// (and the pane) at the reopened copy. Pluto saves on every change, so the
+    /// files are current.
+    fn reopen_notebooks(&mut self, cx: &mut Context<Self>) {
+        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        let before = self.last_notebooks.clone();
+        let paths: Vec<String> = before.iter().map(|(_, p)| p.clone()).collect();
+        let reopen = cx.background_executor().spawn(async move {
+            paths
+                .into_iter()
+                .filter_map(|path| {
+                    let result = pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path })).ok()?;
+                    Some((result["notebook_id"].as_str()?.to_owned(), path))
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let reopened = reopen.await;
+            let _ = this.update(cx, |this, cx| {
+                let new_id = |old: &str| {
+                    let path = before.iter().find(|(id, _)| id == old).map(|(_, p)| p)?;
+                    reopened.iter().find(|(_, p)| p == path).map(|(id, _)| id.clone())
+                };
+                for session in &mut this.sessions {
+                    session.notebook = session.notebook.as_deref().and_then(new_id);
+                }
+                if let Some(id) = this.active_session().and_then(|s| s.notebook.clone()) {
+                    this.load_notebook(&id, cx);
+                }
+                if !reopened.is_empty() {
+                    this.status = format!("Julia restarted; reopened {} notebook(s) in safe preview.", reopened.len()).into();
+                }
+                this.last_notebooks = reopened;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// After a session goes idle, say if it left edited cells unrun or still running.
+    fn check_run_state(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
         let list = cx
             .background_executor()
@@ -361,377 +472,248 @@ impl Workspace {
             let Ok(list) = list.await else { return };
             let _ = this.update(cx, |this, cx| {
                 this.remember_notebooks(&list);
-                for warning in pluto::run_warnings(&list) {
-                    this.note(format!("⚠ {warning}"), cx);
-                }
+                // ponytail: warns about every open notebook, not only the ones this session touched.
+                let warnings = pluto::run_warnings(&list);
+                this.with_session(key, cx, |s| warnings.into_iter().for_each(|w| s.note(format!("⚠ {w}"))));
             });
         })
         .detach();
     }
 
-    fn show_notebook(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(runtime) = &self.runtime else { return };
-        // pluto_url is `http://host:port/?secret=…`; keep the secret app-side.
-        let url = runtime.pluto_url.replacen("/?", &format!("/edit?id={id}&"), 1);
-        self.webview.update(cx, |w, _| w.load_url(&url));
-    }
+    // -----------------------------------------------------------------------
+    // Rendering
+    // -----------------------------------------------------------------------
 
-    fn note(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.entries.push(Entry::Note(text.into()));
-        self.scroll.scroll_to_bottom();
-        cx.notify();
-    }
-
-    fn on_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
-        match event {
-            AgentEvent::Ready => return self.note("Claude connected with the pluto MCP server.", cx),
-            AgentEvent::Failed(e) => {
-                self.prompts = None; // no more prompts
-                return self.note(format!("Agent stopped: {e}"), cx);
-            }
-            AgentEvent::TurnEnded(reason) => {
-                if reason != StopReason::EndTurn {
-                    self.note(format!("Turn ended: {reason:?}"), cx);
-                }
-                let next = self.outbox.turn_ended();
-                let idle = next.is_none();
-                self.dispatch(next, cx);
-                if idle {
-                    self.check_run_state(cx);
-                }
-                return;
-            }
-            AgentEvent::Steered => {
-                if let Some(label) = self.outbox.steered() {
-                    self.entries.push(Entry::User(format!("{label}\n↳ sent into the running turn").into()));
-                }
-            }
-            AgentEvent::Unsent => {
-                let next = self.outbox.unsent();
-                return self.dispatch(next, cx);
-            }
-            AgentEvent::Permission(request, responder) => {
-                let fields = &request.tool_call.fields;
-                let title = fields.title.clone().unwrap_or_else(|| "Tool call".into());
-                let runs_code = gate::is_pluto(&title);
-                if runs_code && self.run_without_asking {
-                    if let Some(allow) = option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
-                        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
-                        let _ = responder.respond(RequestPermissionResponse::new(outcome));
-                        return self.note(format!("▶ Ran without asking: {title}"), cx);
-                    }
-                }
-                let input = fields.raw_input.clone().unwrap_or_default();
-                let code = input["code"].as_str().map(str::to_owned).or_else(|| {
-                    input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned)
-                });
-                self.entries.push(Entry::Permission {
-                    title,
-                    code,
-                    options: request.options,
-                    responder: Some(responder),
-                    runs_code,
-                });
-            }
-            AgentEvent::Update(SessionUpdate::AgentMessageChunk(chunk)) => {
-                if let ContentBlock::Text(t) = chunk.content {
-                    match self.entries.last_mut() {
-                        Some(Entry::Agent(text)) => text.push_str(&t.text),
-                        _ => self.entries.push(Entry::Agent(t.text)),
-                    }
-                }
-            }
-            AgentEvent::Update(SessionUpdate::AgentThoughtChunk(chunk)) => {
-                if let ContentBlock::Text(t) = chunk.content {
-                    match self.entries.last_mut() {
-                        Some(Entry::Thought { text, .. }) => text.push_str(&t.text),
-                        _ => self.entries.push(Entry::Thought { text: t.text, expanded: false }),
-                    }
-                }
-            }
-            // One plan per turn, updated in place.
-            AgentEvent::Update(SessionUpdate::Plan(plan)) => {
-                let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
-                match self.entries[turn_start..].iter_mut().find(|e| matches!(e, Entry::Plan(_))) {
-                    Some(existing) => *existing = Entry::Plan(plan.entries),
-                    None => self.entries.push(Entry::Plan(plan.entries)),
-                }
-            }
-            AgentEvent::Update(SessionUpdate::ToolCall(call)) => self.entries.push(Entry::Tool {
-                id: call.tool_call_id,
-                title: call.title,
-                status: call.status,
-                input: call.raw_input,
-                output: call.raw_output,
-                diffs: Vec::new(),
-                expanded: false,
-            }),
-            AgentEvent::Update(SessionUpdate::ToolCallUpdate(update)) => {
-                if let Some(opened) = self.on_tool_update(update) {
-                    // Follow the agent: show notebooks it opens in the pane.
-                    self.show_notebook(&opened, cx);
-                }
-            }
-            // ponytail: modes, usage, available commands not shown yet.
-            AgentEvent::Update(_) => return,
-        }
-        self.scroll.scroll_to_bottom();
-        cx.notify();
-    }
-
-    /// Apply a tool-call update; on a completed pluto call, learn cell code and
-    /// diff edits. Returns a notebook id the agent just opened or created.
-    fn on_tool_update(&mut self, update: agent_client_protocol::schema::v1::ToolCallUpdate) -> Option<String> {
-        let ix = self
-            .entries
-            .iter()
-            .rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
-        let Entry::Tool { title, status, input, output, diffs, .. } = &mut self.entries[ix] else { return None };
-        let fields = update.fields;
-        if let Some(t) = fields.title {
-            *title = t;
-        }
-        if let Some(s) = fields.status {
-            *status = s;
-        }
-        if fields.raw_input.is_some() {
-            *input = fields.raw_input;
-        }
-        if fields.raw_output.is_some() {
-            *output = fields.raw_output;
-        }
-        let tool = celldiff::pluto_tool(title).filter(|_| *status == ToolCallStatus::Completed)?;
-        let result = output.as_ref().and_then(celldiff::tool_json)?;
-        if result.get("error").is_some() {
-            return None;
-        }
-        self.cell_codes.observe(tool, &result);
-        if let Some(input) = input {
-            *diffs = self.cell_codes.diff(tool, input);
-        }
-        matches!(tool, "open_notebook" | "new_notebook")
-            .then(|| result["notebook_id"].as_str().map(str::to_owned))
-            .flatten()
-    }
-
-    fn toggle(&mut self, ix: usize, cx: &mut Context<Self>) {
-        if let Some(Entry::Tool { expanded, .. } | Entry::Thought { expanded, .. }) = self.entries.get_mut(ix) {
-            *expanded = !*expanded;
-            cx.notify();
-        }
-    }
-
-    /// Answer a permission request; `stop_asking` approves later runs this session.
-    fn answer(&mut self, ix: usize, option: &PermissionOption, stop_asking: bool, cx: &mut Context<Self>) {
-        let Some(Entry::Permission { title, responder, .. }) = self.entries.get_mut(ix) else {
-            return;
-        };
-        if let Some(responder) = responder.take() {
-            let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
-            let _ = responder.respond(RequestPermissionResponse::new(outcome));
-            let verb = if stop_asking { "Allowed (won't ask again this session)" } else { option.name.as_str() };
-            self.entries[ix] = Entry::Note(format!("{verb}: {title}").into());
-            self.run_without_asking |= stop_asking;
-            cx.notify();
-        }
-    }
-
-    fn render_entry(&self, ix: usize, entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
+    fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = rgb(0x8a8a8a);
-        match entry {
-            Entry::User(text) => div().p_2().rounded_md().bg(rgb(0x2d2d30)).child(text.clone()).into_any_element(),
-            Entry::Agent(text) => TextView::markdown(("agent", ix), text.clone()).into_any_element(),
-            Entry::Note(text) => div().text_sm().text_color(muted).child(text.clone()).into_any_element(),
-            Entry::Tool { title, status, input, output, diffs, expanded, .. } => {
-                let arrow = if *expanded { "▾" } else { "▸" };
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .text_sm()
-                    .child(
-                        div()
-                            .id(("tool", ix))
-                            .cursor_pointer()
-                            .text_color(muted)
-                            .child(format!("{arrow} ⚙ {title} · {status:?}"))
-                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(ix, cx))),
-                    )
-                    .children(diffs.iter().map(render_diff))
-                    .when(*expanded, |d| {
-                        d.children(input.as_ref().map(|v| detail("input", v)))
-                            .children(output.as_ref().map(|v| detail("result", &celldiff::tool_json(v).unwrap_or_else(|| v.clone()))))
-                    })
-                    .into_any_element()
+        // Sessions grouped by folder, in order of first appearance.
+        let mut folders: Vec<&PathBuf> = Vec::new();
+        for s in &self.sessions {
+            if !folders.contains(&&s.cwd) {
+                folders.push(&s.cwd);
             }
-            Entry::Thought { text, expanded } => div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .text_sm()
-                .text_color(muted)
-                .child(
-                    div()
-                        .id(("thought", ix))
-                        .cursor_pointer()
-                        .child(if *expanded { "▾ Thinking" } else { "▸ Thinking" })
-                        .on_click(cx.listener(move |this, _, _, cx| this.toggle(ix, cx))),
-                )
-                .when(*expanded, |d| d.child(div().italic().child(text.clone())))
-                .into_any_element(),
-            Entry::Plan(entries) => div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .text_sm()
-                .child(div().text_color(muted).child("Plan"))
-                .children(entries.iter().map(|e| {
-                    let (mark, color) = match e.status {
-                        PlanEntryStatus::Completed => ("☑", rgb(0x6a9955)),
-                        PlanEntryStatus::InProgress => ("◐", rgb(0xc8a040)),
-                        _ => ("☐", rgb(0xaaaaaa)),
-                    };
-                    div().flex().gap_2().child(div().text_color(color).child(mark)).child(e.content.clone())
-                }))
-                .into_any_element(),
-            Entry::Permission { title, code, options, runs_code, .. } => {
-                // Run approvals: Allow / Allow & stop asking / Deny. Anything else: the agent's own options.
-                let mut buttons: Vec<(String, PermissionOption, bool)> = Vec::new();
-                if *runs_code {
-                    if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
-                        buttons.push(("Allow".into(), allow.clone(), false));
-                        buttons.push(("Allow & stop asking".into(), allow.clone(), true));
-                    }
-                    if let Some(deny) = option_of_kind(options, PermissionOptionKind::RejectOnce) {
-                        buttons.push(("Deny".into(), deny.clone(), false));
-                    }
-                }
-                if buttons.is_empty() {
-                    buttons = options.iter().map(|o| (o.name.clone(), o.clone(), false)).collect();
-                }
-                let heading = match celldiff::pluto_tool(title) {
-                    Some(tool) if *runs_code => format!("Run code? · {tool}"),
-                    _ => format!("Allow {title}?"),
-                };
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(0xc8a040))
-                    .child(heading)
-                    .children(code.as_ref().map(|code| {
-                        div().p_1().rounded_sm().bg(rgb(0x252526)).font_family("Menlo").text_xs().child(code.clone())
-                    }))
-                    .child(div().flex().gap_2().children(buttons.into_iter().enumerate().map(|(i, (label, option, stop))| {
-                        let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
+        }
+        let groups: Vec<_> = folders
+            .into_iter()
+            .map(|folder| {
+                let rows: Vec<_> = self
+                    .sessions
+                    .iter()
+                    .filter(|s| &s.cwd == folder)
+                    .map(|s| {
+                        let key = s.key;
+                        let (dot, color) = if s.needs_approval() {
+                            ("!", rgb(0xd16969))
+                        } else if s.outbox.busy {
+                            ("●", rgb(0xc8a040))
+                        } else {
+                            ("○", rgb(0x6a6a6a))
+                        };
                         div()
-                            .id(("perm", ix * 16 + i))
+                            .id(("session", key as usize))
+                            .flex()
+                            .gap_2()
                             .px_2()
+                            .py_1()
                             .rounded_sm()
                             .cursor_pointer()
-                            .bg(if allow { rgb(0x2f5d3a) } else { rgb(0x5d2f2f) })
-                            .child(label)
-                            .on_click(cx.listener(move |this, _, _, cx| this.answer(ix, &option, stop, cx)))
-                    })))
-                    .into_any_element()
-            }
-        }
+                            .text_sm()
+                            .when(self.active == Some(key), |d| d.bg(rgb(0x2d2d30)))
+                            .child(div().text_color(color).child(dot))
+                            .child(div().flex_1().overflow_hidden().child(s.title.clone()))
+                            .on_click(cx.listener(move |this, _, _, cx| this.activate(key, cx)))
+                    })
+                    .collect();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().px_2().text_xs().text_color(muted).child(folder_name(folder)))
+                    .children(rows)
+            })
+            .collect();
+
+        div()
+            .w(px(220.))
+            .h_full()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_2()
+            .border_r_1()
+            .border_color(rgb(0x333333))
+            .bg(rgb(0x191919))
+            .child(
+                div()
+                    .id("new-session")
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_sm()
+                    .bg(rgb(0x2d2d30))
+                    .child("+ New session")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.active = None;
+                        cx.notify();
+                    })),
+            )
+            .child(div().id("sessions").flex_1().overflow_y_scroll().flex().flex_col().gap_3().children(groups))
+            .child(div().text_xs().text_color(muted).child(self.status.clone()))
+            .when(self.runtime.is_none() && !self.starting, |d| {
+                d.child(
+                    div()
+                        .id("restart")
+                        .px_2()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_sm()
+                        .bg(rgb(0x3a3a3c))
+                        .child("↻ Restart Julia")
+                        .on_click(cx.listener(|this, _, _, cx| this.boot(this.last_ports, cx))),
+                )
+            })
     }
 
-    /// Messages waiting for Claude: click ✎ to pull one back into the input, ✕ to drop it.
-    fn render_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_new_session(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = rgb(0x8a8a8a);
-        div().flex().flex_col().gap_1().children(self.outbox.items.iter().enumerate().map(|(i, q)| {
-            div()
-                .flex()
-                .gap_2()
-                .text_sm()
-                .text_color(muted)
-                .child(div().flex_1().overflow_hidden().child(q.label.clone()))
-                .when(q.in_flight(), |d| d.child("sending now…"))
-                .when(!q.in_flight() && q.editable.is_some(), |d| {
-                    d.child(div().id(("edit", i)).cursor_pointer().child("✎").on_click(cx.listener(
-                        move |this, _, window, cx| {
-                            if let Some(text) = this.outbox.take(i).and_then(|q| q.editable) {
-                                this.input.update(cx, |s, cx| s.set_value(text, window, cx));
-                                cx.notify();
-                            }
-                        },
-                    )))
-                })
-                .when(!q.in_flight(), |d| {
-                    d.child(div().id(("drop", i)).cursor_pointer().child("✕").on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.outbox.take(i);
-                            cx.notify();
-                        },
-                    )))
-                })
-        }))
+        let folder = self.new_cwd.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Choose a folder…".into());
+        let recent: Vec<_> = self
+            .recent
+            .iter()
+            .enumerate()
+            .map(|(i, path)| {
+                let path = path.clone();
+                div()
+                    .id(("recent", i))
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_sm()
+                    .text_color(muted)
+                    .when(self.new_cwd.as_ref() == Some(&path), |d| d.text_color(rgb(0xdddddd)).bg(rgb(0x2d2d30)))
+                    .child(format!("{}  ·  {}", folder_name(&path), path.display()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.new_cwd = Some(path.clone());
+                        cx.notify();
+                    }))
+            })
+            .collect();
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .child(div().text_lg().child("New session"))
+            .child(div().text_sm().text_color(muted).child("Working folder: where Claude works, whose CLAUDE.md applies, and where new notebooks go."))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(div().flex_1().p_1().rounded_sm().bg(rgb(0x252526)).text_sm().overflow_hidden().child(folder))
+                    .child(
+                        div()
+                            .id("choose-folder")
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .text_sm()
+                            .bg(rgb(0x3a3a3c))
+                            .child("Choose…")
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_folder(cx))),
+                    ),
+            )
+            .when(!recent.is_empty(), |d| d.child(div().text_xs().text_color(muted).child("Recent")).children(recent))
+            .child(div().flex_1())
+            .child(div().text_sm().text_color(muted).child("First message (optional)"))
+            .child(Textarea::new(&self.input))
+            .child(
+                div()
+                    .id("start-session")
+                    .px_3()
+                    .py_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .bg(if self.new_cwd.is_some() { rgb(0x2f5d3a) } else { rgb(0x3a3a3c) })
+                    .child("Start session  ↩")
+                    .on_click(cx.listener(|this, _, window, cx| this.start_session(window, cx))),
+            )
     }
-}
 
-fn option_of_kind(options: &[PermissionOption], kind: PermissionOptionKind) -> Option<&PermissionOption> {
-    options.iter().find(|o| o.kind == kind)
-}
-
-/// A cell edit as colored lines.
-fn render_diff(diff: &celldiff::CellDiff) -> impl IntoElement + use<> {
-    use celldiff::Change;
-    // ponytail: long diffs are cut, not scrollable; expand the tool call for its input.
-    const MAX_LINES: usize = 60;
-    div()
-        .flex()
-        .flex_col()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(0x333333))
-        .font_family("Menlo")
-        .text_xs()
-        .child(div().px_2().text_color(rgb(0x8a8a8a)).child(diff.label.clone()))
-        .children(diff.lines.iter().take(MAX_LINES).map(|(change, line)| {
-            let (sign, bg) = match change {
-                Change::Added => ("+", Some(rgb(0x1f3a26))),
-                Change::Removed => ("-", Some(rgb(0x4a2226))),
-                Change::Same => (" ", None),
-            };
-            div()
-                .px_2()
-                .when_some(bg, |d, bg| d.bg(bg))
-                .child(format!("{sign} {line}"))
-        }))
-        .when(diff.lines.len() > MAX_LINES, |d| {
-            d.child(div().px_2().text_color(rgb(0x8a8a8a)).child(format!("… {} more lines", diff.lines.len() - MAX_LINES)))
-        })
-}
-
-/// A tool call's input or result, pretty-printed and truncated.
-fn detail(label: &str, value: &serde_json::Value) -> impl IntoElement + use<> {
-    const MAX_CHARS: usize = 2000;
-    let text = serde_json::to_string_pretty(value).unwrap_or_default();
-    let text = match text.char_indices().nth(MAX_CHARS) {
-        Some((cut, _)) => format!("{}\n…", &text[..cut]),
-        None => text,
-    };
-    div()
-        .flex()
-        .flex_col()
-        .rounded_sm()
-        .bg(rgb(0x252526))
-        .p_2()
-        .font_family("Menlo")
-        .text_xs()
-        .child(div().text_color(rgb(0x8a8a8a)).child(label.to_string()))
-        .child(text)
+    fn render_chat(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let key = session.key;
+        let button = |id: &'static str| div().id(id).px_2().rounded_sm().cursor_pointer().text_sm();
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(0x333333))
+                    .text_sm()
+                    .child(session.title.clone())
+                    .child(div().text_xs().text_color(rgb(0x8a8a8a)).child(session.cwd.display().to_string())),
+            )
+            .child(session::render_transcript(session, cx))
+            .child(
+                div()
+                    .p_3()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .border_t_1()
+                    .border_color(rgb(0x333333))
+                    .child(session::render_queue(session, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                button("annotate-toggle")
+                                    .when(self.annotating, |d| d.bg(rgb(0x8a6d1f)))
+                                    .child(if self.annotating { "◉ Annotating (⌘⇧E exits)" } else { "◎ Annotate (⌘⇧E)" })
+                                    .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&ToggleAnnotation, window, cx))),
+                            )
+                            .when(session.run_without_asking, |d| {
+                                d.child(
+                                    button("ask-again")
+                                        .bg(rgb(0x3a3a3c))
+                                        .child("▶ Runs without asking ✕")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.with_session(key, cx, |s| {
+                                                s.run_without_asking = false;
+                                                s.note("Will ask before running code again.");
+                                            })
+                                        })),
+                                )
+                            })
+                            .child(div().flex_1())
+                            .when(session.outbox.busy && session.id.is_some(), |d| {
+                                d.child(
+                                    button("stop")
+                                        .bg(rgb(0x5d2f2f))
+                                        .child("■ Stop (Esc)")
+                                        .on_click(cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx))),
+                                )
+                            }),
+                    )
+                    .child(Textarea::new(&self.input)),
+            )
+    }
 }
 
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let entries: Vec<_> = self.entries.iter().enumerate().map(|(i, e)| self.render_entry(i, e, cx)).collect();
-        let button = |id: &'static str| div().id(id).px_2().rounded_sm().cursor_pointer().text_sm();
+        let chat = match self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key)) {
+            Some(ix) => self.render_chat(&self.sessions[ix], cx).into_any_element(),
+            None => self.render_new_session(cx).into_any_element(),
+        };
         div()
             .key_context("Workspace")
             .on_action(cx.listener(Self::interrupt))
@@ -740,6 +722,7 @@ impl Render for Workspace {
             .size_full()
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xdddddd))
+            .child(self.render_session_bar(cx))
             .child(
                 div()
                     .w(px(420.))
@@ -748,70 +731,7 @@ impl Render for Workspace {
                     .flex_col()
                     .border_r_1()
                     .border_color(rgb(0x333333))
-                    .child(
-                        div()
-                            .id("transcript")
-                            .flex_1()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.scroll)
-                            .p_3()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .children(entries),
-                    )
-                    .child(
-                        div()
-                            .p_3()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .border_t_1()
-                            .border_color(rgb(0x333333))
-                            .child(self.render_queue(cx))
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_2()
-                                    .child(
-                                        button("annotate-toggle")
-                                            .when(self.annotating, |d| d.bg(rgb(0x8a6d1f)))
-                                            .child(if self.annotating { "◉ Annotating (⌘⇧E exits)" } else { "◎ Annotate (⌘⇧E)" })
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_annotation(&ToggleAnnotation, window, cx)
-                                            })),
-                                    )
-                                    .when(self.run_without_asking, |d| {
-                                        d.child(
-                                            button("ask-again")
-                                                .bg(rgb(0x3a3a3c))
-                                                .child("▶ Runs without asking ✕")
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.run_without_asking = false;
-                                                    this.note("Will ask before running code again.", cx);
-                                                })),
-                                        )
-                                    })
-                                    .child(div().flex_1())
-                                    .when(self.runtime.is_none() && !self.starting, |d| {
-                                        d.child(
-                                            button("restart")
-                                                .bg(rgb(0x3a3a3c))
-                                                .child("↻ Restart Julia")
-                                                .on_click(cx.listener(|this, _, _, cx| this.boot(this.last_ports, cx))),
-                                        )
-                                    })
-                                    .when(self.outbox.busy, |d| {
-                                        d.child(
-                                            button("stop")
-                                                .bg(rgb(0x5d2f2f))
-                                                .child("■ Stop (Esc)")
-                                                .on_click(cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx))),
-                                        )
-                                    }),
-                            )
-                            .child(Textarea::new(&self.input)),
-                    ),
+                    .child(chat),
             )
             .child(div().flex_1().h_full().child(self.webview.clone()))
     }
@@ -829,7 +749,7 @@ fn main() {
             KeyBinding::new("escape", Interrupt, None),
             KeyBinding::new("cmd-shift-e", ToggleAnnotation, None),
         ]);
-        let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
+        let bounds = Bounds::centered(None, size(px(1560.), px(900.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
