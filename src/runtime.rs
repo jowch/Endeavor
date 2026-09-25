@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::UnboundedSender;
 
+use crate::splash::{Progress, Step};
+
 /// Julia needed by runtime/Project.toml's `[sources]` section.
 const MIN_JULIA: (u32, u32) = (1, 11);
 const STDERR_TAIL: usize = 40;
@@ -52,8 +54,8 @@ const JULIA_TARBALL: (&str, &str, u64) = (
 
 
 /// The julia binary to run: the user's (Settings), else the app's own,
-/// downloaded and verified on first run. `progress` gets status lines meanwhile.
-fn julia_binary(progress: &dyn Fn(String)) -> Result<String, String> {
+/// downloaded and verified on first run. `progress` hears how that's going.
+fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
     if let Some(julia) = crate::settings::Settings::load().julia {
         return Ok(julia.display().to_string());
     }
@@ -68,10 +70,13 @@ fn julia_binary(progress: &dyn Fn(String)) -> Result<String, String> {
 
 /// Start Julia and block until boot.jl reports `READY`. `ports` pins the Pluto
 /// and MCP ports (restart); `died` gets a message if Julia exits afterwards;
-/// `progress` gets status lines during a first-run install.
-pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: &dyn Fn(String)) -> Result<Runtime, String> {
+/// `progress` hears about setup: Julia's install, then its package output.
+pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: UnboundedSender<Progress>) -> Result<Runtime, String> {
     let root = crate::install::resources().display().to_string();
-    let julia = julia_binary(progress)?;
+    let julia = julia_binary(&|detail, fraction| {
+        let _ = progress.unbounded_send(Progress { fraction, ..Progress::new(Step::Julia, detail) });
+    })?;
+    let _ = progress.unbounded_send(Progress::new(Step::Packages, "Starting Julia…"));
     check_version(&julia)?;
     // Trailing ':' stacks the default depots (~/.julia) read-only behind ours.
     let depot = format!("{}/depot:", crate::install::app_dir()?.display());
@@ -99,6 +104,11 @@ pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: &
     std::thread::spawn(move || {
         for line in stderr.lines().map_while(Result::ok) {
             eprintln!("{line}");
+            // Package installs and precompiles show on the setup screen.
+            let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
+            if !text.is_empty() {
+                let _ = progress.unbounded_send(Progress { log: true, ..Progress::new(Step::Packages, redact_secret(text)) });
+            }
             let mut log = log.lock().unwrap();
             if log.len() == STDERR_TAIL {
                 log.pop_front();
@@ -241,7 +251,7 @@ mod tests {
 fn live_die_and_restart() {
     use futures::StreamExt;
     let (died, mut deaths) = futures::channel::mpsc::unbounded();
-    let first = start(None, died.clone(), &|l| println!("{l}")).expect("start");
+    let first = start(None, died.clone(), futures::channel::mpsc::unbounded().0).expect("start");
     // SIGKILL, like a crash or OOM kill. (SIGTERM can leave Julia hung mid-exit; the
     // app never sends it: quitting closes stdin and boot.jl exits itself.)
     let pattern = format!("boot.jl {} {}", first.ports[0], first.ports[1]);
@@ -250,7 +260,7 @@ fn live_die_and_restart() {
     println!("died: {reason}");
     assert!(reason.starts_with("Julia exited"));
 
-    let second = start(Some(first.ports), died, &|l| println!("{l}")).expect("restart on the same ports");
+    let second = start(Some(first.ports), died, futures::channel::mpsc::unbounded().0).expect("restart on the same ports");
     assert_eq!(second.mcp_url, first.mcp_url, "agent's MCP URL must survive a restart");
     assert_ne!(second.pluto_url, first.pluto_url, "new Pluto secret");
     let list = crate::pluto::call_tool(&second.mcp_url, "list_notebooks", serde_json::json!({})).unwrap();

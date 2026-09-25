@@ -18,6 +18,8 @@ use futures::future::{Either, LocalBoxFuture, select};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 
+use crate::splash::{Progress, Step};
+
 /// In the app's resources, `adapter/` holds package.json + package-lock.json
 /// pinning the ACP adapter and its dependencies.
 const ADAPTER_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
@@ -41,13 +43,15 @@ const NODE_TARBALL: (&str, &str, u64, &str) = (
 
 /// The command that runs the ACP adapter: the app's own Node and a `npm ci` of
 /// the pinned lockfile (integrity-checked), both installed on first launch.
-fn adapter_command(progress: &dyn Fn(String)) -> Result<Vec<String>, String> {
+fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     let app = crate::install::app_dir()?;
     let node_dir = app.join(format!("node-v{NODE_VERSION}"));
     let node = node_dir.join("bin/node");
     if !node.exists() {
         let (url, sha, size, top) = NODE_TARBALL;
-        crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), progress)?;
+        crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), &|detail, fraction| {
+            progress(Progress { fraction, ..Progress::new(Step::Agent, detail) })
+        })?;
     }
 
     let pinned = crate::install::resources().join("adapter");
@@ -57,7 +61,7 @@ fn adapter_command(progress: &dyn Fn(String)) -> Result<Vec<String>, String> {
     let adapter = app.join(format!("adapter-{version}"));
     let entry = adapter.join(format!("node_modules/{ADAPTER_PACKAGE}/dist/index.js"));
     if !entry.exists() {
-        progress("Installing the Claude agent (first launch)…".into());
+        progress(Progress::new(Step::Agent, "Installing the Claude agent…"));
         // Install beside the target, then rename, so a partial install is never used.
         let staging = app.join("adapter.installing");
         let _ = std::fs::remove_dir_all(&staging);
@@ -152,8 +156,8 @@ pub enum AgentEvent {
     /// The copy made by `ForkSession` exists; its history replays next.
     Forked { key: u64, id: SessionId },
     Session(SessionId, SessionEvent),
-    /// First-launch install progress, for the status line.
-    Status(String),
+    /// Setup progress (installing Node and the adapter, then connecting).
+    Setup(Progress),
     /// The connection is gone; no session works any more.
     Failed(String),
 }
@@ -164,9 +168,10 @@ pub fn start(mcp_url: String, commands: UnboundedReceiver<Command>) -> Unbounded
     let (event_tx, event_rx) = unbounded();
     std::thread::spawn(move || {
         let events = event_tx.clone();
-        let command = adapter_command(&|line| {
-            let _ = events.unbounded_send(AgentEvent::Status(line));
+        let command = adapter_command(&|p| {
+            let _ = events.unbounded_send(AgentEvent::Setup(p));
         });
+        let _ = events.unbounded_send(AgentEvent::Setup(Progress::new(Step::Claude, "Connecting…")));
         let reason = match command {
             Err(e) => e,
             Ok(command) => match futures::executor::block_on(run(command, mcp_url, commands, event_tx)) {

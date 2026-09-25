@@ -20,7 +20,7 @@ pub fn app_dir() -> Result<PathBuf, String> {
 
 /// Download a pinned tarball (resuming a partial one), check its SHA-256, and
 /// unpack its `top` folder to `dir`. `what` names it in progress and errors.
-pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String)) -> Result<(), String> {
+pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
     let parent = dir.parent().unwrap();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let tarball = parent.join(format!("{top}.tar.gz.part"));
@@ -39,28 +39,28 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
             break status;
         }
         let got = std::fs::metadata(&tarball).map(|m| m.len()).unwrap_or(0);
-        progress(format!("Downloading {what} (first launch)… {}%", got * 100 / size));
+        progress(format!("Downloading {what}… {}%", got * 100 / size), Some(got as f32 / size as f32));
         std::thread::sleep(Duration::from_millis(500));
     };
     if !status.success() {
         let mut err = String::new();
         let _ = std::io::Read::read_to_string(&mut curl.stderr.take().unwrap(), &mut err);
         return Err(format!(
-            "Couldn't download {what} ({}). Check the internet connection and restart; the download resumes.",
+            "Couldn't download {what} ({}). Check the internet connection and try again; the download resumes.",
             err.trim()
         ));
     }
 
-    progress(format!("Checking {what}…"));
+    progress(format!("Checking {what}…"), None);
     let out = Command::new("shasum").args(["-a", "256"]).arg(&tarball).output().map_err(|e| e.to_string())?;
     let got = String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned();
     if got != sha256 {
         let _ = std::fs::remove_file(&tarball);
-        return Err(format!("The {what} download was corrupt or tampered with (SHA-256 {got}); it was deleted. Restart to try again."));
+        return Err(format!("The {what} download was corrupt or tampered with (SHA-256 {got}); it was deleted. Try again to download it afresh."));
     }
 
     // Unpack beside the target, then rename, so a half-unpacked Julia is never used.
-    progress(format!("Unpacking {what}…"));
+    progress(format!("Unpacking {what}…"), None);
     let staging = parent.join(format!("{top}.unpacking"));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
@@ -94,12 +94,12 @@ mod tests {
         let size = std::fs::metadata(&archive).unwrap().len();
 
         let bad = tmp.join("app/bad");
-        let err = tarball(&bad, "Thing", "thing-1.0", (&url, &"0".repeat(64), size), &|_| {}).unwrap_err();
+        let err = tarball(&bad, "Thing", "thing-1.0", (&url, &"0".repeat(64), size), &|_, _| {}).unwrap_err();
         assert!(err.contains("corrupt"), "{err}");
         assert!(!bad.exists() && !tmp.join("app/thing-1.0.tar.gz.part").exists());
 
         let good = tmp.join("app/good");
-        tarball(&good, "Thing", "thing-1.0", (&url, &sha, size), &|_| {}).unwrap();
+        tarball(&good, "Thing", "thing-1.0", (&url, &sha, size), &|_, _| {}).unwrap();
         assert!(good.join("bin/thing").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }

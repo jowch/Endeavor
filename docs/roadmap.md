@@ -43,6 +43,10 @@ process running Pluto + PlutoMCP.
   Sessions take the agent's generated titles; double-click to rename (names
   kept in `titles.json`); × closes an open session (it stays in history) or,
   with a confirm, deletes a past one (`session/delete`); "Show more" past 8.
+- **First-launch setup screen** (`splash.rs`): placeholder logo, the setup
+  steps (Julia, Pluto packages, Claude agent, connecting) with a progress bar
+  and live detail, and Retry on failure. Shown until setup finishes once
+  (`setup-complete` marker); later installs report in the status line.
 - **Settings** (session bar): use my Claude Code setup, run notebook code
   without asking in new sessions, and Endeavor's Julia vs. a chosen julia
   (applies when Julia next starts). Kept in `settings.json`.
@@ -79,6 +83,14 @@ In priority order. Nothing queued: the next work is the packaging list below.
 ## Before sharing the app
 
 Everything here is a known `ponytail:` shortcut that's fine for one developer.
+
+- **Logo and style system.** The setup screen's rocket + wordmark and the
+  app's inline colors are placeholders for the designed logo and UI style
+  system (in progress separately).
+- **Claude login.** The app assumes Claude Code is already logged in on the
+  Mac; a new user needs a sign-in step (ACP `authenticate`).
+- **Logs.** Launched from Finder, stderr goes nowhere; write a log file and
+  offer "Show logs".
 
 - **Signing and notarization.** `scripts/bundle.sh` builds an ad-hoc signed
   `Endeavor.app` (resources in `Contents/Resources`); sharing it needs a

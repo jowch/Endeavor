@@ -16,6 +16,7 @@ mod pluto;
 mod runtime;
 mod session;
 mod settings;
+mod splash;
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, SessionId, SessionInfo, TextContent};
@@ -32,6 +33,7 @@ use raw_window_handle::HasWindowHandle;
 use runtime::Runtime;
 use session::{Effect, Session, folder_name};
 use settings::Settings;
+use splash::{Progress, Setup, Step};
 
 /// Notebook id from a Pluto `/edit?id=…` URL. Only the id is used: the URL also
 /// carries Pluto's secret, which must never reach the agent.
@@ -133,6 +135,8 @@ pub struct Workspace {
     settings: Settings,
     /// The Settings screen is in the chat pane.
     settings_open: bool,
+    /// First launch: the setup screen covers the window until setup finishes.
+    setup: Option<Setup>,
     agent_tx: UnboundedSender<Command>,
     /// Handed to the agent thread once Julia is up (it needs the MCP URL).
     agent_rx: Option<UnboundedReceiver<Command>>,
@@ -249,6 +253,7 @@ impl Workspace {
             expanded: HashSet::new(),
             settings: Settings::load(),
             settings_open: false,
+            setup: Setup::needed().then(Setup::default),
             agent_tx,
             agent_rx: Some(agent_rx),
             status: "".into(),
@@ -259,6 +264,10 @@ impl Workspace {
             last_notebooks: Vec::new(),
             died_tx,
         };
+        // The webview is a native view over the window; hide it behind the setup screen.
+        if this.setup.is_some() {
+            let _ = this.webview.read(cx).raw().set_visible(false);
+        }
         // Julia boots while the user picks a folder on the new-session screen.
         this.boot(None, cx);
         this
@@ -551,11 +560,15 @@ impl Workspace {
         match event {
             AgentEvent::Ready => {
                 self.status = "Claude connected.".into();
+                if self.setup.take().is_some() {
+                    Setup::finish();
+                    let _ = self.webview.read(cx).raw().set_visible(true);
+                }
                 for cwd in &self.recent {
                     let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
                 }
             }
-            AgentEvent::Status(line) => self.status = line.into(),
+            AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::Listed { cwd, sessions } => {
                 self.past.insert(cwd, sessions);
             }
@@ -566,6 +579,9 @@ impl Workspace {
             }
             AgentEvent::Failed(e) => {
                 self.status = format!("⚠ Agent stopped: {e}").into();
+                if let Some(setup) = &mut self.setup {
+                    setup.error = Some(e.clone());
+                }
                 for session in &mut self.sessions {
                     session.note(format!("⚠ Agent stopped: {e}"));
                 }
@@ -653,19 +669,14 @@ impl Workspace {
         self.status = if ports.is_some() { "Restarting Julia…" } else { "Starting Julia…" }.into();
         let died = self.died_tx.clone();
         // First run downloads Julia, then instantiates + precompiles (~1 min); later launches are seconds.
-        let (progress_tx, mut progress) = futures::channel::mpsc::unbounded::<String>();
-        let boot = cx.background_executor().spawn(async move {
-            runtime::start(ports, died, &|line| {
-                let _ = progress_tx.unbounded_send(line);
-            })
-        });
+        let (progress_tx, mut progress) = futures::channel::mpsc::unbounded::<Progress>();
+        let boot = cx.background_executor().spawn(async move { runtime::start(ports, died, progress_tx) });
         cx.spawn(async move |this, cx| {
-            while let Some(line) = progress.next().await {
-                // A late line mustn't overwrite what on_booted reported.
+            while let Some(p) = progress.next().await {
+                // Julia's log keeps coming after it's up; only show it while starting.
                 let _ = this.update(cx, |this, cx| {
                     if this.starting {
-                        this.status = line.into();
-                        cx.notify();
+                        this.on_progress(p, cx);
                     }
                 });
             }
@@ -679,12 +690,55 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Setup is under way: the status line, and the setup screen on first launch.
+    fn on_progress(&mut self, p: Progress, cx: &mut Context<Self>) {
+        if !p.log {
+            self.status = p.detail.clone().into();
+        }
+        if let Some(setup) = &mut self.setup {
+            setup.apply(p);
+        }
+        cx.notify();
+    }
+
+    /// Retry the failed setup step: start Julia again, or the agent once Julia is up.
+    pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
+        let Some(setup) = &mut self.setup else { return };
+        setup.error = None;
+        match self.runtime.as_ref().map(|r| r.mcp_url.clone()) {
+            None if !self.starting => self.boot(None, cx),
+            None => {}
+            Some(mcp_url) => {
+                // The failed agent thread dropped its command channel; start with a new one.
+                let (tx, rx) = futures::channel::mpsc::unbounded();
+                self.agent_tx = tx;
+                self.start_agent(mcp_url, rx, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn start_agent(&mut self, mcp_url: String, commands: UnboundedReceiver<Command>, cx: &mut Context<Self>) {
+        let mut events = agent::start(mcp_url, commands);
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = events.next().await {
+                if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     fn on_booted(&mut self, result: Result<Runtime, String>, cx: &mut Context<Self>) {
         self.starting = false;
         let runtime = match result {
             Ok(runtime) => runtime,
             Err(e) => {
                 self.status = format!("⚠ {e}").into();
+                if let Some(setup) = &mut self.setup {
+                    setup.error = Some(e);
+                }
                 return cx.notify();
             }
         };
@@ -693,16 +747,8 @@ impl Workspace {
         self.runtime = Some(runtime);
         self.follow_folder();
         if let Some(commands) = self.agent_rx.take() {
-            self.status = "Pluto ready · connecting to Claude…".into();
-            let mut events = agent::start(mcp_url, commands);
-            cx.spawn(async move |this, cx| {
-                while let Some(event) = events.next().await {
-                    if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
-                        break;
-                    }
-                }
-            })
-            .detach();
+            self.on_progress(Progress::new(Step::Agent, "Pluto ready · starting Claude…"), cx);
+            self.start_agent(mcp_url, commands, cx);
         } else {
             self.status = "Julia restarted.".into();
             self.reopen_notebooks(cx);
@@ -1205,6 +1251,9 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(setup) = &self.setup {
+            return div().size_full().bg(rgb(0x1e1e1e)).text_color(rgb(0xdddddd)).child(splash::render(setup, cx)).into_any_element();
+        }
         let chat = match self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key)) {
             _ if self.settings_open => self.render_settings(cx).into_any_element(),
             Some(ix) => self.render_chat(&self.sessions[ix], cx).into_any_element(),
@@ -1230,6 +1279,7 @@ impl Render for Workspace {
                     .child(chat),
             )
             .child(div().flex_1().h_full().child(self.webview.clone()))
+            .into_any_element()
     }
 }
 
