@@ -105,6 +105,17 @@ fn failure_message(error: &str) -> (String, bool) {
     (format!("Couldn't open the session: {}", detail.lines().next().unwrap_or(detail).trim()), false)
 }
 
+/// A session title from its first message: cut at a word boundary, with "…".
+fn short_title(text: &str) -> String {
+    const MAX: usize = 50;
+    if text.chars().count() <= MAX {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(MAX).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    format!("{}…", cut.trim_end_matches([',', '.', ':', ';']))
+}
+
 pub fn folder_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
 }
@@ -183,7 +194,7 @@ impl Session {
             return Vec::new();
         }
         if self.title == "New session" {
-            self.title = message.label.lines().next().unwrap_or_default().chars().take(60).collect();
+            self.title = short_title(message.label.lines().next().unwrap_or_default());
         }
         let mut effects = Vec::new();
         let dispatch = self.outbox.submit(message, now && self.id.is_some());
@@ -648,6 +659,13 @@ more" }"#);
         assert!(effects.iter().all(|e| !matches!(e, Effect::ShowNotebook(_))), "no stale navigation");
         let effects = s.started(SessionId::new("abc"));
         assert!(matches!(effects.first(), Some(Effect::ReopenNotebook(p)) if p == "/tmp/a.jl"));
+    }
+
+    #[test]
+    fn titles_are_cut_at_a_word_boundary() {
+        assert_eq!(super::short_title("plot sin"), "plot sin");
+        let long = "Reply with one word: what is the capital of France? Use no tools.";
+        assert_eq!(super::short_title(long), "Reply with one word: what is the capital of…");
     }
 
     #[test]

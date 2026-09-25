@@ -455,7 +455,8 @@ impl Workspace {
     }
 
     fn page_script(&self, js: &str, cx: &mut Context<Self>) {
-        let _ = self.webview.read(cx).raw().evaluate_script(&format!("window.__annotate && ({{ {js} }})"));
+        // A statement block, not `({ … })`, which would parse as an object literal.
+        let _ = self.webview.read(cx).raw().evaluate_script(&format!("if (window.__annotate) {{ {js} }}"));
     }
 
     // -----------------------------------------------------------------------
@@ -832,6 +833,8 @@ impl Workspace {
                     .child(
                         div()
                             .flex()
+                            // Wrap rather than clip when the chips and Stop don't fit.
+                            .flex_wrap()
                             .gap_2()
                             .child(
                                 button("annotate-toggle")

@@ -81,7 +81,9 @@ pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>) -> Result<R
         // Report an unexpected exit. When the app quits, this thread dies with it first.
         std::thread::spawn(move || {
             let status = child.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
-            let _ = died.unbounded_send(format!("Julia exited ({status}). {}", diagnose(&tail_text())));
+            // A crash's log is just Pluto's startup banner: say why only if we know.
+            let hint = hint(&tail_text().join("\n")).map(|h| format!(" {h}")).unwrap_or_default();
+            let _ = died.unbounded_send(format!("Julia exited ({status}).{hint}"));
         });
         return Ok(Runtime { _stdin: stdin, pluto_url, mcp_url, ports });
     }
@@ -131,10 +133,9 @@ fn redact_secret(line: &str) -> String {
     format!("{}…{}", &line[..start], &line[end..])
 }
 
-/// Plain-language cause for common failures, else the end of Julia's log.
-fn diagnose(tail: &[String]) -> String {
-    let log = tail.join("\n");
-    let hint = if ["Could not resolve host", "failed to clone", "Couldn't connect", "network"]
+/// Plain-language cause for common failures in Julia's log, if recognized.
+fn hint(log: &str) -> Option<&'static str> {
+    if ["Could not resolve host", "failed to clone", "Couldn't connect", "network"]
         .iter()
         .any(|p| log.contains(p))
     {
@@ -145,7 +146,12 @@ fn diagnose(tail: &[String]) -> String {
         Some("A port it needs is already in use.")
     } else {
         None
-    };
+    }
+}
+
+/// Plain-language cause for common failures, else the end of Julia's log.
+fn diagnose(tail: &[String]) -> String {
+    let hint = hint(&tail.join("\n"));
     let recent: Vec<&str> = tail.iter().rev().take(12).rev().map(String::as_str).collect();
     match hint {
         Some(hint) => hint.to_string(),
