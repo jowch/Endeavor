@@ -120,8 +120,10 @@ Staged, each step shippable:
    pushes the `list_notebooks` summary whenever it changes, driven by Pluto's
    `StateChangeEvent` / `NotebookExecutionDoneEvent` / open / shutdown and by
    every tool call. The app follows it for crash reopen and the end-of-turn
-   run warning; the 10 s poll and the post-turn call are gone. Cell-level
-   events (for the spec's cell states) extend this stream.
+   run warning; the 10 s poll and the post-turn call are gone. Events also
+   carry per-cell state for the spec's cell marking: `running`, `errored`,
+   `unrun` (agent edit not run since) and `author` (who last changed the code:
+   the agent's tools record "agent"; any other code change is "user").
 4. **Derived staleness (done 2026-09-25):** each agent edit records its time;
    a cell is pending until Pluto's `last_run_timestamp` for it is newer, so a
    run from anywhere (Pluto's button included) clears it, and the events stream

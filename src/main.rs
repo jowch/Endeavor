@@ -848,8 +848,10 @@ impl Workspace {
         // A long-lived blocking read: its own thread, not the executor's pool. It ends
         // when Julia goes away; the next boot starts a new one.
         std::thread::spawn(move || {
-            let _ = pluto::watch_notebooks(&mcp_url, |list| {
-                let _ = tx.unbounded_send(list);
+            // ponytail: per-cell states ("cells") arrive too; the notebook pane's cell
+            // marking (spec phase 2) will read them.
+            let _ = pluto::watch_notebooks(&mcp_url, |mut event| {
+                let _ = tx.unbounded_send(event["notebooks"].take());
             });
         });
         cx.spawn(async move |this, cx| {

@@ -25,17 +25,18 @@ fn host_of(mcp_url: &str) -> Result<&str, String> {
     mcp_url.strip_prefix("http://").and_then(|rest| rest.split('/').next()).ok_or_else(|| format!("bad MCP url {mcp_url}"))
 }
 
-/// Follow the runtime's notebook list (`GET /events`, the `list_notebooks` shape):
-/// `on_list` gets it now and after every change, until the runtime goes away.
-pub fn watch_notebooks(mcp_url: &str, mut on_list: impl FnMut(Value)) -> Result<(), String> {
+/// Follow the runtime's notebook state (`GET /events`): `on_event` gets
+/// `{"notebooks": [list_notebooks summary], "cells": {id: [cell states]}}` now and
+/// after every change, until the runtime goes away.
+pub fn watch_notebooks(mcp_url: &str, mut on_event: impl FnMut(Value)) -> Result<(), String> {
     let host = host_of(mcp_url)?;
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
     write!(stream, "GET /events HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge_token())
         .map_err(|e| e.to_string())?;
     for line in std::io::BufReader::new(stream).lines() {
         let line = line.map_err(|e| e.to_string())?;
-        if let Some(list) = line.strip_prefix("data: ").and_then(|json| serde_json::from_str(json).ok()) {
-            on_list(list);
+        if let Some(event) = line.strip_prefix("data: ").and_then(|json| serde_json::from_str(json).ok()) {
+            on_event(event);
         }
     }
     Ok(())
