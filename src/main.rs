@@ -11,6 +11,7 @@ mod annotate;
 mod celldiff;
 mod gate;
 mod install;
+mod logs;
 mod outbox;
 mod pluto;
 mod runtime;
@@ -1241,6 +1242,20 @@ impl Workspace {
             // ponytail: no live switch; restarting Julia under running sessions needs
             // the old process gone before its ports are reused.
             .child(note("Takes effect the next time Julia starts (relaunching Endeavor, or Restart Julia).".into()))
+            .child(heading("Troubleshooting"))
+            .child(
+                div()
+                    .id("show-logs")
+                    .self_start()
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_sm()
+                    .bg(rgb(0x3a3a3c))
+                    .child("Show logs")
+                    .on_click(|_, _, _| logs::reveal()),
+            )
+            .child(note("The log of this run and the one before, to attach to a bug report.".into()))
     }
 
     fn render_chat(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1378,6 +1393,7 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("hook-pretool") {
         gate::run_pretool_hook();
     }
+    logs::start();
     gpui_platform::application().run(|cx: &mut App| {
         gpui_component::init(cx);
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.

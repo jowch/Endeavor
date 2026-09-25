@@ -103,18 +103,19 @@ pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: U
     let log = tail.clone();
     std::thread::spawn(move || {
         for line in stderr.lines().map_while(Result::ok) {
+            // Pluto prints its URL with the access secret; keep it out of logs and the UI.
+            let line = redact_secret(&line);
             eprintln!("{line}");
             // Package installs and precompiles show on the setup screen.
             let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
             if !text.is_empty() {
-                let _ = progress.unbounded_send(Progress { log: true, ..Progress::new(Step::Packages, redact_secret(text)) });
+                let _ = progress.unbounded_send(Progress { log: true, ..Progress::new(Step::Packages, text) });
             }
             let mut log = log.lock().unwrap();
             if log.len() == STDERR_TAIL {
                 log.pop_front();
             }
-            // The tail may be shown in the panel; Pluto's secret must not be.
-            log.push_back(redact_secret(&line));
+            log.push_back(line);
         }
     });
     let tail_text = move || tail.lock().unwrap().iter().cloned().collect::<Vec<_>>();
@@ -123,13 +124,13 @@ pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: U
     for line in lines.by_ref() {
         let line = line.map_err(|e| e.to_string())?;
         let Some((pluto_url, mcp_url)) = line.strip_prefix("READY ").and_then(|r| r.split_once(' ')) else {
-            println!("{line}");
+            println!("{}", redact_secret(&line));
             continue;
         };
         let (pluto_url, mcp_url) = (pluto_url.to_owned(), mcp_url.to_owned());
         let stdin = child.stdin.take().unwrap();
         // Keep draining stdout so a chatty Julia never blocks on a full pipe.
-        std::thread::spawn(move || lines.map_while(Result::ok).for_each(|l| println!("{l}")));
+        std::thread::spawn(move || lines.map_while(Result::ok).for_each(|l| println!("{}", redact_secret(&l))));
         // Report an unexpected exit. When the app quits, this thread dies with it first.
         std::thread::spawn(move || {
             let status = child.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());

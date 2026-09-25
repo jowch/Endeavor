@@ -133,6 +133,7 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspa
         .child(div().w(px(BAR)).flex().flex_col().gap_2().text_sm().children(steps))
         .children(extra.map(|e| div().w(px(BAR)).child(e)))
         .children(setup.error.clone().map(|error| {
+            let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(rgb(0x3a3a3c)).child(label);
             div()
                 .w(px(BAR))
                 .flex()
@@ -141,15 +142,10 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspa
                 .child(div().text_sm().text_color(rgb(0xd16969)).child(error))
                 .child(
                     div()
-                        .id("retry-setup")
-                        .self_start()
-                        .px_3()
-                        .py_1()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .bg(rgb(0x3a3a3c))
-                        .child("Retry")
-                        .on_click(cx.listener(|this, _, _, cx| this.retry_setup(cx))),
+                        .flex()
+                        .gap_2()
+                        .child(button("retry-setup", "Retry").on_click(cx.listener(|this, _, _, cx| this.retry_setup(cx))))
+                        .child(button("setup-logs", "Show logs").on_click(|_, _, _| crate::logs::reveal())),
                 )
         }))
 }

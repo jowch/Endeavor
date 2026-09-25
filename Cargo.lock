@@ -1779,6 +1779,7 @@ dependencies = [
  "gpui-pre-platform",
  "gpui-wry",
  "lb-wry",
+ "libc",
  "raw-window-handle",
  "serde",
  "serde_json",

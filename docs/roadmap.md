@@ -43,6 +43,9 @@ process running Pluto + PlutoMCP.
   Sessions take the agent's generated titles; double-click to rename (names
   kept in `titles.json`); × closes an open session (it stays in history) or,
   with a confirm, deletes a past one (`session/delete`); "Show more" past 8.
+- **Logs.** Launched from Finder, output goes to
+  `~/Library/Logs/Endeavor/endeavor.log` (previous run: `endeavor.old.log`),
+  with Pluto's secret redacted; "Show logs" in Settings and on setup errors.
 - **Claude sign-in.** Signed out, the setup screen (or, later, the session
   bar) offers Claude subscription / Anthropic Console sign-in via the bundled
   CLI's `auth login` in the browser; setup finishes once signed in.
@@ -94,8 +97,6 @@ Everything here is a known `ponytail:` shortcut that's fine for one developer.
 - **Sign-in expiring mid-use.** Sign-in is checked at startup only; a login
   that expires while the app runs shows up as failed turns, not the sign-in
   panel.
-- **Logs.** Launched from Finder, stderr goes nowhere; write a log file and
-  offer "Show logs".
 
 - **Signing and notarization.** `scripts/bundle.sh` builds an ad-hoc signed
   `Endeavor.app` (resources in `Contents/Resources`); sharing it needs a
