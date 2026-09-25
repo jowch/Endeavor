@@ -72,6 +72,8 @@ pub struct Session {
     /// The notebook this session was last looking at.
     pub notebook: Option<String>,
     pub scroll: ScrollHandle,
+    /// Reopening a past session: its history is replaying.
+    replaying: bool,
 }
 
 pub fn folder_name(path: &Path) -> String {
@@ -91,7 +93,18 @@ impl Session {
             run_without_asking: false,
             notebook: None,
             scroll: ScrollHandle::new(),
+            replaying: false,
         }
+    }
+
+    /// A past session being reopened: its id is known up front so the replayed
+    /// history (which arrives before the load completes) lands here.
+    pub fn loading(key: u64, id: SessionId, cwd: PathBuf, title: String) -> Self {
+        let mut session = Self::new(key, cwd);
+        session.id = Some(id);
+        session.title = title;
+        session.replaying = true;
+        session
     }
 
     /// Waiting on the user to approve something.
@@ -107,6 +120,7 @@ impl Session {
     /// The agent created this session: send whatever was queued meanwhile.
     pub fn started(&mut self, id: SessionId) -> Vec<Effect> {
         self.id = Some(id);
+        self.replaying = false;
         let mut effects = Vec::new();
         let next = self.outbox.turn_ended();
         self.dispatch(next, &mut effects);
@@ -195,6 +209,20 @@ impl Session {
 
     fn apply_update(&mut self, update: SessionUpdate, effects: &mut Vec<Effect>) {
         match update {
+            // Only while replaying history: live messages are already in the transcript.
+            SessionUpdate::UserMessageChunk(chunk) if self.replaying => {
+                let text = match chunk.content {
+                    // The app's own context notes aren't the user's words.
+                    ContentBlock::Text(t) if t.text.starts_with("[Endeavor]") => return,
+                    ContentBlock::Text(t) => t.text,
+                    ContentBlock::ResourceLink(link) => format!("✎ {}", link.name),
+                    _ => return,
+                };
+                match self.entries.last_mut() {
+                    Some(Entry::User(existing)) => *existing = format!("{existing}\n{text}").into(),
+                    _ => self.entries.push(Entry::User(text.into())),
+                }
+            }
             SessionUpdate::AgentMessageChunk(chunk) => {
                 if let ContentBlock::Text(t) = chunk.content {
                     match self.entries.last_mut() {
@@ -515,6 +543,20 @@ mod tests {
         let effects = s.started(SessionId::new("abc"));
         assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
         assert!(matches!(s.entries.as_slice(), [Entry::User(_)]));
+    }
+
+    #[test]
+    fn a_reopened_session_shows_replayed_user_messages_but_not_app_context() {
+        use agent_client_protocol::schema::v1::{ContentChunk, SessionUpdate, TextContent};
+        use agent_client_protocol::schema::v1::ContentBlock;
+        let chunk = |s: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
+        let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old chat".into());
+        s.apply(chunk("[Endeavor] The user is viewing Pluto notebook …"));
+        s.apply(chunk("plot sin"));
+        assert!(matches!(s.entries.as_slice(), [Entry::User(t)] if t.as_ref() == "plot sin"));
+        s.started(SessionId::new("abc"));
+        s.apply(chunk("live echo"));
+        assert_eq!(s.entries.len(), 1, "after loading, user chunks are ignored");
     }
 
     #[test]

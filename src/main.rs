@@ -2,7 +2,8 @@
 //! child webview, and ACP agent sessions (a session bar, one chat pane) wired to the
 //! same Pluto session over MCP.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 mod agent;
@@ -15,7 +16,7 @@ mod runtime;
 mod session;
 
 use agent::{AgentEvent, Command};
-use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+use agent_client_protocol::schema::v1::{ContentBlock, SessionInfo, TextContent};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder as _;
@@ -41,6 +42,24 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
 
 actions!(endeavor, [Interrupt, ToggleAnnotation]);
 
+/// Recently used working folders, most recent first, kept across launches.
+fn recent_file() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(Path::new(&home).join("Library/Application Support/endeavor/recent.json"))
+}
+
+fn load_recent() -> Vec<PathBuf> {
+    let text = recent_file().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
+    serde_json::from_str::<Vec<PathBuf>>(&text).unwrap_or_default().into_iter().filter(|p| p.is_dir()).collect()
+}
+
+fn save_recent(recent: &[PathBuf]) {
+    // ponytail: best effort; losing the recent list only costs a folder pick.
+    if let (Some(file), Ok(json)) = (recent_file(), serde_json::to_string_pretty(recent)) {
+        let _ = std::fs::create_dir_all(file.parent().unwrap()).and_then(|_| std::fs::write(file, json));
+    }
+}
+
 pub struct Workspace {
     webview: Entity<WebView>,
     /// The chat box; on the new-session screen it holds the optional first message.
@@ -51,8 +70,10 @@ pub struct Workspace {
     next_key: u64,
     /// New-session screen: the chosen working folder.
     new_cwd: Option<PathBuf>,
-    /// Folders used this run, most recent first.
+    /// Working folders, most recent first (persisted).
     recent: Vec<PathBuf>,
+    /// Past sessions per folder, from the agent's history.
+    past: HashMap<PathBuf, Vec<SessionInfo>>,
     agent_tx: UnboundedSender<Command>,
     /// Handed to the agent thread once Julia is up (it needs the MCP URL).
     agent_rx: Option<UnboundedReceiver<Command>>,
@@ -139,15 +160,19 @@ impl Workspace {
         .detach();
 
         let (agent_tx, agent_rx) = futures::channel::mpsc::unbounded();
-        let launch_dir = std::env::current_dir().ok();
+        let mut recent = load_recent();
+        if recent.is_empty() {
+            recent.extend(std::env::current_dir().ok());
+        }
         let mut this = Self {
             webview,
             input,
             sessions: Vec::new(),
             active: None,
             next_key: 1,
-            new_cwd: launch_dir.clone(),
-            recent: launch_dir.into_iter().collect(),
+            new_cwd: recent.first().cloned(),
+            recent,
+            past: HashMap::new(),
             agent_tx,
             agent_rx: Some(agent_rx),
             status: "".into(),
@@ -210,6 +235,10 @@ impl Workspace {
         self.next_key += 1;
         self.recent.retain(|p| p != &cwd);
         self.recent.insert(0, cwd.clone());
+        save_recent(&self.recent);
+        if !self.past.contains_key(&cwd) {
+            let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
+        }
         let _ = self.agent_tx.unbounded_send(Command::NewSession { key, cwd: cwd.clone() });
         self.sessions.push(Session::new(key, cwd));
         self.active = Some(key);
@@ -218,6 +247,19 @@ impl Workspace {
             self.submit(&self.input.clone(), false, window, cx);
         }
         cx.notify();
+    }
+
+    /// Reopen a past session (or switch to it if it's already open).
+    fn open_past(&mut self, info: SessionInfo, cx: &mut Context<Self>) {
+        if let Some(key) = self.sessions.iter().find(|s| s.id.as_ref() == Some(&info.session_id)).map(|s| s.key) {
+            return self.activate(key, cx);
+        }
+        let key = self.next_key;
+        self.next_key += 1;
+        let title = info.title.clone().unwrap_or_else(|| "Earlier session".into());
+        let _ = self.agent_tx.unbounded_send(Command::LoadSession { key, id: info.session_id.clone(), cwd: info.cwd.clone() });
+        self.sessions.push(Session::loading(key, info.session_id, info.cwd, title));
+        self.activate(key, cx);
     }
 
     /// Show a session; the notebook pane follows it to the notebook it last viewed.
@@ -288,7 +330,15 @@ impl Workspace {
 
     fn on_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
-            AgentEvent::Ready => self.status = "Claude connected.".into(),
+            AgentEvent::Ready => {
+                self.status = "Claude connected.".into();
+                for cwd in &self.recent {
+                    let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
+                }
+            }
+            AgentEvent::Listed { cwd, sessions } => {
+                self.past.insert(cwd, sessions);
+            }
             AgentEvent::Failed(e) => {
                 self.status = format!("⚠ Agent stopped: {e}").into();
                 for session in &mut self.sessions {
@@ -302,7 +352,7 @@ impl Workspace {
                         let effects = session.started(id);
                         self.apply_effects(key, effects, cx);
                     }
-                    Err(e) => session.note(format!("⚠ Couldn't start the session: {e}")),
+                    Err(e) => session.note(format!("⚠ Couldn't start or reopen the session: {e}")),
                 }
             }
             AgentEvent::Session(id, event) => {
@@ -486,8 +536,8 @@ impl Workspace {
 
     fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = rgb(0x8a8a8a);
-        // Sessions grouped by folder, in order of first appearance.
-        let mut folders: Vec<&PathBuf> = Vec::new();
+        // Folders: recent ones, then any other folder with an open session.
+        let mut folders: Vec<&PathBuf> = self.recent.iter().collect();
         for s in &self.sessions {
             if !folders.contains(&&s.cwd) {
                 folders.push(&s.cwd);
@@ -496,7 +546,7 @@ impl Workspace {
         let groups: Vec<_> = folders
             .into_iter()
             .map(|folder| {
-                let rows: Vec<_> = self
+                let open: Vec<_> = self
                     .sessions
                     .iter()
                     .filter(|s| &s.cwd == folder)
@@ -510,7 +560,7 @@ impl Workspace {
                             ("○", rgb(0x6a6a6a))
                         };
                         div()
-                            .id(("session", key as usize))
+                            .id(ElementId::NamedInteger("session".into(), key))
                             .flex()
                             .gap_2()
                             .px_2()
@@ -524,12 +574,42 @@ impl Workspace {
                             .on_click(cx.listener(move |this, _, _, cx| this.activate(key, cx)))
                     })
                     .collect();
+                // Past sessions not already open, newest first.
+                // ponytail: capped at 8 per folder; add "show more" if people want older ones.
+                let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
+                let past: Vec<_> = self
+                    .past
+                    .get(folder)
+                    .into_iter()
+                    .flatten()
+                    .filter(|info| !is_open(info))
+                    .take(8)
+                    .enumerate()
+                    .map(|(i, info)| {
+                        let title = info.title.clone().unwrap_or_else(|| "Earlier session".into());
+                        let date = info.updated_at.as_deref().map(|d| d.chars().take(10).collect::<String>()).unwrap_or_default();
+                        let info = info.clone();
+                        div()
+                            .id(ElementId::Name(format!("past-{}-{i}", folder.display()).into()))
+                            .flex()
+                            .gap_2()
+                            .px_2()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(div().flex_1().overflow_hidden().child(title))
+                            .child(date)
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_past(info.clone(), cx)))
+                    })
+                    .collect();
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .child(div().px_2().text_xs().text_color(muted).child(folder_name(folder)))
-                    .children(rows)
+                    .children(open)
+                    .children(past)
             })
             .collect();
 

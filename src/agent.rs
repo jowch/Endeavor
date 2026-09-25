@@ -9,9 +9,9 @@ use std::str::FromStr;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, McpServer, McpServerSse, NewSessionRequest,
-    PromptRequest, PromptResponse, RequestPermissionRequest, RequestPermissionResponse, SessionId,
-    SessionNotification, SessionUpdate, StopReason,
+    CancelNotification, ContentBlock, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
+    McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
+    RequestPermissionResponse, SessionId, SessionInfo, SessionNotification, SessionUpdate, StopReason,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder, UntypedMessage};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -53,6 +53,11 @@ pub enum Turn {
 pub enum Command {
     /// Create a session in `cwd`; answered by [`AgentEvent::Started`] with the same `key`.
     NewSession { key: u64, cwd: PathBuf },
+    /// Reopen a past session. Its history replays as session updates for `id`,
+    /// then [`AgentEvent::Started`] with the same `key`.
+    LoadSession { key: u64, id: SessionId, cwd: PathBuf },
+    /// Past sessions in `cwd`; answered by [`AgentEvent::Listed`].
+    ListSessions { cwd: PathBuf },
     Turn(SessionId, Turn),
 }
 
@@ -72,6 +77,7 @@ pub enum SessionEvent {
 pub enum AgentEvent {
     Ready,
     Started { key: u64, result: Result<SessionId, String> },
+    Listed { cwd: PathBuf, sessions: Vec<SessionInfo> },
     Session(SessionId, SessionEvent),
     /// The connection is gone; no session works any more.
     Failed(String),
@@ -97,6 +103,7 @@ pub fn start(mcp_url: String, commands: UnboundedReceiver<Command>) -> Unbounded
 enum Done {
     Turn(SessionId, Result<PromptResponse, agent_client_protocol::Error>),
     Started(u64, Result<SessionId, agent_client_protocol::Error>),
+    Listed(PathBuf, Result<Vec<SessionInfo>, agent_client_protocol::Error>),
 }
 
 async fn run(
@@ -173,6 +180,12 @@ async fn run(
                         let _ = events.unbounded_send(AgentEvent::Started { key, result });
                         continue;
                     }
+                    Either::Left(Some(Done::Listed(cwd, result))) => {
+                        // ponytail: a failed listing just shows no history for that folder.
+                        let sessions = result.unwrap_or_default();
+                        let _ = events.unbounded_send(AgentEvent::Listed { cwd, sessions });
+                        continue;
+                    }
                     Either::Left(None) => continue,
                     Either::Right(None) => break,
                     Either::Right(Some(command)) => command,
@@ -182,6 +195,16 @@ async fn run(
                         let request = NewSessionRequest::new(cwd).mcp_servers(vec![pluto.clone()]).meta(options.clone());
                         let started = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, started.await.map(|r| r.session_id)) }.boxed_local());
+                    }
+                    Command::LoadSession { key, id, cwd } => {
+                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options.clone());
+                        let loaded = connection.send_request(request).block_task();
+                        pending.push(async move { Done::Started(key, loaded.await.map(|_| id)) }.boxed_local());
+                    }
+                    Command::ListSessions { cwd } => {
+                        // ponytail: first page only; a folder with a long history shows its newest sessions.
+                        let listed = connection.send_request(ListSessionsRequest::new().cwd(cwd.clone())).block_task();
+                        pending.push(async move { Done::Listed(cwd, listed.await.map(|r| r.sessions)) }.boxed_local());
                     }
                     Command::Turn(session, Turn::Prompt(prompt) | Turn::SendNow(prompt)) if !running.contains(&session) => {
                         running.insert(session.clone());
@@ -228,6 +251,64 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::session_options;
+
+    /// A finished session is listed for its folder and reloads with its history:
+    /// `ENDEAVOR_TEST_MCP_URL=… cargo test -- --ignored live_list_and_load`.
+    #[test]
+    #[ignore]
+    fn live_list_and_load() {
+        use super::*;
+        use agent_client_protocol::schema::v1::TextContent;
+
+        let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
+        let cwd = std::env::temp_dir().join(format!("endeavor-history-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cwd = cwd.canonicalize().unwrap();
+        let (tx, rx) = unbounded();
+        let mut events = start(url, rx);
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: cwd.clone() }).unwrap();
+        futures::executor::block_on(async {
+            let mut id = None;
+            let mut replayed_user = String::new();
+            let mut replayed_agent = String::new();
+            while let Some(event) = events.next().await {
+                match event {
+                    AgentEvent::Started { key: 1, result } => {
+                        let sid = result.expect("started");
+                        id = Some(sid.clone());
+                        let prompt = vec![ContentBlock::Text(TextContent::new("Reply with exactly KIWI. Use no tools."))];
+                        tx.unbounded_send(Command::Turn(sid, Turn::Prompt(prompt))).unwrap();
+                    }
+                    AgentEvent::Session(_, SessionEvent::TurnEnded(_)) if replayed_user.is_empty() => {
+                        tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() }).unwrap();
+                    }
+                    AgentEvent::Listed { sessions, .. } => {
+                        let sid = id.clone().unwrap();
+                        assert!(sessions.iter().any(|s| s.session_id == sid), "listed: {sessions:?}");
+                        tx.unbounded_send(Command::LoadSession { key: 2, id: sid, cwd: cwd.clone() }).unwrap();
+                    }
+                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::UserMessageChunk(c))) => {
+                        if let ContentBlock::Text(t) = c.content {
+                            replayed_user.push_str(&t.text);
+                        }
+                    }
+                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::AgentMessageChunk(c))) if !replayed_user.is_empty() => {
+                        if let ContentBlock::Text(t) = c.content {
+                            replayed_agent.push_str(&t.text);
+                        }
+                    }
+                    AgentEvent::Started { key: 2, result } => {
+                        result.expect("loaded");
+                        break;
+                    }
+                    AgentEvent::Session(_, SessionEvent::TurnFailed(e)) | AgentEvent::Failed(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+            println!("replayed user: {replayed_user:?}\nreplayed agent: {replayed_agent:?}");
+            assert!(replayed_user.contains("KIWI") && replayed_agent.contains("KIWI"));
+        });
+    }
 
     /// Two sessions on one connection with overlapping turns, each reply routed to its
     /// own session: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/sse cargo test -- --ignored live_two_sessions`.
