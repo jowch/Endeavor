@@ -43,6 +43,10 @@ process running Pluto + PlutoMCP.
   `delete_cell`, `run_after=true`): a plugin PreToolUse hook (`endeavor
   hook-pretool`) answers "ask", and the panel offers Allow / Allow & stop
   asking (this session) / Deny. Other ACP agents would need their own gate.
+- **Verified in the app (2026-09-25 click-through,** driven with synthetic
+  input): folder picker, new/second/reopened sessions, run approvals and
+  "stop asking", cell diffs, queue, ⌘↩ steering, Esc, annotation mode, Julia
+  crash + restart, and window resize keeping the webview in its pane (§7.1).
 - **Context the agent gets for free.** Which notebook is on screen; an
   end-of-turn warning when edited cells were left unrun or still running.
 
@@ -57,16 +61,11 @@ Endeavor pins `main` (`runtime/Project.toml`).
 
 In priority order.
 
-1. **Click-through of the app.** Screenshots work again, but the newest UI has
-   only been seen on its start screen: starting and switching sessions,
-   reopening a past one, run approvals, cell diffs, thinking/plan, ⌘↩
-   steering, Stop, and Restart Julia. Also still unconfirmed from the first
-   spike: **window resize** keeping the webview inside its pane (§7.1).
-2. **Pluto's own "Create a new notebook" button** still saves to the app's
+1. **Pluto's own "Create a new notebook" button** still saves to the app's
    internal folder (Pluto's new-notebook folder is one global setting, and
    sessions have different folders). Options: point it at the active
    session's folder when sessions switch, or steer users to asking the agent.
-3. **Session polish:** rename, close, and delete sessions; use the agent's
+2. **Session polish:** rename, close, and delete sessions; use the agent's
    own session titles; "show more" for older sessions.
 
 ## Before sharing the app
