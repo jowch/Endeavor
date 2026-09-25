@@ -10,9 +10,10 @@ use std::time::Instant;
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, PermissionOption, PermissionOptionKind, PlanEntry, PlanEntryStatus,
-    RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
-    SessionUpdate, StopReason, ToolCallId, ToolCallStatus, ToolCallUpdate,
+    AvailableCommand, ContentBlock, PermissionOption, PermissionOptionKind, PlanEntry, PlanEntryStatus,
+    RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
+    SessionConfigValueId, SessionId,
+    SessionModeId, SessionModeState, SessionUpdate, StopReason, ToolCallId, ToolCallStatus, ToolCallUpdate,
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -20,7 +21,7 @@ use gpui_component::text::TextView;
 
 use crate::Workspace;
 use crate::theme;
-use crate::agent::{SessionEvent, Turn};
+use crate::agent::{SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
 use crate::gate;
 use crate::outbox::{Dispatch, Outbox, Queued};
@@ -62,6 +63,8 @@ pub enum Effect {
     ReopenNotebook(String),
     /// The session went idle: check for unrun edits.
     CheckRunState,
+    /// Ask the agent to switch mode.
+    SetMode(SessionModeId),
 }
 
 pub struct Session {
@@ -94,6 +97,14 @@ pub struct Session {
     replayed_path: Option<String>,
     /// Starting or reopening failed; the session can't take messages.
     pub failed: Option<Failure>,
+    /// The agent's modes (e.g. plan / default / auto) and which is current.
+    pub modes: Option<SessionModeState>,
+    /// The agent's session config options (e.g. model, effort).
+    pub config: Vec<SessionConfigOption>,
+    /// Context used / size, in tokens, from the agent's usage updates.
+    pub usage: Option<(u64, u64)>,
+    /// Slash commands the agent offers.
+    pub commands: Vec<AvailableCommand>,
 }
 
 pub struct Failure {
@@ -157,6 +168,10 @@ impl Session {
             replaying: false,
             replayed_path: None,
             failed: None,
+            modes: None,
+            config: Vec::new(),
+            usage: None,
+            commands: Vec::new(),
         }
     }
 
@@ -190,6 +205,22 @@ impl Session {
         session
     }
 
+    /// The agent's name for the current mode.
+    pub fn mode_name(&self) -> Option<&str> {
+        let modes = self.modes.as_ref()?;
+        modes.available_modes.iter().find(|m| m.id == modes.current_mode_id).map(|m| m.name.as_str())
+    }
+
+    /// Switch to the next mode (⇧⇥), showing it at once; the agent confirms with
+    /// a mode update.
+    pub fn cycle_mode(&mut self) -> Option<Effect> {
+        let modes = self.modes.as_mut()?;
+        let at = modes.available_modes.iter().position(|m| m.id == modes.current_mode_id).unwrap_or(0);
+        let next = modes.available_modes.get((at + 1) % modes.available_modes.len().max(1))?.id.clone();
+        modes.current_mode_id = next.clone();
+        Some(Effect::SetMode(next))
+    }
+
     /// Waiting on the user to approve something.
     pub fn needs_approval(&self) -> bool {
         self.entries.iter().any(|e| matches!(e, Entry::Permission { responder: Some(_), .. }))
@@ -220,8 +251,10 @@ impl Session {
     }
 
     /// The agent created this session: send whatever was queued meanwhile.
-    pub fn started(&mut self, id: SessionId) -> Vec<Effect> {
-        self.id = Some(id);
+    pub fn started(&mut self, started: Started) -> Vec<Effect> {
+        self.id = Some(started.id);
+        self.modes = started.modes;
+        self.config = started.config;
         self.replaying = false;
         let mut effects: Vec<Effect> = self.replayed_path.take().map(Effect::ReopenNotebook).into_iter().collect();
         let next = self.outbox.turn_ended();
@@ -382,6 +415,20 @@ impl Session {
                     }
                 }
             }
+            SessionUpdate::CurrentModeUpdate(update) => {
+                if let Some(modes) = &mut self.modes {
+                    modes.current_mode_id = update.current_mode_id;
+                }
+            }
+            SessionUpdate::ConfigOptionUpdate(update) => {
+                self.config = update.config_options;
+                // The agent confirms a mode switch through its "mode" config option.
+                if let (Some(modes), Some(mode)) = (&mut self.modes, config_value(&self.config, "mode")) {
+                    modes.current_mode_id = mode.to_string().into();
+                }
+            }
+            SessionUpdate::UsageUpdate(usage) => self.usage = Some((usage.used, usage.size)),
+            SessionUpdate::AvailableCommandsUpdate(update) => self.commands = update.available_commands,
             SessionUpdate::SessionInfoUpdate(info) => {
                 if let (MaybeUndefined::Value(title), false) = (info.title, self.named) {
                     self.title = title;
@@ -446,6 +493,14 @@ impl Session {
             self.run_without_asking |= stop_asking;
         }
     }
+}
+
+/// The current value of a select config option, by id.
+fn config_value<'a>(config: &'a [SessionConfigOption], id: &str) -> Option<&'a SessionConfigValueId> {
+    config.iter().find(|c| c.id.to_string() == id).and_then(|c| match &c.kind {
+        SessionConfigKind::Select(select) => Some(&select.current_value),
+        _ => None,
+    })
 }
 
 fn option_of_kind(options: &[PermissionOption], kind: PermissionOptionKind) -> Option<&PermissionOption> {
@@ -707,9 +762,39 @@ fn detail(label: &str, value: &serde_json::Value) -> impl IntoElement + use<> {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
-    use super::{Effect, Entry, Session, SessionEvent, Turn};
+    use super::{Effect, Entry, Session, SessionEvent, Started, Turn};
     use crate::outbox::Queued;
-    use agent_client_protocol::schema::v1::{SessionId, StopReason};
+    use agent_client_protocol::schema::v1::{
+        AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, SessionId, SessionMode, SessionModeState, SessionUpdate,
+        StopReason, UsageUpdate,
+    };
+
+    #[test]
+    fn modes_usage_and_commands_follow_the_agent() {
+        let mut s = Session::new(1, "/tmp/project".into());
+        let modes = SessionModeState::new("default", vec![SessionMode::new("default", "Ask to run"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
+        s.started(Started::new(SessionId::new("s1"), Some(modes), None));
+        assert_eq!(s.mode_name(), Some("Ask to run"));
+
+        // ⇧⇥ moves on at once and asks the agent; it wraps around.
+        assert!(matches!(s.cycle_mode(), Some(Effect::SetMode(m)) if m.to_string() == "plan"));
+        assert_eq!(s.mode_name(), Some("Plan"));
+        s.cycle_mode();
+        assert!(matches!(s.cycle_mode(), Some(Effect::SetMode(m)) if m.to_string() == "default"));
+
+        // The agent's own updates win.
+        s.apply(SessionEvent::Update(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("auto"))));
+        assert_eq!(s.mode_name(), Some("Auto"));
+        s.apply(SessionEvent::Update(SessionUpdate::UsageUpdate(UsageUpdate::new(12_000, 200_000))));
+        assert_eq!(s.usage, Some((12_000, 200_000)));
+        let commands = vec![AvailableCommand::new("review", "Review the notebook")];
+        s.apply(SessionEvent::Update(SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(commands))));
+        assert_eq!(s.commands.len(), 1);
+
+        // No modes offered: nothing to cycle.
+        let mut plain = Session::new(2, "/tmp/project".into());
+        assert!(plain.cycle_mode().is_none() && plain.mode_name().is_none());
+    }
 
     fn text(s: &str) -> Queued {
         Queued::new(s.into(), Some(s.into()), vec![])
@@ -720,7 +805,7 @@ mod tests {
         let mut s = Session::new(1, "/tmp/project".into());
         assert!(s.submit(text("plot sin"), true).is_empty(), "nothing sent before the session exists");
         assert_eq!(s.title, "plot sin");
-        let effects = s.started(SessionId::new("abc"));
+        let effects = s.started(Started::new(SessionId::new("abc"), None, None));
         assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
         assert!(matches!(s.entries.as_slice(), [Entry::User(_)]));
     }
@@ -734,7 +819,7 @@ mod tests {
         s.apply(chunk("[Endeavor] The user is viewing Pluto notebook …"));
         s.apply(chunk("plot sin"));
         assert!(matches!(s.entries.as_slice(), [Entry::User(t)] if t.as_ref() == "plot sin"));
-        s.started(SessionId::new("abc"));
+        s.started(Started::new(SessionId::new("abc"), None, None));
         s.apply(chunk("live echo"));
         assert_eq!(s.entries.len(), 1, "after loading, user chunks are ignored");
     }
@@ -764,7 +849,7 @@ more" }"#);
         let done = ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output));
         let effects = s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(done)));
         assert!(effects.iter().all(|e| !matches!(e, Effect::ShowNotebook(_))), "no stale navigation");
-        let effects = s.started(SessionId::new("abc"));
+        let effects = s.started(Started::new(SessionId::new("abc"), None, None));
         assert!(matches!(effects.first(), Some(Effect::ReopenNotebook(p)) if p == "/tmp/a.jl"));
     }
 
@@ -795,7 +880,7 @@ more" }"#);
     #[test]
     fn busy_time_runs_from_sending_until_idle() {
         let mut s = Session::new(1, "/tmp".into());
-        s.started(SessionId::new("abc"));
+        s.started(Started::new(SessionId::new("abc"), None, None));
         assert!(s.busy_since.is_none());
         s.submit(text("hi"), false);
         assert!(s.busy_since.is_some());
@@ -806,7 +891,7 @@ more" }"#);
     #[test]
     fn going_idle_asks_for_a_run_state_check() {
         let mut s = Session::new(1, "/tmp".into());
-        s.started(SessionId::new("abc"));
+        s.started(Started::new(SessionId::new("abc"), None, None));
         s.submit(text("hi"), false);
         let effects = s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(matches!(effects.as_slice(), [Effect::CheckRunState]));

@@ -48,7 +48,7 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
     annotate::is_uuid(id).then_some(id)
 }
 
-actions!(endeavor, [Interrupt, ToggleAnnotation]);
+actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode]);
 
 /// A small JSON file in Endeavor's Application Support folder.
 fn app_file(name: &str) -> Option<PathBuf> {
@@ -515,6 +515,11 @@ impl Workspace {
                     }
                 }
                 Effect::CheckRunState => self.check_run_state(key, cx),
+                Effect::SetMode(mode) => {
+                    if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
+                        let _ = self.agent_tx.unbounded_send(Command::SetMode(id, mode));
+                    }
+                }
                 Effect::ReopenNotebook(path) => self.reopen_for_session(key, path, cx),
             }
         }
@@ -547,6 +552,14 @@ impl Workspace {
         let effects = session.submit(Queued::new(text.clone(), Some(text), blocks), now);
         self.apply_effects(key, effects, cx);
         input.update(cx, |s, cx| s.set_value("", window, cx));
+    }
+
+    /// ⇧⇥: the active session's next mode (e.g. default → plan → auto).
+    fn cycle_mode(&mut self, _: &CycleMode, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.active else { return };
+        if let Some(effect) = self.session_mut(key).and_then(Session::cycle_mode) {
+            self.apply_effects(key, vec![effect], cx);
+        }
     }
 
     fn interrupt(&mut self, _: &Interrupt, _: &mut Window, cx: &mut Context<Self>) {
@@ -594,7 +607,8 @@ impl Workspace {
             AgentEvent::Started { key, result } => {
                 let Some(session) = self.session_mut(key) else { return };
                 match result {
-                    Ok(id) => {
+                    Ok(started) => {
+                        let id = started.id.clone();
                         if self.ours.insert(id.to_string()) {
                             save_json("sessions.json", &self.ours);
                         }
@@ -604,7 +618,7 @@ impl Workspace {
                             save_json("titles.json", &self.titles);
                         }
                         let Some(session) = self.session_mut(key) else { return };
-                        let effects = session.started(id);
+                        let effects = session.started(started);
                         self.apply_effects(key, effects, cx);
                     }
                     Err(e) => session.fail(&e),
@@ -1327,6 +1341,13 @@ impl Workspace {
                                     .child(if self.annotating { "◉ Annotating (⌘⇧E exits)" } else { "◎ Annotate (⌘⇧E)" })
                                     .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&ToggleAnnotation, window, cx))),
                             )
+                            // ponytail: plain label until the spec's composer toolbar (phase 1).
+                            .children(session.mode_name().map(|name| {
+                                button("mode")
+                                    .text_color(if name.to_lowercase().contains("plan") { theme::accent_text() } else { theme::text_muted() })
+                                    .child(format!("{name} (⇧⇥)"))
+                                    .on_click(cx.listener(|this, _, window, cx| this.cycle_mode(&CycleMode, window, cx)))
+                            }))
                             .when(session.run_without_asking, |d| {
                                 d.child(
                                     button("ask-again")
@@ -1370,6 +1391,7 @@ impl Render for Workspace {
             .key_context("Workspace")
             .on_action(cx.listener(Self::interrupt))
             .on_action(cx.listener(Self::toggle_annotation))
+            .on_action(cx.listener(Self::cycle_mode))
             .flex()
             .size_full()
             .bg(theme::bg_page())
@@ -1402,6 +1424,9 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
             KeyBinding::new("cmd-shift-e", ToggleAnnotation, None),
+            // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).
+            KeyBinding::new("shift-tab", CycleMode, Some("Input")),
+            KeyBinding::new("shift-tab", CycleMode, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1560.), px(900.)), cx);
         cx.open_window(

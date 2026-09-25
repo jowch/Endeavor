@@ -10,7 +10,9 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, CloseSessionRequest, ContentBlock, DeleteSessionRequest, ForkSessionRequest, HttpHeader, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
     McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionInfo, SessionNotification, SessionUpdate, StopReason,
+    RequestPermissionResponse, SessionConfigOption, SessionId, SessionInfo,
+    SessionModeId, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    StopReason,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder, UntypedMessage};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -165,6 +167,8 @@ pub enum Command {
     ForkSession { key: u64, source: SessionId, cwd: PathBuf },
     /// Past sessions in `cwd`; answered by [`AgentEvent::Listed`].
     ListSessions { cwd: PathBuf },
+    /// Switch a session's mode (e.g. plan); fire and forget.
+    SetMode(SessionId, SessionModeId),
     /// Stop a session (cancelling its turn); it stays in the folder's history.
     CloseSession(SessionId),
     /// Stop a session and delete its history.
@@ -185,9 +189,23 @@ pub enum SessionEvent {
     Unsent,
 }
 
+/// A session is up: its id, and the modes and config options the agent offers.
+#[derive(Debug)]
+pub struct Started {
+    pub id: SessionId,
+    pub modes: Option<SessionModeState>,
+    pub config: Vec<SessionConfigOption>,
+}
+
+impl Started {
+    pub fn new(id: SessionId, modes: Option<SessionModeState>, config: Option<Vec<SessionConfigOption>>) -> Self {
+        Self { id, modes, config: config.unwrap_or_default() }
+    }
+}
+
 pub enum AgentEvent {
     Ready,
-    Started { key: u64, result: Result<SessionId, String> },
+    Started { key: u64, result: Result<Started, String> },
     Listed { cwd: PathBuf, sessions: Vec<SessionInfo> },
     /// The copy made by `ForkSession` exists; its history replays next.
     Forked { key: u64, id: SessionId },
@@ -229,7 +247,7 @@ pub fn start(mcp_url: String, commands: UnboundedReceiver<Command>) -> Unbounded
 /// Work in flight on the connection, awaited alongside incoming commands.
 enum Done {
     Turn(SessionId, Result<PromptResponse, agent_client_protocol::Error>),
-    Started(u64, Result<SessionId, agent_client_protocol::Error>),
+    Started(u64, Result<Started, agent_client_protocol::Error>),
     Listed(PathBuf, Result<Vec<SessionInfo>, agent_client_protocol::Error>),
     Forked(u64, PathBuf, Result<SessionId, agent_client_protocol::Error>),
 }
@@ -321,7 +339,7 @@ async fn run(
                                 // Load the copy so its history replays into the new session.
                                 let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options());
                                 let loaded = connection.send_request(request).block_task();
-                                pending.push(async move { Done::Started(key, loaded.await.map(|_| id)) }.boxed_local());
+                                pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
                             }
                             Err(e) => {
                                 let _ = events.unbounded_send(AgentEvent::Started { key, result: Err(e.to_string()) });
@@ -337,12 +355,12 @@ async fn run(
                     Command::NewSession { key, cwd } => {
                         let request = NewSessionRequest::new(cwd).mcp_servers(vec![pluto.clone()]).meta(options());
                         let started = connection.send_request(request).block_task();
-                        pending.push(async move { Done::Started(key, started.await.map(|r| r.session_id)) }.boxed_local());
+                        pending.push(async move { Done::Started(key, started.await.map(|r| Started::new(r.session_id, r.modes, r.config_options))) }.boxed_local());
                     }
                     Command::LoadSession { key, id, cwd } => {
                         let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options());
                         let loaded = connection.send_request(request).block_task();
-                        pending.push(async move { Done::Started(key, loaded.await.map(|_| id)) }.boxed_local());
+                        pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
                     }
                     Command::ForkSession { key, source, cwd } => {
                         let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![pluto.clone()]).meta(options());
@@ -353,6 +371,10 @@ async fn run(
                         // ponytail: first page only; a folder with a long history shows its newest sessions.
                         let listed = connection.send_request(ListSessionsRequest::new().cwd(cwd.clone())).block_task();
                         pending.push(async move { Done::Listed(cwd, listed.await.map(|r| r.sessions)) }.boxed_local());
+                    }
+                    // ponytail: fire and forget; the agent confirms with a mode/config update.
+                    Command::SetMode(session, mode) => {
+                        connection.send_request(SetSessionModeRequest::new(session, mode)).on_receiving_result(async |_| Ok(()))?;
                     }
                     // ponytail: fire and forget; a failed close or delete only leaves the file behind.
                     Command::CloseSession(session) => {
@@ -431,7 +453,7 @@ mod tests {
             while let Some(event) = events.next().await {
                 match event {
                     AgentEvent::Started { key: 1, result } => {
-                        let sid = result.expect("started");
+                        let sid = result.expect("started").id;
                         id = Some(sid.clone());
                         let prompt = vec![ContentBlock::Text(TextContent::new("Reply with exactly KIWI. Use no tools."))];
                         tx.unbounded_send(Command::Turn(sid, Turn::Prompt(prompt))).unwrap();
@@ -487,7 +509,7 @@ mod tests {
             while let Some(event) = events.next().await {
                 match event {
                     AgentEvent::Started { key: 1, result } => {
-                        let id = result.expect("started");
+                        let id = result.expect("started").id;
                         original = Some(id.clone());
                         let prompt = vec![ContentBlock::Text(TextContent::new("Reply with exactly MANGO. Use no tools."))];
                         tx.unbounded_send(Command::Turn(id, Turn::Prompt(prompt))).unwrap();
@@ -536,7 +558,7 @@ mod tests {
                     AgentEvent::Started { key: 1, result } => {
                         let prompt = "Call the pluto list_notebooks tool once, then reply with exactly DONE.";
                         let prompt = vec![ContentBlock::Text(TextContent::new(prompt))];
-                        tx.unbounded_send(Command::Turn(result.expect("started"), Turn::Prompt(prompt))).unwrap();
+                        tx.unbounded_send(Command::Turn(result.expect("started").id, Turn::Prompt(prompt))).unwrap();
                     }
                     AgentEvent::Session(_, SessionEvent::Permission(request, responder)) => {
                         let allow = request.options.iter().find(|o| o.kind == PermissionOptionKind::AllowOnce).expect("allow option");
@@ -556,6 +578,47 @@ mod tests {
             }
             assert!(call.is_some(), "no list_notebooks call: the agent didn't get the pluto tools");
             assert!(completed, "list_notebooks didn't complete");
+        });
+    }
+
+    /// What the agent offers as modes and config, and that a mode switch is confirmed:
+    /// `cargo test -- --ignored live_modes -- --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_modes() {
+        use super::*;
+        let runtime = crate::runtime::start(None, unbounded().0, unbounded().0).expect("runtime");
+        let (tx, rx) = unbounded();
+        let mut events = start(runtime.mcp_url.clone(), rx);
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: std::env::temp_dir() }).unwrap();
+        futures::executor::block_on(async {
+            while let Some(event) = events.next().await {
+                match event {
+                    AgentEvent::Started { key: 1, result } => {
+                        let started = result.expect("started");
+                        let modes = started.modes.expect("modes");
+                        for m in &modes.available_modes {
+                            println!("mode {} = {:?}", m.id, m.name);
+                        }
+                        println!("current {}", modes.current_mode_id);
+                        for c in &started.config {
+                            println!("config {} = {:?}", c.id, c.name);
+                        }
+                        let plan = modes.available_modes.iter().find(|m| m.id.to_string() == "plan").expect("plan mode").id.clone();
+                        tx.unbounded_send(Command::SetMode(started.id, plan)).unwrap();
+                    }
+                    // The adapter confirms through the "mode" config option (a mode update
+                    // only when it falls back to another mode).
+                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ConfigOptionUpdate(u))) => {
+                        let mode = u.config_options.iter().find(|c| c.id.to_string() == "mode").expect("mode option");
+                        println!("confirmed {:?}", mode.kind);
+                        assert!(format!("{:?}", mode.kind).contains("\"plan\""));
+                        break;
+                    }
+                    AgentEvent::Failed(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
         });
     }
 
@@ -581,7 +644,7 @@ mod tests {
             while let Some(event) = events.next().await {
                 match event {
                     AgentEvent::Started { key, result } => {
-                        let id = result.expect("session started");
+                        let id = result.expect("session started").id;
                         ids.insert(key, id.clone());
                         if ids.len() == 2 {
                             // Both turns in flight at once.

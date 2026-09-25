@@ -53,9 +53,17 @@ Before-text per cell is already kept for the chat's diffs (`celldiff.rs`).
 
 ## Plan mode
 
-- `claude-agent-acp` exposes Claude Code's session modes (plan among them) over
-  ACP; the app currently drops modes (spec: Data wiring). ⇧⇥ cycles them via
-  `session/set_mode`.
+- `claude-agent-acp` (0.81.2) offers modes Manual (`default`), Accept edits,
+  Plan, Auto and Bypass permissions; **sessions start in Auto**. It also exposes
+  config options `mode`, `model`, `effort`, `fast`. A mode switch is confirmed
+  by a `config_option_update` for `mode` (a `current_mode_update` only when it
+  falls back to another mode). Wired (2026-09-25): the session keeps modes,
+  config, usage and commands; ⇧⇥ cycles through the agent's modes (a plain
+  label in the chat toolbar until the spec's composer toolbar).
+- Open: mapping the spec's Plan / Ask to run / Auto onto these. Claude's modes
+  govern its own tools (files, shell); notebook runs are gated by our hook
+  (runtime step 5 moves that into the runtime). Likely Plan → `plan`, Ask to run
+  → `default`/`acceptEdits` + our gate asking, Auto → `auto` + our gate allowing.
 - Claude Code's plan mode restricts its own write tools, but notebook edits go
   through our MCP tools, so the runtime must enforce read-only too: in Plan, the
   runtime refuses edits and runs (runtime step 5). Same for Ask to run vs Auto:
