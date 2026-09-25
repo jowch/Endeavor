@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, CloseSessionRequest, ContentBlock, DeleteSessionRequest, ForkSessionRequest, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
+    CancelNotification, CloseSessionRequest, ContentBlock, DeleteSessionRequest, ForkSessionRequest, HttpHeader, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
     McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionId, SessionInfo, SessionNotification, SessionUpdate, StopReason,
 };
@@ -272,7 +272,8 @@ async fn run(
                 .as_ref()
                 .and_then(|m| m.get("steering")?.get("supported")?.as_bool())
                 .unwrap_or(false);
-            let pluto = McpServer::Sse(McpServerSse::new("pluto", mcp_url));
+            let auth = HttpHeader::new("Authorization", format!("Bearer {}", crate::pluto::bridge_token()));
+            let pluto = McpServer::Sse(McpServerSse::new("pluto", mcp_url).headers(vec![auth]));
             // Read per session, so a Settings change applies to the next one.
             let plugin = crate::install::resources().join("plugin").display().to_string();
             let options = || session_options(crate::settings::Settings::load().personal_claude, &plugin).as_object().cloned();
@@ -511,6 +512,50 @@ mod tests {
             println!("original {original:?} copy {copy:?} replayed {replayed:?}");
             assert_ne!(original, copy);
             assert!(replayed.contains("MANGO"));
+        });
+    }
+
+    /// The agent reaches the runtime's tools through the token-protected bridge (the
+    /// real runtime, the real agent): `cargo test -- --ignored live_tools_through_authenticated_bridge`.
+    #[test]
+    #[ignore]
+    fn live_tools_through_authenticated_bridge() {
+        use super::*;
+        use agent_client_protocol::schema::v1::{
+            PermissionOptionKind, RequestPermissionOutcome, SelectedPermissionOutcome, TextContent, ToolCallStatus,
+        };
+
+        let runtime = crate::runtime::start(None, unbounded().0, unbounded().0).expect("runtime");
+        let (tx, rx) = unbounded();
+        let mut events = start(runtime.mcp_url.clone(), rx);
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: std::env::temp_dir() }).unwrap();
+        futures::executor::block_on(async {
+            let (mut call, mut completed) = (None, false);
+            while let Some(event) = events.next().await {
+                match event {
+                    AgentEvent::Started { key: 1, result } => {
+                        let prompt = "Call the pluto list_notebooks tool once, then reply with exactly DONE.";
+                        let prompt = vec![ContentBlock::Text(TextContent::new(prompt))];
+                        tx.unbounded_send(Command::Turn(result.expect("started"), Turn::Prompt(prompt))).unwrap();
+                    }
+                    AgentEvent::Session(_, SessionEvent::Permission(request, responder)) => {
+                        let allow = request.options.iter().find(|o| o.kind == PermissionOptionKind::AllowOnce).expect("allow option");
+                        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
+                        responder.respond(RequestPermissionResponse::new(outcome)).unwrap();
+                    }
+                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ToolCall(c))) if c.title.contains("list_notebooks") => {
+                        call = Some(c.tool_call_id);
+                    }
+                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ToolCallUpdate(u))) if Some(&u.tool_call_id) == call.as_ref() => {
+                        completed |= u.fields.status == Some(ToolCallStatus::Completed);
+                    }
+                    AgentEvent::Session(_, SessionEvent::TurnEnded(_)) => break,
+                    AgentEvent::Session(_, SessionEvent::TurnFailed(e)) | AgentEvent::Failed(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+            assert!(call.is_some(), "no list_notebooks call: the agent didn't get the pluto tools");
+            assert!(completed, "list_notebooks didn't complete");
         });
     }
 

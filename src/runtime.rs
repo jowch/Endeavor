@@ -91,6 +91,7 @@ pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: U
         .arg(format!("{root}/runtime/boot.jl"))
         .args(ports.map(|p| p.to_string()))
         .env("JULIA_DEPOT_PATH", depot)
+        .env("ENDEAVOR_TOKEN", crate::pluto::bridge_token())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

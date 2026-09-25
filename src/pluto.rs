@@ -9,6 +9,17 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+/// The bearer token the runtime's bridge requires: random, one per app launch (it
+/// must survive Julia restarts, since the agent's MCP config carries it).
+pub fn bridge_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| {
+        let mut bytes = [0u8; 32];
+        std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).expect("/dev/urandom");
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    })
+}
+
 /// Call a runtime tool and return its decoded JSON result.
 pub fn call_tool(mcp_url: &str, tool: &str, arguments: Value) -> Result<Value, String> {
     // mcp_url is `http://127.0.0.1:PORT/sse`.
@@ -28,7 +39,8 @@ pub fn call_tool(mcp_url: &str, tool: &str, arguments: Value) -> Result<Value, S
     // instead of dealing with chunked encoding.
     write!(
         stream,
-        "POST /call HTTP/1.0\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        "POST /call HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        bridge_token(),
         body.len()
     )
     .map_err(|e| e.to_string())?;

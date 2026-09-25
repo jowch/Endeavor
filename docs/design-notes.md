@@ -111,9 +111,11 @@ Staged, each step shippable:
    at 918e75d: 25 tools (start/stop session and `resolve_pluto_context` dropped),
    no binding, eval-log or external-client entry points (~1,900 lines fewer);
    tests ported (290 passing) and made to use a temp copy of their fixture.
-2. **Security:** token or socket on the tool channel (the agent's MCP config
-   can carry a header). Closes the shared-host hole (any local user can reach
-   the port today).
+2. **Security (done 2026-09-25):** the bridge requires `Authorization: Bearer`
+   with a random per-launch token (app → Julia via `ENDEAVOR_TOKEN`, removed from
+   Julia's environment before notebooks start; the agent's MCP config carries
+   the header). Closes the shared-host hole. Pluto's own port stays protected
+   by its secret. Still open: SSH remote sessions (forward both ports).
 3. **Events:** push cell/notebook changes to the app; drop the 10 s poll and
    the post-turn run-state check.
 4. **Derived staleness:** the unrun set from edit time vs

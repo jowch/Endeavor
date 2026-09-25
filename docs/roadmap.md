@@ -91,8 +91,9 @@ In priority order.
 
 1. **Own runtime package** replacing the PlutoMCP fork: `runtime/EndeavorRuntime`,
    staged plan in [design-notes.md](design-notes.md#runtime-our-own-replacement-for-plutomcp).
-   Step 1 (parity) done; next: auth on the tool channel, pushed events,
-   derived staleness, policy in the server, versions and attribution.
+   Steps 1 (parity) and 2 (token auth on the tool channel) done; next:
+   pushed events, derived staleness, policy in the server, versions and
+   attribution.
 
 ## Before sharing the app
 
