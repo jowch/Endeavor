@@ -25,6 +25,13 @@ process running Pluto + PlutoMCP.
   editable message queue (Enter queues while busy), ⌘↩ send-now via
   `_session/steering`, Esc/Stop to interrupt, cell edits shown as diffs,
   expandable tool calls, thinking, and the agent's plan.
+- **Sessions.** Session bar | chat | notebook. Launch shows a new-session
+  screen (working folder via picker or recent folders, optional first
+  message). Sessions run in parallel on one ACP connection, grouped by folder
+  with busy / needs-approval marks; each folder's past sessions (Claude Code's
+  history, including CLI sessions there) reopen with their transcript. The
+  folder sets the agent's working directory and project settings, and new
+  notebooks are created there. The notebook pane follows the active session.
 - **Annotation mode (§4.2).** ⌘⇧E; click cells, comment, send as
   `pluto://notebook/{id}/cell/{uuid}` links through the same queue.
 - **Agent environment.** Endeavor's own Claude Code plugin (`plugin/`: the
@@ -49,20 +56,18 @@ Endeavor pins `main` (`runtime/Project.toml`).
 
 In priority order.
 
-1. **End-to-end UI check.** Several recent features are unit- and live-tested
-   below the UI but not yet seen in the running app: the Restart Julia button
-   and error notes, cell diffs, thinking/plan entries, ⌘↩ steering, Stop.
-   Also still unconfirmed from the first spike: **window resize** keeping the
-   webview inside its pane (§7.1). Window screenshots currently fail (macOS
-   Screen Recording permission); restore that or check by hand.
-2. **Where notebooks live.** `new_notebook` without a path lands in the app's
-   depot (`~/Library/Application Support/endeavor/depot/pluto_notebooks`),
-   which users won't find. Default to the project folder instead.
-3. **Project folder.** The agent's working directory (and so which project
-   CLAUDE.md applies) is wherever the app was launched. Add an explicit
-   "open folder", like an editor, and use it for new notebooks too.
-4. **Session persistence.** Keep the transcript across launches and resume
-   the agent session (the adapter supports `loadSession`/resume).
+1. **Click-through of the app.** Screenshots work again, but the newest UI has
+   only been seen on its start screen: starting and switching sessions,
+   reopening a past one, run approvals, cell diffs, thinking/plan, ⌘↩
+   steering, Stop, and Restart Julia. Also still unconfirmed from the first
+   spike: **window resize** keeping the webview inside its pane (§7.1).
+2. **Pluto's own "Create a new notebook" button** still saves to the app's
+   internal folder (Pluto's new-notebook folder is one global setting, and
+   sessions have different folders). Options: point it at the active
+   session's folder when sessions switch, or steer users to asking the agent.
+3. **Session polish:** rename, close, and delete sessions; use the agent's
+   own session titles; "show more" for older sessions; a warning when
+   reopening a session that is still open in the Claude Code CLI.
 
 ## Before sharing the app
 
