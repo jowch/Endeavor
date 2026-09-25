@@ -19,6 +19,7 @@ use gpui::*;
 use gpui_component::text::TextView;
 
 use crate::Workspace;
+use crate::theme;
 use crate::agent::{SessionEvent, Turn};
 use crate::celldiff::{self, CellCodes};
 use crate::gate;
@@ -477,9 +478,9 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
 /// session is waiting on the user.
 pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
     let since = session.busy_since?;
-    let muted = rgb(0x8a8a8a);
+    let muted = theme::text_muted();
     if session.needs_approval() {
-        return Some(div().px_3().pb_2().text_sm().text_color(rgb(0xc8a040)).child("Waiting for your approval").into_any_element());
+        return Some(div().px_3().pb_2().text_sm().text_color(theme::accent_text()).child("Waiting for your approval").into_any_element());
     }
     let secs = since.elapsed().as_secs();
     let elapsed = if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) };
@@ -499,7 +500,7 @@ pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
                     .relative()
                     .w(px(TRACK + 16.))
                     .h(px(18.))
-                    .child(div().absolute().top(px(4.)).text_xs().text_color(rgb(0x4a4a4a)).child("· · · · · · · · · · · · ·"))
+                    .child(div().absolute().top(px(4.)).text_xs().text_color(theme::text_section()).child("· · · · · · · · · · · · ·"))
                     .child(
                         div()
                             .absolute()
@@ -517,10 +518,10 @@ pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
 }
 
 fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>) -> AnyElement {
-    let muted = rgb(0x8a8a8a);
+    let muted = theme::text_muted();
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), (key as u64) << 32 | ix as u64);
     match entry {
-        Entry::User(text) => div().p_2().rounded_md().bg(rgb(0x2d2d30)).child(text.clone()).into_any_element(),
+        Entry::User(text) => div().p_2().rounded_md().bg(theme::bg_raised()).child(text.clone()).into_any_element(),
         Entry::Agent(text) => TextView::markdown(id("agent"), text.clone()).into_any_element(),
         Entry::Note(text) => div().text_sm().text_color(muted).child(text.clone()).into_any_element(),
         Entry::Tool { title, status, input, output, diffs, expanded, .. } => {
@@ -568,9 +569,9 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
             .child(div().text_color(muted).child("Plan"))
             .children(entries.iter().map(|e| {
                 let (mark, color) = match e.status {
-                    PlanEntryStatus::Completed => ("☑", rgb(0x6a9955)),
-                    PlanEntryStatus::InProgress => ("◐", rgb(0xc8a040)),
-                    _ => ("☐", rgb(0xaaaaaa)),
+                    PlanEntryStatus::Completed => ("☑", theme::diff_add()),
+                    PlanEntryStatus::InProgress => ("◐", theme::accent_text()),
+                    _ => ("☐", theme::text_secondary()),
                 };
                 div().flex().gap_2().child(div().text_color(color).child(mark)).child(e.content.clone())
             }))
@@ -601,10 +602,10 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
                 .p_2()
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(0xc8a040))
+                .border_color(theme::accent())
                 .child(heading)
                 .children(code.as_ref().map(|code| {
-                    div().p_1().rounded_sm().bg(rgb(0x252526)).font_family("Menlo").text_xs().child(code.clone())
+                    div().p_1().rounded_sm().bg(theme::bg_card()).font_family("Menlo").text_xs().child(code.clone())
                 }))
                 .child(div().flex().gap_2().children(buttons.into_iter().enumerate().map(|(i, (label, option, stop))| {
                     let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
@@ -613,7 +614,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
                         .px_2()
                         .rounded_sm()
                         .cursor_pointer()
-                        .bg(if allow { rgb(0x2f5d3a) } else { rgb(0x5d2f2f) })
+                        .bg(if allow { theme::accent() } else { theme::bg_raised() })
                         .child(label)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.with_session(key, cx, |s| s.answer(ix, &option, stop))
@@ -626,7 +627,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
 
 /// Messages waiting for Claude: click ✎ to pull one back into the input, ✕ to drop it.
 pub fn render_queue(session: &Session, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
-    let muted = rgb(0x8a8a8a);
+    let muted = theme::text_muted();
     let key = session.key;
     div().flex().flex_col().gap_1().children(session.outbox.items.iter().enumerate().map(|(i, q)| {
         let id = |name: &'static str| ElementId::NamedInteger(name.into(), (key << 32) | i as u64);
@@ -666,20 +667,20 @@ fn render_diff(diff: &celldiff::CellDiff) -> impl IntoElement + use<> {
         .flex_col()
         .rounded_sm()
         .border_1()
-        .border_color(rgb(0x333333))
+        .border_color(theme::border())
         .font_family("Menlo")
         .text_xs()
-        .child(div().px_2().text_color(rgb(0x8a8a8a)).child(diff.label.clone()))
+        .child(div().px_2().text_color(theme::text_muted()).child(diff.label.clone()))
         .children(diff.lines.iter().take(MAX_LINES).map(|(change, line)| {
             let (sign, bg) = match change {
-                Change::Added => ("+", Some(rgb(0x1f3a26))),
-                Change::Removed => ("-", Some(rgb(0x4a2226))),
+                Change::Added => ("+", Some(theme::diff_add_tint())),
+                Change::Removed => ("-", Some(theme::diff_del_tint())),
                 Change::Same => (" ", None),
             };
             div().px_2().when_some(bg, |d, bg| d.bg(bg)).child(format!("{sign} {line}"))
         }))
         .when(diff.lines.len() > MAX_LINES, |d| {
-            d.child(div().px_2().text_color(rgb(0x8a8a8a)).child(format!("… {} more lines", diff.lines.len() - MAX_LINES)))
+            d.child(div().px_2().text_color(theme::text_muted()).child(format!("… {} more lines", diff.lines.len() - MAX_LINES)))
         })
 }
 
@@ -695,11 +696,11 @@ fn detail(label: &str, value: &serde_json::Value) -> impl IntoElement + use<> {
         .flex()
         .flex_col()
         .rounded_sm()
-        .bg(rgb(0x252526))
+        .bg(theme::bg_card())
         .p_2()
         .font_family("Menlo")
         .text_xs()
-        .child(div().text_color(rgb(0x8a8a8a)).child(label.to_string()))
+        .child(div().text_color(theme::text_muted()).child(label.to_string()))
         .child(text)
 }
 

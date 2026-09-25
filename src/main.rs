@@ -18,6 +18,7 @@ mod runtime;
 mod session;
 mod settings;
 mod splash;
+mod theme;
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, SessionId, SessionInfo, TextContent};
@@ -77,9 +78,9 @@ fn check_row(id: &'static str, checked: bool, label: &'static str) -> Stateful<D
         .justify_center()
         .rounded_sm()
         .border_1()
-        .border_color(rgb(0x6a6a6a))
+        .border_color(theme::text_faint())
         .text_xs()
-        .when(checked, |d| d.bg(rgb(0x2f5d3a)).border_color(rgb(0x2f5d3a)).child("✓"));
+        .when(checked, |d| d.bg(theme::accent()).border_color(theme::accent()).child("✓"));
     div().id(id).flex().items_center().gap_2().cursor_pointer().child(mark).child(label)
 }
 
@@ -97,8 +98,8 @@ fn hover_button(
         .id(id)
         .px_1()
         .text_color(gpui::transparent_black())
-        .group_hover(group, |s| s.text_color(rgb(0x8a8a8a)))
-        .hover(|s| s.text_color(rgb(0xe0e0e0)))
+        .group_hover(group, |s| s.text_color(theme::text_muted()))
+        .hover(|s| s.text_color(theme::text_primary()))
         .child(label)
         .on_click(on_click)
 }
@@ -743,7 +744,7 @@ impl Workspace {
         if self.signed_in != Some(false) {
             return None;
         }
-        let muted = rgb(0x8a8a8a);
+        let muted = theme::text_muted();
         let button = |id: &'static str, label: &'static str, primary: bool| {
             div()
                 .id(id)
@@ -752,7 +753,7 @@ impl Workspace {
                 .rounded_sm()
                 .cursor_pointer()
                 .text_sm()
-                .bg(if primary { rgb(0x2f5d3a) } else { rgb(0x3a3a3c) })
+                .bg(if primary { theme::accent() } else { theme::bg_raised() })
                 .child(label)
         };
         let waiting = self.signing_in.then(|| div().text_xs().text_color(muted).child("Waiting for you to finish in your browser…"));
@@ -763,7 +764,7 @@ impl Workspace {
                 .gap_2()
                 .p_2()
                 .rounded_md()
-                .bg(rgb(0x252526))
+                .bg(theme::bg_card())
                 .child(div().text_sm().child("Sign in to Claude"))
                 .child(div().text_xs().text_color(muted).child("Endeavor runs Claude Code with your account. Sign-in opens in your browser."))
                 .child(button("sign-in-claude", "Claude subscription", true).on_click(cx.listener(|this, _, _, cx| this.sign_in(false, cx))))
@@ -772,7 +773,7 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx))),
                 )
                 .children(waiting)
-                .children(self.sign_in_error.clone().map(|e| div().text_xs().text_color(rgb(0xd16969)).child(e)))
+                .children(self.sign_in_error.clone().map(|e| div().text_xs().text_color(theme::danger()).child(e)))
                 .into_any_element(),
         )
     }
@@ -922,7 +923,7 @@ impl Workspace {
     // -----------------------------------------------------------------------
 
     fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = rgb(0x8a8a8a);
+        let muted = theme::text_muted();
         // Folders: recent ones, then any other folder with an open session.
         let mut folders: Vec<&PathBuf> = self.recent.iter().collect();
         for s in &self.sessions {
@@ -940,13 +941,13 @@ impl Workspace {
                     .map(|s| {
                         let key = s.key;
                         let (dot, color) = if s.failed.is_some() {
-                            ("×", rgb(0x6a6a6a))
+                            ("×", theme::text_faint())
                         } else if s.needs_approval() {
-                            ("!", rgb(0xd16969))
+                            ("!", theme::accent())
                         } else if s.outbox.busy {
-                            ("●", rgb(0xc8a040))
+                            ("●", theme::accent())
                         } else {
-                            ("○", rgb(0x6a6a6a))
+                            ("○", theme::text_faint())
                         };
                         let row: SharedString = format!("session-{key}").into();
                         let title = match &self.renaming {
@@ -964,7 +965,7 @@ impl Workspace {
                             .rounded_sm()
                             .cursor_pointer()
                             .text_sm()
-                            .when(self.active == Some(key), |d| d.bg(rgb(0x2d2d30)))
+                            .when(self.active == Some(key), |d| d.bg(theme::row_active()))
                             .child(div().text_color(color).child(dot))
                             .child(title)
                             .child(hover_button(("close", key), row, "×", cx.listener(move |this, _, _, cx| {
@@ -1017,7 +1018,7 @@ impl Workspace {
                             .map(|d| {
                                 if confirming {
                                     let id = ElementId::Name(format!("{row}-confirm").into());
-                                    d.child(div().id(id).text_color(rgb(0xd16969)).child("Delete?").on_click(delete))
+                                    d.child(div().id(id).text_color(theme::danger()).child("Delete?").on_click(delete))
                                 } else {
                                     d.child(hover_button(ElementId::Name(format!("{row}-delete").into()), row, "×", delete))
                                 }
@@ -1033,7 +1034,7 @@ impl Workspace {
                         .px_2()
                         .cursor_pointer()
                         .text_xs()
-                        .text_color(rgb(0x6a8fb5))
+                        .text_color(theme::accent_text())
                         .child(label)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if !this.expanded.remove(&folder) {
@@ -1061,8 +1062,8 @@ impl Workspace {
             .gap_3()
             .p_2()
             .border_r_1()
-            .border_color(rgb(0x333333))
-            .bg(rgb(0x191919))
+            .border_color(theme::divider())
+            .bg(theme::bg_sidebar())
             .child(
                 div()
                     .id("new-session")
@@ -1071,7 +1072,7 @@ impl Workspace {
                     .rounded_sm()
                     .cursor_pointer()
                     .text_sm()
-                    .bg(rgb(0x2d2d30))
+                    .bg(theme::row_active())
                     .child("+ New session")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active = None;
@@ -1089,7 +1090,7 @@ impl Workspace {
                     .cursor_pointer()
                     .text_sm()
                     .text_color(muted)
-                    .when(self.settings_open, |d| d.bg(rgb(0x2d2d30)).text_color(rgb(0xdddddd)))
+                    .when(self.settings_open, |d| d.bg(theme::row_active()).text_color(theme::text_primary()))
                     .child("⚙ Settings")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.settings_open = true;
@@ -1106,7 +1107,7 @@ impl Workspace {
                         .rounded_sm()
                         .cursor_pointer()
                         .text_sm()
-                        .bg(rgb(0x3a3a3c))
+                        .bg(theme::bg_raised())
                         .child("↻ Restart Julia")
                         .on_click(cx.listener(|this, _, _, cx| this.boot(this.last_ports, cx))),
                 )
@@ -1114,7 +1115,7 @@ impl Workspace {
     }
 
     fn render_new_session(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = rgb(0x8a8a8a);
+        let muted = theme::text_muted();
         let folder = self.new_cwd.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Choose a folder…".into());
         let recent: Vec<_> = self
             .recent
@@ -1129,7 +1130,7 @@ impl Workspace {
                     .cursor_pointer()
                     .text_sm()
                     .text_color(muted)
-                    .when(self.new_cwd.as_ref() == Some(&path), |d| d.text_color(rgb(0xdddddd)).bg(rgb(0x2d2d30)))
+                    .when(self.new_cwd.as_ref() == Some(&path), |d| d.text_color(theme::text_primary()).bg(theme::row_active()))
                     .child(format!("{}  ·  {}", folder_name(&path), path.display()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.new_cwd = Some(path.clone());
@@ -1149,7 +1150,7 @@ impl Workspace {
                 div()
                     .flex()
                     .gap_2()
-                    .child(div().flex_1().p_1().rounded_sm().bg(rgb(0x252526)).text_sm().overflow_hidden().child(folder))
+                    .child(div().flex_1().p_1().rounded_sm().bg(theme::bg_card()).text_sm().overflow_hidden().child(folder))
                     .child(
                         div()
                             .id("choose-folder")
@@ -1158,7 +1159,7 @@ impl Workspace {
                             .rounded_sm()
                             .cursor_pointer()
                             .text_sm()
-                            .bg(rgb(0x3a3a3c))
+                            .bg(theme::bg_raised())
                             .child("Choose…")
                             .on_click(cx.listener(|this, _, _, cx| this.choose_folder(cx))),
                     ),
@@ -1174,14 +1175,14 @@ impl Workspace {
                     .py_1()
                     .rounded_sm()
                     .cursor_pointer()
-                    .bg(if self.new_cwd.is_some() { rgb(0x2f5d3a) } else { rgb(0x3a3a3c) })
+                    .bg(if self.new_cwd.is_some() { theme::accent() } else { theme::bg_raised() })
                     .child("Start session  ↩")
                     .on_click(cx.listener(|this, _, window, cx| this.start_session(window, cx))),
             )
     }
 
     fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = rgb(0x8a8a8a);
+        let muted = theme::text_muted();
         let s = &self.settings;
         let heading = |text: &'static str| div().mt_2().text_sm().child(text);
         let note = |text: String| div().pl_6().text_xs().text_color(muted).child(text);
@@ -1232,7 +1233,7 @@ impl Workspace {
                             .rounded_sm()
                             .cursor_pointer()
                             .text_sm()
-                            .bg(rgb(0x3a3a3c))
+                            .bg(theme::bg_raised())
                             .child("Choose…")
                             .on_click(cx.listener(|this, _, _, cx| this.choose_julia(cx))),
                     ),
@@ -1250,7 +1251,7 @@ impl Workspace {
                     .rounded_sm()
                     .cursor_pointer()
                     .text_sm()
-                    .bg(rgb(0x3a3a3c))
+                    .bg(theme::bg_raised())
                     .child("Show logs")
                     .on_click(|_, _, _| logs::reveal()),
             )
@@ -1270,10 +1271,10 @@ impl Workspace {
                     .px_3()
                     .py_2()
                     .border_b_1()
-                    .border_color(rgb(0x333333))
+                    .border_color(theme::divider())
                     .text_sm()
                     .child(session.title.clone())
-                    .child(div().text_xs().text_color(rgb(0x8a8a8a)).child(session.cwd.display().to_string())),
+                    .child(div().text_xs().text_color(theme::text_muted()).child(session.cwd.display().to_string())),
             )
             .children(session.failed.as_ref().map(|failure| {
                 div()
@@ -1284,7 +1285,7 @@ impl Workspace {
                     .gap_2()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(0xd16969))
+                    .border_color(theme::danger())
                     .text_sm()
                     .child(failure.message.clone())
                     .when(failure.can_copy, |d| {
@@ -1295,7 +1296,7 @@ impl Workspace {
                                 .py_1()
                                 .rounded_sm()
                                 .cursor_pointer()
-                                .bg(rgb(0x2f5d3a))
+                                .bg(theme::accent())
                                 .child("Open a copy")
                                 .on_click(cx.listener(move |this, _, _, cx| this.open_copy(key, cx))),
                         )
@@ -1310,7 +1311,7 @@ impl Workspace {
                     .flex_col()
                     .gap_2()
                     .border_t_1()
-                    .border_color(rgb(0x333333))
+                    .border_color(theme::divider())
                     .child(session::render_queue(session, cx))
                     .child(
                         div()
@@ -1320,14 +1321,14 @@ impl Workspace {
                             .gap_2()
                             .child(
                                 button("annotate-toggle")
-                                    .when(self.annotating, |d| d.bg(rgb(0x8a6d1f)))
+                                    .when(self.annotating, |d| d.bg(theme::accent()))
                                     .child(if self.annotating { "◉ Annotating (⌘⇧E exits)" } else { "◎ Annotate (⌘⇧E)" })
                                     .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&ToggleAnnotation, window, cx))),
                             )
                             .when(session.run_without_asking, |d| {
                                 d.child(
                                     button("ask-again")
-                                        .bg(rgb(0x3a3a3c))
+                                        .bg(theme::bg_raised())
                                         .child("▶ Runs without asking ✕")
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.with_session(key, cx, |s| {
@@ -1341,7 +1342,7 @@ impl Workspace {
                             .when(session.outbox.busy && session.id.is_some(), |d| {
                                 d.child(
                                     button("stop")
-                                        .bg(rgb(0x5d2f2f))
+                                        .bg(theme::bg_raised())
                                         .child("■ Stop (Esc)")
                                         .on_click(cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx))),
                                 )
@@ -1356,7 +1357,7 @@ impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(setup) = &self.setup {
             let sign_in = self.render_sign_in(cx);
-            return div().size_full().bg(rgb(0x1e1e1e)).text_color(rgb(0xdddddd)).child(splash::render(setup, sign_in, cx)).into_any_element();
+            return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).child(splash::render(setup, sign_in, cx)).into_any_element();
         }
         let chat = match self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key)) {
             _ if self.settings_open => self.render_settings(cx).into_any_element(),
@@ -1369,8 +1370,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_annotation))
             .flex()
             .size_full()
-            .bg(rgb(0x1e1e1e))
-            .text_color(rgb(0xdddddd))
+            .bg(theme::bg_page())
+            .text_color(theme::text_primary())
             .child(self.render_session_bar(cx))
             .child(
                 div()
@@ -1379,7 +1380,7 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .border_r_1()
-                    .border_color(rgb(0x333333))
+                    .border_color(theme::divider())
                     .child(chat),
             )
             .child(div().flex_1().h_full().child(self.webview.clone()))

@@ -8,6 +8,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::Workspace;
+use crate::theme;
 
 /// Setup steps, in the order they run.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
@@ -89,13 +90,13 @@ impl Setup {
 /// `extra` goes under the steps (e.g. the sign-in panel).
 pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     const BAR: f32 = 360.;
-    let muted = rgb(0x8a8a8a);
+    let muted = theme::text_muted();
     let steps = Step::ALL.map(|step| {
         let (mark, color) = match step.cmp(&setup.step) {
-            std::cmp::Ordering::Less => ("✓", rgb(0x6fbf73)),
-            std::cmp::Ordering::Equal if setup.error.is_some() => ("⚠", rgb(0xd16969)),
-            std::cmp::Ordering::Equal => ("●", rgb(0xc8a040)),
-            std::cmp::Ordering::Greater => ("○", rgb(0x5a5a5a)),
+            std::cmp::Ordering::Less => ("✓", theme::diff_add()),
+            std::cmp::Ordering::Equal if setup.error.is_some() => ("⚠", theme::danger()),
+            std::cmp::Ordering::Equal => ("●", theme::accent()),
+            std::cmp::Ordering::Greater => ("○", theme::text_section()),
         };
         let active = step == setup.step;
         div()
@@ -127,19 +128,19 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspa
                 .w(px(BAR))
                 .h(px(6.))
                 .rounded_full()
-                .bg(rgb(0x333333))
-                .child(div().h_full().rounded_full().bg(rgb(0x2f5d3a)).w(px(BAR * setup.overall()))),
+                .bg(theme::border())
+                .child(div().h_full().rounded_full().bg(theme::accent()).w(px(BAR * setup.overall()))),
         )
         .child(div().w(px(BAR)).flex().flex_col().gap_2().text_sm().children(steps))
         .children(extra.map(|e| div().w(px(BAR)).child(e)))
         .children(setup.error.clone().map(|error| {
-            let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(rgb(0x3a3a3c)).child(label);
+            let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).child(label);
             div()
                 .w(px(BAR))
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(div().text_sm().text_color(rgb(0xd16969)).child(error))
+                .child(div().text_sm().text_color(theme::danger()).child(error))
                 .child(
                     div()
                         .flex()
