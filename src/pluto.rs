@@ -57,6 +57,32 @@ pub fn set_policy(mcp_url: &str, owner: u64, policy: &str) -> Result<(), String>
     rpc(mcp_url, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy })).map(|_| ())
 }
 
+/// What a run would run, for the approval card (the runtime's `run_preview`).
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct RunPreview {
+    /// The whole notebook (`count` is then its size).
+    pub all: bool,
+    pub count: usize,
+    pub cells: Vec<PreviewCell>,
+    /// Other cells that re-run with these.
+    pub dependents: usize,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PreviewCell {
+    /// What the cell defines, e.g. "fit, model".
+    pub name: Option<String>,
+    pub code: String,
+}
+
+pub fn run_preview(mcp_url: &str, tool: &str, arguments: &Value) -> Result<RunPreview, String> {
+    let reply = rpc(mcp_url, "endeavor/run_preview", json!({ "tool": tool, "arguments": arguments }))?;
+    if let Some(error) = reply.get("error") {
+        return Err(error["message"].as_str().unwrap_or("run_preview failed").to_string());
+    }
+    serde_json::from_value(reply["result"].clone()).map_err(|e| e.to_string())
+}
+
 /// One JSON-RPC request to the bridge's app-only `/call` endpoint.
 fn rpc(mcp_url: &str, method: &str, params: Value) -> Result<Value, String> {
     let host = host_of(mcp_url)?;

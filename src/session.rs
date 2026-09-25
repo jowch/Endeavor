@@ -24,6 +24,7 @@ use crate::theme;
 use crate::agent::{SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
 use crate::gate;
+use crate::pluto;
 use crate::outbox::{Dispatch, Outbox, Queued};
 
 pub enum Entry {
@@ -49,6 +50,11 @@ pub enum Entry {
         responder: Option<Responder<RequestPermissionResponse>>,
         /// Raised by the execution gate (a pluto call that runs code).
         runs_code: bool,
+        /// The pluto tool and its input, for the run card.
+        tool: Option<String>,
+        input: serde_json::Value,
+        /// What the run would run, once the runtime answers.
+        preview: Option<pluto::RunPreview>,
     },
     Note(SharedString),
 }
@@ -65,6 +71,8 @@ pub enum Effect {
     CheckRunState,
     /// Ask the agent to switch mode.
     SetMode(SessionModeId),
+    /// Ask the runtime what the pending run at this entry would run.
+    PreviewRun { ix: usize, tool: String, input: serde_json::Value },
     /// Tell the runtime this session's policy changed ("plan" | "ask").
     SetPolicy(&'static str),
 }
@@ -369,12 +377,15 @@ impl Session {
                         return effects;
                     }
                 }
-                let input = fields.raw_input.clone().unwrap_or_default();
                 let code = input["code"]
                     .as_str()
                     .map(str::to_owned)
                     .or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned));
-                self.push(Entry::Permission { title, code, options: request.options, responder: Some(responder), runs_code });
+                let tool = title.strip_prefix("mcp__pluto__").map(str::to_owned);
+                if let Some(tool) = tool.clone().filter(|_| runs_code) {
+                    effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
+                }
+                self.push(Entry::Permission { title, code, options: request.options, responder: Some(responder), runs_code, tool, input, preview: None });
             }
             SessionEvent::Update(update) => self.apply_update(update, &mut effects),
         }
@@ -526,14 +537,40 @@ impl Session {
         }
     }
 
+    /// The permission request waiting for an answer, if any.
+    pub fn pending_permission(&self) -> Option<usize> {
+        self.entries.iter().position(|e| matches!(e, Entry::Permission { responder: Some(_), .. }))
+    }
+
+    /// Answer the pending request by kind (keys: ⏎ allow, ⌘⏎ always, Esc deny).
+    pub fn answer_pending(&mut self, kind: PermissionOptionKind, stop_asking: bool) -> bool {
+        let Some(ix) = self.pending_permission() else { return false };
+        let Entry::Permission { options, .. } = &self.entries[ix] else { return false };
+        let Some(option) = option_of_kind(options, kind).cloned() else { return false };
+        self.answer(ix, &option, stop_asking);
+        true
+    }
+
+    pub fn set_preview(&mut self, ix: usize, value: pluto::RunPreview) {
+        if let Some(Entry::Permission { preview, .. }) = self.entries.get_mut(ix) {
+            *preview = Some(value);
+        }
+    }
+
     /// Answer a permission request; `stop_asking` approves this session's later runs.
     pub fn answer(&mut self, ix: usize, option: &PermissionOption, stop_asking: bool) {
         let Some(Entry::Permission { title, responder, .. }) = self.entries.get_mut(ix) else { return };
         if let Some(responder) = responder.take() {
             let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
             let _ = responder.respond(RequestPermissionResponse::new(outcome));
-            let verb = if stop_asking { "Allowed (won't ask again this session)" } else { option.name.as_str() };
-            self.entries[ix] = Entry::Note(format!("{verb}: {title}").into());
+            let allowed = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
+            let verb = match (allowed, stop_asking) {
+                (true, true) => "Allowed, and won't ask again this session",
+                (true, false) => "Allowed",
+                (false, _) => "Denied",
+            };
+            let tool = celldiff::pluto_tool(title).unwrap_or(title);
+            self.entries[ix] = Entry::Note(format!("{verb}: {tool}").into());
             self.mark(ix);
             self.run_without_asking |= stop_asking;
         }
@@ -579,8 +616,9 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
 pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
     let since = session.busy_since?;
     let muted = theme::text_muted();
+    // The approval card above the composer says it all.
     if session.needs_approval() {
-        return Some(div().px_3().pb_2().text_sm().text_color(theme::accent_text()).child("Waiting for your approval").into_any_element());
+        return None;
     }
     let secs = since.elapsed().as_secs();
     let elapsed = if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) };
@@ -703,54 +741,130 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
                 div().flex().gap_2().child(div().text_color(color).child(mark)).child(e.content.clone())
             }))
             .into_any_element(),
-        Entry::Permission { title, code, options, runs_code, .. } => {
-            // Run approvals: Allow / Allow & stop asking / Deny. Anything else: the agent's own options.
-            let mut buttons: Vec<(String, PermissionOption, bool)> = Vec::new();
-            if *runs_code {
-                if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
-                    buttons.push(("Allow".into(), allow.clone(), false));
-                    buttons.push(("Allow & stop asking".into(), allow.clone(), true));
-                }
-                if let Some(deny) = option_of_kind(options, PermissionOptionKind::RejectOnce) {
-                    buttons.push(("Deny".into(), deny.clone(), false));
-                }
+        // Pending: shown as the approval card above the composer (render_approval).
+        Entry::Permission { .. } => div().into_any_element(),
+    }
+}
+
+/// The pending approval, pinned above the composer: the only heavy element
+/// (accent edge, soft ring, filled primary). Runs get "Run N cells?", the cells,
+/// and how many dependents re-run; other prompts get the agent's own options.
+pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+    let ix = session.pending_permission()?;
+    let Entry::Permission { title, code, options, runs_code, tool, input, preview, .. } = &session.entries[ix] else { return None };
+    let key = session.key;
+    let mono = |text: String| div().font_family("Menlo").text_size(px(12.)).child(text);
+    let first_line = |code: &str| code.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+    let tool = tool.as_deref().unwrap_or("");
+
+    let (heading, body): (String, Vec<AnyElement>) = if !*runs_code {
+        (format!("Allow {}?", celldiff::pluto_tool(title).unwrap_or(title)), vec![])
+    } else if tool == "add_cell" {
+        ("Add a cell and run it?".into(), vec![])
+    } else if let Some(p) = preview {
+        let names: Vec<String> = p.cells.iter().map(|c| c.name.clone().unwrap_or_else(|| first_line(&c.code))).collect();
+        let heading = match (tool, p.all, p.count) {
+            ("delete_cell", _, _) => format!("Delete {}?", names.first().map(|n| format!("`{n}`")).unwrap_or("this cell".into())),
+            (_, true, n) => format!("Run all {n} cells?"),
+            (_, _, 1) => format!("Run {}?", names.first().map(|n| format!("`{n}`")).unwrap_or("1 cell".into())),
+            (_, _, n) => format!("Run {n} cells?"),
+        };
+        let mut body: Vec<AnyElement> = Vec::new();
+        if p.count > 1 && !p.all {
+            const SHOWN: usize = 5;
+            body.extend(names.iter().take(SHOWN).map(|n| mono(n.clone()).text_color(theme::text_secondary()).into_any_element()));
+            if names.len() > SHOWN {
+                body.push(div().text_color(theme::text_muted()).child(format!("and {} more", names.len() - SHOWN)).into_any_element());
             }
-            if buttons.is_empty() {
-                buttons = options.iter().map(|o| (o.name.clone(), o.clone(), false)).collect();
-            }
-            let heading = match celldiff::pluto_tool(title) {
-                Some(tool) if *runs_code => format!("Run code? · {tool}"),
-                _ => format!("Allow {title}?"),
-            };
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_2()
-                .rounded_md()
-                .border_1()
-                .border_color(theme::accent())
-                .child(heading)
-                .children(code.as_ref().map(|code| {
-                    div().p_1().rounded_sm().bg(theme::bg_card()).font_family("Menlo").text_xs().child(code.clone())
-                }))
-                // Wrap: the agent's own option labels can be long.
-                .child(div().flex().flex_wrap().gap_2().children(buttons.into_iter().enumerate().map(|(i, (label, option, stop))| {
-                    let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
-                    div()
-                        .id(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)))
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .bg(if allow { theme::accent() } else { theme::bg_raised() })
-                        .child(label)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.with_session(key, cx, |s| s.answer(ix, &option, stop))
-                        }))
-                })))
-                .into_any_element()
+        }
+        if p.dependents > 0 {
+            let them = if p.count == 1 { "it" } else { "them" };
+            let n = p.dependents;
+            let cells = if n == 1 { "cell" } else { "cells" };
+            body.push(div().text_color(theme::text_muted()).child(format!("Also re-runs {n} {cells} that depend on {them}.")).into_any_element());
+        }
+        (heading, body)
+    } else {
+        ("Run code?".into(), vec![])
+    };
+    // A single cell's code (or the new cell's) is short enough to show.
+    let code = code
+        .clone()
+        .or_else(|| input["code"].as_str().map(str::to_owned))
+        .or_else(|| preview.as_ref().and_then(|p| p.cells.first()).map(|c| c.code.clone())).filter(|_| preview.as_ref().is_none_or(|p| p.count <= 1 && !p.all));
+
+    let mut buttons: Vec<(String, &'static str, PermissionOption, bool)> = Vec::new();
+    if *runs_code {
+        if let Some(deny) = option_of_kind(options, PermissionOptionKind::RejectOnce) {
+            buttons.push(("Deny".into(), "esc", deny.clone(), false));
+        }
+        if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
+            buttons.push(("Always this session".into(), "⌘⏎", allow.clone(), true));
+            let run = if tool == "delete_cell" { "Delete" } else { "Run" };
+            buttons.push((run.into(), "⏎", allow.clone(), false));
         }
     }
+    if buttons.is_empty() {
+        buttons = options.iter().map(|o| (o.name.clone(), "", o.clone(), false)).collect();
+    }
+    let primary = buttons.len() - 1;
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .p(px(10.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme::accent())
+            .bg(theme::bg_card())
+            .shadow(vec![BoxShadow {
+                color: Hsla::from(theme::accent()).opacity(0.25),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(3.),
+                inset: false,
+            }])
+            .text_sm()
+            .child(inline_code(&heading).text_color(theme::text_primary()))
+            .children(code.map(|code| {
+                const LINES: usize = 8;
+                let mut shown: Vec<&str> = code.lines().take(LINES).collect();
+                if code.lines().count() > LINES {
+                    shown.push("…");
+                }
+                mono(shown.join("\n")).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary())
+            }))
+            .children(body)
+            // Wrap: the agent's own option labels can be long.
+            .child(div().flex().flex_wrap().justify_end().gap_2().children(buttons.into_iter().enumerate().map(|(i, (label, hint, option, stop))| {
+                let is_primary = i == primary;
+                div()
+                    .id(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .h(px(26.))
+                    .px(px(10.))
+                    .rounded(px(5.))
+                    .cursor_pointer()
+                    .map(|d| if is_primary { d.bg(theme::accent()).text_color(gpui::white()) } else { d.bg(theme::bg_raised()).hover(|s| s.bg(theme::row_active())) })
+                    .child(label)
+                    .when(!hint.is_empty(), |d| d.child(div().text_size(px(11.)).opacity(0.6).child(hint)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, stop))))
+            })))
+            .into_any_element(),
+    )
+}
+
+
+/// Text with `backticked` spans in mono.
+fn inline_code(text: &str) -> Div {
+    div().flex().flex_wrap().children(text.split('`').enumerate().map(|(i, part)| {
+        // Flex drops a part's edge spaces; non-breaking ones survive.
+        let d = div().child(part.replace(' ', "\u{a0}"));
+        if i % 2 == 1 { d.font_family("Menlo").text_size(px(12.5)) } else { d }
+    }))
 }
 
 /// Messages waiting for Claude: click ✎ to pull one back into the input, ✕ to drop it.

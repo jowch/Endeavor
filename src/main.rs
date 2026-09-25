@@ -23,7 +23,7 @@ mod splash;
 mod theme;
 
 use agent::{AgentEvent, Command};
-use agent_client_protocol::schema::v1::{ContentBlock, SessionId, SessionInfo, TextContent};
+use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder as _;
@@ -299,6 +299,16 @@ impl Workspace {
         });
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { secondary, shift: false } = event {
+                // An empty box answers a pending approval: ⏎ allow, ⌘⏎ allow and stop asking.
+                if input.read(cx).value().trim().is_empty()
+                    && let Some(key) = this.active
+                    && this.session_mut(key).is_some_and(|s| s.pending_permission().is_some())
+                {
+                    this.with_session(key, cx, |s| {
+                        s.answer_pending(PermissionOptionKind::AllowOnce, *secondary);
+                    });
+                    return;
+                }
                 if this.active.is_some() {
                     this.submit(input, *secondary, window, cx);
                 } else {
@@ -625,6 +635,18 @@ impl Workspace {
                 }
                 Effect::CheckRunState => self.check_run_state(key, cx),
                 Effect::SetPolicy(policy) => self.send_policy(key, policy, cx),
+                Effect::PreviewRun { ix, tool, input } => {
+                    let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { continue };
+                    let task = cx.background_executor().spawn(async move { pluto::run_preview(&mcp_url, &tool, &input) });
+                    cx.spawn(async move |this, cx| match task.await {
+                        Ok(preview) => {
+                            let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.set_preview(ix, preview)));
+                        }
+                        // The card falls back to "Run code?".
+                        Err(e) => eprintln!("run preview: {e}"),
+                    })
+                    .detach();
+                }
                 Effect::SetMode(mode) => {
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
                         let _ = self.agent_tx.unbounded_send(Command::SetMode(id, mode));
@@ -735,6 +757,13 @@ impl Workspace {
 
     fn interrupt(&mut self, _: &Interrupt, _: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.active else { return };
+        // Esc denies a pending approval before it stops the turn.
+        if let Some(s) = self.session_mut(key)
+            && s.answer_pending(PermissionOptionKind::RejectOnce, false)
+        {
+            cx.notify();
+            return;
+        }
         if let Some(effect) = self.active_session().and_then(Session::interrupt) {
             self.apply_effects(key, vec![effect], cx);
         }
@@ -1522,6 +1551,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .children(session::render_approval(session, cx))
                     .child(session::render_queue(session, cx))
                     // One-line box: Enter sends; the glyph becomes Stop while Claude works.
                     .child(
