@@ -262,6 +262,37 @@ impl Workspace {
         self.activate(key, cx);
     }
 
+    /// Continue a session that couldn't be reopened (e.g. live in the CLI) as a copy.
+    fn open_copy(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(session) = self.session_mut(key) else { return };
+        let cwd = session.cwd.clone();
+        if let Some(source) = session.reopen_as_copy() {
+            let _ = self.agent_tx.unbounded_send(Command::ForkSession { key, source, cwd });
+        }
+        cx.notify();
+    }
+
+    /// Open a reopened session's notebook file in the current Pluto (reusing it if
+    /// it's already open) and point the session, and the pane if active, at it.
+    fn reopen_for_session(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
+        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        let opened = cx.background_executor().spawn(async move {
+            let listed = pluto::call_tool(&mcp_url, "list_notebooks", serde_json::json!({})).ok();
+            let open = listed.as_ref().and_then(|l| l.as_array()?.iter().find(|nb| nb["path"] == path.as_str()).cloned());
+            let nb = match open {
+                Some(nb) => nb,
+                None => pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path })).ok()?,
+            };
+            nb["notebook_id"].as_str().map(str::to_owned)
+        });
+        cx.spawn(async move |this, cx| {
+            // ponytail: a notebook file that's gone just leaves the pane where it is.
+            let Some(id) = opened.await else { return };
+            let _ = this.update(cx, |this, cx| this.apply_effects(key, vec![Effect::ShowNotebook(id)], cx));
+        })
+        .detach();
+    }
+
     /// Show a session; the notebook pane follows it to the notebook it last viewed.
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         self.active = Some(key);
@@ -288,6 +319,7 @@ impl Workspace {
                     }
                 }
                 Effect::CheckRunState => self.check_run_state(key, cx),
+                Effect::ReopenNotebook(path) => self.reopen_for_session(key, path, cx),
             }
         }
         cx.notify();
@@ -339,6 +371,11 @@ impl Workspace {
             AgentEvent::Listed { cwd, sessions } => {
                 self.past.insert(cwd, sessions);
             }
+            AgentEvent::Forked { key, id } => {
+                if let Some(session) = self.session_mut(key) {
+                    session.id = Some(id);
+                }
+            }
             AgentEvent::Failed(e) => {
                 self.status = format!("⚠ Agent stopped: {e}").into();
                 for session in &mut self.sessions {
@@ -352,7 +389,7 @@ impl Workspace {
                         let effects = session.started(id);
                         self.apply_effects(key, effects, cx);
                     }
-                    Err(e) => session.note(format!("⚠ Couldn't start or reopen the session: {e}")),
+                    Err(e) => session.fail(&e),
                 }
             }
             AgentEvent::Session(id, event) => {
@@ -552,7 +589,9 @@ impl Workspace {
                     .filter(|s| &s.cwd == folder)
                     .map(|s| {
                         let key = s.key;
-                        let (dot, color) = if s.needs_approval() {
+                        let (dot, color) = if s.failed.is_some() {
+                            ("×", rgb(0x6a6a6a))
+                        } else if s.needs_approval() {
                             ("!", rgb(0xd16969))
                         } else if s.outbox.busy {
                             ("●", rgb(0xc8a040))
@@ -740,6 +779,32 @@ impl Workspace {
                     .child(session.title.clone())
                     .child(div().text_xs().text_color(rgb(0x8a8a8a)).child(session.cwd.display().to_string())),
             )
+            .children(session.failed.as_ref().map(|failure| {
+                div()
+                    .m_3()
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0xd16969))
+                    .text_sm()
+                    .child(failure.message.clone())
+                    .when(failure.can_copy, |d| {
+                        d.child(
+                            div()
+                                .id("open-copy")
+                                .px_2()
+                                .py_1()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .bg(rgb(0x2f5d3a))
+                                .child("Open a copy")
+                                .on_click(cx.listener(move |this, _, _, cx| this.open_copy(key, cx))),
+                        )
+                    })
+            }))
             .child(session::render_transcript(session, cx))
             .child(
                 div()

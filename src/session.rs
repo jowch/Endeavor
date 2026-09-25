@@ -53,6 +53,9 @@ pub enum Effect {
     Send(Turn),
     /// The agent opened or created this notebook.
     ShowNotebook(String),
+    /// A reopened session last worked in this notebook file: open it in the
+    /// current Pluto (its old id died with the previous Julia) and show it.
+    ReopenNotebook(String),
     /// The session went idle: check for unrun edits.
     CheckRunState,
 }
@@ -74,6 +77,32 @@ pub struct Session {
     pub scroll: ScrollHandle,
     /// Reopening a past session: its history is replaying.
     replaying: bool,
+    /// Notebook file the replayed history last opened, reopened once loading ends.
+    replayed_path: Option<String>,
+    /// Starting or reopening failed; the session can't take messages.
+    pub failed: Option<Failure>,
+}
+
+pub struct Failure {
+    pub message: String,
+    /// A reopen that failed can still be continued as a copy (session/fork).
+    pub can_copy: bool,
+}
+
+/// A readable reason from an agent error, which may wrap stderr in JSON.
+fn failure_message(error: &str) -> (String, bool) {
+    if error.contains("running as a background session") || error.contains("claude attach") {
+        let message = "This session is still open in the Claude Code CLI. Close it there to continue it \
+                       here, or open a copy (it keeps the conversation so far)."
+            .to_string();
+        return (message, true);
+    }
+    let detail = error
+        .split_once("\"details\": \"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(detail, _)| detail)
+        .unwrap_or(error);
+    (format!("Couldn't open the session: {}", detail.lines().next().unwrap_or(detail).trim()), false)
 }
 
 pub fn folder_name(path: &Path) -> String {
@@ -94,7 +123,27 @@ impl Session {
             notebook: None,
             scroll: ScrollHandle::new(),
             replaying: false,
+            replayed_path: None,
+            failed: None,
         }
+    }
+
+    /// Starting or reopening failed: stop looking busy and say why.
+    pub fn fail(&mut self, error: &str) {
+        let (message, cli_live) = failure_message(error);
+        self.failed = Some(Failure { message, can_copy: cli_live || self.replaying });
+        self.outbox.busy = false;
+        self.replaying = false;
+    }
+
+    /// Retry a failed reopen as a copy: the transcript refills from the copy's replay.
+    pub fn reopen_as_copy(&mut self) -> Option<SessionId> {
+        self.failed.take()?;
+        self.entries.clear();
+        self.outbox = Outbox::waiting();
+        self.replaying = true;
+        self.title = format!("{} (copy)", self.title);
+        self.id.take()
     }
 
     /// A past session being reopened: its id is known up front so the replayed
@@ -121,7 +170,7 @@ impl Session {
     pub fn started(&mut self, id: SessionId) -> Vec<Effect> {
         self.id = Some(id);
         self.replaying = false;
-        let mut effects = Vec::new();
+        let mut effects: Vec<Effect> = self.replayed_path.take().map(Effect::ReopenNotebook).into_iter().collect();
         let next = self.outbox.turn_ended();
         self.dispatch(next, &mut effects);
         effects
@@ -129,6 +178,10 @@ impl Session {
 
     /// Send or queue a message. Before the session exists everything queues.
     pub fn submit(&mut self, message: Queued, now: bool) -> Vec<Effect> {
+        if self.failed.is_some() {
+            self.note("This session isn't open, so nothing was sent.");
+            return Vec::new();
+        }
         if self.title == "New session" {
             self.title = message.label.lines().next().unwrap_or_default().chars().take(60).collect();
         }
@@ -257,8 +310,13 @@ impl Session {
                 expanded: false,
             }),
             SessionUpdate::ToolCallUpdate(update) => {
-                if let Some(opened) = self.on_tool_update(update) {
-                    effects.push(Effect::ShowNotebook(opened));
+                if let Some((id, path)) = self.on_tool_update(update) {
+                    if self.replaying {
+                        // History, not a live open: that id belongs to an earlier Julia.
+                        self.replayed_path = path.or(self.replayed_path.take());
+                    } else {
+                        effects.push(Effect::ShowNotebook(id));
+                    }
                 }
             }
             // ponytail: modes, usage, available commands not shown yet.
@@ -267,8 +325,8 @@ impl Session {
     }
 
     /// Apply a tool-call update; on a completed pluto call, learn cell code and
-    /// diff edits. Returns a notebook id the agent just opened or created.
-    fn on_tool_update(&mut self, update: ToolCallUpdate) -> Option<String> {
+    /// diff edits. Returns the id (and file path) of a notebook the agent just opened or created.
+    fn on_tool_update(&mut self, update: ToolCallUpdate) -> Option<(String, Option<String>)> {
         let ix = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
         let Entry::Tool { title, status, input, output, diffs, .. } = &mut self.entries[ix] else { return None };
         let fields = update.fields;
@@ -293,7 +351,11 @@ impl Session {
         if let Some(input) = input {
             *diffs = self.cell_codes.diff(tool, input);
         }
-        matches!(tool, "open_notebook" | "new_notebook").then(|| result["notebook_id"].as_str().map(str::to_owned)).flatten()
+        if !matches!(tool, "open_notebook" | "new_notebook") {
+            return None;
+        }
+        let id = result["notebook_id"].as_str()?.to_owned();
+        Some((id, result["path"].as_str().map(str::to_owned)))
     }
 
     pub fn toggle(&mut self, ix: usize) {
@@ -557,6 +619,35 @@ mod tests {
         s.started(SessionId::new("abc"));
         s.apply(chunk("live echo"));
         assert_eq!(s.entries.len(), 1, "after loading, user chunks are ignored");
+    }
+
+    #[test]
+    fn a_failed_reopen_stops_looking_busy_and_explains() {
+        let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old chat".into());
+        s.fail(r#"Internal error: { "details": "Claude Code process exited with code 1. stderr: Error: Session abc is running as a background session (abc). Run `claude attach abc` to open it" }"#);
+        assert!(!s.outbox.busy);
+        let failure = s.failed.as_ref().unwrap();
+        assert!(failure.can_copy && failure.message.contains("Claude Code CLI"));
+        assert_eq!(s.reopen_as_copy(), Some(SessionId::new("abc")));
+        assert!(s.failed.is_none() && s.id.is_none() && s.title.ends_with("(copy)"));
+
+        let mut other = Session::new(2, "/tmp".into());
+        other.fail(r#"Internal error: { "details": "boom happened
+more" }"#);
+        assert_eq!(other.failed.unwrap().message, "Couldn't open the session: boom happened");
+    }
+
+    #[test]
+    fn replayed_notebook_opens_are_reopened_by_path_not_shown_by_stale_id() {
+        use agent_client_protocol::schema::v1::{SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
+        let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old".into());
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__pluto__open_notebook"))));
+        let output = serde_json::json!([{ "type": "text", "text": "{\"notebook_id\":\"old-id\",\"path\":\"/tmp/a.jl\"}" }]);
+        let done = ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output));
+        let effects = s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(done)));
+        assert!(effects.iter().all(|e| !matches!(e, Effect::ShowNotebook(_))), "no stale navigation");
+        let effects = s.started(SessionId::new("abc"));
+        assert!(matches!(effects.first(), Some(Effect::ReopenNotebook(p)) if p == "/tmp/a.jl"));
     }
 
     #[test]

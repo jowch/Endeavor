@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
+    CancelNotification, ContentBlock, ForkSessionRequest, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
     McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionId, SessionInfo, SessionNotification, SessionUpdate, StopReason,
 };
@@ -56,6 +56,10 @@ pub enum Command {
     /// Reopen a past session. Its history replays as session updates for `id`,
     /// then [`AgentEvent::Started`] with the same `key`.
     LoadSession { key: u64, id: SessionId, cwd: PathBuf },
+    /// Open a copy of a past session (e.g. one still live in the Claude Code CLI):
+    /// [`AgentEvent::Forked`] with the copy's id, its history replays, then
+    /// [`AgentEvent::Started`] with the same `key`.
+    ForkSession { key: u64, source: SessionId, cwd: PathBuf },
     /// Past sessions in `cwd`; answered by [`AgentEvent::Listed`].
     ListSessions { cwd: PathBuf },
     Turn(SessionId, Turn),
@@ -78,6 +82,8 @@ pub enum AgentEvent {
     Ready,
     Started { key: u64, result: Result<SessionId, String> },
     Listed { cwd: PathBuf, sessions: Vec<SessionInfo> },
+    /// The copy made by `ForkSession` exists; its history replays next.
+    Forked { key: u64, id: SessionId },
     Session(SessionId, SessionEvent),
     /// The connection is gone; no session works any more.
     Failed(String),
@@ -104,6 +110,7 @@ enum Done {
     Turn(SessionId, Result<PromptResponse, agent_client_protocol::Error>),
     Started(u64, Result<SessionId, agent_client_protocol::Error>),
     Listed(PathBuf, Result<Vec<SessionInfo>, agent_client_protocol::Error>),
+    Forked(u64, PathBuf, Result<SessionId, agent_client_protocol::Error>),
 }
 
 async fn run(
@@ -186,6 +193,21 @@ async fn run(
                         let _ = events.unbounded_send(AgentEvent::Listed { cwd, sessions });
                         continue;
                     }
+                    Either::Left(Some(Done::Forked(key, cwd, result))) => {
+                        match result {
+                            Ok(id) => {
+                                let _ = events.unbounded_send(AgentEvent::Forked { key, id: id.clone() });
+                                // Load the copy so its history replays into the new session.
+                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options.clone());
+                                let loaded = connection.send_request(request).block_task();
+                                pending.push(async move { Done::Started(key, loaded.await.map(|_| id)) }.boxed_local());
+                            }
+                            Err(e) => {
+                                let _ = events.unbounded_send(AgentEvent::Started { key, result: Err(e.to_string()) });
+                            }
+                        }
+                        continue;
+                    }
                     Either::Left(None) => continue,
                     Either::Right(None) => break,
                     Either::Right(Some(command)) => command,
@@ -200,6 +222,11 @@ async fn run(
                         let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto.clone()]).meta(options.clone());
                         let loaded = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, loaded.await.map(|_| id)) }.boxed_local());
+                    }
+                    Command::ForkSession { key, source, cwd } => {
+                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![pluto.clone()]).meta(options.clone());
+                        let forked = connection.send_request(request).block_task();
+                        pending.push(async move { Done::Forked(key, cwd, forked.await.map(|r| r.session_id)) }.boxed_local());
                     }
                     Command::ListSessions { cwd } => {
                         // ponytail: first page only; a folder with a long history shows its newest sessions.
@@ -307,6 +334,54 @@ mod tests {
             }
             println!("replayed user: {replayed_user:?}\nreplayed agent: {replayed_agent:?}");
             assert!(replayed_user.contains("KIWI") && replayed_agent.contains("KIWI"));
+        });
+    }
+
+    /// Forking a session gives a new id whose load replays the original's history:
+    /// `ENDEAVOR_TEST_MCP_URL=… cargo test -- --ignored live_fork`.
+    #[test]
+    #[ignore]
+    fn live_fork() {
+        use super::*;
+        use agent_client_protocol::schema::v1::TextContent;
+
+        let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
+        let cwd = std::env::temp_dir().join(format!("endeavor-fork-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cwd = cwd.canonicalize().unwrap();
+        let (tx, rx) = unbounded();
+        let mut events = start(url, rx);
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: cwd.clone() }).unwrap();
+        futures::executor::block_on(async {
+            let (mut original, mut copy, mut replayed) = (None, None, String::new());
+            while let Some(event) = events.next().await {
+                match event {
+                    AgentEvent::Started { key: 1, result } => {
+                        let id = result.expect("started");
+                        original = Some(id.clone());
+                        let prompt = vec![ContentBlock::Text(TextContent::new("Reply with exactly MANGO. Use no tools."))];
+                        tx.unbounded_send(Command::Turn(id, Turn::Prompt(prompt))).unwrap();
+                    }
+                    AgentEvent::Session(id, SessionEvent::TurnEnded(_)) if Some(&id) == original.as_ref() => {
+                        tx.unbounded_send(Command::ForkSession { key: 2, source: id, cwd: cwd.clone() }).unwrap();
+                    }
+                    AgentEvent::Forked { key: 2, id } => copy = Some(id),
+                    AgentEvent::Session(id, SessionEvent::Update(SessionUpdate::AgentMessageChunk(c))) if Some(&id) == copy.as_ref() => {
+                        if let ContentBlock::Text(t) = c.content {
+                            replayed.push_str(&t.text);
+                        }
+                    }
+                    AgentEvent::Started { key: 2, result } => {
+                        result.expect("copy loaded");
+                        break;
+                    }
+                    AgentEvent::Session(_, SessionEvent::TurnFailed(e)) | AgentEvent::Failed(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+            println!("original {original:?} copy {copy:?} replayed {replayed:?}");
+            assert_ne!(original, copy);
+            assert!(replayed.contains("MANGO"));
         });
     }
 
