@@ -13,7 +13,10 @@ process running Pluto + PlutoMCP.
 
 **Done**
 
-- **Runtime (§11).** App-owned Julia with a stacked private depot; `boot.jl`
+- **Runtime (§11).** App-owned Julia: Julia 1.12.6 is downloaded on first
+  launch (progress in the status line, resumable) into Application Support,
+  checked against a pinned SHA-256; `ENDEAVOR_JULIA` uses your own julia
+  instead. Stacked private depot; `boot.jl`
   reports the Pluto URL and MCP bridge; Julia exits when the app closes its
   stdin. Plain-language startup errors, crash detection, and **Restart Julia**
   on the same ports (the agent's MCP connection reconnects; open notebooks are
@@ -70,8 +73,6 @@ In priority order. Nothing queued: the next work is the packaging list below.
 
 Everything here is a known `ponytail:` shortcut that's fine for one developer.
 
-- **Managed Julia (§11):** first-run download + SHA-256 check into Application
-  Support; `ENDEAVOR_JULIA` stays as the "use my Julia" override.
 - **Bundle the ACP adapter.** It's fetched with `npx` on first launch (~85 s
   over VPN) and needs Node installed; ship it (and a runtime) with the app.
 - **`.app` bundle:** move dev-tree paths (`runtime/`, `plugin/`) to bundle
@@ -109,6 +110,7 @@ Deliberate simplifications with their upgrade path (search the code for
 | `main.rs` events | modes, usage, available commands ignored | the panel grows those features |
 | PlutoMCP `view_cell_output` | no timeout when the worker is busy | a long run blocks it in practice |
 | `agent.rs`, `runtime.rs` | dev-tree paths, `npx` adapter, env-var opt-ins | packaging (above) |
+| `runtime.rs` Julia install | pinned 1.12.6 (bump URL, SHA-256, size per release); curl outlives a quit mid-download | a Julia upgrade, or overlapping launches bite |
 
 Also noted: SIGTERM can leave Julia hung mid-exit. The app never sends it
 (quitting closes stdin and `boot.jl` exits itself), but anything that manages

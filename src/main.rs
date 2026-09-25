@@ -601,8 +601,25 @@ impl Workspace {
         self.starting = true;
         self.status = if ports.is_some() { "Restarting Julia…" } else { "Starting Julia…" }.into();
         let died = self.died_tx.clone();
-        // First run instantiates + precompiles (~1 min); later launches are seconds.
-        let boot = cx.background_executor().spawn(async move { runtime::start(ports, died) });
+        // First run downloads Julia, then instantiates + precompiles (~1 min); later launches are seconds.
+        let (progress_tx, mut progress) = futures::channel::mpsc::unbounded::<String>();
+        let boot = cx.background_executor().spawn(async move {
+            runtime::start(ports, died, &|line| {
+                let _ = progress_tx.unbounded_send(line);
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            while let Some(line) = progress.next().await {
+                // A late line mustn't overwrite what on_booted reported.
+                let _ = this.update(cx, |this, cx| {
+                    if this.starting {
+                        this.status = line.into();
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             let result = boot.await;
             let _ = this.update(cx, |this, cx| this.on_booted(result, cx));
