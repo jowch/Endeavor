@@ -5,6 +5,7 @@
 // the grey stripe. Pluto redraws cells, so the attributes are re-applied.
 
 import { on, type CellState } from "./bridge";
+import { onRedraw } from "./redraw";
 
 const css = `
   pluto-cell { position: relative; }
@@ -45,12 +46,5 @@ export function initCells(): void {
     states = new Map(msg.cells.map((c) => [c.cell_id, c]));
     apply();
   });
-  // New or redrawn cells: re-apply (only attribute changes of ours are skipped,
-  // so our own writes don't loop).
-  let queued = false;
-  new MutationObserver((records) => {
-    if (queued || records.every((r) => r.type === "attributes" && r.attributeName?.startsWith("data-"))) return;
-    queued = true;
-    queueMicrotask(() => ((queued = false), apply()));
-  }).observe(document.body, { childList: true, subtree: true });
+  onRedraw(apply);
 }

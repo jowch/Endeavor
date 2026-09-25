@@ -7,7 +7,9 @@
 export type ToApp =
   | { type: "ready" }
   | { type: "mode"; on: boolean }
-  | { type: "annotation"; notebook: string | null; cells: string[]; comment: string; now: boolean };
+  | { type: "annotation"; notebook: string | null; cells: string[]; comment: string; now: boolean }
+  // Fix with Claude / Explain on a cell's error.
+  | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; error: string };
 
 /** One cell's state, from the runtime's events (see runtime Events.jl). */
 export type CellState = { cell_id: string; running: boolean; errored: boolean; unrun: boolean; author: "agent" | "user" | null };

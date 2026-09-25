@@ -76,6 +76,12 @@ Before-text per cell is already kept for the chat's diffs (`celldiff.rs`).
   channel: page → app over `window.ipc` (typed `ToApp`), app → page through
   `window.__endeavor.receive(msg)` (typed `ToPage`; Rust `send_to_page`).
   Annotation mode is ported unchanged; `npm test` runs it in jsdom.
+- **Also done (2026-09-25), not yet seen on screen:** cell marking
+  (`cells.ts`: data-endeavor / data-author + striped gutter and stale output
+  from the runtime's per-cell events) and Fix with Claude / Explain on error
+  boxes (`errors.ts`, Pluto's "Fix with AI" hidden). Remaining spec phase 2:
+  Pluto theme CSS (colour variables, hidden chrome, forced dark), the overview
+  rail, the per-notebook-type adapter.
 - The spec's bundle (gutter diffs, pointing overlay, ⌘K prompt, agent "+"
   button, overview rail, user-edit reporting) and the two-way Rust↔JS channel
   make this real frontend work: **TypeScript + esbuild** (`frontend/src/*.ts` →

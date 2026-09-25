@@ -116,6 +116,24 @@
     on("annotate", (msg) => set(msg.on));
   }
 
+  // src/redraw.ts
+  var hooks = [];
+  var queued = false;
+  function onRedraw(hook) {
+    hooks.push(hook);
+    hook();
+  }
+  function watchRedraws() {
+    new MutationObserver((records) => {
+      if (queued || records.every((r) => r.type === "attributes" && r.attributeName?.startsWith("data-"))) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        hooks.forEach((hook) => hook());
+      });
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
   // src/cells.ts
   var css2 = `
   pluto-cell { position: relative; }
@@ -152,18 +170,50 @@
       states = new Map(msg.cells.map((c) => [c.cell_id, c]));
       apply();
     });
-    let queued = false;
-    new MutationObserver((records) => {
-      if (queued || records.every((r) => r.type === "attributes" && r.attributeName?.startsWith("data-"))) return;
-      queued = true;
-      queueMicrotask(() => (queued = false, apply()));
-    }).observe(document.body, { childList: true, subtree: true });
+    onRedraw(apply);
+  }
+
+  // src/errors.ts
+  var AGENT = "Claude";
+  var css3 = `
+  .fix-with-ai { display: none !important; }
+  .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
+  .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
+    background: transparent; color: #E08A5E; border: 1px solid #CC3F00; }
+  .endeavor-ask button.explain { color: #BDBDBD; border-color: #3A3A40; }
+`;
+  function decorate() {
+    for (const error of document.querySelectorAll("pluto-cell jlerror")) {
+      if (error.querySelector(".endeavor-ask")) continue;
+      const cell = error.closest("pluto-cell");
+      if (!cell) continue;
+      const row = document.createElement("div");
+      row.className = "endeavor-ask";
+      row.innerHTML = `<button class="fix">Fix with ${AGENT}</button><button class="explain">Explain</button>`;
+      const ask = (kind) => {
+        const text = (error.querySelector("header")?.textContent ?? error.textContent ?? "").trim().slice(0, 2e3);
+        const notebook = new URLSearchParams(location.search).get("id");
+        send({ type: "ask", kind, notebook, cell: cell.id, error: text });
+      };
+      row.querySelector(".fix").onclick = () => ask("fix");
+      row.querySelector(".explain").onclick = () => ask("explain");
+      const header = error.querySelector(".error-header");
+      header ? header.after(row) : error.prepend(row);
+    }
+  }
+  function initErrors() {
+    const style = document.createElement("style");
+    style.textContent = css3;
+    document.head.append(style);
+    onRedraw(decorate);
   }
 
   // src/main.ts
   function init() {
     initAnnotate();
     initCells();
+    initErrors();
+    watchRedraws();
     send({ type: "ready" });
   }
   document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", init) : init();

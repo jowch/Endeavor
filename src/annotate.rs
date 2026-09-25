@@ -39,6 +39,18 @@ pub fn parse(body: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     match v.get("type")?.as_str()? {
         "ready" => Some(Message::Ready),
+        // Fix with Claude / Explain on a cell's error: an annotation on that cell.
+        "ask" => {
+            let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
+            let cell = v.get("cell")?.as_str().filter(|s| is_uuid(s))?.to_owned();
+            let error: String = v.get("error")?.as_str()?.chars().take(MAX_COMMENT).collect();
+            let comment = match v.get("kind")?.as_str()? {
+                "fix" => format!("Fix the error in this cell:\n{error}"),
+                "explain" => format!("Explain this error; don't change anything yet:\n{error}"),
+                _ => return None,
+            };
+            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now: false }))
+        }
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "annotation" => {
             let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
@@ -99,6 +111,15 @@ mod tests {
     fn parses_valid_messages() {
         assert_eq!(parse(r#"{"type":"mode","on":true}"#), Some(Message::Mode(true)));
         assert_eq!(parse(r#"{"type":"ready"}"#), Some(Message::Ready));
+        let ask = |kind: &str| {
+            parse(&format!(
+                r#"{{"type":"ask","kind":"{kind}","notebook":"{NB}","cell":"{C1}","error":"UndefVarError: x"}}"#
+            ))
+        };
+        let Some(Message::Annotation(fix)) = ask("fix") else { panic!("fix") };
+        assert_eq!((fix.cells.as_slice(), fix.comment.as_str()), ([C1.to_string()].as_slice(), "Fix the error in this cell:\nUndefVarError: x"));
+        assert!(matches!(ask("explain"), Some(Message::Annotation(a)) if a.comment.starts_with("Explain")));
+        assert_eq!(ask("delete everything"), None);
         assert_eq!(parse(r#"{"type":"send"}"#), None);
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"why so slow?"}}"#);
         let Some(Message::Annotation(a)) = parse(&body) else { panic!("rejected valid annotation") };
