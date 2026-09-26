@@ -15,6 +15,11 @@ _Listed 2026-09-25._
 - [ ] New-session screen: working folder, Choose…, recent folders, optional first message, Start session — improvised
 - [ ] Endeavor light mode — missing (planned for later)
 - [ ] About window and update notices (adapter updates only show in the status line) — missing
+- [ ] Menu bar: Endeavor (Settings…, Quit), Edit, View — improvised; Window and Help menus — missing
+- [ ] Appearance "Light": native chrome stays dark while the notebook turns Pluto-light — improvised (mismatched until light mode exists)
+- [ ] Window minimum size — missing (the window can shrink with no floor)
+- [ ] Folder and julia pickers' prompt text ("Choose folder", "Use this julia") — improvised
+- [ ] Offline: no network shows as a generic setup failure; losing it mid-session has no state — missing
 
 ## Sidebar
 
@@ -33,13 +38,14 @@ _Listed 2026-09-25._
 - [ ] Opening a past session: loading and replay — improvised
 - [ ] Messages sent from the notebook ("✎ 1 cell: …") and the "📎 error message / selected text" attachment chip — improvised
 - [ ] Working indicator: spec says orange asterisk + "Adding `residuals` · 12s"; app shows a rocket + "Working · 24s" — improvised
+- [ ] Long content: tool output and long messages have no max height or scroll (only the plan card does) — missing
 
 ## Cards above the composer
 
-- [ ] Run-card variants: "Delete `x`?", "Run all N cells?", "Let this notebook run? (Nothing runs yet.)", "Add a cell and run it?" (spec shows only "Run 3 cells?") — improvised
+- [ ] Run-card variants: "Delete `x`?", "Run all N cells?", "Run code?" (no cell preview), "Let this notebook run? (Nothing runs yet.)", "Add a cell and run it?" (spec shows only "Run 3 cells?") — improvised
 - [ ] The agent's own permission prompts (e.g. "Allow list_notebooks?" with Yes / Yes, don't ask again / No) — improvised
 - [ ] Queued messages with ✎ edit and ✕ remove — improvised
-- [ ] Plan card: spec shows numbered steps; the app renders the plan's markdown, headings included — improvised
+- [ ] Plan card: spec shows numbered steps; the app renders the plan's markdown, headings included, under a "Ready to start?" heading the spec doesn't have — improvised
 
 ## Composer
 
@@ -61,6 +67,11 @@ _Listed 2026-09-25._
 - [ ] Fix with Claude / Explain at the bottom of error cards — improvised
 - [ ] Pointing mode's comment bar under the picked cell — improvised (spec's hint pill and drawn-box region not built)
 - [ ] Folded cell shown open until it runs — improvised
+
+## Accessibility
+
+- [ ] VoiceOver labels for icon-only controls (×, ✦, point, gear) — missing
+- [ ] Keyboard focus styles across sidebar, cards and composer — missing
 
 ## Spec'd but not built yet
 
