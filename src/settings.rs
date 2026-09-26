@@ -19,6 +19,25 @@ pub struct Settings {
     /// Light or dark (only the notebook follows it so far; the app is dark).
     pub appearance: Appearance,
     pub notebook_theme: NotebookTheme,
+    /// The panes as the user left them.
+    pub layout: Layout,
+    /// The agent config values last picked (e.g. "model", "effort"), applied to
+    /// each session as it starts: the adapter only sets them per session.
+    pub agent_config: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Layout {
+    pub sidebar_open: bool,
+    pub sidebar_width: f32,
+    pub chat_width: f32,
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self { sidebar_open: true, sidebar_width: 232., chat_width: 440. }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]

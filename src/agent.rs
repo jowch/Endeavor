@@ -128,7 +128,10 @@ fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
 
     // The plugin's execution-gate hook calls back into this binary (see gate.rs).
     let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-    Ok(vec![format!("ENDEAVOR_BIN={exe}"), node.display().to_string(), entry.display().to_string()])
+    // Claude Code leaves its task tools off for newer models; they're what the
+    // adapter turns into plan updates, which the composer pins while a turn runs.
+    let tasks = "CLAUDE_CODE_ENABLE_TODO_TOOLS=1".to_string();
+    Ok(vec![format!("ENDEAVOR_BIN={exe}"), tasks, node.display().to_string(), entry.display().to_string()])
 }
 
 /// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto

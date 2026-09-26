@@ -86,8 +86,7 @@ fn check_row(id: &'static str, checked: bool, label: &'static str) -> Stateful<D
     div().id(id).flex().items_center().gap_2().cursor_pointer().child(mark).child(label)
 }
 
-/// Pane widths: the default, and the range a divider can drag them to.
-const SIDEBAR_WIDTH: f32 = 232.;
+/// The range a divider can drag the panes to (defaults: settings::Layout).
 const SIDEBAR_RANGE: (f32, f32) = (180., 400.);
 const CHAT_MIN: f32 = 320.;
 const NOTEBOOK_MIN: f32 = 360.;
@@ -167,7 +166,6 @@ fn tool_button(id: &'static str) -> Stateful<Div> {
         .cursor_pointer()
         .hover(|s| s.bg(theme::row_active()))
 }
-const CHAT_WIDTH: f32 = 440.;
 /// Room the traffic lights take at the start of a header.
 const TRAFFIC_LIGHTS: f32 = 84.;
 
@@ -260,9 +258,6 @@ pub struct Workspace {
     /// Folders showing all their past sessions, not just the newest.
     expanded: HashSet<PathBuf>,
     settings: Settings,
-    sidebar_open: bool,
-    sidebar_width: f32,
-    chat_width: f32,
     /// The divider being dragged.
     resizing: Option<Divider>,
     /// The composer's open picker: a config option id ("model", "effort").
@@ -400,9 +395,6 @@ impl Workspace {
             expanded: HashSet::new(),
             settings: Settings::load(),
             settings_open: false,
-            sidebar_open: true,
-            sidebar_width: SIDEBAR_WIDTH,
-            chat_width: CHAT_WIDTH,
             resizing: None,
             picker: None,
             setup: Setup::needed().then(Setup::default),
@@ -847,6 +839,8 @@ impl Workspace {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.picker = None;
                             let effects = this.session_mut(key).map(|s| s.set_config(id, value.clone())).unwrap_or_default();
+                            this.settings.agent_config.insert(id.to_string(), value.to_string());
+                            this.settings.save();
                             this.apply_effects(key, effects, cx);
                             cx.notify();
                         }))
@@ -856,7 +850,8 @@ impl Workspace {
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
-        self.sidebar_open = !self.sidebar_open;
+        self.settings.layout.sidebar_open = !self.settings.layout.sidebar_open;
+        self.settings.save();
         cx.notify();
     }
 
@@ -894,12 +889,12 @@ impl Workspace {
         let x = e.position.x.as_f32();
         match which {
             // Dragging well past the minimum collapses the sidebar, like ⌘B.
-            Divider::Sidebar if x < SIDEBAR_RANGE.0 / 2. => self.sidebar_open = false,
-            Divider::Sidebar => (self.sidebar_open, self.sidebar_width) = (true, x.clamp(SIDEBAR_RANGE.0, SIDEBAR_RANGE.1)),
+            Divider::Sidebar if x < SIDEBAR_RANGE.0 / 2. => self.settings.layout.sidebar_open = false,
+            Divider::Sidebar => (self.settings.layout.sidebar_open, self.settings.layout.sidebar_width) = (true, x.clamp(SIDEBAR_RANGE.0, SIDEBAR_RANGE.1)),
             Divider::Chat => {
-                let start = if self.sidebar_open { self.sidebar_width + 1. } else { 0. };
+                let start = if self.settings.layout.sidebar_open { self.settings.layout.sidebar_width + 1. } else { 0. };
                 let max = (window.viewport_size().width.as_f32() - start - NOTEBOOK_MIN).max(CHAT_MIN);
-                self.chat_width = (x - start).clamp(CHAT_MIN, max);
+                self.settings.layout.chat_width = (x - start).clamp(CHAT_MIN, max);
             }
         }
         cx.notify();
@@ -974,8 +969,22 @@ impl Workspace {
                             self.titles.insert(id.to_string(), name);
                             save_json("titles.json", &self.titles);
                         }
+                        let picked = self.settings.agent_config.clone();
                         let Some(session) = self.session_mut(key) else { return };
-                        let effects = session.started(started);
+                        let queued = session.started(started);
+                        // The user's last picks, ahead of a queued first message; the model
+                        // first, since effort's choices depend on it.
+                        let mut effects = Vec::new();
+                        for id in ["model", "effort"] {
+                            let Some(value) = picked.get(id) else { continue };
+                            let offered = session.config_choices(id).filter(|(current, options)| {
+                                current.to_string() != *value && options.iter().any(|o| o.value.to_string() == *value)
+                            });
+                            if offered.is_some() {
+                                effects.extend(session.set_config(id, value.clone().into()));
+                            }
+                        }
+                        effects.extend(queued);
                         self.apply_effects(key, effects, cx);
                     }
                     Err(e) => session.fail(&e),
@@ -1444,7 +1453,7 @@ impl Workspace {
             .collect();
 
         div()
-            .w(px(self.sidebar_width))
+            .w(px(self.settings.layout.sidebar_width))
             .flex_shrink_0()
             .h_full()
             .flex()
@@ -1822,7 +1831,7 @@ impl Render for Workspace {
             None => ("New session".into(), None),
         };
         let chat_header = column_header("chat-header")
-            .when(!self.sidebar_open, |d| d.pl(px(TRAFFIC_LIGHTS)).child(sidebar_toggle(cx)))
+            .when(!self.settings.layout.sidebar_open, |d| d.pl(px(TRAFFIC_LIGHTS)).child(sidebar_toggle(cx)))
             .child(div().text_size(px(13.5)).overflow_hidden().whitespace_nowrap().child(title))
             .children(folder.map(|f| {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family("Menlo").text_size(px(11.)).child(f)
@@ -1840,15 +1849,22 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::open_settings))
             .on_mouse_move(cx.listener(Self::drag_divider))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.resizing = None))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    if this.resizing.take().is_some() {
+                        this.settings.save();
+                    }
+                }),
+            )
             .flex()
             .size_full()
             .bg(theme::bg_page())
             .text_color(theme::text_primary())
-            .when(self.sidebar_open, |d| d.child(self.render_session_bar(cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
+            .when(self.settings.layout.sidebar_open, |d| d.child(self.render_session_bar(cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
             .child(
                 div()
-                    .w(px(self.chat_width))
+                    .w(px(self.settings.layout.chat_width))
                     .flex_shrink_0()
                     .h_full()
                     .flex()
@@ -1939,7 +1955,8 @@ fn main() {
                 let ws = workspace.downgrade();
                 cx.on_action(move |_: &ToggleSidebar, cx| {
                     ws.update(cx, |this, cx| {
-                        this.sidebar_open = !this.sidebar_open;
+                        this.settings.layout.sidebar_open = !this.settings.layout.sidebar_open;
+                        this.settings.save();
                         cx.notify();
                     })
                     .ok();
