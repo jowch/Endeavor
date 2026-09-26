@@ -97,7 +97,10 @@ connection into the channel. The webview, the agent's MCP config
 **Local sessions use the same path.** The app can run the helper as a child
 process without SSH, so local and remote share one transport, with local as
 the case that skips SSH. Whether local runtimes should also survive the app
-quitting is a separate choice. The default can stay "quit with the app".
+quitting is a user setting (decided 2026-09-26): by default local notebooks
+quit with the app; with the setting on, the local runtime keeps running and the
+app reconnects to it on the next launch, as with a remote host. Either way,
+notebooks stop after 48 hours idle (a setting), even while the app is open.
 
 ## Launchers
 
