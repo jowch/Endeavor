@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::Instant;
 
 use agent_client_protocol::Responder;
@@ -13,7 +14,7 @@ use agent_client_protocol::schema::v1::{
     AvailableCommand, ContentBlock, PermissionOption, PermissionOptionKind, PlanEntry, PlanEntryStatus,
     RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
     SessionConfigValueId, SessionId,
-    SessionModeId, SessionModeState, SessionUpdate, StopReason, ToolCallId, ToolCallStatus, ToolCallUpdate,
+    SessionModeId, SessionModeState, SessionUpdate, StopReason, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -33,6 +34,9 @@ pub enum Entry {
     Tool {
         id: ToolCallId,
         title: String,
+        kind: ToolKind,
+        /// The first file the call touches, when the agent says.
+        path: Option<PathBuf>,
         status: ToolCallStatus,
         input: Option<serde_json::Value>,
         output: Option<serde_json::Value>,
@@ -519,6 +523,8 @@ impl Session {
             SessionUpdate::ToolCall(call) => self.push(Entry::Tool {
                 id: call.tool_call_id,
                 title: call.title,
+                kind: call.kind,
+                path: call.locations.into_iter().next().map(|l| l.path),
                 status: call.status,
                 input: call.raw_input,
                 output: call.raw_output,
@@ -566,10 +572,16 @@ impl Session {
     fn on_tool_update(&mut self, update: ToolCallUpdate) -> Option<(String, Option<String>)> {
         let ix = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
         self.mark(ix);
-        let Entry::Tool { title, status, input, output, diffs, .. } = &mut self.entries[ix] else { return None };
+        let Entry::Tool { title, kind, path, status, input, output, diffs, .. } = &mut self.entries[ix] else { return None };
         let fields = update.fields;
         if let Some(t) = fields.title {
             *title = t;
+        }
+        if let Some(k) = fields.kind {
+            *kind = k;
+        }
+        if let Some(locations) = fields.locations {
+            *path = locations.into_iter().next().map(|l| l.path);
         }
         if let Some(s) = fields.status {
             *status = s;
@@ -600,6 +612,70 @@ impl Session {
         if let Some(Entry::Tool { expanded, .. } | Entry::Thought { expanded, .. }) = self.entries.get_mut(ix) {
             *expanded = !*expanded;
             self.mark(ix);
+        }
+    }
+
+    /// What the agent is doing, for the working line: this turn's latest running tool
+    /// call, else thinking or working. The second part (a cell or file name) is code-like.
+    fn activity(&self) -> (String, Option<String>) {
+        let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
+        let running = self.entries[turn_start..].iter().rev().find_map(|e| match e {
+            Entry::Tool { title, kind, path, status: ToolCallStatus::Pending | ToolCallStatus::InProgress, input, .. } => {
+                Some((title, *kind, path, input))
+            }
+            _ => None,
+        });
+        let Some((title, kind, path, input)) = running else {
+            let verb = if matches!(self.entries.last(), Some(Entry::Thought { .. })) { "Thinking" } else { "Working" };
+            return (verb.into(), None);
+        };
+        let input = input.as_ref().unwrap_or(&serde_json::Value::Null);
+        let named = |field: &str| input[field].as_str().and_then(|id| self.cell_codes.get(id)).and_then(defined_name);
+        let cells = |n: usize| if n == 1 { "1 cell".to_string() } else { format!("{n} cells") };
+        match celldiff::pluto_tool(title) {
+            Some(tool) => {
+                let (verb, object) = match tool {
+                    "read_cell" | "view_cell_output" => ("Reading", named("cell_id")),
+                    "edit_cell" => ("Editing", input["code"].as_str().and_then(defined_name).or_else(|| named("cell_id"))),
+                    "add_cell" => ("Adding", input["code"].as_str().and_then(defined_name)),
+                    "delete_cell" => ("Deleting", named("cell_id")),
+                    "move_cell" => ("Moving", named("cell_id")),
+                    "execute_cell" => ("Running", named("cell_id")),
+                    "edit_cells" => return (format!("Editing {}", cells(input["cells"].as_array().map_or(0, Vec::len))), None),
+                    "submit_changes" => match input["cell_ids"].as_array() {
+                        Some(ids) => return (format!("Running {}", cells(ids.len())), None),
+                        None => return ("Running changed cells".into(), None),
+                    },
+                    "run_all_cells" => return ("Running all cells".into(), None),
+                    "read_notebook_code" => return ("Reading the notebook".into(), None),
+                    "search_code" => return ("Searching the notebook".into(), None),
+                    "open_notebook" => return ("Opening a notebook".into(), None),
+                    "new_notebook" => return ("Creating a notebook".into(), None),
+                    _ => return ("Working".into(), None),
+                };
+                match object {
+                    Some(name) => (verb.into(), Some(name)),
+                    None => (format!("{verb} a cell"), None),
+                }
+            }
+            None => {
+                let file = path.as_deref().and_then(Path::file_name).map(|f| f.to_string_lossy().into_owned());
+                let verb = match kind {
+                    ToolKind::Read => "Reading",
+                    ToolKind::Edit => "Editing",
+                    ToolKind::Delete => "Deleting",
+                    ToolKind::Move => "Moving",
+                    ToolKind::Search => return ("Searching".into(), None),
+                    ToolKind::Execute => return ("Running a command".into(), None),
+                    ToolKind::Think => return ("Thinking".into(), None),
+                    ToolKind::Fetch => return ("Fetching".into(), None),
+                    _ => return ("Working".into(), None),
+                };
+                match file {
+                    Some(file) => (verb.into(), Some(file)),
+                    None => (format!("{verb} a file"), None),
+                }
+            }
         }
     }
 
@@ -703,48 +779,90 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
     .pt_3()
 }
 
-/// "Working · 12s" with a rocket crossing a dotted track, or a note that the
-/// session is waiting on the user.
+/// The working line: an orbit, then what the agent is doing and for how long
+/// ("Editing `residuals` · 12s"), or nothing while it waits on the user.
 pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
     let since = session.busy_since?;
-    let muted = theme::text_muted();
     // The approval card above the composer says it all.
     if session.needs_approval() {
         return None;
     }
     let secs = since.elapsed().as_secs();
     let elapsed = if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) };
-    // Matches the width of the dotted track below.
-    const TRACK: f32 = 78.;
+    let (verb, object) = session.activity();
     Some(
         div()
             .px_3()
             .pb_2()
             .flex()
             .items_center()
-            .gap_2()
-            .text_sm()
-            .text_color(muted)
+            .gap(px(4.))
+            .text_size(theme::size_meta())
+            .text_color(theme::text_muted())
             .child(
                 div()
-                    .relative()
-                    .w(px(TRACK + 16.))
-                    .h(px(18.))
-                    .child(div().absolute().top(px(4.)).text_xs().text_color(theme::text_section()).child("· · · · · · · · · · · · ·"))
-                    .child(
-                        div()
-                            .absolute()
-                            .child("🚀")
-                            .with_animation(
-                                ElementId::NamedInteger("rocket".into(), session.key),
-                                Animation::new(std::time::Duration::from_millis(2400)).repeat().with_easing(ease_in_out),
-                                |rocket, t| rocket.left(px(t * TRACK)),
-                            ),
+                    .mr(px(4.))
+                    .size(px(ORBIT))
+                    .with_animation(
+                        ElementId::NamedInteger("orbit".into(), session.key),
+                        Animation::new(Duration::from_secs(1)).repeat(),
+                        |d, t| d.child(orbit(t)),
                     ),
             )
-            .child(format!("Working · {elapsed}"))
+            .child(verb)
+            .children(object.map(|o| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_secondary()).child(o)))
+            .child(format!("· {elapsed}"))
             .into_any_element(),
     )
+}
+
+const ORBIT: f32 = 14.;
+
+/// A dot circling a small sphere on a tilted ring, `t` of the way round a lap.
+/// It passes behind the sphere on the ring's far half, so the ring's back half,
+/// a dot there, the sphere, the front half and a dot there are drawn in that order.
+fn orbit(t: f32) -> impl IntoElement {
+    use std::f32::consts::{PI, TAU};
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let center = bounds.center();
+            let (rx, tilt) = (ORBIT * 0.36, -25f32.to_radians());
+            let ry = rx * 0.36;
+            let on_ring = |a: f32| {
+                let (x, y) = (rx * a.cos(), ry * a.sin());
+                point(center.x + px(x * tilt.cos() - y * tilt.sin()), center.y + px(x * tilt.sin() + y * tilt.cos()))
+            };
+            let half = |from: f32, window: &mut Window| {
+                const STEPS: usize = 24;
+                let mut path = PathBuilder::stroke(px(1.));
+                for i in 0..=STEPS {
+                    let p = on_ring(from + PI * i as f32 / STEPS as f32);
+                    if i == 0 { path.move_to(p) } else { path.line_to(p) }
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, theme::text_section());
+                }
+            };
+            let disc = |at: Point<Pixels>, r: f32, color: Rgba, window: &mut Window| {
+                window.paint_quad(fill(Bounds::centered_at(at, size(px(2. * r), px(2. * r))), color).corner_radii(px(r)));
+            };
+            let angle = t * TAU;
+            // sin < 0: the far half, above the sphere on screen.
+            let behind = angle > PI;
+            let dot = |window: &mut Window| disc(on_ring(angle), ORBIT * 1.7 / 14., theme::accent(), window);
+            half(PI, window);
+            if behind {
+                dot(window);
+            }
+            disc(center, ORBIT * 3.4 / 14., theme::orbit_sphere(), window);
+            half(0., window);
+            if !behind {
+                dot(window);
+            }
+        },
+    )
+    .size(px(ORBIT))
 }
 
 fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>) -> AnyElement {
@@ -757,7 +875,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
             .child(div().max_w(px(300.)).px_3().py_2().rounded(px(8.)).bg(theme::bg_raised()).child(text.clone()))
             .into_any_element(),
         Entry::Agent(text) => TextView::markdown(id("agent"), text.clone()).into_any_element(),
-        Entry::Note(text) => div().text_sm().text_color(muted).child(text.clone()).into_any_element(),
+        Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
         Entry::Tool { title, status, input, output, diffs, expanded, .. } => {
             // One line: grey verb, the cells in mono, ± counts, › to expand (the diff).
             let names: Vec<String> = diffs.iter().map(cell_name).collect();
@@ -766,7 +884,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
                 celldiff::Change::Removed => (a, r + 1),
                 celldiff::Change::Same => (a, r),
             });
-            let mono = |text: String, color: Rgba| div().font_family("Menlo").text_size(px(12.)).text_color(color).child(text);
+            let mono = |text: String, color: Rgba| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
             let state = match status {
                 ToolCallStatus::Failed => Some(div().text_color(theme::danger()).child("failed")),
                 ToolCallStatus::Pending | ToolCallStatus::InProgress => Some(div().child("…")),
@@ -783,7 +901,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
                         .items_center()
                         .gap(px(6.))
                         .cursor_pointer()
-                        .text_size(px(13.))
+                        .text_size(theme::size_meta())
                         .text_color(theme::text_faint())
                         .hover(|s| s.text_color(theme::text_secondary()))
                         .child(div().overflow_hidden().whitespace_nowrap().child(tool_verb(title)))
@@ -807,7 +925,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
             .flex()
             .flex_col()
             .gap_1()
-            .text_sm()
+            .text_size(theme::size_meta())
             .text_color(muted)
             .child(
                 div()
@@ -816,14 +934,13 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
                     .child(if *expanded { "▾ Thinking" } else { "▸ Thinking" })
                     .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle(ix)))),
             )
-            .when(*expanded, |d| d.child(div().italic().child(text.clone())))
+            .when(*expanded, |d| d.child(div().italic().text_size(theme::size_body()).child(text.clone())))
             .into_any_element(),
         Entry::Plan(entries) => div()
             .flex()
             .flex_col()
             .gap_1()
-            .text_sm()
-            .child(div().text_color(muted).child(progress(entries)))
+            .child(div().text_size(theme::size_meta()).text_color(muted).child(progress(entries)))
             .children(plan_rows(entries))
             .into_any_element(),
         // Pending: shown as the approval card above the composer (render_approval).
@@ -841,7 +958,7 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
     if let Some(plan) = plan {
         return Some(render_plan_card(key, ix, plan, options, cx));
     }
-    let mono = |text: String| div().font_family("Menlo").text_size(px(12.)).child(text);
+    let mono = |text: String| div().font_family(theme::MONO).text_size(theme::size_code()).child(text);
     // An unnamed cell (e.g. markdown) by its first line, cut short.
     let first_line = |code: &str| {
         let line = code.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
@@ -923,7 +1040,7 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         })
         .collect();
     Some(approval_card(
-        inline_code(&heading).text_color(theme::text_primary()).into_any_element(),
+        inline_code(&heading).text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).into_any_element(),
         code.into_iter().chain(body).collect(),
         buttons,
     ))
@@ -938,7 +1055,7 @@ fn render_plan_card(key: u64, ix: usize, plan: &str, options: &[PermissionOption
         ("Start", "⏎", plan_option(options), false, true),
     ];
     approval_card(
-        div().text_color(theme::text_primary()).child("Ready to start?").into_any_element(),
+        div().text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child("Ready to start?").into_any_element(),
         vec![
             div()
                 .id(ElementId::NamedInteger("plan".into(), key))
@@ -979,7 +1096,6 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<AnyEle
             spread_radius: px(3.),
             inset: false,
         }])
-        .text_sm()
         .child(heading)
         .children(body)
         .child(div().flex().flex_wrap().justify_end().gap_2().children(buttons))
@@ -998,15 +1114,15 @@ fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool) -> Sta
         .cursor_pointer()
         .map(|d| if primary { d.bg(theme::accent()).text_color(gpui::white()) } else { d.bg(theme::bg_raised()).hover(|s| s.bg(theme::row_active())) })
         .child(label.to_string())
-        .when(!hint.is_empty(), |d| d.child(div().text_size(px(11.)).opacity(0.6).child(hint.to_string())))
+        .when(!hint.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).opacity(0.6).child(hint.to_string())))
 }
 
-/// Text with `backticked` spans in mono.
+/// A card title with `backticked` spans in mono, a pixel smaller (as in body text).
 fn inline_code(text: &str) -> Div {
     div().flex().flex_wrap().children(text.split('`').enumerate().map(|(i, part)| {
         // Flex drops a part's edge spaces; non-breaking ones survive.
         let d = div().child(part.replace(' ', "\u{a0}"));
-        if i % 2 == 1 { d.font_family("Menlo").text_size(px(12.5)) } else { d }
+        if i % 2 == 1 { d.font_family(theme::MONO).font_weight(FontWeight::NORMAL).text_size(theme::size_subhead() - px(1.)) } else { d }
     }))
 }
 
@@ -1046,13 +1162,13 @@ pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Opt
             .rounded(px(8.))
             .border_1()
             .border_color(theme::composer_edge())
-            .text_sm()
             .child(
                 div()
                     .id("pinned-plan")
                     .flex()
                     .justify_between()
                     .cursor_pointer()
+                    .text_size(theme::size_meta())
                     .text_color(theme::text_muted())
                     .child(progress(entries))
                     .child(if folded { "›" } else { "⌄" })
@@ -1072,7 +1188,6 @@ pub fn render_queue(session: &Session, cx: &mut Context<Workspace>) -> impl Into
         div()
             .flex()
             .gap_2()
-            .text_sm()
             .text_color(muted)
             .child(div().flex_1().overflow_hidden().child(q.label.clone()))
             .when(q.in_flight(), |d| d.child("sending now…"))
@@ -1106,8 +1221,8 @@ fn render_diff(diff: &celldiff::CellDiff) -> impl IntoElement + use<> {
         .rounded_sm()
         .border_1()
         .border_color(theme::border())
-        .font_family("Menlo")
-        .text_xs()
+        .font_family(theme::MONO)
+        .text_size(theme::size_code())
         .child(div().px_2().text_color(theme::text_muted()).child(diff.label.clone()))
         .children(diff.lines.iter().take(MAX_LINES).map(|(change, line)| {
             let (sign, bg) = match change {
@@ -1147,13 +1262,16 @@ fn tool_verb(title: &str) -> String {
 /// `x = …` → `x`), else its label.
 fn cell_name(diff: &celldiff::CellDiff) -> String {
     let first = diff.lines.iter().find(|(c, l)| !matches!(c, celldiff::Change::Removed) && !l.trim().is_empty());
-    let defined = first.and_then(|(_, line)| {
-        let lhs = line.split_once('=').map(|(lhs, _)| lhs).unwrap_or(line.as_str());
-        let lhs = lhs.trim().trim_start_matches("function ").trim_start_matches("const ");
-        let name: String = lhs.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '!').collect();
-        (!name.is_empty() && line.contains('=')).then_some(name)
-    });
-    defined.unwrap_or_else(|| diff.label.clone())
+    first.and_then(|(_, line)| defined_name(line)).unwrap_or_else(|| diff.label.clone())
+}
+
+/// What code defines, from its first line: `model(S, p) = …` → `model`, `x = …` → `x`.
+fn defined_name(code: &str) -> Option<String> {
+    let line = code.lines().find(|l| !l.trim().is_empty())?;
+    let lhs = line.split_once('=').map(|(lhs, _)| lhs).unwrap_or(line);
+    let lhs = lhs.trim().trim_start_matches("function ").trim_start_matches("const ");
+    let name: String = lhs.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '!').collect();
+    (!name.is_empty() && line.contains('=')).then_some(name)
 }
 
 /// A tool call's input or result, pretty-printed and truncated.
@@ -1170,8 +1288,8 @@ fn detail(label: &str, value: &serde_json::Value) -> impl IntoElement + use<> {
         .rounded_sm()
         .bg(theme::bg_card())
         .p_2()
-        .font_family("Menlo")
-        .text_xs()
+        .font_family(theme::MONO)
+        .text_size(theme::size_code())
         .child(div().text_color(theme::text_muted()).child(label.to_string()))
         .child(text)
 }

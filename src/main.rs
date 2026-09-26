@@ -31,7 +31,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_component::radio::Radio;
-use gpui_component::{Root, Sizable, Theme, ThemeMode};
+use gpui_component::{Root, Sizable, Theme, ThemeConfig, ThemeMode};
 use gpui_wry::WebView;
 use outbox::Queued;
 use raw_window_handle::HasWindowHandle;
@@ -82,7 +82,7 @@ fn check_row(id: &'static str, checked: bool, label: &'static str) -> Stateful<D
         .rounded_sm()
         .border_1()
         .border_color(theme::text_faint())
-        .text_xs()
+        .text_size(theme::size_meta_small())
         .when(checked, |d| d.bg(theme::accent()).border_color(theme::accent()).child("✓"));
     div().id(id).flex().items_center().gap_2().cursor_pointer().child(mark).child(label)
 }
@@ -202,7 +202,6 @@ fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
         .px(px(10.))
         .rounded(px(4.))
         .cursor_pointer()
-        .text_size(px(12.5))
         .text_color(if active { theme::text_row_active() } else { theme::text_muted() })
         .when(active, |d| d.bg(theme::row_active()))
         .hover(|s| s.bg(theme::row_active()))
@@ -306,6 +305,20 @@ impl Workspace {
             let webview = wry::WebViewBuilder::new()
                 .with_devtools(true)
                 .with_initialization_script(&annotate::script())
+                // The bundled JuliaMono for Pluto's page, which otherwise loads it from a CDN.
+                .with_custom_protocol("endeavor".into(), |_, request| {
+                    let font = match request.uri().path() {
+                        "/fonts/JuliaMono-Regular.ttf" => Some(theme::JULIA_MONO_REGULAR),
+                        "/fonts/JuliaMono-Bold.ttf" => Some(theme::JULIA_MONO_BOLD),
+                        _ => None,
+                    };
+                    let response = wry::http::Response::builder().header("Access-Control-Allow-Origin", "*");
+                    match font {
+                        Some(bytes) => response.header("Content-Type", "font/ttf").body(bytes.into()),
+                        None => response.status(404).body(Vec::new().into()),
+                    }
+                    .expect("static response")
+                })
                 .with_ipc_handler(move |request| {
                     let _ = page_tx.unbounded_send(request.into_body());
                 })
@@ -766,7 +779,6 @@ impl Workspace {
                 .border_1()
                 .border_color(theme::composer_edge())
                 .bg(theme::bg_raised())
-                .text_size(px(12.5))
                 .children(matches.into_iter().enumerate().map(|(i, command)| {
                     let name = command.name.clone();
                     div()
@@ -778,7 +790,7 @@ impl Workspace {
                         .rounded(px(5.))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::row_active()))
-                        .child(div().flex_shrink_0().font_family("Menlo").child(format!("/{}", command.name)))
+                        .child(div().flex_shrink_0().font_family(theme::MONO).text_size(theme::size_code()).child(format!("/{}", command.name)))
                         .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(theme::text_muted()).child(command.description.clone()))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.input.update(cx, |s, cx| s.set_value(format!("/{name} "), window, cx));
@@ -812,7 +824,6 @@ impl Workspace {
                 .border_1()
                 .border_color(theme::composer_edge())
                 .bg(theme::bg_raised())
-                .text_size(px(12.5))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.picker = None;
                     cx.notify();
@@ -837,7 +848,7 @@ impl Workspace {
                                 .flex()
                                 .flex_col()
                                 .child(option.name.clone())
-                                .children(option.description.clone().map(|d| div().text_size(px(11.5)).text_color(theme::text_muted()).child(d))),
+                                .children(option.description.clone().map(|d| div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(d))),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.picker = None;
@@ -1149,11 +1160,10 @@ impl Workspace {
                 .py_1()
                 .rounded_sm()
                 .cursor_pointer()
-                .text_sm()
                 .bg(if primary { theme::accent() } else { theme::bg_raised() })
                 .child(label)
         };
-        let waiting = self.signing_in.then(|| div().text_xs().text_color(muted).child("Waiting for you to finish in your browser…"));
+        let waiting = self.signing_in.then(|| div().text_size(theme::size_meta()).text_color(muted).child("Waiting for you to finish in your browser…"));
         Some(
             div()
                 .flex()
@@ -1162,15 +1172,15 @@ impl Workspace {
                 .p_2()
                 .rounded_md()
                 .bg(theme::bg_card())
-                .child(div().text_sm().child("Sign in to Claude"))
-                .child(div().text_xs().text_color(muted).child("Endeavor runs Claude Code with your account. Sign-in opens in your browser."))
+                .child(div().text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).child("Sign in to Claude"))
+                .child(div().text_size(theme::size_meta()).text_color(muted).child("Endeavor runs Claude Code with your account. Sign-in opens in your browser."))
                 .child(button("sign-in-claude", "Claude subscription", true).on_click(cx.listener(|this, _, _, cx| this.sign_in(false, cx))))
                 .child(
                     button("sign-in-console", "Anthropic Console (API billing)", false)
                         .on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx))),
                 )
                 .children(waiting)
-                .children(self.sign_in_error.clone().map(|e| div().text_xs().text_color(theme::danger()).child(e)))
+                .children(self.sign_in_error.clone().map(|e| div().text_size(theme::size_meta()).text_color(theme::danger()).child(e)))
                 .into_any_element(),
         )
     }
@@ -1380,7 +1390,7 @@ impl Workspace {
                         let active = self.active == Some(key) && !self.settings_open;
                         let row: SharedString = format!("session-{key}").into();
                         let title = match &self.renaming {
-                            Some((k, input)) if *k == key => div().flex_1().child(Input::new(input).xsmall()),
+                            Some((k, input)) if *k == key => div().flex_1().child(Input::new(input).xsmall().text_size(theme::size_body())),
                             _ => div().flex_1().overflow_hidden().whitespace_nowrap().child(s.title.clone()),
                         };
                         // Status at the row's end: a ring waits for you, a dot is working.
@@ -1460,7 +1470,7 @@ impl Workspace {
                 div()
                     .flex()
                     .flex_col()
-                    .child(div().mt(px(18.)).px(px(10.)).pb_1().text_size(px(11.5)).text_color(theme::text_section()).child(folder_name(folder)))
+                    .child(div().mt(px(18.)).px(px(10.)).pb_1().text_size(theme::size_meta_small()).text_color(theme::text_section()).child(folder_name(folder)))
                     .children(open)
                     .children(past)
                     .children(more)
@@ -1505,7 +1515,7 @@ impl Workspace {
                     .items_center()
                     .pt(px(6.))
                     .px_1()
-                    .child(div().flex_1().pl(px(6.)).text_size(px(11.5)).text_color(theme::text_section()).child(self.status.clone()))
+                    .child(div().flex_1().pl(px(6.)).text_size(theme::size_meta()).text_color(theme::text_section()).child(self.status.clone()))
                     .child(
                         div()
                             .id("settings")
@@ -1539,7 +1549,6 @@ impl Workspace {
                     .px_2()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_sm()
                     .text_color(muted)
                     .when(self.new_cwd.as_ref() == Some(&path), |d| d.text_color(theme::text_primary()).bg(theme::row_active()))
                     .child(format!("{}  ·  {}", folder_name(&path), path.display()))
@@ -1555,12 +1564,12 @@ impl Workspace {
             .flex_col()
             .gap_3()
             .p_4()
-            .child(div().text_sm().text_color(muted).child("Working folder: where Claude works, whose CLAUDE.md applies, and where new notebooks go."))
+            .child(div().text_color(muted).child("Working folder: where Claude works, whose CLAUDE.md applies, and where new notebooks go."))
             .child(
                 div()
                     .flex()
                     .gap_2()
-                    .child(div().flex_1().p_1().rounded_sm().bg(theme::bg_card()).text_sm().overflow_hidden().child(folder))
+                    .child(div().flex_1().p_1().rounded_sm().bg(theme::bg_card()).font_family(theme::MONO).text_size(theme::size_code()).overflow_hidden().child(folder))
                     .child(
                         div()
                             .id("choose-folder")
@@ -1568,16 +1577,15 @@ impl Workspace {
                             .py_1()
                             .rounded_sm()
                             .cursor_pointer()
-                            .text_sm()
                             .bg(theme::bg_raised())
                             .child("Choose…")
                             .on_click(cx.listener(|this, _, _, cx| this.choose_folder(cx))),
                     ),
             )
-            .when(!recent.is_empty(), |d| d.child(div().text_xs().text_color(muted).child("Recent")).children(recent))
+            .when(!recent.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).text_color(muted).child("Recent")).children(recent))
             .child(div().flex_1())
-            .child(div().text_sm().text_color(muted).child("First message (optional)"))
-            .child(Textarea::new(&self.input))
+            .child(div().text_color(muted).child("First message (optional)"))
+            .child(Textarea::new(&self.input).text_size(theme::size_body()))
             .child(
                 div()
                     .id("start-session")
@@ -1594,8 +1602,8 @@ impl Workspace {
     fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = theme::text_muted();
         let s = &self.settings;
-        let heading = |text: &'static str| div().mt_2().text_sm().child(text);
-        let note = |text: String| div().pl_6().text_xs().text_color(muted).child(text);
+        let heading = |text: &'static str| div().mt_2().text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).child(text);
+        let note = |text: String| div().pl_6().text_size(theme::size_meta()).text_color(muted).child(text);
         let own = s.julia.is_none();
         div()
             .flex_1()
@@ -1624,7 +1632,7 @@ impl Workspace {
                     .gap_4()
                     .children([(Appearance::Dark, "Dark"), (Appearance::Light, "Light"), (Appearance::System, "Match system")].map(
                         |(value, label)| {
-                            Radio::new(label).checked(s.appearance == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
+                            Radio::new(label).text_size(theme::size_body()).checked(s.appearance == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
                                 this.update_settings(cx, |s| s.appearance = value);
                                 this.apply_look(cx);
                             }))
@@ -1638,7 +1646,7 @@ impl Workspace {
                     .flex()
                     .gap_4()
                     .children([(NotebookTheme::Endeavor, "Endeavor"), (NotebookTheme::Pluto, "Pluto")].map(|(value, label)| {
-                        Radio::new(label).checked(s.notebook_theme == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
+                        Radio::new(label).text_size(theme::size_body()).checked(s.notebook_theme == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
                             this.update_settings(cx, |s| s.notebook_theme = value);
                             this.apply_look(cx);
                         }))
@@ -1648,6 +1656,7 @@ impl Workspace {
             .child(heading("Julia"))
             .child(
                 Radio::new("julia-own")
+                    .text_size(theme::size_body())
                     .checked(own)
                     .label(format!("Endeavor's Julia ({})", runtime::JULIA_VERSION))
                     .on_click(cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.julia = None))),
@@ -1659,6 +1668,7 @@ impl Workspace {
                     .gap_2()
                     .child(
                         Radio::new("julia-mine")
+                            .text_size(theme::size_body())
                             .checked(!own)
                             .label("My julia")
                             .on_click(cx.listener(|this, _, _, cx| this.choose_julia(cx))),
@@ -1669,7 +1679,6 @@ impl Workspace {
                             .px_2()
                             .rounded_sm()
                             .cursor_pointer()
-                            .text_sm()
                             .bg(theme::bg_raised())
                             .child("Choose…")
                             .on_click(cx.listener(|this, _, _, cx| this.choose_julia(cx))),
@@ -1687,7 +1696,6 @@ impl Workspace {
                     .px_2()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_sm()
                     .bg(theme::bg_raised())
                     .child("Show logs")
                     .on_click(|_, _, _| logs::reveal()),
@@ -1712,7 +1720,6 @@ impl Workspace {
                     .rounded_md()
                     .border_1()
                     .border_color(theme::danger())
-                    .text_sm()
                     .child(failure.message.clone())
                     .when(failure.can_copy, |d| {
                         d.child(
@@ -1755,7 +1762,7 @@ impl Workspace {
                             .border_1()
                             .border_color(theme::composer_edge())
                             .bg(theme::bg_card())
-                            .child(div().flex_1().child(Textarea::new(&self.input).appearance(false)))
+                            .child(div().flex_1().child(Textarea::new(&self.input).appearance(false).text_size(theme::size_body())))
                             .child(if session.outbox.busy && session.id.is_some() {
                                 div()
                                     .id("stop")
@@ -1766,7 +1773,7 @@ impl Workspace {
                                     .rounded(px(4.))
                                     .cursor_pointer()
                                     .bg(theme::bg_raised())
-                                    .text_size(px(10.))
+                                    .text_size(theme::size_meta_small())
                                     .child("■")
                                     .on_click(cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx)))
                                     .into_any_element()
@@ -1781,7 +1788,7 @@ impl Workspace {
                             .items_center()
                             .gap(px(2.))
                             .h(px(24.))
-                            .text_size(px(12.))
+                            .text_size(theme::size_meta())
                             .text_color(theme::text_new())
                             .child(
                                 tool_button("point")
@@ -1834,7 +1841,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(setup) = &self.setup {
             let sign_in = self.render_sign_in(cx);
-            return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).child(splash::render(setup, sign_in, cx)).into_any_element();
+            return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(splash::render(setup, sign_in, cx)).into_any_element();
         }
         let active = self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key));
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
@@ -1856,15 +1863,15 @@ impl Render for Workspace {
         };
         let chat_header = column_header("chat-header")
             .when(!self.settings.layout.sidebar_open, |d| d.pl(px(TRAFFIC_LIGHTS)).child(sidebar_toggle(cx)))
-            .child(div().text_size(px(13.5)).overflow_hidden().whitespace_nowrap().child(title))
+            .child(div().overflow_hidden().whitespace_nowrap().child(title))
             .children(folder.map(|f| {
-                div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family("Menlo").text_size(px(11.)).child(f)
+                div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family(theme::MONO).text_size(theme::size_meta_small()).child(f)
             }));
         let notebook_file = self.active_session().and_then(|s| s.notebook.as_ref()).and_then(|id| {
             self.last_notebooks.iter().find(|(nid, _)| nid == id).map(|(_, path)| folder_name(Path::new(path)))
         });
         let notebook_header = column_header("notebook-header")
-            .children(notebook_file.map(|f| div().font_family("Menlo").text_size(px(12.)).text_color(theme::text_muted()).child(f)));
+            .children(notebook_file.map(|f| div().font_family(theme::MONO).text_size(theme::size_meta()).text_color(theme::text_muted()).child(f)));
         div()
             .key_context("Workspace")
             .on_action(cx.listener(Self::interrupt))
@@ -1885,6 +1892,8 @@ impl Render for Workspace {
             .size_full()
             .bg(theme::bg_page())
             .text_color(theme::text_primary())
+            .text_size(theme::size_body())
+            .line_height(theme::line_body())
             .when(self.settings.layout.sidebar_open, |d| d.child(self.render_session_bar(cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
             .child(
                 div()
@@ -1911,6 +1920,17 @@ impl Render for Workspace {
     }
 }
 
+/// Accessibility's Reduce motion, which GPUI doesn't read itself.
+fn system_reduces_motion() -> bool {
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{class, msg_send};
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let reduce: Bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+        reduce.as_bool()
+    }
+}
+
 fn main() {
     // Claude Code runs the plugin's execution-gate hook as `endeavor hook-pretool`.
     if std::env::args().nth(1).as_deref() == Some("hook-pretool") {
@@ -1919,6 +1939,16 @@ fn main() {
     logs::start();
     gpui_platform::application().run(|cx: &mut App| {
         gpui_component::init(cx);
+        theme::load_fonts(cx);
+        // Theme::change applies these before building the component defaults from them.
+        let ui = Theme::global_mut(cx);
+        ui.dark_theme = std::rc::Rc::new(ThemeConfig {
+            font_family: Some(theme::SANS.into()),
+            mono_font_family: Some(theme::MONO.into()),
+            mono_font_size: Some(f32::from(theme::size_code())),
+            ..(*ui.dark_theme).clone()
+        });
+        cx.set_reduce_motion(system_reduces_motion());
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),

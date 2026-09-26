@@ -52,7 +52,27 @@ const endeavorDark = `
 footer { display: none !important; }
 `;
 
+// The app's bundled JuliaMono (served by the app's endeavor: protocol), so code
+// renders offline. Declared after Pluto's CDN faces of the same family, so these
+// win for every character; Pluto's italic stays as is (the app has no italic).
+const juliaMono = [400, 700]
+  .map(
+    (weight) => `
+@font-face {
+  font-family: JuliaMono;
+  src: url("endeavor://localhost/fonts/JuliaMono-${weight === 400 ? "Regular" : "Bold"}.ttf") format("truetype");
+  font-display: swap;
+  font-weight: ${weight};
+}`,
+  )
+  .join("");
+
 export function initTheme(): void {
+  const fonts = document.createElement("style");
+  fonts.id = "endeavor-fonts";
+  fonts.textContent = juliaMono;
+  document.head.append(fonts);
+
   const style = document.createElement("style");
   style.id = "endeavor-theme";
   // After Pluto's stylesheets, so equal-specificity rules win.

@@ -243,7 +243,7 @@ def import_greek(base, weight, log):
     gcmap = greek.getBestCmap()
     n = 0
     for c in cps:
-        if c in gcmap:
+        if c in gcmap and c != NU:
             name = "grk." + gcmap[c]
             if name not in base["glyf"].glyphs:
                 copy_glyph(greek, gcmap[c], base, name, scale)

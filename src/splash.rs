@@ -110,7 +110,7 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspa
                     .child(div().when(!active && step > setup.step, |d| d.text_color(muted)).child(step.label())),
             )
             .when(active && setup.error.is_none() && !setup.detail.is_empty(), |d| {
-                d.child(div().pl_6().text_xs().text_color(muted).overflow_hidden().whitespace_nowrap().child(setup.detail.clone()))
+                d.child(div().pl_6().text_size(theme::size_meta()).text_color(muted).overflow_hidden().whitespace_nowrap().child(setup.detail.clone()))
             })
     });
     div()
@@ -121,8 +121,8 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspa
         .justify_center()
         .gap_4()
         .child(div().text_3xl().child("🚀"))
-        .child(div().text_2xl().child("Endeavor"))
-        .child(div().text_sm().text_color(muted).child("Setting up. The first launch takes a few minutes."))
+        .child(div().text_size(theme::size_title()).font_weight(FontWeight::SEMIBOLD).child("Endeavor"))
+        .child(div().text_color(muted).child("Setting up. The first launch takes a few minutes."))
         .child(
             div()
                 .w(px(BAR))
@@ -131,7 +131,7 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspa
                 .bg(theme::border())
                 .child(div().h_full().rounded_full().bg(theme::accent()).w(px(BAR * setup.overall()))),
         )
-        .child(div().w(px(BAR)).flex().flex_col().gap_2().text_sm().children(steps))
+        .child(div().w(px(BAR)).flex().flex_col().gap_2().children(steps))
         .children(extra.map(|e| div().w(px(BAR)).child(e)))
         .children(setup.error.clone().map(|error| {
             let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).child(label);
@@ -140,7 +140,7 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspa
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(div().text_sm().text_color(theme::danger()).child(error))
+                .child(div().text_color(theme::danger()).child(error))
                 .child(
                     div()
                         .flex()

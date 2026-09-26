@@ -667,7 +667,20 @@
 }
 footer { display: none !important; }
 `;
+  var juliaMono = [400, 700].map(
+    (weight) => `
+@font-face {
+  font-family: JuliaMono;
+  src: url("endeavor://localhost/fonts/JuliaMono-${weight === 400 ? "Regular" : "Bold"}.ttf") format("truetype");
+  font-display: swap;
+  font-weight: ${weight};
+}`
+  ).join("");
   function initTheme() {
+    const fonts = document.createElement("style");
+    fonts.id = "endeavor-fonts";
+    fonts.textContent = juliaMono;
+    document.head.append(fonts);
     const style = document.createElement("style");
     style.id = "endeavor-theme";
     document.head.append(style);

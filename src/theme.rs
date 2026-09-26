@@ -1,7 +1,10 @@
-//! Colour tokens from docs/ui-spec.md (dark only; neutrals carry a faint cool tint).
-//! Every colour in the native UI comes from here.
+//! Colour and type tokens from docs/ui-spec.md (dark only; neutrals carry a faint
+//! cool tint), and the bundled fonts. Every colour, font and text size in the
+//! native UI comes from here.
 
-use gpui::{Rgba, rgb, rgba};
+use std::borrow::Cow;
+
+use gpui::{App, Pixels, Rgba, px, rgb, rgba};
 
 /// Sessions sidebar.
 pub fn bg_sidebar() -> Rgba { rgb(0x111113) }
@@ -52,3 +55,38 @@ pub fn diff_add_tint() -> Rgba { rgba(0x6CC7841F) }
 pub fn diff_del_tint() -> Rgba { rgba(0xE07A7A1F) }
 /// Errors use the removal red.
 pub fn danger() -> Rgba { diff_del() }
+/// The working indicator's centre sphere.
+pub fn orbit_sphere() -> Rgba { rgb(0x9A9AA0) }
+
+/// The interface font (fonts/README.md) and the code font, for cell names, paths,
+/// counts, code and tool names. Bundled, so they look the same everywhere.
+pub const SANS: &str = "Endeavor Sans";
+pub const MONO: &str = "JuliaMono";
+pub const JULIA_MONO_REGULAR: &[u8] = include_bytes!("../fonts/JuliaMono-Regular.ttf");
+pub const JULIA_MONO_BOLD: &[u8] = include_bytes!("../fonts/JuliaMono-Bold.ttf");
+
+pub fn load_fonts(cx: &mut App) {
+    let fonts = [
+        include_bytes!("../fonts/EndeavorSans-Regular.ttf").as_slice(),
+        include_bytes!("../fonts/EndeavorSans-Medium.ttf"),
+        include_bytes!("../fonts/EndeavorSans-SemiBold.ttf"),
+        JULIA_MONO_REGULAR,
+        JULIA_MONO_BOLD,
+    ];
+    cx.text_system().add_fonts(fonts.into_iter().map(Cow::Borrowed).collect()).expect("bundled fonts");
+}
+
+/// Section heads, tags, keyboard hints.
+pub fn size_meta_small() -> Pixels { px(11.) }
+/// Tool lines, toolbar, timestamps, captions.
+pub fn size_meta() -> Pixels { px(12.) }
+/// Chat messages, sidebar rows, cards, settings.
+pub fn size_body() -> Pixels { px(13.) }
+pub fn line_body() -> Pixels { px(19.5) }
+/// Card titles ("Run 3 cells?"), medium weight.
+pub fn size_subhead() -> Pixels { px(15.) }
+/// Titles, semibold.
+pub fn size_title() -> Pixels { px(21.) }
+/// JuliaMono inside body text: a size smaller, since it looks larger than the
+/// interface font at the same size.
+pub fn size_code() -> Pixels { px(12.) }
