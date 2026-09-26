@@ -38,7 +38,7 @@ use gpui_component::radio::Radio;
 use gpui_component::{Root, Sizable, Theme, ThemeConfig, ThemeMode};
 use gpui_wry::WebView;
 use outbox::Queued;
-use new_session::{Draft, NotebookChoice};
+use new_session::{Draft, Glyph, NotebookChoice, glyph, menu_row};
 use raw_window_handle::HasWindowHandle;
 use runtime::Runtime;
 use session::{Effect, Session, folder_name};
@@ -222,30 +222,54 @@ enum Row {
     Past(SessionId, PathBuf),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum RowAction {
     Rename,
     Reveal,
+    Archive,
+    Unarchive,
     Close,
     Delete,
 }
 
 impl RowAction {
+    const ALL: [RowAction; 6] = [RowAction::Rename, RowAction::Reveal, RowAction::Archive, RowAction::Unarchive, RowAction::Close, RowAction::Delete];
+
     fn label(self) -> &'static str {
         match self {
             RowAction::Rename => "Rename",
             RowAction::Reveal => "Reveal folder in Finder",
+            RowAction::Archive => "Archive",
+            RowAction::Unarchive => "Unarchive",
             RowAction::Close => "Close",
             RowAction::Delete => "Delete…",
         }
     }
 
-    /// A row's menu; Delete comes last, after a separator.
-    fn for_row(row: &Row) -> &'static [RowAction] {
-        match row {
-            Row::Open(_) => &[RowAction::Rename, RowAction::Reveal, RowAction::Close, RowAction::Delete],
-            Row::Past(..) => &[RowAction::Rename, RowAction::Reveal, RowAction::Delete],
+    /// The key that picks it while the menu is open (`Keystroke::key`), and how
+    /// the menu shows that key.
+    fn shortcut(self) -> (&'static str, &'static str) {
+        match self {
+            RowAction::Rename => ("r", "R"),
+            RowAction::Reveal => ("f", "F"),
+            RowAction::Archive | RowAction::Unarchive => ("a", "A"),
+            RowAction::Close => ("c", "C"),
+            RowAction::Delete => ("backspace", "⌫"),
         }
+    }
+
+    /// A row's menu; Delete comes last, after a separator. `archived` is None for
+    /// a session the agent hasn't given an id yet, which can't be archived.
+    fn for_row(row: &Row, archived: Option<bool>) -> Vec<RowAction> {
+        Self::ALL
+            .into_iter()
+            .filter(|action| match action {
+                RowAction::Archive => archived == Some(false),
+                RowAction::Unarchive => archived == Some(true),
+                RowAction::Close => matches!(row, Row::Open(_)),
+                _ => true,
+            })
+            .collect()
     }
 }
 
@@ -308,6 +332,10 @@ pub struct Workspace {
     ours: HashSet<String>,
     /// Session names the user gave, by session id (persisted).
     titles: HashMap<String, String>,
+    /// Ids of archived sessions (persisted): hidden from the sidebar's Active view.
+    archived: HashSet<String>,
+    /// The sidebar's Active / All filter menu is open.
+    filter_menu: bool,
     /// Each session's notebook file, by session id (persisted), for reopening it
     /// with the session: one the app opened isn't in the agent's history.
     session_notebooks: HashMap<String, String>,
@@ -464,6 +492,8 @@ impl Workspace {
             past: HashMap::new(),
             ours: load_json("sessions.json"),
             titles: load_json("titles.json"),
+            archived: load_json("archived.json"),
+            filter_menu: false,
             session_notebooks: load_json("notebooks.json"),
             renaming: None,
             row_menu: None,
@@ -640,10 +670,43 @@ impl Workspace {
         if self.titles.remove(&id.to_string()).is_some() {
             save_json("titles.json", &self.titles);
         }
+        if self.archived.remove(&id.to_string()) {
+            save_json("archived.json", &self.archived);
+        }
         if self.session_notebooks.remove(&id.to_string()).is_some() {
             save_json("notebooks.json", &self.session_notebooks);
         }
         cx.notify();
+    }
+
+    fn row_session_id(&self, row: &Row) -> Option<SessionId> {
+        match row {
+            Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).and_then(|s| s.id.clone()),
+            Row::Past(id, _) => Some(id.clone()),
+        }
+    }
+
+    fn row_actions(&self, row: &Row) -> Vec<RowAction> {
+        let archived = self.row_session_id(row).map(|id| self.archived.contains(&id.to_string()));
+        RowAction::for_row(row, archived)
+    }
+
+    /// Archive a session (closing it if it's open), or bring it back.
+    fn set_archived(&mut self, row: Row, archive: bool, cx: &mut Context<Self>) {
+        let Some(id) = self.row_session_id(&row) else { return };
+        let changed = if archive { self.archived.insert(id.to_string()) } else { self.archived.remove(&id.to_string()) };
+        if changed {
+            save_json("archived.json", &self.archived);
+        }
+        if let (true, Row::Open(key)) = (archive, row) {
+            self.close_session(key, cx);
+        }
+        cx.notify();
+    }
+
+    fn set_show_archived(&mut self, show: bool, cx: &mut Context<Self>) {
+        self.filter_menu = false;
+        self.update_settings(cx, |s| s.show_archived = show);
     }
 
     /// A row's name as the sidebar shows it.
@@ -688,6 +751,8 @@ impl Workspace {
                     let _ = std::process::Command::new("open").arg("-R").arg(folder).spawn();
                 }
             }
+            RowAction::Archive => self.set_archived(row, true, cx),
+            RowAction::Unarchive => self.set_archived(row, false, cx),
             RowAction::Close => {
                 if let Row::Open(key) = row {
                     self.close_session(key, cx);
@@ -1082,6 +1147,10 @@ impl Workspace {
     }
 
     fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if self.filter_menu {
+            self.filter_menu = false;
+            return cx.notify();
+        }
         if self.draft.popover.is_some() {
             return self.close_popover(window, cx);
         }
@@ -1565,7 +1634,7 @@ impl Workspace {
 
     /// The row menu, under the ⋮ button or at the pointer that right-clicked.
     fn render_row_menu(&self, menu: &RowMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let items = RowAction::for_row(&menu.row).iter().enumerate().flat_map(|(i, &action)| {
+        let items = self.row_actions(&menu.row).into_iter().enumerate().flat_map(|(i, action)| {
             let danger = matches!(action, RowAction::Delete);
             let separator = danger.then(|| div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge()).into_any_element());
             let row = menu.row.clone();
@@ -1573,6 +1642,9 @@ impl Workspace {
                 .id(ElementId::NamedInteger("row-menu-item".into(), i as u64))
                 .role(Role::MenuItem)
                 .aria_label(action.label())
+                .flex()
+                .items_center()
+                .justify_between()
                 .px(px(8.))
                 .py(px(4.))
                 .rounded(px(5.))
@@ -1590,6 +1662,7 @@ impl Workspace {
                     this.row_action(row.clone(), action, window, cx);
                 }))
                 .child(action.label())
+                .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(action.shortcut().1))
                 .into_any_element();
             separator.into_iter().chain([item])
         });
@@ -1621,8 +1694,15 @@ impl Workspace {
     }
 
     fn row_menu_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.row_menu.as_ref().map(|menu| menu.row.clone()) else { return };
+        let actions = self.row_actions(&row);
+        if !e.keystroke.modifiers.modified()
+            && let Some(&action) = actions.iter().find(|a| a.shortcut().0 == e.keystroke.key)
+        {
+            cx.stop_propagation();
+            return self.row_action(row, action, window, cx);
+        }
         let Some(menu) = self.row_menu.as_mut() else { return };
-        let actions = RowAction::for_row(&menu.row);
         let n = actions.len();
         match e.keystroke.key.as_str() {
             "down" => menu.selected = Some(menu.selected.map_or(0, |i| (i + 1) % n)),
@@ -1660,11 +1740,14 @@ impl Workspace {
                         let active = self.active == Some(key) && !self.settings_open;
                         let group: SharedString = format!("session-{key}").into();
                         let title = self.row_label(&Row::Open(key), s.title.clone());
+                        let archived = s.id.as_ref().is_some_and(|id| self.archived.contains(&id.to_string()));
                         // Status at the row's end: a ring waits for you, a dot is working.
                         let mark = if s.needs_approval() {
-                            Some(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()))
+                            Some(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element())
                         } else if s.outbox.busy {
-                            Some(div().size(px(6.)).rounded_full().bg(theme::accent()))
+                            Some(div().size(px(6.)).rounded_full().bg(theme::accent()).into_any_element())
+                        } else if archived {
+                            Some(glyph(Glyph::Archive, theme::text_section()).into_any_element())
                         } else {
                             None
                         };
@@ -1685,7 +1768,8 @@ impl Workspace {
                     .collect();
                 // Past sessions not already open, newest first; the newest few unless expanded.
                 let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
-                let shown = |info: &SessionInfo| self.ours.contains(&info.session_id.to_string());
+                let is_archived = |info: &SessionInfo| self.archived.contains(&info.session_id.to_string());
+                let shown = |info: &SessionInfo| self.ours.contains(&info.session_id.to_string()) && (self.settings.show_archived || !is_archived(info));
                 let all: Vec<_> = self.past.get(folder).into_iter().flatten().filter(|info| !is_open(info) && shown(info)).collect();
                 let expanded = self.expanded.contains(folder);
                 let limit = if expanded { all.len() } else { PAST_SHOWN };
@@ -1698,8 +1782,11 @@ impl Workspace {
                         let title = self.row_label(&row, self.row_title(&row).unwrap_or_default());
                         let group: SharedString = format!("past-{}-{i}", folder.display()).into();
                         let open = (*info).clone();
+                        let archived = is_archived(info);
                         self.session_row(row.clone(), group.clone(), false, cx)
+                            .when(archived, |d| d.text_color(theme::text_section()))
                             .child(title)
+                            .when(archived, |d| d.child(glyph(Glyph::Archive, theme::text_section())))
                             .child(self.row_more(row.clone(), group, false, cx))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.renaming.as_ref().is_some_and(|(renaming, _)| *renaming == row) {
@@ -1746,7 +1833,8 @@ impl Workspace {
                 sidebar_row("new-session".into(), false)
                     .text_color(theme::text_new())
                     .child(div().text_color(theme::text_faint()).child("+"))
-                    .child("New session")
+                    .child(div().flex_1().child("New session"))
+                    .child(self.render_filter_button(cx))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active = None;
                         this.settings_open = false;
@@ -1789,6 +1877,63 @@ impl Workspace {
                             .on_click(cx.listener(|this, _, window, cx| this.open_settings(&OpenSettings, window, cx))),
                     ),
             )
+    }
+
+    /// The funnel at the end of the "New session" row, and its Active / All menu.
+    fn render_filter_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let all = self.settings.show_archived;
+        let color = if all { theme::accent_text() } else { theme::text_faint() };
+        let item = |id: &'static str, checked: bool, label: &'static str, show: bool| {
+            menu_row(id, checked, false)
+                .role(Role::MenuItemRadio)
+                .aria_label(label)
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.set_show_archived(show, cx);
+                }))
+        };
+        let menu = self.filter_menu.then(|| {
+            let body = div()
+                .id("filter-menu")
+                .role(Role::Menu)
+                .occlude()
+                .w(px(210.))
+                .p(px(4.))
+                .flex()
+                .flex_col()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme::composer_edge())
+                .bg(theme::bg_raised())
+                .font_family(theme::SANS)
+                .text_size(theme::size_body())
+                .text_color(theme::text_primary())
+                .child(item("filter-active", !all, "Active", false))
+                .child(item("filter-all", all, "All, including archived", true));
+            div().absolute().top(px(26.)).right_0().child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(1))
+        });
+        div()
+            .id("sidebar-filter")
+            .role(Role::Button)
+            .aria_label("Show sessions")
+            .relative()
+            .flex_shrink_0()
+            .size(px(24.))
+            .mr(px(-6.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .when(self.filter_menu, |d| d.bg(theme::bg_raised()))
+            .hover(|s| s.bg(theme::bg_raised()))
+            .child(glyph(Glyph::Funnel, color.into()))
+            .children(menu)
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                this.filter_menu = !this.filter_menu;
+                cx.notify();
+            }))
     }
 
     fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -2136,6 +2281,19 @@ impl Render for Workspace {
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_popover(window, cx))),
                 )
             })
+            .when(self.filter_menu, |d| {
+                d.child(
+                    div()
+                        .id("filter-menu-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            this.filter_menu = false;
+                            cx.notify();
+                        })),
+                )
+            })
             // A click outside the row menu only closes it, as with a native menu.
             .when(self.row_menu.is_some(), |d| {
                 d.child(
@@ -2282,7 +2440,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::viewed_notebook_id;
+    use super::{Row, RowAction, viewed_notebook_id};
 
     #[test]
     fn notebook_id_from_pluto_url() {
@@ -2291,5 +2449,14 @@ mod tests {
         assert_eq!(viewed_notebook_id(&url), Some(id));
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/?secret=s3cr3t"), None);
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/edit?id=../../secret"), None);
+    }
+
+    #[test]
+    fn row_menu_items() {
+        let labels = |row: &Row, archived| RowAction::for_row(row, archived).into_iter().map(RowAction::label).collect::<Vec<_>>();
+        let past = Row::Past("s1".to_string().into(), "/tmp".into());
+        assert_eq!(labels(&Row::Open(1), Some(false)), ["Rename", "Reveal folder in Finder", "Archive", "Close", "Delete…"]);
+        assert_eq!(labels(&Row::Open(1), None), ["Rename", "Reveal folder in Finder", "Close", "Delete…"]);
+        assert_eq!(labels(&past, Some(true)), ["Rename", "Reveal folder in Finder", "Unarchive", "Delete…"]);
     }
 }
