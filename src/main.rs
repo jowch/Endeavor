@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+mod webkeys;
 mod agent;
 mod annotate;
 mod celldiff;
@@ -310,6 +311,7 @@ impl Workspace {
                 })
                 .build_as_child(&handle)
                 .expect("child webview");
+            webkeys::fix_key_handling();
             WebView::new(webview, window, cx)
         });
 
