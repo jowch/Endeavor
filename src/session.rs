@@ -95,6 +95,9 @@ pub struct Session {
     pub run_without_asking: bool,
     /// The notebook this session was last looking at.
     pub notebook: Option<String>,
+    /// Cells the user changed since the agent last heard (cell id, name); told
+    /// with the next prompt.
+    pub user_edits: Vec<(String, Option<String>)>,
     /// The transcript as a virtualized list: only visible entries are laid out,
     /// and it follows new content unless the user has scrolled up to read.
     pub list: ListState,
@@ -171,6 +174,7 @@ impl Session {
             cell_codes: CellCodes::default(),
             run_without_asking: false,
             notebook: None,
+            user_edits: Vec::new(),
             list: {
                 let list = ListState::new(0, ListAlignment::Top, px(1000.));
                 list.set_follow_mode(FollowMode::Tail);
@@ -288,6 +292,17 @@ impl Session {
     /// Waiting on the user to approve something.
     pub fn needs_approval(&self) -> bool {
         self.entries.iter().any(|e| matches!(e, Entry::Permission { responder: Some(_), .. }))
+    }
+
+    /// The user changed a cell in this session's notebook.
+    pub fn note_user_edit(&mut self, cell: String, name: Option<String>) {
+        self.note(match &name {
+            Some(name) => format!("You edited `{name}`"),
+            None => "You edited a cell".into(),
+        });
+        if !self.user_edits.iter().any(|(id, _)| *id == cell) {
+            self.user_edits.push((cell, name));
+        }
     }
 
     pub fn note(&mut self, text: impl Into<SharedString>) {

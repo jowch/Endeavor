@@ -5,7 +5,7 @@
 // sends now, Shift+Enter is a newline. Only Cmd+Shift+E toggles the mode: Esc is
 // reserved for stopping the agent, so a stray Esc never does two things.
 
-import { on, send } from "./bridge";
+import { byUser, on, send } from "./bridge";
 
 const css = `
   body.annotating pluto-cell { cursor: crosshair; }
@@ -109,12 +109,12 @@ export function initAnnotate(): void {
       e.stopPropagation();
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        sendComment(e.metaKey);
+        if (byUser(e)) sendComment(e.metaKey);
       }
     },
     true,
   );
-  sendButton.onclick = () => sendComment(false);
+  sendButton.onclick = (e) => byUser(e) && sendComment(false);
   bar.querySelector<HTMLButtonElement>(".exit")!.onclick = () => set(false);
 
   on("annotate", (msg) => set(msg.on));

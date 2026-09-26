@@ -274,7 +274,7 @@ impl Workspace {
             let handle = window.window_handle().expect("window handle");
             let webview = wry::WebViewBuilder::new()
                 .with_devtools(true)
-                .with_initialization_script(annotate::SCRIPT)
+                .with_initialization_script(&annotate::script())
                 .with_ipc_handler(move |request| {
                     let _ = page_tx.unbounded_send(request.into_body());
                 })
@@ -675,13 +675,20 @@ impl Workspace {
     fn viewing_context(&mut self, cx: &mut Context<Self>) -> Option<ContentBlock> {
         let url = self.webview.read(cx).raw().url().unwrap_or_default();
         let id = viewed_notebook_id(&url)?.to_owned();
+        let mut edits = Vec::new();
         if let Some(session) = self.active.and_then(|key| self.session_mut(key)) {
             session.notebook = Some(id.clone());
+            edits = std::mem::take(&mut session.user_edits);
         }
-        Some(ContentBlock::Text(TextContent::new(format!(
+        let mut text = format!(
             "[Endeavor] The user is viewing Pluto notebook {id} in the notebook pane. \
              Unless they say otherwise, \"the notebook\" means this one."
-        ))))
+        );
+        if !edits.is_empty() {
+            let cells: Vec<String> = edits.iter().map(|(cell, name)| name.as_ref().map_or(cell.clone(), |n| format!("`{n}` ({cell})"))).collect();
+            text += &format!(" Since you last heard, the user edited these cells: {}. Re-read them before relying on their code.", cells.join(", "));
+        }
+        Some(ContentBlock::Text(TextContent::new(text)))
     }
 
     fn submit(&mut self, input: &Entity<TextareaState>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1204,6 +1211,11 @@ impl Workspace {
             while let Some(mut event) = rx.next().await {
                 let updated = this.update(cx, |this, cx| {
                     this.remember_notebooks(event["notebooks"].take());
+                    for (notebook, cell, name) in pluto::user_edits(&this.cells, &event["cells"]) {
+                        for session in this.sessions.iter_mut().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())) {
+                            session.note_user_edit(cell.clone(), name.clone());
+                        }
+                    }
                     this.cells = event["cells"].take();
                     this.push_cells(cx);
                 });

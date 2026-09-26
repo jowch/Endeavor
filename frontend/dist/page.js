@@ -2,15 +2,19 @@
 (() => {
   // src/bridge.ts
   var handlers = {};
+  var nonce = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
+  var handler = window.webkit?.messageHandlers?.ipc;
+  var post = handler ? handler.postMessage.bind(handler) : (body) => window.ipc?.postMessage(body);
   function send(msg) {
-    window.ipc?.postMessage(JSON.stringify(msg));
+    post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
   }
-  function on(type, handler) {
-    (handlers[type] ??= []).push(handler);
+  var byUser = (e) => e.isTrusted || !nonce;
+  function on(type, handler2) {
+    (handlers[type] ??= []).push(handler2);
   }
   window.__endeavor = {
     receive(msg) {
-      handlers[msg.type]?.forEach((handler) => handler(msg));
+      handlers[msg.type]?.forEach((handler2) => handler2(msg));
     }
   };
 
@@ -105,12 +109,12 @@
         e.stopPropagation();
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
-          sendComment(e.metaKey);
+          if (byUser(e)) sendComment(e.metaKey);
         }
       },
       true
     );
-    sendButton.onclick = () => sendComment(false);
+    sendButton.onclick = (e) => byUser(e) && sendComment(false);
     bar.querySelector(".exit").onclick = () => set(false);
     on("annotate", (msg) => set(msg.on));
   }
@@ -231,11 +235,11 @@
       for (let j2 = m - 1; j2 >= 0; j2--)
         lcs[i2][j2] = a[i2] === b[j2] ? lcs[i2 + 1][j2 + 1] + 1 : Math.max(lcs[i2 + 1][j2], lcs[i2][j2 + 1]);
     const hunks = [];
-    let i = 0, j = 0, open = null;
-    const hunk = () => open ??= (hunks.push({ at: j, removed: [], added: [] }), hunks[hunks.length - 1]);
+    let i = 0, j = 0, open2 = null;
+    const hunk = () => open2 ??= (hunks.push({ at: j, removed: [], added: [] }), hunks[hunks.length - 1]);
     while (i < n || j < m) {
       if (i < n && j < m && a[i] === b[j]) {
-        open = null;
+        open2 = null;
         i++, j++;
       } else if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j])) {
         hunk().added.push(b[j++]);
@@ -372,9 +376,123 @@
     onRedraw(refresh);
   }
 
-  // src/errors.ts
+  // src/prompt.ts
   var AGENT = "Claude";
   var css5 = `
+  pluto-cell > .endeavor-add-agent {
+    position: absolute; left: 14px; bottom: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); z-index: 20;
+    height: 18px; padding: 0 7px; border-radius: 9px; border: 1px solid #333;
+    background: #1C1C1E; color: #9A9A9A; font: 11px system-ui, sans-serif; cursor: pointer;
+    opacity: 0; transition: opacity 0.1s;
+  }
+  pluto-cell:hover > .endeavor-add-agent { opacity: 1; }
+  pluto-cell > .endeavor-add-agent:hover { color: #FF9A6B; border-color: #CC3F00; }
+  #endeavor-prompt {
+    position: absolute; z-index: 1000; display: flex; flex-direction: column; gap: 6px;
+    padding: 8px 10px; border-radius: 8px; border: 1px solid #CC3F00; background: #1C1C1E;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4); font: 13px system-ui, sans-serif; color: #E6E6E6;
+  }
+  #endeavor-prompt textarea {
+    resize: none; border: none; outline: none; background: transparent; color: inherit;
+    font: inherit; min-height: 20px;
+  }
+  #endeavor-prompt .hint { color: #7A7A7A; font-size: 11px; }
+  /* The empty-cell hint names the shortcut. */
+  pluto-input .cm-placeholder { font-size: 0; }
+  pluto-input .cm-placeholder::after { content: "Type code, or \u2318K to ask ${AGENT}"; font-size: 13px; }
+`;
+  var open = null;
+  function close(refocus) {
+    if (!open) return;
+    const { box, cell } = open;
+    open = null;
+    box.remove();
+    if (refocus) cell.querySelector("pluto-input .cm-content")?.focus();
+  }
+  function place(box, cell) {
+    const rect = cell.getBoundingClientRect();
+    box.style.left = `${rect.left + window.scrollX}px`;
+    box.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    box.style.width = `${Math.max(rect.width, 280)}px`;
+  }
+  function isEmpty(cell) {
+    return !(cell.querySelector("pluto-input .cm-content")?.textContent ?? "").trim();
+  }
+  function openPrompt(cell, where) {
+    close(false);
+    const box = document.createElement("div");
+    box.id = "endeavor-prompt";
+    box.dataset.endeavorUi = "";
+    const asking = where === "after" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
+    box.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">\u21B5 send \xB7 esc cancel</div>`;
+    const text = box.querySelector("textarea");
+    text.placeholder = asking;
+    text.addEventListener("input", () => {
+      text.style.height = "auto";
+      text.style.height = `${text.scrollHeight}px`;
+    });
+    text.addEventListener(
+      "keydown",
+      (e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          close(true);
+        } else if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const comment = text.value.trim();
+          if (!comment || !byUser(e)) return;
+          const notebook = new URLSearchParams(location.search).get("id");
+          send({ type: "prompt", notebook, cell: cell.id, where: where === "after" ? "after" : isEmpty(cell) ? "fill" : "about", text: comment, now: e.metaKey });
+          close(true);
+        }
+      },
+      true
+    );
+    document.body.append(box);
+    place(box, cell);
+    open = { box, cell, where };
+    requestAnimationFrame(() => text.focus());
+  }
+  function initPrompt() {
+    const style = document.createElement("style");
+    style.textContent = css5;
+    document.head.append(style);
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (!(e.metaKey && e.key.toLowerCase() === "k") || e.shiftKey) return;
+        const cell = document.activeElement?.closest("pluto-cell");
+        if (!cell) return;
+        e.preventDefault();
+        e.stopPropagation();
+        openPrompt(cell, "cell");
+      },
+      true
+    );
+    document.addEventListener("mousedown", (e) => {
+      if (open && !open.box.contains(e.target)) close(false);
+    });
+    window.addEventListener("resize", () => open && place(open.box, open.cell));
+    onRedraw(() => {
+      for (const cell of document.querySelectorAll("pluto-cell")) {
+        if (cell.querySelector(":scope > .endeavor-add-agent")) continue;
+        const add = cell.querySelector(":scope > button.add_cell.after");
+        if (!add) continue;
+        const button = document.createElement("button");
+        button.className = "endeavor-add-agent";
+        button.dataset.endeavorUi = "";
+        button.textContent = `\u2726 ${AGENT}`;
+        button.title = `Ask ${AGENT} to write a cell here`;
+        button.onclick = () => openPrompt(cell, "after");
+        add.after(button);
+      }
+    });
+  }
+
+  // src/errors.ts
+  var AGENT2 = "Claude";
+  var css6 = `
   .fix-with-ai { display: none !important; }
   .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
   .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
@@ -388,21 +506,21 @@
       if (!cell) continue;
       const row = document.createElement("div");
       row.className = "endeavor-ask";
-      row.innerHTML = `<button class="fix">Fix with ${AGENT}</button><button class="explain">Explain</button>`;
+      row.innerHTML = `<button class="fix">Fix with ${AGENT2}</button><button class="explain">Explain</button>`;
       const ask = (kind) => {
         const text = (error.querySelector("header")?.textContent ?? error.textContent ?? "").trim().slice(0, 2e3);
         const notebook = new URLSearchParams(location.search).get("id");
         send({ type: "ask", kind, notebook, cell: cell.id, error: text });
       };
-      row.querySelector(".fix").onclick = () => ask("fix");
-      row.querySelector(".explain").onclick = () => ask("explain");
+      row.querySelector(".fix").onclick = (e) => byUser(e) && ask("fix");
+      row.querySelector(".explain").onclick = (e) => byUser(e) && ask("explain");
       const header = error.querySelector(".error-header");
       header ? header.after(row) : error.prepend(row);
     }
   }
   function initErrors() {
     const style = document.createElement("style");
-    style.textContent = css5;
+    style.textContent = css6;
     document.head.append(style);
     onRedraw(decorate2);
   }
@@ -468,6 +586,7 @@ footer { display: none !important; }
     initAnnotate();
     initCells();
     initDiffs();
+    initPrompt();
     initErrors();
     initRail();
     watchRedraws();

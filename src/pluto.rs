@@ -138,9 +138,30 @@ pub fn run_warnings(notebooks: &Value) -> Vec<String> {
     warnings
 }
 
+/// A cell the user changed between two events: (notebook id, cell id, name).
+pub type UserEdit = (String, String, Option<String>);
+
+/// Cells whose code the user changed between two `/events` snapshots
+/// (`{notebook_id: [cell state]}`): authored by "user", with a new version. The
+/// first snapshot (`old` null) reports nothing.
+pub fn user_edits(old: &Value, new: &Value) -> Vec<UserEdit> {
+    let mut edits = Vec::new();
+    let (Some(old), Some(new)) = (old.as_object(), new.as_object()) else { return edits };
+    for (notebook, cells) in new {
+        let before = |id: &str| old.get(notebook)?.as_array()?.iter().find(|c| c["cell_id"] == id).map(|c| c["version"].clone());
+        for cell in cells.as_array().into_iter().flatten() {
+            let Some(id) = cell["cell_id"].as_str() else { continue };
+            if cell["author"] == "user" && before(id).is_some_and(|v| v != cell["version"]) {
+                edits.push((notebook.clone(), id.to_owned(), cell["name"].as_str().map(str::to_owned)));
+            }
+        }
+    }
+    edits
+}
+
 #[cfg(test)]
 mod tests {
-    use super::run_warnings;
+    use super::{run_warnings, user_edits};
     use serde_json::json;
 
     #[test]
@@ -155,6 +176,19 @@ mod tests {
         assert!(w[0].starts_with("preview.jl: 2 cells edited but not run") && w[0].contains("safe preview"));
         assert_eq!(w[1], "busy.jl: 1 cell edited but never run.");
         assert_eq!(w[2], "busy.jl: 1 cell still running.");
+    }
+
+    #[test]
+    fn finds_the_users_edits() {
+        let snap = |author: &str, version: &str| json!({ "nb": [
+            { "cell_id": "a", "author": author, "version": version, "name": "fit" },
+            { "cell_id": "b", "author": null, "version": "1", "name": null },
+        ]});
+        assert!(user_edits(&json!(null), &snap("user", "2")).is_empty(), "first snapshot");
+        assert_eq!(user_edits(&snap("", "1"), &snap("user", "2")), vec![("nb".into(), "a".into(), Some("fit".into()))]);
+        assert!(user_edits(&snap("user", "2"), &snap("user", "2")).is_empty(), "no new edit");
+        assert!(user_edits(&snap("user", "1"), &snap("agent", "2")).is_empty(), "the agent's");
+        assert_eq!(user_edits(&snap("user", "2"), &snap("user", "3")).len(), 1, "a second edit");
     }
 
     #[test]

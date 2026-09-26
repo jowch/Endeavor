@@ -5,7 +5,25 @@ use agent_client_protocol::schema::v1::{ContentBlock, ResourceLink, TextContent}
 
 /// The page script (frontend/, built with `npm run build`; the bundle is committed
 /// so building the app needs no Node).
-pub const SCRIPT: &str = include_str!("../frontend/dist/page.js");
+const SCRIPT: &str = include_str!("../frontend/dist/page.js");
+
+/// A per-launch secret the page script puts in every message. The page also runs
+/// notebook output JS, which can post to the same channel; it can't read the
+/// secret (it stays in the script's closure, see frontend/src/bridge.ts).
+fn page_nonce() -> &'static str {
+    static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NONCE.get_or_init(|| {
+        use std::io::Read;
+        let mut bytes = [0u8; 16];
+        std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).expect("/dev/urandom");
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    })
+}
+
+/// The page script with this launch's secret filled in.
+pub fn script() -> String {
+    SCRIPT.replace("__ENDEAVOR_NONCE__", &format!("\"{}\"", page_nonce()))
+}
 
 /// Upper bounds on page-supplied data. The page also runs notebook output JS,
 /// so any of these messages may be forged; the user sees every annotation in
@@ -36,7 +54,15 @@ pub fn is_uuid(s: &str) -> bool {
 
 /// Parse and validate one IPC message from the page; `None` drops it.
 pub fn parse(body: &str) -> Option<Message> {
+    parse_with(body, page_nonce())
+}
+
+/// `parse`, given the secret messages must carry (a missing one counts as "").
+fn parse_with(body: &str, nonce: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    if v.get("nonce").and_then(|n| n.as_str()).unwrap_or("") != nonce {
+        return None;
+    }
     match v.get("type")?.as_str()? {
         "ready" => Some(Message::Ready),
         // Fix with Claude / Explain on a cell's error: an annotation on that cell.
@@ -50,6 +76,20 @@ pub fn parse(body: &str) -> Option<Message> {
                 _ => return None,
             };
             Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now: false }))
+        }
+        // ⌘K on a cell, or the agent button between cells.
+        "prompt" => {
+            let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
+            let cell = v.get("cell")?.as_str().filter(|s| is_uuid(s))?.to_owned();
+            let text: String = v.get("text")?.as_str()?.chars().take(MAX_COMMENT).collect();
+            let comment = match v.get("where")?.as_str()? {
+                "about" => text,
+                "fill" => format!("Write the code for this empty cell: {text}"),
+                "after" => format!("Add a new cell right after this one: {text}"),
+                _ => return None,
+            };
+            let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
+            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now }))
         }
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "annotation" => {
@@ -108,21 +148,37 @@ mod tests {
     const C1: &str = "11111111-2222-4333-8444-555555555555";
 
     #[test]
+    fn needs_the_page_secret() {
+        let body = r#"{"type":"mode","on":true,"nonce":"abc"}"#;
+        assert_eq!(parse_with(body, "abc"), Some(Message::Mode(true)));
+        assert_eq!(parse_with(body, "xyz"), None);
+        assert_eq!(parse_with(r#"{"type":"mode","on":true}"#, "abc"), None, "notebook JS has no secret");
+        assert!(script().contains(&format!("\"{}\"", page_nonce())) && !script().contains("__ENDEAVOR_NONCE__"));
+    }
+
+    #[test]
     fn parses_valid_messages() {
-        assert_eq!(parse(r#"{"type":"mode","on":true}"#), Some(Message::Mode(true)));
-        assert_eq!(parse(r#"{"type":"ready"}"#), Some(Message::Ready));
+        assert_eq!(parse_with(r#"{"type":"mode","on":true}"#, ""), Some(Message::Mode(true)));
+        assert_eq!(parse_with(r#"{"type":"ready"}"#, ""), Some(Message::Ready));
         let ask = |kind: &str| {
-            parse(&format!(
-                r#"{{"type":"ask","kind":"{kind}","notebook":"{NB}","cell":"{C1}","error":"UndefVarError: x"}}"#
-            ))
+            parse_with(
+                &format!(r#"{{"type":"ask","kind":"{kind}","notebook":"{NB}","cell":"{C1}","error":"UndefVarError: x"}}"#),
+                "",
+            )
         };
         let Some(Message::Annotation(fix)) = ask("fix") else { panic!("fix") };
         assert_eq!((fix.cells.as_slice(), fix.comment.as_str()), ([C1.to_string()].as_slice(), "Fix the error in this cell:\nUndefVarError: x"));
         assert!(matches!(ask("explain"), Some(Message::Annotation(a)) if a.comment.starts_with("Explain")));
         assert_eq!(ask("delete everything"), None);
-        assert_eq!(parse(r#"{"type":"send"}"#), None);
+        assert_eq!(parse_with(r#"{"type":"send"}"#, ""), None);
+        let prompt = |place: &str| {
+            parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","where":"{place}","text":"plot it","now":false}}"#), "")
+        };
+        assert!(matches!(prompt("about"), Some(Message::Annotation(a)) if a.comment == "plot it" && a.cells == [C1]));
+        assert!(matches!(prompt("after"), Some(Message::Annotation(a)) if a.comment.starts_with("Add a new cell right after")));
+        assert_eq!(prompt("anywhere"), None);
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"why so slow?"}}"#);
-        let Some(Message::Annotation(a)) = parse(&body) else { panic!("rejected valid annotation") };
+        let Some(Message::Annotation(a)) = parse_with(&body, "") else { panic!("rejected valid annotation") };
         assert_eq!((a.notebook.as_str(), a.cells.len(), a.comment.as_str()), (NB, 1, "why so slow?"));
     }
 
@@ -132,7 +188,7 @@ mod tests {
         let no_cells = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":[],"comment":""}}"#);
         let bad_nb = format!(r#"{{"type":"annotation","notebook":"nope","cells":["{C1}"],"comment":""}}"#);
         for body in [bad_cell.as_str(), no_cells.as_str(), bad_nb.as_str(), "not json", r#"{"type":"other"}"#] {
-            assert_eq!(parse(body), None, "{body}");
+            assert_eq!(parse_with(body, ""), None, "{body}");
         }
     }
 
@@ -140,7 +196,7 @@ mod tests {
     fn caps_comment_length() {
         let long = "x".repeat(MAX_COMMENT + 10);
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"{long}"}}"#);
-        let Some(Message::Annotation(a)) = parse(&body) else { panic!() };
+        let Some(Message::Annotation(a)) = parse_with(&body, "") else { panic!() };
         assert_eq!(a.comment.len(), MAX_COMMENT);
     }
 

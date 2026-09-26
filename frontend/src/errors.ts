@@ -2,7 +2,7 @@
 // Errors), replacing Pluto's own "Fix with AI". A click asks the agent about
 // that cell's error, through the same queue as the chat box.
 
-import { send } from "./bridge";
+import { byUser, send } from "./bridge";
 import { onRedraw } from "./redraw";
 
 // ponytail: "Claude" until the agent's name reaches the page (ACP agent info).
@@ -29,8 +29,8 @@ function decorate() {
       const notebook = new URLSearchParams(location.search).get("id");
       send({ type: "ask", kind, notebook, cell: cell.id, error: text });
     };
-    row.querySelector<HTMLButtonElement>(".fix")!.onclick = () => ask("fix");
-    row.querySelector<HTMLButtonElement>(".explain")!.onclick = () => ask("explain");
+    row.querySelector<HTMLButtonElement>(".fix")!.onclick = (e) => byUser(e) && ask("fix");
+    row.querySelector<HTMLButtonElement>(".explain")!.onclick = (e) => byUser(e) && ask("explain");
     const header = error.querySelector(".error-header");
     header ? header.after(row) : error.prepend(row);
   }
