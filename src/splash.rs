@@ -1,14 +1,16 @@
-//! First-launch setup screen: the logo, setup steps with a progress bar, and
-//! Retry when a step fails. Shown until setup has finished once; later launches
-//! report setup work (e.g. a new adapter version) in the status line instead.
+//! First-launch setup screen: the turtle walks in and looks around while one
+//! quiet line and a thin bar report setup; a failed step lists the steps and
+//! offers Retry. Shown until setup has finished once; later launches report
+//! setup work (e.g. a new adapter version) in the status line instead.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-use crate::Workspace;
 use crate::theme;
+use crate::turtle::{self, Gaze, Pose, ease, lerp};
 
 /// Setup steps, in the order they run.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
@@ -31,6 +33,24 @@ impl Step {
             Step::Claude => "Connecting to Claude",
         }
     }
+
+    fn doing(self) -> &'static str {
+        match self {
+            Step::Julia => "Setting up Julia",
+            Step::Packages => "Installing Pluto and its packages",
+            Step::Agent => "Setting up the Claude agent",
+            Step::Claude => "Connecting to Claude",
+        }
+    }
+
+    fn failed(self) -> &'static str {
+        match self {
+            Step::Julia => "Couldn't set up Julia.",
+            Step::Packages => "Couldn't install Pluto and its packages.",
+            Step::Agent => "Couldn't set up the Claude agent.",
+            Step::Claude => "Couldn't connect to Claude.",
+        }
+    }
 }
 
 /// A setup step is under way: what it's doing, and how far along if known.
@@ -49,12 +69,19 @@ impl Progress {
     }
 }
 
-#[derive(Default)]
 pub struct Setup {
     step: Step,
-    detail: String,
     fraction: Option<f32>,
-    pub error: Option<String>,
+    /// What went wrong, and when (the turtle tucks its head in from then).
+    error: Option<(String, Instant)>,
+    /// The intro plays from here.
+    shown: Instant,
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self { step: Step::default(), fraction: None, error: None, shown: Instant::now() }
+    }
 }
 
 fn marker() -> Option<PathBuf> {
@@ -76,8 +103,16 @@ impl Setup {
     /// Steps only move forward; a late message from an earlier step is ignored.
     pub fn apply(&mut self, p: Progress) {
         if p.step >= self.step {
-            (self.step, self.detail, self.fraction) = (p.step, p.detail, p.fraction);
+            (self.step, self.fraction) = (p.step, p.fraction);
         }
+    }
+
+    pub fn fail(&mut self, error: String) {
+        self.error = Some((error, Instant::now()));
+    }
+
+    pub fn clear_error(&mut self) {
+        self.error = None;
     }
 
     fn overall(&self) -> f32 {
@@ -86,32 +121,168 @@ impl Setup {
     }
 }
 
-// ponytail: placeholder logo and inline colors until the logo and the style system land.
-/// `extra` goes under the steps (e.g. the sign-in panel).
-pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
-    const BAR: f32 = 360.;
+/// Shell radius: the shell is 120 px wide.
+const R: f32 = 60.;
+/// Tall enough for the highest star.
+const SCENE_HEIGHT: f32 = 3.7 * R + 2.;
+const WALK: f32 = 1.6;
+const GAZE_START: f32 = 3.7;
+const GAZE_MOVE: f32 = 0.45;
+/// With reduced motion: everything is in and the turtle looks up at the stars.
+const STILL: f32 = 6.;
+
+const STARS_GAZE: Gaze = Gaze { eye_x: 1., look: 1., dx: 0.06, dy: -0.28 };
+const HIGH: Gaze = Gaze { eye_x: 0.55, look: 1.25, dx: 0.02, dy: -0.34 };
+const YOU: Gaze = Gaze { eye_x: 0., look: 0.1, dx: 0., dy: -0.04 };
+const BACK: Gaze = Gaze { eye_x: -1.3, look: 0.35, dx: -0.07, dy: -0.08 };
+const DOWN: Gaze = Gaze { eye_x: 1., look: -0.7, dx: 0.05, dy: 0.07 };
+const AHEAD: Gaze = Gaze::AHEAD;
+/// (gaze, seconds held), hand-ordered so it doesn't feel like a metronome.
+const GAZES: [(Gaze, f32); 14] = [
+    (STARS_GAZE, 4.),
+    (AHEAD, 1.6),
+    (YOU, 2.2),
+    (AHEAD, 1.2),
+    (HIGH, 3.2),
+    (STARS_GAZE, 1.8),
+    (AHEAD, 1.4),
+    (BACK, 1.8),
+    (AHEAD, 2.),
+    (DOWN, 1.4),
+    (AHEAD, 1.8),
+    (YOU, 1.6),
+    (STARS_GAZE, 3.6),
+    (AHEAD, 2.4),
+];
+/// (x, y) from where the turtle stops, in shell radii, and the radius in px.
+const STARS: [(f32, f32, f32); 7] = [(1.5, -2.7, 3.7), (2.4, -2.1, 2.8), (0.8, -3.2, 3.), (3., -3., 4.6), (2., -3.6, 2.5), (-0.3, -2.9, 2.3), (3.6, -2.3, 2.5)];
+
+/// After the intro the head glances through `GAZES` on a loop, easing between them.
+fn gaze_at(t: f32) -> Gaze {
+    if t < GAZE_START {
+        return AHEAD;
+    }
+    let total: f32 = GAZES.iter().map(|(_, hold)| GAZE_MOVE + hold).sum();
+    let mut u = (t - GAZE_START) % total;
+    let mut from = GAZES[GAZES.len() - 1].0;
+    for (to, hold) in GAZES {
+        if u < GAZE_MOVE {
+            return from.lerp(to, ease(u / GAZE_MOVE));
+        }
+        u -= GAZE_MOVE;
+        if u < hold {
+            return to;
+        }
+        u -= hold;
+        from = to;
+    }
+    AHEAD
+}
+
+/// The turtle walks in from the left edge and stops just left of centre; the stars
+/// come out one by one and twinkle. `t` is seconds since the splash showed; `tuck`
+/// how far the head is in the shell.
+fn scene(t: f32, tuck: f32) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, cx| {
+            if !cx.reduce_motion() {
+                window.request_animation_frame();
+            }
+            let ground_y = f32::from(bounds.bottom()) - 1.;
+            let left = f32::from(bounds.left());
+            let end_x = f32::from(bounds.center().x) - 0.2 * R;
+            for (i, (dx, dy, r)) in STARS.into_iter().enumerate() {
+                let on = ease((t - 3. - i as f32 * 0.18) / 0.4);
+                if on > 0. {
+                    let a = on * (0.7 + 0.3 * (t * 2.2 + i as f32 * 1.7).sin());
+                    let at = point(px(end_x + dx * R), px(ground_y + dy * R));
+                    turtle::disc(window, at, (r, r), Rgba { a, ..theme::star() });
+                }
+            }
+            let walked = (t / WALK).clamp(0., 1.);
+            let x = lerp(left - 2. * R, end_x, 1. - (1. - walked).powi(2));
+            let stepping = 1. - ease(walked);
+            let phase = t * std::f32::consts::TAU / 0.8;
+            let pose = Pose {
+                bob: if t < WALK { -0.035 * phase.sin().abs() * stepping } else { 0. },
+                blink: turtle::blink_at(t, 3.3, 0.9),
+                breathe: 0.018 * (t * std::f32::consts::TAU / 3.4).sin(),
+                gaze: gaze_at(t),
+                ..Pose::default()
+            }
+            .walk(phase, 0.1 * stepping, 0.14 * stepping)
+            .tuck(tuck);
+            turtle::paint(window, point(px(x), px(ground_y)), R, &pose);
+        },
+    )
+    .w_full()
+    .h(px(SCENE_HEIGHT))
+}
+
+/// `extra` goes under the progress (e.g. the sign-in panel); `retry` restarts the failed step.
+pub fn render(setup: &Setup, extra: Option<AnyElement>, retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, cx: &App) -> Div {
+    const BAR: f32 = 240.;
+    const WIDE: f32 = 360.;
     let muted = theme::text_muted();
-    let steps = Step::ALL.map(|step| {
-        let (mark, color) = match step.cmp(&setup.step) {
-            std::cmp::Ordering::Less => ("✓", theme::diff_add()),
-            std::cmp::Ordering::Equal if setup.error.is_some() => ("⚠", theme::danger()),
-            std::cmp::Ordering::Equal => ("●", theme::accent()),
-            std::cmp::Ordering::Greater => ("○", theme::text_section()),
-        };
-        let active = step == setup.step;
+    let still = cx.reduce_motion();
+    let t = if still { STILL } else { setup.shown.elapsed().as_secs_f32() };
+    let tuck = setup.error.as_ref().map_or(0., |(_, at)| if still { 1. } else { ease(at.elapsed().as_secs_f32() / 0.4) });
+    let (name_in, tagline_in) = (ease((t - 1.8) / 0.6), ease((t - 2.3) / 0.6));
+    let n = Step::ALL.iter().position(|s| *s == setup.step).unwrap_or(0) + 1;
+    let progress = div()
+        .mt(px(36.))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(10.))
+        .opacity(tagline_in)
+        .child(div().text_size(theme::size_meta()).text_color(muted).child(format!("{} · {n} of {}", setup.step.doing(), Step::ALL.len())))
+        .child(
+            div()
+                .w(px(BAR))
+                .h(px(2.))
+                .rounded_full()
+                .bg(theme::border())
+                .child(div().h_full().rounded_full().bg(theme::accent()).w(px(BAR * setup.overall()))),
+        );
+    let failure = setup.error.as_ref().map(|(error, _)| {
+        let steps = Step::ALL.map(|step| {
+            let (mark, color) = match step.cmp(&setup.step) {
+                std::cmp::Ordering::Less => ("✓", theme::diff_add()),
+                std::cmp::Ordering::Equal => ("⚠", theme::danger()),
+                std::cmp::Ordering::Greater => ("○", theme::text_section()),
+            };
+            div()
+                .flex()
+                .gap_2()
+                .child(div().w_4().text_color(color).child(mark))
+                .child(div().when(step > setup.step, |d| d.text_color(muted)).child(step.label()))
+        });
+        let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).child(label);
         div()
+            .mt(px(36.))
+            .w(px(WIDE))
             .flex()
             .flex_col()
+            .gap_3()
+            .child(div().flex().flex_col().gap_1().text_size(theme::size_meta()).children(steps))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(setup.step.failed())
+                    .child(div().text_size(theme::size_meta()).text_color(muted).child(error.clone()))
+                    .child(div().text_size(theme::size_meta()).text_color(muted).child("Check your connection and retry, or see the logs.")),
+            )
             .child(
                 div()
                     .flex()
                     .gap_2()
-                    .child(div().w_4().text_color(color).child(mark))
-                    .child(div().when(!active && step > setup.step, |d| d.text_color(muted)).child(step.label())),
+                    .child(button("retry-setup", "Retry").bg(theme::accent()).on_click(retry))
+                    .child(button("setup-logs", "Show logs").on_click(|_, _, _| crate::logs::reveal())),
             )
-            .when(active && setup.error.is_none() && !setup.detail.is_empty(), |d| {
-                d.child(div().pl_6().text_size(theme::size_meta()).text_color(muted).overflow_hidden().whitespace_nowrap().child(setup.detail.clone()))
-            })
     });
     div()
         .size_full()
@@ -119,41 +290,100 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, cx: &mut Context<Workspa
         .flex_col()
         .items_center()
         .justify_center()
-        .gap_4()
-        .child(div().text_3xl().child("🚀"))
-        .child(div().text_size(theme::size_title()).font_weight(FontWeight::SEMIBOLD).child("Endeavor"))
-        .child(div().text_color(muted).child("Setting up. The first launch takes a few minutes."))
+        .child(scene(t, tuck))
         .child(
             div()
-                .w(px(BAR))
-                .h(px(6.))
-                .rounded_full()
-                .bg(theme::border())
-                .child(div().h_full().rounded_full().bg(theme::accent()).w(px(BAR * setup.overall()))),
+                .mt(px(20.))
+                .relative()
+                .top(px((1. - name_in) * 10.))
+                .opacity(name_in)
+                .text_size(theme::size_title())
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Endeavor"),
         )
-        .child(div().w(px(BAR)).flex().flex_col().gap_2().children(steps))
-        .children(extra.map(|e| div().w(px(BAR)).child(e)))
-        .children(setup.error.clone().map(|error| {
-            let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).child(label);
+        .child(div().mt(px(4.)).relative().top(px((1. - tagline_in) * 8.)).opacity(tagline_in).text_color(muted).child("Build our future"))
+        .child(
+            // Room for the failure message and sign-in, so the turtle stays put when they appear.
             div()
-                .w(px(BAR))
+                .min_h(px(300.))
                 .flex()
                 .flex_col()
-                .gap_2()
-                .child(div().text_color(theme::danger()).child(error))
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(button("retry-setup", "Retry").on_click(cx.listener(|this, _, _, cx| this.retry_setup(cx))))
-                        .child(button("setup-logs", "Show logs").on_click(|_, _, _| crate::logs::reveal())),
-                )
+                .items_center()
+                .map(|d| match failure {
+                    Some(failure) => d.child(failure),
+                    None => d.child(progress),
+                })
+                .children(extra.map(|e| div().mt_4().w(px(WIDE)).child(e))),
+        )
+}
+
+/// Debug builds only: `ENDEAVOR_SPLASH_PREVIEW=1` opens the setup screen with made-up
+/// progress, installing nothing. Add `fail` to stop at the second step, `still` for
+/// the reduced-motion frame (e.g. `fail,still`).
+#[cfg(debug_assertions)]
+pub mod preview {
+    use std::time::Duration;
+
+    use gpui::*;
+
+    use super::{Progress, Setup, Step};
+    use crate::theme;
+
+    pub struct Preview {
+        setup: Setup,
+        ticks: usize,
+        fail: bool,
+    }
+
+    pub fn open(cx: &mut App) -> Option<Entity<Preview>> {
+        let mode = std::env::var("ENDEAVOR_SPLASH_PREVIEW").ok()?;
+        if mode.contains("still") {
+            cx.set_reduce_motion(true);
+        }
+        Some(cx.new(|cx| {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(600)).await;
+                    if this.update(cx, |this: &mut Preview, cx| this.tick(cx)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+            Preview { setup: Setup::default(), ticks: 0, fail: mode.contains("fail") }
         }))
+    }
+
+    impl Preview {
+        fn tick(&mut self, cx: &mut Context<Self>) {
+            if self.setup.error.is_some() {
+                return;
+            }
+            self.ticks = (self.ticks + 1).min(39);
+            let step = Step::ALL[self.ticks / 10];
+            self.setup.apply(Progress { fraction: Some((self.ticks % 10) as f32 / 10.), ..Progress::new(step, "") });
+            if self.fail && self.ticks == 15 {
+                self.fail = false;
+                self.setup.fail("Precompiling Pluto failed: connection reset by peer (preview)".into());
+            }
+            cx.notify();
+        }
+    }
+
+    impl Render for Preview {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let retry = cx.listener(|this, _, _, cx| {
+                this.setup.clear_error();
+                cx.notify();
+            });
+            div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(super::render(&self.setup, None, retry, cx))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Progress, Setup, Step};
+    use super::{AHEAD, GAZE_MOVE, GAZE_START, Progress, STARS_GAZE, STILL, Setup, Step, gaze_at};
 
     #[test]
     fn steps_only_move_forward_and_fill_the_bar() {
@@ -162,7 +392,14 @@ mod tests {
         assert_eq!(s.overall(), 0.125);
         s.apply(Progress::new(Step::Agent, "Installing"));
         s.apply(Progress::new(Step::Packages, "late Julia log line"));
-        assert_eq!((s.step, s.detail.as_str()), (Step::Agent, "Installing"));
+        assert_eq!(s.step, Step::Agent);
         assert_eq!(s.overall(), 0.5);
+    }
+
+    #[test]
+    fn the_head_looks_ahead_then_up_at_the_stars() {
+        assert_eq!(gaze_at(1.), AHEAD);
+        assert_eq!(gaze_at(GAZE_START + GAZE_MOVE + 0.1), STARS_GAZE);
+        assert_eq!(gaze_at(STILL), STARS_GAZE);
     }
 }

@@ -52,9 +52,10 @@ process running Pluto + PlutoMCP.
   bar) offers Claude subscription / Anthropic Console sign-in via the bundled
   CLI's `auth login` in the browser; setup finishes once signed in.
   Verified end to end with a throwaway config folder.
-- **First-launch setup screen** (`splash.rs`): placeholder logo, the setup
-  steps (Julia, Pluto packages, Claude agent, connecting) with a progress bar
-  and live detail, and Retry on failure. Shown until setup finishes once
+- **First-launch setup screen** (`splash.rs`, `turtle.rs`): the turtle walks
+  in and looks around; one line and a thin bar report the setup steps (Julia,
+  Pluto packages, Claude agent, connecting); on failure the step list, Retry
+  and Show logs. Shown until setup finishes once
   (`setup-complete` marker); later installs report in the status line.
 - **Settings** (session bar): use my Claude Code setup, run notebook code
   without asking in new sessions, and Endeavor's Julia vs. a chosen julia
@@ -99,8 +100,7 @@ In priority order.
 
 Everything here is a known `ponytail:` shortcut that's fine for one developer.
 
-- **Logo and style system.** The setup screen's rocket + wordmark and the
-  app's inline colors are placeholders for the designed logo and UI style
+- **Logo and style system.** The app's inline colors are placeholders for the designed logo and UI style
   system (in progress separately).
 - **Sign-in expiring mid-use.** Sign-in is checked at startup only; a login
   that expires while the app runs shows up as failed turns, not the sign-in

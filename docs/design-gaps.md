@@ -8,7 +8,7 @@ _Listed 2026-09-25._
 
 ## Whole-app screens
 
-- [ ] First launch: splash, setup steps and progress bar, error and Retry, "Show logs" — improvised (🚀 stands in for the logo)
+- [x] First launch: the turtle walks in and looks around; one progress line and a thin bar; on failure it tucks its head in, lists the steps, Retry and "Show logs"
 - [ ] Logo and app icon — missing
 - [ ] Sign-in panel: subscription / console buttons, waiting state, errors — improvised
 - [ ] Settings screen: Claude setup, custom Julia path, run without asking, appearance, notebook theme, troubleshooting — improvised

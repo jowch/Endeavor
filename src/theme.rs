@@ -57,6 +57,8 @@ pub fn diff_del_tint() -> Rgba { rgba(0xE07A7A1F) }
 pub fn danger() -> Rgba { diff_del() }
 /// The working indicator's centre sphere.
 pub fn orbit_sphere() -> Rgba { rgb(0x9A9AA0) }
+/// The stars over the setup screen's turtle.
+pub fn star() -> Rgba { rgb(0xF2E6D0) }
 
 /// The interface font (fonts/README.md) and the code font, for cell names, paths,
 /// counts, code and tool names. Bundled, so they look the same everywhere.

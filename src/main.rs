@@ -22,6 +22,7 @@ mod session;
 mod settings;
 mod splash;
 mod theme;
+mod turtle;
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
@@ -973,7 +974,7 @@ impl Workspace {
             AgentEvent::Failed(e) => {
                 self.status = format!("⚠ Agent stopped: {e}").into();
                 if let Some(setup) = &mut self.setup {
-                    setup.error = Some(e.clone());
+                    setup.fail(e.clone());
                 }
                 for session in &mut self.sessions {
                     session.note(format!("⚠ Agent stopped: {e}"));
@@ -1189,7 +1190,7 @@ impl Workspace {
     /// Retry the failed setup step: start Julia again, or the agent once Julia is up.
     pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
-        setup.error = None;
+        setup.clear_error();
         match self.runtime.as_ref().map(|r| r.mcp_url.clone()) {
             None if !self.starting => self.boot(None, cx),
             None => {}
@@ -1222,7 +1223,7 @@ impl Workspace {
             Err(e) => {
                 self.status = format!("⚠ {e}").into();
                 if let Some(setup) = &mut self.setup {
-                    setup.error = Some(e);
+                    setup.fail(e);
                 }
                 return cx.notify();
             }
@@ -1843,7 +1844,8 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(setup) = &self.setup {
             let sign_in = self.render_sign_in(cx);
-            return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(splash::render(setup, sign_in, cx)).into_any_element();
+            let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
+            return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(splash::render(setup, sign_in, retry, cx)).into_any_element();
         }
         let active = self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key));
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
@@ -2009,6 +2011,10 @@ fn main() {
             },
             |window, cx| {
                 Theme::change(ThemeMode::Dark, Some(window), cx);
+                #[cfg(debug_assertions)]
+                if let Some(preview) = splash::preview::open(cx) {
+                    return cx.new(|cx| Root::new(preview, window, cx));
+                }
                 let workspace = cx.new(|cx| Workspace::new(window, cx));
                 // Menu items and shortcuts pressed while the notebook has the keyboard reach
                 // no focused GPUI element; these app-wide handlers forward them.
