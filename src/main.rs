@@ -43,7 +43,7 @@ use new_session::{Draft, Glyph, NotebookChoice, glyph, menu_row};
 use raw_window_handle::HasWindowHandle;
 use runtime::Runtime;
 use session::{Effect, Session, Stopped, folder_name};
-use settings::{Appearance, NotebookTheme, Settings};
+use settings::{Appearance, IdleStop, NotebookTheme, Settings};
 use splash::{Progress, Setup, Step};
 
 /// Notebook id from a Pluto `/edit?id=…` URL. Only the id is used: the URL also
@@ -447,6 +447,8 @@ pub struct Workspace {
     notebooks: serde_json::Value,
     /// Per-notebook cell states as last pushed ({notebook_id: [state]}).
     cells: serde_json::Value,
+    /// Paths the runtime listed as stopped for being idle, as last pushed.
+    idle_stopped: HashSet<String>,
     /// The composer's placeholder as last set (it changes while Claude works).
     placeholder: &'static str,
     /// Bumped when Julia boots or dies, so an old runtime's event reader stops.
@@ -587,6 +589,7 @@ impl Workspace {
             last_notebooks: Vec::new(),
             notebooks: serde_json::Value::Null,
             cells: serde_json::Value::Null,
+            idle_stopped: HashSet::new(),
             placeholder: "Type / for commands",
             runtime_generation: Arc::new(AtomicU64::new(0)),
             died_tx,
@@ -1005,7 +1008,7 @@ impl Workspace {
                 match result {
                     // Not open (already stopped elsewhere): Start reopens it in safe preview.
                     Ok(safe_preview) => {
-                        let stopped = Stopped { safe_preview: safe_preview.unwrap_or(true) };
+                        let stopped = Stopped { safe_preview: safe_preview.unwrap_or(true), idle_hours: None };
                         for session in this.sessions.iter_mut().filter(|s| s.notebook_path.as_deref() == Some(path.as_str())) {
                             session.notebook = None;
                             session.stopped = Some(stopped);
@@ -1141,6 +1144,13 @@ impl Workspace {
         let effects = session.submit(Queued::new(text.clone(), Some(text), blocks), now);
         self.apply_effects(key, effects, cx);
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
+    }
+
+    fn send_idle_limit(&self, cx: &mut Context<Self>) {
+        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        let hours = self.settings.idle_stop.hours();
+        // ponytail: a failed send leaves the runtime on its default (48 hours) until the next start.
+        cx.background_executor().spawn(async move { pluto::set_idle_limit(&mcp_url, hours) }).detach();
     }
 
     fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
@@ -1631,6 +1641,7 @@ impl Workspace {
         let mcp_url = runtime.mcp_url.clone();
         self.runtime = Some(runtime);
         self.follow_folder();
+        self.send_idle_limit(cx);
         // A new runtime knows no session's notebook.
         let bound: Vec<(u64, String)> = self.sessions.iter().filter_map(|s| Some((s.key, s.notebook_path.clone()?))).collect();
         for (key, path) in bound {
@@ -1682,6 +1693,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             while let Some(mut event) = rx.next().await {
                 let updated = this.update(cx, |this, cx| {
+                    this.note_idle_stops(&event);
                     this.remember_notebooks(event["notebooks"].take());
                     for (notebook, cell, name) in pluto::user_edits(&this.cells, &event["cells"]) {
                         for session in this.sessions.iter_mut().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())) {
@@ -1714,6 +1726,24 @@ impl Workspace {
         let Some(id) = viewed_notebook_id(&url) else { return };
         let cells = self.cells.get(id).cloned().unwrap_or_else(|| serde_json::json!([]));
         self.send_to_page(&serde_json::json!({ "type": "cells", "cells": cells }), cx);
+    }
+
+    /// A notebook the runtime just stopped for being idle shows stopped, with
+    /// Start, in every session on it. Only new entries count: a stale one must not
+    /// stop a notebook the user has started again since.
+    fn note_idle_stops(&mut self, event: &serde_json::Value) {
+        let stops = pluto::idle_stopped(event);
+        for (path, hours, safe_preview) in &stops {
+            if self.idle_stopped.contains(path) {
+                continue;
+            }
+            let stopped = Stopped { safe_preview: *safe_preview, idle_hours: Some(*hours) };
+            for session in self.sessions.iter_mut().filter(|s| s.notebook_path.as_deref() == Some(path.as_str())) {
+                session.notebook = None;
+                session.stopped = Some(stopped);
+            }
+        }
+        self.idle_stopped = stops.into_iter().map(|(path, ..)| path).collect();
     }
 
     fn remember_notebooks(&mut self, list: serde_json::Value) {
@@ -2144,6 +2174,18 @@ impl Workspace {
             .child(note(
                 "New sessions start as if you'd chosen \"Always this session\". Applies to new and reopened sessions.".into(),
             ))
+            .child(heading("Stop idle notebooks after"))
+            .child(
+                div().flex().gap_4().children(IdleStop::ALL.map(|(value, label)| {
+                    Radio::new(label).text_size(theme::size_body()).checked(s.idle_stop == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(cx, |s| s.idle_stop = value);
+                        this.send_idle_limit(cx);
+                    }))
+                })),
+            )
+            .child(note(
+                "A notebook nobody has used for this long (no edits, runs, or Claude working in it) stops, even with Endeavor open. Start brings it back.".into(),
+            ))
             .child(heading("Appearance"))
             .child(
                 div()
@@ -2277,7 +2319,11 @@ impl Workspace {
                 .text_color(theme::text_primary())
                 .child("Start")
                 .on_click(cx.listener(move |this, _, _, cx| this.start_notebook(key, cx)));
-            return Some(new_session::turtle_pane().child(line().child(file).child(" is stopped.")).child(start).into_any_element());
+            let why = match session.stopped.and_then(|s| s.idle_hours) {
+                Some(hours) => format!(" stopped after {hours} hours idle."),
+                None => " is stopped.".into(),
+            };
+            return Some(new_session::turtle_pane().child(line().child(file).child(why)).child(start).into_any_element());
         }
         if session.notebook.is_some() {
             return None;

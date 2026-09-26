@@ -28,6 +28,40 @@ pub struct Settings {
     pub show_archived: bool,
     /// The notebook's zoom (⌘= / ⌘− / ⌘0); 0 means unset (1.0).
     pub zoom: f64,
+    /// Open notebooks with no turns, edits or running cells for this long stop.
+    pub idle_stop: IdleStop,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IdleStop {
+    Hours12,
+    Hours24,
+    #[default]
+    Hours48,
+    Week,
+    Never,
+}
+
+impl IdleStop {
+    pub const ALL: [(IdleStop, &str); 5] = [
+        (IdleStop::Hours12, "12 hours"),
+        (IdleStop::Hours24, "24 hours"),
+        (IdleStop::Hours48, "48 hours"),
+        (IdleStop::Week, "1 week"),
+        (IdleStop::Never, "Never"),
+    ];
+
+    /// The runtime's limit; 0 never stops.
+    pub fn hours(self) -> u32 {
+        match self {
+            IdleStop::Hours12 => 12,
+            IdleStop::Hours24 => 24,
+            IdleStop::Hours48 => 48,
+            IdleStop::Week => 168,
+            IdleStop::Never => 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

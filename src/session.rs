@@ -104,7 +104,7 @@ pub struct Session {
     pub notebook: Option<String>,
     /// The session's one notebook file, once it has one.
     pub notebook_path: Option<String>,
-    /// Its notebook was stopped from the notebook's ⋯ menu.
+    /// Its notebook was stopped from the notebook's ⋯ menu, or for being idle.
     pub stopped: Option<Stopped>,
     /// Cells the user changed since the agent last heard (cell id, name); told
     /// with the next prompt.
@@ -142,6 +142,8 @@ pub struct Session {
 pub struct Stopped {
     /// It was in safe preview, so Start reopens it without running.
     pub safe_preview: bool,
+    /// The runtime stopped it after this many hours idle.
+    pub idle_hours: Option<u64>,
 }
 
 pub struct Failure {

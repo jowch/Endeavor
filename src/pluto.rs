@@ -63,6 +63,22 @@ pub fn set_notebook(mcp_url: &str, owner: u64, path: &str) -> Result<(), String>
     rpc(mcp_url, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
 }
 
+/// Stop open notebooks after `hours` with no activity; 0 never stops them.
+pub fn set_idle_limit(mcp_url: &str, hours: u32) -> Result<(), String> {
+    rpc(mcp_url, "endeavor/set_idle_limit", json!({ "hours": hours })).map(|_| ())
+}
+
+/// Notebooks the runtime stopped for being idle, from its event stream:
+/// (path, the idle limit in hours, whether it was in safe preview).
+pub fn idle_stopped(event: &serde_json::Value) -> Vec<(String, u64, bool)> {
+    event["idle_stopped"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| Some((s["path"].as_str()?.to_owned(), s["hours"].as_u64()?, s["safe_preview"].as_bool().unwrap_or(true))))
+        .collect()
+}
+
 /// Shut down the open notebook at `path`. Returns whether it was in safe preview,
 /// or None if it wasn't open.
 pub fn stop_notebook(mcp_url: &str, path: &str) -> Result<Option<bool>, String> {
