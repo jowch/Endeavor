@@ -19,6 +19,7 @@ use agent_client_protocol::schema::v1::{
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::text::TextView;
+use gpui_component::tooltip::Tooltip;
 
 use crate::Workspace;
 use crate::theme;
@@ -876,19 +877,46 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
             .into_any_element(),
         Entry::Agent(text) => TextView::markdown(id("agent"), text.clone()).into_any_element(),
         Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
-        Entry::Tool { title, status, input, output, diffs, expanded, .. } => {
-            // One line: grey verb, the cells in mono, ± counts, › to expand (the diff).
-            let names: Vec<String> = diffs.iter().map(cell_name).collect();
-            let (added, removed) = diffs.iter().flat_map(|d| &d.lines).fold((0, 0), |(a, r), (change, _)| match change {
+        Entry::Tool { title, kind, path, status, input, output, diffs, expanded, .. } => {
+            // One line: grey verb, what it acted on in mono, ± counts, › to expand.
+            let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
+            let pluto = celldiff::pluto_tool(title).is_some();
+            let file_diff = if pluto { None } else { file_diff(*kind, path.as_deref(), args) };
+            let all_diffs: Vec<&celldiff::CellDiff> = diffs.iter().chain(&file_diff).collect();
+            let (added, removed) = all_diffs.iter().flat_map(|d| &d.lines).fold((0, 0), |(a, r), (change, _)| match change {
                 celldiff::Change::Added => (a + 1, r),
                 celldiff::Change::Removed => (a, r + 1),
                 celldiff::Change::Same => (a, r),
             });
-            let mono = |text: String, color: Rgba| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
+            let line = if pluto {
+                let names: Vec<String> = diffs.iter().map(cell_name).collect();
+                ToolLine { verb: tool_verb(title), object: (!names.is_empty()).then(|| names.join(", ")), mono: true, full: None }
+            } else {
+                tool_line(title, *kind, path.as_deref(), args)
+            };
+            let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
             let state = match status {
-                ToolCallStatus::Failed => Some(div().text_color(theme::danger()).child("failed")),
-                ToolCallStatus::Pending | ToolCallStatus::InProgress => Some(div().child("…")),
+                ToolCallStatus::Failed => Some(div().flex_none().text_color(theme::danger()).child("failed")),
+                ToolCallStatus::Pending | ToolCallStatus::InProgress => Some(div().flex_none().child("…")),
                 _ => None,
+            };
+            let object = line.object.map(|text| {
+                let d = div().id(id("tool-object")).min_w_0().truncate().text_color(theme::text_secondary()).child(text);
+                let d = if line.mono { d.font_family(theme::MONO).text_size(theme::size_meta_small()) } else { d };
+                match line.full {
+                    Some(full) => d.tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx)),
+                    None => d,
+                }
+            });
+            let sections = if pluto {
+                let json = |v: &serde_json::Value| serde_json::to_string_pretty(v).unwrap_or_default();
+                input
+                    .iter()
+                    .map(|v| ("input", json(v)))
+                    .chain(output.iter().map(|v| ("result", json(&celldiff::tool_json(v).unwrap_or_else(|| v.clone())))))
+                    .collect()
+            } else {
+                tool_details(*kind, path.as_deref(), input.as_ref(), output.as_ref(), file_diff.is_some())
             };
             div()
                 .flex()
@@ -904,20 +932,17 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
                         .text_size(theme::size_meta())
                         .text_color(theme::text_faint())
                         .hover(|s| s.text_color(theme::text_secondary()))
-                        .child(div().overflow_hidden().whitespace_nowrap().child(tool_verb(title)))
-                        .when(!names.is_empty(), |d| d.child(mono(names.join(", "), theme::text_secondary())))
+                        .child(div().flex_none().whitespace_nowrap().child(line.verb))
+                        .children(object)
                         .when(added > 0, |d| d.child(mono(format!("+{added}"), theme::diff_add())))
                         .when(removed > 0, |d| d.child(mono(format!("−{removed}"), theme::diff_del())))
                         .children(state)
-                        .child(if *expanded { "⌄" } else { "›" })
+                        .child(div().flex_none().child(if *expanded { "⌄" } else { "›" }))
                         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle(ix)))),
                 )
                 .when(*expanded, |d| {
-                    d.children(diffs.iter().map(render_diff))
-                        .when(diffs.is_empty(), |d| {
-                            d.children(input.as_ref().map(|v| detail("input", v)))
-                                .children(output.as_ref().map(|v| detail("result", &celldiff::tool_json(v).unwrap_or_else(|| v.clone()))))
-                        })
+                    d.children(all_diffs.into_iter().map(render_diff))
+                        .when(diffs.is_empty() && !sections.is_empty(), |d| d.child(detail(id("tool-detail"), sections)))
                 })
                 .into_any_element()
         }
@@ -1274,24 +1299,159 @@ fn defined_name(code: &str) -> Option<String> {
     (!name.is_empty() && line.contains('=')).then_some(name)
 }
 
-/// A tool call's input or result, pretty-printed and truncated.
-fn detail(label: &str, value: &serde_json::Value) -> impl IntoElement + use<> {
-    const MAX_CHARS: usize = 2000;
-    let text = serde_json::to_string_pretty(value).unwrap_or_default();
-    let text = match text.char_indices().nth(MAX_CHARS) {
-        Some((cut, _)) => format!("{}\n…", &text[..cut]),
-        None => text,
+/// A tool call's collapsed line.
+struct ToolLine {
+    verb: String,
+    /// What it acted on: a file name, pattern or command line (mono), or the
+    /// agent's own description of a command (not mono). One line.
+    object: Option<String>,
+    mono: bool,
+    /// The full path, shown on hover.
+    full: Option<String>,
+}
+
+/// A non-notebook call's line: "Ran" + the agent's description or the command's
+/// first line; "Read" + a file name; "Searched" + the pattern; "Fetched" + the
+/// host; else the agent's title.
+fn tool_line(title: &str, kind: ToolKind, path: Option<&Path>, input: &serde_json::Value) -> ToolLine {
+    let field = |name: &str| input[name].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let line = |verb: &str, object: Option<&str>, mono: bool| ToolLine { verb: verb.into(), object: object.map(first_line), mono, full: None };
+    match kind {
+        ToolKind::Execute => match field("description") {
+            Some(description) => {
+                // "List files" → "Ran list files"; acronyms ("JSON …") keep their case.
+                let mut chars = description.chars();
+                let lower = match (chars.next(), chars.next()) {
+                    (Some(first), Some(second)) if !second.is_uppercase() => format!("{}{}", first.to_lowercase(), &description[first.len_utf8()..]),
+                    _ => description.to_string(),
+                };
+                line("Ran", Some(&lower), false)
+            }
+            None => line("Ran", field("command"), true),
+        },
+        ToolKind::Read | ToolKind::Edit | ToolKind::Delete | ToolKind::Move => {
+            let verb = match kind {
+                ToolKind::Read => "Read",
+                ToolKind::Delete => "Deleted",
+                ToolKind::Move => "Moved",
+                _ if title.starts_with("Write") => "Wrote",
+                _ => "Edited",
+            };
+            match file_path(path, input) {
+                Some(full) => ToolLine { verb: verb.into(), object: Some(file_name(&full)), mono: true, full: Some(full) },
+                None => line(&first_line(title), None, false),
+            }
+        }
+        ToolKind::Search => line("Searched", field("pattern").or(field("query")).or(Some(title)), true),
+        ToolKind::Fetch => match field("url") {
+            Some(url) => line("Fetched", Some(url_host(url)), true),
+            None => line("Searched", field("query").or(Some(title)), true),
+        },
+        _ => line(&first_line(title), None, false),
+    }
+}
+
+/// The file a call touches: its first location, else a path in its input.
+fn file_path(path: Option<&Path>, input: &serde_json::Value) -> Option<String> {
+    path.map(|p| p.display().to_string())
+        .or_else(|| ["file_path", "notebook_path", "path"].iter().find_map(|f| input[*f].as_str()).map(str::to_owned))
+}
+
+fn file_name(path: &str) -> String {
+    Path::new(path).file_name().map_or_else(|| path.to_string(), |f| f.to_string_lossy().into_owned())
+}
+
+fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest)
+}
+
+/// The first non-blank line, with "…" when more follow.
+fn first_line(text: &str) -> String {
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    let first = lines.next().unwrap_or("").to_string();
+    if lines.next().is_some() { format!("{first} …") } else { first }
+}
+
+/// A file edit's old and new text as a diff.
+fn file_diff(kind: ToolKind, path: Option<&Path>, input: &serde_json::Value) -> Option<celldiff::CellDiff> {
+    let (old, new) = (input["old_string"].as_str(), input["new_string"].as_str());
+    if kind != ToolKind::Edit || (old.is_none() && new.is_none()) {
+        return None;
+    }
+    let label = file_path(path, input).map_or_else(|| "edit".into(), |p| file_name(&p));
+    Some(celldiff::CellDiff { label, lines: celldiff::line_diff(old.unwrap_or(""), new.unwrap_or("")) })
+}
+
+/// What an expanded non-notebook call shows: its input (the command, the path, or
+/// its fields) and its output as text. JSON only when the input isn't flat.
+fn tool_details(
+    kind: ToolKind,
+    path: Option<&Path>,
+    input: Option<&serde_json::Value>,
+    output: Option<&serde_json::Value>,
+    has_diff: bool,
+) -> Vec<(&'static str, String)> {
+    let args = input.unwrap_or(&serde_json::Value::Null);
+    let input = match (kind, args["command"].as_str()) {
+        (ToolKind::Execute, Some(command)) => Some(("command", command.to_string())),
+        _ if has_diff => file_path(path, args).map(|p| ("path", p)),
+        _ => match args.as_object() {
+            Some(fields) if fields.values().all(|v| !v.is_object() && !v.is_array()) => {
+                let lines: Vec<String> = fields
+                    .iter()
+                    .map(|(k, v)| {
+                        let v = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
+                        if v.contains('\n') { format!("{k}:\n{v}") } else { format!("{k}: {v}") }
+                    })
+                    .collect();
+                (!lines.is_empty()).then(|| ("input", lines.join("\n")))
+            }
+            Some(_) => Some(("input", serde_json::to_string_pretty(args).unwrap_or_default())),
+            None => file_path(path, args).map(|p| ("path", p)),
+        },
     };
+    let output = output.map(plain_text).filter(|t| !t.trim().is_empty()).map(|t| ("output", t));
+    input.into_iter().chain(output).collect()
+}
+
+/// A tool result as text: the text itself, the MCP content array's texts, else JSON.
+fn plain_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Array(items) if items.iter().all(|i| i["text"].is_string()) => {
+            items.iter().filter_map(|i| i["text"].as_str()).collect::<Vec<_>>().join("\n")
+        }
+        other => serde_json::to_string_pretty(other).unwrap_or_default(),
+    }
+}
+
+/// An expanded tool call's input and output, labelled, in a panel that scrolls.
+fn detail(id: ElementId, sections: Vec<(&'static str, String)>) -> impl IntoElement + use<> {
+    const MAX_CHARS: usize = 20_000;
     div()
+        .id(id)
+        .max_h(px(240.))
+        .overflow_y_scroll()
         .flex()
         .flex_col()
+        .gap_2()
         .rounded_sm()
         .bg(theme::bg_card())
         .p_2()
         .font_family(theme::MONO)
-        .text_size(theme::size_code())
-        .child(div().text_color(theme::text_muted()).child(label.to_string()))
-        .child(text)
+        .text_size(theme::size_meta())
+        .children(sections.into_iter().map(|(label, text)| {
+            let text = match text.char_indices().nth(MAX_CHARS) {
+                Some((cut, _)) => format!("{}\n…", &text[..cut]),
+                None => text,
+            };
+            div()
+                .flex()
+                .flex_col()
+                .child(div().text_color(theme::text_muted()).child(label))
+                .child(div().text_color(theme::text_secondary()).child(text))
+        }))
 }
 
 #[cfg(test)]
@@ -1303,6 +1463,48 @@ mod tests {
         AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, SessionId, SessionMode, SessionModeState, SessionUpdate,
         StopReason, UsageUpdate,
     };
+
+    #[test]
+    fn tool_calls_collapse_to_one_line() {
+        use agent_client_protocol::schema::v1::ToolKind;
+        use serde_json::json;
+        let line = |title: &str, kind, path: Option<&str>, input| {
+            let l = super::tool_line(title, kind, path.map(std::path::Path::new), &input);
+            (l.verb, l.object, l.mono, l.full)
+        };
+        let script = "cd /tmp\nfor f in *.jl; do\n  julia $f\ndone";
+        assert_eq!(line(script, ToolKind::Execute, None, json!({"command": script})), ("Ran".into(), Some("cd /tmp …".into()), true, None));
+        assert_eq!(
+            line("ls", ToolKind::Execute, None, json!({"command": "ls", "description": "List files\nin the folder"})),
+            ("Ran".into(), Some("list files …".into()), false, None)
+        );
+        assert_eq!(
+            line("Read src/main.rs (1 - 50)", ToolKind::Read, Some("/repo/src/main.rs"), json!({"file_path": "/repo/src/main.rs"})),
+            ("Read".into(), Some("main.rs".into()), true, Some("/repo/src/main.rs".into()))
+        );
+        assert_eq!(line("Write a.txt", ToolKind::Edit, None, json!({"file_path": "/x/a.txt"})).0, "Wrote");
+        assert_eq!(line("grep \"fn main\"", ToolKind::Search, None, json!({"pattern": "fn main"})).1, Some("fn main".into()));
+        assert_eq!(line("Fetch", ToolKind::Fetch, None, json!({"url": "https://docs.rs/gpui/latest"})).1, Some("docs.rs".into()));
+        assert_eq!(line("Update TODOs: a, b", ToolKind::Think, None, json!({})).0, "Update TODOs: a, b");
+    }
+
+    #[test]
+    fn expanded_tool_calls_show_text_not_json() {
+        use agent_client_protocol::schema::v1::ToolKind;
+        use serde_json::json;
+        let input = json!({"command": "echo hi\nls", "description": "Say hi"});
+        let output = json!([{"type": "text", "text": "hi\nREADME.md"}]);
+        assert_eq!(
+            super::tool_details(ToolKind::Execute, None, Some(&input), Some(&output), false),
+            vec![("command", "echo hi\nls".to_string()), ("output", "hi\nREADME.md".to_string())]
+        );
+        let read = json!({"file_path": "/repo/README.md", "limit": 20});
+        assert_eq!(super::tool_details(ToolKind::Read, None, Some(&read), None, false), vec![("input", "file_path: /repo/README.md\nlimit: 20".to_string())]);
+        let edit = json!({"file_path": "/repo/a.rs", "old_string": "a\nb", "new_string": "a\nc"});
+        let diff = super::file_diff(ToolKind::Edit, None, &edit).unwrap();
+        assert_eq!(diff.label, "a.rs");
+        assert_eq!(super::tool_details(ToolKind::Edit, None, Some(&edit), None, true), vec![("path", "/repo/a.rs".to_string())]);
+    }
 
     #[test]
     fn cells_are_named_by_what_they_define() {
