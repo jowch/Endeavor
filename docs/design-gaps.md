@@ -35,7 +35,7 @@ _Listed 2026-09-25._
 - [ ] Markdown in agent replies: code blocks, tables, headings, lists — improvised (component library defaults)
 - [ ] "▸ Thinking" blocks — improvised
 - [ ] Non-notebook tool calls (shell, Read, Write, ToolSearch) and their expanded input/output view — improvised (raw JSON)
-- [ ] Shell tool lines print the whole command (multi-line scripts) in the transcript; spec says one collapsed line each (grey verb, mono name, `›` to expand), like "Ran `python3 -c …`" — improvised
+- [x] Shell tool lines print the whole command (multi-line scripts) in the transcript; spec says one collapsed line each (grey verb, mono name, `›` to expand), like "Ran `python3 -c …`" — improvised
 - [ ] Transcript notes: "Allowed: …", "Denied: …", "Turn ended", end-of-turn run warnings — improvised
 - [ ] Failure states: turn failed, agent disconnected, Julia crashed and notebooks reopened, "Open a copy" for a session still open in the Claude Code CLI — improvised
 - [ ] Opening a past session: loading and replay — improvised
