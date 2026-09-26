@@ -11,10 +11,23 @@
 import { on } from "./bridge";
 import { onRedraw } from "./redraw";
 
+// Pluto indents wrapped lines with margin-left: var(--indented), which a line's
+// own background doesn't cover; the tint is a layer behind the text that
+// reaches back over the indent. The ± signs sit just left of the text column.
 const css = `
-  .endeavor-add { background: rgba(108, 199, 132, 0.12); }
+  .cm-line.endeavor-add { position: relative; z-index: 0; }
+  .cm-line.endeavor-add::before {
+    content: ""; position: absolute; z-index: -1; pointer-events: none;
+    top: 0; bottom: 0; right: 0; left: calc(-1 * var(--indented, 0px));
+    background: rgba(108, 199, 132, 0.12);
+  }
+  .cm-line.endeavor-add::after {
+    content: "+"; position: absolute; top: 0; pointer-events: none;
+    left: calc(-1 * var(--indented, 0px) - 13px); color: #6CC784; text-indent: 0;
+  }
   .endeavor-add-ch { background: rgba(108, 199, 132, 0.28); border-radius: 2px; }
-  .endeavor-del { background: rgba(224, 122, 122, 0.12); color: #E07A7A; white-space: pre; padding-left: 6px; }
+  .endeavor-del { position: relative; background: rgba(224, 122, 122, 0.12); color: #E07A7A; white-space: pre; }
+  .endeavor-del::before { content: "−"; position: absolute; left: -13px; }
   .endeavor-del-ch { background: rgba(224, 122, 122, 0.28); border-radius: 2px; }
 `;
 

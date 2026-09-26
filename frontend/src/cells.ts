@@ -19,6 +19,8 @@ const css = `
     background: repeating-linear-gradient(-45deg, #9A9A9A 0 3px, rgba(154, 154, 154, 0.25) 3px 6px);
   }
   pluto-cell[data-endeavor="unrun"] > pluto-output { opacity: 0.4; }
+  /* Code the agent changed stays in view until it runs, even in a folded cell. */
+  pluto-cell[data-endeavor="unrun"][data-author="agent"] > pluto-input { display: block !important; opacity: 1 !important; }
 `;
 
 let states = new Map<string, CellState>();

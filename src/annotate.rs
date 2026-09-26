@@ -38,6 +38,8 @@ pub struct Annotation {
     pub comment: String,
     /// Cmd+Enter: join the running turn instead of waiting in the queue.
     pub now: bool,
+    /// Sent along but not shown in the chat bubble: (label, text), e.g. an error trace.
+    pub attachment: Option<(String, String)>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -71,11 +73,12 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             let cell = v.get("cell")?.as_str().filter(|s| is_uuid(s))?.to_owned();
             let error: String = v.get("error")?.as_str()?.chars().take(MAX_COMMENT).collect();
             let comment = match v.get("kind")?.as_str()? {
-                "fix" => format!("Fix the error in this cell:\n{error}"),
-                "explain" => format!("Explain this error; don't change anything yet:\n{error}"),
+                "fix" => "Fix the error in this cell (its message is attached).".to_string(),
+                "explain" => "Explain the error in this cell (its message is attached); don't change anything yet.".to_string(),
                 _ => return None,
             };
-            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now: false }))
+            let attachment = Some(("error message".to_string(), error));
+            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now: false, attachment }))
         }
         // ⌘K on a cell, or the agent button between cells.
         "prompt" => {
@@ -85,11 +88,12 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             let comment = match v.get("where")?.as_str()? {
                 "about" => text,
                 "fill" => format!("Write the code for this empty cell: {text}"),
+                "before" => format!("Add a new cell right before this one: {text}"),
                 "after" => format!("Add a new cell right after this one: {text}"),
                 _ => return None,
             };
             let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
-            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now }))
+            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now, attachment: None }))
         }
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "annotation" => {
@@ -103,7 +107,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             let comment: String = v.get("comment")?.as_str()?.chars().take(MAX_COMMENT).collect();
             let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
             (!cells.is_empty() && cells.len() <= MAX_CELLS)
-                .then_some(Message::Annotation(Annotation { notebook, cells, comment, now }))
+                .then_some(Message::Annotation(Annotation { notebook, cells, comment, now, attachment: None }))
         }
         _ => None,
     }
@@ -136,6 +140,9 @@ pub fn prompt_blocks(annotations: &[Annotation]) -> Vec<ContentBlock> {
             "Comment on the {} cell(s) above: {comment}",
             a.cells.len()
         ))));
+        if let Some((label, text)) = &a.attachment {
+            blocks.push(ContentBlock::Text(TextContent::new(format!("[Attached {label}]\n{text}"))));
+        }
     }
     blocks
 }
@@ -167,7 +174,8 @@ mod tests {
             )
         };
         let Some(Message::Annotation(fix)) = ask("fix") else { panic!("fix") };
-        assert_eq!((fix.cells.as_slice(), fix.comment.as_str()), ([C1.to_string()].as_slice(), "Fix the error in this cell:\nUndefVarError: x"));
+        assert_eq!((fix.cells.as_slice(), fix.comment.as_str()), ([C1.to_string()].as_slice(), "Fix the error in this cell (its message is attached)."));
+        assert_eq!(fix.attachment.as_ref().map(|(_, text)| text.as_str()), Some("UndefVarError: x"), "the trace goes as an attachment");
         assert!(matches!(ask("explain"), Some(Message::Annotation(a)) if a.comment.starts_with("Explain")));
         assert_eq!(ask("delete everything"), None);
         assert_eq!(parse_with(r#"{"type":"send"}"#, ""), None);
@@ -202,7 +210,7 @@ mod tests {
 
     #[test]
     fn prompt_blocks_link_each_cell_then_comment() {
-        let a = Annotation { notebook: NB.into(), cells: vec![C1.into()], comment: "".into(), now: false };
+        let a = Annotation { notebook: NB.into(), cells: vec![C1.into()], comment: "".into(), now: false, attachment: None };
         let blocks = prompt_blocks(&[a]);
         assert_eq!(blocks.len(), 3);
         let ContentBlock::ResourceLink(link) = &blocks[1] else { panic!("expected link") };

@@ -31,8 +31,8 @@ function decorate() {
     };
     row.querySelector<HTMLButtonElement>(".fix")!.onclick = (e) => byUser(e) && ask("fix");
     row.querySelector<HTMLButtonElement>(".explain")!.onclick = (e) => byUser(e) && ask("explain");
-    const header = error.querySelector(".error-header");
-    header ? header.after(row) : error.prepend(row);
+    // At the bottom of the error card, after the message and trace.
+    error.append(row);
   }
 }
 

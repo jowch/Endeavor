@@ -24,6 +24,8 @@ pub struct Settings {
     /// The agent config values last picked (e.g. "model", "effort"), applied to
     /// each session as it starts: the adapter only sets them per session.
     pub agent_config: std::collections::BTreeMap<String, String>,
+    /// The notebook's zoom (⌘= / ⌘− / ⌘0); 0 means unset (1.0).
+    pub zoom: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

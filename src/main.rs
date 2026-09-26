@@ -51,7 +51,7 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
     annotate::is_uuid(id).then_some(id)
 }
 
-actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode, ToggleSidebar, OpenSettings, Quit]);
+actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode, ToggleSidebar, OpenSettings, Quit, ZoomIn, ZoomOut, ZoomReset]);
 
 /// A small JSON file in Endeavor's Application Support folder.
 fn app_file(name: &str) -> Option<PathBuf> {
@@ -851,6 +851,14 @@ impl Workspace {
         )
     }
 
+    /// Zoom the notebook by `step` (or back to 100%), kept in settings.
+    fn zoom(&mut self, step: f64, reset: bool, cx: &mut Context<Self>) {
+        let current = if self.settings.zoom > 0. { self.settings.zoom } else { 1. };
+        self.settings.zoom = if reset { 1. } else { (current * step).clamp(0.5, 3.) };
+        self.settings.save();
+        let _ = self.webview.read(cx).raw().zoom(self.settings.zoom);
+    }
+
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         self.settings.layout.sidebar_open = !self.settings.layout.sidebar_open;
         self.settings.save();
@@ -1023,7 +1031,8 @@ impl Workspace {
             Some(annotate::Message::Annotation(a)) => {
                 let Some(key) = self.active else { return };
                 let comment = if a.comment.is_empty() { "(no comment)" } else { a.comment.as_str() };
-                let label = format!("✎ {} cell{}: {comment}", a.cells.len(), if a.cells.len() > 1 { "s" } else { "" });
+                let attached = a.attachment.as_ref().map(|(label, _)| format!("\n📎 {label}")).unwrap_or_default();
+                let label = format!("✎ {} cell{}: {comment}{attached}", a.cells.len(), if a.cells.len() > 1 { "s" } else { "" });
                 let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
                 blocks.extend(annotate::prompt_blocks(std::slice::from_ref(&a)));
                 let Some(session) = self.session_mut(key) else { return };
@@ -1276,6 +1285,9 @@ impl Workspace {
     /// The notebook's appearance and theme, from Settings.
     fn apply_look(&self, cx: &mut Context<Self>) {
         settings::set_webview_appearance(self.webview.read(cx).raw(), self.settings.appearance);
+        if self.settings.zoom > 0. {
+            let _ = self.webview.read(cx).raw().zoom(self.settings.zoom);
+        }
         self.send_to_page(&serde_json::json!({ "type": "theme", "name": self.settings.notebook_theme.name() }), cx);
     }
 
@@ -1796,12 +1808,21 @@ impl Workspace {
                                 })
                             }).into_iter().flatten())
                             .children(session.usage.filter(|(_, size)| *size > 0).map(|(used, size)| {
-                                let label = format!("{}% of context used", used * 100 / size);
+                                // Shown on hover beside the ring: a tooltip would open under the notebook.
                                 div()
                                     .id("context")
+                                    .group("context")
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
                                     .px(px(5.))
+                                    .child(
+                                        div()
+                                            .text_color(gpui::transparent_black())
+                                            .group_hover("context", |s| s.text_color(theme::text_muted()))
+                                            .child(format!("{}% context", used * 100 / size)),
+                                    )
                                     .child(context_ring(used as f32 / size as f32))
-                                    .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(label.clone()).build(window, cx))
                             })),
                     ),
             )
@@ -1908,6 +1929,9 @@ fn main() {
             KeyBinding::new("cmd-b", ToggleSidebar, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-=", ZoomIn, None),
+            KeyBinding::new("cmd--", ZoomOut, None),
+            KeyBinding::new("cmd-0", ZoomReset, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
         // Edit's items send the native cut:/copy:/paste:/selectAll: selectors, which
@@ -1926,7 +1950,16 @@ fn main() {
                     MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
                 ],
             ),
-            menu("View", vec![MenuItem::action("Toggle Sidebar", ToggleSidebar)]),
+            menu(
+                "View",
+                vec![
+                    MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                    MenuItem::separator(),
+                    MenuItem::action("Zoom In", ZoomIn),
+                    MenuItem::action("Zoom Out", ZoomOut),
+                    MenuItem::action("Actual Size", ZoomReset),
+                ],
+            ),
         ]);
         let bounds = Bounds::centered(None, size(px(1560.), px(900.)), cx);
         cx.open_window(
@@ -1954,6 +1987,13 @@ fn main() {
                     })
                     .ok();
                 });
+                // The notebook's zoom, from anywhere (the notebook usually has the keyboard).
+                let ws = workspace.downgrade();
+                cx.on_action(move |_: &ZoomIn, cx| drop(ws.update(cx, |this, cx| this.zoom(1.1, false, cx))));
+                let ws = workspace.downgrade();
+                cx.on_action(move |_: &ZoomOut, cx| drop(ws.update(cx, |this, cx| this.zoom(1. / 1.1, false, cx))));
+                let ws = workspace.downgrade();
+                cx.on_action(move |_: &ZoomReset, cx| drop(ws.update(cx, |this, cx| this.zoom(1., true, cx))));
                 let ws = workspace.downgrade();
                 cx.on_action(move |_: &ToggleSidebar, cx| {
                     ws.update(cx, |this, cx| {

@@ -10,13 +10,18 @@ import { onRedraw } from "./redraw";
 const AGENT = "Claude";
 
 const css = `
+  /* Beside Pluto's "+" in the gap above a cell (and below the last one): faint
+     while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
-    position: absolute; left: 14px; bottom: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); z-index: 20;
+    position: absolute; left: 14px; z-index: 20;
     height: 18px; padding: 0 7px; border-radius: 9px; border: 1px solid #333;
     background: #1C1C1E; color: #9A9A9A; font: 11px system-ui, sans-serif; cursor: pointer;
     opacity: 0; transition: opacity 0.1s;
   }
-  pluto-cell:hover > .endeavor-add-agent { opacity: 1; }
+  pluto-cell > .endeavor-add-agent.before { top: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); }
+  pluto-cell > .endeavor-add-agent.after { bottom: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); }
+  pluto-cell:hover > .endeavor-add-agent { opacity: 0.35; }
+  pluto-cell > button.add_cell:hover + .endeavor-add-agent, pluto-cell > .endeavor-add-agent:hover { opacity: 1; }
   pluto-cell > .endeavor-add-agent:hover { color: #FF9A6B; border-color: #CC3F00; }
   #endeavor-prompt {
     position: absolute; z-index: 1000; display: flex; flex-direction: column; gap: 6px;
@@ -33,7 +38,7 @@ const css = `
   pluto-input .cm-placeholder::after { content: "Type code, or ⌘K to ask ${AGENT}"; font-size: 13px; }
 `;
 
-type Where = "cell" | "after";
+type Where = "cell" | "before" | "after";
 let open: { box: HTMLElement; cell: HTMLElement; where: Where } | null = null;
 
 function close(refocus: boolean) {
@@ -44,10 +49,12 @@ function close(refocus: boolean) {
   if (refocus) cell.querySelector<HTMLElement>("pluto-input .cm-content")?.focus();
 }
 
-function place(box: HTMLElement, cell: HTMLElement) {
+function place(box: HTMLElement, cell: HTMLElement, where: Where) {
   const rect = cell.getBoundingClientRect();
   box.style.left = `${rect.left + window.scrollX}px`;
-  box.style.top = `${rect.bottom + window.scrollY + 6}px`;
+  // A new cell before this one: the prompt sits in the gap above it.
+  const top = where === "before" ? rect.top + window.scrollY - 6 - 70 : rect.bottom + window.scrollY + 6;
+  box.style.top = `${Math.max(top, 0)}px`;
   box.style.width = `${Math.max(rect.width, 280)}px`;
 }
 
@@ -60,7 +67,7 @@ export function openPrompt(cell: HTMLElement, where: Where) {
   const box = document.createElement("div");
   box.id = "endeavor-prompt";
   box.dataset.endeavorUi = "";
-  const asking = where === "after" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
+  const asking = where !== "cell" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
   box.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">↵ send · esc cancel</div>`;
   const text = box.querySelector("textarea")!;
   text.placeholder = asking;
@@ -81,14 +88,14 @@ export function openPrompt(cell: HTMLElement, where: Where) {
         const comment = text.value.trim();
         if (!comment || !byUser(e)) return;
         const notebook = new URLSearchParams(location.search).get("id");
-        send({ type: "prompt", notebook, cell: cell.id, where: where === "after" ? "after" : isEmpty(cell) ? "fill" : "about", text: comment, now: e.metaKey });
+        send({ type: "prompt", notebook, cell: cell.id, where: where !== "cell" ? where : isEmpty(cell) ? "fill" : "about", text: comment, now: e.metaKey });
         close(true);
       }
     },
     true,
   );
   document.body.append(box);
-  place(box, cell);
+  place(box, cell, where);
   open = { box, cell, where };
   // After the key event that opened it: focusing during ⌘K's keydown doesn't stick.
   requestAnimationFrame(() => text.focus());
@@ -115,21 +122,28 @@ export function initPrompt(): void {
   document.addEventListener("mousedown", (e) => {
     if (open && !open.box.contains(e.target as Node)) close(false);
   });
-  window.addEventListener("resize", () => open && place(open.box, open.cell));
+  window.addEventListener("resize", () => open && place(open.box, open.cell, open.where));
 
-  // The agent button beside Pluto's "+" after each cell; re-added when Pluto redraws.
+  // The agent button beside Pluto's "+": above each cell, and below the last.
+  // Re-added when Pluto redraws.
   onRedraw(() => {
-    for (const cell of document.querySelectorAll<HTMLElement>("pluto-cell")) {
-      if (cell.querySelector(":scope > .endeavor-add-agent")) continue;
-      const add = cell.querySelector(":scope > button.add_cell.after");
-      if (!add) continue;
-      const button = document.createElement("button");
-      button.className = "endeavor-add-agent";
-      button.dataset.endeavorUi = "";
-      button.textContent = `✦ ${AGENT}`;
-      button.title = `Ask ${AGENT} to write a cell here`;
-      button.onclick = () => openPrompt(cell, "after");
-      add.after(button);
-    }
+    const cells = [...document.querySelectorAll<HTMLElement>("pluto-cell")];
+    cells.forEach((cell, i) => {
+      const places: Array<"before" | "after"> = i === cells.length - 1 ? ["before", "after"] : ["before"];
+      for (const where of places) {
+        if (cell.querySelector(`:scope > .endeavor-add-agent.${where}`)) continue;
+        const add = cell.querySelector(`:scope > button.add_cell.${where}`);
+        if (!add) continue;
+        const button = document.createElement("button");
+        button.className = `endeavor-add-agent ${where}`;
+        button.dataset.endeavorUi = "";
+        button.textContent = `✦ ${AGENT}`;
+        button.title = `Ask ${AGENT} to write a cell here`;
+        button.onclick = () => openPrompt(cell, where);
+        add.after(button);
+      }
+    });
+    // A cell that stopped being last keeps a stale bottom button.
+    for (const stale of document.querySelectorAll("pluto-cell:not(:last-of-type) > .endeavor-add-agent.after")) stale.remove();
   });
 }

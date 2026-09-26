@@ -190,6 +190,8 @@
     background: repeating-linear-gradient(-45deg, #9A9A9A 0 3px, rgba(154, 154, 154, 0.25) 3px 6px);
   }
   pluto-cell[data-endeavor="unrun"] > pluto-output { opacity: 0.4; }
+  /* Code the agent changed stays in view until it runs, even in a folded cell. */
+  pluto-cell[data-endeavor="unrun"][data-author="agent"] > pluto-input { display: block !important; opacity: 1 !important; }
 `;
   var states = /* @__PURE__ */ new Map();
   function apply() {
@@ -220,9 +222,19 @@
 
   // src/diff.ts
   var css4 = `
-  .endeavor-add { background: rgba(108, 199, 132, 0.12); }
+  .cm-line.endeavor-add { position: relative; z-index: 0; }
+  .cm-line.endeavor-add::before {
+    content: ""; position: absolute; z-index: -1; pointer-events: none;
+    top: 0; bottom: 0; right: 0; left: calc(-1 * var(--indented, 0px));
+    background: rgba(108, 199, 132, 0.12);
+  }
+  .cm-line.endeavor-add::after {
+    content: "+"; position: absolute; top: 0; pointer-events: none;
+    left: calc(-1 * var(--indented, 0px) - 13px); color: #6CC784; text-indent: 0;
+  }
   .endeavor-add-ch { background: rgba(108, 199, 132, 0.28); border-radius: 2px; }
-  .endeavor-del { background: rgba(224, 122, 122, 0.12); color: #E07A7A; white-space: pre; padding-left: 6px; }
+  .endeavor-del { position: relative; background: rgba(224, 122, 122, 0.12); color: #E07A7A; white-space: pre; }
+  .endeavor-del::before { content: "\u2212"; position: absolute; left: -13px; }
   .endeavor-del-ch { background: rgba(224, 122, 122, 0.28); border-radius: 2px; }
 `;
   function lineDiff(before, after) {
@@ -379,13 +391,18 @@
   // src/prompt.ts
   var AGENT = "Claude";
   var css5 = `
+  /* Beside Pluto's "+" in the gap above a cell (and below the last one): faint
+     while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
-    position: absolute; left: 14px; bottom: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); z-index: 20;
+    position: absolute; left: 14px; z-index: 20;
     height: 18px; padding: 0 7px; border-radius: 9px; border: 1px solid #333;
     background: #1C1C1E; color: #9A9A9A; font: 11px system-ui, sans-serif; cursor: pointer;
     opacity: 0; transition: opacity 0.1s;
   }
-  pluto-cell:hover > .endeavor-add-agent { opacity: 1; }
+  pluto-cell > .endeavor-add-agent.before { top: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); }
+  pluto-cell > .endeavor-add-agent.after { bottom: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); }
+  pluto-cell:hover > .endeavor-add-agent { opacity: 0.35; }
+  pluto-cell > button.add_cell:hover + .endeavor-add-agent, pluto-cell > .endeavor-add-agent:hover { opacity: 1; }
   pluto-cell > .endeavor-add-agent:hover { color: #FF9A6B; border-color: #CC3F00; }
   #endeavor-prompt {
     position: absolute; z-index: 1000; display: flex; flex-direction: column; gap: 6px;
@@ -409,10 +426,11 @@
     box.remove();
     if (refocus) cell.querySelector("pluto-input .cm-content")?.focus();
   }
-  function place(box, cell) {
+  function place(box, cell, where) {
     const rect = cell.getBoundingClientRect();
     box.style.left = `${rect.left + window.scrollX}px`;
-    box.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    const top = where === "before" ? rect.top + window.scrollY - 6 - 70 : rect.bottom + window.scrollY + 6;
+    box.style.top = `${Math.max(top, 0)}px`;
     box.style.width = `${Math.max(rect.width, 280)}px`;
   }
   function isEmpty(cell) {
@@ -423,7 +441,7 @@
     const box = document.createElement("div");
     box.id = "endeavor-prompt";
     box.dataset.endeavorUi = "";
-    const asking = where === "after" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
+    const asking = where !== "cell" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
     box.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">\u21B5 send \xB7 esc cancel</div>`;
     const text = box.querySelector("textarea");
     text.placeholder = asking;
@@ -443,14 +461,14 @@
           const comment = text.value.trim();
           if (!comment || !byUser(e)) return;
           const notebook = new URLSearchParams(location.search).get("id");
-          send({ type: "prompt", notebook, cell: cell.id, where: where === "after" ? "after" : isEmpty(cell) ? "fill" : "about", text: comment, now: e.metaKey });
+          send({ type: "prompt", notebook, cell: cell.id, where: where !== "cell" ? where : isEmpty(cell) ? "fill" : "about", text: comment, now: e.metaKey });
           close(true);
         }
       },
       true
     );
     document.body.append(box);
-    place(box, cell);
+    place(box, cell, where);
     open = { box, cell, where };
     requestAnimationFrame(() => text.focus());
   }
@@ -473,20 +491,25 @@
     document.addEventListener("mousedown", (e) => {
       if (open && !open.box.contains(e.target)) close(false);
     });
-    window.addEventListener("resize", () => open && place(open.box, open.cell));
+    window.addEventListener("resize", () => open && place(open.box, open.cell, open.where));
     onRedraw(() => {
-      for (const cell of document.querySelectorAll("pluto-cell")) {
-        if (cell.querySelector(":scope > .endeavor-add-agent")) continue;
-        const add = cell.querySelector(":scope > button.add_cell.after");
-        if (!add) continue;
-        const button = document.createElement("button");
-        button.className = "endeavor-add-agent";
-        button.dataset.endeavorUi = "";
-        button.textContent = `\u2726 ${AGENT}`;
-        button.title = `Ask ${AGENT} to write a cell here`;
-        button.onclick = () => openPrompt(cell, "after");
-        add.after(button);
-      }
+      const cells = [...document.querySelectorAll("pluto-cell")];
+      cells.forEach((cell, i) => {
+        const places = i === cells.length - 1 ? ["before", "after"] : ["before"];
+        for (const where of places) {
+          if (cell.querySelector(`:scope > .endeavor-add-agent.${where}`)) continue;
+          const add = cell.querySelector(`:scope > button.add_cell.${where}`);
+          if (!add) continue;
+          const button = document.createElement("button");
+          button.className = `endeavor-add-agent ${where}`;
+          button.dataset.endeavorUi = "";
+          button.textContent = `\u2726 ${AGENT}`;
+          button.title = `Ask ${AGENT} to write a cell here`;
+          button.onclick = () => openPrompt(cell, where);
+          add.after(button);
+        }
+      });
+      for (const stale of document.querySelectorAll("pluto-cell:not(:last-of-type) > .endeavor-add-agent.after")) stale.remove();
     });
   }
 
@@ -514,8 +537,7 @@
       };
       row.querySelector(".fix").onclick = (e) => byUser(e) && ask("fix");
       row.querySelector(".explain").onclick = (e) => byUser(e) && ask("explain");
-      const header = error.querySelector(".error-header");
-      header ? header.after(row) : error.prepend(row);
+      error.append(row);
     }
   }
   function initErrors() {

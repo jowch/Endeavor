@@ -12,7 +12,7 @@ export type ToApp =
   | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; error: string }
   // ⌘K on a cell / the agent button between cells: about this cell, fill this
   // empty cell, or add a new cell after it. `now` (⌘⏎) joins a running turn.
-  | { type: "prompt"; notebook: string | null; cell: string; where: "about" | "fill" | "after"; text: string; now: boolean };
+  | { type: "prompt"; notebook: string | null; cell: string; where: "about" | "fill" | "before" | "after"; text: string; now: boolean };
 
 /** One cell's state, from the runtime's events (see runtime Events.jl). */
 export type CellState = {
