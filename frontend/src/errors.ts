@@ -1,6 +1,6 @@
 // "Fix with Claude" and "Explain" on Pluto's error boxes (docs/ui-spec.md,
-// Errors), replacing Pluto's own "Fix with AI". A click asks the agent about
-// that cell's error, through the same queue as the chat box.
+// Errors); Pluto's own "Fix with AI" is off in the runtime. A click asks the
+// agent about that cell's error, through the same queue as the chat box.
 
 import { byUser, send } from "./bridge";
 import { onRedraw } from "./redraw";
@@ -9,7 +9,6 @@ import { onRedraw } from "./redraw";
 const AGENT = "Claude";
 
 const css = `
-  .fix-with-ai { display: none !important; }
   .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
   .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
     background: transparent; color: #E08A5E; border: 1px solid #CC3F00; }

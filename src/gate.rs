@@ -1,7 +1,7 @@
 //! The execution gate: the agent asks before it runs notebook code. Claude Code
 //! calls `endeavor hook-pretool` before each pluto tool (plugin/hooks/hooks.json);
 //! for anything that runs code the hook answers "ask", which reaches the app as an
-//! ACP permission request. "Allow & stop asking" is remembered by the app, so no
+//! ACP permission request. "Always this session" is remembered by the app, so no
 //! approval is written into the user's settings files.
 
 use std::io::Read;

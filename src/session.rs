@@ -93,7 +93,7 @@ pub struct Session {
     pub outbox: Outbox,
     /// Each cell's code as last seen in the agent's reads and edits, for diffs.
     pub cell_codes: CellCodes,
-    /// "Allow & stop asking": approve this session's runs from now on.
+    /// "Always this session": approve this session's runs from now on.
     pub run_without_asking: bool,
     /// The notebook this session was last looking at.
     pub notebook: Option<String>,
@@ -424,7 +424,7 @@ impl Session {
             SessionEvent::Permission(request, responder) => {
                 let fields = &request.tool_call.fields;
                 let title = fields.title.clone().unwrap_or_else(|| "Tool call".into());
-                // Only runs get the run card ("Allow & stop asking"); other pluto
+                // Only runs get the run card ("Always this session"); other pluto
                 // prompts (e.g. plan mode asking before a read) get the agent's options.
                 let input = fields.raw_input.clone().unwrap_or_default();
                 let runs_code = title.strip_prefix("mcp__pluto__").is_some_and(|tool| gate::runs_code(tool, &input));

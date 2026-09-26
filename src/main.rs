@@ -1615,7 +1615,7 @@ impl Workspace {
                 cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking)),
             ))
             .child(note(
-                "New sessions start as if you'd chosen \"Allow & stop asking\". Applies to new and reopened sessions.".into(),
+                "New sessions start as if you'd chosen \"Always this session\". Applies to new and reopened sessions.".into(),
             ))
             .child(heading("Appearance"))
             .child(

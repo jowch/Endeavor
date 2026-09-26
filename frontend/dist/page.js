@@ -591,7 +591,6 @@
   // src/errors.ts
   var AGENT2 = "Claude";
   var css6 = `
-  .fix-with-ai { display: none !important; }
   .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
   .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
     background: transparent; color: #E08A5E; border: 1px solid #CC3F00; }
