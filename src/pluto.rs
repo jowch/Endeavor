@@ -57,6 +57,20 @@ pub fn set_policy(mcp_url: &str, owner: u64, policy: &str) -> Result<(), String>
     rpc(mcp_url, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy })).map(|_| ())
 }
 
+/// Bind an agent session (`owner`, its key) to its one notebook file; the runtime
+/// then refuses its opening, creating, editing or running any other.
+pub fn set_notebook(mcp_url: &str, owner: u64, path: &str) -> Result<(), String> {
+    rpc(mcp_url, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
+}
+
+/// Shut down the open notebook at `path`. Returns whether it was in safe preview,
+/// or None if it wasn't open.
+pub fn stop_notebook(mcp_url: &str, path: &str) -> Result<Option<bool>, String> {
+    let reply = rpc(mcp_url, "endeavor/stop_notebook", json!({ "path": path }))?;
+    let result = &reply["result"];
+    Ok(result["stopped"].as_bool().unwrap_or(false).then(|| result["safe_preview"].as_bool().unwrap_or(false)))
+}
+
 /// What a run would run, for the approval card (the runtime's `run_preview`).
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 pub struct RunPreview {

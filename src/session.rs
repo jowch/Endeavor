@@ -69,8 +69,8 @@ pub enum Entry {
 /// Work a session hands back to the workspace.
 pub enum Effect {
     Send(Turn),
-    /// The agent opened or created this notebook.
-    ShowNotebook(String),
+    /// The agent opened or created this notebook (its id, and its file).
+    ShowNotebook { id: String, path: Option<String> },
     /// A reopened session last worked in this notebook file: open it in the
     /// current Pluto (its old id died with the previous Julia) and show it.
     ReopenNotebook(String),
@@ -102,6 +102,10 @@ pub struct Session {
     pub run_without_asking: bool,
     /// The notebook this session was last looking at.
     pub notebook: Option<String>,
+    /// The session's one notebook file, once it has one.
+    pub notebook_path: Option<String>,
+    /// Its notebook was stopped from the notebook's ⋯ menu.
+    pub stopped: Option<Stopped>,
     /// Cells the user changed since the agent last heard (cell id, name); told
     /// with the next prompt.
     pub user_edits: Vec<(String, Option<String>)>,
@@ -132,6 +136,12 @@ pub struct Session {
     pub commands: Vec<AvailableCommand>,
     /// The policy last sent to the runtime.
     policy_sent: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stopped {
+    /// It was in safe preview, so Start reopens it without running.
+    pub safe_preview: bool,
 }
 
 pub struct Failure {
@@ -184,6 +194,8 @@ impl Session {
             cell_codes: CellCodes::default(),
             run_without_asking: false,
             notebook: None,
+            notebook_path: None,
+            stopped: None,
             user_edits: Vec::new(),
             list: {
                 let list = ListState::new(0, ListAlignment::Top, px(1000.));
@@ -545,7 +557,7 @@ impl Session {
                         // History, not a live open: that id belongs to an earlier Julia.
                         self.replayed_path = path.or(self.replayed_path.take());
                     } else {
-                        effects.push(Effect::ShowNotebook(id));
+                        effects.push(Effect::ShowNotebook { id, path });
                     }
                 }
             }
@@ -1678,9 +1690,28 @@ more" }"#);
         let output = serde_json::json!([{ "type": "text", "text": "{\"notebook_id\":\"old-id\",\"path\":\"/tmp/a.jl\"}" }]);
         let done = ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output));
         let effects = s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(done)));
-        assert!(effects.iter().all(|e| !matches!(e, Effect::ShowNotebook(_))), "no stale navigation");
+        assert!(effects.iter().all(|e| !matches!(e, Effect::ShowNotebook { .. })), "no stale navigation");
         let effects = s.started(Started::new(SessionId::new("abc"), None, None));
         assert!(matches!(effects.first(), Some(Effect::ReopenNotebook(p)) if p == "/tmp/a.jl"));
+    }
+
+    #[test]
+    fn a_live_notebook_creation_is_shown_with_its_file() {
+        use agent_client_protocol::schema::v1::{SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
+        let mut s = Session::new(1, "/tmp".into());
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        let tool_update = |text: &str| {
+            let output = serde_json::json!([{ "type": "text", "text": text }]);
+            SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output))))
+        };
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__pluto__new_notebook"))));
+        let effects = s.apply(tool_update("{\"notebook_id\":\"n1\",\"path\":\"/tmp/fit.jl\",\"created\":true}"));
+        assert!(matches!(effects.as_slice(), [Effect::ShowNotebook { id, path: Some(p) }] if id == "n1" && p == "/tmp/fit.jl"));
+
+        // A refused open (one notebook per session) shows nothing.
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__pluto__open_notebook"))));
+        let effects = s.apply(tool_update("{\"error\":\"one_notebook\",\"message\":\"This session works on one notebook\"}"));
+        assert!(effects.is_empty());
     }
 
     #[test]

@@ -523,42 +523,37 @@ impl Workspace {
             .child(div().id("notebook-rows").max_h(px(300.)).overflow_y_scroll().flex().flex_col().children(rows))
     }
 
+    /// The new-session screen, set to start in `folder` on `notebook` (its preview shows).
+    pub fn new_session_on(&mut self, folder: PathBuf, notebook: PathBuf, cx: &mut Context<Self>) {
+        self.active = None;
+        self.settings_open = false;
+        if folder != self.draft.folder {
+            self.draft.folder = folder;
+            self.draft.notebooks.clear();
+        }
+        self.scan_notebooks(cx);
+        self.choose_notebook(NotebookChoice::Existing(notebook), cx);
+    }
+
     /// The notebook pane's header before the session starts.
     pub fn draft_pane_header(&self) -> AnyElement {
         match &self.draft.notebook {
             NotebookChoice::New => div().text_color(theme::text_muted()).child("New notebook").into_any_element(),
-            NotebookChoice::Existing(path) => div()
-                .flex()
-                .min_w_0()
-                .items_baseline()
-                .gap_2()
-                .font_family(theme::MONO)
-                .child(div().flex_shrink_0().text_size(theme::size_meta()).text_color(theme::text_muted()).child(folder_name(path)))
-                .children(path.parent().map(|dir| {
-                    div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(theme::size_meta_small()).text_color(theme::text_section()).child(tilde(dir))
-                }))
-                .into_any_element(),
+            NotebookChoice::Existing(path) => notebook_title(path).into_any_element(),
         }
     }
 
     /// The notebook pane before the session starts (the web view is hidden).
     pub fn render_draft_pane(&self) -> AnyElement {
         match (&self.draft.notebook, &self.draft.preview) {
-            (NotebookChoice::New, _) => div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(14.))
-                .child(canvas(|_, _, _| (), |bounds, _, window, _| turtle::paint(window, point(bounds.left() + px(TURTLE_R), bounds.bottom()), TURTLE_R, &Pose::default())).w(px(TURTLE_R * 2.4)).h(px(TURTLE_R * 1.25)))
+            (NotebookChoice::New, _) => turtle_pane()
                 .child(
                     div()
                         .flex()
                         .items_baseline()
                         .text_color(theme::text_muted())
                         .child("A new notebook will be created in ")
-                        .child(div().font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_secondary()).child(folder_name(&self.draft.folder)))
+                        .child(file_name(folder_name(&self.draft.folder)))
                         .child(" when you start."),
                 )
                 .into_any_element(),
@@ -616,6 +611,37 @@ impl Workspace {
 }
 
 const TURTLE_R: f32 = 22.;
+
+/// The notebook pane's native stand-in: the resting turtle, above the caller's lines.
+pub fn turtle_pane() -> Div {
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(14.))
+        .child(canvas(|_, _, _| (), |bounds, _, window, _| turtle::paint(window, point(bounds.left() + px(TURTLE_R), bounds.bottom()), TURTLE_R, &Pose::default())).w(px(TURTLE_R * 2.4)).h(px(TURTLE_R * 1.25)))
+}
+
+/// A file or folder name inside a line of text.
+pub fn file_name(name: String) -> Div {
+    div().font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_secondary()).child(name)
+}
+
+/// A notebook pane header: the notebook's file name, then its folder, faint.
+pub fn notebook_title(path: &Path) -> Div {
+    div()
+        .flex()
+        .min_w_0()
+        .items_baseline()
+        .gap_2()
+        .font_family(theme::MONO)
+        .child(div().flex_shrink_0().text_size(theme::size_meta()).text_color(theme::text_muted()).child(folder_name(path)))
+        .children(path.parent().map(|dir| {
+            div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(theme::size_meta_small()).text_color(theme::text_section()).child(tilde(dir))
+        }))
+}
 
 /// A chip-menu row: a ✓ column, then the caller's icon and text.
 pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool) -> Stateful<Div> {
