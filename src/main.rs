@@ -697,11 +697,13 @@ impl Workspace {
                     PromptLevel::Warning,
                     &format!("Delete “{title}”?"),
                     Some("This permanently deletes the conversation, including its Claude Code history. Notebooks and other files it made stay on disk."),
-                    &[PromptButton::new("Delete"), PromptButton::cancel("Cancel")],
+                    // Cancel first: NSAlert gives the first button Return, and a cancel
+                    // button trades it for Escape, so no key deletes by accident.
+                    &[PromptButton::cancel("Cancel"), PromptButton::new("Delete")],
                     cx,
                 );
                 cx.spawn(async move |this, cx| {
-                    if answer.await == Ok(0) {
+                    if answer.await == Ok(1) {
                         let _ = this.update(cx, |this, cx| this.delete_session(row, cx));
                     }
                 })

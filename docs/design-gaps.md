@@ -26,7 +26,7 @@ _Listed 2026-09-25._
 ## Sidebar
 
 - [ ] Session row states: active, working dot, needs-approval dot — improvised
-- [ ] Row actions: inline rename, hover ×, "Delete?" confirm — improvised. The hover × is too easy to hit by accident; replace it with a ⋮ button that opens a context menu, also on right-click, like Claude desktop. The menu is where session actions live as they're added; candidates: Rename, Pin, Reveal folder in Finder, Open notebook, Resume in Claude Code, Export transcript, Delete… (last, separated)
+- [x] Row actions: inline rename, hover ×, "Delete?" confirm — improvised. The hover × is too easy to hit by accident; replace it with a ⋮ button that opens a context menu, also on right-click, like Claude desktop. The menu is where session actions live as they're added; candidates: Rename, Pin, Reveal folder in Finder, Open notebook, Resume in Claude Code, Export transcript, Delete… (last, separated)
 - [ ] "Show N more / Show fewer", folder headings, status line ("Claude connected."), settings gear — improvised
 - [ ] Empty sidebar (no sessions yet) — missing
 
