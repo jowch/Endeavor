@@ -230,6 +230,8 @@ pub struct Workspace {
     chat_width: f32,
     /// The divider being dragged.
     resizing: Option<Divider>,
+    /// The composer's open picker: a config option id ("model", "effort").
+    picker: Option<&'static str>,
     /// The Settings screen is in the chat pane.
     settings_open: bool,
     /// First launch: the setup screen covers the window until setup finishes.
@@ -298,6 +300,10 @@ impl Workspace {
                 .auto_grow(1, 8)
         });
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
+            // The slash-command menu follows what's typed.
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
             if let InputEvent::PressEnter { secondary, shift: false } = event {
                 // An empty box answers a pending approval: ⏎ allow, ⌘⏎ allow and stop asking.
                 if input.read(cx).value().trim().is_empty()
@@ -363,6 +369,7 @@ impl Workspace {
             sidebar_width: SIDEBAR_WIDTH,
             chat_width: CHAT_WIDTH,
             resizing: None,
+            picker: None,
             setup: Setup::needed().then(Setup::default),
             agent_ready: false,
             signed_in: None,
@@ -647,6 +654,11 @@ impl Workspace {
                     })
                     .detach();
                 }
+                Effect::SetConfig(id_, value) => {
+                    if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
+                        let _ = self.agent_tx.unbounded_send(Command::SetConfig(id, id_, value));
+                    }
+                }
                 Effect::SetMode(mode) => {
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
                         let _ = self.agent_tx.unbounded_send(Command::SetMode(id, mode));
@@ -696,6 +708,109 @@ impl Workspace {
     fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
         self.settings_open = true;
         cx.notify();
+    }
+
+    /// "/" at the start of the box lists the agent's commands matching what follows;
+    /// a click fills in the command.
+    fn render_commands(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
+        const SHOWN: usize = 8;
+        let text = self.input.read(cx).value().to_string();
+        let typed = text.strip_prefix('/').filter(|t| !t.contains(char::is_whitespace))?;
+        let matches: Vec<_> = session.commands.iter().filter(|c| c.name.starts_with(typed)).take(SHOWN).collect();
+        if matches.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .p(px(4.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme::composer_edge())
+                .bg(theme::bg_raised())
+                .text_size(px(12.5))
+                .children(matches.into_iter().enumerate().map(|(i, command)| {
+                    let name = command.name.clone();
+                    div()
+                        .id(ElementId::NamedInteger("command".into(), i as u64))
+                        .flex()
+                        .gap_3()
+                        .px(px(8.))
+                        .py(px(4.))
+                        .rounded(px(5.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::row_active()))
+                        .child(div().flex_shrink_0().font_family("Menlo").child(format!("/{}", command.name)))
+                        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(theme::text_muted()).child(command.description.clone()))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.input.update(cx, |s, cx| s.set_value(format!("/{name} "), window, cx));
+                            // The box keeps focus; put the caret after the command.
+                            window.dispatch_action(Box::new(gpui_component::input::MoveToEnd), cx);
+                            cx.notify();
+                        }))
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// The model / effort list, opening upward from the composer toolbar.
+    fn render_picker(&self, session: &Session, id: &'static str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (current, options) = session.config_choices(id)?;
+        let key = session.key;
+        Some(
+            div()
+                .id("picker")
+                // Clicks stop here instead of reaching the transcript underneath.
+                .occlude()
+                .absolute()
+                .right(px(16.))
+                // Above the box, not over it.
+                .bottom(px(84.))
+                .w(px(260.))
+                .p(px(4.))
+                .flex()
+                .flex_col()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme::composer_edge())
+                .bg(theme::bg_raised())
+                .text_size(px(12.5))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.picker = None;
+                    cx.notify();
+                }))
+                .children(options.into_iter().enumerate().map(|(i, option)| {
+                    let chosen = option.value == current;
+                    let value = option.value.clone();
+                    div()
+                        .id(ElementId::NamedInteger("pick".into(), i as u64))
+                        .flex()
+                        .gap_2()
+                        .px(px(8.))
+                        .py(px(5.))
+                        .rounded(px(5.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::row_active()))
+                        .child(div().w(px(10.)).flex_shrink_0().text_color(theme::accent_text()).child(if chosen { "✓" } else { "" }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(option.name.clone())
+                                .children(option.description.clone().map(|d| div().text_size(px(11.5)).text_color(theme::text_muted()).child(d))),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.picker = None;
+                            let effects = this.session_mut(key).map(|s| s.set_config(id, value.clone())).unwrap_or_default();
+                            this.apply_effects(key, effects, cx);
+                            cx.notify();
+                        }))
+                }))
+                .into_any_element(),
+        )
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
@@ -1551,6 +1666,9 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .relative()
+                    .children(self.picker.and_then(|id| self.render_picker(session, id, cx)))
+                    .children(self.render_commands(session, cx))
                     .children(session::render_approval(session, cx))
                     .child(session::render_queue(session, cx))
                     // One-line box: Enter sends; the glyph becomes Stop while Claude works.
@@ -1619,8 +1737,18 @@ impl Workspace {
                                 )
                             })
                             .child(div().flex_1())
-                            .children(session.config_label("model").map(|m| div().px(px(5.)).text_color(theme::text_secondary()).child(m)))
-                            .children(session.config_label("effort").map(|e| div().px(px(5.)).text_color(theme::text_secondary()).child(e)))
+                            .children(["model", "effort"].map(|id| {
+                                session.config_label(id).map(|label| {
+                                    tool_button(id)
+                                        .text_color(theme::text_secondary())
+                                        .when(self.picker == Some(id), |d| d.bg(theme::row_active()))
+                                        .child(label)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.picker = if this.picker == Some(id) { None } else { Some(id) };
+                                            cx.notify();
+                                        }))
+                                })
+                            }).into_iter().flatten())
                             .children(session.usage.filter(|(_, size)| *size > 0).map(|(used, size)| {
                                 div().px(px(5.)).text_color(theme::text_faint()).child(format!("{}%", used * 100 / size))
                             })),

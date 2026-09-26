@@ -69,6 +69,8 @@ pub enum Effect {
     ReopenNotebook(String),
     /// The session went idle: check for unrun edits.
     CheckRunState,
+    /// Set one of the agent's config options (model, effort).
+    SetConfig(String, SessionConfigValueId),
     /// Ask the agent to switch mode.
     SetMode(SessionModeId),
     /// Ask the runtime what the pending run at this entry would run.
@@ -221,14 +223,29 @@ impl Session {
     /// The current choice of a select config option, by its display name (e.g.
     /// "model" → "Opus 5.5").
     pub fn config_label(&self, id: &str) -> Option<String> {
+        let (current, options) = self.config_choices(id)?;
+        options.iter().find(|o| o.value == current).map(|o| o.name.clone())
+    }
+
+    /// A select config option's current value and its choices.
+    pub fn config_choices(&self, id: &str) -> Option<(SessionConfigValueId, Vec<SessionConfigSelectOption>)> {
         let option = self.config.iter().find(|c| c.id.to_string() == id)?;
         let SessionConfigKind::Select(select) = &option.kind else { return None };
-        let options: Vec<&SessionConfigSelectOption> = match &select.options {
-            SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
-            SessionConfigSelectOptions::Grouped(groups) => groups.iter().flat_map(|g| &g.options).collect(),
+        let options = match &select.options {
+            SessionConfigSelectOptions::Ungrouped(options) => options.clone(),
+            SessionConfigSelectOptions::Grouped(groups) => groups.iter().flat_map(|g| g.options.clone()).collect(),
             _ => Vec::new(),
         };
-        options.iter().find(|o| o.value == select.current_value).map(|o| o.name.clone())
+        Some((select.current_value.clone(), options))
+    }
+
+    /// Pick a config value, showing it at once; the agent's reply confirms it.
+    pub fn set_config(&mut self, id: &str, value: SessionConfigValueId) -> Vec<Effect> {
+        let Some(option) = self.config.iter_mut().find(|c| c.id.to_string() == id) else { return Vec::new() };
+        if let SessionConfigKind::Select(select) = &mut option.kind {
+            select.current_value = value.clone();
+        }
+        vec![Effect::SetConfig(id.to_string(), value)]
     }
 
     /// The agent's name for the current mode.

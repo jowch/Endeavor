@@ -12,6 +12,7 @@ use agent_client_protocol::schema::v1::{
     McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionConfigOption, SessionId, SessionInfo,
     SessionModeId, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    ConfigOptionUpdate, SessionConfigValueId, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
     StopReason,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder, UntypedMessage};
@@ -170,6 +171,9 @@ pub enum Command {
     ListSessions { cwd: PathBuf },
     /// Switch a session's mode (e.g. plan); fire and forget.
     SetMode(SessionId, SessionModeId),
+    /// Set a session's config option (model, effort); the reply's options come
+    /// back as a config update.
+    SetConfig(SessionId, String, SessionConfigValueId),
     /// Stop a session (cancelling its turn); it stays in the folder's history.
     CloseSession(SessionId),
     /// Stop a session and delete its history.
@@ -251,6 +255,7 @@ enum Done {
     Started(u64, Result<Started, agent_client_protocol::Error>),
     Listed(PathBuf, Result<Vec<SessionInfo>, agent_client_protocol::Error>),
     Forked(u64, PathBuf, Result<SessionId, agent_client_protocol::Error>),
+    Config(SessionId, Result<SetSessionConfigOptionResponse, agent_client_protocol::Error>),
 }
 
 async fn run(
@@ -337,6 +342,13 @@ async fn run(
                         let _ = events.unbounded_send(AgentEvent::Listed { cwd, sessions });
                         continue;
                     }
+                    Either::Left(Some(Done::Config(session, result))) => {
+                        match result {
+                            Ok(reply) => emit(&session, SessionEvent::Update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(reply.config_options)))),
+                            Err(e) => emit(&session, SessionEvent::TurnFailed(format!("Couldn't change the setting: {e}"))),
+                        }
+                        continue;
+                    }
                     Either::Left(Some(Done::Forked(key, cwd, result))) => {
                         match result {
                             Ok(id) => {
@@ -380,6 +392,10 @@ async fn run(
                     // ponytail: fire and forget; the agent confirms with a mode/config update.
                     Command::SetMode(session, mode) => {
                         connection.send_request(SetSessionModeRequest::new(session, mode)).on_receiving_result(async |_| Ok(()))?;
+                    }
+                    Command::SetConfig(session, id, value) => {
+                        let reply = connection.send_request(SetSessionConfigOptionRequest::new(session.clone(), id, value)).block_task();
+                        pending.push(async move { Done::Config(session, reply.await) }.boxed_local());
                     }
                     // ponytail: fire and forget; a failed close or delete only leaves the file behind.
                     Command::CloseSession(session) => {
