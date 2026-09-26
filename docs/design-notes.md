@@ -40,16 +40,27 @@ this for the agent's edits:
 Pluto's run button on an agent-edited cell runs it without the approval card.
 That's intended: the gate is for runs the agent starts.
 
-## Diffs in the CodeMirror gutter (risk)
+## Diffs in the CodeMirror gutter
 
-The spec draws unified diffs inside Pluto's editor (line tints, changed
-characters, removed lines above additions) as CodeMirror decorations. That means
-adding extensions to Pluto's own CodeMirror instances, which only works with the
-**same** CodeMirror build Pluto bundles (extensions from a second copy don't
-compose). Prototype this first: find how to reach Pluto's CodeMirror modules and
-each cell's `EditorView` (the DOM exposes the view), and add an extension via a
-compartment. Fallback: an overlay that covers the editor while a diff is shown.
-Before-text per cell is already kept for the chat's diffs (`celldiff.rs`).
+**Done (2026-09-25)**, `frontend/src/diff.ts`. Pluto serves a Parcel bundle, so
+its CodeMirror can't be imported (a second copy's extensions don't compose).
+The classes come from the live editor instead:
+
+- the view: `.cm-content`'s `cmTile.root.view` (what `findFromDOM` reads);
+- `StateEffect` from `EditorView.scrollIntoView(0).constructor` (for
+  `appendConfig`); `Decoration` as the base class of any existing decoration;
+  `Compartment` from `state.config.compartments` (Pluto uses them);
+- the removed-line widget is duck-typed (`WidgetType` isn't reachable).
+
+Each diffed editor gets its own compartment holding a static decoration set
+(block widgets can't come from a function source), swapped when the runtime's
+`before` changes, and re-diffed in the same transaction when the user types
+(`transactionExtender`). The before-text is the runtime's: the cell's code
+before the agent's first edit since it last ran, forgotten when it runs.
+Relies on CodeMirror internals (`cmTile`, `config.compartments`); Pluto is
+pinned, so breakage shows on upgrade. Pluto also has a built-in unified diff
+(`ai_suggestion.js`, the "ai-suggestion" DOM event), but it edits the cell's
+text, so it doesn't fit edits that already landed.
 
 ## Plan mode
 
@@ -200,7 +211,6 @@ would find most convincing.
 ## Open questions
 
 - Chat-panel radius and undo granularity (from the spec).
-- Can the bundle reach Pluto's CodeMirror build (gutter-diff prototype)?
 - Does GPUI do backdrop blur (spec's header risk)?
 - Mode per session (spec) — and does Plan mode also stop the user's own runs?
   (Presumably not; it constrains the agent.)

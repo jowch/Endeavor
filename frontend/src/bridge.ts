@@ -12,7 +12,15 @@ export type ToApp =
   | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; error: string };
 
 /** One cell's state, from the runtime's events (see runtime Events.jl). */
-export type CellState = { cell_id: string; running: boolean; errored: boolean; unrun: boolean; author: "agent" | "user" | null };
+export type CellState = {
+  cell_id: string;
+  running: boolean;
+  errored: boolean;
+  unrun: boolean;
+  author: "agent" | "user" | null;
+  /** An unrun cell's code before the agent's edits ("" if the agent added it). */
+  before?: string | null;
+};
 
 /** Messages the app sends the page. */
 export type ToPage =
@@ -29,20 +37,19 @@ declare global {
   }
 }
 
-type Handlers = { [T in ToPage["type"]]?: (msg: Extract<ToPage, { type: T }>) => void };
-const handlers: Handlers = {};
+const handlers: Record<string, Array<(msg: ToPage) => void>> = {};
 
 export function send(msg: ToApp): void {
   window.ipc?.postMessage(JSON.stringify(msg));
 }
 
+/** Several features may listen to the same message (e.g. "cells"). */
 export function on<T extends ToPage["type"]>(type: T, handler: (msg: Extract<ToPage, { type: T }>) => void): void {
-  (handlers as Record<string, unknown>)[type] = handler;
+  (handlers[type] ??= []).push(handler as (msg: ToPage) => void);
 }
 
 window.__endeavor = {
   receive(msg) {
-    const handler = handlers[msg.type] as ((m: ToPage) => void) | undefined;
-    handler?.(msg);
+    handlers[msg.type]?.forEach((handler) => handler(msg));
   },
 };

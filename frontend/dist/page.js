@@ -6,12 +6,11 @@
     window.ipc?.postMessage(JSON.stringify(msg));
   }
   function on(type, handler) {
-    handlers[type] = handler;
+    (handlers[type] ??= []).push(handler);
   }
   window.__endeavor = {
     receive(msg) {
-      const handler = handlers[msg.type];
-      handler?.(msg);
+      handlers[msg.type]?.forEach((handler) => handler(msg));
     }
   };
 
@@ -58,7 +57,7 @@
     const status = bar.querySelector(".status");
     const text = bar.querySelector("textarea");
     const sendButton = bar.querySelector(".send");
-    function refresh() {
+    function refresh2() {
       status.textContent = picked.size ? `${picked.size} cell${picked.size > 1 ? "s" : ""} selected` : "Click cells to select them";
       sendButton.disabled = picked.size === 0;
       for (const c of cells()) c.classList.toggle("annotate-picked", picked.has(c.id));
@@ -71,7 +70,7 @@
         for (const c of document.querySelectorAll("pluto-cell.selected")) picked.add(c.id);
         text.focus();
       }
-      refresh();
+      refresh2();
       send({ type: "mode", on: enable });
     }
     function sendComment(now) {
@@ -81,7 +80,7 @@
       send({ type: "annotation", notebook, cells: ids, comment: text.value.trim(), now });
       text.value = "";
       picked.clear();
-      refresh();
+      refresh2();
     }
     const swallow = (e) => {
       const target = e.target;
@@ -92,7 +91,7 @@
       const cell = target.closest("pluto-cell");
       if (!cell) return;
       picked.has(cell.id) ? picked.delete(cell.id) : picked.add(cell.id);
-      refresh();
+      refresh2();
     };
     for (const type of ["pointerdown", "mousedown", "click"]) document.addEventListener(type, swallow, true);
     window.addEventListener(
@@ -215,16 +214,174 @@
     onRedraw(apply);
   }
 
+  // src/diff.ts
+  var css4 = `
+  .endeavor-add { background: rgba(108, 199, 132, 0.12); }
+  .endeavor-add-ch { background: rgba(108, 199, 132, 0.28); border-radius: 2px; }
+  .endeavor-del { background: rgba(224, 122, 122, 0.12); color: #E07A7A; white-space: pre; padding-left: 6px; }
+  .endeavor-del-ch { background: rgba(224, 122, 122, 0.28); border-radius: 2px; }
+`;
+  function lineDiff(before, after) {
+    const a = before === "" ? [] : before.split("\n");
+    const b = after.split("\n");
+    const n = a.length, m = b.length;
+    if (n * m > 25e4) return [];
+    const lcs = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i2 = n - 1; i2 >= 0; i2--)
+      for (let j2 = m - 1; j2 >= 0; j2--)
+        lcs[i2][j2] = a[i2] === b[j2] ? lcs[i2 + 1][j2 + 1] + 1 : Math.max(lcs[i2 + 1][j2], lcs[i2][j2 + 1]);
+    const hunks = [];
+    let i = 0, j = 0, open = null;
+    const hunk = () => open ??= (hunks.push({ at: j, removed: [], added: [] }), hunks[hunks.length - 1]);
+    while (i < n || j < m) {
+      if (i < n && j < m && a[i] === b[j]) {
+        open = null;
+        i++, j++;
+      } else if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j])) {
+        hunk().added.push(b[j++]);
+      } else {
+        hunk().removed.push(a[i++]);
+      }
+    }
+    return hunks;
+  }
+  function changedSpan(a, b) {
+    let start = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) start++;
+    let endA = a.length, endB = b.length;
+    while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) endA--, endB--;
+    return [start, endA, endB];
+  }
+  var cm = null;
+  function classes(view) {
+    if (cm) return cm;
+    const EditorView = view.constructor;
+    const StateEffect = EditorView.scrollIntoView(0).constructor;
+    const Compartment = [...view.state.config?.compartments?.keys() ?? []][0]?.constructor;
+    if (!Compartment) return null;
+    for (const source of view.state.facet(EditorView.decorations)) {
+      const set = typeof source === "function" ? source(view) : source;
+      let c = set?.iter?.().value?.constructor;
+      while (c && typeof c.line !== "function") c = Object.getPrototypeOf(c);
+      if (c)
+        return cm = {
+          Decoration: c,
+          Compartment,
+          appendConfig: StateEffect.appendConfig,
+          decorations: EditorView.decorations,
+          extender: view.state.constructor.transactionExtender
+        };
+    }
+    return null;
+  }
+  function viewOf(cell) {
+    return cell.querySelector("pluto-input .cm-content")?.cmTile?.root?.view ?? null;
+  }
+  function removedLine(text, span) {
+    return {
+      text,
+      toDOM() {
+        const el = document.createElement("div");
+        el.className = "endeavor-del";
+        if (span) {
+          const mark = document.createElement("span");
+          mark.className = "endeavor-del-ch";
+          mark.textContent = text.slice(span[0], span[1]);
+          el.append(text.slice(0, span[0]), mark, text.slice(span[1]));
+        } else {
+          el.textContent = text || " ";
+        }
+        return el;
+      },
+      eq(other) {
+        return other.text === text;
+      },
+      compare(other) {
+        return other === this || other.text === text;
+      },
+      updateDOM() {
+        return false;
+      },
+      estimatedHeight: -1,
+      lineBreaks: 0,
+      ignoreEvent() {
+        return true;
+      },
+      coordsAt() {
+        return null;
+      },
+      destroy() {
+      }
+    };
+  }
+  function decorate(doc, before) {
+    const { Decoration } = cm;
+    const ranges = [];
+    for (const h of lineDiff(before, doc.toString())) {
+      const paired = h.removed.length === h.added.length;
+      const spans = h.added.map((line, k) => paired ? changedSpan(h.removed[k], line) : null);
+      const at = h.at < doc.lines ? doc.line(h.at + 1).from : doc.length;
+      h.removed.forEach((line, k) => {
+        const span = spans[k];
+        const widget = removedLine(line, span ? [span[0], span[1]] : null);
+        ranges.push(Decoration.widget({ widget, block: true, side: h.at < doc.lines ? -1 : 1 }).range(at));
+      });
+      h.added.forEach((_, k) => {
+        const line = doc.line(h.at + k + 1);
+        ranges.push(Decoration.line({ class: "endeavor-add" }).range(line.from));
+        const span = spans[k];
+        if (span && span[2] > span[0]) ranges.push(Decoration.mark({ class: "endeavor-add-ch" }).range(line.from + span[0], line.from + span[2]));
+      });
+    }
+    return Decoration.set(ranges, true);
+  }
+  var befores = /* @__PURE__ */ new Map();
+  var installed = /* @__PURE__ */ new WeakMap();
+  var extension = (doc, before) => before === void 0 ? [] : cm.decorations.of(decorate(doc, before));
+  function refresh() {
+    for (const cell of document.querySelectorAll("pluto-cell")) {
+      const view = viewOf(cell);
+      if (!view || !classes(view)) continue;
+      const id = cell.id;
+      const before = befores.get(id);
+      let entry = installed.get(view);
+      if (!entry) {
+        if (before === void 0) continue;
+        entry = { compartment: new cm.Compartment(), shown: before };
+        installed.set(view, entry);
+        const { compartment } = entry;
+        const follow = cm.extender.of(
+          (tr) => tr.docChanged && befores.has(id) ? { effects: compartment.reconfigure(extension(tr.newDoc, befores.get(id))) } : null
+        );
+        view.dispatch({ effects: cm.appendConfig.of([compartment.of(extension(view.state.doc, before)), follow]) });
+      } else if (entry.shown !== before) {
+        entry.shown = before;
+        view.dispatch({ effects: entry.compartment.reconfigure(extension(view.state.doc, before)) });
+      }
+    }
+  }
+  function initDiffs() {
+    const style = document.createElement("style");
+    style.textContent = css4;
+    document.head.append(style);
+    on("cells", (msg) => {
+      befores.clear();
+      for (const c of msg.cells) if (typeof c.before === "string") befores.set(c.cell_id, c.before);
+      refresh();
+    });
+    onRedraw(refresh);
+  }
+
   // src/errors.ts
   var AGENT = "Claude";
-  var css4 = `
+  var css5 = `
   .fix-with-ai { display: none !important; }
   .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
   .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
     background: transparent; color: #E08A5E; border: 1px solid #CC3F00; }
   .endeavor-ask button.explain { color: #BDBDBD; border-color: #3A3A40; }
 `;
-  function decorate() {
+  function decorate2() {
     for (const error of document.querySelectorAll("pluto-cell jlerror")) {
       if (error.querySelector(".endeavor-ask")) continue;
       const cell = error.closest("pluto-cell");
@@ -245,9 +402,9 @@
   }
   function initErrors() {
     const style = document.createElement("style");
-    style.textContent = css4;
+    style.textContent = css5;
     document.head.append(style);
-    onRedraw(decorate);
+    onRedraw(decorate2);
   }
 
   // src/theme.ts
@@ -310,6 +467,7 @@ footer { display: none !important; }
     initTheme();
     initAnnotate();
     initCells();
+    initDiffs();
     initErrors();
     initRail();
     watchRedraws();

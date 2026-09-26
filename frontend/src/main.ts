@@ -4,6 +4,7 @@
 import { initAnnotate } from "./annotate";
 import { send } from "./bridge";
 import { initCells } from "./cells";
+import { initDiffs } from "./diff";
 import { initErrors } from "./errors";
 import { initRail } from "./rail";
 import { initTheme } from "./theme";
@@ -13,6 +14,7 @@ function init() {
   initTheme();
   initAnnotate();
   initCells();
+  initDiffs();
   initErrors();
   initRail();
   watchRedraws();
