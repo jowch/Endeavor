@@ -47,7 +47,7 @@ _Listed 2026-09-25._
 - [ ] Attachments across the chat: how cells, selected text, error messages, picked regions (and later files and images from "+") look in the user bubble, the composer before sending, and queued messages; what clicking one does (jump to the cell, show the attached text) — missing
 - [ ] Working indicator: spec says orange asterisk + "Adding `residuals` · 12s"; app shows a rocket + "Working · 24s" — improvised
 - [ ] Long content: tool output and long messages have no max height or scroll (only the plan card does) — missing
-- [ ] Long user messages: fold after about 10 lines with the last lines fading out and "Show more" ("Show less" once open), so the transcript shows mostly Claude's replies. The user wrote it and rarely needs to reread it all — missing
+- [x] Long user messages: fold after about 10 lines with the last lines fading out and "Show more" ("Show less" once open), so the transcript shows mostly Claude's replies. The user wrote it and rarely needs to reread it all
 
 ## Cards above the composer
 

@@ -30,7 +30,7 @@ use crate::pluto;
 use crate::outbox::{Dispatch, Outbox, Queued};
 
 pub enum Entry {
-    User(SharedString),
+    User { text: SharedString, expanded: bool },
     Agent(String),
     Tool {
         id: ToolCallId,
@@ -404,7 +404,7 @@ impl Session {
         let Some(Dispatch { turn, shown }) = dispatch else { return };
         effects.push(Effect::Send(turn));
         if let Some(label) = shown {
-            self.push(Entry::User(label.into()));
+            self.push(Entry::User { text: label.into(), expanded: false });
             self.busy_since.get_or_insert_with(Instant::now);
             // Sending jumps back to the bottom even if the user had scrolled up.
             self.list.set_follow_mode(FollowMode::Tail);
@@ -426,7 +426,7 @@ impl Session {
             }
             SessionEvent::Steered => {
                 if let Some(label) = self.outbox.steered() {
-                    self.push(Entry::User(format!("{label}\n↳ sent into the running turn").into()));
+                    self.push(Entry::User { text: format!("{label}\n↳ sent into the running turn").into(), expanded: false });
                 }
             }
             SessionEvent::Unsent => {
@@ -497,8 +497,8 @@ impl Session {
                     _ => return,
                 };
                 match self.entries.last_mut() {
-                    Some(Entry::User(existing)) => *existing = format!("{existing}\n{text}").into(),
-                    _ => self.push(Entry::User(text.into())),
+                    Some(Entry::User { text: existing, .. }) => *existing = format!("{existing}\n{text}").into(),
+                    _ => self.push(Entry::User { text: text.into(), expanded: false }),
                 }
                 self.mark(self.entries.len() - 1);
             }
@@ -617,7 +617,7 @@ impl Session {
     }
 
     pub fn toggle(&mut self, ix: usize) {
-        if let Some(Entry::Tool { expanded, .. } | Entry::Thought { expanded, .. }) = self.entries.get_mut(ix) {
+        if let Some(Entry::Tool { expanded, .. } | Entry::Thought { expanded, .. } | Entry::User { expanded, .. }) = self.entries.get_mut(ix) {
             *expanded = !*expanded;
             self.mark(ix);
         }
@@ -626,7 +626,7 @@ impl Session {
     /// What the agent is doing, for the working line: this turn's latest running tool
     /// call, else thinking or working. The second part (a cell or file name) is code-like.
     fn activity(&self) -> (String, Option<String>) {
-        let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
+        let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap_or(0);
         let running = self.entries[turn_start..].iter().rev().find_map(|e| match e {
             Entry::Tool { title, kind, path, status: ToolCallStatus::Pending | ToolCallStatus::InProgress, input, .. } => {
                 Some((title, *kind, path, input))
@@ -689,7 +689,7 @@ impl Session {
 
     /// This turn's plan entry: the agent updates it in place.
     fn turn_plan(&self) -> Option<usize> {
-        let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
+        let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap_or(0);
         self.entries[turn_start..].iter().position(|e| matches!(e, Entry::Plan(_))).map(|offset| turn_start + offset)
     }
 
@@ -772,14 +772,14 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
     session.sync_list();
     let key = session.key;
     let workspace = cx.entity().downgrade();
-    list(session.list.clone(), move |ix, _window, cx| {
+    list(session.list.clone(), move |ix, window, cx| {
         workspace
             .update(cx, |this, cx| {
                 let Some(session) = this.sessions.iter().find(|s| s.key == key) else { return div().into_any_element() };
                 let Some(entry) = session.entries.get(ix).filter(|_| session.pinned_plan() != Some(ix)) else {
                     return div().into_any_element();
                 };
-                div().px_4().pb_4().child(render_entry(key, ix, entry, cx)).into_any_element()
+                div().px_4().pb_4().child(render_entry(key, ix, entry, window, cx)).into_any_element()
             })
             .unwrap_or_else(|_| div().into_any_element())
     })
@@ -873,15 +873,71 @@ fn orbit(t: f32) -> impl IntoElement {
     .size(px(ORBIT))
 }
 
-fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>) -> AnyElement {
+/// User messages taller than this many wrapped lines fold to their first
+/// `FOLD_TO` lines, so the transcript shows mostly the agent's replies.
+const FOLD_AFTER: usize = 12;
+const FOLD_TO: usize = 10;
+const USER_BUBBLE_WIDTH: f32 = 300.;
+const USER_BUBBLE_PAD_X: f32 = 12.;
+
+/// How many lines `text` wraps to inside a user bubble. The bubble sets its
+/// font itself: list items don't see the ancestors' text style here.
+fn bubble_lines(text: &SharedString, window: &Window) -> usize {
+    let style = TextStyle { font_family: theme::SANS.into(), ..window.text_style() };
+    let wrap = px(USER_BUBBLE_WIDTH - 2. * USER_BUBBLE_PAD_X);
+    window
+        .text_system()
+        .shape_text(text.clone(), theme::size_body(), &[style.to_run(text.len())], Some(wrap), None)
+        .map_or(0, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum())
+}
+
+fn render_entry(key: u64, ix: usize, entry: &Entry, window: &Window, cx: &mut Context<Workspace>) -> AnyElement {
     let muted = theme::text_muted();
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), (key as u64) << 32 | ix as u64);
     match entry {
-        Entry::User(text) => div()
-            .flex()
-            .justify_end()
-            .child(div().max_w(px(300.)).px_3().py_2().rounded(px(8.)).bg(theme::bg_raised()).child(text.clone()))
-            .into_any_element(),
+        Entry::User { text, expanded } => {
+            let bubble = div()
+                .max_w(px(USER_BUBBLE_WIDTH))
+                .px(px(USER_BUBBLE_PAD_X))
+                .py_2()
+                .rounded(px(8.))
+                .bg(theme::bg_raised())
+                .font_family(theme::SANS)
+                .text_size(theme::size_body())
+                .line_height(theme::line_body());
+            let line_height = theme::line_body();
+            if bubble_lines(text, window) <= FOLD_AFTER {
+                return div().flex().justify_end().child(bubble.child(text.clone())).into_any_element();
+            }
+            let fade = div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .h(line_height)
+                .bg(linear_gradient(180., linear_color_stop(theme::bg_raised().opacity(0.), 0.), linear_color_stop(theme::bg_raised(), 1.)));
+            let body = div()
+                .relative()
+                .child(text.clone())
+                .when(!*expanded, |d| d.max_h(line_height * FOLD_TO as f32).overflow_hidden().child(fade));
+            div()
+                .flex()
+                .flex_col()
+                .items_end()
+                .gap_1()
+                .child(bubble.child(body))
+                .child(
+                    div()
+                        .id(id("user-fold"))
+                        .cursor_pointer()
+                        .text_size(theme::size_meta())
+                        .text_color(muted)
+                        .hover(|s| s.text_color(theme::text_primary()))
+                        .child(if *expanded { "Show less" } else { "Show more" })
+                        .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle(ix)))),
+                )
+                .into_any_element()
+        }
         Entry::Agent(text) => TextView::markdown(id("agent"), text.clone()).into_any_element(),
         Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
         Entry::Tool { title, kind, path, status, input, output, diffs, expanded, .. } => {
@@ -1570,7 +1626,18 @@ mod tests {
         assert_eq!(s.title, "plot sin");
         let effects = s.started(Started::new(SessionId::new("abc"), None, None));
         assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
-        assert!(matches!(s.entries.as_slice(), [Entry::User(_)]));
+        assert!(matches!(s.entries.as_slice(), [Entry::User { .. }]));
+    }
+
+    #[test]
+    fn a_user_message_unfolds_and_folds_again() {
+        let mut s = Session::new(1, "/tmp/project".into());
+        s.submit(text("plot sin"), true);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.toggle(0);
+        assert!(matches!(s.entries.as_slice(), [Entry::User { expanded: true, .. }]));
+        s.toggle(0);
+        assert!(matches!(s.entries.as_slice(), [Entry::User { expanded: false, .. }]));
     }
 
     #[test]
@@ -1581,7 +1648,7 @@ mod tests {
         let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old chat".into());
         s.apply(chunk("[Endeavor] The user is viewing Pluto notebook …"));
         s.apply(chunk("plot sin"));
-        assert!(matches!(s.entries.as_slice(), [Entry::User(t)] if t.as_ref() == "plot sin"));
+        assert!(matches!(s.entries.as_slice(), [Entry::User { text, .. }] if text.as_ref() == "plot sin"));
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.apply(chunk("live echo"));
         assert_eq!(s.entries.len(), 1, "after loading, user chunks are ignored");
