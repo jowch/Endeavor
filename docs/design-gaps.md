@@ -12,9 +12,11 @@ _Listed 2026-09-25._
 - [ ] Logo and app icon — missing
 - [ ] Sign-in panel: subscription / console buttons, waiting state, errors — improvised
 - [ ] Settings screen: Claude setup, custom Julia path, run without asking, appearance, notebook theme, troubleshooting — improvised
-- [ ] New-session screen: working folder, Choose…, recent folders, optional first message, Start session — improvised; needs a rework
-- [ ] Folder picking for a new session: an in-app picker (recent folders, projects, search) instead of the macOS open panel, which feels out of place here — missing
-- [ ] Opening notebooks: the whole flow — finding an existing notebook (in the working folder, recent, anywhere), creating one, what the pane shows before one is open, safe preview and running it, switching between notebooks — missing
+- [ ] New-session screen: working folder, Choose…, recent folders, optional first message, Start session — improvised; needs a rework. Direction chosen (2026-09-26): "Start a session" at the top with the few most recent sessions to resume; chips above the composer for where it runs, the folder and the notebook; the first message starts the session. The notebook pane is always there but shows no Pluto until the session starts: a quiet empty state for a new notebook, or a static safe preview of the chosen notebook's first cells. Julia may start early on this Mac; remote hosts connect only on send
+- [ ] Where it runs: This Mac, servers and clusters as separate kinds (they're set up differently and choosing one asks different questions). Picking a cluster adds a resources chip (partition, CPUs, memory, time limit, presets, paste an `salloc` line) — missing
+- [ ] Folder picking for a new session: an in-app picker (search, recent folders, Browse… opening at ~/Documents/Endeavor) instead of going straight to the macOS open panel — missing
+- [ ] Opening notebooks: the notebook chip lists only notebooks inside the chosen folder (subfolders by relative path) plus "New notebook"; existing notebooks open in safe preview. Starting shows a slowly walking turtle, the current step with elapsed time, and a short step log. Leaning to one notebook per session for now (no switcher; the notebook's ⋯ has Reveal in Finder, Open in a new session…, Stop notebook); several sessions may share a notebook — missing
+- [ ] Notebook lifetime: notebooks stop after an idle period with no turns, edits or running cells (default about two days, a setting; the agent can keep a session's alive); a cluster job's time limit also caps it; the ⋮ menu can stop them now. Undecided: whether local runtimes outlive quitting the app — missing
 - [ ] Endeavor light mode — missing (planned for later)
 - [ ] About window and update notices (adapter updates only show in the status line) — missing
 - [ ] Menu bar: Endeavor (Settings…, Quit), Edit, View — improvised; Window and Help menus — missing
@@ -29,6 +31,7 @@ _Listed 2026-09-25._
 - [x] Row actions: inline rename, hover ×, "Delete?" confirm — improvised. The hover × is too easy to hit by accident; replace it with a ⋮ button that opens a context menu, also on right-click, like Claude desktop. The menu is where session actions live as they're added; candidates: Rename, Pin, Reveal folder in Finder, Open notebook, Resume in Claude Code, Export transcript, Delete… (last, separated)
 - [ ] "Show N more / Show fewer", folder headings, status line ("Claude connected."), settings gear — improvised
 - [ ] Empty sidebar (no sessions yet) — missing
+- [ ] Archive: an Archive item in the session ⋮ menu and a sidebar view filter (Active / All, including archived; archived rows dimmed) — missing
 
 ## Chat transcript
 
