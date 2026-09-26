@@ -93,7 +93,13 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
                 _ => return None,
             };
             let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
-            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now, attachment: None }))
+            // Asking about selected text: the selection goes along, out of the chat bubble.
+            let quote = v.get("quote").and_then(|q| q.as_str()).map(|q| q.chars().take(MAX_COMMENT).collect::<String>());
+            let (comment, attachment) = match quote {
+                Some(quote) => (format!("{comment} (about the attached selection)"), Some(("selected text".to_string(), quote))),
+                None => (comment, None),
+            };
+            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now, attachment }))
         }
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "annotation" => {
@@ -185,6 +191,8 @@ mod tests {
         assert!(matches!(prompt("about"), Some(Message::Annotation(a)) if a.comment == "plot it" && a.cells == [C1]));
         assert!(matches!(prompt("after"), Some(Message::Annotation(a)) if a.comment.starts_with("Add a new cell right after")));
         assert_eq!(prompt("anywhere"), None);
+        let quoted = parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","where":"about","text":"why?","now":false,"quote":"sum(xs)"}}"#), "");
+        assert!(matches!(quoted, Some(Message::Annotation(a)) if a.attachment == Some(("selected text".into(), "sum(xs)".into()))));
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"why so slow?"}}"#);
         let Some(Message::Annotation(a)) = parse_with(&body, "") else { panic!("rejected valid annotation") };
         assert_eq!((a.notebook.as_str(), a.cells.len(), a.comment.as_str()), (NB, 1, "why so slow?"));

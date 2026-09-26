@@ -53,7 +53,28 @@ export function initAnnotate(): void {
   const text = bar.querySelector<HTMLTextAreaElement>("textarea")!;
   const sendButton = bar.querySelector<HTMLButtonElement>(".send")!;
 
+  // With cells picked, the bar floats under the last one (in notebook order),
+  // next to what it's about; otherwise it waits at the bottom of the window.
+  function place() {
+    const last = cells().filter((c) => picked.has(c.id)).at(-1);
+    if (!last) {
+      bar.removeAttribute("style");
+      return;
+    }
+    const rect = last.getBoundingClientRect();
+    const width = Math.min(Math.max(rect.width, 320), 640);
+    Object.assign(bar.style, {
+      position: "absolute",
+      transform: "none",
+      bottom: "auto",
+      left: `${rect.left + window.scrollX}px`,
+      top: `${rect.bottom + window.scrollY + 10}px`,
+      width: `${width}px`,
+    });
+  }
+
   function refresh() {
+    place();
     status.textContent = picked.size ? `${picked.size} cell${picked.size > 1 ? "s" : ""} selected` : "Click cells to select them";
     sendButton.disabled = picked.size === 0;
     for (const c of cells()) c.classList.toggle("annotate-picked", picked.has(c.id));

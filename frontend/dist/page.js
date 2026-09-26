@@ -61,7 +61,25 @@
     const status = bar.querySelector(".status");
     const text = bar.querySelector("textarea");
     const sendButton = bar.querySelector(".send");
+    function place2() {
+      const last = cells().filter((c) => picked.has(c.id)).at(-1);
+      if (!last) {
+        bar.removeAttribute("style");
+        return;
+      }
+      const rect = last.getBoundingClientRect();
+      const width = Math.min(Math.max(rect.width, 320), 640);
+      Object.assign(bar.style, {
+        position: "absolute",
+        transform: "none",
+        bottom: "auto",
+        left: `${rect.left + window.scrollX}px`,
+        top: `${rect.bottom + window.scrollY + 10}px`,
+        width: `${width}px`
+      });
+    }
     function refresh2() {
+      place2();
       status.textContent = picked.size ? `${picked.size} cell${picked.size > 1 ? "s" : ""} selected` : "Click cells to select them";
       sendButton.disabled = picked.size === 0;
       for (const c of cells()) c.classList.toggle("annotate-picked", picked.has(c.id));
@@ -414,6 +432,12 @@
     font: inherit; min-height: 20px;
   }
   #endeavor-prompt .hint { color: #7A7A7A; font-size: 11px; }
+  #endeavor-prompt .quote { color: #9A9A9A; font: 12px ui-monospace, monospace; white-space: pre-wrap;
+    border-left: 2px solid #CC3F00; padding-left: 8px; max-height: 5.5em; overflow: hidden; }
+  #endeavor-ask-selection {
+    position: absolute; z-index: 1000; height: 22px; padding: 0 9px; border-radius: 11px;
+    border: 1px solid #CC3F00; background: #1C1C1E; color: #FF9A6B; font: 12px system-ui, sans-serif; cursor: pointer;
+  }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
   pluto-input .cm-placeholder::after { content: "Type code, or \u2318K to ask ${AGENT}"; font-size: 13px; }
@@ -426,23 +450,28 @@
     box.remove();
     if (refocus) cell.querySelector("pluto-input .cm-content")?.focus();
   }
-  function place(box, cell, where) {
-    const rect = cell.getBoundingClientRect();
+  function place(box, cell, where, selection) {
+    const rect = selection?.rect ?? cell.getBoundingClientRect();
     box.style.left = `${rect.left + window.scrollX}px`;
     const top = where === "before" ? rect.top + window.scrollY - 6 - 70 : rect.bottom + window.scrollY + 6;
     box.style.top = `${Math.max(top, 0)}px`;
-    box.style.width = `${Math.max(rect.width, 280)}px`;
+    box.style.width = `${Math.min(Math.max(rect.width, 320), 640)}px`;
   }
   function isEmpty(cell) {
     return !(cell.querySelector("pluto-input .cm-content")?.textContent ?? "").trim();
   }
-  function openPrompt(cell, where) {
+  function openPrompt(cell, where, selection) {
     close(false);
     const box = document.createElement("div");
     box.id = "endeavor-prompt";
     box.dataset.endeavorUi = "";
-    const asking = where !== "cell" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
-    box.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">\u21B5 send \xB7 esc cancel</div>`;
+    const asking = selection ? `Ask ${AGENT} about the selection` : where !== "cell" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
+    box.innerHTML = `<div class="quote" hidden></div><textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">\u21B5 send \xB7 esc cancel</div>`;
+    if (selection) {
+      const quote = box.querySelector(".quote");
+      quote.hidden = false;
+      quote.textContent = selection.quote.length > 160 ? selection.quote.slice(0, 160) + "\u2026" : selection.quote;
+    }
     const text = box.querySelector("textarea");
     text.placeholder = asking;
     text.addEventListener("input", () => {
@@ -461,15 +490,16 @@
           const comment = text.value.trim();
           if (!comment || !byUser(e)) return;
           const notebook = new URLSearchParams(location.search).get("id");
-          send({ type: "prompt", notebook, cell: cell.id, where: where !== "cell" ? where : isEmpty(cell) ? "fill" : "about", text: comment, now: e.metaKey });
+          const kind = where !== "cell" ? where : isEmpty(cell) ? "fill" : "about";
+          send({ type: "prompt", notebook, cell: cell.id, where: kind, text: comment, now: e.metaKey, quote: selection?.quote });
           close(true);
         }
       },
       true
     );
     document.body.append(box);
-    place(box, cell, where);
-    open = { box, cell, where };
+    place(box, cell, where, selection);
+    open = { box, cell, where, selection };
     requestAnimationFrame(() => text.focus());
   }
   function initPrompt() {
@@ -491,7 +521,8 @@
     document.addEventListener("mousedown", (e) => {
       if (open && !open.box.contains(e.target)) close(false);
     });
-    window.addEventListener("resize", () => open && place(open.box, open.cell, open.where));
+    window.addEventListener("resize", () => open && place(open.box, open.cell, open.where, open.selection));
+    initSelectionChip();
     onRedraw(() => {
       const cells = [...document.querySelectorAll("pluto-cell")];
       cells.forEach((cell, i) => {
@@ -511,6 +542,48 @@
       });
       for (const stale of document.querySelectorAll("pluto-cell:not(:last-of-type) > .endeavor-add-agent.after")) stale.remove();
     });
+  }
+  function selectedInCell() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+    const range = selection.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    const element = node instanceof Element ? node : node.parentElement;
+    const cell = element?.closest("pluto-cell");
+    if (!cell || element?.closest("[data-endeavor-ui]")) return null;
+    const view = element?.closest(".cm-content")?.cmTile?.root?.view;
+    const main = view?.state.selection.main;
+    const quote = (main && !main.empty ? view.state.sliceDoc(main.from, main.to) : selection.toString()).trim();
+    return quote ? { cell, quote, rect: range.getBoundingClientRect() } : null;
+  }
+  function initSelectionChip() {
+    let chip = null;
+    const hide = () => {
+      chip?.remove();
+      chip = null;
+    };
+    document.addEventListener("mouseup", (e) => {
+      if (chip?.contains(e.target) || document.body.classList.contains("annotating")) return;
+      setTimeout(() => {
+        hide();
+        const found = selectedInCell();
+        if (!found) return;
+        chip = document.createElement("button");
+        chip.id = "endeavor-ask-selection";
+        chip.dataset.endeavorUi = "";
+        chip.textContent = `\u2726 Ask ${AGENT}`;
+        chip.style.left = `${found.rect.left + window.scrollX}px`;
+        chip.style.top = `${found.rect.bottom + window.scrollY + 6}px`;
+        chip.onmousedown = (event) => event.preventDefault();
+        chip.onclick = (event) => {
+          if (!byUser(event)) return;
+          hide();
+          openPrompt(found.cell, "cell", { rect: found.rect, quote: found.quote });
+        };
+        document.body.append(chip);
+      });
+    });
+    document.addEventListener("keydown", hide, true);
   }
 
   // src/errors.ts
