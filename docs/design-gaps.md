@@ -12,19 +12,21 @@ _Listed 2026-09-25._
 - [ ] Logo and app icon — missing
 - [ ] Sign-in panel: subscription / console buttons, waiting state, errors — improvised
 - [ ] Settings screen: Claude setup, custom Julia path, run without asking, appearance, notebook theme, troubleshooting — improvised
-- [ ] New-session screen: working folder, Choose…, recent folders, optional first message, Start session — improvised
+- [ ] New-session screen: working folder, Choose…, recent folders, optional first message, Start session — improvised; needs a rework
+- [ ] Folder picking for a new session: an in-app picker (recent folders, projects, search) instead of the macOS open panel, which feels out of place here — missing
+- [ ] Opening notebooks: the whole flow — finding an existing notebook (in the working folder, recent, anywhere), creating one, what the pane shows before one is open, safe preview and running it, switching between notebooks — missing
 - [ ] Endeavor light mode — missing (planned for later)
 - [ ] About window and update notices (adapter updates only show in the status line) — missing
 - [ ] Menu bar: Endeavor (Settings…, Quit), Edit, View — improvised; Window and Help menus — missing
 - [ ] Appearance "Light": native chrome stays dark while the notebook turns Pluto-light — improvised (mismatched until light mode exists)
 - [ ] Window minimum size — missing (the window can shrink with no floor)
-- [ ] Folder and julia pickers' prompt text ("Choose folder", "Use this julia") — improvised
+- [ ] Julia picker's prompt text ("Use this julia") in Settings — improvised
 - [ ] Offline: no network shows as a generic setup failure; losing it mid-session has no state — missing
 
 ## Sidebar
 
 - [ ] Session row states: active, working dot, needs-approval dot — improvised
-- [ ] Row actions: inline rename, hover ×, "Delete?" confirm — improvised
+- [ ] Row actions: inline rename, hover ×, "Delete?" confirm — improvised. The hover × is too easy to hit by accident; replace it with a ⋮ button that opens a context menu, also on right-click, like Claude desktop. The menu is where session actions live as they're added; candidates: Rename, Pin, Reveal folder in Finder, Open notebook, Resume in Claude Code, Export transcript, Delete… (last, separated)
 - [ ] "Show N more / Show fewer", folder headings, status line ("Claude connected."), settings gear — improvised
 - [ ] Empty sidebar (no sessions yet) — missing
 
@@ -33,10 +35,12 @@ _Listed 2026-09-25._
 - [ ] Markdown in agent replies: code blocks, tables, headings, lists — improvised (component library defaults)
 - [ ] "▸ Thinking" blocks — improvised
 - [ ] Non-notebook tool calls (shell, Read, Write, ToolSearch) and their expanded input/output view — improvised (raw JSON)
+- [ ] Shell tool lines print the whole command (multi-line scripts) in the transcript; spec says one collapsed line each (grey verb, mono name, `›` to expand), like "Ran `python3 -c …`" — improvised
 - [ ] Transcript notes: "Allowed: …", "Denied: …", "Turn ended", end-of-turn run warnings — improvised
 - [ ] Failure states: turn failed, agent disconnected, Julia crashed and notebooks reopened, "Open a copy" for a session still open in the Claude Code CLI — improvised
 - [ ] Opening a past session: loading and replay — improvised
 - [ ] Messages sent from the notebook ("✎ 1 cell: …") and the "📎 error message / selected text" attachment chip — improvised
+- [ ] Attachments across the chat: how cells, selected text, error messages, picked regions (and later files and images from "+") look in the user bubble, the composer before sending, and queued messages; what clicking one does (jump to the cell, show the attached text) — missing
 - [ ] Working indicator: spec says orange asterisk + "Adding `residuals` · 12s"; app shows a rocket + "Working · 24s" — improvised
 - [ ] Long content: tool output and long messages have no max height or scroll (only the plan card does) — missing
 
