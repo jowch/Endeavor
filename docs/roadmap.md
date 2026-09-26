@@ -61,7 +61,7 @@ process running Pluto + PlutoMCP.
   (applies when Julia next starts). Kept in `settings.json`.
 - **Packaging.** `scripts/bundle.sh` builds `Endeavor.app` with its resources
   in `Contents/Resources`.
-- **Annotation mode (§4.2).** ⌘⇧E; click cells, comment, send as
+- **Annotation mode (§4.2).** ⌘⇧K; click cells, comment, send as
   `pluto://notebook/{id}/cell/{uuid}` links through the same queue.
 - **Agent environment.** Endeavor's own Claude Code plugin (`plugin/`: the
   styx Pluto skills, ported) plus project settings; the user's personal Claude

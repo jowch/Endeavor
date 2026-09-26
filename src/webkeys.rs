@@ -90,3 +90,12 @@ pub fn fix_key_handling() {
         class_replaceMethod(wry as *const AnyClass as *mut AnyClass, sel, ours, c"B@:@".as_ptr());
     }
 }
+
+/// Trackpad pinch zooms the notebook (WebKit's magnification, separate from ⌘=).
+pub fn allow_pinch_zoom(webview: &wry::WebView) {
+    use wry::WebViewExtMacOS;
+    let view = webview.webview();
+    unsafe {
+        let _: () = msg_send![&*view, setAllowsMagnification: true];
+    }
+}

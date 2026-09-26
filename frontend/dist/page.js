@@ -21,10 +21,12 @@
   // src/annotate.ts
   var css = `
   body.annotating pluto-cell { cursor: crosshair; }
-  body.annotating pluto-cell:hover { outline: 2px dashed #c8a040; outline-offset: 4px; }
-  body.annotating pluto-cell.annotate-picked { outline: 2px solid #c8a040; outline-offset: 4px; }
+  /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, dashed hover and
+     solid picked outlines in the accent. */
+  body.annotating pluto-cell:hover { outline: 1.5px dashed #FF7A40; outline-offset: 4px; }
+  body.annotating pluto-cell.annotate-picked { outline: 1.5px solid #CC3F00; outline-offset: 4px; }
   #annotate-frame { position: fixed; inset: 0; pointer-events: none; z-index: 9999;
-    box-shadow: inset 0 0 0 3px #c8a040; display: none; }
+    background: rgba(0, 0, 0, 0.25); box-shadow: inset 0 0 0 1px #CC3F00; display: none; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
     z-index: 10000; display: none; flex-direction: column; gap: 8px;
     width: min(640px, 90vw); padding: 12px; border-radius: 12px;
@@ -38,7 +40,7 @@
   #annotate-bar .status { flex: 1; color: #aaa; }
   #annotate-bar button { padding: 4px 10px; border-radius: 6px; border: 0; cursor: pointer;
     background: #3a3a3c; color: #eee; font: 13px system-ui; }
-  #annotate-bar button.primary { background: #8a6d1f; }
+  #annotate-bar button.primary { background: #CC3F00; color: #fff; }
   #annotate-bar button:disabled { opacity: 0.4; cursor: default; }
 `;
   function initAnnotate() {
@@ -54,7 +56,7 @@
     bar.innerHTML = `
     <div class="row"><span class="status"></span></div>
     <textarea placeholder="Comment for Claude on the selected cells\u2026"></textarea>
-    <div class="row"><span class="status">\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 \u2318\u21E7E exit</span>
+    <div class="row"><span class="status">\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 \u2318\u21E7K exit</span>
       <button class="exit">Done</button><button class="primary send">Send</button></div>`;
     document.head.append(style);
     document.body.append(frame, bar);
@@ -119,7 +121,7 @@
     window.addEventListener(
       "keydown",
       (e) => {
-        if (e.key.toLowerCase() === "e" && e.metaKey && e.shiftKey) {
+        if (e.key.toLowerCase() === "k" && e.metaKey && e.shiftKey) {
           e.preventDefault();
           return set(!active());
         }

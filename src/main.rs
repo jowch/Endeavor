@@ -312,6 +312,7 @@ impl Workspace {
                 .build_as_child(&handle)
                 .expect("child webview");
             webkeys::fix_key_handling();
+            webkeys::allow_pinch_zoom(&webview);
             WebView::new(webview, window, cx)
         });
 
@@ -1044,7 +1045,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Cmd+Shift+E from the panel (the page handles it when the notebook has focus).
+    /// Cmd+Shift+K from the panel (the page handles it when the notebook has focus).
     fn toggle_annotation(&mut self, _: &ToggleAnnotation, _: &mut Window, cx: &mut Context<Self>) {
         let enable = !self.annotating;
         if enable {
@@ -1921,7 +1922,7 @@ fn main() {
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
-            KeyBinding::new("cmd-shift-e", ToggleAnnotation, None),
+            KeyBinding::new("cmd-shift-k", ToggleAnnotation, None),
             // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).
             KeyBinding::new("shift-tab", CycleMode, Some("Input")),
             KeyBinding::new("shift-tab", CycleMode, None),

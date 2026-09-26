@@ -69,7 +69,7 @@ Replace the inline `rgb()` literals in `src/main.rs`, `src/session.rs`, `src/spl
 ## Composer
 
 - One line, 38px, `bg.card`, 1px `border`, 8px radius, 10px side padding. Placeholder "Type / for commands"; a faint ↵ glyph instead of a send button (Enter sends). While running: placeholder "Queue a message, or ⌘⏎ to steer" and the glyph becomes a small stop button (Esc).
-- Toolbar **below** the box, 24px buttons, 12px text, centre level with the sidebar settings gear: `+` (attach / @ cell) · point (⌘⇧E, orange when active) · mode — then model · effort · context ring.
+- Toolbar **below** the box, 24px buttons, 12px text, centre level with the sidebar settings gear: `+` (attach / @ cell) · point (⌘⇧K, orange when active) · mode — then model · effort · context ring.
 - **Modes** (⇧⇥ cycles), mirroring Claude Code:
   | Mode | Notebook edits | Runs / deletes |
   |---|---|---|
@@ -88,7 +88,7 @@ Replace the inline `rgb()` literals in `src/main.rs`, `src/session.rs`, `src/spl
 - **Between cells**: Pluto's "+" unchanged; an agent button beside it on hover ("Ask <agent> to write a cell here").
 - **Empty cell**: hint "Type code, or ⌘K to ask <agent>"; ⌘K turns it into a prompt; Esc returns to typing.
 - **Errors**: Pluto's error card gains **Fix with <agent>** (outlined, not filled) and **Explain**, replacing Pluto's "Fix with AI".
-- **Pointing overlay** (⌘⇧E): over the notebook only — 25% dim, solid 1px `accent` inset edge (no glow), plain-text hint pill "Click a cell or drag a box · Done", dashed hover outline, solid selection outline, dashed box for a drawn region, prompt anchored under the selection with a single **Send**. Sends immediately (no tray).
+- **Pointing overlay** (⌘⇧K): over the notebook only — 25% dim, solid 1px `accent` inset edge (no glow), plain-text hint pill "Click a cell or drag a box · Done", dashed hover outline, solid selection outline, dashed box for a drawn region, prompt anchored under the selection with a single **Send**. Sends immediately (no tray).
 
 ## Build map
 
@@ -117,7 +117,7 @@ Replace the inline `rgb()` literals in `src/main.rs`, `src/session.rs`, `src/spl
 
 ## Shortcuts
 
-Enter send · ⌘⏎ steer running turn · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧E pointing · ⌘K ask about focused/empty cell · ⌘N new session.
+Enter send · ⌘⏎ steer running turn · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧K pointing · ⌘K ask about focused/empty cell · ⌘N new session.
 
 ## Open decisions
 
