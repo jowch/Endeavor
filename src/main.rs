@@ -211,21 +211,73 @@ fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
 /// Past sessions listed per folder before "Show more".
 const PAST_SHOWN: usize = 8;
 
-/// A small button that appears when the pointer is over its row (`group`).
-fn hover_button(
-    id: impl Into<ElementId>,
-    group: SharedString,
-    label: &'static str,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+/// A session in the sidebar: an open one, or a past one listed under its folder.
+#[derive(Clone, PartialEq)]
+enum Row {
+    Open(u64),
+    Past(SessionId, PathBuf),
+}
+
+#[derive(Clone, Copy)]
+enum RowAction {
+    Rename,
+    Reveal,
+    Close,
+    Delete,
+}
+
+impl RowAction {
+    fn label(self) -> &'static str {
+        match self {
+            RowAction::Rename => "Rename",
+            RowAction::Reveal => "Reveal folder in Finder",
+            RowAction::Close => "Close",
+            RowAction::Delete => "Delete…",
+        }
+    }
+
+    /// A row's menu; Delete comes last, after a separator.
+    fn for_row(row: &Row) -> &'static [RowAction] {
+        match row {
+            Row::Open(_) => &[RowAction::Rename, RowAction::Reveal, RowAction::Close, RowAction::Delete],
+            Row::Past(..) => &[RowAction::Rename, RowAction::Reveal, RowAction::Delete],
+        }
+    }
+}
+
+/// A sidebar row's open ⋮ menu.
+struct RowMenu {
+    row: Row,
+    /// Where a right-click opened it; None hangs it under the ⋮ button.
+    at: Option<Point<Pixels>>,
+    /// The item picked with the arrow keys or the pointer.
+    selected: Option<usize>,
+    focus: FocusHandle,
+    /// Focus to give back when the menu closes.
+    restore: Option<FocusHandle>,
+}
+
+/// The ⋮ button at a row's end: shown while the pointer is over the row
+/// (`group`), and always on the active row or while its menu is open.
+fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> Stateful<Div> {
     div()
         .id(id)
-        .px_1()
-        .text_color(gpui::transparent_black())
+        .role(Role::Button)
+        .aria_label("Session actions")
+        .relative()
+        .flex_shrink_0()
+        .size(px(24.))
+        .mr(px(-6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .font_family(theme::MONO)
+        .text_size(theme::size_subhead())
+        .text_color(if shown { theme::text_muted().into() } else { gpui::transparent_black() })
         .group_hover(group, |s| s.text_color(theme::text_muted()))
         .hover(|s| s.text_color(theme::text_primary()))
-        .child(label)
-        .on_click(on_click)
+        .child("⋮")
 }
 
 /// Recently used working folders, most recent first, kept across launches.
@@ -252,10 +304,9 @@ pub struct Workspace {
     ours: HashSet<String>,
     /// Session names the user gave, by session id (persisted).
     titles: HashMap<String, String>,
-    /// The open session being renamed, and its name box.
-    renaming: Option<(u64, Entity<InputState>)>,
-    /// A past session whose delete button was clicked once; the second click deletes.
-    confirm_delete: Option<SessionId>,
+    /// The session being renamed, and its name box.
+    renaming: Option<(Row, Entity<InputState>)>,
+    row_menu: Option<RowMenu>,
     /// Folders showing all their past sessions, not just the newest.
     expanded: HashSet<PathBuf>,
     settings: Settings,
@@ -409,7 +460,7 @@ impl Workspace {
             ours: load_json("sessions.json"),
             titles: load_json("titles.json"),
             renaming: None,
-            confirm_delete: None,
+            row_menu: None,
             expanded: HashSet::new(),
             settings: Settings::load(),
             settings_open: false,
@@ -554,7 +605,7 @@ impl Workspace {
             let _ = self.agent_tx.unbounded_send(Command::CloseSession(id));
         }
         let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: session.cwd });
-        if self.renaming.as_ref().is_some_and(|(k, _)| *k == key) {
+        if self.renaming.as_ref().is_some_and(|(row, _)| *row == Row::Open(key)) {
             self.renaming = None;
         }
         if self.active == Some(key) {
@@ -566,16 +617,24 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Delete a past session's history; the first click only asks to confirm.
-    fn delete_past(&mut self, id: SessionId, cwd: PathBuf, cx: &mut Context<Self>) {
-        if self.confirm_delete.as_ref() != Some(&id) {
-            self.confirm_delete = Some(id);
-            return cx.notify();
-        }
-        self.confirm_delete = None;
+    /// Delete a session's history (Claude Code's transcript of it), closing it first
+    /// if it's open. A session the agent hasn't started yet just closes.
+    fn delete_session(&mut self, row: Row, cx: &mut Context<Self>) {
+        let id = match row {
+            Row::Open(key) => {
+                let id = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.id.clone());
+                self.close_session(key, cx);
+                id
+            }
+            Row::Past(id, _) => Some(id),
+        };
+        let Some(id) = id else { return };
         let _ = self.agent_tx.unbounded_send(Command::DeleteSession(id.clone()));
-        if let Some(past) = self.past.get_mut(&cwd) {
+        for past in self.past.values_mut() {
             past.retain(|info| info.session_id != id);
+        }
+        if self.renaming.as_ref().is_some_and(|(row, _)| matches!(row, Row::Past(p, _) if *p == id)) {
+            self.renaming = None;
         }
         self.ours.remove(&id.to_string());
         save_json("sessions.json", &self.ours);
@@ -585,8 +644,74 @@ impl Workspace {
         cx.notify();
     }
 
-    fn start_rename(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(title) = self.sessions.iter().find(|s| s.key == key).map(|s| s.title.clone()) else { return };
+    /// A row's name as the sidebar shows it.
+    fn row_title(&self, row: &Row) -> Option<String> {
+        match row {
+            Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.title.clone()),
+            Row::Past(id, folder) => {
+                let info = self.past.get(folder)?.iter().find(|info| info.session_id == *id)?;
+                Some(self.titles.get(&id.to_string()).cloned().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into()))
+            }
+        }
+    }
+
+    fn open_row_menu(&mut self, row: Row, at: Option<Point<Pixels>>, window: &mut Window, cx: &mut Context<Self>) {
+        let restore = match self.row_menu.take() {
+            Some(menu) => menu.restore,
+            None => window.focused(cx),
+        };
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        self.row_menu = Some(RowMenu { row, at, selected: None, focus, restore });
+        cx.notify();
+    }
+
+    fn close_row_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(restore) = self.row_menu.take().and_then(|menu| menu.restore) {
+            window.focus(&restore, cx);
+        }
+        cx.notify();
+    }
+
+    fn row_action(&mut self, row: Row, action: RowAction, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_row_menu(window, cx);
+        match action {
+            RowAction::Rename => self.start_rename(row, window, cx),
+            RowAction::Reveal => {
+                let folder = match &row {
+                    Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.cwd.clone()),
+                    Row::Past(_, folder) => Some(folder.clone()),
+                };
+                if let Some(folder) = folder {
+                    let _ = std::process::Command::new("open").arg("-R").arg(folder).spawn();
+                }
+            }
+            RowAction::Close => {
+                if let Row::Open(key) = row {
+                    self.close_session(key, cx);
+                }
+            }
+            RowAction::Delete => {
+                let Some(title) = self.row_title(&row) else { return };
+                let answer = window.prompt(
+                    PromptLevel::Warning,
+                    &format!("Delete “{title}”?"),
+                    Some("This permanently deletes the conversation, including its Claude Code history. Notebooks and other files it made stay on disk."),
+                    &[PromptButton::new("Delete"), PromptButton::cancel("Cancel")],
+                    cx,
+                );
+                cx.spawn(async move |this, cx| {
+                    if answer.await == Ok(0) {
+                        let _ = this.update(cx, |this, cx| this.delete_session(row, cx));
+                    }
+                })
+                .detach();
+            }
+        }
+    }
+
+    fn start_rename(&mut self, row: Row, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = self.row_title(&row) else { return };
         let input = cx.new(|cx| InputState::new(window, cx).default_value(title));
         input.update(cx, |s, cx| {
             s.focus(window, cx);
@@ -598,21 +723,28 @@ impl Workspace {
             }
         })
         .detach();
-        self.renaming = Some((key, input));
+        self.renaming = Some((row, input));
         cx.notify();
     }
 
     /// Keep the typed name (an empty one leaves the title as it was).
     fn finish_rename(&mut self, cx: &mut Context<Self>) {
-        let Some((key, input)) = self.renaming.take() else { return };
+        let Some((row, input)) = self.renaming.take() else { return };
         let name = input.read(cx).value().trim().to_string();
-        if let (false, Some(session)) = (name.is_empty(), self.session_mut(key)) {
-            session.title = name.clone();
-            session.named = true;
-            if let Some(id) = session.id.as_ref().map(ToString::to_string) {
-                self.titles.insert(id, name);
-                save_json("titles.json", &self.titles);
-            }
+        if name.is_empty() {
+            return cx.notify();
+        }
+        let id = match row {
+            Row::Open(key) => self.session_mut(key).and_then(|session| {
+                session.title = name.clone();
+                session.named = true;
+                session.id.as_ref().map(ToString::to_string)
+            }),
+            Row::Past(id, _) => Some(id.to_string()),
+        };
+        if let Some(id) = id {
+            self.titles.insert(id, name);
+            save_json("titles.json", &self.titles);
         }
         cx.notify();
     }
@@ -652,7 +784,6 @@ impl Workspace {
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         self.active = Some(key);
         self.settings_open = false;
-        self.confirm_delete = None;
         self.follow_folder();
         if let Some(notebook) = self.active_session().and_then(|s| s.notebook.clone()) {
             self.load_notebook(&notebook, cx);
@@ -1372,6 +1503,115 @@ impl Workspace {
     // Rendering
     // -----------------------------------------------------------------------
 
+    /// A session's sidebar row: right-click opens its menu, and it stays lit while
+    /// the menu is open.
+    fn session_row(&self, row: Row, group: SharedString, active: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let menu_open = self.row_menu.as_ref().is_some_and(|menu| menu.row == row);
+        sidebar_row(ElementId::Name(group.clone()), active)
+            .group(group)
+            .when(menu_open, |d| d.bg(theme::row_active()))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| this.open_row_menu(row.clone(), Some(e.position), window, cx)),
+            )
+    }
+
+    /// A row's title, or its name box while it's being renamed.
+    fn row_label(&self, row: &Row, title: String) -> Div {
+        match &self.renaming {
+            Some((renaming, input)) if renaming == row => div().flex_1().child(Input::new(input).xsmall().text_size(theme::size_body())),
+            _ => div().flex_1().overflow_hidden().whitespace_nowrap().child(title),
+        }
+    }
+
+    /// A row's ⋮ button, and its menu while open.
+    fn row_more(&self, row: Row, group: SharedString, active: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let menu = self.row_menu.as_ref().filter(|menu| menu.row == row);
+        more_button(ElementId::Name(format!("{group}-more").into()), group, active || menu.is_some())
+            .children(menu.map(|menu| self.render_row_menu(menu, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.open_row_menu(row.clone(), None, window, cx);
+            }))
+    }
+
+    /// The row menu, under the ⋮ button or at the pointer that right-clicked.
+    fn render_row_menu(&self, menu: &RowMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let items = RowAction::for_row(&menu.row).iter().enumerate().flat_map(|(i, &action)| {
+            let danger = matches!(action, RowAction::Delete);
+            let separator = danger.then(|| div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge()).into_any_element());
+            let row = menu.row.clone();
+            let item = div()
+                .id(ElementId::NamedInteger("row-menu-item".into(), i as u64))
+                .role(Role::MenuItem)
+                .aria_label(action.label())
+                .px(px(8.))
+                .py(px(4.))
+                .rounded(px(5.))
+                .cursor_pointer()
+                .when(danger, |d| d.text_color(theme::danger()))
+                .when(menu.selected == Some(i), |d| d.bg(theme::composer_edge()))
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if let Some(menu) = this.row_menu.as_mut().filter(|menu| menu.selected != Some(i)) {
+                        menu.selected = Some(i);
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.row_action(row.clone(), action, window, cx);
+                }))
+                .child(action.label())
+                .into_any_element();
+            separator.into_iter().chain([item])
+        });
+        let body = div()
+            .id("row-menu")
+            .role(Role::Menu)
+            .track_focus(&menu.focus)
+            .occlude()
+            .w(px(210.))
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme::composer_edge())
+            .bg(theme::bg_raised())
+            .font_family(theme::SANS)
+            .text_size(theme::size_body())
+            .text_color(theme::text_primary())
+            .on_action(cx.listener(|this, _: &Interrupt, window, cx| this.close_row_menu(window, cx)))
+            .on_key_down(cx.listener(Self::row_menu_key))
+            .children(items);
+        let placed = match menu.at {
+            Some(at) => anchored().position(at),
+            None => anchored().anchor(Anchor::TopRight),
+        };
+        // The wrapper puts an un-positioned menu under the button's right edge.
+        div().absolute().top(px(28.)).right_0().child(deferred(placed.child(body)).with_priority(1))
+    }
+
+    fn row_menu_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.row_menu.as_mut() else { return };
+        let actions = RowAction::for_row(&menu.row);
+        let n = actions.len();
+        match e.keystroke.key.as_str() {
+            "down" => menu.selected = Some(menu.selected.map_or(0, |i| (i + 1) % n)),
+            "up" => menu.selected = Some(menu.selected.map_or(n - 1, |i| (i + n - 1) % n)),
+            "enter" | "space" => {
+                if let Some(i) = menu.selected {
+                    let row = menu.row.clone();
+                    self.row_action(row, actions[i], window, cx);
+                }
+            }
+            "escape" => self.close_row_menu(window, cx),
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
     fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // Folders: recent ones, then any other folder with an open session.
         let mut folders: Vec<&PathBuf> = self.recent.iter().collect();
@@ -1390,11 +1630,8 @@ impl Workspace {
                     .map(|s| {
                         let key = s.key;
                         let active = self.active == Some(key) && !self.settings_open;
-                        let row: SharedString = format!("session-{key}").into();
-                        let title = match &self.renaming {
-                            Some((k, input)) if *k == key => div().flex_1().child(Input::new(input).xsmall().text_size(theme::size_body())),
-                            _ => div().flex_1().overflow_hidden().whitespace_nowrap().child(s.title.clone()),
-                        };
+                        let group: SharedString = format!("session-{key}").into();
+                        let title = self.row_label(&Row::Open(key), s.title.clone());
                         // Status at the row's end: a ring waits for you, a dot is working.
                         let mark = if s.needs_approval() {
                             Some(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()))
@@ -1403,19 +1640,15 @@ impl Workspace {
                         } else {
                             None
                         };
-                        sidebar_row(ElementId::NamedInteger("session".into(), key), active)
-                            .group(row.clone())
+                        self.session_row(Row::Open(key), group.clone(), active, cx)
                             .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
                             .child(title)
                             .children(mark)
-                            .child(hover_button(("close", key), row, "×", cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.close_session(key, cx);
-                            })))
+                            .child(self.row_more(Row::Open(key), group, active, cx))
                             // Double-click renames.
                             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                                 if e.click_count() >= 2 {
-                                    this.start_rename(key, window, cx);
+                                    this.start_rename(Row::Open(key), window, cx);
                                 } else {
                                     this.activate(key, cx);
                                 }
@@ -1433,27 +1666,18 @@ impl Workspace {
                     .take(limit)
                     .enumerate()
                     .map(|(i, info)| {
-                        let id = info.session_id.to_string();
-                        let title = self.titles.get(&id).cloned().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into());
-                        let row: SharedString = format!("past-{}-{i}", folder.display()).into();
-                        let confirming = self.confirm_delete.as_ref() == Some(&info.session_id);
-                        let (open, delete, cwd) = ((*info).clone(), info.session_id.clone(), folder.clone());
-                        let delete = cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.delete_past(delete.clone(), cwd.clone(), cx);
-                        });
-                        sidebar_row(ElementId::Name(row.clone()), false)
-                            .group(row.clone())
-                            .child(div().flex_1().overflow_hidden().whitespace_nowrap().child(title))
-                            .map(|d| {
-                                if confirming {
-                                    let id = ElementId::Name(format!("{row}-confirm").into());
-                                    d.child(div().id(id).text_color(theme::danger()).child("Delete?").on_click(delete))
-                                } else {
-                                    d.child(hover_button(ElementId::Name(format!("{row}-delete").into()), row, "×", delete))
+                        let row = Row::Past(info.session_id.clone(), folder.clone());
+                        let title = self.row_label(&row, self.row_title(&row).unwrap_or_default());
+                        let group: SharedString = format!("past-{}-{i}", folder.display()).into();
+                        let open = (*info).clone();
+                        self.session_row(row.clone(), group.clone(), false, cx)
+                            .child(title)
+                            .child(self.row_more(row.clone(), group, false, cx))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.renaming.as_ref().is_some_and(|(renaming, _)| *renaming == row) {
+                                    this.open_past(open.clone(), cx);
                                 }
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| this.open_past(open.clone(), cx)))
+                            }))
                     })
                     .collect();
                 let more = (all.len() > PAST_SHOWN).then(|| {
@@ -1920,6 +2144,18 @@ impl Render for Workspace {
                     .child(notebook_header)
                     .child(div().flex_1().min_h_0().child(self.webview.clone())),
             )
+            // A click outside the row menu only closes it, as with a native menu.
+            .when(self.row_menu.is_some(), |d| {
+                d.child(
+                    div()
+                        .id("row-menu-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_row_menu(window, cx)))
+                        .on_mouse_down(MouseButton::Right, cx.listener(|this, _, window, cx| this.close_row_menu(window, cx))),
+                )
+            })
             .into_any_element()
     }
 }
