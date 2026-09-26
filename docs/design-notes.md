@@ -145,7 +145,7 @@ Staged, each step shippable:
    with a random per-launch token (app → Julia via `ENDEAVOR_TOKEN`, removed from
    Julia's environment before notebooks start; the agent's MCP config carries
    the header). Closes the shared-host hole. Pluto's own port stays protected
-   by its secret. Still open: SSH remote sessions (forward both ports).
+   by its secret. SSH remote sessions: see [remote-sessions.md](remote-sessions.md).
 3. **Events (done 2026-09-25):** `GET /events` (server-sent events, same token)
    pushes the `list_notebooks` summary whenever it changes, driven by Pluto's
    `StateChangeEvent` / `NotebookExecutionDoneEvent` / open / shutdown and by

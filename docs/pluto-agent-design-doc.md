@@ -32,6 +32,8 @@ structured context into the agent's next prompt turn.
 - Not rebuilding Pluto's rendering natively in GPUI — the notebook pane is a
   real embedded browser view of the actual Pluto frontend.
 - Not supporting remote/multi-user Pluto servers — loopback-only, single user.
+  (Remote over SSH, still loopback on both ends, is designed in
+  [remote-sessions.md](remote-sessions.md).)
 - Not designing a universal "skills" system — fold styx's skill content into
   plain ACP prompt context instead.
 
@@ -171,7 +173,8 @@ Verified directly against styx's own repo contents and the ACP schema.
 - Pluto binds to `127.0.0.1` by default and gates access with a rotating
   `?secret=` URL token specifically to prevent arbitrary remote code
   execution — never change this binding, and never let the app's proxying
-  extend beyond loopback.
+  extend beyond loopback. Remote sessions keep both ends on loopback and
+  carry traffic over SSH; see [remote-sessions.md](remote-sessions.md).
 - The new browser-automation MCP bridge should use a per-boot-regenerated
   token for its own loopback channel (not a static/shared secret) — same
   pattern used by comparable existing tools (e.g. AgentsRoom's browser MCP
