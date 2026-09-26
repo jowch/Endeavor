@@ -55,6 +55,8 @@ pub enum Entry {
         input: serde_json::Value,
         /// What the run would run, once the runtime answers.
         preview: Option<pluto::RunPreview>,
+        /// Plan mode's end: the plan to approve (markdown).
+        plan: Option<String>,
     },
     Note(SharedString),
 }
@@ -106,6 +108,8 @@ pub struct Session {
     dirty_from: Cell<Option<usize>>,
     /// When the current turn started, for the "Working · 12s" indicator.
     pub busy_since: Option<Instant>,
+    /// The pinned plan (above the composer) is folded.
+    pub plan_folded: bool,
     /// Reopening a past session: its history is replaying.
     replaying: bool,
     /// Notebook file the replayed history last opened, reopened once loading ends.
@@ -183,6 +187,7 @@ impl Session {
             list_len: Cell::new(0),
             dirty_from: Cell::new(None),
             busy_since: None,
+            plan_folded: false,
             replaying: false,
             replayed_path: None,
             failed: None,
@@ -253,21 +258,43 @@ impl Session {
     }
 
     /// The agent's name for the current mode.
-    pub fn mode_name(&self) -> Option<&str> {
+    /// The spec's modes (docs/ui-spec.md, Composer): Plan is the agent's plan mode;
+    /// Ask to run and Auto are its auto mode with our run gate asking or not. Any
+    /// other agent mode shows under the agent's own name.
+    pub fn mode_name(&self) -> Option<String> {
         let modes = self.modes.as_ref()?;
-        modes.available_modes.iter().find(|m| m.id == modes.current_mode_id).map(|m| m.name.as_str())
+        Some(match modes.current_mode_id.to_string().as_str() {
+            "plan" => "Plan".into(),
+            "auto" if self.run_without_asking => "Auto".into(),
+            "auto" => "Ask to run".into(),
+            _ => modes.available_modes.iter().find(|m| m.id == modes.current_mode_id)?.name.clone(),
+        })
     }
 
-    /// Switch to the next mode (⇧⇥), showing it at once; the agent confirms with
-    /// a mode update.
+    /// ⇧⇥: Ask to run → Auto → Plan → Ask to run, showing it at once; the agent
+    /// confirms mode switches with a mode update. Agents without plan and auto
+    /// modes cycle through their own.
     pub fn cycle_mode(&mut self) -> Vec<Effect> {
         let Some(modes) = self.modes.as_mut() else { return Vec::new() };
-        let at = modes.available_modes.iter().position(|m| m.id == modes.current_mode_id).unwrap_or(0);
-        let Some(next) = modes.available_modes.get((at + 1) % modes.available_modes.len().max(1)).map(|m| m.id.clone()) else {
-            return Vec::new();
+        let has = |id: &str| modes.available_modes.iter().any(|m| m.id.to_string() == id);
+        let next = if has("plan") && has("auto") {
+            let (next, auto) = match (modes.current_mode_id.to_string().as_str(), self.run_without_asking) {
+                ("plan", _) => ("auto", false),
+                ("auto", false) => ("auto", true),
+                _ => ("plan", false),
+            };
+            self.run_without_asking = auto;
+            SessionModeId::from(next.to_string())
+        } else {
+            let at = modes.available_modes.iter().position(|m| m.id == modes.current_mode_id).unwrap_or(0);
+            let Some(next) = modes.available_modes.get((at + 1) % modes.available_modes.len().max(1)) else { return Vec::new() };
+            next.id.clone()
         };
-        modes.current_mode_id = next.clone();
-        let mut effects = vec![Effect::SetMode(next)];
+        let mut effects = Vec::new();
+        if next != modes.current_mode_id {
+            modes.current_mode_id = next.clone();
+            effects.push(Effect::SetMode(next));
+        }
         self.sync_policy(&mut effects);
         effects
     }
@@ -417,7 +444,13 @@ impl Session {
                 if let Some(tool) = tool.clone().filter(|_| runs_code) {
                     effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
                 }
-                self.push(Entry::Permission { title, code, options: request.options, responder: Some(responder), runs_code, tool, input, preview: None });
+                // The adapter's ExitPlanMode prompt: its options carry these ids.
+                let plan = request
+                    .options
+                    .iter()
+                    .any(|o| o.option_id.to_string().starts_with("exit-plan-"))
+                    .then(|| input["plan"].as_str().unwrap_or("").to_owned());
+                self.push(Entry::Permission { title, code, options: request.options, responder: Some(responder), runs_code, tool, input, preview: None, plan });
             }
             SessionEvent::Update(update) => self.apply_update(update, &mut effects),
         }
@@ -428,6 +461,10 @@ impl Session {
         let next = self.outbox.turn_ended();
         let idle = next.is_none();
         if idle {
+            // The pinned plan folds back into the transcript.
+            if let Some(ix) = self.pinned_plan() {
+                self.mark(ix);
+            }
             self.busy_since = None;
         }
         self.dispatch(next, effects);
@@ -472,16 +509,13 @@ impl Session {
                 }
             }
             // One plan per turn, updated in place.
-            SessionUpdate::Plan(plan) => {
-                let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
-                match self.entries[turn_start..].iter().position(|e| matches!(e, Entry::Plan(_))) {
-                    Some(offset) => {
-                        self.entries[turn_start + offset] = Entry::Plan(plan.entries);
-                        self.mark(turn_start + offset);
-                    }
-                    None => self.push(Entry::Plan(plan.entries)),
+            SessionUpdate::Plan(plan) => match self.turn_plan() {
+                Some(ix) => {
+                    self.entries[ix] = Entry::Plan(plan.entries);
+                    self.mark(ix);
                 }
-            }
+                None => self.push(Entry::Plan(plan.entries)),
+            },
             SessionUpdate::ToolCall(call) => self.push(Entry::Tool {
                 id: call.tool_call_id,
                 title: call.title,
@@ -569,16 +603,32 @@ impl Session {
         }
     }
 
+    /// This turn's plan entry: the agent updates it in place.
+    fn turn_plan(&self) -> Option<usize> {
+        let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
+        self.entries[turn_start..].iter().position(|e| matches!(e, Entry::Plan(_))).map(|offset| turn_start + offset)
+    }
+
+    /// While a turn runs, its plan is pinned above the composer instead of in the transcript.
+    pub fn pinned_plan(&self) -> Option<usize> {
+        self.busy_since.and(self.turn_plan())
+    }
+
     /// The permission request waiting for an answer, if any.
     pub fn pending_permission(&self) -> Option<usize> {
         self.entries.iter().position(|e| matches!(e, Entry::Permission { responder: Some(_), .. }))
     }
 
     /// Answer the pending request by kind (keys: ⏎ allow, ⌘⏎ always, Esc deny).
+    /// For a plan: ⏎ starts (asking before runs), ⌘⏎ starts in Auto.
     pub fn answer_pending(&mut self, kind: PermissionOptionKind, stop_asking: bool) -> bool {
         let Some(ix) = self.pending_permission() else { return false };
-        let Entry::Permission { options, .. } = &self.entries[ix] else { return false };
-        let Some(option) = option_of_kind(options, kind).cloned() else { return false };
+        let Entry::Permission { options, plan, .. } = &self.entries[ix] else { return false };
+        let option = match (plan.is_some(), kind) {
+            (true, PermissionOptionKind::AllowOnce) => plan_option(options),
+            _ => option_of_kind(options, kind),
+        };
+        let Some(option) = option.cloned() else { return false };
         self.answer(ix, &option, stop_asking);
         true
     }
@@ -617,6 +667,15 @@ fn config_value<'a>(config: &'a [SessionConfigOption], id: &str) -> Option<&'a S
     })
 }
 
+/// The adapter's plan-approval option ids (claude-agent-acp permissions/options),
+/// best first. Starting means the agent's auto mode; whether runs ask is ours
+/// (Start: Ask to run; Start in Auto: runs without asking).
+const PLAN_START: [&str; 3] = ["exit-plan-auto", "exit-plan-accept-edits", "exit-plan-default"];
+
+fn plan_option(options: &[PermissionOption]) -> Option<&PermissionOption> {
+    PLAN_START.iter().find_map(|id| options.iter().find(|o| o.option_id.to_string() == *id))
+}
+
 fn option_of_kind(options: &[PermissionOption], kind: PermissionOptionKind) -> Option<&PermissionOption> {
     options.iter().find(|o| o.kind == kind)
 }
@@ -632,7 +691,8 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
     list(session.list.clone(), move |ix, _window, cx| {
         workspace
             .update(cx, |this, cx| {
-                let Some(entry) = this.sessions.iter().find(|s| s.key == key).and_then(|s| s.entries.get(ix)) else {
+                let Some(session) = this.sessions.iter().find(|s| s.key == key) else { return div().into_any_element() };
+                let Some(entry) = session.entries.get(ix).filter(|_| session.pinned_plan() != Some(ix)) else {
                     return div().into_any_element();
                 };
                 div().px_4().pb_4().child(render_entry(key, ix, entry, cx)).into_any_element()
@@ -763,15 +823,8 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
             .flex_col()
             .gap_1()
             .text_sm()
-            .child(div().text_color(muted).child("Plan"))
-            .children(entries.iter().map(|e| {
-                let (mark, color) = match e.status {
-                    PlanEntryStatus::Completed => ("☑", theme::diff_add()),
-                    PlanEntryStatus::InProgress => ("◐", theme::accent_text()),
-                    _ => ("☐", theme::text_secondary()),
-                };
-                div().flex().gap_2().child(div().text_color(color).child(mark)).child(e.content.clone())
-            }))
+            .child(div().text_color(muted).child(progress(entries)))
+            .children(plan_rows(entries))
             .into_any_element(),
         // Pending: shown as the approval card above the composer (render_approval).
         Entry::Permission { .. } => div().into_any_element(),
@@ -783,10 +836,20 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, cx: &mut Context<Workspace>)
 /// and how many dependents re-run; other prompts get the agent's own options.
 pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let ix = session.pending_permission()?;
-    let Entry::Permission { title, code, options, runs_code, tool, input, preview, .. } = &session.entries[ix] else { return None };
+    let Entry::Permission { title, code, options, runs_code, tool, input, preview, plan, .. } = &session.entries[ix] else { return None };
     let key = session.key;
+    if let Some(plan) = plan {
+        return Some(render_plan_card(key, ix, plan, options, cx));
+    }
     let mono = |text: String| div().font_family("Menlo").text_size(px(12.)).child(text);
-    let first_line = |code: &str| code.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+    // An unnamed cell (e.g. markdown) by its first line, cut short.
+    let first_line = |code: &str| {
+        let line = code.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+        match line.char_indices().nth(60) {
+            Some((cut, _)) => format!("{}…", &line[..cut]),
+            None => line.to_string(),
+        }
+    };
     let tool = tool.as_deref().unwrap_or("");
 
     let (heading, body): (String, Vec<AnyElement>) = if !*runs_code {
@@ -797,6 +860,7 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         let names: Vec<String> = p.cells.iter().map(|c| c.name.clone().unwrap_or_else(|| first_line(&c.code))).collect();
         let heading = match (tool, p.all, p.count) {
             ("delete_cell", _, _) => format!("Delete {}?", names.first().map(|n| format!("`{n}`")).unwrap_or("this cell".into())),
+            ("allow_execution", false, _) => "Let this notebook run? (Nothing runs yet.)".into(),
             (_, true, n) => format!("Run all {n} cells?"),
             (_, _, 1) => format!("Run {}?", names.first().map(|n| format!("`{n}`")).unwrap_or("1 cell".into())),
             (_, _, n) => format!("Run {n} cells?"),
@@ -840,55 +904,102 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         buttons = options.iter().map(|o| (o.name.clone(), "", o.clone(), false)).collect();
     }
     let primary = buttons.len() - 1;
-    Some(
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .p(px(10.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme::accent())
-            .bg(theme::bg_card())
-            .shadow(vec![BoxShadow {
-                color: Hsla::from(theme::accent()).opacity(0.25),
-                offset: point(px(0.), px(0.)),
-                blur_radius: px(0.),
-                spread_radius: px(3.),
-                inset: false,
-            }])
-            .text_sm()
-            .child(inline_code(&heading).text_color(theme::text_primary()))
-            .children(code.map(|code| {
-                const LINES: usize = 8;
-                let mut shown: Vec<&str> = code.lines().take(LINES).collect();
-                if code.lines().count() > LINES {
-                    shown.push("…");
-                }
-                mono(shown.join("\n")).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary())
-            }))
-            .children(body)
-            // Wrap: the agent's own option labels can be long.
-            .child(div().flex().flex_wrap().justify_end().gap_2().children(buttons.into_iter().enumerate().map(|(i, (label, hint, option, stop))| {
-                let is_primary = i == primary;
-                div()
-                    .id(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .h(px(26.))
-                    .px(px(10.))
-                    .rounded(px(5.))
-                    .cursor_pointer()
-                    .map(|d| if is_primary { d.bg(theme::accent()).text_color(gpui::white()) } else { d.bg(theme::bg_raised()).hover(|s| s.bg(theme::row_active())) })
-                    .child(label)
-                    .when(!hint.is_empty(), |d| d.child(div().text_size(px(11.)).opacity(0.6).child(hint)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, stop))))
-            })))
-            .into_any_element(),
+    let code = code.map(|code| {
+        const LINES: usize = 8;
+        let mut shown: Vec<&str> = code.lines().take(LINES).collect();
+        if code.lines().count() > LINES {
+            shown.push("…");
+        }
+        mono(shown.join("\n")).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).into_any_element()
+    });
+    // Wrap: the agent's own option labels can be long.
+    let buttons = buttons
+        .into_iter()
+        .enumerate()
+        .map(|(i, (label, hint, option, stop))| {
+            approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, i == primary)
+                .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, stop))))
+                .into_any_element()
+        })
+        .collect();
+    Some(approval_card(
+        inline_code(&heading).text_color(theme::text_primary()).into_any_element(),
+        code.into_iter().chain(body).collect(),
+        buttons,
+    ))
+}
+
+/// Plan mode's end: the plan, then Keep planning · Start in Auto · **Start**.
+fn render_plan_card(key: u64, ix: usize, plan: &str, options: &[PermissionOption], cx: &mut Context<Workspace>) -> AnyElement {
+    // (label, key, option, runs without asking, primary)
+    let buttons: Vec<(&str, &str, Option<&PermissionOption>, bool, bool)> = vec![
+        ("Keep planning", "esc", option_of_kind(options, PermissionOptionKind::RejectOnce), false, false),
+        ("Start in Auto", "⌘⏎", plan_option(options), true, false),
+        ("Start", "⏎", plan_option(options), false, true),
+    ];
+    approval_card(
+        div().text_color(theme::text_primary()).child("Ready to start?").into_any_element(),
+        vec![
+            div()
+                .id(ElementId::NamedInteger("plan".into(), key))
+                .max_h(px(260.))
+                .overflow_y_scroll()
+                .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan.to_string()))
+                .into_any_element(),
+        ],
+        buttons
+            .into_iter()
+            .filter_map(|(label, hint, option, auto, primary)| {
+                let option = option?.clone();
+                Some(
+                    approval_button(ElementId::NamedInteger(label.into(), key), label, hint, primary)
+                        .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, auto))))
+                        .into_any_element(),
+                )
+            })
+            .collect(),
     )
 }
 
+/// The approval card's frame: accent edge, soft ring, buttons right-aligned.
+fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<AnyElement>) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .p(px(10.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme::accent())
+        .bg(theme::bg_card())
+        .shadow(vec![BoxShadow {
+            color: Hsla::from(theme::accent()).opacity(0.25),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(3.),
+            inset: false,
+        }])
+        .text_sm()
+        .child(heading)
+        .children(body)
+        .child(div().flex().flex_wrap().justify_end().gap_2().children(buttons))
+        .into_any_element()
+}
+
+fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .h(px(26.))
+        .px(px(10.))
+        .rounded(px(5.))
+        .cursor_pointer()
+        .map(|d| if primary { d.bg(theme::accent()).text_color(gpui::white()) } else { d.bg(theme::bg_raised()).hover(|s| s.bg(theme::row_active())) })
+        .child(label.to_string())
+        .when(!hint.is_empty(), |d| d.child(div().text_size(px(11.)).opacity(0.6).child(hint.to_string())))
+}
 
 /// Text with `backticked` spans in mono.
 fn inline_code(text: &str) -> Div {
@@ -897,6 +1008,59 @@ fn inline_code(text: &str) -> Div {
         let d = div().child(part.replace(' ', "\u{a0}"));
         if i % 2 == 1 { d.font_family("Menlo").text_size(px(12.5)) } else { d }
     }))
+}
+
+/// "Progress · 1 of 3": steps done of all.
+fn progress(entries: &[PlanEntry]) -> String {
+    let done = entries.iter().filter(|e| e.status == PlanEntryStatus::Completed).count();
+    format!("Progress · {done} of {}", entries.len())
+}
+
+/// The plan checklist: ✓ done (struck through), ◐ current (bright), ○ upcoming (grey).
+fn plan_rows(entries: &[PlanEntry]) -> impl Iterator<Item = Div> + '_ {
+    entries.iter().map(|e| {
+        let (mark, mark_color, text_color) = match e.status {
+            PlanEntryStatus::Completed => ("✓", theme::diff_add(), theme::text_muted()),
+            PlanEntryStatus::InProgress => ("◐", theme::accent_text(), theme::text_primary()),
+            _ => ("○", theme::text_faint(), theme::text_secondary()),
+        };
+        div()
+            .flex()
+            .gap_2()
+            .child(div().w(px(12.)).flex_shrink_0().text_color(mark_color).child(mark))
+            .child(div().text_color(text_color).when(e.status == PlanEntryStatus::Completed, |d| d.line_through()).child(e.content.clone()))
+    })
+}
+
+/// The running turn's plan, pinned above the composer; click the header to fold it.
+pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+    let Entry::Plan(entries) = &session.entries[session.pinned_plan()?] else { return None };
+    let (key, folded) = (session.key, session.plan_folded);
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px(px(10.))
+            .py(px(8.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme::composer_edge())
+            .text_sm()
+            .child(
+                div()
+                    .id("pinned-plan")
+                    .flex()
+                    .justify_between()
+                    .cursor_pointer()
+                    .text_color(theme::text_muted())
+                    .child(progress(entries))
+                    .child(if folded { "›" } else { "⌄" })
+                    .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.plan_folded = !s.plan_folded))),
+            )
+            .when(!folded, |d| d.children(plan_rows(entries)))
+            .into_any_element(),
+    )
 }
 
 /// Messages waiting for Claude: click ✎ to pull one back into the input, ✕ to drop it.
@@ -1038,20 +1202,25 @@ mod tests {
     #[test]
     fn modes_usage_and_commands_follow_the_agent() {
         let mut s = Session::new(1, "/tmp/project".into());
-        let modes = SessionModeState::new("default", vec![SessionMode::new("default", "Ask to run"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
+        let modes = SessionModeState::new("default", vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
         s.started(Started::new(SessionId::new("s1"), Some(modes), None));
-        assert_eq!(s.mode_name(), Some("Ask to run"));
+        assert_eq!(s.mode_name().as_deref(), Some("Manual"), "another agent mode: its own name");
 
-        // ⇧⇥ moves on at once and asks the agent; it wraps around.
+        // ⇧⇥ moves on at once and asks the agent: Plan → Ask to run → Auto → Plan.
         assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan")] if m.to_string() == "plan"));
-        assert_eq!(s.mode_name(), Some("Plan"));
+        assert_eq!(s.mode_name().as_deref(), Some("Plan"));
         // Leaving plan tells the runtime too.
-        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(_), Effect::SetPolicy("ask")]));
-        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m)] if m.to_string() == "default"));
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("ask")] if m.to_string() == "auto"));
+        assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
+        // Auto is the same agent mode, with runs no longer asking.
+        assert!(s.cycle_mode().is_empty() && s.run_without_asking);
+        assert_eq!(s.mode_name().as_deref(), Some("Auto"));
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan")] if m.to_string() == "plan"));
+        assert!(!s.run_without_asking);
 
         // The agent's own updates win.
         s.apply(SessionEvent::Update(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("auto"))));
-        assert_eq!(s.mode_name(), Some("Auto"));
+        assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
         s.apply(SessionEvent::Update(SessionUpdate::UsageUpdate(UsageUpdate::new(12_000, 200_000))));
         assert_eq!(s.usage, Some((12_000, 200_000)));
         let commands = vec![AvailableCommand::new("review", "Review the notebook")];
@@ -1153,6 +1322,22 @@ more" }"#);
         assert!(s.busy_since.is_some());
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(s.busy_since.is_none());
+    }
+
+    #[test]
+    fn the_plan_is_pinned_while_the_turn_runs() {
+        use agent_client_protocol::schema::v1::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
+        let mut s = Session::new(1, "/tmp".into());
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("hi"), false);
+        let plan = |status| SessionUpdate::Plan(Plan::new(vec![PlanEntry::new("step", PlanEntryPriority::Medium, status)]));
+        s.apply(SessionEvent::Update(plan(PlanEntryStatus::InProgress)));
+        let pinned = s.pinned_plan().expect("pinned while running");
+        s.apply(SessionEvent::Update(plan(PlanEntryStatus::Completed)));
+        assert_eq!(s.pinned_plan(), Some(pinned), "updated in place");
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert_eq!(s.pinned_plan(), None, "back in the transcript");
+        assert!(matches!(s.entries[pinned], Entry::Plan(_)));
     }
 
     #[test]

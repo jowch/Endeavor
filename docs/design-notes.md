@@ -71,10 +71,12 @@ text, so it doesn't fit edits that already landed.
   falls back to another mode). Wired (2026-09-25): the session keeps modes,
   config, usage and commands; ⇧⇥ cycles through the agent's modes (a plain
   label in the chat toolbar until the spec's composer toolbar).
-- Open: mapping the spec's Plan / Ask to run / Auto onto these. Claude's modes
-  govern its own tools (files, shell); notebook runs are gated by our hook
-  (runtime step 5 moves that into the runtime). Likely Plan → `plan`, Ask to run
-  → `default`/`acceptEdits` + our gate asking, Auto → `auto` + our gate allowing.
+- **Mapping (decided 2026-09-25):** Plan → the agent's `plan`; Ask to run and
+  Auto → the agent's `auto`, with our run gate asking or not
+  (`run_without_asking`). ⇧⇥ cycles Ask to run → Auto → Plan. Claude's Manual
+  mode asks before every MCP tool, reads included, so it isn't one of ours.
+  The plan card's Start / Start in Auto both pick the adapter's
+  `exit-plan-auto` and set the gate.
 - Claude Code's plan mode restricts its own write tools, but notebook edits go
   through our MCP tools, so the runtime must enforce read-only too: in Plan, the
   runtime refuses edits and runs (runtime step 5). Same for Ask to run vs Auto:

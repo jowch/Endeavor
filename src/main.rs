@@ -120,6 +120,41 @@ fn sidebar_toggle(cx: &mut Context<Workspace>) -> impl IntoElement {
         )
 }
 
+/// The composer's context ring: a 14px circle filled clockwise by the share of
+/// the context window used; orange once it's nearly full.
+fn context_ring(fraction: f32) -> impl IntoElement {
+    const SIZE: f32 = 14.;
+    const WIDTH: f32 = 2.;
+    let fraction = fraction.clamp(0., 1.);
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let center = bounds.center();
+            let r = px((SIZE - WIDTH) / 2.);
+            // ponytail: arcs as 48-segment polylines; arc_to if it ever looks faceted.
+            let arc = |to: f32| {
+                let mut path = PathBuilder::stroke(px(WIDTH));
+                let steps = ((48. * to).ceil() as usize).max(1);
+                for i in 0..=steps {
+                    let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * to * i as f32 / steps as f32;
+                    let point = point(center.x + r * angle.cos(), center.y + r * angle.sin());
+                    if i == 0 { path.move_to(point) } else { path.line_to(point) }
+                }
+                path.build().ok()
+            };
+            if let Some(track) = arc(1.) {
+                window.paint_path(track, theme::border());
+            }
+            if fraction > 0.
+                && let Some(used) = arc(fraction)
+            {
+                window.paint_path(used, if fraction >= 0.8 { theme::accent_text() } else { theme::text_secondary() });
+            }
+        },
+    )
+    .size(px(SIZE))
+}
+
 /// A 24px composer-toolbar button.
 fn tool_button(id: &'static str) -> Stateful<Div> {
     div()
@@ -1681,6 +1716,7 @@ impl Workspace {
                     .relative()
                     .children(self.picker.and_then(|id| self.render_picker(session, id, cx)))
                     .children(self.render_commands(session, cx))
+                    .children(session::render_pinned_plan(session, cx))
                     .children(session::render_approval(session, cx))
                     .child(session::render_queue(session, cx))
                     // One-line box: Enter sends; the glyph becomes Stop while Claude works.
@@ -1732,22 +1768,9 @@ impl Workspace {
                             .children(session.mode_name().map(|name| {
                                 tool_button("mode")
                                     .when(name.to_lowercase().contains("plan"), |d| d.text_color(theme::accent_text()))
-                                    .child(name.to_string())
+                                    .child(name)
                                     .on_click(cx.listener(|this, _, window, cx| this.cycle_mode(&CycleMode, window, cx)))
                             }))
-                            .when(session.run_without_asking, |d| {
-                                d.child(
-                                    tool_button("ask-again")
-                                        .text_color(theme::text_faint())
-                                        .child("runs without asking ✕")
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.with_session(key, cx, |s| {
-                                                s.run_without_asking = false;
-                                                s.note("Will ask before running code again.");
-                                            })
-                                        })),
-                                )
-                            })
                             .child(div().flex_1())
                             .children(["model", "effort"].map(|id| {
                                 session.config_label(id).map(|label| {
@@ -1762,7 +1785,12 @@ impl Workspace {
                                 })
                             }).into_iter().flatten())
                             .children(session.usage.filter(|(_, size)| *size > 0).map(|(used, size)| {
-                                div().px(px(5.)).text_color(theme::text_faint()).child(format!("{}%", used * 100 / size))
+                                let label = format!("{}% of context used", used * 100 / size);
+                                div()
+                                    .id("context")
+                                    .px(px(5.))
+                                    .child(context_ring(used as f32 / size as f32))
+                                    .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(label.clone()).build(window, cx))
                             })),
                     ),
             )
