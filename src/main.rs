@@ -310,6 +310,7 @@ impl Workspace {
                     let font = match request.uri().path() {
                         "/fonts/JuliaMono-Regular.ttf" => Some(theme::JULIA_MONO_REGULAR),
                         "/fonts/JuliaMono-Bold.ttf" => Some(theme::JULIA_MONO_BOLD),
+                        "/fonts/JuliaMono-RegularItalic.ttf" => Some(theme::JULIA_MONO_ITALIC),
                         _ => None,
                     };
                     let response = wry::http::Response::builder().header("Access-Control-Allow-Origin", "*");
@@ -1526,6 +1527,7 @@ impl Workspace {
                             .justify_center()
                             .rounded(px(4.))
                             .cursor_pointer()
+                            .text_size(px(16.))
                             .text_color(if self.settings_open { theme::text_primary() } else { theme::text_faint() })
                             .when(self.settings_open, |d| d.bg(theme::row_active()))
                             .hover(|s| s.text_color(theme::text_primary()))

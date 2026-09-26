@@ -8,7 +8,7 @@
 - ∇ ∈ ∉ ∝ from Noto Sans Math, thickened to Schibsted's stroke weight per weight. ℏ uses Schibsted's ħ.
 
 Schibsted's Latin letters, kerning and vertical metrics are unchanged. Weights: Regular, Medium, SemiBold.
-**JuliaMono** (Regular, Bold) is the code font, shipped unmodified from its official release.
+**JuliaMono** (Regular, Bold, and RegularItalic for Pluto's italic comments) is the code font, shipped unmodified from its official release (v0.63.2).
 
 Rebuild everything (downloads sources into `fonts/.cache/`, which git ignores):
     pip3 install -r fonts/requirements.txt

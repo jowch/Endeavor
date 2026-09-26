@@ -54,15 +54,20 @@ footer { display: none !important; }
 
 // The app's bundled JuliaMono (served by the app's endeavor: protocol), so code
 // renders offline. Declared after Pluto's CDN faces of the same family, so these
-// win for every character; Pluto's italic stays as is (the app has no italic).
-const juliaMono = [400, 700]
+// win for every character. Pluto declares only a regular-weight italic.
+const juliaMono = [
+  { file: "Regular", weight: 400, style: "normal" },
+  { file: "Bold", weight: 700, style: "normal" },
+  { file: "RegularItalic", weight: 400, style: "italic" },
+]
   .map(
-    (weight) => `
+    ({ file, weight, style }) => `
 @font-face {
   font-family: JuliaMono;
-  src: url("endeavor://localhost/fonts/JuliaMono-${weight === 400 ? "Regular" : "Bold"}.ttf") format("truetype");
+  src: url("endeavor://localhost/fonts/JuliaMono-${file}.ttf") format("truetype");
   font-display: swap;
   font-weight: ${weight};
+  font-style: ${style};
 }`,
   )
   .join("");

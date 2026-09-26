@@ -64,6 +64,8 @@ pub const SANS: &str = "Endeavor Sans";
 pub const MONO: &str = "JuliaMono";
 pub const JULIA_MONO_REGULAR: &[u8] = include_bytes!("../fonts/JuliaMono-Regular.ttf");
 pub const JULIA_MONO_BOLD: &[u8] = include_bytes!("../fonts/JuliaMono-Bold.ttf");
+/// Only for Pluto's page; the app sets no mono italic.
+pub const JULIA_MONO_ITALIC: &[u8] = include_bytes!("../fonts/JuliaMono-RegularItalic.ttf");
 
 pub fn load_fonts(cx: &mut App) {
     let fonts = [

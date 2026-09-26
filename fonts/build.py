@@ -109,7 +109,7 @@ def fetch_juliamono():
         url = f"https://github.com/cormullion/juliamono/releases/download/{JULIAMONO_TAG}/JuliaMono-ttf.tar.gz"
         urllib.request.urlretrieve(url, tgz)
     with tarfile.open(tgz) as tar:
-        for name in ("JuliaMono-Regular.ttf", "JuliaMono-Bold.ttf"):
+        for name in ("JuliaMono-Regular.ttf", "JuliaMono-Bold.ttf", "JuliaMono-RegularItalic.ttf"):
             (HERE / name).write_bytes(tar.extractfile(name).read())
         (HERE / "JuliaMono-LICENSE.txt").write_bytes(tar.extractfile("LICENSE").read())
     return TTFont(HERE / "JuliaMono-Regular.ttf")["name"].getDebugName(5).split(";")[0]
@@ -575,7 +575,7 @@ def build(args):
     lines = [f"{fam}: {c}" for fam, c in zip((BASE, GREEK, NU_FAMILY, MATH), copyrights)]
     (HERE / "OFL.txt").write_text("Endeavor Sans is built from:\n" + "\n".join(lines) + "\n\n" + body)
     version = fetch_juliamono()
-    log.append(f"JuliaMono {version}: JuliaMono-Regular.ttf, JuliaMono-Bold.ttf, JuliaMono-LICENSE.txt")
+    log.append(f"JuliaMono {version}: JuliaMono-Regular.ttf, JuliaMono-Bold.ttf, JuliaMono-RegularItalic.ttf, JuliaMono-LICENSE.txt")
     print("\n".join(log))
 
 

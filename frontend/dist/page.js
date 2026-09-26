@@ -667,13 +667,18 @@
 }
 footer { display: none !important; }
 `;
-  var juliaMono = [400, 700].map(
-    (weight) => `
+  var juliaMono = [
+    { file: "Regular", weight: 400, style: "normal" },
+    { file: "Bold", weight: 700, style: "normal" },
+    { file: "RegularItalic", weight: 400, style: "italic" }
+  ].map(
+    ({ file, weight, style }) => `
 @font-face {
   font-family: JuliaMono;
-  src: url("endeavor://localhost/fonts/JuliaMono-${weight === 400 ? "Regular" : "Bold"}.ttf") format("truetype");
+  src: url("endeavor://localhost/fonts/JuliaMono-${file}.ttf") format("truetype");
   font-display: swap;
   font-weight: ${weight};
+  font-style: ${style};
 }`
   ).join("");
   function initTheme() {

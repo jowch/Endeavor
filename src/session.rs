@@ -1117,12 +1117,12 @@ fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool) -> Sta
         .when(!hint.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).opacity(0.6).child(hint.to_string())))
 }
 
-/// A card title with `backticked` spans in mono, a pixel smaller (as in body text).
+/// A card title with `backticked` spans in mono, a size smaller (as in body text).
 fn inline_code(text: &str) -> Div {
     div().flex().flex_wrap().children(text.split('`').enumerate().map(|(i, part)| {
         // Flex drops a part's edge spaces; non-breaking ones survive.
         let d = div().child(part.replace(' ', "\u{a0}"));
-        if i % 2 == 1 { d.font_family(theme::MONO).font_weight(FontWeight::NORMAL).text_size(theme::size_subhead() - px(1.)) } else { d }
+        if i % 2 == 1 { d.font_family(theme::MONO).font_weight(FontWeight::NORMAL).text_size(theme::size_body()) } else { d }
     }))
 }
 
