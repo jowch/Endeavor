@@ -256,7 +256,7 @@ impl Workspace {
             .past
             .values()
             .flatten()
-            .filter(|info| self.ours.contains(&info.session_id.to_string()))
+            .filter(|info| self.ours.contains(&info.session_id.to_string()) && !self.archived.contains(&info.session_id.to_string()))
             .filter(|info| !self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id)))
             .map(|info| (info.updated_at.as_deref().and_then(when::parse_iso8601).unwrap_or(SystemTime::UNIX_EPOCH), info))
             .collect();
@@ -618,7 +618,7 @@ impl Workspace {
 const TURTLE_R: f32 = 22.;
 
 /// A chip-menu row: a ✓ column, then the caller's icon and text.
-fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool) -> Stateful<Div> {
+pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -638,16 +638,18 @@ fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
 }
 
 #[derive(Clone, Copy)]
-enum Glyph {
+pub(crate) enum Glyph {
     Laptop,
     Folder,
     File,
     Chevron,
     Search,
+    Funnel,
+    Archive,
 }
 
 /// A 12px line icon (the app ships no icon set).
-fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
+pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
     const SIZE: f32 = 12.;
     canvas(
         |_, _, _| (),
@@ -678,6 +680,12 @@ fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
                     }).collect();
                     polyline(&circle);
                     polyline(&[(7.6, 7.6), (11., 11.)]);
+                }
+                Glyph::Funnel => polyline(&[(1.5, 2.), (10.5, 2.), (7., 6.5), (7., 10.5), (5., 9.5), (5., 6.5), (1.5, 2.)]),
+                Glyph::Archive => {
+                    polyline(&[(1., 2.), (11., 2.), (11., 4.5), (1., 4.5), (1., 2.)]);
+                    polyline(&[(2., 4.5), (2., 10.5), (10., 10.5), (10., 4.5)]);
+                    polyline(&[(4.5, 6.5), (7.5, 6.5)]);
                 }
             }
             if let Ok(path) = path.build() {
