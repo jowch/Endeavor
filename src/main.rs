@@ -15,6 +15,8 @@ mod celldiff;
 mod gate;
 mod install;
 mod logs;
+mod new_session;
+mod notebook_files;
 mod outbox;
 mod pluto;
 mod runtime;
@@ -23,6 +25,7 @@ mod settings;
 mod splash;
 mod theme;
 mod turtle;
+mod when;
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
@@ -35,6 +38,7 @@ use gpui_component::radio::Radio;
 use gpui_component::{Root, Sizable, Theme, ThemeConfig, ThemeMode};
 use gpui_wry::WebView;
 use outbox::Queued;
+use new_session::{Draft, NotebookChoice};
 use raw_window_handle::HasWindowHandle;
 use runtime::Runtime;
 use session::{Effect, Session, folder_name};
@@ -293,8 +297,8 @@ pub struct Workspace {
     /// The session in the chat pane; None shows the new-session screen.
     active: Option<u64>,
     next_key: u64,
-    /// New-session screen: the chosen working folder.
-    new_cwd: Option<PathBuf>,
+    /// The new-session screen's choices.
+    draft: Draft,
     /// Working folders, most recent first (persisted).
     recent: Vec<PathBuf>,
     /// Past sessions per folder, from the agent's history.
@@ -304,6 +308,9 @@ pub struct Workspace {
     ours: HashSet<String>,
     /// Session names the user gave, by session id (persisted).
     titles: HashMap<String, String>,
+    /// Each session's notebook file, by session id (persisted), for reopening it
+    /// with the session: one the app opened isn't in the agent's history.
+    session_notebooks: HashMap<String, String>,
     /// The session being renamed, and its name box.
     renaming: Option<(Row, Entity<InputState>)>,
     row_menu: Option<RowMenu>,
@@ -415,7 +422,7 @@ impl Workspace {
                     return;
                 }
                 if this.active.is_some() {
-                    this.submit(input, *secondary, window, cx);
+                    this.submit(*secondary, window, cx);
                 } else {
                     this.start_session(window, cx);
                 }
@@ -444,21 +451,20 @@ impl Workspace {
         .detach();
 
         let (agent_tx, agent_rx) = futures::channel::mpsc::unbounded();
-        let mut recent = load_recent();
-        if recent.is_empty() {
-            recent.extend(std::env::current_dir().ok());
-        }
+        let recent = load_recent();
+        let draft = Draft::new(new_session::default_folder(&recent), window, cx);
         let mut this = Self {
             webview,
             input,
             sessions: Vec::new(),
             active: None,
             next_key: 1,
-            new_cwd: recent.first().cloned(),
+            draft,
             recent,
             past: HashMap::new(),
             ours: load_json("sessions.json"),
             titles: load_json("titles.json"),
+            session_notebooks: load_json("notebooks.json"),
             renaming: None,
             row_menu: None,
             expanded: HashSet::new(),
@@ -486,12 +492,9 @@ impl Workspace {
             died_tx,
         };
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
-        // The webview is a native view over the window; hide it behind the setup screen.
-        if this.setup.is_some() {
-            let _ = this.webview.read(cx).raw().set_visible(false);
-        }
         // Julia boots while the user picks a folder on the new-session screen.
         this.boot(None, cx);
+        this.scan_notebooks(cx);
         this
     }
 
@@ -536,29 +539,12 @@ impl Workspace {
         .detach();
     }
 
-    fn choose_folder(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Choose folder".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(mut paths))) = picked.await {
-                if let Some(path) = paths.pop() {
-                    let _ = this.update(cx, |this, cx| {
-                        this.new_cwd = Some(path);
-                        cx.notify();
-                    });
-                }
-            }
-        })
-        .detach();
-    }
-
-    /// Start a session in the chosen folder, with the input's text (if any) as its first message.
+    /// Start a session with the new-session screen's choices, and the input's
+    /// text (if any) as its first message. A chosen notebook opens in safe preview.
     fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(cwd) = self.new_cwd.clone() else { return };
+        self.close_popover(window, cx);
+        let cwd = self.draft.folder.clone();
+        let _ = std::fs::create_dir_all(&cwd);
         let key = self.next_key;
         self.next_key += 1;
         self.recent.retain(|p| p != &cwd);
@@ -570,14 +556,23 @@ impl Workspace {
         let _ = self.agent_tx.unbounded_send(Command::NewSession { key, cwd: cwd.clone() });
         let mut session = Session::new(key, cwd);
         session.run_without_asking = self.settings.run_without_asking;
+        let context = match &self.draft.notebook {
+            NotebookChoice::New => None,
+            NotebookChoice::Existing(path) => {
+                session.open_on_start(path.display().to_string());
+                Some(ContentBlock::Text(TextContent::new(format!(
+                    "[Endeavor] The user started this session on the Pluto notebook {}, which is open in the \
+                     notebook pane in safe preview (nothing has run). Unless they say otherwise, \"the notebook\" \
+                     means this one; list_notebooks gives its id.",
+                    path.display()
+                ))))
+            }
+        };
         self.sessions.push(session);
-        self.active = Some(key);
-        self.follow_folder();
-        let text = self.input.read(cx).value().trim().to_string();
-        if !text.is_empty() {
-            self.submit(&self.input.clone(), false, window, cx);
-        }
-        cx.notify();
+        self.draft.notebook = NotebookChoice::New;
+        self.draft.preview = None;
+        self.activate(key, cx);
+        self.send(key, context, false, window, cx);
     }
 
     /// Reopen a past session (or switch to it if it's already open).
@@ -590,7 +585,11 @@ impl Workspace {
         let named = self.titles.get(&info.session_id.to_string()).cloned();
         let title = named.clone().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into());
         let _ = self.agent_tx.unbounded_send(Command::LoadSession { key, id: info.session_id.clone(), cwd: info.cwd.clone() });
+        let notebook = self.session_notebooks.get(&info.session_id.to_string()).cloned();
         let mut session = Session::loading(key, info.session_id, info.cwd, title);
+        if let Some(path) = notebook {
+            session.open_on_start(path);
+        }
         session.named = named.is_some();
         session.run_without_asking = self.settings.run_without_asking;
         self.sessions.push(session);
@@ -640,6 +639,9 @@ impl Workspace {
         save_json("sessions.json", &self.ours);
         if self.titles.remove(&id.to_string()).is_some() {
             save_json("titles.json", &self.titles);
+        }
+        if self.session_notebooks.remove(&id.to_string()).is_some() {
+            save_json("notebooks.json", &self.session_notebooks);
         }
         cx.notify();
     }
@@ -761,8 +763,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Open a reopened session's notebook file in the current Pluto (reusing it if
-    /// it's already open) and point the session, and the pane if active, at it.
+    /// Open a session's notebook file in the current Pluto in safe preview (reusing
+    /// it if it's already open) and point the session, and the pane if active, at it.
     fn reopen_for_session(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
         let opened = cx.background_executor().spawn(async move {
@@ -770,7 +772,7 @@ impl Workspace {
             let open = listed.as_ref().and_then(|l| l.as_array()?.iter().find(|nb| nb["path"] == path.as_str()).cloned());
             let nb = match open {
                 Some(nb) => nb,
-                None => pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path })).ok()?,
+                None => pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path, "run_notebook": false })).ok()?,
             };
             nb["notebook_id"].as_str().map(str::to_owned)
         });
@@ -782,13 +784,19 @@ impl Workspace {
         .detach();
     }
 
-    /// Show a session; the notebook pane follows it to the notebook it last viewed.
+    /// Show a session; the notebook pane follows it to the notebook it last viewed,
+    /// or to Pluto's start page if it has none yet.
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         self.active = Some(key);
         self.settings_open = false;
         self.follow_folder();
-        if let Some(notebook) = self.active_session().and_then(|s| s.notebook.clone()) {
-            self.load_notebook(&notebook, cx);
+        match self.active_session().and_then(|s| s.notebook.clone()) {
+            Some(notebook) => self.load_notebook(&notebook, cx),
+            None => {
+                if let Some(url) = self.runtime.as_ref().map(|r| r.pluto_url.clone()) {
+                    self.webview.update(cx, |w, _| w.load_url(&url));
+                }
+            }
         }
         cx.notify();
     }
@@ -869,18 +877,27 @@ impl Workspace {
         Some(ContentBlock::Text(TextContent::new(text)))
     }
 
-    fn submit(&mut self, input: &Entity<TextareaState>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, now: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.active else { return };
-        let text = input.read(cx).value().trim().to_string();
+        if self.input.read(cx).value().trim().is_empty() {
+            return;
+        }
+        let context = self.viewing_context(cx);
+        self.send(key, context, now, window, cx);
+    }
+
+    /// Send the input's text (if any) to a session, after `context`.
+    fn send(&mut self, key: u64, context: Option<ContentBlock>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.input.read(cx).value().trim().to_string();
         if text.is_empty() {
             return;
         }
-        let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
+        let mut blocks: Vec<_> = context.into_iter().collect();
         blocks.push(ContentBlock::Text(TextContent::new(text.clone())));
         let Some(session) = self.session_mut(key) else { return };
         let effects = session.submit(Queued::new(text.clone(), Some(text), blocks), now);
         self.apply_effects(key, effects, cx);
-        input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.input.update(cx, |s, cx| s.set_value("", window, cx));
     }
 
     fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
@@ -1064,7 +1081,10 @@ impl Workspace {
         }
     }
 
-    fn interrupt(&mut self, _: &Interrupt, _: &mut Window, cx: &mut Context<Self>) {
+    fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft.popover.is_some() {
+            return self.close_popover(window, cx);
+        }
         let Some(key) = self.active else { return };
         // Esc denies a pending approval before it stops the turn.
         if let Some(s) = self.session_mut(key)
@@ -1118,6 +1138,7 @@ impl Workspace {
                 match result {
                     Ok(started) => {
                         let id = started.id.clone();
+                        let session_id = id.to_string();
                         if self.ours.insert(id.to_string()) {
                             save_json("sessions.json", &self.ours);
                         }
@@ -1140,6 +1161,12 @@ impl Workspace {
                             if offered.is_some() {
                                 effects.extend(session.set_config(id, value.clone().into()));
                             }
+                        }
+                        if let Some(Effect::ReopenNotebook(path)) = queued.first()
+                            && self.session_notebooks.get(&session_id) != Some(path)
+                        {
+                            self.session_notebooks.insert(session_id, path.clone());
+                            save_json("notebooks.json", &self.session_notebooks);
                         }
                         effects.extend(queued);
                         self.apply_effects(key, effects, cx);
@@ -1254,7 +1281,6 @@ impl Workspace {
         if self.setup.is_some() && self.agent_ready && self.signed_in != Some(false) {
             self.setup = None;
             Setup::finish();
-            let _ = self.webview.read(cx).raw().set_visible(true);
             cx.notify();
         }
     }
@@ -1724,6 +1750,7 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active = None;
                         this.settings_open = false;
+                        this.scan_notebooks(cx);
                         cx.notify();
                     })),
             )
@@ -1761,70 +1788,6 @@ impl Workspace {
                             .child("⚙")
                             .on_click(cx.listener(|this, _, window, cx| this.open_settings(&OpenSettings, window, cx))),
                     ),
-            )
-    }
-
-    fn render_new_session(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = theme::text_muted();
-        let folder = self.new_cwd.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Choose a folder…".into());
-        let recent: Vec<_> = self
-            .recent
-            .iter()
-            .enumerate()
-            .map(|(i, path)| {
-                let path = path.clone();
-                div()
-                    .id(("recent", i))
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(muted)
-                    .when(self.new_cwd.as_ref() == Some(&path), |d| d.text_color(theme::text_primary()).bg(theme::row_active()))
-                    .child(format!("{}  ·  {}", folder_name(&path), path.display()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.new_cwd = Some(path.clone());
-                        cx.notify();
-                    }))
-            })
-            .collect();
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_4()
-            .child(div().text_color(muted).child("Working folder: where Claude works, whose CLAUDE.md applies, and where new notebooks go."))
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(div().flex_1().p_1().rounded_sm().bg(theme::bg_card()).font_family(theme::MONO).text_size(theme::size_code()).overflow_hidden().child(folder))
-                    .child(
-                        div()
-                            .id("choose-folder")
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .bg(theme::bg_raised())
-                            .child("Choose…")
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_folder(cx))),
-                    ),
-            )
-            .when(!recent.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).text_color(muted).child("Recent")).children(recent))
-            .child(div().flex_1())
-            .child(div().text_color(muted).child("First message (optional)"))
-            .child(Textarea::new(&self.input).text_size(theme::size_body()))
-            .child(
-                div()
-                    .id("start-session")
-                    .px_3()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(if self.new_cwd.is_some() { theme::accent() } else { theme::bg_raised() })
-                    .child("Start session  ↩")
-                    .on_click(cx.listener(|this, _, window, cx| this.start_session(window, cx))),
             )
     }
 
@@ -2068,6 +2031,12 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The web view is a native view over the window: hidden behind the setup
+        // screen, and on the new-session screen, whose pane is drawn natively.
+        let show_webview = self.setup.is_none() && self.active.is_some();
+        if self.webview.read(cx).visible() != show_webview {
+            self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
+        }
         if let Some(setup) = &self.setup {
             let sign_in = self.render_sign_in(cx);
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
@@ -2075,7 +2044,11 @@ impl Render for Workspace {
         }
         let active = self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key));
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
-        let placeholder = if working { "Queue a message, or ⌘⏎ to steer" } else { "Type / for commands" };
+        let placeholder = match active {
+            None => "What do you want to work on?",
+            Some(_) if working => "Queue a message, or ⌘⏎ to steer",
+            Some(_) => "Type / for commands",
+        };
         if self.placeholder != placeholder {
             self.placeholder = placeholder;
             self.input.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
@@ -2100,8 +2073,14 @@ impl Render for Workspace {
         let notebook_file = self.active_session().and_then(|s| s.notebook.as_ref()).and_then(|id| {
             self.last_notebooks.iter().find(|(nid, _)| nid == id).map(|(_, path)| folder_name(Path::new(path)))
         });
-        let notebook_header = column_header("notebook-header")
-            .children(notebook_file.map(|f| div().font_family(theme::MONO).text_size(theme::size_meta()).text_color(theme::text_muted()).child(f)));
+        let notebook_header = column_header("notebook-header").map(|d| match active {
+            None => d.child(self.draft_pane_header()),
+            Some(_) => d.children(notebook_file.map(|f| div().font_family(theme::MONO).text_size(theme::size_meta()).text_color(theme::text_muted()).child(f))),
+        });
+        let notebook = match active {
+            None => self.render_draft_pane(),
+            Some(_) => self.webview.clone().into_any_element(),
+        };
         div()
             .key_context("Workspace")
             .on_action(cx.listener(Self::interrupt))
@@ -2144,8 +2123,19 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .child(notebook_header)
-                    .child(div().flex_1().min_h_0().child(self.webview.clone())),
+                    .child(div().flex_1().min_h_0().child(notebook)),
             )
+            // A click outside a chip's menu only closes it.
+            .when(self.draft.popover.is_some() && active.is_none(), |d| {
+                d.child(
+                    div()
+                        .id("chip-menu-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_popover(window, cx))),
+                )
+            })
             // A click outside the row menu only closes it, as with a native menu.
             .when(self.row_menu.is_some(), |d| {
                 d.child(

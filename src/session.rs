@@ -117,7 +117,8 @@ pub struct Session {
     pub plan_folded: bool,
     /// Reopening a past session: its history is replaying.
     replaying: bool,
-    /// Notebook file the replayed history last opened, reopened once loading ends.
+    /// Notebook file to open once the agent session is up: the one the replayed
+    /// history last opened, or the one picked on the new-session screen.
     replayed_path: Option<String>,
     /// Starting or reopening failed; the session can't take messages.
     pub failed: Option<Failure>,
@@ -359,6 +360,12 @@ impl Session {
         let from = from.min(old);
         self.list.splice(from..old, self.entries.len() - from);
         self.list_len.set(self.entries.len());
+    }
+
+    /// Open this notebook file in the notebook pane once the agent session is up
+    /// (Julia is running by then).
+    pub fn open_on_start(&mut self, path: String) {
+        self.replayed_path = Some(path);
     }
 
     /// The agent created this session: send whatever was queued meanwhile.

@@ -1,0 +1,115 @@
+//! Times as the new-session screen shows them ("2 h ago", "yesterday", "Aug 12").
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// An ISO 8601 timestamp (`2026-09-26T14:03:11.123Z`, or with a `+02:00` offset).
+pub fn parse_iso8601(text: &str) -> Option<SystemTime> {
+    let (date, time) = text.split_once('T')?;
+    let mut ymd = date.splitn(3, '-').map(|p| p.parse::<i64>().ok());
+    let (y, m, d) = (ymd.next()??, ymd.next()??, ymd.next()??);
+    let (clock, offset) = match time.find(['Z', '+', '-']) {
+        Some(i) => (&time[..i], &time[i..]),
+        None => (time, "Z"),
+    };
+    let mut hms = clock.splitn(3, ':');
+    let h: i64 = hms.next()?.parse().ok()?;
+    let min: i64 = hms.next()?.parse().ok()?;
+    let s: f64 = hms.next().unwrap_or("0").parse().ok()?;
+    let offset_secs = match offset {
+        "Z" => 0,
+        o => {
+            let sign = if o.starts_with('-') { -1 } else { 1 };
+            let (oh, om) = o[1..].split_once(':').unwrap_or((&o[1..], "0"));
+            sign * (oh.parse::<i64>().ok()? * 3600 + om.parse::<i64>().ok()? * 60)
+        }
+    };
+    let secs = days_from_civil(y, m, d) * 86400 + h * 3600 + min * 60 + s as i64 - offset_secs;
+    Some(UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).ok()?))
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z: i64) -> (i64, i64) {
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (m, d)
+}
+
+/// How long ago `then` was, in a few words, with days in local time.
+pub fn ago(then: SystemTime) -> String {
+    ago_at(then, SystemTime::now(), local_offset())
+}
+
+/// The local time zone's offset from UTC, in seconds.
+fn local_offset() -> i64 {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() { 0 } else { tm.tm_gmtoff as i64 }
+}
+
+fn ago_at(then: SystemTime, now: SystemTime, offset: i64) -> String {
+    let secs = now.duration_since(then).unwrap_or_default().as_secs() as i64;
+    let then_secs = then.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 + offset;
+    let now_secs = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 + offset;
+    let days = now_secs.div_euclid(86400) - then_secs.div_euclid(86400);
+    match secs {
+        s if s < 60 => "just now".into(),
+        s if s < 3600 => format!("{} min ago", s / 60),
+        s if days == 0 => format!("{} h ago", s / 3600),
+        _ if days == 1 => "yesterday".into(),
+        _ if days < 7 => format!("{days} days ago"),
+        _ if days < 14 => "last week".into(),
+        _ => {
+            const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            let (m, d) = civil_from_days(then_secs.div_euclid(86400));
+            format!("{} {d}", MONTHS[(m - 1) as usize])
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(text: &str) -> SystemTime {
+        parse_iso8601(text).unwrap()
+    }
+
+    #[test]
+    fn parses_utc_and_offsets() {
+        assert_eq!(at("1970-01-02T00:00:00Z"), UNIX_EPOCH + Duration::from_secs(86400));
+        assert_eq!(at("2026-09-26T12:00:00.500Z"), at("2026-09-26T14:00:00+02:00"));
+        assert_eq!(at("2026-09-26T12:00:00Z").duration_since(UNIX_EPOCH).unwrap().as_secs(), 1790424000);
+        assert_eq!(parse_iso8601("yesterday"), None);
+    }
+
+    #[test]
+    fn says_how_long_ago() {
+        let now = at("2026-09-26T15:00:00Z");
+        let ago = |then| ago_at(then, now, 0);
+        assert_eq!(ago(at("2026-09-26T14:59:30Z")), "just now");
+        assert_eq!(ago(at("2026-09-26T14:10:00Z")), "50 min ago");
+        assert_eq!(ago(at("2026-09-26T13:00:00Z")), "2 h ago");
+        assert_eq!(ago(at("2026-09-25T23:00:00Z")), "yesterday");
+        assert_eq!(ago(at("2026-09-22T09:00:00Z")), "4 days ago");
+        assert_eq!(ago(at("2026-09-17T09:00:00Z")), "last week");
+        assert_eq!(ago(at("2026-08-12T09:00:00Z")), "Aug 12");
+        // 00:30 in UTC+2 is already the next day there.
+        assert_eq!(ago_at(at("2026-09-25T20:00:00Z"), at("2026-09-25T22:30:00Z"), 7200), "yesterday");
+        assert_eq!(ago_at(at("2026-09-25T20:00:00Z"), at("2026-09-25T22:30:00Z"), 0), "2 h ago");
+    }
+}
