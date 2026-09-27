@@ -198,7 +198,9 @@ export function initAnnotate(): void {
   const swallow = (e: Event) => {
     const target = e.target as Element;
     if (!active() || bar.contains(target) || hint.contains(target)) return;
-    e.preventDefault();
+    // Cancelling pointerdown would also cancel the mousedown/mousemove/mouseup
+    // that drawing a box listens for.
+    if (e.type !== "pointerdown") e.preventDefault();
     e.stopPropagation();
     if (e.type === "mousedown" && (e as MouseEvent).button === 0) {
       const m = e as MouseEvent;

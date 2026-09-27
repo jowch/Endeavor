@@ -217,7 +217,7 @@
     const swallow = (e) => {
       const target = e.target;
       if (!active() || bar.contains(target) || hint.contains(target)) return;
-      e.preventDefault();
+      if (e.type !== "pointerdown") e.preventDefault();
       e.stopPropagation();
       if (e.type === "mousedown" && e.button === 0) {
         const m = e;
