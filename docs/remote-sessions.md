@@ -2,7 +2,7 @@
 
 Design for running notebooks on a remote machine (a lab server, a cloud VM, or
 an HPC cluster) from the Endeavor app on macOS, Linux, or Windows. Plain
-servers (the process launcher) are built on macOS; clusters (Slurm) and the
+servers (the process launcher) and clusters (Slurm) are built on macOS; the
 Linux and Windows clients are not yet. Settled work moves to
 [roadmap.md](roadmap.md) once scheduled.
 
@@ -123,14 +123,18 @@ notebooks stop after 48 hours idle (a setting), even while the app is open.
 ## Launchers
 
 The state file records how the runtime was launched. Connect, reconnect, and
-stop each switch on this one value instead of scattered checks.
+stop each switch on this one value instead of scattered checks. Each host
+entry has its own state folder: `~/.cache/endeavor/state/` for a server,
+`~/.cache/endeavor/cluster-<id>/` for a cluster, so one machine can be both a
+server entry and a cluster entry without the two sharing a runtime. The app
+sends the launcher and the folder's name in the bootstrap's preamble.
 
 ```
-~/.cache/endeavor/runtime.json   (mode 0600)
+<state folder>/runtime.json   (mode 0600)
 { "launcher": "process", "node": "labbox3", "pid": 81234,
-  "pluto_port": 40211, "mcp_port": 40212, "token": "…" }
-{ "launcher": "slurm", "job": "4812731", "node": "n2cn0216",
-  "pluto_port": 40211, "mcp_port": 40212, "token": "…" }
+  "pluto_port": 40211, "mcp_port": 40212, "token": "…", "pluto_secret": "…" }
+{ "launcher": "slurm", "job": "4812731", "node": "n2cn0216", "pid": 5120,
+  "pluto_port": 40211, "mcp_port": 40212, "token": "…", "pluto_secret": "…" }
 ```
 
 **Process (plain server).** The helper starts `boot.jl` with `setsid`/`nohup`.
@@ -141,30 +145,69 @@ records the node name. If the host name rotates between machines, the helper
 reports that the runtime is on another node and does not start a second one.
 
 **Slurm (cluster).** HPC centers do not want long-lived notebook servers on
-login nodes (see Prior art). The helper on the login node only relays, which
-is light and short-lived. The runtime starts with `sbatch` using settings the
-user chooses per host. A good first version is letting users paste the
-`salloc` line they already use, since novices rarely know partition names.
+login nodes (see Prior art). The helper on the login node
+(`connect --launcher slurm`, `crates/endeavor-remote/src/slurm.rs`) only
+submits, waits and relays; Julia runs in a batch job.
 
-- The login-node helper reaches the runtime with an inner
-  `ssh <compute node> endeavor-remote …` inside the cluster. There is still one
-  outer sign-in, and the runtime stays on the compute node's loopback. Compute
-  nodes usually accept SSH only while the user has a job there
-  (`pam_slurm_adopt`), which holds here.
-- Reconnect works from any login node, because `squeue` finds the job by ID.
-- Persistence lasts until the job's time limit. The app shows "waiting for a
-  node" while the job is queued and warns before the time limit, noting that
-  Pluto has already saved the notebook file.
-- Put the Julia depot on scratch and not in home. Home quotas are small, and
-  Pluto's per-notebook package handling is very slow on some cluster
-  filesystems.
+- **Settings.** A cluster entry has an SSH host, how to get Julia, an optional
+  account, default resources (partition, CPUs, memory, time limit), where to
+  keep Julia packages, and the idle stop. Test connection checks that `sinfo`
+  and `sbatch` exist and lists the partitions with each one's time limit and
+  node size, which fill the partition select. The new-session screen has a
+  resources chip ("8 CPUs · 32 GB · 8 h") whose popover sets one session's
+  job: presets (Small 2 CPUs · 8 GB · 2 h, Medium 8 · 32 · 8 h, Large 32 ·
+  128 · 24 h), partition, CPUs, memory and time limit, all kept within the
+  partition's limits, or a pasted `salloc` line. From a pasted line Endeavor
+  reads `-p/--partition`, `-c/--cpus-per-task`, `--mem`, `-t/--time`,
+  `-A/--account` and `--gres`, drops interactive-only flags (`--pty`), and
+  passes the other flags to `sbatch` as they are. Each session's resources are
+  saved with it (`resources.json`), for the job that runs it after a reopen.
+- **Submit.** On `StartRuntime { job }` the helper finds Julia on the login
+  node (the shared filesystem makes it the compute node's too), writes
+  `job.sh` and runs `sbatch --parsable --job-name=endeavor` with the
+  resources, the account and `--output` to the state folder's `runtime.log`.
+  The script is `endeavor-remote node-start`, which picks free ports on the
+  compute node and becomes Julia running `boot.jl`, which writes
+  `runtime.json` with the node and `SLURM_JOB_ID`. `job.json` records the
+  job until its runtime is up, so a reconnect waits for the same job instead
+  of submitting another. Packages go to `$SCRATCH/endeavor/depot` when the
+  cluster sets `$SCRATCH` (home quotas are small, and Pluto's per-notebook
+  package handling is slow on some cluster filesystems), else
+  `~/.cache/endeavor/depot`, unless the cluster entry names a folder.
+- **Queued.** The helper polls `squeue` every 2 seconds and tells the app the
+  job's state and reason. The starting pane shows "Submitted job N (8 CPUs ·
+  32 GB · 8 h)", then "Waiting for a node" with the time waited and the
+  reason in plain words ("other jobs are ahead in the queue", "waiting for a
+  node with enough free CPUs and memory"), and a Cancel link, which runs
+  `scancel`. Leaving the app leaves the job queued.
+- **Relay.** Once `runtime.json` names the job, the login helper starts
+  `endeavor-remote relay` on the job's node and passes the app's streams
+  through its stdin and stdout; the runtime stays on the node's loopback.
+  It tries `srun --jobid=<job> --overlap --unbuffered` first: it needs no SSH
+  between nodes and works wherever the user can run job steps (Slurm 20.11
+  and later). If that fails (older Slurm, steps not allowed), it uses
+  `ssh <node>`, which works on clusters with `pam_slurm_adopt`. The starting
+  log says which route it took and why. Without `--unbuffered`, `srun` holds
+  a step's output until a newline, which stalls the binary frames.
+- **Reconnect** works from any login node: `squeue` finds the job by the ID in
+  `runtime.json`. The state folder's lock records the host with the pid, since
+  a pid means nothing on another login node.
+- **Time limit.** The notebook header shows the job's end ("Job ends 18:40",
+  from `squeue`'s time left) and turns orange in the last 15 minutes; then
+  each session on the cluster gets a notice in the chat that the notebook file
+  is already saved and Start Julia runs it in a new job. The idle stop still
+  applies inside the job.
+- **Stop and end.** Stop asks the runtime to shut down through the relay,
+  then runs `scancel`. When the job ends on its own, the app says why, from
+  `sacct` (or `squeue`, or the job's log): "Julia on hoffman2 stopped. Its
+  Slurm job reached its time limit." Likewise for preemption, cancellation,
+  running out of memory, a failed node.
 
-If Slurm is present (`sinfo` exists) and the host isn't set to cluster mode,
-the app warns before starting a process runtime on what is probably a login
-node.
-
-Build the process launcher first and Slurm second, but keep both in the state
-file format from the start.
+If Slurm is present (`sinfo` exists) on a host set up as a plain server,
+starting a session there asks first: "This looks like a cluster's login node.
+Clusters stop long-running programs here. Add it as a cluster instead?", with
+Add as cluster (a cluster entry from the same SSH host) or Start anyway (once
+per launch).
 
 ## Claude's tools on a remote session
 
@@ -179,7 +222,9 @@ wrong machine. In remote sessions:
   carry `X-Endeavor-Host: <server name>`, which the app sends for server
   sessions, and refuses them otherwise. `run_shell` goes through the same
   execution gate as running cells; its card says "Run a command on
-  <server>?" with the command and folder.
+  <server>?" with the command and folder. It runs in the session's folder
+  unless Claude gives another; the app tells the runtime each session's
+  folder when the host is ready.
 - The first message tells Claude which server and folder it works in.
 
 The skills already route notebook work through MCP and tell the agent not to
@@ -250,7 +295,6 @@ has no Kerberos sign-in, which some clusters use.
 
 - Does current Windows 11 OpenSSH honor `SSH_ASKPASS_REQUIRE=force` with a
   Duo account? Test before choosing between system `ssh` and `russh`.
-- Slurm settings: pasted `salloc` line, a small form, or both?
 - Idle timeout length for process runtimes, and where the user sees and
   changes it.
 - Should local runtimes also survive the app quitting?
