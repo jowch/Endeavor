@@ -33,6 +33,7 @@ _Listed 2026-09-25._
 - [ ] Session row states: active, working dot, needs-approval dot — improvised
 - [x] Row actions: inline rename, hover ×, "Delete?" confirm — improvised. The hover × is too easy to hit by accident; replace it with a ⋮ button that opens a context menu, also on right-click, like Claude desktop. The menu is where session actions live as they're added; candidates: Rename, Pin, Reveal folder in Finder, Open notebook, Resume in Claude Code, Export transcript, Delete… (last, separated)
 - [ ] "Show N more / Show fewer", folder headings, status line ("Claude connected."), settings gear — improvised
+- [ ] Long sidebar status lines overflow into the chat pane and can cover the settings gear — bug
 - [ ] Empty sidebar (no sessions yet) — missing
 - [x] Session ⋮ menu keyboard shortcuts: while the menu is open, single keys pick an item (R Rename, P Pin, F Reveal folder, A Archive, ⌫ Delete…), shown on the right of each row — missing. Built with C for Close; P waits for Pin
 - [x] Archive: an Archive item in the session ⋮ menu and a sidebar view filter (Active / All, including archived; archived rows dimmed) — missing
