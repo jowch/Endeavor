@@ -2682,8 +2682,9 @@ impl Render for Workspace {
                         })),
                 )
             })
-            .children(self.render_server_dialog(cx))
-            .children(self.render_askpass(cx))
+            // Deferred so they paint, and take clicks, above everything else.
+            .children(self.render_server_dialog(cx).map(|d| deferred(d).with_priority(3)))
+            .children(self.render_askpass(cx).map(|d| deferred(d).with_priority(5)))
             // A click outside the menu only closes it, as with a native menu.
             .when(self.menu.is_some(), |d| {
                 d.child(

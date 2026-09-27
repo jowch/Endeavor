@@ -109,13 +109,13 @@ impl Server {
         }
     }
 
-    /// The helper's Julia arguments for this server.
+    /// The helper's Julia arguments for this server. A path to a julia binary
+    /// (which may hold spaces) is used as is; anything else is a shell line.
     pub fn julia_args(&self) -> [String; 2] {
+        let is_path = |j: &str| (j.starts_with('/') || j.starts_with("~/")) && j.rsplit('/').next().is_some_and(|name| name.starts_with("julia"));
         match self.julia.as_deref().map(str::trim).filter(|j| !j.is_empty()) {
             None => ["--julia".into(), "auto".into()],
-            Some(path) if (path.starts_with('/') || path.starts_with("~/")) && !path.contains(char::is_whitespace) => {
-                ["--julia".into(), path.into()]
-            }
+            Some(path) if is_path(path) => ["--julia".into(), path.into()],
             Some(line) => ["--julia-shell".into(), line.replace('\n', "; ")],
         }
     }
@@ -205,7 +205,9 @@ mod tests {
         assert_eq!(with(Some("  ")), ["--julia", "auto"]);
         assert_eq!(with(Some("/opt/julia/bin/julia")), ["--julia", "/opt/julia/bin/julia"]);
         assert_eq!(with(Some("~/julia-1.11/bin/julia")), ["--julia", "~/julia-1.11/bin/julia"]);
+        assert_eq!(with(Some("/Users/jc/Library/Application Support/julia/bin/julia")), ["--julia", "/Users/jc/Library/Application Support/julia/bin/julia"]);
         assert_eq!(with(Some("module load julia/1.11")), ["--julia-shell", "module load julia/1.11"]);
+        assert_eq!(with(Some("/opt/lmod/setup.sh && module load julia")), ["--julia-shell", "/opt/lmod/setup.sh && module load julia"]);
     }
 
     #[test]

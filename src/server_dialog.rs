@@ -27,7 +27,6 @@ pub struct ServerDialog {
     idle_menu: bool,
     /// `Host` entries from ~/.ssh/config.
     ssh_hosts: Vec<String>,
-    host_focused: bool,
     test: Option<TestRun>,
     confirm_remove: bool,
     error: Option<String>,
@@ -63,16 +62,12 @@ impl Workspace {
             let placeholder = placeholder.to_owned();
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value))
         };
-        let name = input(server.name.clone(), "lab-server", window, cx);
+        let name = input(server.name.clone(), "Same as the SSH host", window, cx);
         let host = input(if server.ssh_host.is_empty() { String::new() } else { server.ssh_target() }, "alias, or user@host", window, cx);
         let julia = input(server.julia.clone().unwrap_or_default(), "module load julia", window, cx);
-        let subscriptions = vec![cx.subscribe_in(&host, window, |this: &mut Workspace, _, event: &InputEvent, _, cx| {
-            if let Some(dialog) = &mut this.server_dialog {
-                match event {
-                    InputEvent::Focus => dialog.host_focused = true,
-                    InputEvent::Blur | InputEvent::PressEnter { .. } => dialog.host_focused = false,
-                    InputEvent::Change => dialog.host_focused = true,
-                }
+        // The suggestions follow what's typed.
+        let subscriptions = vec![cx.subscribe(&host, |_: &mut Workspace, _, event: &InputEvent, cx| {
+            if let InputEvent::Change = event {
                 cx.notify();
             }
         })];
@@ -85,7 +80,6 @@ impl Workspace {
             idle_stop: server.idle_stop,
             idle_menu: false,
             ssh_hosts: crate::hosts::ssh_config_hosts(),
-            host_focused: false,
             test: None,
             confirm_remove: false,
             error: None,
@@ -285,49 +279,35 @@ impl Workspace {
             .take(6)
             .cloned()
             .collect();
-        let host_field = div()
-            .relative()
-            .child(field(&dialog.host, true))
-            .when(dialog.host_focused && !suggestions.is_empty(), |d| {
-                d.child(
-                    div().absolute().top(px(32.)).left_0().right_0().child(
-                        deferred(
-                            div()
-                                .id("ssh-suggestions")
-                                .occlude()
-                                .p(px(4.))
-                                .flex()
-                                .flex_col()
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(theme::composer_edge())
-                                .bg(theme::bg_raised())
-                                .children(suggestions.into_iter().enumerate().map(|(i, host)| {
-                                    div()
-                                        .id(("ssh-suggestion", i))
-                                        .h(px(26.))
-                                        .px(px(8.))
-                                        .flex()
-                                        .items_center()
-                                        .rounded(px(4.))
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(theme::composer_edge()))
-                                        .font_family(theme::MONO)
-                                        .text_size(theme::size_code())
-                                        .child(host.clone())
-                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                                            cx.stop_propagation();
-                                            if let Some(dialog) = &mut this.server_dialog {
-                                                dialog.host_focused = false;
-                                                dialog.host.update(cx, |s, cx| s.set_value(host.clone(), window, cx));
-                                            }
-                                        }))
-                                })),
-                        )
-                        .with_priority(2),
-                    ),
-                )
-            });
+        let host_field = field(&dialog.host, true);
+        let suggestions = (!suggestions.is_empty()).then(|| {
+            div()
+                .pb(px(6.))
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(6.))
+                .text_size(theme::size_meta())
+                .text_color(theme::text_faint())
+                .child("From ~/.ssh/config:")
+                .children(suggestions.into_iter().enumerate().map(|(i, host)| {
+                    div()
+                        .id(("ssh-suggestion", i))
+                        .px(px(6.))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .bg(theme::bg_tag())
+                        .hover(|s| s.bg(theme::bg_raised()))
+                        .font_family(theme::MONO)
+                        .text_color(theme::text_secondary())
+                        .child(host.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(dialog) = &mut this.server_dialog {
+                                dialog.host.update(cx, |s, cx| s.set_value(host.clone(), window, cx));
+                            }
+                        }))
+                }))
+        });
         let idle_label = match dialog.idle_stop {
             None => format!("Same as Settings ({})", idle_name(self.settings.idle_stop)),
             Some(value) => idle_name(value).to_owned(),
@@ -370,7 +350,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .child(div().flex_1().text_size(theme::size_meta()).text_color(theme::text_secondary()).child(format!(
+                .child(div().flex_1().min_w_0().text_size(theme::size_meta()).text_color(theme::text_secondary()).child(format!(
                     "Remove {title}? Endeavor forgets it; anything running there keeps running."
                 )))
                 .child(button("cancel-remove", "Cancel", false).on_click(cx.listener(|this, _, _, cx| {
@@ -406,7 +386,6 @@ impl Workspace {
         };
         let card = div()
             .id("server-dialog")
-            .occlude()
             .w(px(520.))
             .flex()
             .flex_col()
@@ -438,10 +417,13 @@ impl Workspace {
                         "SSH host",
                         div().flex().gap(px(8.)).child(div().w(px(200.)).child(host_field)).child(
                             button("test-connection", if testing { "Stop test" } else { "Test connection" }, false)
+                                .w(px(124.))
+                                .justify_center()
                                 .on_click(cx.listener(|this, _, _, cx| this.test_server(cx))),
                         ),
                     ))
                     .child(hint("An alias from ~/.ssh/config, or user@host (add :port if it isn't 22). Endeavor uses the keys and settings there."))
+                    .children(suggestions)
                     .children(dialog.test.as_ref().map(render_test))
                     .child(row("How to get Julia", div().w(px(260.)).child(field(&dialog.julia, true))))
                     .child(hint(
@@ -490,7 +472,6 @@ impl Workspace {
         };
         let card = div()
             .id("askpass")
-            .occlude()
             .w(px(420.))
             .p(px(20.))
             .flex()
@@ -557,6 +538,7 @@ fn idle_name(value: IdleStop) -> &'static str {
 }
 
 /// A dimmed cover over the window, centering its child; clicks stay in it.
+/// Only the cover occludes: an occluding card keeps clicks from its text fields.
 fn modal_backdrop(id: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -571,6 +553,10 @@ fn modal_backdrop(id: &'static str) -> Stateful<Div> {
 }
 
 fn field(state: &Entity<InputState>, mono: bool) -> Div {
+    field_frame(mono).child(div().flex_1().child(Input::new(state).appearance(false).text_size(if mono { theme::size_code() } else { theme::size_body() })))
+}
+
+fn field_frame(mono: bool) -> Div {
     div()
         .h(px(28.))
         .px(px(8.))
@@ -581,7 +567,6 @@ fn field(state: &Entity<InputState>, mono: bool) -> Div {
         .border_color(theme::composer_edge())
         .bg(theme::bg_page())
         .when(mono, |d| d.font_family(theme::MONO))
-        .child(div().flex_1().child(Input::new(state).appearance(false).text_size(if mono { theme::size_code() } else { theme::size_body() })))
 }
 
 fn button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div> {
