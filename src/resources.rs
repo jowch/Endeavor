@@ -73,6 +73,14 @@ pub fn apply(r: &mut Resources, change: &Change, partitions: &[Partition]) {
     r.clip(find(r.partition.as_deref()));
 }
 
+/// Whether `r` is what picking preset `i` would give now: its size, capped to
+/// the partition's limits.
+fn is_preset(r: &Resources, i: usize, partitions: &[Partition]) -> bool {
+    let mut picked = r.clone();
+    apply(&mut picked, &Change::Preset(i), partitions);
+    (picked.cpus, picked.mem_gb, picked.minutes) == (r.cpus, r.mem_gb, r.minutes)
+}
+
 impl Workspace {
     fn resources_target(&mut self, target: Target) -> Option<(&mut Resources, Vec<Partition>, &mut bool)> {
         match target {
@@ -104,8 +112,8 @@ impl Workspace {
         let on = move |change: Change| move |this: &mut Workspace, _: &ClickEvent, _: &mut Window, cx: &mut Context<Workspace>| this.change_resources(target, change.clone(), cx);
         let mut rows = Vec::new();
         if presets {
-            let buttons = PRESETS.iter().enumerate().map(|(i, (name, cpus, mem, minutes))| {
-                let active = (r.cpus, r.mem_gb, r.minutes) == (*cpus, *mem, *minutes);
+            let buttons = PRESETS.iter().enumerate().map(|(i, (name, ..))| {
+                let active = is_preset(r, i, partitions);
                 div()
                     .id(("preset", i))
                     .role(Role::Button)
@@ -177,8 +185,18 @@ impl Workspace {
             ("Memory", Field::Mem, if r.mem_gb == 0 { "per CPU".into() } else { format!("{} GB", r.mem_gb) }),
             ("Time limit", Field::Time, duration_text(r.minutes)),
         ];
-        for (name, field, value) in steppers {
-            rows.push(row(name, stepper(field as usize + 10 * target as usize, value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))).into_any_element());
+        let steppers = steppers.map(|(name, field, value)| (name, stepper(field as usize + 10 * target as usize, value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))));
+        match target {
+            // The dialog has more to fit, so its three share one row.
+            Target::Dialog => rows.push(
+                div()
+                    .pt(px(4.))
+                    .flex()
+                    .gap(px(12.))
+                    .children(steppers.map(|(name, stepper)| div().flex_1().flex().flex_col().gap(px(4.)).child(label(name).pb_0()).child(stepper.w_full())))
+                    .into_any_element(),
+            ),
+            Target::Draft => rows.extend(steppers.map(|(name, stepper)| row(name, stepper).into_any_element())),
         }
         rows
     }
@@ -227,7 +245,7 @@ fn stepper(id: usize, value: String, minus: impl Fn(&ClickEvent, &mut Window, &m
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Field, apply};
+    use super::{Change, Field, apply, is_preset};
     use wire::slurm::{Partition, Resources};
 
     fn short() -> Partition {
@@ -253,5 +271,23 @@ mod tests {
         let mut r = Resources { minutes: 15, ..Resources::default() };
         apply(&mut r, &Change::Step(Field::Time, false), &[]);
         assert_eq!(r.minutes, 15, "nothing below the ladder");
+    }
+
+    #[test]
+    fn a_preset_capped_to_the_partition_stays_picked() {
+        let parts = [Partition { default: true, name: "shared".into(), max_minutes: Some(480), ..short() }, short()];
+        let highlighted = |r: &Resources| (0..3).filter(|&i| is_preset(r, i, &parts)).collect::<Vec<_>>();
+        let mut r = Resources::default();
+        apply(&mut r, &Change::Preset(0), &parts);
+        assert_eq!((r.cpus, r.mem_gb, r.minutes), (2, 7, 120), "Small's 8 GB is more than a node has");
+        assert_eq!(highlighted(&r), [0]);
+        apply(&mut r, &Change::Preset(1), &parts);
+        assert_eq!(highlighted(&r), [1]);
+        apply(&mut r, &Change::Partition(Some("short".into())), &parts);
+        assert_eq!((r.cpus, r.mem_gb, r.minutes), (8, 7, 60));
+        assert_eq!(highlighted(&r), [1], "still Medium, as short allows it");
+        apply(&mut r, &Change::Step(Field::Cpus, false), &parts);
+        assert!(highlighted(&r).is_empty(), "changed by hand");
+        assert!(is_preset(&Resources::preset(2), 2, &[]), "no partitions known: the preset as it is");
     }
 }

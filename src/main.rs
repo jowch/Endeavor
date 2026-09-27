@@ -13,6 +13,7 @@ mod annotate;
 mod celldiff;
 mod connection;
 mod gate;
+mod host_list;
 mod hosts;
 mod install;
 mod logs;
@@ -2135,7 +2136,10 @@ impl Workspace {
         let note = |text: String| div().pl_6().text_size(theme::size_meta()).text_color(muted).child(text);
         let own = s.julia.is_none();
         div()
+            .id("settings")
             .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap_2()
@@ -2154,6 +2158,8 @@ impl Workspace {
             .child(note(
                 "New sessions start as if you'd chosen \"Always this session\". Applies to new and reopened sessions.".into(),
             ))
+            .child(heading("Where notebooks run"))
+            .child(self.render_hosts(cx))
             .child(heading("Stop idle notebooks after"))
             .child(
                 div().flex().gap_4().children(IdleStop::ALL.map(|(value, label)| {
@@ -2597,7 +2603,7 @@ impl Render for Workspace {
                 )
             })
             // Deferred so they paint, and take clicks, above everything else.
-            .children(self.render_server_dialog(cx).map(|d| deferred(d).with_priority(3)))
+            .children(self.render_server_dialog(window, cx).map(|d| deferred(d).with_priority(3)))
             .children(self.render_askpass(cx).map(|d| deferred(d).with_priority(5)))
             .children(self.render_login_node_warning(cx).map(|d| deferred(d).with_priority(4)))
             // A click outside the menu only closes it, as with a native menu.

@@ -13,8 +13,10 @@ use futures::StreamExt;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+use wire::files::{Reply, Request, RuntimeState};
 use wire::slurm::JobRequest;
 
+use crate::host_list::HostState;
 use crate::hosts::HostId;
 use crate::pluto::{self, Bridge};
 use crate::remote::{self, Askpass, Cancel, Event};
@@ -54,6 +56,17 @@ pub struct Connection {
     pub job_request: Option<JobRequest>,
     /// Cancel was pressed while Julia started (a job waited in the queue).
     cancelling: bool,
+    /// Stop Julia once connected (Stop in Settings' host list).
+    stop_when_connected: bool,
+    /// Bumped by each check and stop, so an older check's answer is dropped.
+    check: u64,
+    /// A Stop is under way.
+    pub stopping: bool,
+    /// What the last check found running there, while connected without a
+    /// runtime; Err if the check failed.
+    pub found: Option<Result<RuntimeState, String>>,
+    /// On a cluster, the job Julia is starting in.
+    pub job: Option<String>,
     /// ssh may ask again (a reconnect inside it, a key's passphrase), so it lives as long as the connection.
     _askpass: Option<Askpass>,
     cancel: Arc<Cancel>,
@@ -155,6 +168,11 @@ impl Connection {
             start_when_connected: false,
             job_request: None,
             cancelling: false,
+            stop_when_connected: false,
+            check: 0,
+            stopping: false,
+            found: None,
+            job: None,
             _askpass: None,
             cancel: Arc::default(),
             steps,
@@ -274,12 +292,14 @@ impl Workspace {
         // A cluster restarted from its pane runs the shown session's resources.
         let shown = self.active_session().filter(|s| s.place.host == *host).and_then(|s| s.resources.clone());
         let Some(connection) = self.connections.get_mut(host) else { return };
-        if !matches!(connection.status, Status::Browsing | Status::Died(_)) {
+        if !matches!(connection.status, Status::Browsing | Status::Died(_)) || connection.stopping {
             return;
         }
         let Some(channel) = connection.channel.clone() else { return };
         connection.status = Status::Starting;
         connection.cancelling = false;
+        connection.found = None;
+        connection.job = None;
         connection.steps = match host {
             HostId::ThisMac => Steps::new("Starting Julia"),
             HostId::Server(_) => Steps { done: vec![format!("Connected to {}", self.hosts.name(host))], ..Steps::new("Finding Julia") },
@@ -365,6 +385,7 @@ impl Workspace {
                 connection.steps.advance(format!("Julia {version}"), if cluster { "Submitting a job" } else { "Starting Julia" });
             }
             Update::Event(Event::Submitted { job, summary }) => {
+                connection.job = Some(job.clone());
                 connection.steps.found_julia = true;
                 connection.steps.advance(format!("Submitted job {job} ({summary})"), "Waiting for a node");
             }
@@ -394,9 +415,11 @@ impl Workspace {
                 if !local && connection.steps.done.is_empty() {
                     connection.steps.advance(format!("Connected to {name}"), "Finding Julia");
                 }
-                let start = connection.start_when_connected;
-                self.on_connected(&host, cx);
-                if start {
+                let (start, stop) = (connection.start_when_connected, connection.stop_when_connected);
+                self.on_connected(&host, !stop && !start, cx);
+                if stop {
+                    self.stop_host(&host, cx);
+                } else if start {
                     self.start_host(&host, cx);
                 }
             }
@@ -410,6 +433,7 @@ impl Workspace {
                 }
             }
             Update::Started(Ok(runtime)) => {
+                connection.job = None;
                 connection.steps.found_julia = true;
                 let started = if runtime.reattached { format!("Julia running on {}", runtime.node) } else { "Started Julia".to_owned() };
                 connection.steps.advance(started, "Opening the notebook");
@@ -420,9 +444,11 @@ impl Workspace {
             }
             Update::Started(Err(_)) if connection.cancelling => {
                 connection.cancelling = false;
+                connection.job = None;
                 connection.status = Status::Died(String::new());
             }
             Update::Started(Err(e)) => {
+                connection.job = None;
                 connection.status = Status::Died(e.clone());
                 if local {
                     self.status = format!("⚠ {e}").into();
@@ -458,8 +484,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Connected, before any runtime: the new-session screen can use its files.
-    fn on_connected(&mut self, host: &HostId, cx: &mut Context<Self>) {
+    /// Connected, before any runtime: the new-session screen can use its files,
+    /// and (with `check`) the host list hears what runs there.
+    fn on_connected(&mut self, host: &HostId, check: bool, cx: &mut Context<Self>) {
+        if check && *host != HostId::ThisMac {
+            self.check_host(host, cx);
+        }
         self.fetch_partitions(host, cx);
         if self.draft.host == *host {
             if self.draft.folder.is_none() {
@@ -677,6 +707,126 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Ask a connected host what runs there (a runtime, or a cluster job for
+    /// one), without taking it over. A host that isn't connected connects,
+    /// which then asks.
+    pub fn check_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let Some(connection) = self.connections.get_mut(host).filter(|c| matches!(c.status, Status::Browsing | Status::Died(_))) else {
+            if matches!(self.status(host), None | Some(Status::Failed(_) | Status::Replaced)) {
+                self.connect_host(host, false, cx);
+            }
+            return;
+        };
+        let Some(channel) = connection.channel.clone().filter(|_| !connection.stopping) else { return };
+        connection.found = None;
+        connection.check += 1;
+        let (id, check) = (connection.id, connection.check);
+        let ask = cx.background_executor().spawn(async move { channel.files(Request::Runtime) });
+        let host = host.clone();
+        cx.spawn(async move |this, cx| {
+            let reply = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(connection) = this.connections.get_mut(&host).filter(|c| c.id == id && c.check == check) else { return };
+                connection.found = Some(match reply {
+                    Ok(Reply::Runtime { runtime }) => Ok(runtime),
+                    Ok(other) => Err(format!("The helper answered {other:?}.")),
+                    Err(e) => Err(e),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Stop Julia on `host` (Settings' host list): its runtime, or on a
+    /// cluster its job, queued or running, whether or not this app attached
+    /// to it. A host that isn't connected connects first. Sessions on it then
+    /// show Julia stopped, with Start.
+    pub fn stop_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        match self.status(host) {
+            Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) => {}
+            Some(Status::Connecting) => {
+                if let Some(connection) = self.connections.get_mut(host) {
+                    connection.stop_when_connected = true;
+                }
+                return cx.notify();
+            }
+            None | Some(Status::Failed(_) | Status::Replaced) => {
+                self.connect_host(host, false, cx);
+                if let Some(connection) = self.connections.get_mut(host) {
+                    connection.stop_when_connected = true;
+                }
+                return;
+            }
+        }
+        let Some(connection) = self.connections.get_mut(host) else { return };
+        let Some(channel) = connection.channel.clone().filter(|_| !connection.stopping) else { return };
+        if connection.status == Status::Starting {
+            // The start under way ends as cancelled (Update::Started).
+            connection.cancelling = true;
+        } else {
+            connection.forget_runtime();
+            connection.status = Status::Died(String::new());
+        }
+        connection.stop_when_connected = false;
+        connection.stopping = true;
+        connection.found = None;
+        connection.check += 1;
+        let id = connection.id;
+        if *host == HostId::ThisMac {
+            self.status = "Stopping Julia…".into();
+        }
+        let stop = cx.background_executor().spawn(async move { channel.stop() });
+        let host = host.clone();
+        cx.spawn(async move |this, cx| {
+            stop.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(connection) = this.connections.get_mut(&host).filter(|c| c.id == id) {
+                    connection.stopping = false;
+                    connection.found = Some(Ok(RuntimeState::NotRunning));
+                }
+                if host == HostId::ThisMac {
+                    this.status = "Julia on This Mac is stopped.".into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// What runs on `host`, as far as the app knows, for the host list and the Where menu.
+    pub fn host_state(&self, host: &HostId) -> HostState {
+        let Some(c) = self.connections.get(host) else { return HostState::Unknown };
+        if c.stopping {
+            return HostState::Stopping;
+        }
+        match &c.status {
+            Status::Connecting => HostState::Connecting,
+            Status::Browsing => match &c.found {
+                None => HostState::Checking,
+                Some(Ok(found)) => HostState::from(found),
+                Some(Err(_)) => HostState::Connected,
+            },
+            // Started since by another app, as a check found.
+            Status::Died(_) => match &c.found {
+                Some(Ok(found @ (RuntimeState::Running { .. } | RuntimeState::Queued { .. }))) => HostState::from(found),
+                _ => HostState::NotRunning,
+            },
+            Status::Starting => match &c.job {
+                Some(job) => HostState::Queued { job: job.clone(), starting: c.steps.current != "Waiting for a node" },
+                None => HostState::Starting,
+            },
+            Status::Ready => HostState::Running {
+                notebooks: c.notebooks.as_array().map(Vec::len),
+                job: c.runtime.as_ref().and_then(|r| r.job.as_ref()).map(|j| (j.id.clone(), j.ends_at)),
+            },
+            Status::Replaced => HostState::Replaced,
+            Status::Failed(e) => HostState::Failed(e.clone()),
+        }
+    }
+
     /// When a cluster job's end is near, say so in the chat of each session on
     /// it: the notebook file is saved, and a new job can run it again.
     fn warn_before_job_ends(&mut self, host: &HostId, cx: &mut Context<Self>) {
@@ -775,6 +925,7 @@ impl Workspace {
                 });
                 return Some(starting_pane(&steps).children(cancel).into_any_element());
             }
+            Status::Died(_) if connection.is_some_and(|c| c.stopping) => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping Julia on {name}…"))),
             Status::Died(reason) => {
                 let headline = if reason.is_empty() { format!("Julia on {name} is stopped.") } else { format!("Julia on {name} stopped.") };
                 resting.child(div().text_color(theme::text_muted()).child(headline)).when(!reason.is_empty(), |d| d.child(message(reason))).child(action("host-start", "Start Julia", host.clone(), true))

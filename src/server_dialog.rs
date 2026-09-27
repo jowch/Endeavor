@@ -340,7 +340,7 @@ impl Workspace {
         cx.notify();
     }
 
-    pub fn render_server_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub fn render_server_dialog(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.server_dialog.as_ref()?;
         let editing = dialog.editing.is_some();
         let is_cluster = dialog.cluster.is_some();
@@ -489,61 +489,65 @@ impl Workspace {
             .child(
                 div()
                     .id("server-dialog-body")
-                    .max_h(px(620.))
+                    // The title and the buttons stay put; only this scrolls, when the window is short.
+                    .max_h((window.viewport_size().height - px(150.)).max(px(160.)))
                     .overflow_y_scroll()
-                    .px(px(20.))
-                    .pb(px(14.))
-                    .flex()
-                    .flex_col()
-                    .child(section("Connection"))
-                    .child(row("Name", div().w(px(260.)).child(field(&dialog.name, false))))
-                    .child(row(
-                        "SSH host",
-                        div().flex().gap(px(8.)).child(div().w(px(200.)).child(host_field)).child(
-                            button("test-connection", if testing { "Stop test" } else { "Test connection" }, false)
-                                .w(px(124.))
-                                .justify_center()
-                                .on_click(cx.listener(|this, _, _, cx| this.test_server(cx))),
-                        ),
-                    ))
-                    .child(hint("An alias from ~/.ssh/config, or user@host (add :port if it isn't 22). Endeavor uses the keys and settings there."))
-                    .children(suggestions)
-                    .children(dialog.test.as_ref().map(render_test))
-                    .when(is_cluster, |d| d.children(self.cluster_rows(cx)))
-                    .when(!is_cluster, |d| {
-                        d.child(row("How to get Julia", div().w(px(260.)).child(field(&dialog.julia, true)))).child(hint(
-                            "A path to julia, or a shell line that puts it on the PATH. Empty: the julia on the server's PATH, else Endeavor downloads its own.",
-                        ))
-                    })
-                    .child(divider())
-                    .child(section("Notebooks"))
-                    .child(row(
-                        "Stop idle notebooks after",
-                        div().relative().child(
-                            div()
-                                .id("idle-stop")
-                                .w(px(220.))
-                                .h(px(28.))
-                                .px(px(10.))
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(theme::composer_edge())
-                                .cursor_pointer()
-                                .child(idle_label)
-                                .child(glyph(Glyph::Chevron, theme::text_faint()))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(dialog) = &mut this.server_dialog {
-                                        dialog.idle_menu = !dialog.idle_menu;
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                        .children(idle_menu),
-                    ))
-                    .children(dialog.error.clone().map(|e| div().pt(px(10.)).text_size(theme::size_meta()).text_color(theme::danger()).child(e))),
+                    .child(
+                        div()
+                            .px(px(20.))
+                            .pb(px(14.))
+                            .flex()
+                            .flex_col()
+                            .child(section("Connection"))
+                            .child(row("Name", div().w(px(260.)).child(field(&dialog.name, false))))
+                            .child(row(
+                                "SSH host",
+                                div().flex().gap(px(8.)).child(div().w(px(200.)).child(host_field)).child(
+                                    button("test-connection", if testing { "Stop test" } else { "Test connection" }, false)
+                                        .w(px(124.))
+                                        .justify_center()
+                                        .on_click(cx.listener(|this, _, _, cx| this.test_server(cx))),
+                                ),
+                            ))
+                            .child(hint("An alias from ~/.ssh/config, or user@host (:port if not 22). Uses your SSH keys."))
+                            .children(suggestions)
+                            .children(dialog.test.as_ref().map(render_test))
+                            .when(is_cluster, |d| d.children(self.cluster_rows(cx)))
+                            .when(!is_cluster, |d| {
+                                d.child(row("How to get Julia", div().w(px(260.)).child(field(&dialog.julia, true)))).child(hint(
+                                    "A path to julia, or a shell line that puts it on the PATH. Empty: the julia on the server's PATH, else Endeavor downloads its own.",
+                                ))
+                            })
+                            .child(divider())
+                            .child(section("Notebooks"))
+                            .child(row(
+                                "Stop idle notebooks after",
+                                div().relative().child(
+                                    div()
+                                        .id("idle-stop")
+                                        .w(px(220.))
+                                        .h(px(28.))
+                                        .px(px(10.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .rounded(px(6.))
+                                        .border_1()
+                                        .border_color(theme::composer_edge())
+                                        .cursor_pointer()
+                                        .child(idle_label)
+                                        .child(glyph(Glyph::Chevron, theme::text_faint()))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if let Some(dialog) = &mut this.server_dialog {
+                                                dialog.idle_menu = !dialog.idle_menu;
+                                                cx.notify();
+                                            }
+                                        })),
+                                )
+                                .children(idle_menu),
+                            ))
+                            .children(dialog.error.clone().map(|e| div().pt(px(10.)).text_size(theme::size_meta()).text_color(theme::danger()).child(e))),
+                    ),
             )
             .child(div().px(px(20.)).py(px(12.)).border_t_1().border_color(theme::composer_edge()).child(footer));
         Some(modal_backdrop("server-dialog-backdrop").child(card).into_any_element())
@@ -662,14 +666,14 @@ impl Workspace {
             row("Type", detected).into_any_element(),
             row("Account", div().w(px(220.)).child(field(&c.account, false))).into_any_element(),
             row("How to get Julia", div().w(px(220.)).child(field(&dialog.julia, true))).into_any_element(),
-            hint("A path to julia, or a shell line that puts it on the PATH (module load julia). Empty: the julia on the login node's PATH, else Endeavor downloads its own.").into_any_element(),
+            hint("A julia path or a shell line (module load julia); empty finds or downloads one.").into_any_element(),
             row("Where to keep Julia packages", div().w(px(220.)).child(field(&c.depot, true))).into_any_element(),
-            hint("Home folders on clusters are usually small, so packages go to scratch space by default.").into_any_element(),
+            hint("Scratch space by default: home folders on clusters are usually small.").into_any_element(),
             divider().into_any_element(),
             section("Default resources for new sessions").into_any_element(),
         ];
         rows.extend(self.resource_rows(Target::Dialog, &c.resources, &c.partitions, c.partition_menu, false, cx));
-        rows.push(hint("Each session can change these from the resources chip. The cluster may end jobs sooner than this.").pt(px(4.)).into_any_element());
+        rows.push(hint("Each session can change these from its resources chip.").pt(px(6.)).into_any_element());
         rows
     }
 }
@@ -752,17 +756,17 @@ fn button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div>
 }
 
 fn row(label: &'static str, control: impl IntoElement) -> Div {
-    div().min_h(px(36.)).flex().items_center().justify_between().gap(px(12.)).child(div().text_color(theme::text_secondary()).child(label)).child(control)
+    div().min_h(px(32.)).flex().items_center().justify_between().gap(px(12.)).child(div().text_color(theme::text_secondary()).child(label)).child(control)
 }
 
 fn section(text: &'static str) -> Div {
-    div().pt(px(10.)).pb(px(2.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(text)
+    div().pt(px(8.)).pb(px(2.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(text)
 }
 
 fn hint(text: &'static str) -> Div {
-    div().pb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(text)
+    div().pb(px(2.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(text)
 }
 
 fn divider() -> Div {
-    div().mt(px(10.)).h(px(1.)).bg(theme::composer_edge())
+    div().mt(px(8.)).h(px(1.)).bg(theme::composer_edge())
 }
