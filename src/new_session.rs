@@ -128,6 +128,7 @@ fn browse_start() -> PathBuf {
 
 /// NSOpenPanel opens where it was last left, kept in this user default; GPUI's
 /// prompt has no starting-folder option, so set it before opening the panel.
+#[cfg(target_os = "macos")]
 fn set_open_panel_folder(dir: &Path) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
@@ -373,6 +374,7 @@ impl Workspace {
             return self.browse_to(start, cx);
         }
         self.close_popover(window, cx);
+        #[cfg(target_os = "macos")]
         set_open_panel_folder(&browse_start());
         let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Choose folder".into()) });
         cx.spawn_in(window, async move |this, cx| {

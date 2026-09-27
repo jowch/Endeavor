@@ -12,10 +12,15 @@ pub fn resources() -> PathBuf {
     bundled.filter(|r| r.join("runtime").is_dir()).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
-/// Endeavor's folder in Application Support (runtimes, Julia depot, app state).
+/// Endeavor's folder in Application Support, or on Linux in XDG_DATA_HOME
+/// (runtimes, Julia depot, app state).
 pub fn app_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    Ok(PathBuf::from(home).join("Library/Application Support/endeavor"))
+    let home = PathBuf::from(std::env::var("HOME").map_err(|e| e.to_string())?);
+    if cfg!(target_os = "macos") {
+        return Ok(home.join("Library/Application Support/endeavor"));
+    }
+    let data = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".local/share"), PathBuf::from);
+    Ok(data.join("endeavor"))
 }
 
 /// Download a pinned tarball (resuming a partial one), check its SHA-256, and

@@ -1,6 +1,7 @@
 //! The app's log file. Launched from Finder, stdout and stderr (our messages,
 //! Julia's log we echo, and child processes that inherit them) go to
-//! ~/Library/Logs/Endeavor/endeavor.log; the previous run's is kept as endeavor.old.log.
+//! ~/Library/Logs/Endeavor/endeavor.log (on Linux, $XDG_STATE_HOME/endeavor/endeavor.log);
+//! the previous run's is kept as endeavor.old.log.
 //! From a terminal, output stays in the terminal.
 
 use std::io::IsTerminal;
@@ -8,8 +9,12 @@ use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 pub fn path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join("Library/Logs/Endeavor/endeavor.log"))
+    let home = PathBuf::from(std::env::var("HOME").ok()?);
+    if cfg!(target_os = "macos") {
+        return Some(home.join("Library/Logs/Endeavor/endeavor.log"));
+    }
+    let state = std::env::var_os("XDG_STATE_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".local/state"), PathBuf::from);
+    Some(state.join("endeavor/endeavor.log"))
 }
 
 pub fn start() {
@@ -29,9 +34,9 @@ pub fn start() {
     eprintln!("Endeavor {} started", env!("CARGO_PKG_VERSION"));
 }
 
-/// Show the log file in Finder.
+/// Show the log file in Finder (on Linux, its folder in the file manager).
 pub fn reveal() {
     if let Some(path) = path() {
-        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+        crate::platform::reveal(&path);
     }
 }

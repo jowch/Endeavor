@@ -139,3 +139,15 @@ pub fn set_webview_appearance(webview: &wry::WebView, appearance: Appearance) {
     let look = name.and_then(NSAppearance::appearanceNamed);
     webview.webview().setAppearance(look.as_deref());
 }
+
+/// WebKitGTK's `prefers-color-scheme` follows GTK's dark-theme preference.
+#[cfg(target_os = "linux")]
+pub fn set_webview_appearance(_: &wry::WebView, appearance: Appearance) {
+    use gtk::prelude::GtkSettingsExt;
+    let Some(gtk) = gtk::Settings::default() else { return };
+    match appearance {
+        Appearance::Dark => gtk.set_gtk_application_prefer_dark_theme(true),
+        Appearance::Light => gtk.set_gtk_application_prefer_dark_theme(false),
+        Appearance::System => gtk.reset_property("gtk-application-prefer-dark-theme"),
+    }
+}

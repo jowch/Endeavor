@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 mod webkeys;
 mod agent;
 mod annotate;
@@ -19,7 +20,9 @@ mod install;
 mod logs;
 mod new_session;
 mod outbox;
+#[cfg(target_os = "macos")]
 mod overlay;
+mod platform;
 mod pluto;
 mod remote;
 mod resources;
@@ -31,6 +34,8 @@ mod splash;
 mod theme;
 mod turtle;
 mod when;
+#[cfg(not(target_os = "macos"))]
+use platform::{overlay, webkeys};
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
@@ -45,7 +50,6 @@ use gpui_wry::WebView;
 use hosts::{HostId, Place};
 use outbox::Queued;
 use new_session::{Draft, Glyph, NotebookChoice, glyph, menu_row};
-use raw_window_handle::HasWindowHandle;
 use session::{Effect, Session, Stopped, folder_name};
 use settings::{Appearance, IdleStop, NotebookTheme, Settings};
 use splash::{Progress, Setup, Step};
@@ -65,8 +69,7 @@ actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode, ToggleSidebar, OpenS
 
 /// A small JSON file in Endeavor's Application Support folder.
 fn app_file(name: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(Path::new(&home).join("Library/Application Support/endeavor").join(name))
+    Some(install::app_dir().ok()?.join(name))
 }
 
 fn load_json<T: serde::de::DeserializeOwned + Default>(name: &str) -> T {
@@ -490,7 +493,7 @@ impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (page_tx, mut page_rx) = futures::channel::mpsc::unbounded::<String>();
         let webview = cx.new(|cx| {
-            let handle = window.window_handle().expect("window handle");
+            let handle = platform::webview_parent(window);
             let webview = wry::WebViewBuilder::new()
                 // wry's url() panics on a web view that has never loaded a page.
                 .with_url("about:blank")
@@ -968,7 +971,7 @@ impl Workspace {
         let Some(path) = session.notebook_path.clone() else { return };
         match action {
             NotebookAction::Reveal => {
-                let _ = std::process::Command::new("open").arg("-R").arg(&path).spawn();
+                platform::reveal(Path::new(&path));
             }
             NotebookAction::NewSession => {
                 let folder = session.place.clone();
@@ -987,7 +990,7 @@ impl Workspace {
                     Row::Past(_, place) => Some(place.clone()),
                 };
                 if let Some(Place { host: HostId::ThisMac, path: folder }) = folder {
-                    let _ = std::process::Command::new("open").arg("-R").arg(folder).spawn();
+                    platform::reveal(&folder);
                 }
             }
             RowAction::Archive => self.set_archived(row, true, cx),
@@ -2622,17 +2625,6 @@ impl Render for Workspace {
     }
 }
 
-/// Accessibility's Reduce motion, which GPUI doesn't read itself.
-fn system_reduces_motion() -> bool {
-    use objc2::runtime::{AnyObject, Bool};
-    use objc2::{class, msg_send};
-    unsafe {
-        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let reduce: Bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
-        reduce.as_bool()
-    }
-}
-
 fn main() {
     // Claude Code runs the plugin's execution-gate hook as `endeavor hook-pretool`.
     if std::env::args().nth(1).as_deref() == Some("hook-pretool") {
@@ -2640,6 +2632,7 @@ fn main() {
     }
     logs::start();
     gpui_platform::application().run(|cx: &mut App| {
+        platform::init(cx);
         gpui_component::init(cx);
         theme::load_fonts(cx);
         // Theme::change applies these before building the component defaults from them.
@@ -2650,7 +2643,7 @@ fn main() {
             mono_font_size: Some(f32::from(theme::size_code())),
             ..(*ui.dark_theme).clone()
         });
-        cx.set_reduce_motion(system_reduces_motion());
+        cx.set_reduce_motion(platform::reduces_motion());
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
