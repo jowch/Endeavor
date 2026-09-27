@@ -2597,7 +2597,7 @@ impl Render for Workspace {
                 )
             })
             // Deferred so they paint, and take clicks, above everything else.
-            .children(self.render_server_dialog(cx).map(|d| deferred(d).with_priority(3)))
+            .children(self.render_server_dialog(window, cx).map(|d| deferred(d).with_priority(3)))
             .children(self.render_askpass(cx).map(|d| deferred(d).with_priority(5)))
             .children(self.render_login_node_warning(cx).map(|d| deferred(d).with_priority(4)))
             // A click outside the menu only closes it, as with a native menu.

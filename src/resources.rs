@@ -185,8 +185,18 @@ impl Workspace {
             ("Memory", Field::Mem, if r.mem_gb == 0 { "per CPU".into() } else { format!("{} GB", r.mem_gb) }),
             ("Time limit", Field::Time, duration_text(r.minutes)),
         ];
-        for (name, field, value) in steppers {
-            rows.push(row(name, stepper(field as usize + 10 * target as usize, value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))).into_any_element());
+        let steppers = steppers.map(|(name, field, value)| (name, stepper(field as usize + 10 * target as usize, value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))));
+        match target {
+            // The dialog has more to fit, so its three share one row.
+            Target::Dialog => rows.push(
+                div()
+                    .pt(px(4.))
+                    .flex()
+                    .gap(px(12.))
+                    .children(steppers.map(|(name, stepper)| div().flex_1().flex().flex_col().gap(px(4.)).child(label(name).pb_0()).child(stepper.w_full())))
+                    .into_any_element(),
+            ),
+            Target::Draft => rows.extend(steppers.map(|(name, stepper)| row(name, stepper).into_any_element())),
         }
         rows
     }

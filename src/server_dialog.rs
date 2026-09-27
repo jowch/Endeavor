@@ -340,7 +340,7 @@ impl Workspace {
         cx.notify();
     }
 
-    pub fn render_server_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub fn render_server_dialog(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.server_dialog.as_ref()?;
         let editing = dialog.editing.is_some();
         let is_cluster = dialog.cluster.is_some();
@@ -489,7 +489,8 @@ impl Workspace {
             .child(
                 div()
                     .id("server-dialog-body")
-                    .max_h(px(620.))
+                    // The title and the buttons stay put; only this scrolls, when the window is short.
+                    .max_h((window.viewport_size().height - px(150.)).max(px(160.)))
                     .overflow_y_scroll()
                     .px(px(20.))
                     .pb(px(14.))
@@ -506,7 +507,7 @@ impl Workspace {
                                 .on_click(cx.listener(|this, _, _, cx| this.test_server(cx))),
                         ),
                     ))
-                    .child(hint("An alias from ~/.ssh/config, or user@host (add :port if it isn't 22). Endeavor uses the keys and settings there."))
+                    .child(hint("An alias from ~/.ssh/config, or user@host (:port if not 22). Your SSH keys and settings apply."))
                     .children(suggestions)
                     .children(dialog.test.as_ref().map(render_test))
                     .when(is_cluster, |d| d.children(self.cluster_rows(cx)))
@@ -662,14 +663,14 @@ impl Workspace {
             row("Type", detected).into_any_element(),
             row("Account", div().w(px(220.)).child(field(&c.account, false))).into_any_element(),
             row("How to get Julia", div().w(px(220.)).child(field(&dialog.julia, true))).into_any_element(),
-            hint("A path to julia, or a shell line that puts it on the PATH (module load julia). Empty: the julia on the login node's PATH, else Endeavor downloads its own.").into_any_element(),
+            hint("A julia path or a shell line (module load julia). Empty: the login node's julia, else Endeavor's.").into_any_element(),
             row("Where to keep Julia packages", div().w(px(220.)).child(field(&c.depot, true))).into_any_element(),
-            hint("Home folders on clusters are usually small, so packages go to scratch space by default.").into_any_element(),
+            hint("Scratch space by default: home folders on clusters are usually small.").into_any_element(),
             divider().into_any_element(),
             section("Default resources for new sessions").into_any_element(),
         ];
         rows.extend(self.resource_rows(Target::Dialog, &c.resources, &c.partitions, c.partition_menu, false, cx));
-        rows.push(hint("Each session can change these from the resources chip. The cluster may end jobs sooner than this.").pt(px(4.)).into_any_element());
+        rows.push(hint("Each session can change these from its resources chip.").pt(px(6.)).into_any_element());
         rows
     }
 }
@@ -752,17 +753,17 @@ fn button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div>
 }
 
 fn row(label: &'static str, control: impl IntoElement) -> Div {
-    div().min_h(px(36.)).flex().items_center().justify_between().gap(px(12.)).child(div().text_color(theme::text_secondary()).child(label)).child(control)
+    div().min_h(px(32.)).flex().items_center().justify_between().gap(px(12.)).child(div().text_color(theme::text_secondary()).child(label)).child(control)
 }
 
 fn section(text: &'static str) -> Div {
-    div().pt(px(10.)).pb(px(2.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(text)
+    div().pt(px(8.)).pb(px(2.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(text)
 }
 
 fn hint(text: &'static str) -> Div {
-    div().pb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(text)
+    div().pb(px(2.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(text)
 }
 
 fn divider() -> Div {
-    div().mt(px(10.)).h(px(1.)).bg(theme::composer_edge())
+    div().mt(px(8.)).h(px(1.)).bg(theme::composer_edge())
 }
