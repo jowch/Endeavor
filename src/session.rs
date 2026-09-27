@@ -152,8 +152,8 @@ pub fn app_modes() -> Vec<ModeChoice> {
     };
     vec![
         choice("default", false, "Manual", "Asks before each change"),
-        choice("auto", false, "Ask to run", "Edits land live; asks before running code"),
-        choice("auto", true, "Auto", "Edits land live; runs code without asking"),
+        choice("auto", false, "Ask to run", "Asks before running code"),
+        choice("auto", true, "Auto", "Runs code without asking"),
         choice("plan", false, "Plan", "Reads only, then proposes a plan"),
     ]
 }
