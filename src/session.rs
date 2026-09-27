@@ -68,7 +68,7 @@ pub enum Entry {
         responder: Option<Responder<RequestPermissionResponse>>,
         /// Raised by the execution gate (a pluto call that runs code).
         runs_code: bool,
-        /// The pluto tool and its input, for the run card.
+        /// The notebook tool and its input, for the run card.
         tool: Option<String>,
         input: serde_json::Value,
         /// What the run would run, once the runtime answers.
@@ -682,10 +682,10 @@ impl Session {
             SessionEvent::Permission(request, responder) => {
                 let fields = &request.tool_call.fields;
                 let title = fields.title.clone().unwrap_or_else(|| "Tool call".into());
-                // Only runs get the run card ("Always this session"); other pluto
+                // Only runs get the run card ("Always this session"); other notebook
                 // prompts (e.g. plan mode asking before a read) get the agent's options.
                 let input = fields.raw_input.clone().unwrap_or_default();
-                let runs_code = title.strip_prefix("mcp__pluto__").is_some_and(|tool| gate::runs_code(tool, &input));
+                let runs_code = title.strip_prefix(celldiff::TOOL_PREFIX).is_some_and(|tool| gate::runs_code(tool, &input));
                 if runs_code && self.run_without_asking {
                     if let Some(allow) = option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
                         let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
@@ -698,7 +698,7 @@ impl Session {
                     .as_str()
                     .map(str::to_owned)
                     .or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned));
-                let tool = title.strip_prefix("mcp__pluto__").map(str::to_owned);
+                let tool = title.strip_prefix(celldiff::TOOL_PREFIX).map(str::to_owned);
                 if let Some(tool) = tool.clone().filter(|t| runs_code && t != "run_shell") {
                     effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
                 }
@@ -908,7 +908,7 @@ impl Session {
         if fields.raw_output.is_some() {
             *output = fields.raw_output;
         }
-        let tool = celldiff::pluto_tool(title).filter(|_| *status == ToolCallStatus::Completed)?;
+        let tool = celldiff::notebook_tool(title).filter(|_| *status == ToolCallStatus::Completed)?;
         let result = output.as_ref().and_then(celldiff::tool_json)?;
         if result.get("error").is_some() {
             return None;
@@ -1473,7 +1473,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             .into_any_element(),
         Entry::Tool { title, kind, path, status, input, output, diffs, expanded, approval, .. } => {
             let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
-            let pluto = celldiff::pluto_tool(title).is_some();
+            let pluto = celldiff::notebook_tool(title).is_some();
             let file_diff = if pluto { None } else { file_diff(*kind, title, path.as_deref(), args) };
             let all_diffs: Vec<&celldiff::CellDiff> = diffs.iter().chain(&file_diff).collect();
             let (added, removed) = all_diffs.iter().flat_map(|d| &d.lines).fold((0, 0), |(a, r), (change, _)| match change {
@@ -2003,7 +2003,7 @@ fn render_diff(diff: &celldiff::CellDiff) -> impl IntoElement + use<> {
 
 /// A tool call as a verb: "Edited", "Ran", …; other tools keep their own title.
 fn tool_verb(title: &str) -> String {
-    let Some(tool) = celldiff::pluto_tool(title) else { return title.to_string() };
+    let Some(tool) = celldiff::notebook_tool(title) else { return title.to_string() };
     match tool {
         "read_cell" | "read_notebook_code" => "Read",
         "edit_cell" | "edit_cells" => "Edited",
@@ -2069,7 +2069,7 @@ fn pluto_object(
         read.or_else(|| field("code").and_then(defined_name)).or_else(|| field("cell_id").and_then(name))
     };
     let names_a_cell = matches!(runs::doing(title, ToolKind::Other, input), Some((_, _, runs::Names::Cell)));
-    match (celldiff::pluto_tool(title), field("path"), field("command")) {
+    match (celldiff::notebook_tool(title), field("path"), field("command")) {
         (Some("run_shell"), _, Some(command)) => ToolLine { verb, object: Some(first_line(command)), mono: true, full: None },
         (Some("read_file" | "list_folder"), Some(path), _) => ToolLine { verb, object: Some(file_name(path)), mono: true, full: Some(path.to_string()) },
         (Some("read_notebook_code"), _, _) => {
@@ -2244,14 +2244,14 @@ mod tests {
             _ => panic!("not a call"),
         };
         let mut s = Session::new(1, Place::local("/tmp"), None);
-        s.apply(call("t1", "mcp__pluto__edit_cell"));
-        s.push(asked("t1", "mcp__pluto__edit_cell"));
-        s.approve(&"t1".to_string().into(), Approval::Allowed, "mcp__pluto__edit_cell", &serde_json::Value::Null);
-        s.apply(call("t2", "mcp__pluto__execute_cell"));
-        s.approve(&"t2".to_string().into(), Approval::WithoutAsking, "mcp__pluto__execute_cell", &serde_json::Value::Null);
-        s.apply(call("t3", "mcp__pluto__execute_cell"));
-        s.push(asked("t3", "mcp__pluto__execute_cell"));
-        s.approve(&"t3".to_string().into(), Approval::Denied, "mcp__pluto__execute_cell", &serde_json::Value::Null);
+        s.apply(call("t1", "mcp__notebook__edit_cell"));
+        s.push(asked("t1", "mcp__notebook__edit_cell"));
+        s.approve(&"t1".to_string().into(), Approval::Allowed, "mcp__notebook__edit_cell", &serde_json::Value::Null);
+        s.apply(call("t2", "mcp__notebook__execute_cell"));
+        s.approve(&"t2".to_string().into(), Approval::WithoutAsking, "mcp__notebook__execute_cell", &serde_json::Value::Null);
+        s.apply(call("t3", "mcp__notebook__execute_cell"));
+        s.push(asked("t3", "mcp__notebook__execute_cell"));
+        s.approve(&"t3".to_string().into(), Approval::Denied, "mcp__notebook__execute_cell", &serde_json::Value::Null);
         assert!(!s.entries.iter().any(|e| matches!(e, Entry::Note(_))), "no notes in the transcript");
         assert_eq!(crate::runs::run_at(&s.entries, 0), Some(0..s.entries.len()), "one run");
         assert_eq!(approval(&s, 0), Some(Approval::Allowed));
@@ -2259,7 +2259,7 @@ mod tests {
         assert_eq!(approval(&s, 3), Some(Approval::Denied));
 
         // A prompt whose call isn't in the transcript is still recorded, as a note.
-        s.approve(&"gone".to_string().into(), Approval::Denied, "mcp__pluto__edit_cell", &serde_json::Value::Null);
+        s.approve(&"gone".to_string().into(), Approval::Denied, "mcp__notebook__edit_cell", &serde_json::Value::Null);
         assert!(matches!(s.entries.last(), Some(Entry::Note(text)) if text.as_ref() == "Denied: edit a cell"));
     }
 
@@ -2357,7 +2357,7 @@ mod tests {
         use serde_json::json;
         let seen = |id: &str| (id == "c-fit").then(|| "fit".to_string());
         let line = |title: &str, input: serde_json::Value, output: Option<serde_json::Value>, running: bool| {
-            let l = super::pluto_line(&format!("mcp__pluto__{title}"), &[], &input, output.as_ref(), running, &seen);
+            let l = super::pluto_line(&format!("mcp__notebook__{title}"), &[], &input, output.as_ref(), running, &seen);
             (l.verb, l.object)
         };
         let out = |v: serde_json::Value| Some(json!([{ "type": "text", "text": v.to_string() }]));
@@ -2523,6 +2523,7 @@ mod tests {
         let chunk = |s: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
         s.apply(chunk("[Endeavor] The user is viewing Pluto notebook …"));
+        s.apply(chunk("notebook://pluto/n/cell/c"));
         s.apply(chunk("pluto://notebook/n/cell/c"));
         s.apply(chunk("attachment:notes.txt"));
         s.apply(chunk("\n<context ref=\"attachment:notes.txt\">\nt,y\n</context>"));
@@ -2601,14 +2602,17 @@ more" }"#);
     #[test]
     fn replayed_notebook_opens_are_reopened_by_path_not_shown_by_stale_id() {
         use agent_client_protocol::schema::v1::{SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
-        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
-        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__pluto__open_notebook"))));
-        let output = serde_json::json!([{ "type": "text", "text": "{\"notebook_id\":\"old-id\",\"path\":\"/tmp/a.jl\"}" }]);
-        let done = ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output));
-        let effects = s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(done)));
-        assert!(effects.iter().all(|e| !matches!(e, Effect::ShowNotebook { .. })), "no stale navigation");
-        let effects = s.started(Started::new(SessionId::new("abc"), None, None));
-        assert!(matches!(effects.first(), Some(Effect::ReopenNotebook(p)) if p == "/tmp/a.jl"));
+        // Sessions from before the bridge was named `notebook` replay `mcp__pluto__` names.
+        for title in ["mcp__notebook__open_notebook", "mcp__pluto__open_notebook"] {
+            let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
+            s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", title))));
+            let output = serde_json::json!([{ "type": "text", "text": "{\"notebook_id\":\"old-id\",\"path\":\"/tmp/a.jl\"}" }]);
+            let done = ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output));
+            let effects = s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(done)));
+            assert!(effects.iter().all(|e| !matches!(e, Effect::ShowNotebook { .. })), "no stale navigation");
+            let effects = s.started(Started::new(SessionId::new("abc"), None, None));
+            assert!(matches!(effects.first(), Some(Effect::ReopenNotebook(p)) if p == "/tmp/a.jl"), "{title}");
+        }
     }
 
     #[test]
@@ -2620,12 +2624,12 @@ more" }"#);
             let output = serde_json::json!([{ "type": "text", "text": text }]);
             SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output))))
         };
-        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__pluto__new_notebook"))));
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__notebook__new_notebook"))));
         let effects = s.apply(tool_update("{\"notebook_id\":\"n1\",\"path\":\"/tmp/fit.jl\",\"created\":true}"));
         assert!(matches!(effects.as_slice(), [Effect::ShowNotebook { id, path: Some(p) }] if id == "n1" && p == "/tmp/fit.jl"));
 
         // A refused open (one notebook per session) shows nothing.
-        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__pluto__open_notebook"))));
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__notebook__open_notebook"))));
         let effects = s.apply(tool_update("{\"error\":\"one_notebook\",\"message\":\"This session works on one notebook\"}"));
         assert!(effects.is_empty());
     }
@@ -2706,9 +2710,9 @@ more" }"#);
         };
         s.apply(call("t1", "Read /data/data.csv", ToolKind::Read, json!({"file_path": "/data/data.csv"})));
         assert_eq!(s.activity(), ("Reading".into(), Some("data.csv".into())));
-        s.apply(call("t2", "mcp__pluto__add_cell", ToolKind::Other, json!({"code": "residuals = y .- ŷ"})));
+        s.apply(call("t2", "mcp__notebook__add_cell", ToolKind::Other, json!({"code": "residuals = y .- ŷ"})));
         assert_eq!(s.activity(), ("Adding".into(), Some("residuals".into())));
-        s.apply(call("t3", "mcp__pluto__add_cell", ToolKind::Other, json!({"code": "md\"# Fit\""})));
+        s.apply(call("t3", "mcp__notebook__add_cell", ToolKind::Other, json!({"code": "md\"# Fit\""})));
         assert_eq!(s.activity(), ("Adding a cell".into(), None));
         s.apply(call("t4", "ls", ToolKind::Execute, json!({"command": "ls"})));
         assert_eq!(s.activity(), ("Running a command".into(), None));

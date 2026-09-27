@@ -47,7 +47,7 @@ pub fn details(
     diffed: bool,
     name: &dyn Fn(&str) -> Option<String>,
 ) -> Details {
-    let tool = celldiff::pluto_tool(title);
+    let tool = celldiff::notebook_tool(title);
     let input_parts = match tool {
         Some(tool) => notebook_input(tool, input, diffed, name),
         None => call_input(kind, path, input, diffed),
@@ -542,7 +542,7 @@ mod tests {
     fn host_tools_show_what_they_ran_and_read() {
         let out = |v: Value| Some(json!([{"type": "text", "text": v.to_string()}]));
         let d = open(
-            "mcp__pluto__run_shell",
+            "mcp__notebook__run_shell",
             ToolKind::Other,
             json!({"command": "make", "cwd": "/w"}),
             out(json!({"exit_code": 2, "stdout": "cc a.c\n", "stderr": "a.c:1: error\n", "timed_out": false, "cwd": "/w"})),
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(d.input, vec![Part::Code("make".into()), fields(&[("in", "/w")])]);
         assert_eq!(d.output, vec![Part::Text("cc a.c".into()), Part::Text("a.c:1: error".into()), Part::Error("Exit code 2".into())]);
         let d = open(
-            "mcp__pluto__read_file",
+            "mcp__notebook__read_file",
             ToolKind::Other,
             json!({"path": "/w/a.txt", "limit": 1}),
             out(json!({"path": "/w/a.txt", "text": "     1\thello\n", "start_line": 1, "end_line": 1, "total_lines": 3, "truncated": true})),
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(d.input, vec![fields(&[("file", "/w/a.txt"), ("lines", "1–1")])]);
         assert_eq!(d.output, vec![Part::Numbered(vec![(1, "hello".into())]), Part::Line("Lines 1–1 of 3".into())]);
         let d = open(
-            "mcp__pluto__list_folder",
+            "mcp__notebook__list_folder",
             ToolKind::Other,
             json!({}),
             out(json!({"path": "/w", "entries": [{"name": "src", "kind": "dir"}, {"name": "a.jl", "kind": "file", "size": 3}], "total": 2, "truncated": false})),
@@ -588,7 +588,7 @@ mod tests {
             "cell_id": "c-new",
             "code": "residuals = y .- ŷ",
         });
-        let d = open("mcp__pluto__edit_cell", ToolKind::Other, json!({"notebook_id": "n", "cell_id": "c-new", "code": "residuals = y .- ŷ"}), out(receipt), false, true);
+        let d = open("mcp__notebook__edit_cell", ToolKind::Other, json!({"notebook_id": "n", "cell_id": "c-new", "code": "residuals = y .- ŷ"}), out(receipt), false, true);
         assert_eq!(d.input, Vec::new(), "the diff stands for it");
         assert_eq!(
             d.output,
@@ -601,18 +601,18 @@ mod tests {
                 Part::Line("cells running; pending_run clears when execution finishes".into()),
             ]
         );
-        let d = open("mcp__pluto__execute_cell", ToolKind::Other, json!({"notebook_id": "n", "cell_id": "c-fit", "wait_for_completion": true}), None, false, false);
+        let d = open("mcp__notebook__execute_cell", ToolKind::Other, json!({"notebook_id": "n", "cell_id": "c-fit", "wait_for_completion": true}), None, false, false);
         assert_eq!(d.input, vec![fields(&[("cell", "`fit`"), ("wait for completion", "yes")])]);
-        let d = open("mcp__pluto__read_cell", ToolKind::Other, json!({"notebook_id": "n", "cell_id": "c-9abcdef012"}), out(json!({"error": "not_found", "message": "No cell c-9abcdef012"})), true, false);
+        let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({"notebook_id": "n", "cell_id": "c-9abcdef012"}), out(json!({"error": "not_found", "message": "No cell c-9abcdef012"})), true, false);
         assert_eq!(d.input, vec![fields(&[("cell", "cell c-9abcde")])]);
         assert_eq!(d.output, vec![Part::Error("No cell c-9abcdef012".into())]);
-        let d = open("mcp__pluto__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c", "code": "x = 1", "output": "1", "errored": false})), false, false);
+        let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c", "code": "x = 1", "output": "1", "errored": false})), false, false);
         assert_eq!(d.output, vec![Part::Code("x = 1".into()), Part::Text("1".into())]);
-        let d = open("mcp__pluto__list_notebooks", ToolKind::Other, json!({}), out(json!([{"path": "/w/a.jl", "cell_count": 4, "execution_allowed": false}])), false, false);
+        let d = open("mcp__notebook__list_notebooks", ToolKind::Other, json!({}), out(json!([{"path": "/w/a.jl", "cell_count": 4, "execution_allowed": false}])), false, false);
         assert_eq!(d.output, vec![Part::Text("/w/a.jl · 4 cells · safe preview".into())]);
         let code = "# ╔═╡ 11111111-2222-4333-8444-555555555555\nusing Plots\n\n# ╔═╡ 66666666-7777-4888-9999-aaaaaaaaaaaa\n# (empty)\n\n# ╔═╡ 77777777-7777-4888-9999-aaaaaaaaaaaa\nx = 1\ny = 2";
         let ids = ["11111111-2222-4333-8444-555555555555", "66666666-7777-4888-9999-aaaaaaaaaaaa", "77777777-7777-4888-9999-aaaaaaaaaaaa"];
-        let d = open("mcp__pluto__read_notebook_code", ToolKind::Other, json!({"notebook_id": "n"}), out(json!({"cell_ids": ids, "code": code})), false, false);
+        let d = open("mcp__notebook__read_notebook_code", ToolKind::Other, json!({"notebook_id": "n"}), out(json!({"cell_ids": ids, "code": code})), false, false);
         assert_eq!(d.output, vec![Part::Line("3 cells".into()), Part::Code("using Plots".into()), Part::Code("x = 1\ny = 2".into())]);
     }
 }

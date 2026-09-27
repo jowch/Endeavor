@@ -15,7 +15,11 @@ use agent_client_protocol::schema::v1::{
 
 use wire::files::{self, DATA, Reply, Request, numbered};
 
-use crate::annotate::cell_uri;
+use crate::annotate::{cell_uri, uri_cell};
+use wire::backend::Backend;
+
+/// The backend whose page notebook attachments come from.
+const BACKEND: Backend = Backend::Pluto;
 use crate::session::defined_name;
 
 /// A notebook cell as it was when attached.
@@ -147,8 +151,8 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
     if attachments.iter().any(|a| !a.cells().is_empty()) {
         blocks.push(note(
             "[Endeavor] The user attached notebook cells to this message. Each <cell> below shows a cell's \
-             code as it was when attached; its uri, pluto://notebook/{notebook_id}/cell/{cell_id}, names \
-             the cell (it is not a fetchable URL). Read its current code and output with the pluto MCP tools."
+             code as it was when attached; its uri, notebook://pluto/{notebook_id}/cell/{cell_id}, names \
+             the cell (it is not a fetchable URL). Read its current code and output with the notebook MCP tools."
                 .into(),
         ));
     }
@@ -186,7 +190,7 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
 /// ```text
 /// [Endeavor] The cell below failed with this error.
 /// <attached kind="error">
-/// <cell uri="pluto://notebook/…/cell/…">
+/// <cell uri="notebook://pluto/…/cell/…">
 /// fit = curve_fit(model, t, y, p0)
 /// </cell>
 /// <error>
@@ -223,7 +227,7 @@ fn notebook_block(attachment: &Attachment) -> Option<String> {
     };
     let mut out = format!("[Endeavor] {sentence}\n<attached kind=\"{kind}\" notebook=\"{notebook}\">\n");
     for cell in cells {
-        out += &format!("<cell uri=\"{}\">\n{}\n</cell>\n", cell_uri(notebook, &cell.id), cell.code);
+        out += &format!("<cell uri=\"{}\">\n{}\n</cell>\n", cell_uri(BACKEND, notebook, &cell.id), cell.code);
     }
     if let Some(text) = extra {
         out += &format!("<{kind}>\n{text}\n</{kind}>\n");
@@ -244,7 +248,7 @@ pub fn replayed_notebook(text: &str) -> Option<Attachment> {
     while let Some(after) = rest.strip_prefix("<cell uri=\"") {
         let (uri, after) = after.split_once("\">\n")?;
         let (code, after) = element_body(after, "cell")?;
-        let id = uri.strip_prefix(&format!("pluto://notebook/{notebook}/cell/"))?;
+        let id = uri_cell(uri, &notebook)?;
         cells.push(Cell { id: id.into(), code: code.into() });
         rest = after;
     }
@@ -281,7 +285,7 @@ fn element_body<'a>(text: &'a str, tag: &str) -> Option<(&'a str, &'a str)> {
 /// the user's words: its "[Endeavor]" notes, cell links, and how the agent
 /// echoes an attached text file.
 pub fn is_app_text(text: &str) -> bool {
-    text.starts_with("[Endeavor]") || text.starts_with("pluto://") || text.starts_with("attachment:") || text.trim_start().starts_with("<context ref=")
+    text.starts_with("[Endeavor]") || text.starts_with("notebook://") || text.starts_with("pluto://") || text.starts_with("attachment:") || text.trim_start().starts_with("<context ref=")
 }
 
 /// An attached text file as a replayed session gives it back: the agent
@@ -798,7 +802,7 @@ mod tests {
             [
                 format!(
                     "[Endeavor] The cell below failed with this error.\n<attached kind=\"error\" notebook=\"{NB}\">\n\
-                     <cell uri=\"pluto://notebook/{NB}/cell/c1\">\nfit = curve_fit(model, t, y, p0)\n</cell>\n\
+                     <cell uri=\"notebook://pluto/{NB}/cell/c1\">\nfit = curve_fit(model, t, y, p0)\n</cell>\n\
                      <error>\nBoundsError\n</error>\n</attached>"
                 ),
                 "image image/png aGkh".into(),
@@ -815,7 +819,7 @@ mod tests {
             self::texts(&prompt_blocks("plot it", &[fill], &[]))[1],
             format!(
                 "[Endeavor] The cell below is empty: write its code as the message asks.\n<attached kind=\"fill\" notebook=\"{NB}\">\n\
-                 <cell uri=\"pluto://notebook/{NB}/cell/c2\">\n\n</cell>\n</attached>"
+                 <cell uri=\"notebook://pluto/{NB}/cell/c2\">\n\n</cell>\n</attached>"
             )
         );
     }
@@ -834,6 +838,9 @@ mod tests {
             let block = notebook_block(&attachment).unwrap();
             assert_eq!(replayed_notebook(&block), Some(attachment), "{block}");
         }
+        let old = format!("[Endeavor] The message is about the cell below.\n<attached kind=\"cells\" notebook=\"{NB}\">\n<cell uri=\"pluto://notebook/{NB}/cell/c1\">\nrates = 1\n</cell>\n</attached>");
+        let about = Attachment::Cells { notebook: NB.into(), cells: vec![cell("c1", "rates = 1")], ask: CellAsk::About };
+        assert_eq!(replayed_notebook(&old), Some(about), "a session from before notebook:// links");
         assert_eq!(replayed_notebook("[Endeavor] The user is viewing Pluto notebook x."), None);
         assert_eq!(replayed_notebook("<attached kind=\"cells\">"), None, "only the app's own blocks");
     }
@@ -877,7 +884,8 @@ mod tests {
     #[test]
     fn replayed_app_text_is_recognised() {
         assert!(is_app_text("[Endeavor] The user is viewing"));
-        assert!(is_app_text("pluto://notebook/x/cell/y"));
+        assert!(is_app_text("notebook://pluto/x/cell/y"));
+        assert!(is_app_text("pluto://notebook/x/cell/y"), "a link from before notebook:// links");
         assert!(is_app_text("\n<context ref=\"attachment:notes.txt\">\nx\n</context>"));
         assert!(!is_app_text("why do these bunch up?"));
     }

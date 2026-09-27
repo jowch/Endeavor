@@ -196,7 +196,7 @@ impl Tools {
         if let Some(server) = &self.server {
             headers.push(HttpHeader::new("X-Endeavor-Host", server.clone()));
         }
-        McpServer::Sse(McpServerSse::new("pluto", self.bridge.url.clone()).headers(headers))
+        McpServer::Sse(McpServerSse::new(crate::celldiff::MCP_SERVER, self.bridge.url.clone()).headers(headers))
     }
 }
 
@@ -662,7 +662,7 @@ mod tests {
             while let Some(event) = events.next().await {
                 match event {
                     AgentEvent::Started { key: 1, result } => {
-                        let prompt = "Call the pluto list_notebooks tool once, then reply with exactly DONE.";
+                        let prompt = "Call the notebook list_notebooks tool once, then reply with exactly DONE.";
                         let prompt = vec![ContentBlock::Text(TextContent::new(prompt))];
                         tx.unbounded_send(Command::Turn(result.expect("started").id, Turn::Prompt(prompt))).unwrap();
                     }
@@ -671,7 +671,7 @@ mod tests {
                         let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
                         responder.respond(RequestPermissionResponse::new(outcome)).unwrap();
                     }
-                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ToolCall(c))) if c.title.contains("list_notebooks") => {
+                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ToolCall(c))) if c.title == format!("{}list_notebooks", crate::celldiff::TOOL_PREFIX) => {
                         call = Some(c.tool_call_id);
                     }
                     AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ToolCallUpdate(u))) if Some(&u.tool_call_id) == call.as_ref() => {
@@ -682,7 +682,7 @@ mod tests {
                     _ => {}
                 }
             }
-            assert!(call.is_some(), "no list_notebooks call: the agent didn't get the pluto tools");
+            assert!(call.is_some(), "no list_notebooks call: the agent didn't get the notebook tools");
             assert!(completed, "list_notebooks didn't complete");
         });
     }

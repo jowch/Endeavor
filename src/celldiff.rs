@@ -30,9 +30,16 @@ pub fn tool_json(raw: &Value) -> Option<Value> {
     serde_json::from_str(text).ok()
 }
 
-/// `mcp__pluto__edit_cell` -> `edit_cell`.
-pub fn pluto_tool(title: &str) -> Option<&str> {
-    title.strip_prefix("mcp__pluto__")
+/// The runtime bridge's name in each session's MCP config.
+pub const MCP_SERVER: &str = "notebook";
+/// Claude Code's name for a bridge tool is this prefix plus the tool's name.
+pub const TOOL_PREFIX: &str = "mcp__notebook__";
+/// The prefix before the server was named `notebook`: past sessions replay with it.
+const OLD_TOOL_PREFIX: &str = "mcp__pluto__";
+
+/// `mcp__notebook__edit_cell` (or, in a past session, `mcp__pluto__edit_cell`) -> `edit_cell`.
+pub fn notebook_tool(title: &str) -> Option<&str> {
+    title.strip_prefix(TOOL_PREFIX).or_else(|| title.strip_prefix(OLD_TOOL_PREFIX))
 }
 
 #[derive(Default)]
@@ -190,7 +197,8 @@ mod tests {
         let raw = json!([{ "type": "text", "text": "{\"cell_id\":\"x\",\"code\":\"y\"}" }]);
         assert_eq!(tool_json(&raw).unwrap()["code"], "y");
         assert_eq!(tool_json(&json!("{\"code\":\"z\"}")).unwrap()["code"], "z");
-        assert_eq!(pluto_tool("mcp__pluto__edit_cell"), Some("edit_cell"));
-        assert_eq!(pluto_tool("Bash"), None);
+        assert_eq!(notebook_tool("mcp__notebook__edit_cell"), Some("edit_cell"));
+        assert_eq!(notebook_tool("mcp__pluto__edit_cell"), Some("edit_cell"));
+        assert_eq!(notebook_tool("Bash"), None);
     }
 }

@@ -68,16 +68,12 @@ use notebook_pane::NotebookAction;
 use session::{Effect, Session, Stopped, folder_name};
 use settings::{Appearance, IdleStop, NotebookTheme, Settings};
 use splash::{Progress, Setup};
+use wire::backend::Backend;
 
-/// Notebook id from a Pluto `/edit?id=…` URL. Only the id is used: the URL also
-/// carries Pluto's secret, which must never reach the agent.
+/// Notebook id from a notebook page's URL. Only the id is used: the URL also
+/// carries the notebook server's secret, which must never reach the agent.
 fn viewed_notebook_id(url: &str) -> Option<&str> {
-    let (path, query) = url.split_once('?')?;
-    if !path.ends_with("/edit") {
-        return None;
-    }
-    let id = query.split('&').find_map(|kv| kv.strip_prefix("id="))?;
-    annotate::is_uuid(id).then_some(id)
+    Backend::Pluto.notebook_id(url).filter(|id| annotate::is_uuid(id))
 }
 
 actions!(
@@ -805,7 +801,7 @@ impl Workspace {
             context.push(format!(
                 "[Endeavor] This session works on the server {server} (ssh host {ssh}), in the folder {}. Julia, Pluto, \
                  the notebook and the files are all on that server; your own file and shell tools are off because \
-                 they'd see the user's Mac instead. Use the pluto tools list_folder, read_file and run_shell (the user \
+                 they'd see the user's Mac instead. Use the notebook tools list_folder, read_file and run_shell (the user \
                  approves each command), with the server's paths.",
                 folder.display()
             ));
@@ -1678,8 +1674,8 @@ impl Workspace {
     /// Show notebook `id` of `host`'s Pluto in the pane.
     pub fn load_notebook(&mut self, host: &HostId, id: &str, cx: &mut Context<Self>) {
         let Some(runtime) = self.connection(host).and_then(|c| c.runtime.as_ref()) else { return };
-        // pluto_url is `http://host:port/?secret=…`; keep the secret app-side.
-        let url = runtime.pluto_url.replacen("/?", &format!("/edit?id={id}&"), 1);
+        // pluto_url carries Pluto's secret; keep it app-side.
+        let url = Backend::Pluto.notebook_url(&runtime.pluto_url, id);
         self.webview.update(cx, |w, _| w.load_url(&url));
     }
 

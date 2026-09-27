@@ -28,7 +28,7 @@ pub fn run_at(entries: &[Entry], ix: usize) -> Option<Range<usize>> {
 /// A call failed: the agent says so, or a notebook tool answered with an error.
 pub fn failed(status: ToolCallStatus, title: &str, output: Option<&Value>) -> bool {
     status == ToolCallStatus::Failed
-        || (celldiff::pluto_tool(title).is_some() && output.and_then(celldiff::tool_json).is_some_and(|r| r.get("error").is_some()))
+        || (celldiff::notebook_tool(title).is_some() && output.and_then(celldiff::tool_json).is_some_and(|r| r.get("error").is_some()))
 }
 
 /// One kind of work, worded as "`verb` `one`" for a single one and
@@ -56,7 +56,7 @@ impl Act {
 
 /// A notebook tool call in plain words, as asked for: "edit a cell", "run 2 cells".
 pub fn asked(title: &str, input: &Value) -> Option<String> {
-    celldiff::pluto_tool(title)?;
+    celldiff::notebook_tool(title)?;
     let (act, n) = act_of(title, ToolKind::Other, input);
     Some(format!("{} {}", act.does, act.object(n)))
 }
@@ -115,7 +115,7 @@ pub fn doing(title: &str, kind: ToolKind, input: &Value) -> Option<(&'static str
 /// What a call did, and how many of it (cells edited, say).
 fn act_of(title: &str, kind: ToolKind, input: &Value) -> (Act, usize) {
     let count = |field: &str| input[field].as_array().map_or(1, |a| a.len().max(1));
-    if let Some(tool) = celldiff::pluto_tool(title) {
+    if let Some(tool) = celldiff::notebook_tool(title) {
         return match tool {
             "read_cell" => (READ_CELL, 1),
             "read_notebook_code" => (READ_NOTEBOOK, 1),
@@ -241,24 +241,24 @@ mod tests {
                 ("Read a.rs", ToolKind::Read, &null),
                 ("ls", ToolKind::Execute, &null),
                 ("Read b.rs", ToolKind::Read, &null),
-                ("mcp__pluto__list_folder", ToolKind::Other, &null),
+                ("mcp__notebook__list_folder", ToolKind::Other, &null),
             ]),
             "Read 2 files, ran a command, listed a folder"
         );
         assert_eq!(
             summary([
-                ("mcp__pluto__list_notebooks", ToolKind::Other, &null),
-                ("mcp__pluto__read_cell", ToolKind::Other, &null),
-                ("mcp__pluto__edit_cells", ToolKind::Other, &cells),
-                ("mcp__pluto__execute_cell", ToolKind::Other, &null),
+                ("mcp__notebook__list_notebooks", ToolKind::Other, &null),
+                ("mcp__notebook__read_cell", ToolKind::Other, &null),
+                ("mcp__notebook__edit_cells", ToolKind::Other, &cells),
+                ("mcp__notebook__execute_cell", ToolKind::Other, &null),
             ]),
             "Listed the notebooks, read a cell, edited 2 cells, ran a cell"
         );
         assert_eq!(
-            summary([("mcp__pluto__submit_changes", ToolKind::Other, &ids), ("mcp__pluto__execute_cell", ToolKind::Other, &null)]),
+            summary([("mcp__notebook__submit_changes", ToolKind::Other, &ids), ("mcp__notebook__execute_cell", ToolKind::Other, &null)]),
             "Ran 4 cells"
         );
-        assert_eq!(summary([("mcp__pluto__submit_changes", ToolKind::Other, &null)]), "Ran the changed cells");
+        assert_eq!(summary([("mcp__notebook__submit_changes", ToolKind::Other, &null)]), "Ran the changed cells");
         assert_eq!(
             summary([("Write a.txt", ToolKind::Edit, &null), ("Edit b.txt", ToolKind::Edit, &null), ("grep x", ToolKind::Search, &null)]),
             "Wrote a file, edited a file, ran a search"
@@ -268,7 +268,7 @@ mod tests {
             "Fetched 2 pages, used a tool"
         );
         assert_eq!(
-            summary([("mcp__pluto__read_notebook_code", ToolKind::Other, &null), ("mcp__pluto__read_notebook_code", ToolKind::Other, &null)]),
+            summary([("mcp__notebook__read_notebook_code", ToolKind::Other, &null), ("mcp__notebook__read_notebook_code", ToolKind::Other, &null)]),
             "Read the notebook 2 times"
         );
     }
@@ -276,11 +276,11 @@ mod tests {
     #[test]
     fn notebook_calls_are_asked_for_in_plain_words() {
         let null = Value::Null;
-        assert_eq!(super::asked("mcp__pluto__edit_cell", &null).as_deref(), Some("edit a cell"));
-        assert_eq!(super::asked("mcp__pluto__execute_cell", &null).as_deref(), Some("run a cell"));
-        assert_eq!(super::asked("mcp__pluto__submit_changes", &json!({"cell_ids": ["a", "b"]})).as_deref(), Some("run 2 cells"));
-        assert_eq!(super::asked("mcp__pluto__run_all_cells", &null).as_deref(), Some("run all cells"));
-        assert_eq!(super::asked("mcp__pluto__allow_execution", &null).as_deref(), Some("let the notebook run"));
+        assert_eq!(super::asked("mcp__notebook__edit_cell", &null).as_deref(), Some("edit a cell"));
+        assert_eq!(super::asked("mcp__notebook__execute_cell", &null).as_deref(), Some("run a cell"));
+        assert_eq!(super::asked("mcp__notebook__submit_changes", &json!({"cell_ids": ["a", "b"]})).as_deref(), Some("run 2 cells"));
+        assert_eq!(super::asked("mcp__notebook__run_all_cells", &null).as_deref(), Some("run all cells"));
+        assert_eq!(super::asked("mcp__notebook__allow_execution", &null).as_deref(), Some("let the notebook run"));
         assert_eq!(super::asked("Bash", &null), None);
     }
 
@@ -292,13 +292,13 @@ mod tests {
         assert_eq!(doing("Write a.txt", ToolKind::Edit, &null), Some(("Writing", "Writing a file".into(), Names::File)));
         assert_eq!(doing("ls", ToolKind::Execute, &null), Some(("Running", "Running a command".into(), Names::Nothing)));
         assert_eq!(doing("grep x", ToolKind::Search, &null), Some(("Running", "Running a search".into(), Names::Nothing)));
-        assert_eq!(doing("mcp__pluto__add_cell", ToolKind::Other, &null), Some(("Adding", "Adding a cell".into(), Names::Cell)));
+        assert_eq!(doing("mcp__notebook__add_cell", ToolKind::Other, &null), Some(("Adding", "Adding a cell".into(), Names::Cell)));
         assert_eq!(
-            doing("mcp__pluto__edit_cells", ToolKind::Other, &json!({"cells": [{}, {}]})),
+            doing("mcp__notebook__edit_cells", ToolKind::Other, &json!({"cells": [{}, {}]})),
             Some(("Editing", "Editing 2 cells".into(), Names::Nothing))
         );
-        assert_eq!(doing("mcp__pluto__run_all_cells", ToolKind::Other, &null), Some(("Running", "Running all cells".into(), Names::Nothing)));
-        assert_eq!(doing("mcp__pluto__list_folder", ToolKind::Other, &null), Some(("Listing", "Listing a folder".into(), Names::Nothing)));
+        assert_eq!(doing("mcp__notebook__run_all_cells", ToolKind::Other, &null), Some(("Running", "Running all cells".into(), Names::Nothing)));
+        assert_eq!(doing("mcp__notebook__list_folder", ToolKind::Other, &null), Some(("Listing", "Listing a folder".into(), Names::Nothing)));
         assert_eq!(doing("ToolSearch", ToolKind::Other, &null), None, "no words for it: the line says Working");
     }
 
@@ -306,8 +306,8 @@ mod tests {
     fn notebook_errors_count_as_failures() {
         let error = json!([{"type": "text", "text": "{\"error\":\"not_found\",\"message\":\"no cell\"}"}]);
         let fine = json!([{"type": "text", "text": "{\"cells\":[]}"}]);
-        assert!(super::failed(ToolCallStatus::Completed, "mcp__pluto__read_cell", Some(&error)));
-        assert!(!super::failed(ToolCallStatus::Completed, "mcp__pluto__read_cell", Some(&fine)));
+        assert!(super::failed(ToolCallStatus::Completed, "mcp__notebook__read_cell", Some(&error)));
+        assert!(!super::failed(ToolCallStatus::Completed, "mcp__notebook__read_cell", Some(&fine)));
         assert!(super::failed(ToolCallStatus::Failed, "Bash", None));
         assert!(!super::failed(ToolCallStatus::Completed, "Read", Some(&error)), "only notebook tools answer in JSON");
     }

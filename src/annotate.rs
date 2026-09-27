@@ -2,6 +2,7 @@
 //! cells), turned into chat messages with their attachments (design doc §4.2–4.3).
 
 use crate::attach::{Attachment, Cell, CellAsk};
+use wire::backend::Backend;
 
 /// The page script (frontend/, built with `npm run build`; the bundle is committed
 /// so building the app needs no Node).
@@ -210,8 +211,18 @@ fn cells(v: &serde_json::Value) -> Option<Vec<Cell>> {
     Some(ids.into_iter().enumerate().map(|(i, id)| Cell { id, code: capped(codes.and_then(|c| c.get(i)), MAX_CODE) }).collect())
 }
 
-pub fn cell_uri(notebook: &str, cell: &str) -> String {
-    format!("pluto://notebook/{notebook}/cell/{cell}")
+pub fn cell_uri(backend: Backend, notebook: &str, cell: &str) -> String {
+    format!("notebook://{}/{notebook}/cell/{cell}", backend.name())
+}
+
+/// The cell id in a link to a cell of `notebook`: `cell_uri`'s form, or
+/// `pluto://notebook/…/cell/…`, which sessions from before it used.
+pub fn uri_cell<'a>(uri: &'a str, notebook: &str) -> Option<&'a str> {
+    let rest = match uri.strip_prefix("notebook://") {
+        Some(rest) => rest.split_once('/')?.1,
+        None => uri.strip_prefix("pluto://notebook/")?,
+    };
+    rest.strip_prefix(notebook)?.strip_prefix("/cell/")
 }
 
 #[cfg(test)]
