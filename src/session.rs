@@ -105,6 +105,9 @@ pub struct Session {
     pub title: String,
     /// The user named it; the agent's titles no longer replace it.
     pub named: bool,
+    /// The title stands in for one ("New session", the notebook's name): the
+    /// user's first message, sent or replayed, replaces it.
+    pub untitled: bool,
     pub entries: Vec<Entry>,
     pub outbox: Outbox,
     /// Each cell's code as last seen in the agent's reads and edits, for diffs.
@@ -194,6 +197,14 @@ fn short_title(text: &str) -> String {
     format!("{}…", cut.trim_end_matches([',', '.', ':', ';']))
 }
 
+/// A title from the agent, unless it is really the app's context note: without a
+/// generated title, Claude Code falls back to the prompt's text, which starts
+/// with the "[Endeavor] …" note the app sends ahead of the user's words.
+pub fn agent_title(title: &str) -> Option<&str> {
+    let title = title.trim();
+    (!title.is_empty() && !title.starts_with("[Endeavor]")).then_some(title)
+}
+
 pub fn folder_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
 }
@@ -209,6 +220,7 @@ impl Session {
             start_context: None,
             title: "New session".into(),
             named: false,
+            untitled: true,
             entries: Vec::new(),
             outbox: Outbox::waiting(),
             cell_codes: CellCodes::default(),
@@ -428,13 +440,19 @@ impl Session {
         if let Some(context) = self.start_context.take() {
             message.blocks.insert(0, context);
         }
-        if self.title == "New session" {
-            self.title = short_title(message.label.lines().next().unwrap_or_default());
-        }
+        self.title_from(&message.label);
         let mut effects = Vec::new();
         let dispatch = self.outbox.submit(message, now && self.id.is_some());
         self.dispatch(dispatch, &mut effects);
         effects
+    }
+
+    fn title_from(&mut self, text: &str) {
+        let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().trim();
+        if self.untitled && !self.named && !line.is_empty() {
+            self.title = short_title(line);
+            self.untitled = false;
+        }
     }
 
     pub fn interrupt(&self) -> Option<Effect> {
@@ -540,6 +558,7 @@ impl Session {
                     ContentBlock::ResourceLink(link) => format!("✎ {}", link.name),
                     _ => return,
                 };
+                self.title_from(&text);
                 match self.entries.last_mut() {
                     Some(Entry::User { text: existing, .. }) => *existing = format!("{existing}\n{text}").into(),
                     _ => self.push(Entry::User { text: text.into(), expanded: false }),
@@ -611,7 +630,10 @@ impl Session {
             SessionUpdate::AvailableCommandsUpdate(update) => self.commands = update.available_commands,
             SessionUpdate::SessionInfoUpdate(info) => {
                 if let (MaybeUndefined::Value(title), false) = (info.title, self.named) {
-                    self.title = title;
+                    if let Some(title) = agent_title(&title) {
+                        self.title = title.to_string();
+                        self.untitled = false;
+                    }
                 }
             }
             // ponytail: modes, usage, available commands not shown yet.
@@ -1949,6 +1971,32 @@ more" }"#);
         s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__pluto__open_notebook"))));
         let effects = s.apply(tool_update("{\"error\":\"one_notebook\",\"message\":\"This session works on one notebook\"}"));
         assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn titles_come_from_the_users_words_not_the_apps_context() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, SessionInfoUpdate, TextContent};
+        let context = "[Endeavor] The user started this session on the Pluto notebook /tmp/a.jl, which is open";
+        let info = |t: &str| SessionEvent::Update(SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(t.to_string())));
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.submit(Queued::new("plot the growth curves".into(), None, Vec::new()), false);
+        assert_eq!(s.title, "plot the growth curves");
+        s.apply(info(context));
+        assert_eq!(s.title, "plot the growth curves", "the context note is not a title");
+        s.apply(info("Growth curve plots"));
+        assert_eq!(s.title, "Growth curve plots");
+
+        // Reopened with only a stand-in title: the first replayed message names it.
+        let chunk = |t: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(t)))));
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "a.jl".into());
+        s.untitled = true;
+        s.apply(chunk(context));
+        assert_eq!(s.title, "a.jl");
+        s.apply(chunk("fit the model"));
+        s.apply(chunk("and plot it"));
+        assert_eq!(s.title, "fit the model");
+        assert_eq!(super::agent_title(context), None);
+        assert_eq!(super::agent_title("  "), None);
     }
 
     #[test]

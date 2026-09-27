@@ -803,6 +803,17 @@ impl Workspace {
         }
     }
 
+    /// A past session's title: the user's name for it, else the agent's, else
+    /// its notebook's name; true when it only stands in for a title.
+    fn past_title(&self, info: &SessionInfo) -> (String, bool) {
+        let id = info.session_id.to_string();
+        if let Some(title) = self.titles.get(&id).cloned().or_else(|| info.title.as_deref().and_then(session::agent_title).map(str::to_owned)) {
+            return (title, false);
+        }
+        let notebook = self.session_notebooks.get(&id).and_then(|p| p.path.file_name()).map(|n| n.to_string_lossy().into_owned());
+        (notebook.unwrap_or_else(|| "Earlier session".into()), true)
+    }
+
     /// Reopen a past session (or switch to it if it's already open).
     fn open_past(&mut self, info: SessionInfo, place: Place, cx: &mut Context<Self>) {
         if let Some(key) = self.sessions.iter().find(|s| s.id.as_ref() == Some(&info.session_id)).map(|s| s.key) {
@@ -812,7 +823,7 @@ impl Workspace {
         self.next_key += 1;
         let named = self.titles.get(&info.session_id.to_string()).cloned();
         let resources = self.session_resources.get(&info.session_id.to_string()).cloned();
-        let title = named.clone().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into());
+        let (title, untitled) = self.past_title(&info);
         let notebook = self.session_notebooks.get(&info.session_id.to_string()).map(|p| p.path.display().to_string());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
         let mut session = Session::loading(key, info.session_id, place, server, title);
@@ -820,6 +831,7 @@ impl Workspace {
             session.open_on_start(path.clone());
         }
         session.named = named.is_some();
+        session.untitled = untitled;
         session.run_without_asking = self.settings.run_without_asking;
         session.resources = resources;
         self.sessions.push(session);
@@ -923,7 +935,7 @@ impl Workspace {
             Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.title.clone()),
             Row::Past(id, folder) => {
                 let info = self.past.get(folder)?.iter().find(|info| info.session_id == *id)?;
-                Some(self.titles.get(&id.to_string()).cloned().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into()))
+                Some(self.past_title(info).0)
             }
         }
     }
