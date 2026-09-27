@@ -2661,15 +2661,21 @@ fn main() {
         cx.on_action(|_: &OpenHelp, cx| cx.open_url(about::HELP));
         cx.on_action(|_: &ReportIssue, cx| cx.open_url(about::REPORT_ISSUE));
         cx.on_action(|_: &BringAllToFront, cx| platform::bring_all_to_front(cx));
+        // Deferred: from a focused view the action runs inside the active window,
+        // which can't be updated until it returns.
         cx.on_action(|_: &Minimize, cx| {
-            if let Some(window) = cx.active_window() {
-                let _ = window.update(cx, |_, window, _| window.minimize_window());
-            }
+            cx.defer(|cx| {
+                if let Some(window) = cx.active_window() {
+                    let _ = window.update(cx, |_, window, _| window.minimize_window());
+                }
+            })
         });
         cx.on_action(|_: &ZoomWindow, cx| {
-            if let Some(window) = cx.active_window() {
-                let _ = window.update(cx, |_, window, _| window.zoom_window());
-            }
+            cx.defer(|cx| {
+                if let Some(window) = cx.active_window() {
+                    let _ = window.update(cx, |_, window, _| window.zoom_window());
+                }
+            })
         });
         // Edit's items send the native cut:/copy:/paste:/selectAll: selectors, which
         // the notebook's web view needs for the clipboard; in our own text boxes
