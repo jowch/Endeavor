@@ -15,6 +15,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/endeavor target/release/endeavor-remote "$app/Contents/MacOS/"
 cp -R runtime plugin adapter "$app/Contents/Resources/"
+cp assets/icon/Endeavor.icns "$app/Contents/Resources/"
 # Helpers for Linux servers, if built (scripts/build-helpers.sh).
 if [ -d target/helpers ]; then
   cp -R target/helpers "$app/Contents/Resources/"
@@ -31,6 +32,7 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>CFBundleDisplayName</key><string>Endeavor</string>
   <key>CFBundleIdentifier</key><string>io.github.jowch.endeavor</string>
   <key>CFBundleExecutable</key><string>endeavor</string>
+  <key>CFBundleIconFile</key><string>Endeavor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>CFBundleShortVersionString</key><string>$version</string>

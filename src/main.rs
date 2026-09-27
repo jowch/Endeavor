@@ -9,6 +9,7 @@ use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 mod webkeys;
+mod about;
 mod agent;
 mod annotate;
 mod attach;
@@ -70,7 +71,26 @@ fn viewed_notebook_id(url: &str) -> Option<&str> {
     annotate::is_uuid(id).then_some(id)
 }
 
-actions!(endeavor, [Interrupt, ToggleAnnotation, CycleMode, ToggleSidebar, OpenSettings, Quit, ZoomIn, ZoomOut, ZoomReset]);
+actions!(
+    endeavor,
+    [
+        Interrupt,
+        ToggleAnnotation,
+        CycleMode,
+        ToggleSidebar,
+        OpenSettings,
+        Quit,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
+        ShowAbout,
+        Minimize,
+        ZoomWindow,
+        BringAllToFront,
+        OpenHelp,
+        ReportIssue
+    ]
+);
 
 /// A small JSON file in Endeavor's Application Support folder.
 fn app_file(name: &str) -> Option<PathBuf> {
@@ -466,6 +486,8 @@ pub struct Workspace {
     setup: Option<Setup>,
     /// The agent connected (setup's last step).
     agent_ready: bool,
+    /// The agent stopped with an error (often a failed adapter install); About offers Update.
+    agent_failed: bool,
     /// Claude Code's sign-in state, checked when the agent starts.
     signed_in: Option<bool>,
     /// A browser sign-in is under way.
@@ -639,6 +661,7 @@ impl Workspace {
             agent_options: load_json("agent-options.json"),
             setup: Setup::needed().then(Setup::default),
             agent_ready: false,
+            agent_failed: false,
             signed_in: None,
             signing_in: false,
             sign_in_error: None,
@@ -1462,6 +1485,7 @@ impl Workspace {
             AgentEvent::Ready => {
                 self.status = "Claude connected.".into();
                 self.agent_ready = true;
+                self.agent_failed = false;
                 self.finish_setup(cx);
                 let mut listed = HashSet::new();
                 for place in &self.recent {
@@ -1500,6 +1524,7 @@ impl Workspace {
             }
             AgentEvent::Failed(e) => {
                 self.status = format!("⚠ Agent stopped: {e}").into();
+                self.agent_failed = true;
                 if let Some(setup) = &mut self.setup {
                     setup.fail(e.clone());
                 }
@@ -1731,6 +1756,32 @@ impl Workspace {
     pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
+        self.restart_agent(cx);
+    }
+
+    /// What About Endeavor shows in its update strip.
+    pub fn updates(&self) -> about::Updates {
+        let adapter = match agent::adapter_status() {
+            Ok((version, false)) if self.agent_failed => about::Adapter::Available(version),
+            Ok((version, false)) => about::Adapter::Installing(version),
+            _ => about::Adapter::Current,
+        };
+        about::Updates { app: None, adapter }
+    }
+
+    /// About's Update: start the agent again, which installs the pinned adapter.
+    pub fn update_adapter(&mut self, cx: &mut Context<Self>) {
+        if !self.agent_failed {
+            return;
+        }
+        self.agent_failed = false;
+        if let Some(setup) = &mut self.setup {
+            setup.clear_error();
+        }
+        self.restart_agent(cx);
+    }
+
+    fn restart_agent(&mut self, cx: &mut Context<Self>) {
         if self.bridge(&HostId::ThisMac).is_some() {
             // The failed agent thread dropped its command channel; start with a new one.
             let (tx, rx) = futures::channel::mpsc::unbounded();
@@ -2600,19 +2651,42 @@ fn main() {
             KeyBinding::new("secondary-b", ToggleSidebar, None),
             KeyBinding::new("secondary-,", OpenSettings, None),
             KeyBinding::new("secondary-q", Quit, None),
+            KeyBinding::new("secondary-m", Minimize, None),
             KeyBinding::new("secondary-=", ZoomIn, None),
             KeyBinding::new("secondary--", ZoomOut, None),
             KeyBinding::new("secondary-0", ZoomReset, None),
         ]);
         cx.bind_keys(composer::key_bindings());
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &OpenHelp, cx| cx.open_url(about::HELP));
+        cx.on_action(|_: &ReportIssue, cx| cx.open_url(about::REPORT_ISSUE));
+        cx.on_action(|_: &BringAllToFront, cx| platform::bring_all_to_front(cx));
+        cx.on_action(|_: &Minimize, cx| {
+            if let Some(window) = cx.active_window() {
+                let _ = window.update(cx, |_, window, _| window.minimize_window());
+            }
+        });
+        cx.on_action(|_: &ZoomWindow, cx| {
+            if let Some(window) = cx.active_window() {
+                let _ = window.update(cx, |_, window, _| window.zoom_window());
+            }
+        });
         // Edit's items send the native cut:/copy:/paste:/selectAll: selectors, which
         // the notebook's web view needs for the clipboard; in our own text boxes
         // they become the input's actions.
         use gpui_component::input::{Copy, Cut, Paste, SelectAll};
         let menu = |name: &str, items| Menu { name: name.to_string().into(), items, disabled: false };
         cx.set_menus(vec![
-            menu("Endeavor", vec![MenuItem::action("Settings…", OpenSettings), MenuItem::separator(), MenuItem::action("Quit Endeavor", Quit)]),
+            menu(
+                "Endeavor",
+                vec![
+                    MenuItem::action("About Endeavor", ShowAbout),
+                    MenuItem::separator(),
+                    MenuItem::action("Settings…", OpenSettings),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit Endeavor", Quit),
+                ],
+            ),
             menu(
                 "Edit",
                 vec![
@@ -2632,9 +2706,20 @@ fn main() {
                     MenuItem::action("Actual Size", ZoomReset),
                 ],
             ),
+            // GPUI makes the menu named "Window" the app's windows menu, so macOS adds the window list.
+            menu(
+                "Window",
+                vec![
+                    MenuItem::action("Minimize", Minimize),
+                    MenuItem::action("Zoom", ZoomWindow),
+                    MenuItem::separator(),
+                    MenuItem::action("Bring All to Front", BringAllToFront),
+                ],
+            ),
+            menu("Help", vec![MenuItem::action("Endeavor Help", OpenHelp), MenuItem::action("Report an Issue…", ReportIssue)]),
         ]);
         let bounds = Bounds::centered(None, size(px(1560.), px(900.)), cx);
-        cx.open_window(
+        let main_window = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(WINDOW_MIN),
@@ -2654,6 +2739,8 @@ fn main() {
                     return cx.new(|cx| Root::new(preview, window, cx));
                 }
                 let workspace = cx.new(|cx| Workspace::new(window, cx));
+                let ws = workspace.downgrade();
+                cx.on_action(move |_: &ShowAbout, cx| about::open_about(ws.clone(), cx));
                 // Menu items and shortcuts pressed while the notebook has the keyboard reach
                 // no focused GPUI element; these app-wide handlers forward them.
                 let ws = workspace.downgrade();
@@ -2683,8 +2770,15 @@ fn main() {
                 cx.new(|cx| Root::new(workspace, window, cx))
             },
         )
-        .unwrap();
-        cx.on_window_closed(|cx, _| cx.quit()).detach();
+        .unwrap()
+        .window_id();
+        // About and Licences can close without quitting.
+        cx.on_window_closed(move |cx, closed| {
+            if closed == main_window {
+                cx.quit();
+            }
+        })
+        .detach();
         cx.activate(true);
     });
 }

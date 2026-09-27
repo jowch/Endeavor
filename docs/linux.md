@@ -156,7 +156,9 @@ changes.
    - `install::resources()` looks for `../Resources` next to the executable.
      Linux needs its own layout, such as a tarball, AppImage or .deb with
      `share/endeavor/{runtime,plugin,adapter}`.
-   - Linux also needs a `.desktop` file and an icon.
+   - Linux also needs a `.desktop` file. Its icon is ready:
+     `assets/icon/endeavor-256.png` and `endeavor-512.png` (for
+     `share/icons/hicolor/{256x256,512x512}/apps/endeavor.png`).
    - The Linux runtime dependencies above need to be declared.
 4. **Wayland (L).** wry can embed a child web view only in an X11 window. The
    app builds GPUI with only the `x11` feature, so on a Wayland desktop it runs
