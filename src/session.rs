@@ -829,8 +829,9 @@ impl Session {
     }
 
     /// What the agent is doing, for the working line: this turn's latest running tool
-    /// call, else thinking or working. The second part (a cell or file name) is code-like.
-    fn activity(&self) -> (String, Option<String>) {
+    /// call in the folded runs' words, else thinking or working. The second part
+    /// (a cell or file name) is code-like.
+    pub(crate) fn activity(&self) -> (String, Option<String>) {
         let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap_or(0);
         let running = self.entries[turn_start..].iter().rev().find_map(|e| match e {
             Entry::Tool { title, kind, path, status: ToolCallStatus::Pending | ToolCallStatus::InProgress, input, .. } => {
@@ -843,52 +844,18 @@ impl Session {
             return (verb.into(), None);
         };
         let input = input.as_ref().unwrap_or(&serde_json::Value::Null);
-        let named = |field: &str| input[field].as_str().and_then(|id| self.cell_codes.get(id)).and_then(defined_name);
-        let cells = |n: usize| if n == 1 { "1 cell".to_string() } else { format!("{n} cells") };
-        match celldiff::pluto_tool(title) {
-            Some(tool) => {
-                let (verb, object) = match tool {
-                    "read_cell" | "view_cell_output" => ("Reading", named("cell_id")),
-                    "edit_cell" => ("Editing", input["code"].as_str().and_then(defined_name).or_else(|| named("cell_id"))),
-                    "add_cell" => ("Adding", input["code"].as_str().and_then(defined_name)),
-                    "delete_cell" => ("Deleting", named("cell_id")),
-                    "move_cell" => ("Moving", named("cell_id")),
-                    "execute_cell" => ("Running", named("cell_id")),
-                    "edit_cells" => return (format!("Editing {}", cells(input["cells"].as_array().map_or(0, Vec::len))), None),
-                    "submit_changes" => match input["cell_ids"].as_array() {
-                        Some(ids) => return (format!("Running {}", cells(ids.len())), None),
-                        None => return ("Running changed cells".into(), None),
-                    },
-                    "run_all_cells" => return ("Running all cells".into(), None),
-                    "read_notebook_code" => return ("Reading the notebook".into(), None),
-                    "search_code" => return ("Searching the notebook".into(), None),
-                    "open_notebook" => return ("Opening a notebook".into(), None),
-                    "new_notebook" => return ("Creating a notebook".into(), None),
-                    _ => return ("Working".into(), None),
-                };
-                match object {
-                    Some(name) => (verb.into(), Some(name)),
-                    None => (format!("{verb} a cell"), None),
-                }
-            }
-            None => {
-                let file = path.as_deref().and_then(Path::file_name).map(|f| f.to_string_lossy().into_owned());
-                let verb = match kind {
-                    ToolKind::Read => "Reading",
-                    ToolKind::Edit => "Editing",
-                    ToolKind::Delete => "Deleting",
-                    ToolKind::Move => "Moving",
-                    ToolKind::Search => return ("Searching".into(), None),
-                    ToolKind::Execute => return ("Running a command".into(), None),
-                    ToolKind::Think => return ("Thinking".into(), None),
-                    ToolKind::Fetch => return ("Fetching".into(), None),
-                    _ => return ("Working".into(), None),
-                };
-                match file {
-                    Some(file) => (verb.into(), Some(file)),
-                    None => (format!("{verb} a file"), None),
-                }
-            }
+        let Some((verb, phrase, names)) = runs::doing(title, kind, input) else { return ("Working".into(), None) };
+        let name = match names {
+            runs::Names::File => file_path(path.as_deref(), input).map(|p| file_name(&p)),
+            runs::Names::Cell => input["code"]
+                .as_str()
+                .and_then(defined_name)
+                .or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).and_then(defined_name)),
+            runs::Names::Nothing => None,
+        };
+        match name {
+            Some(name) => (verb.into(), Some(name)),
+            None => (phrase, None),
         }
     }
 
@@ -1022,15 +989,13 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
 }
 
 /// The working line: an orbit, then what the agent is doing and for how long
-/// ("Editing `residuals` · 12s"), or nothing while it waits on the user.
-pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
+/// ("Adding `residuals` · 12s"), or nothing while it waits on the user.
+pub fn render_activity(session: &Session, cx: &App) -> Option<impl IntoElement + use<>> {
     let since = session.busy_since?;
     // The approval card above the composer says it all.
     if session.needs_approval() {
         return None;
     }
-    let secs = since.elapsed().as_secs();
-    let elapsed = if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) };
     let (verb, object) = session.activity();
     Some(
         div()
@@ -1041,35 +1006,43 @@ pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
             .gap(px(4.))
             .text_size(theme::size_meta())
             .text_color(theme::text_muted())
-            .child(
-                div()
-                    .mr(px(4.))
-                    .size(px(ORBIT))
-                    .with_animation(
-                        ElementId::NamedInteger("orbit".into(), session.key),
-                        Animation::new(Duration::from_secs(1)).repeat(),
-                        |d, t| d.child(orbit(t)),
-                    ),
-            )
+            .child(div().mr(px(4.)).child(orbit(ElementId::NamedInteger("orbit".into(), session.key), ORBIT, cx)))
             .child(verb)
             .children(object.map(|o| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_secondary()).child(o)))
-            .child(format!("· {elapsed}"))
+            .child(format!("· {}", elapsed(since.elapsed().as_secs())))
             .into_any_element(),
     )
 }
 
+/// "12s", "1m 05s".
+pub(crate) fn elapsed(secs: u64) -> String {
+    if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) }
+}
+
 const ORBIT: f32 = 14.;
 
-/// A dot circling a small sphere on a tilted ring, `t` of the way round a lap.
-/// It passes behind the sphere on the ring's far half, so the ring's back half,
-/// a dot there, the sphere, the front half and a dot there are drawn in that order.
-fn orbit(t: f32) -> impl IntoElement {
+/// The working mark: a dot circling a small disc on a tilted ring, one lap a
+/// second. With reduce motion it stands still at the front of the ring.
+pub fn orbit(id: ElementId, size: f32, cx: &App) -> AnyElement {
+    if cx.reduce_motion() {
+        return orbit_at(0.25, size).into_any_element();
+    }
+    div()
+        .size(px(size))
+        .with_animation(id, Animation::new(Duration::from_secs(1)).repeat(), move |d, t| d.child(orbit_at(t, size)))
+        .into_any_element()
+}
+
+/// The orbit `t` of the way round a lap (0.25: in front of the disc). The dot
+/// passes behind the disc on the ring's far half, so the ring's back half, a
+/// dot there, the disc, the front half and a dot there are drawn in that order.
+fn orbit_at(t: f32, size_px: f32) -> impl IntoElement {
     use std::f32::consts::{PI, TAU};
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
             let center = bounds.center();
-            let (rx, tilt) = (ORBIT * 0.36, -25f32.to_radians());
+            let (rx, tilt) = (size_px * 0.36, -25f32.to_radians());
             let ry = rx * 0.36;
             let on_ring = |a: f32| {
                 let (x, y) = (rx * a.cos(), ry * a.sin());
@@ -1090,21 +1063,21 @@ fn orbit(t: f32) -> impl IntoElement {
                 window.paint_quad(fill(Bounds::centered_at(at, size(px(2. * r), px(2. * r))), color).corner_radii(px(r)));
             };
             let angle = t * TAU;
-            // sin < 0: the far half, above the sphere on screen.
+            // sin < 0: the far half, above the disc on screen.
             let behind = angle > PI;
-            let dot = |window: &mut Window| disc(on_ring(angle), ORBIT * 1.7 / 14., theme::accent(), window);
+            let dot = |window: &mut Window| disc(on_ring(angle), size_px * 1.7 / 14., theme::accent(), window);
             half(PI, window);
             if behind {
                 dot(window);
             }
-            disc(center, ORBIT * 3.4 / 14., theme::orbit_sphere(), window);
+            disc(center, size_px * 3.4 / 14., theme::orbit_sphere(), window);
             half(0., window);
             if !behind {
                 dot(window);
             }
         },
     )
-    .size(px(ORBIT))
+    .size(px(size_px))
 }
 
 /// User messages taller than this many wrapped lines fold to their first
@@ -2294,6 +2267,37 @@ more" }"#);
         assert!(s.busy_since.is_some());
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(s.busy_since.is_none());
+    }
+
+    #[test]
+    fn the_working_line_says_what_the_running_call_does() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind};
+        use serde_json::json;
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("hi"), false);
+        assert_eq!(s.activity(), ("Working".into(), None));
+        s.apply(SessionEvent::Update(SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::from("hmm")))));
+        assert_eq!(s.activity(), ("Thinking".into(), None));
+        let call = |id: &str, title: &str, kind, input| {
+            SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), title.to_string()).kind(kind).raw_input(input)))
+        };
+        s.apply(call("t1", "Read /data/data.csv", ToolKind::Read, json!({"file_path": "/data/data.csv"})));
+        assert_eq!(s.activity(), ("Reading".into(), Some("data.csv".into())));
+        s.apply(call("t2", "mcp__pluto__add_cell", ToolKind::Other, json!({"code": "residuals = y .- ŷ"})));
+        assert_eq!(s.activity(), ("Adding".into(), Some("residuals".into())));
+        s.apply(call("t3", "mcp__pluto__add_cell", ToolKind::Other, json!({"code": "md\"# Fit\""})));
+        assert_eq!(s.activity(), ("Adding a cell".into(), None));
+        s.apply(call("t4", "ls", ToolKind::Execute, json!({"command": "ls"})));
+        assert_eq!(s.activity(), ("Running a command".into(), None));
+        s.apply(call("t5", "ToolSearch", ToolKind::Other, json!({"query": "fetch"})));
+        assert_eq!(s.activity(), ("Working".into(), None));
+        let done = |id: &str| SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_string(), ToolCallUpdateFields::new().status(ToolCallStatus::Completed))));
+        s.apply(done("t5"));
+        s.apply(done("t4"));
+        assert_eq!(s.activity(), ("Adding a cell".into(), None), "the latest call still running");
+        assert_eq!(super::elapsed(12), "12s");
+        assert_eq!(super::elapsed(65), "1m 05s");
     }
 
     #[test]

@@ -1989,11 +1989,11 @@ impl Workspace {
                         let group: SharedString = format!("session-{key}").into();
                         let title = self.row_label(&Row::Open(key), s.title.clone());
                         let archived = s.id.as_ref().is_some_and(|id| self.archived.contains(&id.to_string()));
-                        // Status at the row's end: a ring waits for you, a dot is working.
+                        // Status at the row's end: a ring waits for you, the working orbit is working.
                         let mark = if s.needs_approval() {
                             Some(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element())
                         } else if s.outbox.busy {
-                            Some(div().size(px(6.)).rounded_full().bg(theme::accent()).into_any_element())
+                            Some(session::orbit(ElementId::NamedInteger("row-orbit".into(), key), 12., cx))
                         } else if archived {
                             Some(glyph(Glyph::Archive, theme::text_section()).into_any_element())
                         } else {
@@ -2455,7 +2455,7 @@ impl Workspace {
                     })
             }))
             .child(session::render_transcript(session, cx))
-            .children(session::render_activity(session))
+            .children(session::render_activity(session, cx))
             .child(
                 div()
                     .px_4()

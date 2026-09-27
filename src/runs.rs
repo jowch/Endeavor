@@ -33,17 +33,19 @@ pub fn failed(status: ToolCallStatus, title: &str, output: Option<&Value>) -> bo
 
 /// One kind of work, worded as "`verb` `one`" for a single one and
 /// "`verb` `many`" (with `{n}` the count) for several; `does` is the verb
-/// before it happens ("edit a cell"), `verb` after ("edited a cell").
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// before it happens ("edit a cell"), `doing` while it happens ("Editing a
+/// cell"), `verb` after ("edited a cell").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Act {
+    doing: &'static str,
     does: &'static str,
     verb: &'static str,
     one: &'static str,
     many: &'static str,
 }
 
-const fn act(does: &'static str, verb: &'static str, one: &'static str, many: &'static str) -> Act {
-    Act { does, verb, one, many }
+const fn act(doing: &'static str, does: &'static str, verb: &'static str, one: &'static str, many: &'static str) -> Act {
+    Act { doing, does, verb, one, many }
 }
 
 impl Act {
@@ -59,33 +61,56 @@ pub fn asked(title: &str, input: &Value) -> Option<String> {
     Some(format!("{} {}", act.does, act.object(n)))
 }
 
-const READ_FILE: Act = act("read", "read", "a file", "{n} files");
-const EDIT_FILE: Act = act("edit", "edited", "a file", "{n} files");
-const WRITE_FILE: Act = act("write", "wrote", "a file", "{n} files");
-const DELETE_FILE: Act = act("delete", "deleted", "a file", "{n} files");
-const MOVE_FILE: Act = act("move", "moved", "a file", "{n} files");
-const LIST_FOLDER: Act = act("list", "listed", "a folder", "{n} folders");
-const SEARCH: Act = act("run", "ran", "a search", "{n} searches");
-const FETCH: Act = act("fetch", "fetched", "a page", "{n} pages");
-const COMMAND: Act = act("run", "ran", "a command", "{n} commands");
-const TODOS: Act = act("update", "updated", "the to-do list", "the to-do list {n} times");
-const READ_CELL: Act = act("read", "read", "a cell", "{n} cells");
-const READ_NOTEBOOK: Act = act("read", "read", "the notebook", "the notebook {n} times");
-const VIEW_OUTPUT: Act = act("view", "viewed", "an output", "{n} outputs");
-const EDIT_CELL: Act = act("edit", "edited", "a cell", "{n} cells");
-const ADD_CELL: Act = act("add", "added", "a cell", "{n} cells");
-const DELETE_CELL: Act = act("delete", "deleted", "a cell", "{n} cells");
-const MOVE_CELL: Act = act("move", "moved", "a cell", "{n} cells");
-const RUN_CELL: Act = act("run", "ran", "a cell", "{n} cells");
-const RUN_CHANGED: Act = act("run", "ran", "the changed cells", "the changed cells {n} times");
-const RUN_ALL: Act = act("run", "ran", "all cells", "all cells {n} times");
-const SEARCH_NOTEBOOK: Act = act("search", "searched", "the notebook", "the notebook {n} times");
-const LIST_NOTEBOOKS: Act = act("list", "listed", "the notebooks", "the notebooks {n} times");
-const OPEN_NOTEBOOK: Act = act("open", "opened", "a notebook", "{n} notebooks");
-const NEW_NOTEBOOK: Act = act("create", "created", "a notebook", "{n} notebooks");
-const ALLOW_RUN: Act = act("let", "let", "the notebook run", "the notebook run");
-const KEEP_ALIVE: Act = act("keep", "kept", "the notebook running", "the notebook running");
-const OTHER: Act = act("use", "used", "a tool", "{n} tools");
+const READ_FILE: Act = act("Reading", "read", "read", "a file", "{n} files");
+const EDIT_FILE: Act = act("Editing", "edit", "edited", "a file", "{n} files");
+const WRITE_FILE: Act = act("Writing", "write", "wrote", "a file", "{n} files");
+const DELETE_FILE: Act = act("Deleting", "delete", "deleted", "a file", "{n} files");
+const MOVE_FILE: Act = act("Moving", "move", "moved", "a file", "{n} files");
+const LIST_FOLDER: Act = act("Listing", "list", "listed", "a folder", "{n} folders");
+const SEARCH: Act = act("Running", "run", "ran", "a search", "{n} searches");
+const FETCH: Act = act("Fetching", "fetch", "fetched", "a page", "{n} pages");
+const COMMAND: Act = act("Running", "run", "ran", "a command", "{n} commands");
+const TODOS: Act = act("Updating", "update", "updated", "the to-do list", "the to-do list {n} times");
+const READ_CELL: Act = act("Reading", "read", "read", "a cell", "{n} cells");
+const READ_NOTEBOOK: Act = act("Reading", "read", "read", "the notebook", "the notebook {n} times");
+const VIEW_OUTPUT: Act = act("Viewing", "view", "viewed", "an output", "{n} outputs");
+const EDIT_CELL: Act = act("Editing", "edit", "edited", "a cell", "{n} cells");
+const ADD_CELL: Act = act("Adding", "add", "added", "a cell", "{n} cells");
+const DELETE_CELL: Act = act("Deleting", "delete", "deleted", "a cell", "{n} cells");
+const MOVE_CELL: Act = act("Moving", "move", "moved", "a cell", "{n} cells");
+const RUN_CELL: Act = act("Running", "run", "ran", "a cell", "{n} cells");
+const RUN_CHANGED: Act = act("Running", "run", "ran", "the changed cells", "the changed cells {n} times");
+const RUN_ALL: Act = act("Running", "run", "ran", "all cells", "all cells {n} times");
+const SEARCH_NOTEBOOK: Act = act("Searching", "search", "searched", "the notebook", "the notebook {n} times");
+const LIST_NOTEBOOKS: Act = act("Listing", "list", "listed", "the notebooks", "the notebooks {n} times");
+const OPEN_NOTEBOOK: Act = act("Opening", "open", "opened", "a notebook", "{n} notebooks");
+const NEW_NOTEBOOK: Act = act("Creating", "create", "created", "a notebook", "{n} notebooks");
+const ALLOW_RUN: Act = act("Letting", "let", "let", "the notebook run", "the notebook run");
+const KEEP_ALIVE: Act = act("Keeping", "keep", "kept", "the notebook running", "the notebook running");
+const OTHER: Act = act("Using", "use", "used", "a tool", "{n} tools");
+
+/// What a running call can be named by on the working line.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Names {
+    File,
+    Cell,
+    Nothing,
+}
+
+/// A running call for the working line, in the same words as the folded runs:
+/// its verb ("Reading"), the phrase to show when it names nothing ("Reading a
+/// file", "Editing 2 cells"), and what it can be named by. None for a tool
+/// there are no words for.
+pub fn doing(title: &str, kind: ToolKind, input: &Value) -> Option<(&'static str, String, Names)> {
+    let (act, n) = act_of(title, kind, input);
+    let names = match act {
+        OTHER => return None,
+        READ_FILE | EDIT_FILE | WRITE_FILE | DELETE_FILE | MOVE_FILE => Names::File,
+        READ_CELL | VIEW_OUTPUT | EDIT_CELL | ADD_CELL | DELETE_CELL | MOVE_CELL | RUN_CELL if n == 1 => Names::Cell,
+        _ => Names::Nothing,
+    };
+    Some((act.doing, format!("{} {}", act.doing, act.object(n)), names))
+}
 
 /// What a call did, and how many of it (cells edited, say).
 fn act_of(title: &str, kind: ToolKind, input: &Value) -> (Act, usize) {
@@ -257,6 +282,24 @@ mod tests {
         assert_eq!(super::asked("mcp__pluto__run_all_cells", &null).as_deref(), Some("run all cells"));
         assert_eq!(super::asked("mcp__pluto__allow_execution", &null).as_deref(), Some("let the notebook run"));
         assert_eq!(super::asked("Bash", &null), None);
+    }
+
+    #[test]
+    fn running_calls_are_worded_like_the_folded_runs() {
+        use super::{Names, doing};
+        let null = Value::Null;
+        assert_eq!(doing("Read data.csv", ToolKind::Read, &null), Some(("Reading", "Reading a file".into(), Names::File)));
+        assert_eq!(doing("Write a.txt", ToolKind::Edit, &null), Some(("Writing", "Writing a file".into(), Names::File)));
+        assert_eq!(doing("ls", ToolKind::Execute, &null), Some(("Running", "Running a command".into(), Names::Nothing)));
+        assert_eq!(doing("grep x", ToolKind::Search, &null), Some(("Running", "Running a search".into(), Names::Nothing)));
+        assert_eq!(doing("mcp__pluto__add_cell", ToolKind::Other, &null), Some(("Adding", "Adding a cell".into(), Names::Cell)));
+        assert_eq!(
+            doing("mcp__pluto__edit_cells", ToolKind::Other, &json!({"cells": [{}, {}]})),
+            Some(("Editing", "Editing 2 cells".into(), Names::Nothing))
+        );
+        assert_eq!(doing("mcp__pluto__run_all_cells", ToolKind::Other, &null), Some(("Running", "Running all cells".into(), Names::Nothing)));
+        assert_eq!(doing("mcp__pluto__list_folder", ToolKind::Other, &null), Some(("Listing", "Listing a folder".into(), Names::Nothing)));
+        assert_eq!(doing("ToolSearch", ToolKind::Other, &null), None, "no words for it: the line says Working");
     }
 
     #[test]
