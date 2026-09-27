@@ -492,59 +492,62 @@ impl Workspace {
                     // The title and the buttons stay put; only this scrolls, when the window is short.
                     .max_h((window.viewport_size().height - px(150.)).max(px(160.)))
                     .overflow_y_scroll()
-                    .px(px(20.))
-                    .pb(px(14.))
-                    .flex()
-                    .flex_col()
-                    .child(section("Connection"))
-                    .child(row("Name", div().w(px(260.)).child(field(&dialog.name, false))))
-                    .child(row(
-                        "SSH host",
-                        div().flex().gap(px(8.)).child(div().w(px(200.)).child(host_field)).child(
-                            button("test-connection", if testing { "Stop test" } else { "Test connection" }, false)
-                                .w(px(124.))
-                                .justify_center()
-                                .on_click(cx.listener(|this, _, _, cx| this.test_server(cx))),
-                        ),
-                    ))
-                    .child(hint("An alias from ~/.ssh/config, or user@host (:port if not 22). Your SSH keys and settings apply."))
-                    .children(suggestions)
-                    .children(dialog.test.as_ref().map(render_test))
-                    .when(is_cluster, |d| d.children(self.cluster_rows(cx)))
-                    .when(!is_cluster, |d| {
-                        d.child(row("How to get Julia", div().w(px(260.)).child(field(&dialog.julia, true)))).child(hint(
-                            "A path to julia, or a shell line that puts it on the PATH. Empty: the julia on the server's PATH, else Endeavor downloads its own.",
-                        ))
-                    })
-                    .child(divider())
-                    .child(section("Notebooks"))
-                    .child(row(
-                        "Stop idle notebooks after",
-                        div().relative().child(
-                            div()
-                                .id("idle-stop")
-                                .w(px(220.))
-                                .h(px(28.))
-                                .px(px(10.))
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(theme::composer_edge())
-                                .cursor_pointer()
-                                .child(idle_label)
-                                .child(glyph(Glyph::Chevron, theme::text_faint()))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(dialog) = &mut this.server_dialog {
-                                        dialog.idle_menu = !dialog.idle_menu;
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                        .children(idle_menu),
-                    ))
-                    .children(dialog.error.clone().map(|e| div().pt(px(10.)).text_size(theme::size_meta()).text_color(theme::danger()).child(e))),
+                    .child(
+                        div()
+                            .px(px(20.))
+                            .pb(px(14.))
+                            .flex()
+                            .flex_col()
+                            .child(section("Connection"))
+                            .child(row("Name", div().w(px(260.)).child(field(&dialog.name, false))))
+                            .child(row(
+                                "SSH host",
+                                div().flex().gap(px(8.)).child(div().w(px(200.)).child(host_field)).child(
+                                    button("test-connection", if testing { "Stop test" } else { "Test connection" }, false)
+                                        .w(px(124.))
+                                        .justify_center()
+                                        .on_click(cx.listener(|this, _, _, cx| this.test_server(cx))),
+                                ),
+                            ))
+                            .child(hint("An alias from ~/.ssh/config, or user@host (:port if not 22). Uses your SSH keys."))
+                            .children(suggestions)
+                            .children(dialog.test.as_ref().map(render_test))
+                            .when(is_cluster, |d| d.children(self.cluster_rows(cx)))
+                            .when(!is_cluster, |d| {
+                                d.child(row("How to get Julia", div().w(px(260.)).child(field(&dialog.julia, true)))).child(hint(
+                                    "A path to julia, or a shell line that puts it on the PATH. Empty: the julia on the server's PATH, else Endeavor downloads its own.",
+                                ))
+                            })
+                            .child(divider())
+                            .child(section("Notebooks"))
+                            .child(row(
+                                "Stop idle notebooks after",
+                                div().relative().child(
+                                    div()
+                                        .id("idle-stop")
+                                        .w(px(220.))
+                                        .h(px(28.))
+                                        .px(px(10.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .rounded(px(6.))
+                                        .border_1()
+                                        .border_color(theme::composer_edge())
+                                        .cursor_pointer()
+                                        .child(idle_label)
+                                        .child(glyph(Glyph::Chevron, theme::text_faint()))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if let Some(dialog) = &mut this.server_dialog {
+                                                dialog.idle_menu = !dialog.idle_menu;
+                                                cx.notify();
+                                            }
+                                        })),
+                                )
+                                .children(idle_menu),
+                            ))
+                            .children(dialog.error.clone().map(|e| div().pt(px(10.)).text_size(theme::size_meta()).text_color(theme::danger()).child(e))),
+                    ),
             )
             .child(div().px(px(20.)).py(px(12.)).border_t_1().border_color(theme::composer_edge()).child(footer));
         Some(modal_backdrop("server-dialog-backdrop").child(card).into_any_element())
@@ -663,7 +666,7 @@ impl Workspace {
             row("Type", detected).into_any_element(),
             row("Account", div().w(px(220.)).child(field(&c.account, false))).into_any_element(),
             row("How to get Julia", div().w(px(220.)).child(field(&dialog.julia, true))).into_any_element(),
-            hint("A julia path or a shell line (module load julia). Empty: the login node's julia, else Endeavor's.").into_any_element(),
+            hint("A julia path or a shell line (module load julia); empty finds or downloads one.").into_any_element(),
             row("Where to keep Julia packages", div().w(px(220.)).child(field(&c.depot, true))).into_any_element(),
             hint("Scratch space by default: home folders on clusters are usually small.").into_any_element(),
             divider().into_any_element(),
