@@ -95,6 +95,18 @@ pub mod overlay {
 }
 
 #[cfg(not(target_os = "macos"))]
+pub mod snapshot {
+    use futures::channel::oneshot;
+
+    /// No picture of the notebook here yet: a drawn box goes as its cells.
+    pub fn png(_: &wry::WebView, _: [f64; 4]) -> oneshot::Receiver<Option<Vec<u8>>> {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(None);
+        rx
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 pub mod webkeys {
     pub fn fix_key_handling() {}
     pub fn allow_pinch_zoom(_: &wry::WebView) {}

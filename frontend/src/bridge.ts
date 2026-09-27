@@ -9,6 +9,9 @@ export type ToApp =
   | { type: "mode"; on: boolean }
   // Cells picked with Point, with each one's code (`codes`, same order).
   | { type: "annotation"; notebook: string | null; cells: string[]; codes: string[]; comment: string; now: boolean }
+  // A box drawn with Point: the cells under it, and where it is in the viewport
+  // (CSS pixels) for the app to take its picture.
+  | { type: "region"; notebook: string | null; cells: string[]; codes: string[]; comment: string; now: boolean; rect: { x: number; y: number; width: number; height: number } }
   // Fix with Claude / Explain on a cell's error.
   | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; code: string; error: string }
   // ⌘K on a cell / the agent button between cells: about this cell, fill this
@@ -38,7 +41,9 @@ export type ToPage =
   // Scroll to these cells and outline them briefly (a chip in the chat was clicked).
   | { type: "reveal"; cells: string[] }
   // Ask for a cell's code now.
-  | { type: "code"; cell: string };
+  | { type: "code"; cell: string }
+  // The app took a drawn box's picture: show Point's overlay again.
+  | { type: "shot" };
 
 declare global {
   interface Window {

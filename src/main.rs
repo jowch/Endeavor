@@ -33,12 +33,14 @@ mod runtime;
 mod server_dialog;
 mod session;
 mod settings;
+#[cfg(target_os = "macos")]
+mod snapshot;
 mod splash;
 mod theme;
 mod turtle;
 mod when;
 #[cfg(not(target_os = "macos"))]
-use platform::{overlay, webkeys};
+use platform::{overlay, snapshot, webkeys};
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
@@ -1587,10 +1589,41 @@ impl Workspace {
                 let effects = session.submit(Queued::new(ask.text, attachments, blocks), ask.now);
                 self.apply_effects(key, effects, cx);
             }
+            Some(annotate::Message::Region(region)) => self.send_region(region, cx),
             Some(annotate::Message::Code { cell, code }) => self.on_cell_code(cell, code, cx),
             None => return,
         }
         cx.notify();
+    }
+
+    /// A box drawn with Point: take its picture, then send it with the cells
+    /// under it. The page hides Point's dimming and outlines until told "shot".
+    /// Without a picture it goes as the cells alone.
+    fn send_region(&mut self, region: annotate::Region, cx: &mut Context<Self>) {
+        let zoom = if self.settings.zoom > 0. { self.settings.zoom } else { 1. };
+        let rect = region.rect.map(|n| n * zoom);
+        let shot = snapshot::png(self.webview.read(cx).raw(), rect);
+        cx.spawn(async move |this, cx| {
+            let png = shot.await.ok().flatten();
+            this.update(cx, |this, cx| {
+                this.send_to_page(&serde_json::json!({ "type": "shot" }), cx);
+                let Some(key) = this.active else { return };
+                let annotate::Region { text, notebook, cells, now, .. } = region;
+                let attachment = match png {
+                    Some(png) => attach::Attachment::Region { notebook, cells, png: Arc::new(png) },
+                    None if cells.is_empty() => return,
+                    None => attach::Attachment::Cells { notebook, cells, ask: attach::CellAsk::About },
+                };
+                let mut blocks: Vec<_> = this.viewing_context(cx).into_iter().collect();
+                let attachments = vec![attachment];
+                blocks.extend(attach::prompt_blocks(&text, &attachments, &[]));
+                let Some(session) = this.session_mut(key) else { return };
+                let effects = session.submit(Queued::new(text, attachments, blocks), now);
+                this.apply_effects(key, effects, cx);
+                cx.notify();
+            })
+        })
+        .detach();
     }
 
     /// Cmd+Shift+K from the panel (the page handles it when the notebook has focus).

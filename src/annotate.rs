@@ -31,6 +31,8 @@ pub fn script() -> String {
 const MAX_CELLS: usize = 64;
 const MAX_COMMENT: usize = 4000;
 const MAX_CODE: usize = 20_000;
+/// Bounds a drawn box's coordinates, in CSS pixels.
+const MAX_SIDE: f64 = 100_000.;
 
 /// A message the user sent from the notebook: their words, and what it's about.
 #[derive(Debug, PartialEq)]
@@ -47,8 +49,21 @@ pub enum Message {
     Ready,
     Mode(bool),
     Ask(Ask),
+    /// A box drawn with Point, to be sent once the app has its picture.
+    Region(Region),
     /// A cell's code now (None: the page has no such cell), as the app asked.
     Code { cell: String, code: Option<String> },
+}
+
+/// A drawn box: the user's words, the cells it overlaps, and where it is in
+/// the page's viewport (x, y, width, height in CSS pixels).
+#[derive(Debug, PartialEq)]
+pub struct Region {
+    pub text: String,
+    pub notebook: String,
+    pub cells: Vec<Cell>,
+    pub rect: [f64; 4],
+    pub now: bool,
 }
 
 pub fn is_uuid(s: &str) -> bool {
@@ -107,19 +122,23 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "annotation" => {
             let notebook = uuid("notebook")?;
-            let ids: Vec<String> = v
-                .get("cells")?
-                .as_array()?
-                .iter()
-                .map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned))
-                .collect::<Option<_>>()?;
-            if ids.is_empty() || ids.len() > MAX_CELLS {
+            let cells = cells(&v)?;
+            if cells.is_empty() {
                 return None;
             }
-            let codes = v.get("codes").and_then(|c| c.as_array());
-            let cells = ids.into_iter().enumerate().map(|(i, id)| Cell { id, code: capped(codes.and_then(|c| c.get(i)), MAX_CODE) }).collect();
             let text = capped(v.get("comment"), MAX_COMMENT);
             Some(Message::Ask(Ask { text, attachment: Attachment::Cells { notebook, cells, ask: CellAsk::About }, now }))
+        }
+        "region" => {
+            let notebook = uuid("notebook")?;
+            let rect = v.get("rect")?;
+            let n = |key: &str| rect.get(key)?.as_f64().filter(|n| (-MAX_SIDE..MAX_SIDE).contains(n));
+            let rect = [n("x")?, n("y")?, n("width")?, n("height")?];
+            if rect[2] < 1. || rect[3] < 1. {
+                return None;
+            }
+            let text = capped(v.get("comment"), MAX_COMMENT);
+            Some(Message::Region(Region { text, notebook, cells: cells(&v)?, rect, now }))
         }
         "code" => {
             let cell = uuid("cell")?;
@@ -128,6 +147,16 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
         }
         _ => None,
     }
+}
+
+/// Picked cells: `cells` (their ids, notebook order) and `codes` (the same order).
+fn cells(v: &serde_json::Value) -> Option<Vec<Cell>> {
+    let ids: Vec<String> = v.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned)).collect::<Option<_>>()?;
+    if ids.len() > MAX_CELLS {
+        return None;
+    }
+    let codes = v.get("codes").and_then(|c| c.as_array());
+    Some(ids.into_iter().enumerate().map(|(i, id)| Cell { id, code: capped(codes.and_then(|c| c.get(i)), MAX_CODE) }).collect())
 }
 
 pub fn cell_uri(notebook: &str, cell: &str) -> String {
@@ -193,6 +222,15 @@ mod tests {
             parse_with(&body, ""),
             Some(Message::Ask(Ask { text: "why so slow?".into(), attachment: Attachment::Cells { notebook: NB.into(), cells: vec![cell("y = 2")], ask: CellAsk::About }, now: false }))
         );
+        let region = format!(
+            r#"{{"type":"region","notebook":"{NB}","cells":["{C1}"],"codes":["scatter(t, y)"],"comment":"what's this bump?","now":false,"rect":{{"x":12.5,"y":80,"width":300,"height":140}}}}"#
+        );
+        assert_eq!(
+            parse_with(&region, ""),
+            Some(Message::Region(Region { text: "what's this bump?".into(), notebook: NB.into(), cells: vec![cell("scatter(t, y)")], rect: [12.5, 80., 300., 140.], now: false }))
+        );
+        let flat = format!(r#"{{"type":"region","notebook":"{NB}","cells":[],"comment":"","rect":{{"x":0,"y":0,"width":0,"height":40}}}}"#);
+        assert_eq!(parse_with(&flat, ""), None, "a box needs an area");
         assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":"y = 3"}}"#), ""), Some(Message::Code { cell: C1.into(), code: Some("y = 3".into()) }));
         assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":null}}"#), ""), Some(Message::Code { cell: C1.into(), code: None }));
     }

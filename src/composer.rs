@@ -80,6 +80,9 @@ pub struct Composer {
     pub notice: Option<String>,
     /// The chip under the pointer, whose preview shows.
     hovered: Option<usize>,
+    /// The sent region chip under the pointer (session key, entry, chip),
+    /// whose picture shows.
+    hovered_sent: Option<(u64, usize, usize)>,
     /// The box's height in lines as last set: (fewest, most).
     rows: std::cell::Cell<(usize, usize)>,
 }
@@ -945,10 +948,34 @@ impl Workspace {
                 .cursor_pointer()
                 .when(open, |d| d.bg(theme::bg_raised()))
                 .hover(|s| s.bg(theme::bg_raised()))
+                .when(matches!(a, Attachment::Region { .. }), |d| {
+                    d.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.composer.hovered_sent = Some((key, entry, i));
+                        } else if this.composer.hovered_sent == Some((key, entry, i)) {
+                            this.composer.hovered_sent = None;
+                        }
+                        cx.notify();
+                    }))
+                })
                 .on_click(cx.listener(move |this, _, _, cx| this.click_sent_chip(key, entry, i, cx)))
         });
         let chips: Vec<_> = chips.collect();
         let popover = popover.and_then(|p| Some((p, attachments.get(p.chip)?))).map(|(p, a)| self.render_chip_popover(p, a, cx));
+        let picture = self
+            .composer
+            .hovered_sent
+            .filter(|&(k, e, _)| (k, e) == (key, entry))
+            .and_then(|(_, _, i)| attachments.get(i))
+            .filter(|_| popover.is_none())
+            .map(|a| {
+                let body = popup()
+                    .p(px(8.))
+                    .gap(px(6.))
+                    .child(div().flex().items_center().gap(px(6.)).text_size(theme::size_meta()).text_color(theme::text_muted()).child(glyph(icon_glyph(a.icon()), theme::text_muted())).child(preview_heading(a)))
+                    .child(preview_body(a));
+                div().absolute().top(relative(1.)).right_0().mt(px(4.)).child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(2))
+            });
         Some(
             div()
                 .relative()
@@ -957,6 +984,7 @@ impl Workspace {
                 .items_end()
                 .child(div().flex().flex_wrap().justify_end().gap(px(4.)).children(chips))
                 .children(popover)
+                .children(picture)
                 .into_any_element(),
         )
     }

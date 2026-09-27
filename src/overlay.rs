@@ -27,7 +27,7 @@ struct CGSize {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct CGRect {
+pub(crate) struct CGRect {
     origin: CGPoint,
     size: CGSize,
 }
@@ -51,7 +51,7 @@ unsafe impl RefEncode for CGColor {
 }
 
 impl CGRect {
-    fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+    pub(crate) fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
         CGRect { origin: CGPoint { x, y }, size: CGSize { width: width.max(0.), height: height.max(0.) } }
     }
 
