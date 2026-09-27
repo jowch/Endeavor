@@ -23,6 +23,7 @@ mod overlay;
 mod pluto;
 mod remote;
 mod resources;
+mod runs;
 mod runtime;
 mod server_dialog;
 mod session;
@@ -101,6 +102,8 @@ fn check_row(id: &'static str, checked: bool, label: &'static str) -> Stateful<D
 const SIDEBAR_RANGE: (f32, f32) = (180., 400.);
 const CHAT_MIN: f32 = 320.;
 const NOTEBOOK_MIN: f32 = 360.;
+/// The window can't shrink below every column at its minimum, plus the two dividers.
+const WINDOW_MIN: Size<Pixels> = Size { width: px(SIDEBAR_RANGE.0 + CHAT_MIN + NOTEBOOK_MIN + 2.), height: px(600.) };
 
 #[derive(Clone, Copy, PartialEq)]
 enum Divider {
@@ -2008,7 +2011,9 @@ impl Workspace {
 
         div()
             .w(px(self.settings.layout.sidebar_width))
-            .flex_shrink_0()
+            .min_w(px(SIDEBAR_RANGE.0))
+            .flex_shrink(1.)
+            .overflow_hidden()
             .h_full()
             .flex()
             .flex_col()
@@ -2051,7 +2056,19 @@ impl Workspace {
                     .items_center()
                     .pt(px(6.))
                     .px_1()
-                    .child(div().flex_1().pl(px(6.)).text_size(theme::size_meta()).text_color(theme::text_section()).child(self.status.clone()))
+                    .child({
+                        let status = self.status.clone();
+                        div()
+                            .id("status")
+                            .flex_1()
+                            .min_w_0()
+                            .pl(px(6.))
+                            .truncate()
+                            .text_size(theme::size_meta())
+                            .text_color(theme::text_section())
+                            .child(status.clone())
+                            .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(status.clone()).build(window, cx))
+                    })
                     .child(
                         div()
                             .id("settings")
@@ -2560,7 +2577,8 @@ impl Render for Workspace {
             .child(
                 div()
                     .w(px(self.settings.layout.chat_width))
-                    .flex_shrink_0()
+                    .min_w(px(CHAT_MIN))
+                    .flex_shrink(1.)
                     .h_full()
                     .flex()
                     .flex_col()
@@ -2571,7 +2589,7 @@ impl Render for Workspace {
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(NOTEBOOK_MIN))
                     .h_full()
                     .flex()
                     .flex_col()
@@ -2698,6 +2716,7 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(WINDOW_MIN),
                 // No title bar: each column has its own 44px header, the traffic
                 // lights sit in the sidebar's.
                 titlebar: Some(TitlebarOptions {
