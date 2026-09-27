@@ -24,7 +24,7 @@ _Listed 2026-09-25._
 - [ ] About window and update notices (adapter updates only show in the status line) — missing
 - [ ] Menu bar: Endeavor (Settings…, Quit), Edit, View — improvised; Window and Help menus — missing
 - [ ] Appearance "Light": native chrome stays dark while the notebook turns Pluto-light — improvised (mismatched until light mode exists)
-- [ ] Window minimum size — missing (the window can shrink with no floor)
+- [x] Window minimum size — missing (the window can shrink with no floor). Built: 862 × 600, every column at its minimum (sidebar 180, chat 320, notebook 360); the sidebar and chat shrink to their minimums before the notebook does
 - [ ] Julia picker's prompt text ("Use this julia") in Settings — improvised
 - [ ] Offline: no network shows as a generic setup failure; losing it mid-session has no state — missing
 
@@ -33,7 +33,7 @@ _Listed 2026-09-25._
 - [ ] Session row states: active, working dot, needs-approval dot — improvised
 - [x] Row actions: inline rename, hover ×, "Delete?" confirm — improvised. The hover × is too easy to hit by accident; replace it with a ⋮ button that opens a context menu, also on right-click, like Claude desktop. The menu is where session actions live as they're added; candidates: Rename, Pin, Reveal folder in Finder, Open notebook, Resume in Claude Code, Export transcript, Delete… (last, separated)
 - [ ] "Show N more / Show fewer", folder headings, status line ("Claude connected."), settings gear — improvised
-- [ ] Long sidebar status lines overflow into the chat pane and can cover the settings gear — bug
+- [x] Long sidebar status lines overflow into the chat pane and can cover the settings gear — bug. Fixed: the line truncates, and hovering shows the full text wrapped
 - [ ] Empty sidebar (no sessions yet) — missing
 - [x] Session ⋮ menu keyboard shortcuts: while the menu is open, single keys pick an item (R Rename, P Pin, F Reveal folder, A Archive, ⌫ Delete…), shown on the right of each row — missing. Built with C for Close; P waits for Pin
 - [x] Archive: an Archive item in the session ⋮ menu and a sidebar view filter (Active / All, including archived; archived rows dimmed) — missing
@@ -44,14 +44,14 @@ _Listed 2026-09-25._
 - [ ] "▸ Thinking" blocks — improvised
 - [ ] Non-notebook tool calls (shell, Read, Write, ToolSearch) and their expanded input/output view — improvised (raw JSON)
 - [x] Shell tool lines print the whole command (multi-line scripts) in the transcript; spec says one collapsed line each (grey verb, mono name, `›` to expand), like "Ran `python3 -c …`" — improvised
-- [ ] A run of tool calls between two agent messages folds into one line ("Used 5 tools ›": list_folder, read_file, run_shell…) that expands to the individual lines; the transcript should read as the agent's replies, as with folding long user messages. The expanded tool view should be tighter too (less padding, smaller input/output panels). Reference (Claude desktop, 2026-09-26): the folded line summarises by kind in plain words ("Ran 2 commands, finished a background command ›"; counts with failures in red, "22 background commands completed, 1 failed"); expanded, it becomes one bordered list with a row per call showing its description ("Added the tool-folding item to design gaps ›"); a row expands in place to the input in a code block, then the output as plain mono text under it — missing
+- [x] A run of tool calls between two agent messages folds into one line ("Used 5 tools ›": list_folder, read_file, run_shell…) that expands to the individual lines; the transcript should read as the agent's replies, as with folding long user messages. The expanded tool view should be tighter too (less padding, smaller input/output panels). Reference (Claude desktop, 2026-09-26): the folded line summarises by kind in plain words ("Ran 2 commands, finished a background command ›"; counts with failures in red, "22 background commands completed, 1 failed"); expanded, it becomes one bordered list with a row per call showing its description ("Added the tool-folding item to design gaps ›"); a row expands in place to the input in a code block, then the output as plain mono text under it — missing. Built: "Read 2 files, listed a folder, ran a command ›" with "1 failed" in red; notebook calls in plain words too ("edited 2 cells, ran a cell"); the thinking between calls folds with them; a lone call stays its own line; a run still going shows its latest call under the line and folds when the next agent message comes; approval cards stay above the composer, and their "Allowed: …" notes end a run
 - [ ] Transcript notes: "Allowed: …", "Denied: …", "Turn ended", end-of-turn run warnings — improvised
 - [ ] Failure states: turn failed, agent disconnected, Julia crashed and notebooks reopened, "Open a copy" for a session still open in the Claude Code CLI — improvised
 - [ ] Opening a past session: loading and replay — improvised
 - [ ] Messages sent from the notebook ("✎ 1 cell: …") and the "📎 error message / selected text" attachment chip — improvised
 - [ ] Attachments across the chat: how cells, selected text, error messages, picked regions (and later files and images from "+") look in the user bubble, the composer before sending, and queued messages; what clicking one does (jump to the cell, show the attached text) — missing
 - [ ] Working indicator: spec says orange asterisk + "Adding `residuals` · 12s"; app shows a rocket + "Working · 24s" — improvised
-- [ ] Long content: tool output and long messages have no max height or scroll (only the plan card does) — missing
+- [x] Long content: tool output and long messages have no max height or scroll (only the plan card does) — missing. Built: a call's input and output scroll past 160px, agent replies past 560px; the wheel goes back to the transcript at a panel's end
 - [x] Long user messages: fold after about 10 lines with the last lines fading out and "Show more" ("Show less" once open), so the transcript shows mostly Claude's replies. The user wrote it and rarely needs to reread it all
 
 ## Cards above the composer
@@ -68,6 +68,7 @@ _Listed 2026-09-25._
 - [ ] Context ring hover label ("N% context") — improvised
 - [ ] "+" button (attach / @ cell): its menu — missing
 - [ ] Steering feedback (a message joining the running turn) — missing
+- [ ] The new-session screen's composer doesn't match the chat composer. It needn't be identical, but it should mostly be the chat composer's refined design, with the new-session parts added (the Where / folder / notebook chips above it). Reference (Claude desktop, 2026-09-27): its new-session composer keeps the chat's elements (chips above; the input; "+", model and effort under it) and adds only what starting needs. Keeping the orange send button is optional — improvised
 
 ## Notebook pane
 
