@@ -750,9 +750,11 @@
       let state;
       if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state = "failed";
       else if (busy.has(name) && pkgPhase === "busy") state = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
-      else if (version != null || pkgPhase === "done") state = "ready";
+      else if (version != null) state = "ready";
+      else if (pkgPhase === "done") state = Object.keys(installed2).length ? "failed" : "ready";
       else state = "waiting";
-      return { name, state, detail: state === "ready" || state === "failed" ? detail : "" };
+      const notFound = state === "failed" && version == null && pkgPhase === "done";
+      return { name, state, detail: state === "ready" ? detail : notFound ? "not found" : "" };
     });
     const deps = log.added.filter((n) => !direct.includes(n));
     const depsRow = deps.length ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length } : null;
@@ -764,6 +766,7 @@
     });
     const failedPkg = packages.find((p) => p.state === "failed");
     const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
+    if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
     const readyPkgs = packages.filter((p) => p.state === "ready").length;
     const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
     const runTotal = Object.keys(evaluate).length;
@@ -1008,7 +1011,7 @@
     if (m.failure) {
       const f = m.failure;
       const blocked = f.cells.length ? ` Cells that use it can't run: <code>${f.cells.map(escape2).join("</code>, <code>")}</code>.` : "";
-      failure = `<div class="failure"><code>${escape2(f.name)}</code> couldn't be installed or precompiled.${blocked}<div class="actions"><button class="fix">\u2726 Fix with Claude</button><button class="restart">\u21BB Restart notebook</button><button class="plain pkglog">Log for ${escape2(f.name)}</button></div></div>`;
+      failure = `<div class="failure"><code>${escape2(f.name)}</code> ${m.packages.find((p) => p.name === f.name)?.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled."}${blocked}<div class="actions"><button class="fix">\u2726 Fix with Claude</button><button class="restart">\u21BB Restart notebook</button><button class="plain pkglog">Log for ${escape2(f.name)}</button></div></div>`;
     }
     const packages = m.packages.length ? group("packages", pkgBusy || !!m.failure, "Packages", m.packages.length ? `${readyCount} of ${m.packages.length} ready` : "", pkgRows + failure + deps) : failure;
     const running = m.steps[2].phase === "busy";

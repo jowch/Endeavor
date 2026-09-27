@@ -102,6 +102,25 @@ test("a package that fails to precompile: its row, the blocked cells, the headli
   assert.equal(m.busy, null);
 });
 
+test("a package Pkg can't find fails, though Pluto's package step finished", () => {
+  const nb = installing();
+  nb.process_status = "ready";
+  nb.status_tree.subtasks.pkg = entry(3, 9);
+  nb.status_tree.subtasks.run = entry(9, 12);
+  nb.nbpkg.busy_packages = [];
+  nb.cell_inputs.a.code = "using Colors, Statistics, NotARealPkgQ";
+  nb.cell_results = { a: { errored: true, runtime: 1000 }, b: { runtime: 2000 } };
+  const m = status.statusModel(nb);
+  assert.deepEqual(m.packages.map((p) => [p.name, p.state, p.detail]), [
+    ["Colors", "ready", "0.13.2"],
+    ["Statistics", "ready", "standard library"],
+    ["NotARealPkgQ", "failed", "not found"],
+  ]);
+  assert.equal(m.steps[1].phase, "failed");
+  assert.equal(m.headline, "Package failed · NotARealPkgQ");
+  assert.deepEqual(m.failure, { name: "NotARealPkgQ", cells: ["using Colors, Statistics, N…"] });
+});
+
 test("safe preview, a failed save, a required restart", () => {
   const nb = installing();
   nb.process_status = "waiting_for_permission";

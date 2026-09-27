@@ -173,7 +173,11 @@ function statusHtml(nb: NotebookLike, m: StatusModel): string {
     const f = m.failure;
     const blocked = f.cells.length ? ` Cells that use it can't run: <code>${f.cells.map(escape).join("</code>, <code>")}</code>.` : "";
     failure =
-      `<div class="failure"><code>${escape(f.name)}</code> couldn't be installed or precompiled.${blocked}` +
+      `<div class="failure"><code>${escape(f.name)}</code> ${
+        m.packages.find((p) => p.name === f.name)?.detail === "not found"
+          ? "isn't a package Pkg can find: a typo, or not in the registry."
+          : "couldn't be installed or precompiled."
+      }${blocked}` +
       `<div class="actions"><button class="fix">✦ Fix with Claude</button><button class="restart">↻ Restart notebook</button>` +
       `<button class="plain pkglog">Log for ${escape(f.name)}</button></div></div>`;
   }

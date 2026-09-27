@@ -160,9 +160,12 @@ export function statusModel(nb: NotebookLike): StatusModel {
     let state: PkgState;
     if (pkgPhase === "failed" && (failedSet.has(name) || (failedSet.size === 0 && busy.has(name)))) state = "failed";
     else if (busy.has(name) && pkgPhase === "busy") state = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
-    else if (version != null || pkgPhase === "done") state = "ready";
+    else if (version != null) state = "ready";
+    // Pluto manages the environment but couldn't add this one: Pkg can't find it.
+    else if (pkgPhase === "done") state = Object.keys(installed).length ? "failed" : "ready";
     else state = "waiting";
-    return { name, state, detail: state === "ready" || state === "failed" ? detail : "" };
+    const notFound = state === "failed" && version == null && pkgPhase === "done";
+    return { name, state, detail: state === "ready" ? detail : notFound ? "not found" : "" };
   });
 
   const deps = log.added.filter((n) => !direct.includes(n));
@@ -181,6 +184,7 @@ export function statusModel(nb: NotebookLike): StatusModel {
   // Without the package, the cells that use it error; those are the ones to name.
   const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
 
+  if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
   const readyPkgs = packages.filter((p) => p.state === "ready").length;
   const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
   const runTotal = Object.keys(evaluate).length;
