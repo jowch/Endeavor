@@ -2647,17 +2647,17 @@ fn main() {
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
-            KeyBinding::new("cmd-shift-k", ToggleAnnotation, None),
+            KeyBinding::new("secondary-shift-k", ToggleAnnotation, None),
             // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).
             KeyBinding::new("shift-tab", CycleMode, Some("Input")),
             KeyBinding::new("shift-tab", CycleMode, None),
-            KeyBinding::new("cmd-b", ToggleSidebar, Some("Input")),
-            KeyBinding::new("cmd-b", ToggleSidebar, None),
-            KeyBinding::new("cmd-,", OpenSettings, None),
-            KeyBinding::new("cmd-q", Quit, None),
-            KeyBinding::new("cmd-=", ZoomIn, None),
-            KeyBinding::new("cmd--", ZoomOut, None),
-            KeyBinding::new("cmd-0", ZoomReset, None),
+            KeyBinding::new("secondary-b", ToggleSidebar, Some("Input")),
+            KeyBinding::new("secondary-b", ToggleSidebar, None),
+            KeyBinding::new("secondary-,", OpenSettings, None),
+            KeyBinding::new("secondary-q", Quit, None),
+            KeyBinding::new("secondary-=", ZoomIn, None),
+            KeyBinding::new("secondary--", ZoomOut, None),
+            KeyBinding::new("secondary-0", ZoomReset, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
         // Edit's items send the native cut:/copy:/paste:/selectAll: selectors, which
