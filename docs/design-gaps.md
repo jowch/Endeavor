@@ -51,7 +51,7 @@ _Listed 2026-09-25._
 - [ ] Messages sent from the notebook ("✎ 1 cell: …") and the "📎 error message / selected text" attachment chip — improvised
 - [ ] Attachments across the chat: how cells, selected text, error messages, picked regions (and later files and images from "+") look in the user bubble, the composer before sending, and queued messages; what clicking one does (jump to the cell, show the attached text) — missing
 - [ ] Working indicator: spec says orange asterisk + "Adding `residuals` · 12s"; app shows a rocket + "Working · 24s" — improvised
-- [x] Long content: tool output and long messages have no max height or scroll (only the plan card does) — missing. Built: a call's input and output scroll past 160px, agent replies past 560px; the wheel goes back to the transcript at a panel's end
+- [x] Long content: tool output and long messages have no max height or scroll (only the plan card does) — missing. Built: a call's input and output scroll past 160px (agent replies are always shown in full); the wheel goes back to the transcript at a panel's end
 - [x] Long user messages: fold after about 10 lines with the last lines fading out and "Show more" ("Show less" once open), so the transcript shows mostly Claude's replies. The user wrote it and rarely needs to reread it all
 
 ## Cards above the composer

@@ -1002,9 +1002,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mu
                 )
                 .into_any_element()
         }
-        Entry::Agent(text) => scroll_y(div().id(id("agent-scroll")).max_h(px(AGENT_MAX_H)), window, cx)
-            .child(TextView::markdown(id("agent"), text.clone()))
-            .into_any_element(),
+        Entry::Agent(text) => TextView::markdown(id("agent"), text.clone()).into_any_element(),
         Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
         Entry::Tool { .. } | Entry::Thought { .. } => render_row(key, ix, entry, window, cx),
         Entry::Plan(entries) => div()
@@ -1019,8 +1017,6 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mu
     })
 }
 
-/// Long agent replies scroll inside the transcript past this height.
-const AGENT_MAX_H: f32 = 560.;
 /// A tool call's input and output panels scroll past this height.
 const DETAIL_MAX_H: f32 = 160.;
 const DETAIL_LINE: f32 = 16.;
