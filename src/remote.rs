@@ -780,7 +780,8 @@ mod tests {
         assert_eq!((runtime.bridge.token.as_str(), runtime.node.clone()), (token, hostname()));
         assert!(runtime.pluto_url.ends_with("/?secret=s3cret"));
         let seen = seen.lock().unwrap().clone();
-        assert!(matches!(&seen[0], Event::Connected { os, .. } if os == "Darwin"), "{seen:?}");
+        let uname = if cfg!(target_os = "macos") { "Darwin" } else { "Linux" };
+        assert!(matches!(&seen[0], Event::Connected { os, .. } if os == uname), "{seen:?}");
         assert_eq!(seen[1], Event::Helper { installed: true });
         assert!(matches!(&seen[2], Event::Started { reattached: true, .. }), "{seen:?}");
         bridge_ping(listener.bridge_port(), token).expect("ping through the listener");
