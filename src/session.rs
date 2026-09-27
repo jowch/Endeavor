@@ -1023,6 +1023,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mu
 const AGENT_MAX_H: f32 = 560.;
 /// A tool call's input and output panels scroll past this height.
 const DETAIL_MAX_H: f32 = 160.;
+const DETAIL_LINE: f32 = 16.;
 
 /// A run of tool calls: one line summing it up ("Read 2 files, ran a command ›")
 /// that opens into a bordered list with a row per call. While the run is still
@@ -1047,17 +1048,23 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
     let open = first.is_some_and(|id| session.open_runs.contains(id));
     let live = session.busy_since.is_some() && run.end == session.entries.len();
     let start = run.start;
+    // One run of text, so a long summary wraps with the failures and the chevron in line.
+    let mut text = summary;
+    let mut highlights = Vec::new();
+    if failed > 0 {
+        text.push_str(", ");
+        let failures = format!("{failed} failed");
+        highlights.push((text.len()..text.len() + failures.len(), HighlightStyle { color: Some(theme::danger().into()), ..Default::default() }));
+        text.push_str(&failures);
+    }
+    text.push_str(if open { " ⌄" } else { " ›" });
     let header = div()
         .id(ElementId::NamedInteger("run".into(), key << 32 | start as u64))
-        .flex()
-        .items_center()
-        .gap(px(4.))
         .cursor_pointer()
         .text_size(theme::size_meta())
         .text_color(theme::text_faint())
         .hover(|s| s.text_color(theme::text_secondary()))
-        .map(|d| if failed > 0 { d.child(format!("{summary},")).child(div().text_color(theme::danger()).child(format!("{failed} failed"))) } else { d.child(summary) })
-        .child(if open { "⌄" } else { "›" })
+        .child(StyledText::new(text).with_highlights(highlights))
         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle_run(start))));
     let shown: Vec<usize> = match (open, live) {
         (true, _) => rows,
@@ -1100,7 +1107,7 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
             .child(line("thought").child("Thinking").child(if *expanded { "⌄" } else { "›" }).on_click(toggle))
             .when(*expanded, |d| {
                 d.child(
-                    scroll_y(div().id(id("thought-text")).max_h(px(DETAIL_MAX_H)), window, cx)
+                    scroll_y(div().id(id("thought-text")).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE))
                         .italic()
                         .text_size(theme::size_meta())
                         .text_color(theme::text_muted())
@@ -1137,7 +1144,7 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
             });
             let (input_text, output_text) = if *expanded { call_details(title, *kind, path.as_deref(), input.as_ref(), output.as_ref()) } else { (None, None) };
             let input_panel = input_text.filter(|_| all_diffs.is_empty()).map(|text| {
-                scroll_y(div().id(id("tool-input")).max_h(px(DETAIL_MAX_H)), window, cx)
+                scroll_y(div().id(id("tool-input")).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE))
                     .px(px(8.))
                     .py(px(5.))
                     .rounded(px(4.))
@@ -1148,7 +1155,7 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
                     .child(text)
             });
             let output_panel = output_text.map(|text| {
-                scroll_y(div().id(id("tool-output")).max_h(px(DETAIL_MAX_H)), window, cx)
+                scroll_y(div().id(id("tool-output")).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE))
                     .font_family(theme::MONO)
                     .text_size(theme::size_meta_small())
                     .text_color(theme::text_muted())
@@ -1932,6 +1939,26 @@ more" }"#);
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert_eq!(s.pinned_plan(), None, "back in the transcript");
         assert!(matches!(s.entries[pinned], Entry::Plan(_)));
+    }
+
+    #[test]
+    fn a_run_of_tool_calls_opens_and_folds_by_its_first_call() {
+        use agent_client_protocol::schema::v1::{ContentChunk, TextContent, ToolCall};
+        use agent_client_protocol::schema::v1::ContentBlock;
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("hi"), false);
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "Read a.rs"))));
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t2", "Read b.rs"))));
+        let reply = ContentChunk::new(ContentBlock::Text(TextContent::new("Done.")));
+        s.apply(SessionEvent::Update(SessionUpdate::AgentMessageChunk(reply)));
+        assert_eq!(crate::runs::run_at(&s.entries, 2), Some(1..3));
+        s.toggle_run(1);
+        assert!(s.open_runs.contains(&"t1".to_string().into()));
+        s.toggle_run(1);
+        assert!(s.open_runs.is_empty());
+        s.toggle_run(3);
+        assert!(s.open_runs.is_empty(), "a message is not a run");
     }
 
     #[test]
