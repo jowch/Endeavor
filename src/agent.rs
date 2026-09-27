@@ -59,12 +59,24 @@ const NODE_TARBALL: (&str, &str, u64, &str) = (
     "node-v24.21.0-linux-x64",
 );
 
+/// The adapter version this build of the app pins (adapter/package.json).
+fn pinned_adapter_version() -> Result<String, String> {
+    let manifest = std::fs::read_to_string(crate::install::resources().join("adapter/package.json")).map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| e.to_string())?;
+    manifest["dependencies"][ADAPTER_PACKAGE].as_str().map(str::to_owned).ok_or_else(|| "adapter/package.json has no adapter version".into())
+}
+
+/// The pinned adapter version, and whether it is installed yet. A new app
+/// version can pin a new adapter, which the app installs when the agent starts.
+pub fn adapter_status() -> Result<(String, bool), String> {
+    let (_, entry) = adapter_paths()?;
+    Ok((pinned_adapter_version()?, entry.exists()))
+}
+
 /// Where the app's Node and the pinned adapter's entry point live (installed or not).
 fn adapter_paths() -> Result<(PathBuf, PathBuf), String> {
     let app = crate::install::app_dir()?;
-    let manifest = std::fs::read_to_string(crate::install::resources().join("adapter/package.json")).map_err(|e| e.to_string())?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| e.to_string())?;
-    let version = manifest["dependencies"][ADAPTER_PACKAGE].as_str().ok_or("adapter/package.json has no adapter version")?;
+    let version = pinned_adapter_version()?;
     let node = app.join(format!("node-v{NODE_VERSION}/bin/node"));
     let entry = app.join(format!("adapter-{version}/node_modules/{ADAPTER_PACKAGE}/dist/index.js"));
     Ok((node, entry))

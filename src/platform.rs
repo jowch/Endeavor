@@ -35,9 +35,44 @@ pub fn reduces_motion() -> bool {
     gtk::Settings::default().is_some_and(|s| !s.is_gtk_enable_animations())
 }
 
-/// Before anything touches GTK (the web view, `reduces_motion`).
+/// Run from source (`cargo run`), the app has no bundle to take its Dock icon
+/// from, so it sets the icon itself.
 #[cfg(target_os = "macos")]
-pub fn init(_: &mut gpui::App) {}
+pub fn init(_: &mut gpui::App) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    let bundled = std::env::current_exe().is_ok_and(|exe| exe.to_string_lossy().contains(".app/Contents/MacOS/"));
+    if bundled {
+        return;
+    }
+    let Ok(path) = std::ffi::CString::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icon/Endeavor.icns")) else { return };
+    unsafe {
+        let path: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: path.as_ptr()];
+        let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
+        let image: *mut AnyObject = msg_send![image, initWithContentsOfFile: path];
+        if image.is_null() {
+            return;
+        }
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app, setApplicationIconImage: image];
+    }
+}
+
+/// Window ▸ Bring All to Front.
+#[cfg(target_os = "macos")]
+pub fn bring_all_to_front(_: &mut gpui::App) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app, arrangeInFront: std::ptr::null_mut::<AnyObject>()];
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn bring_all_to_front(cx: &mut gpui::App) {
+    cx.activate(true);
+}
 
 /// Start GTK and keep its events flowing from GPUI's main loop.
 #[cfg(target_os = "linux")]
