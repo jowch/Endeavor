@@ -1,8 +1,12 @@
-// The notebook's theme. The app sets the webview's light/dark appearance, which
-// Pluto's own themes follow (prefers-color-scheme). On top, the "endeavor" theme
-// maps Pluto's colour variables to Endeavor's tokens (docs/ui-spec.md) in dark
-// mode, and hides Pluto's footer; "pluto" leaves Pluto's look alone. There's no
-// Endeavor light theme yet: in light mode both are Pluto's light theme.
+// The notebook's look (Settings, and the notebook's ⋮ menu). The app sets the
+// webview's light/dark appearance, which Pluto's own themes follow
+// (prefers-color-scheme). The Endeavor look maps Pluto's colour variables to
+// Endeavor's tokens (docs/ui-spec.md) in dark mode, and hides Pluto's header,
+// footer, floating panel and per-cell safe-preview labels: the app's header,
+// the drawer and the safe-preview callout stand in for them. Pluto classic is
+// Pluto's own page minus its file box (the app's header shows the file). Both
+// hide Pluto's Instant feedback; the ⋮ menu offers it. There's no Endeavor
+// light theme yet: in light mode the colours are Pluto's.
 
 import { on } from "./bridge";
 
@@ -47,9 +51,40 @@ const endeavorDark = `
     --helpbox-search-border-color: #3A3A40;
     --helpbox-box-shadow-color: rgba(0, 0, 0, 0.3);
     --docs-binding-bg: #26262A;
+    /* Frontmatter and Pluto's other dialogs */
+    --export-bg-color: #1C1C1F;
+    --export-color: #D4D4D4;
+    --frontmatter-button-bg-color: #26262A;
+    --frontmatter-input-bg-color: #151517;
+    --frontmatter-input-border-color: #3A3A40;
+    /* A cell's run time: faint text, no chip */
+    --pluto-runarea-bg-color: transparent;
+    --pluto-runarea-span-color: #5E5E5E;
   }
+  .pluto-modal { border: 1px solid #2A2A2E; border-radius: 8px !important; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5) !important; }
+  .pluto-modal-dark h1 { color: #ECECEC; font-weight: 600; }
+  body.presentation nav#slide_controls { gap: 4px; padding: 4px; margin: 12px; border-radius: 8px;
+    background: #1C1C1F; border: 1px solid #2A2A2E; }
+  nav#slide_controls > button { border-radius: 5px; opacity: 0.8; }
+  nav#slide_controls > button:hover { background: #26262A; opacity: 1; }
 }
-footer { display: none !important; }
+header#pluto-nav, footer, #helpbox-wrapper { display: none !important; }
+html[data-endeavor-drawer="docs"] #helpbox-wrapper { display: block !important; }
+.outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
+pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
+pluto-editor > main { padding-top: 16px; }
+pluto-editor main { margin-right: max(0px, (100% - 731px) / 2) !important; }
+pluto-runarea > span { font-size: 10px; }
+`;
+
+// Pluto classic: Pluto's page, without the file box (the app's header shows the file).
+const classic = `
+nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group { display: none !important; }
+`;
+
+// Instant feedback goes to Pluto's developers, not Endeavor's: the ⋮ menu offers it.
+const both = `
+footer form#feedback { display: none !important; }
 `;
 
 // The app's bundled JuliaMono (served by the app's endeavor: protocol), so code
@@ -83,6 +118,7 @@ export function initTheme(): void {
   // After Pluto's stylesheets, so equal-specificity rules win.
   document.head.append(style);
   on("theme", (msg) => {
-    style.textContent = msg.name === "endeavor" ? endeavorDark : "";
+    style.textContent = both + (msg.name === "endeavor" ? endeavorDark : classic);
+    document.documentElement.dataset.endeavorLook = msg.name;
   });
 }

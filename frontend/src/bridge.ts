@@ -18,7 +18,25 @@ export type ToApp =
   // empty cell, or add a new cell after it. `now` (⌘⏎) joins a running turn.
   | { type: "prompt"; notebook: string | null; cell: string; code: string; where: "about" | "fill" | "before" | "after"; text: string; now: boolean; quote?: string }
   // A cell's code now, answering the app's `code` (null: no such cell here).
-  | { type: "code"; cell: string; code: string | null };
+  | { type: "code"; cell: string; code: string | null }
+  // The shown notebook's state for the app's header, whenever it changes.
+  | {
+      type: "state";
+      notebook: string;
+      safe: boolean;
+      busy: string | null;
+      restart: "required" | "recommended" | null;
+      save_failed: boolean;
+      package_failed: string | null;
+      dead: boolean;
+      connected: boolean;
+      drawer: "docs" | "status" | null;
+    }
+  // Run notebook in the safe-preview callout.
+  | { type: "run_notebook"; notebook: string }
+  // The Status failure box: Fix with Claude (with the package's log), Restart notebook.
+  | { type: "fix_package"; notebook: string; name: string; log: string }
+  | { type: "restart"; notebook: string };
 
 /** One cell's state, from the runtime's events (see runtime Events.jl). */
 export type CellState = {
@@ -43,7 +61,14 @@ export type ToPage =
   // Ask for a cell's code now.
   | { type: "code"; cell: string }
   // The app took a drawn box's picture: show Point's overlay again.
-  | { type: "shot" };
+  | { type: "shot" }
+  // The header's Live docs / Status buttons: open that tab, or shut the drawer (null).
+  | { type: "drawer"; tab: "docs" | "status" | null }
+  // What the safe-preview callout and Status say: where the notebook runs, and
+  // whether the agent is asking to run it (the chat's card is up).
+  | { type: "context"; host: string; asking: boolean }
+  // Share and ⋮ items that act in the page, with Pluto's own functions.
+  | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" };
 
 declare global {
   interface Window {
