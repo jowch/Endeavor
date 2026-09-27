@@ -697,7 +697,8 @@ impl Workspace {
     }
 
     fn where_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let this_mac = host_row("where-this-mac", self.draft.host == HostId::ThisMac, Glyph::Laptop, "This Mac".into(), None, "host-gear-this-mac", cx)
+        let this_mac_running = self.host_state(&HostId::ThisMac).running();
+        let this_mac = host_row("where-this-mac", self.draft.host == HostId::ThisMac, Glyph::Laptop, "This Mac".into(), this_mac_running, None, "host-gear-this-mac", cx)
             .on_click(cx.listener(|this, _, window, cx| this.set_draft_host(HostId::ThisMac, window, cx)));
         let this_mac = this_mac.child(gear_button("gear-this-mac", "host-gear-this-mac").on_click(cx.listener(|this, _, window, cx| {
             cx.stop_propagation();
@@ -713,8 +714,11 @@ impl Workspace {
                 .map(|(i, server)| {
                     let group: SharedString = format!("host-gear-{i}").into();
                     let host = HostId::Server(server.id.clone());
+                    let running = self.host_state(&host).running();
                     let state = match self.status(&host) {
                         Some(Status::Connecting) => Some("Connecting…"),
+                        // The dot says it.
+                        _ if running && !clusters => None,
                         Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) if !clusters => Some("Connected"),
                         Some(Status::Failed(_) | Status::Replaced) => Some("Not connected"),
                         _ if clusters => Some("Slurm"),
@@ -722,7 +726,7 @@ impl Workspace {
                     };
                     let (pick, edit_id) = (host.clone(), server.id.clone());
                     let icon = if clusters { Glyph::Cluster } else { Glyph::Server };
-                    host_row(("where-server", i), self.draft.host == host, icon, server.name.clone(), state, group.clone(), cx)
+                    host_row(("where-server", i), self.draft.host == host, icon, server.name.clone(), running, state, group.clone(), cx)
                         .on_click(cx.listener(move |this, _, window, cx| this.set_draft_host(pick.clone(), window, cx)))
                         .child(gear_button(("gear-server", i), group).on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
@@ -1149,13 +1153,23 @@ pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool) 
         .child(div().w(px(10.)).flex_shrink_0().text_size(theme::size_meta()).text_color(theme::accent_text()).child(if checked { "✓" } else { "" }))
 }
 
-/// A Where menu row: ✓, the machine's icon and name, its connection state if
-/// any, and room for its gear.
-fn host_row(id: impl Into<ElementId>, checked: bool, icon: Glyph, name: String, state: Option<&'static str>, group: impl Into<SharedString>, _: &mut Context<Workspace>) -> Stateful<Div> {
+/// A Where menu row: ✓, the machine's icon and name (with a dot while Julia
+/// runs there), its connection state if any, and room for its gear.
+#[allow(clippy::too_many_arguments)]
+fn host_row(id: impl Into<ElementId>, checked: bool, icon: Glyph, name: String, running: bool, state: Option<&'static str>, group: impl Into<SharedString>, _: &mut Context<Workspace>) -> Stateful<Div> {
     menu_row(id, checked, false)
         .group(group)
         .child(glyph(icon, theme::text_muted()))
-        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(name))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(name))
+                .when(running, |d| d.child(crate::host_list::running_dot())),
+        )
         .children(state.map(|s| div().flex_shrink_0().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(s)))
 }
 
