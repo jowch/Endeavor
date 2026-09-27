@@ -2634,10 +2634,19 @@ fn main() {
         theme::load_fonts(cx);
         // Theme::change applies these before building the component defaults from them.
         let ui = Theme::global_mut(cx);
+        let mut colors = ui.dark_theme.colors.clone();
+        // What agent replies' markdown is drawn with: hairlines, link colour,
+        // code block and table header backgrounds.
+        colors.border = Some(theme::hex(theme::border()));
+        colors.link = Some(theme::hex(theme::accent_text()));
+        colors.muted = Some(theme::hex(theme::bg_card()));
+        colors.table_head = Some(theme::hex(theme::bg_card()));
+        colors.table_head_foreground = Some(theme::hex(theme::text_muted()));
         ui.dark_theme = std::rc::Rc::new(ThemeConfig {
             font_family: Some(theme::SANS.into()),
             mono_font_family: Some(theme::MONO.into()),
             mono_font_size: Some(f32::from(theme::size_code())),
+            colors,
             ..(*ui.dark_theme).clone()
         });
         cx.set_reduce_motion(platform::reduces_motion());

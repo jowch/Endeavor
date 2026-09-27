@@ -19,7 +19,7 @@ use agent_client_protocol::schema::v1::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::text::TextView;
+use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::tooltip::Tooltip;
 
 use crate::Workspace;
@@ -1163,7 +1163,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 )
                 .into_any_element()
         }
-        Entry::Agent(text) => TextView::markdown(id("agent"), text.clone()).into_any_element(),
+        Entry::Agent(text) => div().group(REPLY).child(markdown(id("agent"), text.clone())).into_any_element(),
         Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
         Entry::Tool { .. } | Entry::Thought { .. } => render_row(session, ix, false, window, cx),
         Entry::Plan(entries) => div()
@@ -1176,6 +1176,54 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
         // Pending: shown as the approval card above the composer (render_approval).
         Entry::Permission { .. } => return None,
     })
+}
+
+/// An agent reply, for its code blocks' copy buttons to show on hover.
+const REPLY: &str = "agent-reply";
+
+/// An agent reply's markdown, with a copy button on each code block.
+fn markdown(id: ElementId, text: String) -> TextView {
+    TextView::markdown(id, text).style(markdown_style()).code_block_actions(|block, _, _| {
+        let code = block.code().to_string();
+        div()
+            .id("copy")
+            .px(px(6.))
+            .py(px(2.))
+            .rounded(px(4.))
+            .cursor_pointer()
+            .font_family(theme::SANS)
+            .text_size(theme::size_meta_small())
+            .text_color(theme::text_faint())
+            .opacity(0.)
+            .group_hover(REPLY, |s| s.opacity(1.))
+            .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
+            .child("Copy")
+            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(code.clone())))
+    })
+}
+
+/// Markdown on the type scale: headings at 15 px (h1, h2) and 13 px (h3 on),
+/// code in JuliaMono 12 on the card colour, tag-coloured inline code, compact
+/// tables with a muted 12 px header row. Borders, links and backgrounds come
+/// from the component theme (set in main).
+fn markdown_style() -> TextViewStyle {
+    let code_block = StyleRefinement::default()
+        .p(px(10.))
+        .rounded(px(8.))
+        .bg(theme::bg_card())
+        .font_family(theme::MONO)
+        .text_size(theme::size_code());
+    let table = StyleRefinement::default().rounded(px(8.));
+    let table_head = StyleRefinement::default().text_size(theme::size_meta()).text_color(theme::text_muted());
+    let table_cell = StyleRefinement::default().px(px(8.)).py(px(3.));
+    TextViewStyle::default()
+        .paragraph_gap(rems(0.75))
+        .heading_font_size(|level, _| if level <= 2 { theme::size_subhead() } else { theme::size_body() })
+        .code_block(code_block)
+        .table(table)
+        .table_head(table_head)
+        .table_cell(table_cell)
+        .inline_code(HighlightStyle { background_color: Some(theme::bg_tag().into()), ..Default::default() })
 }
 
 /// A tool call's input and output panels scroll past this height.
@@ -1516,7 +1564,7 @@ fn render_plan_card(key: u64, ix: usize, plan: &str, options: &[PermissionOption
                 .id(ElementId::NamedInteger("plan".into(), key))
                 .max_h(px(260.))
                 .overflow_y_scroll()
-                .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan.to_string()))
+                .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan.to_string()).style(markdown_style()))
                 .into_any_element(),
         ],
         buttons
