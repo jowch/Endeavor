@@ -30,19 +30,33 @@ const ADAPTER_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
 
 /// The Node.js the adapter runs on, installed on first launch like Julia.
 const NODE_VERSION: &str = "24.21.0";
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const NODE_TARBALL: (&str, &str, u64, &str) = (
     "https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.gz",
     "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057",
     52_909_993,
     "node-v24.21.0-darwin-arm64",
 );
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const NODE_TARBALL: (&str, &str, u64, &str) = (
     "https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-x64.tar.gz",
     "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097",
     54_203_979,
     "node-v24.21.0-darwin-x64",
+);
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const NODE_TARBALL: (&str, &str, u64, &str) = (
+    "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-arm64.tar.gz",
+    "724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5",
+    57_824_078,
+    "node-v24.21.0-linux-arm64",
+);
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const NODE_TARBALL: (&str, &str, u64, &str) = (
+    "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz",
+    "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
+    58_088_022,
+    "node-v24.21.0-linux-x64",
 );
 
 /// Where the app's Node and the pinned adapter's entry point live (installed or not).

@@ -104,17 +104,29 @@ pub enum Notice {
 /// The Julia the app installs on first run (design doc §11), pinned with the
 /// official tarballs' SHA-256 and size (bump all three per release).
 pub const JULIA_VERSION: &str = "1.12.6";
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const JULIA_TARBALL: (&str, &str, u64) = (
     "https://julialang-s3.julialang.org/bin/mac/aarch64/1.12/julia-1.12.6-macaarch64.tar.gz",
     "277d82fbd2eda99d0963b3e41f3dc979d7486f181399f8430fb637318ccd6a31",
     231_027_185,
 );
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const JULIA_TARBALL: (&str, &str, u64) = (
     "https://julialang-s3.julialang.org/bin/mac/x64/1.12/julia-1.12.6-mac64.tar.gz",
     "1a70b7c606d6bac38a246e722369e5b30914dccf9378499d2712fb3bd282642c",
     271_518_180,
+);
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const JULIA_TARBALL: (&str, &str, u64) = (
+    "https://julialang-s3.julialang.org/bin/linux/aarch64/1.12/julia-1.12.6-linux-aarch64.tar.gz",
+    "029b93b857bd0ffd627f9a8580d3bbaa63daf008d7b7aed02fbceb8fd57c4899",
+    306_918_080,
+);
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const JULIA_TARBALL: (&str, &str, u64) = (
+    "https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.6-linux-x86_64.tar.gz",
+    "bbabf3bef19421a9dbd24a767d807606ab85e444323b5a1c73ffe293fa3d079a",
+    289_794_236,
 );
 
 
