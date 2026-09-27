@@ -333,10 +333,10 @@ impl Channel {
         let events = self.subscribe();
         let leaving = Arc::new(AtomicBool::new(false));
         *self.leaving.lock().unwrap() = leaving.clone();
-        self.mux.send(&ToHelper::StartRuntime.frame()).map_err(|_| "The connection to Endeavor's helper closed.".to_owned())?;
+        self.mux.send(&ToHelper::StartRuntime { job: None }.frame()).map_err(|_| "The connection to Endeavor's helper closed.".to_owned())?;
         let runtime = loop {
             match events.recv() {
-                Ok(message @ (ToApp::Progress { .. } | ToApp::FoundJulia { .. })) => on_message(message),
+                Ok(message @ (ToApp::Progress { .. } | ToApp::FoundJulia { .. } | ToApp::Submitted { .. } | ToApp::Queued { .. })) => on_message(message),
                 Ok(ToApp::Ready { node, token, pluto_secret, reattached, .. }) => {
                     *self.listener.lock().unwrap() = Some(listener.clone());
                     *listener.current.lock().unwrap() = Some(self.mux.clone());
