@@ -23,6 +23,7 @@ use gpui_component::text::TextView;
 use gpui_component::tooltip::Tooltip;
 
 use crate::Workspace;
+use crate::attach::{self, Attachment};
 use crate::theme;
 use crate::agent::{SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
@@ -33,7 +34,8 @@ use crate::runs;
 use crate::outbox::{Dispatch, Outbox, Queued};
 
 pub enum Entry {
-    User { text: SharedString, expanded: bool },
+    /// The user's words and, above them, their chips.
+    User { text: SharedString, expanded: bool, attachments: Vec<Attachment> },
     Agent(String),
     Tool {
         id: ToolCallId,
@@ -116,6 +118,46 @@ pub enum Effect {
     SetPolicy(&'static str),
 }
 
+/// A select config option's current value and its choices.
+pub fn config_choices(config: &[SessionConfigOption], id: &str) -> Option<(SessionConfigValueId, Vec<SessionConfigSelectOption>)> {
+    let option = config.iter().find(|c| c.id.to_string() == id)?;
+    let SessionConfigKind::Select(select) = &option.kind else { return None };
+    let options = match &select.options {
+        SessionConfigSelectOptions::Ungrouped(options) => options.clone(),
+        SessionConfigSelectOptions::Grouped(groups) => groups.iter().flat_map(|g| g.options.clone()).collect(),
+        _ => Vec::new(),
+    };
+    Some((select.current_value.clone(), options))
+}
+
+/// A mode in the composer's mode menu: the agent mode it switches to, and
+/// whether the app's run gate stops asking (Ask to run and Auto are both the
+/// agent's auto mode).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModeChoice {
+    pub mode: String,
+    pub run_without_asking: bool,
+    pub name: String,
+    pub description: String,
+}
+
+/// The app's modes (docs/ui-spec.md, Composer), in the menu's order, plus the
+/// agent's own Manual mode that sessions start in.
+pub fn app_modes() -> Vec<ModeChoice> {
+    let choice = |mode: &str, run_without_asking, name: &str, description: &str| ModeChoice {
+        mode: mode.into(),
+        run_without_asking,
+        name: name.into(),
+        description: description.into(),
+    };
+    vec![
+        choice("default", false, "Manual", "Asks before each change"),
+        choice("auto", false, "Ask to run", "Edits land live; asks before running code"),
+        choice("auto", true, "Auto", "Edits land live; runs code without asking"),
+        choice("plan", false, "Plan", "Reads only, then proposes a plan"),
+    ]
+}
+
 pub struct Session {
     /// App-local identity, stable before and after the agent assigns `id`.
     pub key: u64,
@@ -181,6 +223,8 @@ pub struct Session {
     policy_sent: &'static str,
     /// On a cluster: what its job asks for (from the resources chip).
     pub resources: Option<wire::slurm::Resources>,
+    /// The mode picked on the new-session screen, set once the agent is up.
+    pub initial_mode: Option<ModeChoice>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -275,6 +319,7 @@ impl Session {
             commands: Vec::new(),
             policy_sent: "ask",
             resources: None,
+            initial_mode: None,
         }
     }
 
@@ -318,14 +363,7 @@ impl Session {
 
     /// A select config option's current value and its choices.
     pub fn config_choices(&self, id: &str) -> Option<(SessionConfigValueId, Vec<SessionConfigSelectOption>)> {
-        let option = self.config.iter().find(|c| c.id.to_string() == id)?;
-        let SessionConfigKind::Select(select) = &option.kind else { return None };
-        let options = match &select.options {
-            SessionConfigSelectOptions::Ungrouped(options) => options.clone(),
-            SessionConfigSelectOptions::Grouped(groups) => groups.iter().flat_map(|g| g.options.clone()).collect(),
-            _ => Vec::new(),
-        };
-        Some((select.current_value.clone(), options))
+        config_choices(&self.config, id)
     }
 
     /// Pick a config value, showing it at once; the agent's reply confirms it.
@@ -349,6 +387,41 @@ impl Session {
             "auto" => "Ask to run".into(),
             _ => modes.available_modes.iter().find(|m| m.id == modes.current_mode_id)?.name.clone(),
         })
+    }
+
+    /// The mode menu's choices: the app's modes the agent offers (see
+    /// `app_modes`), or, for an agent without plan and auto modes, its own.
+    pub fn mode_choices(&self) -> Vec<ModeChoice> {
+        let Some(modes) = &self.modes else { return Vec::new() };
+        let has = |id: &str| modes.available_modes.iter().any(|m| m.id.to_string() == id);
+        if has("plan") && has("auto") {
+            return app_modes().into_iter().filter(|c| has(&c.mode)).collect();
+        }
+        modes
+            .available_modes
+            .iter()
+            .map(|m| ModeChoice { mode: m.id.to_string(), run_without_asking: false, name: m.name.clone(), description: m.description.clone().unwrap_or_default() })
+            .collect()
+    }
+
+    /// Which of `mode_choices` is current.
+    pub fn current_mode(&self) -> Option<usize> {
+        let current = self.modes.as_ref()?.current_mode_id.to_string();
+        self.mode_choices().iter().position(|c| c.mode == current && (c.mode != "auto" || c.run_without_asking == self.run_without_asking))
+    }
+
+    /// Switch to a mode from the menu, showing it at once.
+    pub fn choose_mode(&mut self, choice: &ModeChoice) -> Vec<Effect> {
+        let Some(modes) = self.modes.as_mut() else { return Vec::new() };
+        self.run_without_asking = choice.run_without_asking;
+        let mut effects = Vec::new();
+        let mode = SessionModeId::from(choice.mode.clone());
+        if mode != modes.current_mode_id {
+            modes.current_mode_id = mode.clone();
+            effects.push(Effect::SetMode(mode));
+        }
+        self.sync_policy(&mut effects);
+        effects
     }
 
     /// ⇧⇥: Ask to run → Auto → Plan → Ask to run, showing it at once; the agent
@@ -452,6 +525,9 @@ impl Session {
         self.config = started.config;
         self.replaying = false;
         let mut effects: Vec<Effect> = self.replayed_path.take().map(Effect::ReopenNotebook).into_iter().collect();
+        if let Some(choice) = self.initial_mode.take().filter(|c| self.mode_choices().contains(c)) {
+            effects.extend(self.choose_mode(&choice));
+        }
         self.sync_policy(&mut effects);
         let next = self.outbox.turn_ended();
         self.dispatch(next, &mut effects);
@@ -467,7 +543,7 @@ impl Session {
         if let Some(context) = self.start_context.take() {
             message.blocks.insert(0, context);
         }
-        self.title_from(&message.label);
+        self.title_from(&message.text);
         let mut effects = Vec::new();
         let dispatch = self.outbox.submit(message, now && self.id.is_some());
         self.dispatch(dispatch, &mut effects);
@@ -489,8 +565,8 @@ impl Session {
     fn dispatch(&mut self, dispatch: Option<Dispatch>, effects: &mut Vec<Effect>) {
         let Some(Dispatch { turn, shown }) = dispatch else { return };
         effects.push(Effect::Send(turn));
-        if let Some(label) = shown {
-            self.push(Entry::User { text: label.into(), expanded: false });
+        if let Some((text, attachments)) = shown {
+            self.push(Entry::User { text: text.into(), expanded: false, attachments });
             self.busy_since.get_or_insert_with(Instant::now);
             // Sending jumps back to the bottom even if the user had scrolled up.
             self.list.set_follow_mode(FollowMode::Tail);
@@ -511,8 +587,8 @@ impl Session {
                 self.turn_ended(&mut effects);
             }
             SessionEvent::Steered => {
-                if let Some(label) = self.outbox.steered() {
-                    self.push(Entry::User { text: format!("{label}\n↳ sent into the running turn").into(), expanded: false });
+                if let Some((text, attachments)) = self.outbox.steered() {
+                    self.push(Entry::User { text: format!("{text}\n↳ sent into the running turn").into(), expanded: false, attachments });
                 }
             }
             SessionEvent::Unsent => {
@@ -578,17 +654,28 @@ impl Session {
         match update {
             // Only while replaying history: live messages are already in the transcript.
             SessionUpdate::UserMessageChunk(chunk) if self.replaying => {
-                let text = match chunk.content {
-                    // The app's own context notes aren't the user's words.
-                    ContentBlock::Text(t) if t.text.starts_with("[Endeavor]") => return,
-                    ContentBlock::Text(t) => t.text,
-                    ContentBlock::ResourceLink(link) => format!("✎ {}", link.name),
+                // What the app added comes back as chips where it can (images and
+                // text files carry their contents), else not at all.
+                let (text, attachment) = match chunk.content {
+                    ContentBlock::Text(t) => match attach::replayed_text_file(&t.text) {
+                        Some(file) => (None, Some(file)),
+                        None if attach::is_app_text(&t.text) => return,
+                        None => (Some(t.text), None),
+                    },
+                    ContentBlock::Image(image) => (None, attach::replayed_image(&image.data, &image.mime_type)),
                     _ => return,
                 };
-                self.title_from(&text);
+                if let Some(text) = &text {
+                    self.title_from(text);
+                }
                 match self.entries.last_mut() {
-                    Some(Entry::User { text: existing, .. }) => *existing = format!("{existing}\n{text}").into(),
-                    _ => self.push(Entry::User { text: text.into(), expanded: false }),
+                    Some(Entry::User { text: existing, attachments, .. }) => {
+                        if let Some(text) = text {
+                            *existing = if existing.is_empty() { text.into() } else { format!("{existing}\n{text}").into() };
+                        }
+                        attachments.extend(attachment);
+                    }
+                    _ => self.push(Entry::User { text: text.unwrap_or_default().into(), expanded: false, attachments: attachment.into_iter().collect() }),
                 }
                 self.mark(self.entries.len() - 1);
             }
@@ -909,7 +996,7 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
                 let element = match runs::run_at(&session.entries, ix) {
                     Some(run) if run.start == ix => Some(render_run(session, run, window, cx)),
                     Some(_) => None,
-                    None => render_entry(key, ix, entry, window, cx),
+                    None => render_entry(this, key, ix, entry, window, cx),
                 };
                 match element {
                     Some(element) => div().px_4().pb_4().child(element).into_any_element(),
@@ -1026,11 +1113,16 @@ fn bubble_lines(text: &SharedString, window: &Window) -> usize {
         .map_or(0, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum())
 }
 
-fn render_entry(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+fn render_entry(this: &Workspace, key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let muted = theme::text_muted();
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     Some(match entry {
-        Entry::User { text, expanded } => {
+        Entry::User { text, expanded, attachments } => {
+            let chips = this.render_sent_chips(key, ix, attachments, cx);
+            let column = div().flex().flex_col().items_end().gap(px(4.)).children(chips);
+            if text.is_empty() {
+                return Some(column.into_any_element());
+            }
             let bubble = div()
                 .max_w(px(USER_BUBBLE_WIDTH))
                 .px(px(USER_BUBBLE_PAD_X))
@@ -1042,7 +1134,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mu
                 .line_height(theme::line_body());
             let line_height = theme::line_body();
             if bubble_lines(text, window) <= FOLD_AFTER {
-                return Some(div().flex().justify_end().child(bubble.child(text.clone())).into_any_element());
+                return Some(column.child(bubble.child(text.clone())).into_any_element());
             }
             let fade = div()
                 .absolute()
@@ -1055,11 +1147,7 @@ fn render_entry(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mu
                 .relative()
                 .child(text.clone())
                 .when(!*expanded, |d| d.max_h(line_height * FOLD_TO as f32).overflow_hidden().child(fade));
-            div()
-                .flex()
-                .flex_col()
-                .items_end()
-                .gap_1()
+            column
                 .child(bubble.child(body))
                 .child(
                     div()
@@ -1540,7 +1628,7 @@ pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Opt
 }
 
 /// Messages waiting for Claude: click ✎ to pull one back into the input, ✕ to drop it.
-pub fn render_queue(session: &Session, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
+pub fn render_queue(this: &Workspace, session: &Session, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     let muted = theme::text_muted();
     let key = session.key;
     div().flex().flex_col().gap_1().children(session.outbox.items.iter().enumerate().map(|(i, q)| {
@@ -1549,19 +1637,23 @@ pub fn render_queue(session: &Session, cx: &mut Context<Workspace>) -> impl Into
             .flex()
             .gap_2()
             .text_color(muted)
-            .child(div().flex_1().overflow_hidden().child(q.label.clone()))
+            .items_center()
+            .h(px(30.))
+            .px(px(10.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme::border())
+            .child(this.render_queued(i, &q.attachments, &q.text))
             .when(q.in_flight(), |d| d.child("sending now…"))
-            .when(!q.in_flight() && q.editable.is_some(), |d| {
-                d.child(div().id(id("edit")).cursor_pointer().child("✎").on_click(cx.listener(move |this, _, window, cx| {
-                    let text = this.session_mut(key).and_then(|s| s.outbox.take(i)).and_then(|q| q.editable);
-                    if let Some(text) = text {
-                        this.input.update(cx, |s, cx| s.set_value(text, window, cx));
-                        cx.notify();
+            .when(!q.in_flight(), |d| {
+                d.child(div().id(id("edit")).cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✎").on_click(cx.listener(move |this, _, window, cx| {
+                    if let Some(q) = this.session_mut(key).and_then(|s| s.outbox.take(i)) {
+                        this.restore_composer(q.text, q.attachments, window, cx);
                     }
                 })))
             })
             .when(!q.in_flight(), |d| {
-                d.child(div().id(id("drop")).cursor_pointer().child("✕").on_click(cx.listener(move |this, _, _, cx| {
+                d.child(div().id(id("drop")).cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✕").on_click(cx.listener(move |this, _, _, cx| {
                     this.with_session(key, cx, |s| {
                         s.outbox.take(i);
                     })
@@ -1812,6 +1904,7 @@ fn call_details(
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
     use super::{Effect, Entry, Session, SessionEvent, Started, Turn};
+    use crate::attach::Attachment;
     use crate::hosts::Place;
     use crate::outbox::Queued;
     use agent_client_protocol::schema::v1::{
@@ -1964,10 +2057,37 @@ mod tests {
         // No modes offered: nothing to cycle.
         let mut plain = Session::new(2, Place::local("/tmp/project"), None);
         assert!(plain.cycle_mode().is_empty() && plain.mode_name().is_none());
+        assert!(plain.mode_choices().is_empty());
+    }
+
+    #[test]
+    fn the_mode_menu_picks_a_mode_directly() {
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        let modes = SessionModeState::new(
+            "default",
+            vec![SessionMode::new("default", "Manual"), SessionMode::new("acceptEdits", "Accept edits"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")],
+        );
+        s.started(Started::new(SessionId::new("s1"), Some(modes), None));
+        let names: Vec<String> = s.mode_choices().into_iter().map(|c| c.name).collect();
+        assert_eq!(names, ["Manual", "Ask to run", "Auto", "Plan"]);
+        assert_eq!(s.current_mode(), Some(0));
+        let auto = s.mode_choices()[2].clone();
+        assert!(matches!(s.choose_mode(&auto).as_slice(), [Effect::SetMode(m)] if m.to_string() == "auto"));
+        assert_eq!((s.current_mode(), s.mode_name().as_deref()), (Some(2), Some("Auto")));
+        let plan = s.mode_choices()[3].clone();
+        assert!(matches!(s.choose_mode(&plan).as_slice(), [Effect::SetMode(_), Effect::SetPolicy("plan")]));
+        assert!(!s.run_without_asking);
+
+        // An agent without plan and auto: its own modes and descriptions.
+        let mut other = Session::new(2, Place::local("/tmp/project"), None);
+        let modes = SessionModeState::new("a", vec![SessionMode::new("a", "Careful").description("Asks a lot"), SessionMode::new("b", "Bold")]);
+        other.started(Started::new(SessionId::new("s2"), Some(modes), None));
+        let choices: Vec<(String, String)> = other.mode_choices().into_iter().map(|c| (c.name, c.description)).collect();
+        assert_eq!(choices, [("Careful".to_string(), "Asks a lot".to_string()), ("Bold".into(), "".into())]);
     }
 
     fn text(s: &str) -> Queued {
-        Queued::new(s.into(), Some(s.into()), vec![])
+        Queued::new(s.into(), vec![], vec![])
     }
 
     #[test]
@@ -1998,8 +2118,13 @@ mod tests {
         let chunk = |s: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
         s.apply(chunk("[Endeavor] The user is viewing Pluto notebook …"));
+        s.apply(chunk("pluto://notebook/n/cell/c"));
+        s.apply(chunk("attachment:notes.txt"));
+        s.apply(chunk("\n<context ref=\"attachment:notes.txt\">\nt,y\n</context>"));
         s.apply(chunk("plot sin"));
-        assert!(matches!(s.entries.as_slice(), [Entry::User { text, .. }] if text.as_ref() == "plot sin"));
+        let [Entry::User { text, attachments, .. }] = s.entries.as_slice() else { panic!("one user entry") };
+        assert_eq!(text.as_ref(), "plot sin");
+        assert_eq!(attachments.as_slice(), [Attachment::Text { name: "notes.txt".into(), text: "t,y".into() }]);
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.apply(chunk("live echo"));
         assert_eq!(s.entries.len(), 1, "after loading, user chunks are ignored");
@@ -2059,7 +2184,7 @@ more" }"#);
         let context = "[Endeavor] The user started this session on the Pluto notebook /tmp/a.jl, which is open";
         let info = |t: &str| SessionEvent::Update(SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(t.to_string())));
         let mut s = Session::new(1, Place::local("/tmp"), None);
-        s.submit(Queued::new("plot the growth curves".into(), None, Vec::new()), false);
+        s.submit(Queued::new("plot the growth curves".into(), Vec::new(), Vec::new()), false);
         assert_eq!(s.title, "plot the growth curves");
         s.apply(info(context));
         assert_eq!(s.title, "plot the growth curves", "the context note is not a title");

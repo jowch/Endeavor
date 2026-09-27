@@ -13,6 +13,7 @@ mod agent;
 mod annotate;
 mod attach;
 mod celldiff;
+mod composer;
 mod connection;
 mod gate;
 mod host_list;
@@ -45,7 +46,7 @@ use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_component::input::{Input, InputEvent, InputState, TextareaState};
 use gpui_component::radio::Radio;
 use gpui_component::{Root, Sizable, Theme, ThemeConfig, ThemeMode};
 use gpui_wry::WebView;
@@ -450,8 +451,13 @@ pub struct Workspace {
     settings: Settings,
     /// The divider being dragged.
     resizing: Option<Divider>,
-    /// The composer's open picker: a config option id ("model", "effort").
-    picker: Option<&'static str>,
+    /// The chat box's chips, mentions and menus (the box itself is `input`).
+    composer: composer::Composer,
+    /// A sent chip's popover.
+    chip_popover: Option<composer::ChipPopover>,
+    /// The agent's config options (model, effort) as the last session offered
+    /// them (persisted), so the new-session screen can offer them too.
+    agent_options: Vec<agent_client_protocol::schema::v1::SessionConfigOption>,
     /// The Settings screen is in the chat pane.
     settings_open: bool,
     /// First launch: the setup screen covers the window until setup finishes.
@@ -542,8 +548,9 @@ impl Workspace {
             TextareaState::new(window, cx)
                 .placeholder("Type / for commands")
                 .submit_on_enter(true)
-                .auto_grow(1, 8)
+                .auto_grow(1, 10)
         });
+        composer::subscribe(&input, window, cx);
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             // The slash-command menu follows what's typed.
             if matches!(event, InputEvent::Change) {
@@ -562,7 +569,7 @@ impl Workspace {
                 }
                 if this.active.is_some() {
                     this.submit(*secondary, window, cx);
-                } else {
+                } else if !this.composer_empty(cx) {
                     this.start_session(window, cx);
                 }
             }
@@ -625,7 +632,9 @@ impl Workspace {
             settings: Settings::load(),
             settings_open: false,
             resizing: None,
-            picker: None,
+            composer: composer::Composer::default(),
+            chip_popover: None,
+            agent_options: load_json("agent-options.json"),
             setup: Setup::needed().then(Setup::default),
             agent_ready: false,
             signed_in: None,
@@ -699,6 +708,9 @@ impl Workspace {
     /// preview. On a server, Julia starts now if it isn't running.
     fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popover(window, cx);
+        if self.composer_empty(cx) {
+            return;
+        }
         let host = self.draft.host.clone();
         let Some(folder) = self.draft.folder.clone() else {
             self.draft.notice = Some(format!("Waiting for the connection to {}.", self.hosts.name(&host)).into());
@@ -731,6 +743,7 @@ impl Workspace {
         let mut session = Session::new(key, place, server.clone());
         session.run_without_asking = self.settings.run_without_asking;
         session.resources = self.draft.resources.clone().filter(|_| self.is_cluster(&host));
+        session.initial_mode = (self.draft.mode != 0).then(|| session::app_modes().into_iter().nth(self.draft.mode)).flatten();
         let job = session.resources.as_ref().zip(self.draft_cluster()).map(|(resources, cluster)| cluster.job(resources));
         if let (Some(job), Some(connection)) = (job, self.connections.get_mut(&host)) {
             connection.job_request = Some(job);
@@ -1277,25 +1290,24 @@ impl Workspace {
 
     fn submit(&mut self, now: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.active else { return };
-        if self.input.read(cx).value().trim().is_empty() {
+        if self.composer_empty(cx) {
             return;
         }
         let context = self.viewing_context(cx);
         self.send(key, context, now, window, cx);
     }
 
-    /// Send the input's text (if any) to a session, after `context`.
+    /// Send what's in the composer (if anything) to a session, after `context`.
     fn send(&mut self, key: u64, context: Option<ContentBlock>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.input.read(cx).value().trim().to_string();
-        if text.is_empty() {
+        if self.session_mut(key).is_none() {
             return;
         }
+        let Some((text, attachments, mentioned)) = self.take_composer(window, cx) else { return };
         let mut blocks: Vec<_> = context.into_iter().collect();
-        blocks.push(ContentBlock::Text(TextContent::new(text.clone())));
+        blocks.extend(attach::prompt_blocks(&text, &attachments, &mentioned));
         let Some(session) = self.session_mut(key) else { return };
-        let effects = session.submit(Queued::new(text.clone(), Some(text), blocks), now);
+        let effects = session.submit(Queued::new(text, attachments, blocks), now);
         self.apply_effects(key, effects, cx);
-        self.input.update(cx, |s, cx| s.set_value("", window, cx));
     }
 
     pub fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
@@ -1346,66 +1358,6 @@ impl Workspace {
                             this.input.update(cx, |s, cx| s.set_value(format!("/{name} "), window, cx));
                             // The box keeps focus; put the caret after the command.
                             window.dispatch_action(Box::new(gpui_component::input::MoveToEnd), cx);
-                            cx.notify();
-                        }))
-                }))
-                .into_any_element(),
-        )
-    }
-
-    /// The model / effort list, opening upward from the composer toolbar.
-    fn render_picker(&self, session: &Session, id: &'static str, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (current, options) = session.config_choices(id)?;
-        let key = session.key;
-        Some(
-            div()
-                .id("picker")
-                // Clicks stop here instead of reaching the transcript underneath.
-                .occlude()
-                .absolute()
-                .right(px(16.))
-                // Above the box, not over it.
-                .bottom(px(84.))
-                .w(px(260.))
-                .p(px(4.))
-                .flex()
-                .flex_col()
-                .rounded(px(8.))
-                .border_1()
-                .border_color(theme::composer_edge())
-                .bg(theme::bg_raised())
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.picker = None;
-                    cx.notify();
-                }))
-                .children(options.into_iter().enumerate().map(|(i, option)| {
-                    let chosen = option.value == current;
-                    let value = option.value.clone();
-                    div()
-                        .id(ElementId::NamedInteger("pick".into(), i as u64))
-                        .flex()
-                        .gap_2()
-                        .px(px(8.))
-                        .py(px(5.))
-                        .rounded(px(5.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::row_active()))
-                        .child(div().w(px(10.)).flex_shrink_0().text_color(theme::accent_text()).child(if chosen { "✓" } else { "" }))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .child(option.name.clone())
-                                .children(option.description.clone().map(|d| div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(d))),
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.picker = None;
-                            let effects = this.session_mut(key).map(|s| s.set_config(id, value.clone())).unwrap_or_default();
-                            this.settings.agent_config.insert(id.to_string(), value.to_string());
-                            this.settings.save();
-                            this.apply_effects(key, effects, cx);
                             cx.notify();
                         }))
                 }))
@@ -1480,6 +1432,9 @@ impl Workspace {
     }
 
     fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_composer_menus(cx) {
+            return;
+        }
         if self.filter_menu {
             self.filter_menu = false;
             return cx.notify();
@@ -1569,6 +1524,10 @@ impl Workspace {
                             self.titles.insert(id.to_string(), name);
                             save_json("titles.json", &self.titles);
                         }
+                        if !started.config.is_empty() && started.config != self.agent_options {
+                            self.agent_options = started.config.clone();
+                            save_json("agent-options.json", &self.agent_options);
+                        }
                         let picked = self.settings.agent_config.clone();
                         let Some(session) = self.session_mut(key) else { return };
                         let queued = session.started(started);
@@ -1619,17 +1578,16 @@ impl Workspace {
                 self.apply_look(cx);
             }
             Some(annotate::Message::Mode(on)) => self.annotating = on,
-            Some(annotate::Message::Annotation(a)) => {
+            Some(annotate::Message::Ask(ask)) => {
                 let Some(key) = self.active else { return };
-                let comment = if a.comment.is_empty() { "(no comment)" } else { a.comment.as_str() };
-                let attached = a.attachment.as_ref().map(|(label, _)| format!("\n📎 {label}")).unwrap_or_default();
-                let label = format!("✎ {} cell{}: {comment}{attached}", a.cells.len(), if a.cells.len() > 1 { "s" } else { "" });
                 let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
-                blocks.extend(annotate::prompt_blocks(std::slice::from_ref(&a)));
+                let attachments = vec![ask.attachment];
+                blocks.extend(attach::prompt_blocks(&ask.text, &attachments, &[]));
                 let Some(session) = self.session_mut(key) else { return };
-                let effects = session.submit(Queued::new(label, None, blocks), a.now);
+                let effects = session.submit(Queued::new(ask.text, attachments, blocks), ask.now);
                 self.apply_effects(key, effects, cx);
             }
+            Some(annotate::Message::Code { cell, code }) => self.on_cell_code(cell, code, cx),
             None => return,
         }
         cx.notify();
@@ -2378,7 +2336,9 @@ impl Workspace {
         Some(new_session::turtle_pane().child(line().child("Opening ").child(file).child("…")).into_any_element())
     }
 
-    fn render_chat(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// A session's chat: the transcript, then what waits above the composer, then the composer.
+    /// `notebook_open`: its notebook shows in the pane (Point needs it).
+    fn render_chat(&self, session: &Session, notebook_open: bool, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let key = session.key;
         div()
             .flex_1()
@@ -2419,96 +2379,11 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .relative()
-                    .children(self.picker.and_then(|id| self.render_picker(session, id, cx)))
                     .children(self.render_commands(session, cx))
                     .children(session::render_pinned_plan(session, cx))
                     .children(session::render_approval(session, cx))
-                    .child(session::render_queue(session, cx))
-                    // One-line box: Enter sends; the glyph becomes Stop while Claude works.
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .min_h(px(38.))
-                            .px(px(10.))
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(theme::composer_edge())
-                            .bg(theme::bg_card())
-                            .child(div().flex_1().child(Textarea::new(&self.input).appearance(false).text_size(theme::size_body())))
-                            .child(if session.outbox.busy && session.id.is_some() {
-                                div()
-                                    .id("stop")
-                                    .size(px(20.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(4.))
-                                    .cursor_pointer()
-                                    .bg(theme::bg_raised())
-                                    .text_size(theme::size_meta_small())
-                                    .child("■")
-                                    .on_click(cx.listener(|this, _, window, cx| this.interrupt(&Interrupt, window, cx)))
-                                    .into_any_element()
-                            } else {
-                                div().text_color(theme::text_faint()).child("↵").into_any_element()
-                            }),
-                    )
-                    // Toolbar under the box: point, mode · model, effort, context.
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(2.))
-                            .h(px(24.))
-                            .text_size(theme::size_meta())
-                            .text_color(theme::text_new())
-                            .child(
-                                tool_button("point")
-                                    .when(self.annotating, |d| d.text_color(theme::accent_text()))
-                                    .child("↖ Point")
-                                    .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&ToggleAnnotation, window, cx))),
-                            )
-                            .children(session.mode_name().map(|name| {
-                                tool_button("mode")
-                                    .when(name.to_lowercase().contains("plan"), |d| d.text_color(theme::accent_text()))
-                                    .child(name)
-                                    .on_click(cx.listener(|this, _, window, cx| this.cycle_mode(&CycleMode, window, cx)))
-                            }))
-                            .child(div().flex_1())
-                            .children(["model", "effort"].map(|id| {
-                                session.config_label(id).map(|label| {
-                                    tool_button(id)
-                                        .min_w_0()
-                                        .text_color(theme::text_secondary())
-                                        .when(self.picker == Some(id), |d| d.bg(theme::row_active()))
-                                        .child(div().min_w_0().truncate().child(label))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.picker = if this.picker == Some(id) { None } else { Some(id) };
-                                            cx.notify();
-                                        }))
-                                })
-                            }).into_iter().flatten())
-                            .children(session.usage.filter(|(_, size)| *size > 0).map(|(used, size)| {
-                                // Shown on hover beside the ring: a tooltip would open under the notebook.
-                                div()
-                                    .id("context")
-                                    .group("context")
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .px(px(5.))
-                                    .child(
-                                        div()
-                                            .text_color(gpui::transparent_black())
-                                            .group_hover("context", |s| s.text_color(theme::text_muted()))
-                                            .child(format!("{}% context", used * 100 / size)),
-                                    )
-                                    .child(context_ring(used as f32 / size as f32))
-                            })),
-                    ),
+                    .child(session::render_queue(self, session, cx))
+                    .child(self.render_composer(Some(session), notebook_open, window, cx)),
             )
     }
 }
@@ -2544,8 +2419,8 @@ impl Render for Workspace {
         }
         let chat = match active {
             _ if self.settings_open => self.render_settings(cx).into_any_element(),
-            Some(ix) => self.render_chat(&self.sessions[ix], cx).into_any_element(),
-            None => self.render_new_session(cx).into_any_element(),
+            Some(ix) => self.render_chat(&self.sessions[ix], stand_in.is_none(), window, cx).into_any_element(),
+            None => self.render_new_session(window, cx).into_any_element(),
         };
         // Chat header: the session and its folder; the notebook header: its file.
         let (title, folder) = match active {
@@ -2579,6 +2454,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::cycle_mode))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::add_files))
             .on_mouse_move(cx.listener(Self::drag_divider))
             .on_mouse_up(
                 MouseButton::Left,
@@ -2695,6 +2571,7 @@ fn main() {
             KeyBinding::new("secondary--", ZoomOut, None),
             KeyBinding::new("secondary-0", ZoomReset, None),
         ]);
+        cx.bind_keys(composer::key_bindings());
         cx.on_action(|_: &Quit, cx| cx.quit());
         // Edit's items send the native cut:/copy:/paste:/selectAll: selectors, which
         // the notebook's web view needs for the clipboard; in our own text boxes

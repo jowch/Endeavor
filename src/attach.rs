@@ -178,6 +178,22 @@ pub fn is_app_text(text: &str) -> bool {
     text.starts_with("[Endeavor]") || text.starts_with("pluto://") || text.starts_with("attachment:") || text.trim_start().starts_with("<context ref=")
 }
 
+/// An attached text file as a replayed session gives it back: the agent
+/// echoes it as `<context ref="attachment:name">…</context>`.
+pub fn replayed_text_file(text: &str) -> Option<Attachment> {
+    let rest = text.trim_start().strip_prefix("<context ref=\"attachment:")?;
+    let (name, body) = rest.split_once("\">\n")?;
+    let body = body.strip_suffix("\n</context>").unwrap_or(body);
+    Some(Attachment::Text { name: name.into(), text: body.into() })
+}
+
+/// An attached image as a replayed session gives it back (its name is lost).
+pub fn replayed_image(data: &str, mime: &str) -> Option<Attachment> {
+    let mime = ["image/png", "image/jpeg", "image/gif", "image/webp"].into_iter().find(|m| *m == mime)?;
+    let name = format!("image.{}", mime.trim_start_matches("image/").replace("jpeg", "jpg"));
+    Some(Attachment::Image { name, mime, bytes: Arc::new(unbase64(data)?) })
+}
+
 // ---------------------------------------------------------------------------
 // Uploads
 // ---------------------------------------------------------------------------
@@ -253,6 +269,24 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+fn unbase64(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let digits: Vec<u8> = text.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').map(value).collect::<Option<_>>()?;
+    let mut out = Vec::with_capacity(digits.len() * 3 / 4);
+    for chunk in digits.chunks(4) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &d)| n | (d as u32) << (18 - 6 * i));
+        out.extend((0..chunk.len().saturating_sub(1)).map(|i| (n >> (16 - 8 * i)) as u8));
+    }
+    Some(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +488,19 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(&[0xff, 0xfe, 0x00, 0x01]), "//4AAQ==");
+        for bytes in [&b""[..], b"f", b"fo", b"foo", &[0xff, 0xfe, 0x00, 0x01]] {
+            assert_eq!(unbase64(&base64(bytes)).as_deref(), Some(bytes));
+        }
+        assert_eq!(unbase64("no!"), None);
+    }
+
+    #[test]
+    fn replayed_attachments_come_back_as_chips() {
+        let echoed = "\n<context ref=\"attachment:notes.txt\">\nt,y\n1,2\n</context>";
+        assert_eq!(replayed_text_file(echoed), Some(Attachment::Text { name: "notes.txt".into(), text: "t,y\n1,2".into() }));
+        assert_eq!(replayed_text_file("just words"), None);
+        assert_eq!(replayed_image("aGkh", "image/jpeg"), Some(Attachment::Image { name: "image.jpg".into(), mime: "image/jpeg", bytes: Arc::new(b"hi!".to_vec()) }));
+        assert_eq!(replayed_image("aGkh", "image/tiff"), None);
     }
 
     #[test]

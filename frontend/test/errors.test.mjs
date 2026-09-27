@@ -30,6 +30,7 @@ test("error boxes get Fix with Claude and Explain", async () => {
     kind: "fix",
     notebook: "0f381e2e-b8ca-11f1-b549-49cf0ce82801",
     cell: C,
+    code: "",
     error: "UndefVarError: `lsq` not defined",
   });
   // Redraws don't add a second row.

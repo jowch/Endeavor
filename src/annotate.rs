@@ -1,7 +1,7 @@
-//! Annotation mode, Rust side: messages from the page script and the prompt
-//! blocks queued annotations turn into (design doc §4.2–4.3).
+//! Messages from the page script (frontend/, annotation mode and asking about
+//! cells), turned into chat messages with their attachments (design doc §4.2–4.3).
 
-use agent_client_protocol::schema::v1::{ContentBlock, ResourceLink, TextContent};
+use crate::attach::{Attachment, Cell, CellAsk};
 
 /// The page script (frontend/, built with `npm run build`; the bundle is committed
 /// so building the app needs no Node).
@@ -30,16 +30,15 @@ pub fn script() -> String {
 /// the tray before it is sent.
 const MAX_CELLS: usize = 64;
 const MAX_COMMENT: usize = 4000;
+const MAX_CODE: usize = 20_000;
 
+/// A message the user sent from the notebook: their words, and what it's about.
 #[derive(Debug, PartialEq)]
-pub struct Annotation {
-    pub notebook: String,
-    pub cells: Vec<String>,
-    pub comment: String,
+pub struct Ask {
+    pub text: String,
+    pub attachment: Attachment,
     /// Cmd+Enter: join the running turn instead of waiting in the queue.
     pub now: bool,
-    /// Sent along but not shown in the chat bubble: (label, text), e.g. an error trace.
-    pub attachment: Option<(String, String)>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -47,7 +46,9 @@ pub enum Message {
     /// The page script loaded and wants the current cell states.
     Ready,
     Mode(bool),
-    Annotation(Annotation),
+    Ask(Ask),
+    /// A cell's code now (None: the page has no such cell), as the app asked.
+    Code { cell: String, code: Option<String> },
 }
 
 pub fn is_uuid(s: &str) -> bool {
@@ -59,61 +60,71 @@ pub fn parse(body: &str) -> Option<Message> {
     parse_with(body, page_nonce())
 }
 
+fn capped(value: Option<&serde_json::Value>, max: usize) -> String {
+    value.and_then(|v| v.as_str()).unwrap_or("").chars().take(max).collect()
+}
+
 /// `parse`, given the secret messages must carry (a missing one counts as "").
 fn parse_with(body: &str, nonce: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     if v.get("nonce").and_then(|n| n.as_str()).unwrap_or("") != nonce {
         return None;
     }
+    let uuid = |key: &str| v.get(key)?.as_str().filter(|s| is_uuid(s)).map(str::to_owned);
+    let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
     match v.get("type")?.as_str()? {
         "ready" => Some(Message::Ready),
-        // Fix with Claude / Explain on a cell's error: an annotation on that cell.
+        // Fix with Claude / Explain on a cell's error.
         "ask" => {
-            let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
-            let cell = v.get("cell")?.as_str().filter(|s| is_uuid(s))?.to_owned();
-            let error: String = v.get("error")?.as_str()?.chars().take(MAX_COMMENT).collect();
-            let comment = match v.get("kind")?.as_str()? {
-                "fix" => "Fix the error in this cell (its message is attached).".to_string(),
-                "explain" => "Explain the error in this cell (its message is attached); don't change anything yet.".to_string(),
+            let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
+            let text = match v.get("kind")?.as_str()? {
+                "fix" => "Fix the error in this cell.",
+                "explain" => "Explain this error; don't change anything yet.",
                 _ => return None,
             };
-            let attachment = Some(("error message".to_string(), error));
-            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now: false, attachment }))
+            let cell = Cell { id, code: capped(v.get("code"), MAX_CODE) };
+            let attachment = Attachment::Error { notebook, cell, text: capped(v.get("error"), MAX_COMMENT) };
+            Some(Message::Ask(Ask { text: text.into(), attachment, now: false }))
         }
-        // ⌘K on a cell, or the agent button between cells.
+        // ⌘K on a cell, the agent button between cells, or the selection chip.
         "prompt" => {
-            let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
-            let cell = v.get("cell")?.as_str().filter(|s| is_uuid(s))?.to_owned();
-            let text: String = v.get("text")?.as_str()?.chars().take(MAX_COMMENT).collect();
-            let comment = match v.get("where")?.as_str()? {
-                "about" => text,
-                "fill" => format!("Write the code for this empty cell: {text}"),
-                "before" => format!("Add a new cell right before this one: {text}"),
-                "after" => format!("Add a new cell right after this one: {text}"),
+            let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
+            let text = capped(v.get("text"), MAX_COMMENT);
+            let ask = match v.get("where")?.as_str()? {
+                "about" => CellAsk::About,
+                "fill" => CellAsk::Fill,
+                "before" => CellAsk::Before,
+                "after" => CellAsk::After,
                 _ => return None,
             };
-            let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
-            // Asking about selected text: the selection goes along, out of the chat bubble.
-            let quote = v.get("quote").and_then(|q| q.as_str()).map(|q| q.chars().take(MAX_COMMENT).collect::<String>());
-            let (comment, attachment) = match quote {
-                Some(quote) => (format!("{comment} (about the attached selection)"), Some(("selected text".to_string(), quote))),
-                None => (comment, None),
+            let cell = Cell { id, code: capped(v.get("code"), MAX_CODE) };
+            let attachment = match v.get("quote").and_then(|q| q.as_str()) {
+                Some(quote) => Attachment::Selection { notebook, cell, text: quote.chars().take(MAX_COMMENT).collect() },
+                None => Attachment::Cells { notebook, cells: vec![cell], ask },
             };
-            Some(Message::Annotation(Annotation { notebook, cells: vec![cell], comment, now, attachment }))
+            Some(Message::Ask(Ask { text, attachment, now }))
         }
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "annotation" => {
-            let notebook = v.get("notebook")?.as_str().filter(|s| is_uuid(s))?.to_owned();
-            let cells: Vec<String> = v
+            let notebook = uuid("notebook")?;
+            let ids: Vec<String> = v
                 .get("cells")?
                 .as_array()?
                 .iter()
                 .map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned))
                 .collect::<Option<_>>()?;
-            let comment: String = v.get("comment")?.as_str()?.chars().take(MAX_COMMENT).collect();
-            let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
-            (!cells.is_empty() && cells.len() <= MAX_CELLS)
-                .then_some(Message::Annotation(Annotation { notebook, cells, comment, now, attachment: None }))
+            if ids.is_empty() || ids.len() > MAX_CELLS {
+                return None;
+            }
+            let codes = v.get("codes").and_then(|c| c.as_array());
+            let cells = ids.into_iter().enumerate().map(|(i, id)| Cell { id, code: capped(codes.and_then(|c| c.get(i)), MAX_CODE) }).collect();
+            let text = capped(v.get("comment"), MAX_COMMENT);
+            Some(Message::Ask(Ask { text, attachment: Attachment::Cells { notebook, cells, ask: CellAsk::About }, now }))
+        }
+        "code" => {
+            let cell = uuid("cell")?;
+            let code = v.get("code").and_then(|c| c.as_str()).map(|c| c.chars().take(MAX_CODE).collect());
+            Some(Message::Code { cell, code })
         }
         _ => None,
     }
@@ -123,42 +134,16 @@ pub fn cell_uri(notebook: &str, cell: &str) -> String {
     format!("pluto://notebook/{notebook}/cell/{cell}")
 }
 
-/// Prompt blocks for annotations: one explanatory preface, then per annotation
-/// a `ResourceLink` per cell followed by the user's comment.
-pub fn prompt_blocks(annotations: &[Annotation]) -> Vec<ContentBlock> {
-    if annotations.is_empty() {
-        return Vec::new();
-    }
-    let mut blocks = vec![ContentBlock::Text(TextContent::new(
-        "[Endeavor] The user annotated notebook cells in annotation mode. Each \
-         pluto://notebook/{notebook_id}/cell/{cell_id} link names a cell; read its current \
-         code and output with the pluto MCP tools (the links are not fetchable URLs).",
-    ))];
-    for a in annotations {
-        for cell in &a.cells {
-            blocks.push(ContentBlock::ResourceLink(ResourceLink::new(
-                format!("cell {}", &cell[..8]),
-                cell_uri(&a.notebook, cell),
-            )));
-        }
-        let comment = if a.comment.is_empty() { "(no comment)" } else { &a.comment };
-        blocks.push(ContentBlock::Text(TextContent::new(format!(
-            "Comment on the {} cell(s) above: {comment}",
-            a.cells.len()
-        ))));
-        if let Some((label, text)) = &a.attachment {
-            blocks.push(ContentBlock::Text(TextContent::new(format!("[Attached {label}]\n{text}"))));
-        }
-    }
-    blocks
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const NB: &str = "6a1b2c3d-0000-4000-8000-1234567890ab";
     const C1: &str = "11111111-2222-4333-8444-555555555555";
+
+    fn cell(code: &str) -> Cell {
+        Cell { id: C1.into(), code: code.into() }
+    }
 
     #[test]
     fn needs_the_page_secret() {
@@ -175,27 +160,41 @@ mod tests {
         assert_eq!(parse_with(r#"{"type":"ready"}"#, ""), Some(Message::Ready));
         let ask = |kind: &str| {
             parse_with(
-                &format!(r#"{{"type":"ask","kind":"{kind}","notebook":"{NB}","cell":"{C1}","error":"UndefVarError: x"}}"#),
+                &format!(r#"{{"type":"ask","kind":"{kind}","notebook":"{NB}","cell":"{C1}","code":"x = lsq(1)","error":"UndefVarError: lsq"}}"#),
                 "",
             )
         };
-        let Some(Message::Annotation(fix)) = ask("fix") else { panic!("fix") };
-        assert_eq!((fix.cells.as_slice(), fix.comment.as_str()), ([C1.to_string()].as_slice(), "Fix the error in this cell (its message is attached)."));
-        assert_eq!(fix.attachment.as_ref().map(|(_, text)| text.as_str()), Some("UndefVarError: x"), "the trace goes as an attachment");
-        assert!(matches!(ask("explain"), Some(Message::Annotation(a)) if a.comment.starts_with("Explain")));
+        assert_eq!(
+            ask("fix"),
+            Some(Message::Ask(Ask {
+                text: "Fix the error in this cell.".into(),
+                attachment: Attachment::Error { notebook: NB.into(), cell: cell("x = lsq(1)"), text: "UndefVarError: lsq".into() },
+                now: false,
+            }))
+        );
+        assert!(matches!(ask("explain"), Some(Message::Ask(a)) if a.text.starts_with("Explain")));
         assert_eq!(ask("delete everything"), None);
         assert_eq!(parse_with(r#"{"type":"send"}"#, ""), None);
         let prompt = |place: &str| {
-            parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","where":"{place}","text":"plot it","now":false}}"#), "")
+            parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","code":"","where":"{place}","text":"plot it","now":true}}"#), "")
         };
-        assert!(matches!(prompt("about"), Some(Message::Annotation(a)) if a.comment == "plot it" && a.cells == [C1]));
-        assert!(matches!(prompt("after"), Some(Message::Annotation(a)) if a.comment.starts_with("Add a new cell right after")));
+        assert_eq!(
+            prompt("after"),
+            Some(Message::Ask(Ask { text: "plot it".into(), attachment: Attachment::Cells { notebook: NB.into(), cells: vec![cell("")], ask: CellAsk::After }, now: true }))
+        );
         assert_eq!(prompt("anywhere"), None);
-        let quoted = parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","where":"about","text":"why?","now":false,"quote":"sum(xs)"}}"#), "");
-        assert!(matches!(quoted, Some(Message::Annotation(a)) if a.attachment == Some(("selected text".into(), "sum(xs)".into()))));
-        let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"why so slow?"}}"#);
-        let Some(Message::Annotation(a)) = parse_with(&body, "") else { panic!("rejected valid annotation") };
-        assert_eq!((a.notebook.as_str(), a.cells.len(), a.comment.as_str()), (NB, 1, "why so slow?"));
+        let quoted = parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","code":"s = sum(xs)","where":"about","text":"why?","now":false,"quote":"sum(xs)"}}"#), "");
+        assert_eq!(
+            quoted,
+            Some(Message::Ask(Ask { text: "why?".into(), attachment: Attachment::Selection { notebook: NB.into(), cell: cell("s = sum(xs)"), text: "sum(xs)".into() }, now: false }))
+        );
+        let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"codes":["y = 2"],"comment":"why so slow?"}}"#);
+        assert_eq!(
+            parse_with(&body, ""),
+            Some(Message::Ask(Ask { text: "why so slow?".into(), attachment: Attachment::Cells { notebook: NB.into(), cells: vec![cell("y = 2")], ask: CellAsk::About }, now: false }))
+        );
+        assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":"y = 3"}}"#), ""), Some(Message::Code { cell: C1.into(), code: Some("y = 3".into()) }));
+        assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":null}}"#), ""), Some(Message::Code { cell: C1.into(), code: None }));
     }
 
     #[test]
@@ -212,18 +211,7 @@ mod tests {
     fn caps_comment_length() {
         let long = "x".repeat(MAX_COMMENT + 10);
         let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"{long}"}}"#);
-        let Some(Message::Annotation(a)) = parse_with(&body, "") else { panic!() };
-        assert_eq!(a.comment.len(), MAX_COMMENT);
-    }
-
-    #[test]
-    fn prompt_blocks_link_each_cell_then_comment() {
-        let a = Annotation { notebook: NB.into(), cells: vec![C1.into()], comment: "".into(), now: false, attachment: None };
-        let blocks = prompt_blocks(&[a]);
-        assert_eq!(blocks.len(), 3);
-        let ContentBlock::ResourceLink(link) = &blocks[1] else { panic!("expected link") };
-        assert_eq!(link.uri, cell_uri(NB, C1));
-        let ContentBlock::Text(t) = &blocks[2] else { panic!("expected comment") };
-        assert!(t.text.ends_with("(no comment)"));
+        let Some(Message::Ask(a)) = parse_with(&body, "") else { panic!() };
+        assert_eq!(a.text.len(), MAX_COMMENT);
     }
 }

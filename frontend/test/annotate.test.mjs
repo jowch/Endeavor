@@ -32,6 +32,7 @@ test("annotation round trip through the bridge", async () => {
     type: "annotation",
     notebook: "0f381e2e-b8ca-11f1-b549-49cf0ce82801",
     cells: ["22222222-2222-2222-2222-222222222222"],
+    codes: [""],
     comment: "why is this slow?",
     now: false,
   });

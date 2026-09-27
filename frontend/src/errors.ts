@@ -4,6 +4,7 @@
 
 import { byUser, send } from "./bridge";
 import { onRedraw } from "./redraw";
+import { cellCode } from "./reveal";
 
 // ponytail: "Claude" until the agent's name reaches the page (ACP agent info).
 const AGENT = "Claude";
@@ -26,7 +27,7 @@ function decorate() {
     const ask = (kind: "fix" | "explain") => {
       const text = (error.querySelector("header")?.textContent ?? error.textContent ?? "").trim().slice(0, 2000);
       const notebook = new URLSearchParams(location.search).get("id");
-      send({ type: "ask", kind, notebook, cell: cell.id, error: text });
+      send({ type: "ask", kind, notebook, cell: cell.id, code: cellCode(cell), error: text });
     };
     row.querySelector<HTMLButtonElement>(".fix")!.onclick = (e) => byUser(e) && ask("fix");
     row.querySelector<HTMLButtonElement>(".explain")!.onclick = (e) => byUser(e) && ask("explain");

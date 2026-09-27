@@ -6,6 +6,7 @@
 // reserved for stopping the agent, so a stray Esc never does two things.
 
 import { byUser, on, send } from "./bridge";
+import { cellCode } from "./reveal";
 
 const css = `
   body.annotating pluto-cell { cursor: crosshair; }
@@ -99,7 +100,8 @@ export function initAnnotate(): void {
     if (!picked.size) return;
     const ids = cells().map((c) => c.id).filter((id) => picked.has(id)); // notebook order
     const notebook = new URLSearchParams(location.search).get("id");
-    send({ type: "annotation", notebook, cells: ids, comment: text.value.trim(), now });
+    const codes = ids.map((id) => cellCode(document.getElementById(id)));
+    send({ type: "annotation", notebook, cells: ids, codes, comment: text.value.trim(), now });
     text.value = "";
     picked.clear();
     refresh();

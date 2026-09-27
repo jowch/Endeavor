@@ -8,6 +8,7 @@ import { initDiffs } from "./diff";
 import { initPrompt } from "./prompt";
 import { initErrors } from "./errors";
 import { initRail } from "./rail";
+import { initReveal } from "./reveal";
 import { initTheme } from "./theme";
 import { watchRedraws } from "./redraw";
 
@@ -19,6 +20,7 @@ function init() {
   initPrompt();
   initErrors();
   initRail();
+  initReveal();
   watchRedraws();
   // Ask for the current state: this page may have loaded after it last changed.
   send({ type: "ready" });

@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState, Textarea};
+use gpui_component::input::{Input, InputEvent, InputState};
 use wire::files::{self, Entry, Reply, Request};
 use wire::notebooks::{Found, Preview};
 
@@ -66,6 +66,8 @@ pub struct Draft {
     /// The resources popover's "Paste an salloc line…" box, while it's open.
     pub salloc: Option<Entity<InputState>>,
     pub salloc_error: Option<String>,
+    /// The mode to start in: an index into `session::app_modes()`.
+    pub mode: usize,
 }
 
 /// The server folder browser: the folder shown, and its folders and notebooks once listed.
@@ -173,6 +175,7 @@ impl Draft {
             partition_menu: false,
             salloc: None,
             salloc_error: None,
+            mode: 0,
         }
     }
 }
@@ -180,7 +183,7 @@ impl Draft {
 impl Workspace {
     /// Ask `host` about its files: This Mac answers here, a server through its
     /// helper (once connected). Off the main thread either way.
-    fn ask_files(&self, host: &HostId, request: Request, cx: &mut Context<Self>) -> Option<Task<Result<Reply, String>>> {
+    pub(crate) fn ask_files(&self, host: &HostId, request: Request, cx: &mut Context<Self>) -> Option<Task<Result<Reply, String>>> {
         match host {
             HostId::ThisMac => Some(cx.background_spawn(async move {
                 match files::answer(&request) {
@@ -466,7 +469,7 @@ impl Workspace {
         open.chain(past).take(RESUME_SHOWN).collect()
     }
 
-    pub fn render_new_session(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub fn render_new_session(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let resume = self.resumable();
         let rows = resume.into_iter().enumerate().map(|(i, r)| {
             let meta = std::iter::once(r.folder).chain(r.notebook).collect::<Vec<_>>().join(" · ");
@@ -518,39 +521,7 @@ impl Workspace {
                     .flex_col()
                     .gap(px(10.))
                     .child(self.render_chips(cx))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_h(px(76.))
-                            .pl(px(10.))
-                            .pr(px(8.))
-                            .py(px(6.))
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(theme::composer_edge())
-                            .bg(theme::bg_card())
-                            .child(div().flex_1().child(Textarea::new(&self.input).appearance(false).text_size(theme::size_body())))
-                            .child(
-                                div().flex().justify_end().child(
-                                    div()
-                                        .id("start-session")
-                                        .role(Role::Button)
-                                        .aria_label("Start session")
-                                        .size(px(24.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .cursor_pointer()
-                                        .bg(theme::accent())
-                                        .text_color(theme::text_primary())
-                                        .text_size(theme::size_meta())
-                                        .child("↑")
-                                        .on_click(cx.listener(|this, _, window, cx| this.start_session(window, cx))),
-                                ),
-                            ),
-                    ),
+                    .child(self.render_composer(None, false, window, cx)),
             )
     }
 
@@ -1214,6 +1185,21 @@ pub(crate) enum Glyph {
     Cluster,
     /// A cluster job's resources: a chip with pins.
     Chip,
+    /// A notebook cell: a box with lines of code.
+    Code,
+    /// Several cells, stacked.
+    Cells,
+    /// Selected text: lines.
+    Lines,
+    /// An error: a warning triangle.
+    Warning,
+    Picture,
+    /// The pointing arrow (Point).
+    Pointer,
+    /// Slash commands: a boxed slash.
+    Slash,
+    /// Send.
+    ArrowUp,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -1278,6 +1264,38 @@ pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
                         polyline(&[(1., p), (3., p)]);
                         polyline(&[(9., p), (11., p)]);
                     }
+                }
+                Glyph::Code => {
+                    polyline(&[(1.5, 2.), (10.5, 2.), (10.5, 10.), (1.5, 10.), (1.5, 2.)]);
+                    polyline(&[(3.5, 5.), (8.5, 5.)]);
+                    polyline(&[(3.5, 7.5), (6.5, 7.5)]);
+                }
+                Glyph::Cells => {
+                    polyline(&[(1., 4.), (8.5, 4.), (8.5, 11.), (1., 11.), (1., 4.)]);
+                    polyline(&[(3.5, 4.), (3.5, 1.), (11., 1.), (11., 8.5), (8.5, 8.5)]);
+                }
+                Glyph::Lines => {
+                    polyline(&[(1., 3.), (11., 3.)]);
+                    polyline(&[(1., 6.), (11., 6.)]);
+                    polyline(&[(1., 9.), (7., 9.)]);
+                }
+                Glyph::Warning => {
+                    polyline(&[(6., 1.5), (11., 10.5), (1., 10.5), (6., 1.5)]);
+                    polyline(&[(6., 4.8), (6., 7.3)]);
+                    polyline(&[(6., 8.5), (6., 9.3)]);
+                }
+                Glyph::Picture => {
+                    polyline(&[(1., 2.), (11., 2.), (11., 10.), (1., 10.), (1., 2.)]);
+                    polyline(&[(1., 9.), (4.5, 5.5), (7., 8.), (8.5, 6.5), (11., 9.)]);
+                }
+                Glyph::Pointer => polyline(&[(2.5, 1.5), (2.5, 10.), (4.8, 7.8), (6.6, 11.), (8., 10.3), (6.3, 7.1), (9.5, 7.1), (2.5, 1.5)]),
+                Glyph::Slash => {
+                    polyline(&[(1.5, 1.5), (10.5, 1.5), (10.5, 10.5), (1.5, 10.5), (1.5, 1.5)]);
+                    polyline(&[(4.5, 8.5), (7.5, 3.5)]);
+                }
+                Glyph::ArrowUp => {
+                    polyline(&[(6., 10.), (6., 2.5)]);
+                    polyline(&[(2.5, 6.), (6., 2.5), (9.5, 6.)]);
                 }
                 Glyph::Gear => {
                     let circle = |r: f32| -> Vec<(f32, f32)> {

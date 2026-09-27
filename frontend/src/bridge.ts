@@ -7,12 +7,15 @@
 export type ToApp =
   | { type: "ready" }
   | { type: "mode"; on: boolean }
-  | { type: "annotation"; notebook: string | null; cells: string[]; comment: string; now: boolean }
+  // Cells picked with Point, with each one's code (`codes`, same order).
+  | { type: "annotation"; notebook: string | null; cells: string[]; codes: string[]; comment: string; now: boolean }
   // Fix with Claude / Explain on a cell's error.
-  | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; error: string }
+  | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; code: string; error: string }
   // ⌘K on a cell / the agent button between cells: about this cell, fill this
   // empty cell, or add a new cell after it. `now` (⌘⏎) joins a running turn.
-  | { type: "prompt"; notebook: string | null; cell: string; where: "about" | "fill" | "before" | "after"; text: string; now: boolean; quote?: string };
+  | { type: "prompt"; notebook: string | null; cell: string; code: string; where: "about" | "fill" | "before" | "after"; text: string; now: boolean; quote?: string }
+  // A cell's code now, answering the app's `code` (null: no such cell here).
+  | { type: "code"; cell: string; code: string | null };
 
 /** One cell's state, from the runtime's events (see runtime Events.jl). */
 export type CellState = {
@@ -31,7 +34,11 @@ export type ToPage =
   // The shown notebook's cells, whenever they change and after `ready`.
   | { type: "cells"; cells: CellState[] }
   // The notebook theme (Settings), after `ready` and on change.
-  | { type: "theme"; name: "endeavor" | "pluto" };
+  | { type: "theme"; name: "endeavor" | "pluto" }
+  // Scroll to these cells and outline them briefly (a chip in the chat was clicked).
+  | { type: "reveal"; cells: string[] }
+  // Ask for a cell's code now.
+  | { type: "code"; cell: string };
 
 declare global {
   interface Window {
