@@ -48,8 +48,8 @@ _Listed 2026-09-25._
 - [ ] Transcript notes: "Turn ended", end-of-turn run warnings, and "Allowed: …" / "Denied: …" for a prompt with no call in the transcript (plain words, "Allowed: edit a cell") — improvised
 - [ ] Failure states: turn failed, agent disconnected, Julia crashed and notebooks reopened, "Open a copy" for a session still open in the Claude Code CLI — improvised
 - [ ] Opening a past session: loading and replay — improvised
-- [ ] Messages sent from the notebook ("✎ 1 cell: …") and the "📎 error message / selected text" attachment chip — improvised
-- [ ] Attachments across the chat: how cells, selected text, error messages, picked regions (and later files and images from "+") look in the user bubble, the composer before sending, and queued messages; what clicking one does (jump to the cell, show the attached text) — missing
+- [x] Messages sent from the notebook ("✎ 1 cell: …") and the "📎 error message / selected text" attachment chip — improvised. Built: Fix with Claude, Explain, ⌘K, the selection chip and Point send the user's words with their chips (`rates`, "error in `bad`", "selection · 2 lines", "3 cells"); no "From the notebook" line
+- [x] Attachments across the chat: how cells, selected text, error messages, picked regions (and later files and images from "+") look in the user bubble, the composer before sending, and queued messages; what clicking one does (jump to the cell, show the attached text) — missing. Built: 22px chips (icon, mono names, a red icon for errors); in the box above the text with × and a hover preview (code, text, image thumbnail, file size); above the sent bubble without ×; first on a queued message's one line. A cell chip scrolls the notebook to its cells and outlines them for a second; a selection, error or file chip opens what was sent, with "Show in notebook" and "The cell has changed since." when it has. A reopened session gets its file and image chips back, not its notebook ones. Regions wait for Point's drawn box
 - [ ] Working indicator: spec says orange asterisk + "Adding `residuals` · 12s"; app shows a rocket + "Working · 24s" — improvised
 - [x] Long content: tool output and long messages have no max height or scroll (only the plan card does) — missing. Built: a call's input and output scroll past 160px (agent replies are always shown in full); the wheel goes back to the transcript at a panel's end
 - [x] Long user messages: fold after about 10 lines with the last lines fading out and "Show more" ("Show less" once open), so the transcript shows mostly Claude's replies. The user wrote it and rarely needs to reread it all
@@ -58,17 +58,17 @@ _Listed 2026-09-25._
 
 - [ ] Run-card variants: "Delete `x`?", "Run all N cells?", "Run code?" (no cell preview), "Let this notebook run? (Nothing runs yet.)", "Add a cell and run it?" (spec shows only "Run 3 cells?") — improvised
 - [ ] The agent's own permission prompts (e.g. "Allow list_notebooks?" with Yes / Yes, don't ask again / No) — improvised
-- [ ] Queued messages with ✎ edit and ✕ remove — improvised
+- [ ] Queued messages with ✎ edit and ✕ remove — improvised. Now one bordered line each, chips first and the words cut to fit; ✎ puts both back in the composer
 - [ ] Plan card: spec shows numbered steps; the app renders the plan's markdown, headings included, under a "Ready to start?" heading the spec doesn't have — improvised
 
 ## Composer
 
-- [ ] Model and effort pickers — improvised
+- [x] Model and effort pickers — improvised. Built: the same menus on the new-session screen, from the choices the last session offered; a pick applies to the session and to the next ones
 - [ ] Slash-command menu — improvised
 - [ ] Context ring hover label ("N% context") — improvised
-- [ ] "+" button (attach / @ cell): its menu — missing
+- [x] "+" button (attach / @ cell): its menu — missing. Built: "Add files or photos ⌘U" (the file picker, several at once; also drop or paste into the box) and "Slash commands". Images and text files go in the prompt itself (images up to 3.7 MB, text up to 250 KB), the same on This Mac and servers; other files are refused with a line saying why. Cells come only from Point, Fix with Claude, ⌘K and the selection chip. Typing @ lists the session folder's files and folders (fuzzy, four levels, hidden ones skipped; on a server through its helper) and puts the path in the text as one tinted piece that one backspace deletes; Claude gets the path relative to the folder and reads it itself. Notebooks are files here, so "Refer to another notebook" is this too
 - [ ] Steering feedback (a message joining the running turn) — missing
-- [ ] The new-session screen's composer doesn't match the chat composer. It needn't be identical, but it should mostly be the chat composer's refined design, with the new-session parts added (the Where / folder / notebook chips above it). Reference (Claude desktop, 2026-09-27): its new-session composer keeps the chat's elements (chips above; the input; "+", model and effort under it) and adds only what starting needs. Keeping the orange send button is optional — improvised
+- [ ] The new-session screen's composer doesn't match the chat composer. It needn't be identical, but it should mostly be the chat composer's refined design, with the new-session parts added (the Where / folder / notebook chips above it). Reference (Claude desktop, 2026-09-27): its new-session composer keeps the chat's elements (chips above; the input; "+", model and effort under it) and adds only what starting needs. Keeping the orange send button is optional — improvised. Built: one composer for both, the new-session screen adding only its chips above; the row under the box is the same in both ("+", Point, mode; model, effort, context ring), with Point greyed until a notebook is open and the ring greyed until there is usage, so nothing moves when a session starts. The box is one line in a chat and two on the new-session screen, growing to ten. The send button is orange only with something to send, grey when empty, and Stop (Esc) while Claude works with an empty box. The mode opens a menu (Manual, Ask to run, Auto, Plan, each with a line on what it allows, ✓ on the current one, 1–4 while open); ⇧⇥ still cycles, and the new-session screen's pick applies when the session starts
 
 ## Notebook pane
 
