@@ -11,6 +11,7 @@ use std::time::Duration;
 mod webkeys;
 mod agent;
 mod annotate;
+mod attach;
 mod celldiff;
 mod connection;
 mod gate;

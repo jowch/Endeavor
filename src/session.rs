@@ -1646,7 +1646,7 @@ fn cell_name(diff: &celldiff::CellDiff) -> String {
 }
 
 /// What code defines, from its first line: `model(S, p) = …` → `model`, `x = …` → `x`.
-fn defined_name(code: &str) -> Option<String> {
+pub(crate) fn defined_name(code: &str) -> Option<String> {
     let line = code.lines().find(|l| !l.trim().is_empty())?;
     let lhs = line.split_once('=').map(|(lhs, _)| lhs).unwrap_or(line);
     let lhs = lhs.trim().trim_start_matches("function ").trim_start_matches("const ");
