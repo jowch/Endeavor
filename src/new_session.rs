@@ -11,6 +11,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState, Textarea};
 
+use crate::hosts::Where;
 use crate::notebook_files::{self, Found, Preview};
 use crate::session::folder_name;
 use crate::turtle::{self, Pose};
@@ -32,6 +33,10 @@ pub enum Chip {
 
 /// The new-session screen's state.
 pub struct Draft {
+    /// The machine the session runs on.
+    pub host: Where,
+    /// A short note above the chips (why pressing send did nothing yet).
+    pub notice: Option<SharedString>,
     pub folder: PathBuf,
     pub notebook: NotebookChoice,
     pub popover: Option<Chip>,
@@ -121,7 +126,7 @@ impl Draft {
             _ => {}
         })
         .detach();
-        Draft { folder, notebook: NotebookChoice::New, popover: None, notebooks: Vec::new(), preview: None, search, selected: 0 }
+        Draft { host: Where::ThisMac, notice: None, folder, notebook: NotebookChoice::New, popover: None, notebooks: Vec::new(), preview: None, search, selected: 0 }
     }
 }
 
@@ -365,12 +370,16 @@ impl Workspace {
             NotebookChoice::Existing(path) => folder_name(path),
         };
         let mono = matches!(self.draft.notebook, NotebookChoice::Existing(_));
+        let (where_icon, where_label) = match &self.draft.host {
+            Where::Server(id) => (Glyph::Server, self.hosts.server(id).map_or_else(|| "Server".into(), |s| s.name.clone())),
+            Where::ThisMac => (Glyph::Laptop, "This Mac".to_string()),
+        };
         let chips = [
-            (Chip::Where, "where", Glyph::Laptop, "This Mac".to_string(), false),
+            (Chip::Where, "where", where_icon, where_label, false),
             (Chip::Folder, "folder", Glyph::Folder, folder_name(&self.draft.folder), false),
             (Chip::Notebook, "notebook", Glyph::File, notebook_label, mono),
         ];
-        div().flex().gap(px(6.)).children(chips.map(|(chip, id, icon, label, mono)| {
+        let chips = div().flex().gap(px(6.)).children(chips.map(|(chip, id, icon, label, mono)| {
             let open = self.draft.popover == Some(chip);
             div()
                 .relative()
@@ -395,13 +404,19 @@ impl Workspace {
                         .on_click(cx.listener(move |this, _, window, cx| this.toggle_popover(chip, window, cx))),
                 )
                 .when(open, |d| d.child(self.render_popover(chip, cx)))
-        }))
+        }));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .children(self.draft.notice.clone().map(|n| div().text_size(theme::size_meta()).text_color(theme::accent_text()).child(n)))
+            .child(chips)
     }
 
     /// A chip's menu, opening upward from the chip's top-left corner.
     fn render_popover(&self, chip: Chip, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (width, body) = match chip {
-            Chip::Where => (220., self.where_menu().into_any_element()),
+            Chip::Where => (240., self.where_menu(cx).into_any_element()),
             Chip::Folder => (360., self.folder_menu(cx).into_any_element()),
             Chip::Notebook => (320., self.notebook_menu(cx).into_any_element()),
         };
@@ -424,8 +439,47 @@ impl Workspace {
         div().absolute().top(px(-6.)).left_0().child(deferred(anchored().anchor(Anchor::BottomLeft).child(body)).with_priority(1))
     }
 
-    fn where_menu(&self) -> impl IntoElement {
-        menu_row("where-this-mac", true, false).child(glyph(Glyph::Laptop, theme::text_muted())).child("This Mac")
+    fn set_draft_host(&mut self, host: Where, window: &mut Window, cx: &mut Context<Self>) {
+        self.draft.host = host;
+        self.draft.notice = None;
+        self.close_popover(window, cx);
+    }
+
+    fn where_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let this_mac = host_row("where-this-mac", self.draft.host == Where::ThisMac, Glyph::Laptop, "This Mac".into(), "host-gear-this-mac", cx)
+            .on_click(cx.listener(|this, _, window, cx| this.set_draft_host(Where::ThisMac, window, cx)));
+        let this_mac = this_mac.child(gear_button("gear-this-mac", "host-gear-this-mac").on_click(cx.listener(|this, _, window, cx| {
+            cx.stop_propagation();
+            this.close_popover(window, cx);
+            this.settings_open = true;
+        })));
+        let servers = self.hosts.servers.iter().enumerate().map(|(i, server)| {
+            let group: SharedString = format!("host-gear-{i}").into();
+            let (id, edit_id) = (server.id.clone(), server.id.clone());
+            host_row(("where-server", i), self.draft.host == Where::Server(server.id.clone()), Glyph::Server, server.name.clone(), group.clone(), cx)
+                .on_click(cx.listener(move |this, _, window, cx| this.set_draft_host(Where::Server(id.clone()), window, cx)))
+                .child(gear_button(("gear-server", i), group).on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.close_popover(window, cx);
+                    this.open_server_dialog(Some(edit_id.clone()), window, cx);
+                })))
+        });
+        let servers: Vec<_> = servers.collect();
+        div()
+            .flex()
+            .flex_col()
+            .child(this_mac)
+            .child(section_label("Servers"))
+            .children(servers)
+            .child(
+                menu_row("add-server", false, false)
+                    .child(glyph(Glyph::Plus, theme::text_muted()))
+                    .child(div().text_color(theme::text_muted()).child("Add server…"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.close_popover(window, cx);
+                        this.open_server_dialog(None, window, cx);
+                    })),
+            )
     }
 
     fn folder_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -659,6 +713,33 @@ pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool) 
         .child(div().w(px(10.)).flex_shrink_0().text_size(theme::size_meta()).text_color(theme::accent_text()).child(if checked { "✓" } else { "" }))
 }
 
+/// A Where menu row: ✓, the machine's icon and name, and room for its gear.
+fn host_row(id: impl Into<ElementId>, checked: bool, icon: Glyph, name: String, group: impl Into<SharedString>, _: &mut Context<Workspace>) -> Stateful<Div> {
+    menu_row(id, checked, false)
+        .group(group)
+        .child(glyph(icon, theme::text_muted()))
+        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(name))
+}
+
+/// A host's settings button, shown while the pointer is over its row.
+fn gear_button(id: impl Into<ElementId>, group: impl Into<SharedString>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label("Settings")
+        .flex_shrink_0()
+        .size(px(20.))
+        .mr(px(-4.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .invisible()
+        .group_hover(group, |s| s.visible())
+        .hover(|s| s.bg(theme::bg_raised()))
+        .child(glyph(Glyph::Gear, theme::text_muted()))
+}
+
 fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
     div().pl(px(26.)).pt(px(4.)).pb(px(2.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(text.into())
 }
@@ -672,6 +753,9 @@ pub(crate) enum Glyph {
     Search,
     Funnel,
     Archive,
+    Server,
+    Plus,
+    Gear,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -712,6 +796,30 @@ pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
                     polyline(&[(1., 2.), (11., 2.), (11., 4.5), (1., 4.5), (1., 2.)]);
                     polyline(&[(2., 4.5), (2., 10.5), (10., 10.5), (10., 4.5)]);
                     polyline(&[(4.5, 6.5), (7.5, 6.5)]);
+                }
+                Glyph::Server => {
+                    polyline(&[(1.5, 1.5), (10.5, 1.5), (10.5, 5.), (1.5, 5.), (1.5, 1.5)]);
+                    polyline(&[(1.5, 7.), (10.5, 7.), (10.5, 10.5), (1.5, 10.5), (1.5, 7.)]);
+                    polyline(&[(3., 3.25), (4., 3.25)]);
+                    polyline(&[(3., 8.75), (4., 8.75)]);
+                }
+                Glyph::Plus => {
+                    polyline(&[(6., 1.5), (6., 10.5)]);
+                    polyline(&[(1.5, 6.), (10.5, 6.)]);
+                }
+                Glyph::Gear => {
+                    let circle = |r: f32| -> Vec<(f32, f32)> {
+                        (0..=24).map(|i| {
+                            let a = std::f32::consts::TAU * i as f32 / 24.;
+                            (6. + r * a.cos(), 6. + r * a.sin())
+                        }).collect()
+                    };
+                    polyline(&circle(3.));
+                    polyline(&circle(1.2));
+                    for i in 0..8 {
+                        let a = std::f32::consts::TAU * i as f32 / 8.;
+                        polyline(&[(6. + 3. * a.cos(), 6. + 3. * a.sin()), (6. + 5. * a.cos(), 6. + 5. * a.sin())]);
+                    }
                 }
             }
             if let Ok(path) = path.build() {

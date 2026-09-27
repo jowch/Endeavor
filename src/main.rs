@@ -2,7 +2,7 @@
 //! child webview, and ACP agent sessions (a session bar, one chat pane) wired to the
 //! same Pluto session over MCP.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +23,7 @@ mod overlay;
 mod pluto;
 mod remote;
 mod runtime;
+mod server_dialog;
 mod session;
 mod settings;
 mod splash;
@@ -458,6 +459,13 @@ pub struct Workspace {
     /// Bumped when Julia boots or dies, so an old runtime's event reader stops.
     runtime_generation: Arc<AtomicU64>,
     notices_tx: UnboundedSender<runtime::Notice>,
+    /// Servers sessions can run on (persisted in hosts.json).
+    hosts: hosts::Hosts,
+    /// Adding a server, or its settings.
+    server_dialog: Option<server_dialog::ServerDialog>,
+    /// ssh's prompts waiting for an answer, the first on screen.
+    asks: VecDeque<server_dialog::AskModal>,
+    questions_tx: UnboundedSender<remote::Question>,
 }
 
 impl Workspace {
@@ -543,6 +551,15 @@ impl Workspace {
             }
         })
         .detach();
+        let (questions_tx, mut questions) = futures::channel::mpsc::unbounded::<remote::Question>();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(question) = questions.next().await {
+                if this.update_in(cx, |this, window, cx| this.on_question(question, window, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         // The helper finishes the job after the app is gone.
         cx.on_app_quit(|this, _| {
             if let Some(runtime) = &this.runtime {
@@ -608,6 +625,10 @@ impl Workspace {
             placeholder: "Type / for commands",
             runtime_generation: Arc::new(AtomicU64::new(0)),
             notices_tx,
+            hosts: hosts::Hosts::load(),
+            server_dialog: None,
+            asks: VecDeque::new(),
+            questions_tx,
         };
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
         // Julia boots while the user picks a folder on the new-session screen.
@@ -661,6 +682,10 @@ impl Workspace {
     /// text (if any) as its first message. A chosen notebook opens in safe preview.
     fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popover(window, cx);
+        if let hosts::Where::Server(_) = self.draft.host {
+            self.draft.notice = Some("Sessions on servers are coming next.".into());
+            return cx.notify();
+        }
         let cwd = self.draft.folder.clone();
         let _ = std::fs::create_dir_all(&cwd);
         let key = self.next_key;
@@ -2537,7 +2562,8 @@ impl Render for Workspace {
         let stand_in = active.and_then(|ix| self.notebook_stand_in(&self.sessions[ix], cx));
         // The web view is a native view over the window: hidden behind the setup
         // screen, and wherever the notebook pane is drawn natively.
-        let show_webview = self.setup.is_none() && active.is_some() && stand_in.is_none();
+        let modal = self.server_dialog.is_some() || !self.asks.is_empty();
+        let show_webview = self.setup.is_none() && active.is_some() && stand_in.is_none() && !modal;
         if self.webview.read(cx).visible() != show_webview {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
@@ -2656,6 +2682,8 @@ impl Render for Workspace {
                         })),
                 )
             })
+            .children(self.render_server_dialog(cx))
+            .children(self.render_askpass(cx))
             // A click outside the menu only closes it, as with a native menu.
             .when(self.menu.is_some(), |d| {
                 d.child(
