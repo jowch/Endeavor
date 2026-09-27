@@ -278,14 +278,17 @@ Opt-in: user points at their own `julia` binary.
   Pluto/PlutoMCP still come from the app's pinned project.
 - **Topology.** PlutoMCP already supports this: the app's Julia runs Pluto +
   the HTTP MCP bridge (`start_pluto_stack!`) and reports
-  `{pluto_url(with secret), mcp_url}` to the app on stdout. Agents get the
+  its ports, token and Pluto's secret in a state file that the
+  `endeavor-remote` helper reads ([remote-sessions.md](remote-sessions.md)). Agents get the
   bridge either as an HTTP MCP server (if they advertise
   `mcpCapabilities.http`) or via stdio `PlutoMCP.connect(mcp_port=…)`, which
   proxies to it. The app is also an MCP client of the same bridge — this
   closes the gap in §4.3/§4.4 where the app had no channel to an
   agent-spawned MCP server.
-- **Lifetime.** Julia exits when its stdin hits EOF, so it dies with the app
-  without PID bookkeeping.
+- **Lifetime.** Julia runs detached, started by the `endeavor-remote` helper,
+  which the app reaches over its stdin/stdout. It stops when the app quits,
+  unless the "Keep notebooks running after Endeavor quits" setting is on; then
+  the next launch reattaches.
 
 Deferred: juliaup integration, PackageCompiler sysimage (TTFX paid once per
 app launch, not per chat), automatic Julia upgrades (bump the pin per

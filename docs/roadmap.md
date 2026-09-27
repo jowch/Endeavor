@@ -20,9 +20,9 @@ process running Pluto + PlutoMCP.
   checked against a pinned SHA-256; Settings can switch to your own julia
   instead. The ACP adapter is installed the same way: pinned Node.js 24.21.0
   (SHA-256) plus `npm ci` of `adapter/package-lock.json` (integrity-checked),
-  so no system Node or `npx`. Stacked private depot; `boot.jl`
-  reports the Pluto URL and MCP bridge; Julia exits when the app closes its
-  stdin. Plain-language startup errors, crash detection, and **Restart Julia**
+  so no system Node or `npx`. Stacked private depot; the
+  `endeavor-remote` helper starts `boot.jl` detached and relays its ports to
+  the app; Julia stops when the app quits unless the user keeps it running. Plain-language startup errors, crash detection, and **Restart Julia**
   on the same ports (the agent's MCP connection reconnects; open notebooks are
   reopened).
 - **Notebook pane (§4.1).** Real Pluto frontend in a `gpui-wry` child webview;
@@ -138,6 +138,6 @@ Deliberate simplifications with their upgrade path (search the code for
 | PlutoMCP `view_cell_output` | no timeout when the worker is busy | a long run blocks it in practice |
 | `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download | an upgrade, or overlapping launches bite |
 
-Also noted: SIGTERM can leave Julia hung mid-exit. The app never sends it
-(quitting closes stdin and `boot.jl` exits itself), but anything that manages
-the process externally should use stdin EOF or SIGKILL.
+Also noted: SIGTERM can leave Julia hung mid-exit. The helper stops a runtime
+with the bridge's `endeavor/shutdown` first and only falls back to SIGTERM,
+then SIGKILL after a grace period.
