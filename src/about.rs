@@ -88,7 +88,10 @@ impl Global for Windows {}
 
 /// Bring `handle` forward if it's still open.
 fn raise(handle: Option<AnyWindowHandle>, cx: &mut App) -> bool {
-    handle.is_some_and(|h| h.update(cx, |_, window, _| window.activate_window()).is_ok())
+    let Some(h) = handle.filter(|h| cx.windows().iter().any(|w| w.window_id() == h.window_id())) else { return false };
+    // Chosen from this window's own menu, the window is busy until the action returns.
+    cx.defer(move |cx| drop(h.update(cx, |_, window, _| window.activate_window())));
+    true
 }
 
 fn small_window(title: &'static str, size: Size<Pixels>, cx: &App) -> WindowOptions {
