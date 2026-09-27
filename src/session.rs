@@ -485,7 +485,8 @@ impl Session {
                     if let Some(allow) = option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
                         let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
                         let _ = responder.respond(RequestPermissionResponse::new(outcome));
-                        self.note(format!("▶ Ran without asking: {title}"));
+                        let what = runs::asked(&title, &input).unwrap_or(title);
+                        self.note(format!("▶ Ran without asking: {what}"));
                         return effects;
                     }
                 }
@@ -780,22 +781,27 @@ impl Session {
 
     /// Answer a permission request; `stop_asking` approves this session's later runs.
     pub fn answer(&mut self, ix: usize, option: &PermissionOption, stop_asking: bool) {
-        let Some(Entry::Permission { title, responder, .. }) = self.entries.get_mut(ix) else { return };
+        let Some(Entry::Permission { title, responder, input, .. }) = self.entries.get_mut(ix) else { return };
         if let Some(responder) = responder.take() {
             let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
             let _ = responder.respond(RequestPermissionResponse::new(outcome));
             let allowed = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
-            let verb = match (allowed, stop_asking) {
-                (true, true) => "Allowed, and won't ask again this session",
-                (true, false) => "Allowed",
-                (false, _) => "Denied",
-            };
-            let tool = celldiff::pluto_tool(title).unwrap_or(title);
-            self.entries[ix] = Entry::Note(format!("{verb}: {tool}").into());
+            self.entries[ix] = Entry::Note(answer_note(allowed, stop_asking, title, input).into());
             self.mark(ix);
             self.run_without_asking |= stop_asking;
         }
     }
+}
+
+/// The transcript's record of an answered prompt: "Allowed: edit a cell".
+fn answer_note(allowed: bool, stop_asking: bool, title: &str, input: &serde_json::Value) -> String {
+    let verb = match (allowed, stop_asking) {
+        (true, true) => "Allowed, and won't ask again this session",
+        (true, false) => "Allowed",
+        (false, _) => "Denied",
+    };
+    let what = runs::asked(title, input).unwrap_or_else(|| title.to_string());
+    format!("{verb}: {what}")
 }
 
 /// The current value of a select config option, by id.
@@ -1210,18 +1216,14 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         return Some(render_plan_card(key, ix, plan, options, cx));
     }
     let mono = |text: String| div().font_family(theme::MONO).text_size(theme::size_code()).child(text);
-    // An unnamed cell (e.g. markdown) by its first line, cut short.
-    let first_line = |code: &str| {
-        let line = code.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-        match line.char_indices().nth(60) {
-            Some((cut, _)) => format!("{}…", &line[..cut]),
-            None => line.to_string(),
-        }
-    };
     let tool = tool.as_deref().unwrap_or("");
 
     let (heading, body): (String, Vec<AnyElement>) = if !*runs_code {
-        (format!("Allow {}?", celldiff::pluto_tool(title).unwrap_or(title)), vec![])
+        let heading = match runs::asked(title, input) {
+            Some(what) => format!("Let Claude {what}?"),
+            None => format!("Allow {title}?"),
+        };
+        (heading, vec![])
     } else if tool == "run_shell" {
         let host = session.server.clone().unwrap_or_else(|| "the server".into());
         let folder = session.place.path.display().to_string();
@@ -1230,14 +1232,7 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
     } else if tool == "add_cell" {
         ("Add a cell and run it?".into(), vec![])
     } else if let Some(p) = preview {
-        let names: Vec<String> = p.cells.iter().map(|c| c.name.clone().unwrap_or_else(|| first_line(&c.code))).collect();
-        let heading = match (tool, p.all, p.count) {
-            ("delete_cell", _, _) => format!("Delete {}?", names.first().map(|n| format!("`{n}`")).unwrap_or("this cell".into())),
-            ("allow_execution", false, _) => "Let this notebook run? (Nothing runs yet.)".into(),
-            (_, true, n) => format!("Run all {n} cells?"),
-            (_, _, 1) => format!("Run {}?", names.first().map(|n| format!("`{n}`")).unwrap_or("1 cell".into())),
-            (_, _, n) => format!("Run {n} cells?"),
-        };
+        let (heading, names) = run_heading(tool, p, input);
         let mut body: Vec<AnyElement> = Vec::new();
         if p.count > 1 && !p.all {
             const SHOWN: usize = 5;
@@ -1333,6 +1328,40 @@ fn render_plan_card(key: u64, ix: usize, plan: &str, options: &[PermissionOption
             })
             .collect(),
     )
+}
+
+/// A run card's heading and the names of the cells it lists. A cell is named by
+/// what it defines, else by its first line; an edit that runs is named by its
+/// new code, since the preview only knows the code before the edit.
+fn run_heading(tool: &str, p: &pluto::RunPreview, input: &serde_json::Value) -> (String, Vec<String>) {
+    let first_line = |code: &str| {
+        let line = code.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+        match line.char_indices().nth(60) {
+            Some((cut, _)) => format!("{}…", &line[..cut]),
+            None => line.to_string(),
+        }
+    };
+    let new_code = input["code"].as_str().filter(|_| tool == "edit_cell");
+    let names: Vec<String> = p
+        .cells
+        .iter()
+        .map(|c| match new_code {
+            Some(code) => first_line(code),
+            None => c.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| first_line(&c.code)),
+        })
+        .collect();
+    let named = |fallback: &str| match names.first().filter(|n| !n.is_empty()) {
+        Some(n) => format!("`{n}`"),
+        None => fallback.to_string(),
+    };
+    let heading = match (tool, p.all, p.count) {
+        ("delete_cell", _, _) => format!("Delete {}?", named("this cell")),
+        ("allow_execution", false, _) => "Let this notebook run? (Nothing runs yet.)".into(),
+        (_, true, n) => format!("Run all {n} cells?"),
+        (_, _, 1) => format!("Run {}?", named("1 cell")),
+        (_, _, n) => format!("Run {n} cells?"),
+    };
+    (heading, names)
 }
 
 /// The approval card's frame: accent edge, soft ring, buttons right-aligned.
@@ -1715,6 +1744,38 @@ mod tests {
         AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, SessionId, SessionMode, SessionModeState, SessionUpdate,
         StopReason, UsageUpdate,
     };
+
+    #[test]
+    fn answered_prompts_are_noted_in_plain_words() {
+        use serde_json::json;
+        let null = serde_json::Value::Null;
+        assert_eq!(super::answer_note(true, false, "mcp__pluto__edit_cell", &null), "Allowed: edit a cell");
+        assert_eq!(super::answer_note(false, false, "mcp__pluto__execute_cell", &null), "Denied: run a cell");
+        assert_eq!(
+            super::answer_note(true, true, "mcp__pluto__submit_changes", &json!({"cell_ids": ["a", "b"]})),
+            "Allowed, and won't ask again this session: run 2 cells"
+        );
+        assert_eq!(super::answer_note(true, false, "Write notes.md", &null), "Allowed: Write notes.md");
+    }
+
+    #[test]
+    fn run_cards_name_cells_that_have_no_name_yet() {
+        use crate::pluto::{PreviewCell, RunPreview};
+        use serde_json::json;
+        let one = |name: Option<&str>, code: &str| RunPreview {
+            count: 1,
+            cells: vec![PreviewCell { name: name.map(str::to_owned), code: code.into() }],
+            ..Default::default()
+        };
+        let heading = |tool, p: &RunPreview, input| super::run_heading(tool, p, &input).0;
+        // A new notebook's empty first cell, edited and run in one call.
+        assert_eq!(heading("edit_cell", &one(None, ""), json!({ "code": "x = 1\ny = 2", "run_after": true })), "Run `x = 1`?");
+        assert_eq!(heading("execute_cell", &one(None, ""), json!({})), "Run 1 cell?");
+        assert_eq!(heading("execute_cell", &one(Some(""), "  \n"), json!({})), "Run 1 cell?");
+        assert_eq!(heading("delete_cell", &one(None, ""), json!({})), "Delete this cell?");
+        assert_eq!(heading("execute_cell", &one(Some("fit, model"), "fit = 1"), json!({})), "Run `fit, model`?");
+        assert_eq!(heading("execute_cell", &one(None, "md\"# Intro\""), json!({})), "Run `md\"# Intro\"`?");
+    }
 
     #[test]
     fn tool_calls_collapse_to_one_line() {

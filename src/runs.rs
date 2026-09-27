@@ -32,45 +32,60 @@ pub fn failed(status: ToolCallStatus, title: &str, output: Option<&Value>) -> bo
 }
 
 /// One kind of work, worded as "`verb` `one`" for a single one and
-/// "`verb` `many`" (with `{n}` the count) for several.
+/// "`verb` `many`" (with `{n}` the count) for several; `does` is the verb
+/// before it happens ("edit a cell"), `verb` after ("edited a cell").
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Act {
+    does: &'static str,
     verb: &'static str,
     one: &'static str,
     many: &'static str,
 }
 
-const fn act(verb: &'static str, one: &'static str, many: &'static str) -> Act {
-    Act { verb, one, many }
+const fn act(does: &'static str, verb: &'static str, one: &'static str, many: &'static str) -> Act {
+    Act { does, verb, one, many }
 }
 
-const READ_FILE: Act = act("read", "a file", "{n} files");
-const EDIT_FILE: Act = act("edited", "a file", "{n} files");
-const WRITE_FILE: Act = act("wrote", "a file", "{n} files");
-const DELETE_FILE: Act = act("deleted", "a file", "{n} files");
-const MOVE_FILE: Act = act("moved", "a file", "{n} files");
-const LIST_FOLDER: Act = act("listed", "a folder", "{n} folders");
-const SEARCH: Act = act("ran", "a search", "{n} searches");
-const FETCH: Act = act("fetched", "a page", "{n} pages");
-const COMMAND: Act = act("ran", "a command", "{n} commands");
-const TODOS: Act = act("updated", "the to-do list", "the to-do list {n} times");
-const READ_CELL: Act = act("read", "a cell", "{n} cells");
-const READ_NOTEBOOK: Act = act("read", "the notebook", "the notebook {n} times");
-const VIEW_OUTPUT: Act = act("viewed", "an output", "{n} outputs");
-const EDIT_CELL: Act = act("edited", "a cell", "{n} cells");
-const ADD_CELL: Act = act("added", "a cell", "{n} cells");
-const DELETE_CELL: Act = act("deleted", "a cell", "{n} cells");
-const MOVE_CELL: Act = act("moved", "a cell", "{n} cells");
-const RUN_CELL: Act = act("ran", "a cell", "{n} cells");
-const RUN_CHANGED: Act = act("ran", "the changed cells", "the changed cells {n} times");
-const RUN_ALL: Act = act("ran", "all cells", "all cells {n} times");
-const SEARCH_NOTEBOOK: Act = act("searched", "the notebook", "the notebook {n} times");
-const LIST_NOTEBOOKS: Act = act("listed", "the notebooks", "the notebooks {n} times");
-const OPEN_NOTEBOOK: Act = act("opened", "a notebook", "{n} notebooks");
-const NEW_NOTEBOOK: Act = act("created", "a notebook", "{n} notebooks");
-const ALLOW_RUN: Act = act("let", "the notebook run", "the notebook run");
-const KEEP_ALIVE: Act = act("kept", "the notebook running", "the notebook running");
-const OTHER: Act = act("used", "a tool", "{n} tools");
+impl Act {
+    fn object(&self, n: usize) -> String {
+        if n == 1 { self.one.to_string() } else { self.many.replace("{n}", &n.to_string()) }
+    }
+}
+
+/// A notebook tool call in plain words, as asked for: "edit a cell", "run 2 cells".
+pub fn asked(title: &str, input: &Value) -> Option<String> {
+    celldiff::pluto_tool(title)?;
+    let (act, n) = act_of(title, ToolKind::Other, input);
+    Some(format!("{} {}", act.does, act.object(n)))
+}
+
+const READ_FILE: Act = act("read", "read", "a file", "{n} files");
+const EDIT_FILE: Act = act("edit", "edited", "a file", "{n} files");
+const WRITE_FILE: Act = act("write", "wrote", "a file", "{n} files");
+const DELETE_FILE: Act = act("delete", "deleted", "a file", "{n} files");
+const MOVE_FILE: Act = act("move", "moved", "a file", "{n} files");
+const LIST_FOLDER: Act = act("list", "listed", "a folder", "{n} folders");
+const SEARCH: Act = act("run", "ran", "a search", "{n} searches");
+const FETCH: Act = act("fetch", "fetched", "a page", "{n} pages");
+const COMMAND: Act = act("run", "ran", "a command", "{n} commands");
+const TODOS: Act = act("update", "updated", "the to-do list", "the to-do list {n} times");
+const READ_CELL: Act = act("read", "read", "a cell", "{n} cells");
+const READ_NOTEBOOK: Act = act("read", "read", "the notebook", "the notebook {n} times");
+const VIEW_OUTPUT: Act = act("view", "viewed", "an output", "{n} outputs");
+const EDIT_CELL: Act = act("edit", "edited", "a cell", "{n} cells");
+const ADD_CELL: Act = act("add", "added", "a cell", "{n} cells");
+const DELETE_CELL: Act = act("delete", "deleted", "a cell", "{n} cells");
+const MOVE_CELL: Act = act("move", "moved", "a cell", "{n} cells");
+const RUN_CELL: Act = act("run", "ran", "a cell", "{n} cells");
+const RUN_CHANGED: Act = act("run", "ran", "the changed cells", "the changed cells {n} times");
+const RUN_ALL: Act = act("run", "ran", "all cells", "all cells {n} times");
+const SEARCH_NOTEBOOK: Act = act("search", "searched", "the notebook", "the notebook {n} times");
+const LIST_NOTEBOOKS: Act = act("list", "listed", "the notebooks", "the notebooks {n} times");
+const OPEN_NOTEBOOK: Act = act("open", "opened", "a notebook", "{n} notebooks");
+const NEW_NOTEBOOK: Act = act("create", "created", "a notebook", "{n} notebooks");
+const ALLOW_RUN: Act = act("let", "let", "the notebook run", "the notebook run");
+const KEEP_ALIVE: Act = act("keep", "kept", "the notebook running", "the notebook running");
+const OTHER: Act = act("use", "used", "a tool", "{n} tools");
 
 /// What a call did, and how many of it (cells edited, say).
 fn act_of(title: &str, kind: ToolKind, input: &Value) -> (Act, usize) {
@@ -130,7 +145,7 @@ pub fn summary<'a>(calls: impl IntoIterator<Item = (&'a str, ToolKind, &'a Value
     }
     let phrases: Vec<String> = acts
         .iter()
-        .map(|(act, n)| if *n == 1 { format!("{} {}", act.verb, act.one) } else { format!("{} {}", act.verb, act.many.replace("{n}", &n.to_string())) })
+        .map(|(act, n)| format!("{} {}", act.verb, act.object(*n)))
         .collect();
     let text = phrases.join(", ");
     let mut chars = text.chars();
@@ -230,6 +245,17 @@ mod tests {
             summary([("mcp__pluto__read_notebook_code", ToolKind::Other, &null), ("mcp__pluto__read_notebook_code", ToolKind::Other, &null)]),
             "Read the notebook 2 times"
         );
+    }
+
+    #[test]
+    fn notebook_calls_are_asked_for_in_plain_words() {
+        let null = Value::Null;
+        assert_eq!(super::asked("mcp__pluto__edit_cell", &null).as_deref(), Some("edit a cell"));
+        assert_eq!(super::asked("mcp__pluto__execute_cell", &null).as_deref(), Some("run a cell"));
+        assert_eq!(super::asked("mcp__pluto__submit_changes", &json!({"cell_ids": ["a", "b"]})).as_deref(), Some("run 2 cells"));
+        assert_eq!(super::asked("mcp__pluto__run_all_cells", &null).as_deref(), Some("run all cells"));
+        assert_eq!(super::asked("mcp__pluto__allow_execution", &null).as_deref(), Some("let the notebook run"));
+        assert_eq!(super::asked("Bash", &null), None);
     }
 
     #[test]
