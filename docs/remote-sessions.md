@@ -1,8 +1,10 @@
 # Remote sessions over SSH
 
 Design for running notebooks on a remote machine (a lab server, a cloud VM, or
-an HPC cluster) from the Endeavor app on macOS, Linux, or Windows. Not built
-yet. Settled work moves to [roadmap.md](roadmap.md) once scheduled.
+an HPC cluster) from the Endeavor app on macOS, Linux, or Windows. Plain
+servers (the process launcher) are built on macOS; clusters (Slurm) and the
+Linux and Windows clients are not yet. Settled work moves to
+[roadmap.md](roadmap.md) once scheduled.
 
 _Drafted 2026-09-26_
 
@@ -84,15 +86,31 @@ x86_64 and aarch64 and for macOS. It is not written in Julia, because it runs
 on every connect and Julia is slow to start, and it does not rely on `socat`
 or Python being installed. It:
 
-1. Takes an exclusive lock on the runtime's state file (one client).
-2. Reads the state file. If the runtime is alive, it connects to its ports.
-   If not, it starts one (see Launchers).
+1. Says hello with the machine's name and home folder, and from then on
+   answers file requests itself, without Julia: list a folder (folders and
+   `.jl` files), find the Pluto notebooks under a folder, and the first cells
+   of a notebook (`crates/wire`'s `files` and `notebooks`). The new-session
+   screen browses a server with these before any runtime exists.
+2. When the app sends `StartRuntime` (a session needs Julia), takes an
+   exclusive lock on the runtime's state file (one client), then reads it. If
+   the runtime is alive, it connects to its ports. If not, it starts one (see
+   Launchers). Only this step takes a runtime over from another client, so
+   browsing a server never does.
 3. Multiplexes HTTP and SSE connections between the runtime and the SSH stdio
    channel.
 
+A runtime that dies, fails to start, or is stopped by the app leaves the
+helper connected, so starting it again needs no new SSH sign-in.
+
 **Local listener.** The app listens on local loopback ports and feeds each
 connection into the channel. The webview, the agent's MCP config
-(`agent.rs`), and the `/events` watcher keep using `127.0.0.1` URLs.
+(`agent.rs`), and the `/events` watcher keep using `127.0.0.1` URLs. Each host
+has its own listener for the whole launch, so a session's MCP URL (and the
+token, kept in the host's state folder) survive reconnects and restarts. The
+app keeps one connection per host (`src/connection.rs`): its status
+(connecting, browsing, starting, ready, died, replaced, failed), its askpass,
+and what it follows of the runtime. On quit, servers detach; their idle stop
+(the server's own setting, else Settings') covers forgotten notebooks.
 
 **Local sessions use the same path.** The app can run the helper as a child
 process without SSH, so local and remote share one transport, with local as
@@ -154,24 +172,33 @@ Claude Code's built-in Bash, Read, and Write run on the user's computer in the
 session's local working folder. With a remote notebook they would look at the
 wrong machine. In remote sessions:
 
-- Turn off the built-in Bash, Read, and Write.
-- Add MCP tools that run inside the remote runtime: list a folder, read part
-  of a file, and run a command behind the same approval gate as running cells.
+- Turn off the built-in Bash, Read, Write, Edit, MultiEdit, Glob, Grep and
+  NotebookEdit (`disallowedTools` in the session's options).
+- The runtime's MCP adds tools that run where it runs: `list_folder`,
+  `read_file` and `run_shell`. It lists them only on MCP connections that
+  carry `X-Endeavor-Host: <server name>`, which the app sends for server
+  sessions, and refuses them otherwise. `run_shell` goes through the same
+  execution gate as running cells; its card says "Run a command on
+  <server>?" with the command and folder.
+- The first message tells Claude which server and folder it works in.
 
 The skills already route notebook work through MCP and tell the agent not to
 scan the filesystem (`plugin/skills/pluto-session/SKILL.md`). This makes that
 enforced rather than advisory. Claude Code's session history and CLAUDE.md
-stay tied to a local folder, for example a per-host folder under the app's
-data directory.
+stay tied to a local folder: `hosts/<server id>/` in the app's data
+directory, one per server. The app records each session's host and remote
+folder in `sessions.json`.
 
 ## Notebook identity and files
 
 - A notebook is identified by host plus path everywhere the app stores paths:
-  `recent.json`, saved session paths, crash reopen. The local `is_dir` filter
-  on recents (`main.rs`) only applies to local entries.
-- The native folder picker can't browse a remote disk. Use Pluto's own open
-  box, which already browses the server's files, and add a bridge endpoint
-  that lists a folder for anything else.
+  `recent.json`, `sessions.json`, `notebooks.json`, crash reopen. Entries saved
+  before servers were plain paths and read as This Mac's. The `is_dir` filter
+  on recents only applies to This Mac's entries.
+- The native folder picker can't browse a remote disk. The folder chip's
+  Browse… opens an in-app browser instead (breadcrumbs, up, open, "Choose
+  this folder"), fed by the helper's file requests, as are the notebook chip
+  and the static preview.
 
 ## Secrets
 
