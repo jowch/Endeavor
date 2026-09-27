@@ -21,6 +21,19 @@ pub enum Target {
     Dialog,
     /// The new-session screen's.
     Draft,
+    /// A session's own, from the gear by Start when Julia isn't running on its cluster.
+    Session(u64),
+}
+
+impl Target {
+    /// Keeps element ids apart when two editors are on screen.
+    fn index(self) -> usize {
+        match self {
+            Target::Dialog => 0,
+            Target::Draft => 1,
+            Target::Session(_) => 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -91,6 +104,13 @@ impl Workspace {
                 let resources = draft.resources.as_mut()?;
                 Some((resources, partitions, &mut draft.partition_menu))
             }
+            Target::Session(key) => {
+                let session = self.sessions.iter_mut().find(|s| s.key == key)?;
+                let crate::hosts::HostId::Server(id) = &session.place.host else { return None };
+                let cluster = self.hosts.server(id)?.cluster.as_ref()?;
+                let resources = session.resources.get_or_insert_with(|| cluster.resources.clone());
+                Some((resources, cluster.partitions.clone(), &mut self.pane_partition_menu))
+            }
         }
     }
 
@@ -103,6 +123,13 @@ impl Workspace {
                 *menu = false;
             }
             apply(resources, &change, &partitions);
+        }
+        if let Target::Session(key) = target
+            && let Some(session) = self.sessions.iter().find(|s| s.key == key)
+            && let (Some(id), Some(resources)) = (&session.id, &session.resources)
+        {
+            self.session_resources.insert(id.to_string(), resources.clone());
+            crate::save_json("resources.json", &self.session_resources);
         }
         cx.notify();
     }
@@ -137,7 +164,7 @@ impl Workspace {
         let default_name = partitions.iter().find(|p| p.default).map(|p| p.name.clone());
         let shown = r.partition.clone().or_else(|| default_name.clone().map(|n| format!("{n} (default)"))).unwrap_or_else(|| "Cluster default".into());
         let partition = div()
-            .id(("partition-select", target as usize))
+            .id(("partition-select", target.index()))
             .w(px(136.))
             .h(px(26.))
             .px(px(10.))
@@ -185,7 +212,7 @@ impl Workspace {
             ("Memory", Field::Mem, if r.mem_gb == 0 { "per CPU".into() } else { format!("{} GB", r.mem_gb) }),
             ("Time limit", Field::Time, duration_text(r.minutes)),
         ];
-        let steppers = steppers.map(|(name, field, value)| (name, stepper(field as usize + 10 * target as usize, value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))));
+        let steppers = steppers.map(|(name, field, value)| (name, stepper(field as usize + 10 * target.index(), value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))));
         match target {
             // The dialog has more to fit, so its three share one row.
             Target::Dialog => rows.push(
@@ -196,7 +223,7 @@ impl Workspace {
                     .children(steppers.map(|(name, stepper)| div().flex_1().flex().flex_col().gap(px(4.)).child(label(name).pb_0()).child(stepper.w_full())))
                     .into_any_element(),
             ),
-            Target::Draft => rows.extend(steppers.map(|(name, stepper)| row(name, stepper).into_any_element())),
+            Target::Draft | Target::Session(_) => rows.extend(steppers.map(|(name, stepper)| row(name, stepper).into_any_element())),
         }
         rows
     }

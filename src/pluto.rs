@@ -97,6 +97,83 @@ pub fn stop_notebook(bridge: &Bridge, path: &str) -> Result<Option<bool>, String
     Ok(result["stopped"].as_bool().unwrap_or(false).then(|| result["safe_preview"].as_bool().unwrap_or(false)))
 }
 
+/// An app-only bridge method's `result`, or its error message.
+fn app_call(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
+    let reply = rpc(bridge, method, params)?;
+    match reply.get("error") {
+        Some(error) => Err(error["message"].as_str().unwrap_or("failed").trim_start_matches("ArgumentError: ").to_string()),
+        None => Ok(reply["result"].clone()),
+    }
+}
+
+/// Pluto's own Restart: a new process, then every cell runs. Refused in safe preview.
+pub fn restart_notebook(bridge: &Bridge, notebook_id: &str) -> Result<(), String> {
+    app_call(bridge, "endeavor/restart_notebook", json!({ "notebook_id": notebook_id })).map(|_| ())
+}
+
+/// Rename or move an open notebook's file; returns its new path.
+pub fn move_notebook(bridge: &Bridge, notebook_id: &str, path: &str) -> Result<String, String> {
+    let result = app_call(bridge, "endeavor/move_notebook", json!({ "notebook_id": notebook_id, "path": path }))?;
+    result["path"].as_str().map(str::to_owned).ok_or_else(|| "no path in reply".into())
+}
+
+/// Whether a file is on the runtime's machine, and its modification time.
+pub fn file_info(bridge: &Bridge, path: &str) -> Result<Option<f64>, String> {
+    let result = app_call(bridge, "endeavor/file_info", json!({ "path": path }))?;
+    Ok(if result["exists"] == true { Some(result["modified"].as_f64().unwrap_or(0.)) } else { None })
+}
+
+/// A new notebook in session `owner`'s folder, bound to it: (notebook id, path).
+pub fn new_notebook(bridge: &Bridge, owner: u64) -> Result<(String, String), String> {
+    let result = app_call(bridge, "endeavor/new_notebook", json!({ "owner": owner.to_string() }))?;
+    match (result["notebook_id"].as_str(), result["path"].as_str()) {
+        (Some(id), Some(path)) => Ok((id.to_owned(), path.to_owned())),
+        _ => Err(format!("unexpected reply {result}")),
+    }
+}
+
+/// Leave safe preview and run the notebook (the user's Run notebook).
+pub fn allow_execution(bridge: &Bridge, notebook_id: &str) -> Result<(), String> {
+    call_tool(bridge, "allow_execution", json!({ "notebook_id": notebook_id })).map(|_| ())
+}
+
+/// GET a URL on Pluto's server (its exports), through the host's loopback relay.
+pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
+    let rest = url.strip_prefix("http://").ok_or("not an http URL")?;
+    let (host, path) = rest.split_once('/').ok_or("no path")?;
+    let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
+    stream.set_read_timeout(Some(Duration::from_secs(120))).map_err(|e| e.to_string())?;
+    write!(stream, "GET /{path} HTTP/1.0\r\nHost: {host}\r\n\r\n").map_err(|e| e.to_string())?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).map_err(|e| e.to_string())?;
+    http_body(&response)
+}
+
+/// A whole HTTP/1.x response's body (plain or chunked), if its status is 200.
+fn http_body(response: &[u8]) -> Result<Vec<u8>, String> {
+    let split = response.windows(4).position(|w| w == b"\r\n\r\n").ok_or("malformed HTTP response")?;
+    let head = String::from_utf8_lossy(&response[..split]).to_ascii_lowercase();
+    let status = head.split_whitespace().nth(1).unwrap_or("");
+    if status != "200" {
+        return Err(format!("Pluto answered {status}"));
+    }
+    let mut body = &response[split + 4..];
+    if !head.contains("transfer-encoding: chunked") {
+        return Ok(body.to_vec());
+    }
+    let mut out = Vec::new();
+    loop {
+        let line_end = body.windows(2).position(|w| w == b"\r\n").ok_or("bad chunk")?;
+        let size = usize::from_str_radix(String::from_utf8_lossy(&body[..line_end]).split(';').next().unwrap_or("").trim(), 16).map_err(|e| e.to_string())?;
+        body = &body[line_end + 2..];
+        if size == 0 {
+            return Ok(out);
+        }
+        out.extend_from_slice(body.get(..size).ok_or("short chunk")?);
+        body = body.get(size + 2..).unwrap_or(&[]);
+    }
+}
+
 /// What a run would run, for the approval card (the runtime's `run_preview`).
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 pub struct RunPreview {
@@ -106,6 +183,9 @@ pub struct RunPreview {
     pub cells: Vec<PreviewCell>,
     /// Other cells that re-run with these.
     pub dependents: usize,
+    /// The packages a whole-notebook run loads, in notebook order.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -165,7 +245,7 @@ pub fn run_warnings(notebooks: &Value) -> Vec<String> {
 
         if unrun > 0 && nb["execution_allowed"] == false {
             warnings.push(format!(
-                "{name}: {} edited but not run. The notebook is in safe preview; click “Run notebook code” to run it.",
+                "{name}: {} edited but not run. The notebook is in safe preview; Run notebook at its top runs it.",
                 cells(unrun)
             ));
         } else if unrun > 0 {
@@ -229,6 +309,13 @@ mod tests {
         assert!(user_edits(&snap("user", "2"), &snap("user", "2")).is_empty(), "no new edit");
         assert!(user_edits(&snap("user", "1"), &snap("agent", "2")).is_empty(), "the agent's");
         assert_eq!(user_edits(&snap("user", "2"), &snap("user", "3")).len(), 1, "a second edit");
+    }
+
+    #[test]
+    fn reads_plain_and_chunked_http_bodies() {
+        assert_eq!(super::http_body(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello").unwrap(), b"hello");
+        assert_eq!(super::http_body(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nhel\r\n2\r\nlo\r\n0\r\n\r\n").unwrap(), b"hello");
+        assert_eq!(super::http_body(b"HTTP/1.1 404 Not Found\r\n\r\nno").unwrap_err(), "Pluto answered 404");
     }
 
     #[test]

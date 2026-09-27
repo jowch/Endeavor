@@ -53,6 +53,35 @@ pub enum Message {
     Region(Region),
     /// A cell's code now (None: the page has no such cell), as the app asked.
     Code { cell: String, code: Option<String> },
+    /// The shown notebook's state, for the notebook header.
+    State(PageState),
+    /// Run notebook, in the safe-preview callout.
+    RunNotebook { notebook: String },
+    /// Fix with Claude, in Status's box for a package that failed.
+    FixPackage { notebook: String, name: String, log: String },
+    /// Restart notebook, in the same box.
+    Restart { notebook: String },
+}
+
+/// What the page reads from Pluto's state for the notebook header.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageState {
+    pub notebook: String,
+    /// In safe preview: nothing runs until the user says so.
+    pub safe: bool,
+    /// Work under way, e.g. "Installing packages · 2 of 5", "Running 4 of 7".
+    pub busy: Option<String>,
+    /// Pluto asks for a restart ("required" or "recommended"), e.g. after a package change.
+    pub restart: Option<String>,
+    pub save_failed: bool,
+    /// A package that failed to install or precompile.
+    pub package_failed: Option<String>,
+    /// The notebook's process exited.
+    pub dead: bool,
+    /// The page's connection to Pluto is up.
+    pub connected: bool,
+    /// The drawer's open tab ("docs", "status").
+    pub drawer: Option<String>,
 }
 
 /// A drawn box: the user's words, the cells it overlaps, and where it is in
@@ -145,6 +174,28 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             let code = v.get("code").and_then(|c| c.as_str()).map(|c| c.chars().take(MAX_CODE).collect());
             Some(Message::Code { cell, code })
         }
+        "state" => {
+            let text = |key: &str| v.get(key).and_then(|s| s.as_str()).map(|s| s.chars().take(80).collect::<String>());
+            let flag = |key: &str| v.get(key).and_then(|b| b.as_bool()).unwrap_or(false);
+            Some(Message::State(PageState {
+                notebook: uuid("notebook")?,
+                safe: flag("safe"),
+                busy: text("busy"),
+                restart: text("restart").filter(|r| r == "required" || r == "recommended"),
+                save_failed: flag("save_failed"),
+                package_failed: text("package_failed"),
+                dead: flag("dead"),
+                connected: v.get("connected").and_then(|b| b.as_bool()).unwrap_or(true),
+                drawer: text("drawer").filter(|d| d == "docs" || d == "status"),
+            }))
+        }
+        "run_notebook" => Some(Message::RunNotebook { notebook: uuid("notebook")? }),
+        "restart" => Some(Message::Restart { notebook: uuid("notebook")? }),
+        "fix_package" => Some(Message::FixPackage {
+            notebook: uuid("notebook")?,
+            name: capped(v.get("name"), 200),
+            log: capped(v.get("log"), MAX_CODE),
+        }),
         _ => None,
     }
 }
@@ -243,6 +294,34 @@ mod tests {
         for body in [bad_cell.as_str(), no_cells.as_str(), bad_nb.as_str(), "not json", r#"{"type":"other"}"#] {
             assert_eq!(parse_with(body, ""), None, "{body}");
         }
+    }
+
+    #[test]
+    fn parses_the_notebook_panes_messages() {
+        let state = format!(
+            r#"{{"type":"state","notebook":"{NB}","safe":false,"busy":"Installing packages · 2 of 5","restart":"sometime","save_failed":true,"package_failed":"Plots","dead":false,"connected":false,"drawer":"status"}}"#
+        );
+        assert_eq!(
+            parse_with(&state, ""),
+            Some(Message::State(PageState {
+                notebook: NB.into(),
+                safe: false,
+                busy: Some("Installing packages · 2 of 5".into()),
+                restart: None,
+                save_failed: true,
+                package_failed: Some("Plots".into()),
+                dead: false,
+                connected: false,
+                drawer: Some("status".into()),
+            }))
+        );
+        assert_eq!(parse_with(&format!(r#"{{"type":"run_notebook","notebook":"{NB}"}}"#), ""), Some(Message::RunNotebook { notebook: NB.into() }));
+        assert_eq!(parse_with(&format!(r#"{{"type":"restart","notebook":"{NB}"}}"#), ""), Some(Message::Restart { notebook: NB.into() }));
+        assert_eq!(
+            parse_with(&format!(r#"{{"type":"fix_package","notebook":"{NB}","name":"Plots","log":"✗ Plots"}}"#), ""),
+            Some(Message::FixPackage { notebook: NB.into(), name: "Plots".into(), log: "✗ Plots".into() })
+        );
+        assert_eq!(parse_with(r#"{"type":"run_notebook","notebook":"x"}"#, ""), None);
     }
 
     #[test]

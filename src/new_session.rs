@@ -118,7 +118,7 @@ fn tilde_of(path: &Path, home: &Path) -> String {
 }
 
 /// `path` with This Mac's home folder written as `~`.
-fn tilde(path: &Path) -> String {
+pub(crate) fn tilde(path: &Path) -> String {
     tilde_of(path, &home())
 }
 
@@ -131,7 +131,7 @@ fn browse_start() -> PathBuf {
 /// NSOpenPanel opens where it was last left, kept in this user default; GPUI's
 /// prompt has no starting-folder option, so set it before opening the panel.
 #[cfg(target_os = "macos")]
-fn set_open_panel_folder(dir: &Path) {
+pub(crate) fn set_open_panel_folder(dir: &Path) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     let Ok(path) = std::ffi::CString::new(dir.display().to_string()) else { return };
@@ -1079,7 +1079,8 @@ impl Workspace {
 
 const TURTLE_R: f32 = 22.;
 
-/// The notebook pane's native stand-in: the resting turtle, above the caller's lines.
+/// The notebook pane's native stand-in: the turtle peeking out of its shell now
+/// and then (a still frame under Reduce motion), above the caller's lines.
 pub fn turtle_pane() -> Div {
     div()
         .size_full()
@@ -1088,7 +1089,23 @@ pub fn turtle_pane() -> Div {
         .items_center()
         .justify_center()
         .gap(px(14.))
-        .child(canvas(|_, _, _| (), |bounds, _, window, _| turtle::paint(window, point(bounds.left() + px(TURTLE_R), bounds.bottom()), TURTLE_R, &Pose::default())).w(px(TURTLE_R * 2.4)).h(px(TURTLE_R * 1.25)))
+        .child(
+            canvas(
+                |_, _, _| (),
+                |bounds, _, window, cx| {
+                    let pose = if cx.reduce_motion() {
+                        Pose::default()
+                    } else {
+                        window.request_animation_frame();
+                        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0., |d| (d.as_millis() % 3_600_000) as f32 / 1000.);
+                        turtle::peek(t)
+                    };
+                    turtle::paint(window, point(bounds.left() + px(TURTLE_R), bounds.bottom()), TURTLE_R, &pose)
+                },
+            )
+            .w(px(TURTLE_R * 2.4))
+            .h(px(TURTLE_R * 1.25)),
+        )
 }
 
 /// A file or folder name inside a line of text.
@@ -1202,6 +1219,34 @@ pub(crate) enum Glyph {
     Slash,
     /// Send.
     ArrowUp,
+    /// Share / export: a tray with an arrow out.
+    Share,
+    /// Live docs: an open book.
+    Book,
+    /// Status: a pulse line.
+    Pulse,
+    /// Safe preview: a shield.
+    Shield,
+    /// Restart: a circling arrow.
+    Restart,
+    /// Run / Start: a play triangle.
+    Play,
+    /// Stop: a square.
+    Stop,
+    Copy,
+    /// Rename.
+    Pencil,
+    Keyboard,
+    /// A file that isn't there.
+    FileX,
+    /// Feedback: a speech bubble.
+    Bubble,
+    /// Present: a screen.
+    Screen,
+    /// Record: a dot in a ring.
+    Record,
+    /// Frontmatter: a tag.
+    Tag,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -1307,6 +1352,77 @@ pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
                 Glyph::ArrowUp => {
                     polyline(&[(6., 10.), (6., 2.5)]);
                     polyline(&[(2.5, 6.), (6., 2.5), (9.5, 6.)]);
+                }
+                Glyph::Share => {
+                    polyline(&[(4., 5.), (2., 5.), (2., 11.), (10., 11.), (10., 5.), (8., 5.)]);
+                    polyline(&[(6., 7.5), (6., 1.)]);
+                    polyline(&[(3.8, 3.2), (6., 1.), (8.2, 3.2)]);
+                }
+                Glyph::Book => {
+                    polyline(&[(6., 3.), (6., 10.5)]);
+                    polyline(&[(6., 3.), (4.5, 2.), (1., 2.), (1., 9.5), (4.5, 9.5), (6., 10.5)]);
+                    polyline(&[(6., 3.), (7.5, 2.), (11., 2.), (11., 9.5), (7.5, 9.5), (6., 10.5)]);
+                }
+                Glyph::Pulse => polyline(&[(0.5, 6.5), (3., 6.5), (4.5, 2.5), (7., 9.5), (8.5, 6.5), (11.5, 6.5)]),
+                Glyph::Shield => polyline(&[(6., 1.), (10.5, 2.8), (10.5, 6.), (9.5, 8.6), (6., 11.), (2.5, 8.6), (1.5, 6.), (1.5, 2.8), (6., 1.)]),
+                Glyph::Restart => {
+                    let arc: Vec<(f32, f32)> = (0..=20)
+                        .map(|i| {
+                            let a = -1.2 + 5.0 * i as f32 / 20.;
+                            (6. + 4.2 * a.cos(), 6. + 4.2 * a.sin())
+                        })
+                        .collect();
+                    polyline(&arc);
+                    let (x, y) = (6. + 4.2 * (-1.2f32).cos(), 6. + 4.2 * (-1.2f32).sin());
+                    polyline(&[(x - 2.6, y - 0.4), (x, y), (x - 0.4, y + 2.6)]);
+                }
+                Glyph::Play => polyline(&[(3., 1.5), (10., 6.), (3., 10.5), (3., 1.5)]),
+                Glyph::Stop => polyline(&[(2.5, 2.5), (9.5, 2.5), (9.5, 9.5), (2.5, 9.5), (2.5, 2.5)]),
+                Glyph::Copy => {
+                    polyline(&[(4., 4.), (11., 4.), (11., 11.), (4., 11.), (4., 4.)]);
+                    polyline(&[(4., 8.), (1., 8.), (1., 1.), (8., 1.), (8., 4.)]);
+                }
+                Glyph::Pencil => {
+                    polyline(&[(1.5, 10.5), (2., 8.), (8.5, 1.5), (10.5, 3.5), (4., 10.), (1.5, 10.5)]);
+                    polyline(&[(7., 3.), (9., 5.)]);
+                }
+                Glyph::Keyboard => {
+                    polyline(&[(0.5, 2.5), (11.5, 2.5), (11.5, 9.5), (0.5, 9.5), (0.5, 2.5)]);
+                    for x in [2.5, 4.8, 7.1, 9.4] {
+                        polyline(&[(x, 5.), (x + 0.6, 5.)]);
+                    }
+                    polyline(&[(3.5, 7.5), (8.5, 7.5)]);
+                }
+                Glyph::FileX => {
+                    polyline(&[(2.5, 1.), (7., 1.), (9.5, 3.5), (9.5, 11.), (2.5, 11.), (2.5, 1.)]);
+                    polyline(&[(4.5, 5.5), (7.5, 8.5)]);
+                    polyline(&[(7.5, 5.5), (4.5, 8.5)]);
+                }
+                Glyph::Bubble => polyline(&[(1., 1.5), (11., 1.5), (11., 8.), (5., 8.), (2.5, 10.5), (2.5, 8.), (1., 8.), (1., 1.5)]),
+                Glyph::Screen => {
+                    polyline(&[(1., 1.5), (11., 1.5), (11., 8.5), (1., 8.5), (1., 1.5)]);
+                    polyline(&[(6., 8.5), (6., 10.5)]);
+                    polyline(&[(3.5, 10.5), (8.5, 10.5)]);
+                }
+                Glyph::Record => {
+                    let ring: Vec<(f32, f32)> = (0..=24)
+                        .map(|i| {
+                            let a = std::f32::consts::TAU * i as f32 / 24.;
+                            (6. + 4.5 * a.cos(), 6. + 4.5 * a.sin())
+                        })
+                        .collect();
+                    polyline(&ring);
+                    let dot: Vec<(f32, f32)> = (0..=12)
+                        .map(|i| {
+                            let a = std::f32::consts::TAU * i as f32 / 12.;
+                            (6. + 1.6 * a.cos(), 6. + 1.6 * a.sin())
+                        })
+                        .collect();
+                    polyline(&dot);
+                }
+                Glyph::Tag => {
+                    polyline(&[(1., 1.), (6., 1.), (11., 6.), (6., 11.), (1., 6.), (1., 1.)]);
+                    polyline(&[(3.5, 3.5), (4.2, 3.5)]);
                 }
                 Glyph::Gear => {
                     let circle = |r: f32| -> Vec<(f32, f32)> {

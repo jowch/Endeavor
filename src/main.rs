@@ -22,6 +22,7 @@ mod hosts;
 mod install;
 mod logs;
 mod new_session;
+mod notebook_pane;
 mod outbox;
 #[cfg(target_os = "macos")]
 mod overlay;
@@ -56,6 +57,7 @@ use gpui_wry::WebView;
 use hosts::{HostId, Place};
 use outbox::Queued;
 use new_session::{Draft, Glyph, NotebookChoice, glyph, menu_row};
+use notebook_pane::NotebookAction;
 use session::{Effect, Session, Stopped, folder_name};
 use settings::{Appearance, IdleStop, NotebookTheme, Settings};
 use splash::{Progress, Setup, Step};
@@ -310,47 +312,13 @@ impl RowAction {
     }
 }
 
-/// What a menu is for: a sidebar row (⋮), or an open session's notebook (⋯).
+/// What a menu is for: a sidebar row (⋮), an open session's notebook (⋮), or
+/// its Share button.
 #[derive(Clone, PartialEq)]
 enum MenuTarget {
     Row(Row),
     Notebook(u64),
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum NotebookAction {
-    Reveal,
-    NewSession,
-    Stop,
-}
-
-impl NotebookAction {
-    fn label(self) -> &'static str {
-        match self {
-            NotebookAction::Reveal => "Reveal in Finder",
-            NotebookAction::NewSession => "Open in a new session…",
-            NotebookAction::Stop => "Stop notebook",
-        }
-    }
-
-    fn shortcut(self) -> (&'static str, &'static str) {
-        match self {
-            NotebookAction::Reveal => ("f", "F"),
-            NotebookAction::NewSession => ("n", "N"),
-            NotebookAction::Stop => ("s", "S"),
-        }
-    }
-
-    /// The notebook's menu; Stop comes last, after a separator, once it's open and
-    /// running. Finder can only reveal This Mac's files.
-    fn for_notebook(running: bool, local: bool) -> Vec<NotebookAction> {
-        let mut actions = if local { vec![NotebookAction::Reveal] } else { Vec::new() };
-        actions.push(NotebookAction::NewSession);
-        if running {
-            actions.push(NotebookAction::Stop);
-        }
-        actions
-    }
+    Share(u64),
 }
 
 /// A menu item, with what it acts on.
@@ -375,9 +343,20 @@ impl MenuPick {
         }
     }
 
-    /// Shown in the danger colour, after a separator.
+    /// Shown in the danger colour.
     fn danger(&self) -> bool {
-        matches!(self, MenuPick::Row(_, RowAction::Delete) | MenuPick::Notebook(_, NotebookAction::Stop))
+        match self {
+            MenuPick::Row(_, action) => *action == RowAction::Delete,
+            MenuPick::Notebook(_, action) => action.danger(),
+        }
+    }
+
+    /// Items in one group sit together, with a separator between groups.
+    fn group(&self) -> u8 {
+        match self {
+            MenuPick::Row(_, action) => (*action == RowAction::Delete) as u8,
+            MenuPick::Notebook(_, action) => action.group(),
+        }
     }
 }
 
@@ -521,6 +500,15 @@ pub struct Workspace {
     /// Servers the user chose to use as plain servers anyway, this launch.
     login_node_ok: HashSet<String>,
     questions_tx: UnboundedSender<remote::Question>,
+    /// The shown notebook's state as its page reports it (safe preview, busy work, the drawer).
+    page: annotate::PageState,
+    /// The last `context` message sent to the page (resent when it changes).
+    page_context: String,
+    /// The notebook being renamed in its header, and its name box.
+    notebook_rename: Option<(u64, Entity<InputState>)>,
+    /// The session whose job resources are open from the Julia-not-running page's gear.
+    pane_resources: Option<u64>,
+    pane_partition_menu: bool,
 }
 
 impl Workspace {
@@ -679,6 +667,11 @@ impl Workspace {
             login_node_warning: None,
             login_node_ok: HashSet::new(),
             questions_tx,
+            page: annotate::PageState::default(),
+            page_context: String::new(),
+            notebook_rename: None,
+            pane_resources: None,
+            pane_partition_menu: false,
         };
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
@@ -987,10 +980,12 @@ impl Workspace {
             MenuTarget::Row(row) => self.row_actions(row).into_iter().map(|action| MenuPick::Row(row.clone(), action)).collect(),
             MenuTarget::Notebook(key) => {
                 let session = self.sessions.iter().find(|s| s.key == *key);
-                let running = session.is_some_and(|s| s.notebook.is_some() && s.stopped.is_none());
+                let open = session.is_some_and(|s| s.notebook.is_some() && s.stopped.is_none() && !s.missing);
+                let safe = session.and_then(|s| s.notebook.as_deref()).is_some_and(|id| self.page.notebook == id && self.page.safe);
                 let local = session.is_some_and(|s| s.place.host == HostId::ThisMac);
-                NotebookAction::for_notebook(running, local).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
+                NotebookAction::for_notebook(open, safe, local).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
             }
+            MenuTarget::Share(key) => NotebookAction::for_share().into_iter().map(|action| MenuPick::Notebook(*key, action)).collect(),
         }
     }
 
@@ -1016,22 +1011,7 @@ impl Workspace {
         self.close_menu(window, cx);
         match pick {
             MenuPick::Row(row, action) => self.row_action(row, action, window, cx),
-            MenuPick::Notebook(key, action) => self.notebook_action(key, action, cx),
-        }
-    }
-
-    fn notebook_action(&mut self, key: u64, action: NotebookAction, cx: &mut Context<Self>) {
-        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
-        let Some(path) = session.notebook_path.clone() else { return };
-        match action {
-            NotebookAction::Reveal => {
-                platform::reveal(Path::new(&path));
-            }
-            NotebookAction::NewSession => {
-                let folder = session.place.clone();
-                self.new_session_on(folder, PathBuf::from(path), cx);
-            }
-            NotebookAction::Stop => self.stop_notebook(key, path, cx),
+            MenuPick::Notebook(key, action) => self.notebook_action(key, action, window, cx),
         }
     }
 
@@ -1144,8 +1124,11 @@ impl Workspace {
             }
         });
         cx.spawn(async move |this, cx| {
-            // ponytail: a notebook file that's gone just leaves the pane where it is.
-            let Some(id) = opened.await else { return };
+            let Some(id) = opened.await else {
+                // A notebook file that's gone shows File not found.
+                let _ = this.update(cx, |this, cx| this.check_missing(key, cx));
+                return;
+            };
             let _ = this.update(cx, |this, cx| {
                 let Some(host) = this.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
                 let keys: Vec<u64> = this
@@ -1198,11 +1181,12 @@ impl Workspace {
                 match result {
                     // Not open (already stopped elsewhere): Start reopens it in safe preview.
                     Ok(safe_preview) => {
-                        let stopped = Stopped { safe_preview: safe_preview.unwrap_or(true), idle_hours: None };
+                        let stopped = Stopped { safe_preview: safe_preview.unwrap_or(true), idle_hours: None, modified: None };
                         for session in this.sessions.iter_mut().filter(|s| s.place.host == host && s.notebook_path.as_deref() == Some(path.as_str())) {
                             session.notebook = None;
                             session.stopped = Some(stopped);
                         }
+                        this.note_stopped_file(&host, path.clone(), cx);
                     }
                     Err(e) => this.status = format!("⚠ Couldn't stop {}: {e}", folder_name(Path::new(&path))).into(),
                 }
@@ -1210,12 +1194,6 @@ impl Workspace {
             });
         })
         .detach();
-    }
-
-    /// Start a stopped notebook again, the way it was running.
-    fn start_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some((path, stopped)) = self.session_mut(key).and_then(|s| s.notebook_path.clone().zip(s.stopped)) else { return };
-        self.open_for_session(key, path, !stopped.safe_preview, cx);
     }
 
     /// Show a session; the notebook pane follows it to the notebook it last viewed
@@ -1251,6 +1229,7 @@ impl Workspace {
                     let Some(session) = self.session_mut(key) else { continue };
                     session.notebook = Some(id.clone());
                     session.stopped = None;
+                    session.missing = false;
                     let host = session.place.host.clone();
                     if let Some(path) = path {
                         self.bind_notebook(key, path, cx);
@@ -1601,9 +1580,21 @@ impl Workspace {
     fn on_page_message(&mut self, body: &str, cx: &mut Context<Self>) {
         match annotate::parse(body) {
             Some(annotate::Message::Ready) => {
+                // A fresh page: it gets its context again, and reports its own state.
+                self.page = annotate::PageState::default();
+                self.page_context.clear();
                 self.push_cells(cx);
                 self.apply_look(cx);
+                self.sync_page_context(cx);
             }
+            Some(annotate::Message::State(state)) => return self.on_page_state(state, cx),
+            Some(annotate::Message::RunNotebook { notebook }) => self.run_notebook(notebook, cx),
+            Some(annotate::Message::Restart { notebook }) => {
+                if let Some(key) = self.active_session().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())).map(|s| s.key) {
+                    self.restart_notebook(key, cx);
+                }
+            }
+            Some(annotate::Message::FixPackage { notebook, name, log }) => self.fix_package(notebook, name, log, cx),
             Some(annotate::Message::Mode(on)) => self.annotating = on,
             Some(annotate::Message::Ask(ask)) => {
                 let Some(key) = self.active else { return };
@@ -1868,9 +1859,33 @@ impl Workspace {
 
     /// A menu, under its ⋮ / ⋯ button or at the pointer that right-clicked.
     fn render_menu(&self, menu: &PopupMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let items = self.menu_picks(&menu.target).into_iter().enumerate().flat_map(|(i, pick)| {
+        let picks = self.menu_picks(&menu.target);
+        let groups: Vec<u8> = picks.iter().map(MenuPick::group).collect();
+        let notebook_menu = matches!(menu.target, MenuTarget::Notebook(_) | MenuTarget::Share(_));
+        let items = picks.into_iter().enumerate().flat_map(|(i, pick)| {
             let danger = pick.danger();
-            let separator = danger.then(|| div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge()).into_any_element());
+            let new_group = i > 0 && groups[i - 1] != groups[i];
+            let separator = new_group.then(|| div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge()).into_any_element());
+            let action = match &pick {
+                MenuPick::Notebook(_, action) => Some(*action),
+                MenuPick::Row(..) => None,
+            };
+            let section = action.and_then(|a| a.section()).map(|heading| {
+                div().px(px(8.)).pt(px(4.)).pb(px(2.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(heading).into_any_element()
+            });
+            let checked = match action {
+                Some(NotebookAction::LookEndeavor) => Some(self.settings.notebook_theme == NotebookTheme::Endeavor),
+                Some(NotebookAction::LookClassic) => Some(self.settings.notebook_theme == NotebookTheme::Pluto),
+                _ => None,
+            };
+            let color = if danger { theme::danger() } else { theme::text_muted() };
+            let icon = match (checked, action.and_then(|a| a.glyph())) {
+                (Some(true), _) => Some(div().w(px(12.)).text_size(theme::size_meta()).text_color(theme::accent_text()).child("✓").into_any_element()),
+                (Some(false), _) => Some(div().w(px(12.)).into_any_element()),
+                (None, Some(g)) => Some(glyph(g, color).into_any_element()),
+                (None, None) => None,
+            };
+            let detail = action.and_then(|a| a.detail());
             let (label, shortcut) = (pick.label(), pick.shortcut().1);
             let item = div()
                 .id(ElementId::NamedInteger("menu-item".into(), i as u64))
@@ -1878,7 +1893,7 @@ impl Workspace {
                 .aria_label(label)
                 .flex()
                 .items_center()
-                .justify_between()
+                .gap(px(8.))
                 .px(px(8.))
                 .py(px(4.))
                 .rounded(px(5.))
@@ -1895,13 +1910,52 @@ impl Workspace {
                     cx.stop_propagation();
                     this.pick(pick.clone(), window, cx);
                 }))
-                .child(label)
+                .children(icon)
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .child(label)
+                        .children(detail.map(|d| div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(d))),
+                )
                 .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(shortcut))
                 .into_any_element();
-            separator.into_iter().chain([item])
+            separator.into_iter().chain(section).chain([item])
+        });
+        // The ⋮ menu starts with where the notebook is; Share ends with a note on how exports look.
+        let head = match &menu.target {
+            MenuTarget::Notebook(key) => self.sessions.iter().find(|s| s.key == *key).and_then(|s| {
+                let path = s.notebook_path.clone()?;
+                Some(
+                    div()
+                        .px(px(8.))
+                        .pt(px(4.))
+                        .pb(px(6.))
+                        .mb(px(4.))
+                        .border_b_1()
+                        .border_color(theme::composer_edge())
+                        .child(div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_secondary()).child(new_session::tilde(Path::new(&path))))
+                        .child(div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(self.host_label(&s.place.host)))
+                        .into_any_element(),
+                )
+            }),
+            _ => None,
+        };
+        let foot = matches!(menu.target, MenuTarget::Share(_)).then(|| {
+            div()
+                .mt(px(4.))
+                .px(px(8.))
+                .pt(px(6.))
+                .pb(px(2.))
+                .border_t_1()
+                .border_color(theme::composer_edge())
+                .text_size(theme::size_meta_small())
+                .text_color(theme::text_faint())
+                .child("Exports and recordings use Pluto's standard look.")
         });
         // Over the notebook, the web view (a native view on top) lets the menu show through.
-        let hole = matches!(menu.target, MenuTarget::Notebook(_)).then(|| {
+        let hole = notebook_menu.then(|| {
             let webview = self.webview.read(cx);
             let (handle, under) = (webview.handle(), webview.bounds());
             canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ()).absolute().size_full()
@@ -1911,7 +1965,7 @@ impl Workspace {
             .role(Role::Menu)
             .track_focus(&menu.focus)
             .occlude()
-            .w(px(210.))
+            .w(px(if notebook_menu { 290. } else { 210. }))
             .p(px(4.))
             .flex()
             .flex_col()
@@ -1925,7 +1979,9 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &Interrupt, window, cx| this.close_menu(window, cx)))
             .on_key_down(cx.listener(Self::menu_key))
             .children(hole)
-            .children(items);
+            .children(head)
+            .children(items)
+            .children(foot);
         let placed = match menu.at {
             Some(at) => anchored().position(at),
             None => anchored().anchor(Anchor::TopRight),
@@ -2275,19 +2331,19 @@ impl Workspace {
                     )),
             )
             .child(note("Only the notebook follows it for now; Endeavor itself stays dark.".into()))
-            .child(heading("Notebook theme"))
+            .child(heading("Notebook look"))
             .child(
                 div()
                     .flex()
                     .gap_4()
-                    .children([(NotebookTheme::Endeavor, "Endeavor"), (NotebookTheme::Pluto, "Pluto")].map(|(value, label)| {
+                    .children([(NotebookTheme::Endeavor, "Endeavor"), (NotebookTheme::Pluto, "Pluto classic")].map(|(value, label)| {
                         Radio::new(label).text_size(theme::size_body()).checked(s.notebook_theme == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
                             this.update_settings(cx, |s| s.notebook_theme = value);
                             this.apply_look(cx);
                         }))
                     })),
             )
-            .child(note("Endeavor matches the notebook to the app in dark mode; in light mode both use Pluto's light theme.".into()))
+            .child(note("Endeavor puts Pluto's controls in the pane's header and a drawer, matched to the app in dark mode (light mode uses Pluto's light colours). Pluto classic is Pluto's own page. The notebook's ⋮ menu switches too.".into()))
             .child(heading("Julia"))
             .child(
                 Radio::new("julia-own")
@@ -2350,7 +2406,7 @@ impl Workspace {
             .child(note("The log of this run and the one before, to attach to a bug report.".into()))
     }
 
-    /// The notebook's ⋯ button in its header, and its menu while open.
+    /// The notebook's ⋮ button in its header, and its menu while open.
     fn notebook_more(&self, key: u64, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let menu = self.menu.as_ref().filter(|menu| menu.target == MenuTarget::Notebook(key));
         div()
@@ -2375,49 +2431,8 @@ impl Workspace {
                 cx.stop_propagation();
                 this.open_menu(MenuTarget::Notebook(key), None, window, cx);
             }))
-            .child("⋯")
+            .child("⋮")
             .children(menu.map(|menu| self.render_menu(menu, cx)))
-    }
-
-    /// The notebook pane drawn natively while a session has no notebook to show:
-    /// before Claude creates it, while it opens, and once it's stopped. None shows
-    /// the web view (Pluto's start page never shows for a session).
-    fn notebook_stand_in(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if let Some(pane) = self.host_pane(&session.place.host, cx) {
-            return Some(pane);
-        }
-        let line = || div().flex().items_baseline().text_color(theme::text_muted());
-        let Some(path) = session.notebook_path.as_deref() else {
-            if session.notebook.is_some() {
-                return None;
-            }
-            let folder = new_session::file_name(folder_name(&session.place.path));
-            return Some(new_session::turtle_pane().child(line().child("Claude will create the notebook in ").child(folder).child(".")).into_any_element());
-        };
-        let file = new_session::file_name(folder_name(Path::new(path)));
-        if session.stopped.is_some() {
-            let key = session.key;
-            let start = div()
-                .id("start-notebook")
-                .role(Role::Button)
-                .px_3()
-                .py_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .bg(theme::accent())
-                .text_color(theme::text_primary())
-                .child("Start")
-                .on_click(cx.listener(move |this, _, _, cx| this.start_notebook(key, cx)));
-            let why = match session.stopped.and_then(|s| s.idle_hours) {
-                Some(hours) => format!(" stopped after {hours} hours idle."),
-                None => " is stopped.".into(),
-            };
-            return Some(new_session::turtle_pane().child(line().child(file).child(why)).child(start).into_any_element());
-        }
-        if session.notebook.is_some() {
-            return None;
-        }
-        Some(new_session::turtle_pane().child(line().child("Opening ").child(file).child("…")).into_any_element())
     }
 
     /// A session's chat: the transcript, then what waits above the composer, then the composer.
@@ -2475,7 +2490,8 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key));
-        let stand_in = active.and_then(|ix| self.notebook_stand_in(&self.sessions[ix], cx));
+        let stand_in = active.and_then(|ix| self.notebook_page(&self.sessions[ix], cx));
+        self.sync_page_context(cx);
         // The web view is a native view over the window: hidden behind the setup
         // screen, and wherever the notebook pane is drawn natively.
         let modal = self.server_dialog.is_some() || !self.asks.is_empty() || self.login_node_warning.is_some();
@@ -2483,7 +2499,7 @@ impl Render for Workspace {
         if self.webview.read(cx).visible() != show_webview {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
-        if !self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_))) {
+        if !self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_))) {
             overlay::set_hole(self.webview.read(cx).raw(), None);
         }
         if let Some(setup) = &self.setup {
@@ -2518,13 +2534,9 @@ impl Render for Workspace {
             .children(folder.map(|f| {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family(theme::MONO).text_size(theme::size_meta_small()).child(f)
             }));
-        let job_ends = active.and_then(|ix| self.job_ends(&self.sessions[ix].place.host));
         let notebook_header = column_header("notebook-header").map(|d| match active {
             None => d.child(self.draft_pane_header()),
-            Some(ix) => match self.sessions[ix].notebook_path.as_deref() {
-                Some(path) => d.child(new_session::notebook_title(Path::new(path))).child(div().flex_1()).children(job_ends).child(self.notebook_more(self.sessions[ix].key, cx)),
-                None => d.child(div().flex_1()).children(job_ends),
-            },
+            Some(ix) => d.child(self.notebook_header(ix, stand_in.is_none(), cx)),
         });
         let notebook = match (active, stand_in) {
             (None, _) => self.render_draft_pane(),
@@ -2813,12 +2825,10 @@ mod tests {
     }
 
     #[test]
-    fn notebook_menu_items() {
-        let labels = |running, local| NotebookAction::for_notebook(running, local).into_iter().map(NotebookAction::label).collect::<Vec<_>>();
-        assert_eq!(labels(true, true), ["Reveal in Finder", "Open in a new session…", "Stop notebook"]);
-        assert_eq!(labels(false, true), ["Reveal in Finder", "Open in a new session…"]);
-        assert_eq!(labels(true, false), ["Open in a new session…", "Stop notebook"]);
+    fn notebook_menu_groups() {
         assert!(MenuPick::Notebook(1, NotebookAction::Stop).danger());
         assert!(!MenuPick::Notebook(1, NotebookAction::Reveal).danger());
+        assert_ne!(MenuPick::Notebook(1, NotebookAction::Rename).group(), MenuPick::Notebook(1, NotebookAction::LookEndeavor).group());
+        assert_eq!(MenuPick::Row(Row::Open(1), RowAction::Delete).group(), 1);
     }
 }

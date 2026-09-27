@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use wire::files::{Reply, Request, RuntimeState};
@@ -579,11 +578,13 @@ impl Workspace {
         // Start, in every session on it. Only new entries count: a stale one must
         // not stop a notebook the user has started again since.
         let stops = pluto::idle_stopped(&event);
+        let mut new_stops = Vec::new();
         for (path, hours, safe_preview) in &stops {
             if connection.idle_stopped.contains(path) {
                 continue;
             }
-            let stopped = Stopped { safe_preview: *safe_preview, idle_hours: Some(*hours) };
+            new_stops.push(path.clone());
+            let stopped = Stopped { safe_preview: *safe_preview, idle_hours: Some(*hours), modified: None };
             for session in self.sessions.iter_mut().filter(|s| s.place.host == *host && s.notebook_path.as_deref() == Some(path.as_str())) {
                 session.notebook = None;
                 session.stopped = Some(stopped);
@@ -605,6 +606,9 @@ impl Workspace {
         }
         connection.cells = event["cells"].take();
         self.push_cells(cx);
+        for path in new_stops {
+            self.note_stopped_file(host, path, cx);
+        }
     }
 
     /// Reopen the notebooks that were open in `host`'s last runtime (unless this
@@ -926,10 +930,7 @@ impl Workspace {
                 return Some(starting_pane(&steps).children(cancel).into_any_element());
             }
             Status::Died(_) if connection.is_some_and(|c| c.stopping) => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping Julia on {name}…"))),
-            Status::Died(reason) => {
-                let headline = if reason.is_empty() { format!("Julia on {name} is stopped.") } else { format!("Julia on {name} stopped.") };
-                resting.child(div().text_color(theme::text_muted()).child(headline)).when(!reason.is_empty(), |d| d.child(message(reason))).child(action("host-start", "Start Julia", host.clone(), true))
-            }
+            Status::Died(reason) => return Some(self.julia_stopped_page(host, &reason, cx)),
             Status::Replaced => resting
                 .child(div().text_color(theme::text_muted()).child(format!("Another connection took over Julia on {name}.")))
                 .child(action("host-reconnect", "Reconnect", host.clone(), false)),

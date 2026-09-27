@@ -189,6 +189,8 @@ pub struct Session {
     pub notebook_path: Option<String>,
     /// Its notebook was stopped from the notebook's ⋯ menu, or for being idle.
     pub stopped: Option<Stopped>,
+    /// Its notebook file isn't there (moved, renamed or deleted outside Endeavor).
+    pub missing: bool,
     /// Cells the user changed since the agent last heard (cell id, name); told
     /// with the next prompt.
     pub user_edits: Vec<(String, Option<String>)>,
@@ -233,6 +235,9 @@ pub struct Stopped {
     pub safe_preview: bool,
     /// The runtime stopped it after this many hours idle.
     pub idle_hours: Option<u64>,
+    /// The file's modification time when it stopped: if it changed by Start, the
+    /// notebook opens in safe preview even if it was running.
+    pub modified: Option<f64>,
 }
 
 pub struct Failure {
@@ -299,6 +304,7 @@ impl Session {
             notebook: None,
             notebook_path: None,
             stopped: None,
+            missing: false,
             user_edits: Vec::new(),
             list: {
                 let list = ListState::new(0, ListAlignment::Top, px(1000.));
@@ -908,6 +914,11 @@ impl Session {
         self.entries.iter().position(|e| matches!(e, Entry::Permission { responder: Some(_), .. }))
     }
 
+    /// The agent is asking to let the notebook run ("Let this notebook run?").
+    pub fn asking_to_run(&self) -> bool {
+        self.pending_permission().is_some_and(|ix| matches!(&self.entries[ix], Entry::Permission { tool: Some(tool), .. } if tool == "allow_execution"))
+    }
+
     /// Answer the pending request by kind (keys: ⏎ allow, ⌘⏎ always, Esc deny).
     /// For a plan: ⏎ starts (asking before runs), ⌘⏎ starts in Auto.
     pub fn answer_pending(&mut self, kind: PermissionOptionKind, stop_asking: bool) -> bool {
@@ -1403,6 +1414,15 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         let folder = session.place.path.display().to_string();
         let cwd = input["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or(&folder);
         (format!("Run a command on {host}?"), vec![div().text_color(theme::text_muted()).child(format!("In {cwd}")).into_any_element()])
+    } else if tool == "allow_execution" {
+        let file = session.notebook_path.as_deref().map(|p| folder_name(Path::new(p)));
+        let host = session.server.clone().unwrap_or_else(|| "This Mac".into());
+        let mut body = Vec::new();
+        if let Some(line) = notebook_summary(file.as_deref(), preview.as_ref()) {
+            body.push(div().text_color(theme::text_secondary()).child(line).into_any_element());
+        }
+        body.push(div().text_color(theme::text_muted()).child(format!("Nothing runs yet. Running it lets its code read and change files on {host}.")).into_any_element());
+        ("Let this notebook run?".into(), body)
     } else if tool == "add_cell" {
         ("Add a cell and run it?".into(), vec![])
     } else if let Some(p) = preview {
@@ -1433,7 +1453,15 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         .or_else(|| preview.as_ref().and_then(|p| p.cells.first()).map(|c| c.code.clone())).filter(|_| preview.as_ref().is_none_or(|p| p.count <= 1 && !p.all));
 
     let mut buttons: Vec<(String, &'static str, PermissionOption, bool)> = Vec::new();
-    if *runs_code {
+    if tool == "allow_execution" {
+        // The same question as the notebook's safe-preview callout: once, not "always".
+        if let Some(deny) = option_of_kind(options, PermissionOptionKind::RejectOnce) {
+            buttons.push(("Not now".into(), "esc", deny.clone(), false));
+        }
+        if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
+            buttons.push(("Run notebook".into(), "⏎", allow.clone(), false));
+        }
+    } else if *runs_code {
         if let Some(deny) = option_of_kind(options, PermissionOptionKind::RejectOnce) {
             buttons.push(("Deny".into(), "esc", deny.clone(), false));
         }
@@ -1507,6 +1535,37 @@ fn render_plan_card(key: u64, ix: usize, plan: &str, options: &[PermissionOption
 /// A run card's heading and the names of the cells it lists. A cell is named by
 /// what it defines, else by its first line; an edit that runs is named by its
 /// new code, since the preview only knows the code before the edit.
+/// "Let this notebook run?"'s line about it: "bootstrap.jl · 7 cells · uses CSV, Plots".
+fn notebook_summary(file: Option<&str>, preview: Option<&pluto::RunPreview>) -> Option<String> {
+    let mut parts: Vec<String> = file.map(str::to_owned).into_iter().collect();
+    if let Some(p) = preview {
+        parts.push(if p.count == 1 { "1 cell".into() } else { format!("{} cells", p.count) });
+        let packages = if p.packages.is_empty() { imported_packages(p.cells.iter().map(|c| c.code.as_str())) } else { p.packages.clone() };
+        if !packages.is_empty() {
+            parts.push(format!("uses {}", packages.join(", ")));
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Packages a notebook's code imports (`using A, B`, `import C: f`), in order.
+fn imported_packages<'a>(codes: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for line in codes.flat_map(str::lines) {
+        let line = line.trim_start();
+        let Some(rest) = line.strip_prefix("using ").or_else(|| line.strip_prefix("import ")) else { continue };
+        let list = rest.split('#').next().unwrap_or("").split(':').next().unwrap_or("");
+        for part in list.split(',') {
+            let name = part.trim().split(['.', ' ']).next().unwrap_or("");
+            let valid = name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+            if valid && !["Base", "Core", "Main"].contains(&name) && !names.iter().any(|n| n == name) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names
+}
+
 fn run_heading(tool: &str, p: &pluto::RunPreview, input: &serde_json::Value) -> (String, Vec<String>) {
     let first_line = |code: &str| {
         let line = code.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
@@ -1982,6 +2041,23 @@ mod tests {
         assert_eq!(heading("delete_cell", &one(None, ""), json!({})), "Delete this cell?");
         assert_eq!(heading("execute_cell", &one(Some("fit, model"), "fit = 1"), json!({})), "Run `fit, model`?");
         assert_eq!(heading("execute_cell", &one(None, "md\"# Intro\""), json!({})), "Run `md\"# Intro\"`?");
+    }
+
+    #[test]
+    fn the_run_notebook_card_says_what_the_notebook_uses() {
+        use crate::pluto::{PreviewCell, RunPreview};
+        let cell = |code: &str| PreviewCell { name: None, code: code.into() };
+        let preview = RunPreview {
+            all: true,
+            count: 7,
+            cells: vec![cell("using CSV, DataFrames # data"), cell("import LsqFit: curve_fit\nusing Base.Threads"), cell("using Plots, CSV")],
+            ..Default::default()
+        };
+        assert_eq!(super::notebook_summary(Some("bootstrap.jl"), Some(&preview)).as_deref(), Some("bootstrap.jl · 7 cells · uses CSV, DataFrames, LsqFit, Plots"));
+        let named = RunPreview { all: true, count: 2, packages: vec!["Colors".into(), "Statistics".into()], ..Default::default() };
+        assert_eq!(super::notebook_summary(Some("colors.jl"), Some(&named)).as_deref(), Some("colors.jl · 2 cells · uses Colors, Statistics"));
+        assert_eq!(super::notebook_summary(Some("bootstrap.jl"), None).as_deref(), Some("bootstrap.jl"));
+        assert_eq!(super::notebook_summary(None, None), None);
     }
 
     #[test]

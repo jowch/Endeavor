@@ -73,6 +73,31 @@ impl Pose {
     }
 }
 
+/// The empty notebook pages' peek, `t` seconds in: one cycle every 4.2 s, mostly
+/// resting with the head out; then it tucks into the shell, peeks out looking
+/// up, and pops out again.
+pub fn peek(t: f32) -> Pose {
+    const PERIOD: f32 = 4.2;
+    let u = t.rem_euclid(PERIOD);
+    let up = Gaze { eye_x: 0.55, look: 1., ..Gaze::AHEAD };
+    let span = |from: f32, to: f32| ease((u - from) / (to - from));
+    let (tuck, gaze) = match u {
+        u if u < 2.0 => (0., Gaze::AHEAD),
+        u if u < 2.35 => (span(2.0, 2.35), Gaze::AHEAD),
+        u if u < 2.8 => (1., Gaze::AHEAD),
+        u if u < 3.3 => (lerp(1., 0.45, span(2.8, 3.3)), up),
+        u if u < 3.8 => (0.45, up),
+        u if u < 4.0 => (lerp(0.45, 0., span(3.8, 4.0)), up.lerp(Gaze::AHEAD, span(3.8, 4.0))),
+        _ => (0., Gaze::AHEAD),
+    };
+    let mut pose = Pose { blink: if tuck == 0. { blink_at(t, 3.3, 0.9) } else { 1. }, gaze, ..Pose::default() }.tuck(tuck);
+    if tuck > 0. && tuck < 0.6 {
+        // Peeking: the eye stays open under the shell's rim.
+        pose.blink = 1.;
+    }
+    pose
+}
+
 pub fn lerp(a: f32, b: f32, k: f32) -> f32 {
     a + (b - a) * k
 }
@@ -136,5 +161,20 @@ pub fn paint(window: &mut Window, ground: Point<Pixels>, r: f32, p: &Pose) {
     half_disc(window, at(0., base), (r, r * (1. + p.breathe)), PI, theme::accent());
     if !p.head_behind {
         paint_head(window);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peek;
+
+    #[test]
+    fn the_peek_rests_tucks_peeks_up_and_pops_out() {
+        let out = peek(1.0);
+        assert!(!out.head_behind && out.gaze.look == 0., "resting, head out");
+        assert!(peek(2.5).head_behind && peek(2.5).blink < 0.5, "tucked in, eye shut");
+        let peeking = peek(3.5);
+        assert!(peeking.head_behind && peeking.gaze.look > 0.4 && peeking.blink == 1., "peeking out, looking up");
+        assert!(!peek(4.1).head_behind && !peek(4.2 + 1.0).head_behind, "out again, and the cycle repeats");
     }
 }
