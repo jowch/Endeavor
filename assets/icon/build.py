@@ -44,59 +44,71 @@ def squircle(x0=100, y0=100, w=824, r=185.4):
 SQ = squircle()
 
 
-def icon_svg(small):
+SKY_TOP, SKY_BOTTOM = "#18203A", "#2C3553"
+STAR = "#F3EEE7"
+
+
+def icon_svg(small, with_stars=None):
     """The turtle's head rising over its shell like a moon, on a dark sky.
 
-    The small art (16 and 32 px) has a bigger head and eye, a lighter sky and a
-    faint rim, so the icon keeps its eye and its edge against dark menus and Docks.
+    The small art (16 and 32 px) drops the stars and the horizon line, has a
+    bigger head and eye so the eye survives at 16 px, and a stronger rim so the
+    icon keeps its edge against dark menus and Docks. Stars show from 128 px up.
     """
-    sky = ("#1B2338", "#323B55") if small else ("#0B1020", "#1E2436")
+    if with_stars is None:
+        with_stars = not small
     hx, hy, hr = (600, 560, 190) if small else (600, 560, 150)
     ex, ey, erx, ery = (hx + 58, hy - 44, 44, 52) if small else (hx + 50, hy - 40, 24, 28)
-    horizon_rim = "" if small else '<circle cx="512" cy="1250" r="640" fill="none" stroke="#E08A5E" stroke-opacity=".5" stroke-width="8"/>'
-    edge = ('<path d="{sq}" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="36" clip-path="url(#c)"/>' if small
-            else '<path d="{sq}" fill="none" stroke="url(#hl)" stroke-width="4"/>').format(sq=SQ)
-    shadow = ('<feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#000" flood-opacity=".3"/>' if small
-              else '<feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".32"/>')
+    stars = "" if not with_stars else "".join(
+        f'<circle cx="{x}" cy="{y}" r="{r}" fill="{STAR}" opacity="{o}"/>'
+        for x, y, r, o in ((250, 300, 7, .8), (380, 210, 5, .55), (800, 330, 6, .7), (300, 470, 4, .45)))
+    horizon = "" if small else '<circle cx="512" cy="1250" r="640" fill="none" stroke="#E08A5E" stroke-opacity=".5" stroke-width="8"/>'
+    rim = f'<path d="{SQ}" fill="none" stroke="#fff" stroke-opacity="{.28 if small else .14}" stroke-width="{56 if small else 14}"/>'
+    highlight = "" if small else f'<path d="{SQ}" fill="none" stroke="url(#hl)" stroke-width="4"/>'
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
 <defs>
-<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{sky[0]}"/><stop offset="1" stop-color="{sky[1]}"/></linearGradient>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{SKY_TOP}"/><stop offset="1" stop-color="{SKY_BOTTOM}"/></linearGradient>
 <radialGradient id="shell" cx="0.38" cy="0.2" r="0.9"><stop offset="0" stop-color="#E65A1E"/><stop offset="1" stop-color="#A83400"/></radialGradient>
 <radialGradient id="head" cx="0.4" cy="0.3" r="0.8"><stop offset="0" stop-color="#F0A47C"/><stop offset="1" stop-color="#D07448"/></radialGradient>
 <linearGradient id="hl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".45"/><stop offset=".35" stop-color="#fff" stop-opacity=".06"/><stop offset="1" stop-color="#fff" stop-opacity=".04"/></linearGradient>
 <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".10"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
-<filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">{shadow}</filter>
+<filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".32"/></filter>
 <clipPath id="c"><path d="{SQ}"/></clipPath>
 </defs>
 <path d="{SQ}" fill="#000" filter="url(#shadow)"/>
 <g clip-path="url(#c)">
-<rect width="1024" height="1024" fill="url(#sky)"/>
+<rect width="1024" height="1024" fill="url(#sky)"/>{stars}
 <circle cx="{hx}" cy="{hy}" r="{hr}" fill="url(#head)"/>
 <ellipse cx="{ex}" cy="{ey}" rx="{erx}" ry="{ery}" fill="#151517"/>
-<circle cx="512" cy="1250" r="640" fill="url(#shell)"/>{horizon_rim}
+<circle cx="512" cy="1250" r="640" fill="url(#shell)"/>{horizon}
+{rim}
 <rect width="1024" height="1024" fill="url(#sheen)"/>
 </g>
-{edge}
+{highlight}
 </svg>
 """
 
 
-def badge(size, x=0.0, y=0.0):
-    """The sky badge: the mark inside a round patch of dark sky, as a group."""
+def badge(size):
+    """The sky badge: the icon's scene in a round patch of sky with a ~1 px rim; stars from 64 px up."""
     s = size / 100
-    return f"""<g transform="translate({x:.2f} {y:.2f}) scale({s:.4f})">
+    rim = max(1.2, 100 / size) * 2
+    stars = "" if size < 64 else (
+        f'<circle cx="26" cy="30" r="1.1" fill="{STAR}" opacity=".8"/><circle cx="40" cy="19" r=".8" fill="{STAR}" opacity=".55"/>'
+        f'<circle cx="80" cy="36" r="1" fill="{STAR}" opacity=".7"/>')
+    return f"""<g transform="scale({s:.4f})">
 <defs>
-<linearGradient id="bsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0B1020"/><stop offset="1" stop-color="#1E2436"/></linearGradient>
+<linearGradient id="bsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{SKY_TOP}"/><stop offset="1" stop-color="{SKY_BOTTOM}"/></linearGradient>
 <radialGradient id="bshell" cx="0.4" cy="0.05" r="0.6"><stop offset="0" stop-color="#E65A1E"/><stop offset="1" stop-color="#A83400"/></radialGradient>
 <radialGradient id="bhead" cx="0.4" cy="0.3" r="0.8"><stop offset="0" stop-color="#F0A47C"/><stop offset="1" stop-color="#D07448"/></radialGradient>
 <clipPath id="bclip"><circle cx="50" cy="50" r="50"/></clipPath>
 </defs>
 <g clip-path="url(#bclip)">
-<rect width="100" height="100" fill="url(#bsky)"/>
+<rect width="100" height="100" fill="url(#bsky)"/>{stars}
 <circle cx="62" cy="47" r="15" fill="url(#bhead)"/>
 <ellipse cx="68" cy="42" rx="2.6" ry="3" fill="#151517"/>
 <circle cx="50" cy="136" r="78" fill="url(#bshell)"/>
-<circle cx="50" cy="136" r="78" fill="none" stroke="#E08A5E" stroke-opacity=".5" stroke-width="1"/>
+<circle cx="50" cy="50" r="50" fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="{rim:.2f}"/>
 </g>
 </g>"""
 
@@ -133,8 +145,9 @@ def wordmark_paths(size, tracking=-0.02):
 
 
 def logo_svg(text_color):
-    """Badge at 46 px beside the name at 36 px, 12 px apart, centred on each other."""
-    size, mark, gap = 36, 46, 12
+    """The name at 36 px; the badge 1.28 times that, 0.28 times that away, centred on each other."""
+    size = 36
+    mark, gap = round(size * 1.28), round(size * 0.28)
     d, width, cap = wordmark_paths(size)
     h = mark
     baseline = h / 2 + cap / 2
@@ -185,13 +198,17 @@ def main():
         big, little = os.path.join(tmp, "big.png"), os.path.join(tmp, "small.png")
         render(os.path.join(HERE, "icon.svg"), big)
         render(os.path.join(HERE, "icon-small.svg"), little)
+        mid, mid_svg = os.path.join(tmp, "mid.png"), os.path.join(tmp, "mid.svg")
+        with open(mid_svg, "w") as f:
+            f.write(icon_svg(False, with_stars=False))
+        render(mid_svg, mid)
         iconset = os.path.join(tmp, "Endeavor.iconset")
         os.mkdir(iconset)
         for pt in (16, 32, 128, 256, 512):
             for scale in (1, 2):
                 px = pt * scale
                 name = f"icon_{pt}x{pt}{'@2x' if scale == 2 else ''}.png"
-                resize(little if px <= 32 else big, os.path.join(iconset, name), px)
+                resize(little if px <= 32 else mid if px < 128 else big, os.path.join(iconset, name), px)
         subprocess.run(["iconutil", "-c", "icns", iconset, "-o", os.path.join(HERE, "Endeavor.icns")], check=True)
         for px in (256, 512):
             resize(big, os.path.join(HERE, f"endeavor-{px}.png"), px)
