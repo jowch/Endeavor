@@ -35,7 +35,7 @@ pub struct Settings {
     pub keep_running: bool,
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IdleStop {
     Hours12,

@@ -4,11 +4,11 @@
 //! one. The webview and the agent reach the runtime through the app's local
 //! listener, whose two loopback ports stay the same for the whole launch.
 
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -55,6 +55,10 @@ impl Listener {
         format!("http://127.0.0.1:{}/sse", self.ports[1])
     }
 
+    pub fn bridge_port(&self) -> u16 {
+        self.ports[1]
+    }
+
     fn pluto_url(&self, secret: &str) -> String {
         format!("http://127.0.0.1:{}/?secret={secret}", self.ports[0])
     }
@@ -92,8 +96,17 @@ pub enum Notice {
 impl Runtime {
     /// Stop Julia and wait until the helper is done with it (blocks up to ~30 s).
     pub fn stop(self) {
+        self.leave(ToHelper::Stop);
+    }
+
+    /// Leave Julia running and wait until the helper has gone.
+    pub fn detach(self) {
+        self.leave(ToHelper::Detach);
+    }
+
+    fn leave(self, message: ToHelper) {
         self.leaving.store(true, Ordering::SeqCst);
-        let _ = self.mux.send(&ToHelper::Stop.frame());
+        let _ = self.mux.send(&message.frame());
         let _ = self.helper_exited.recv_timeout(Duration::from_secs(30));
     }
 
@@ -138,7 +151,7 @@ fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String
 }
 
 /// The helper, next to the app's own executable (`cargo test` runs from target/*/deps).
-fn helper_binary() -> Result<PathBuf, String> {
+pub fn helper_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("no executable folder")?;
     [Some(dir), dir.parent()]
@@ -191,32 +204,12 @@ pub fn connect(
         .spawn()
         .map_err(|e| format!("Couldn't start Endeavor's runtime helper: {e}"))?;
 
-    let mux = Mux::new(helper.stdin.take().unwrap());
+    let stdin = helper.stdin.take().unwrap();
     let stdout = helper.stdout.take().unwrap();
-    let (control_tx, control) = mpsc::channel::<ToApp>();
-    let (exited_tx, helper_exited) = mpsc::channel();
-    std::thread::spawn({
-        let (mux, listener) = (mux.clone(), listener.clone());
-        move || {
-            let result = mux.run(
-                stdout,
-                // The app opens every stream; the helper never asks to.
-                |mux, id, _| drop(mux.send(&Frame::Close { id })),
-                |json| match serde_json::from_slice(json) {
-                    Ok(message) => drop(control_tx.send(message)),
-                    Err(e) => eprintln!("endeavor-remote sent an unreadable message: {e}"),
-                },
-            );
-            listener.forget(&mux);
-            let status = helper.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
-            eprintln!("endeavor-remote exited ({status}){}", result.err().map(|e| format!(": {e}")).unwrap_or_default());
-            let _ = exited_tx.send(());
-        }
-    });
-
-    loop {
-        match control.recv() {
-            Ok(ToApp::Progress { line }) => {
+    let channel = Channel::open(helper, stdin, stdout);
+    let hello = channel.wait_hello(
+        |message| {
+            if let ToApp::Progress { line } = message {
                 eprintln!("{line}");
                 // Package installs and precompiles show on the setup screen.
                 let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
@@ -224,30 +217,95 @@ pub fn connect(
                     let _ = progress.unbounded_send(Progress { log: true, ..Progress::new(Step::Packages, text) });
                 }
             }
-            // This Mac's julia was checked before the helper started.
-            Ok(ToApp::FoundJulia { .. }) => {}
-            Ok(ToApp::Hello { token, pluto_secret, reattached, node, pid, .. }) => {
-                let how = if reattached { "Reattached to" } else { "Started" };
-                eprintln!("{how} Julia on {node} (pid {pid}); its log is {}", state_dir.join("runtime.log").display());
-                crate::pluto::set_bridge_token(&token);
-                *listener.current.lock().unwrap() = Some(mux.clone());
-                let leaving = Arc::new(AtomicBool::new(false));
-                forward_notices(control, notices, leaving.clone());
-                return Ok(Runtime {
-                    pluto_url: listener.pluto_url(&pluto_secret),
-                    mcp_url: listener.mcp_url(),
-                    reattached,
-                    mux,
-                    helper_exited,
-                    leaving,
-                });
+        },
+        || "Endeavor's runtime helper stopped unexpectedly. Show logs has the details.".into(),
+    )?;
+    let how = if hello.reattached { "Reattached to" } else { "Started" };
+    eprintln!("{how} Julia on {} (pid {}); its log is {}", hello.node, hello.pid, state_dir.join("runtime.log").display());
+    crate::pluto::set_bridge_token(&hello.token);
+    Ok(channel.attach(&listener, &hello, notices))
+}
+
+/// What the helper said once the runtime was up.
+pub struct Hello {
+    pub node: String,
+    pub pid: u32,
+    pub token: String,
+    pub pluto_secret: String,
+    pub reattached: bool,
+}
+
+/// The app's end of a helper's stdin/stdout, on This Mac or over ssh.
+pub struct Channel {
+    mux: Arc<Mux>,
+    control: mpsc::Receiver<ToApp>,
+    helper_exited: mpsc::Receiver<()>,
+    /// The listener relaying to this channel, which forgets it when it ends.
+    listener: Arc<Mutex<Option<Arc<Listener>>>>,
+}
+
+impl Channel {
+    /// `output` is the helper's stdout, read up to its first frame.
+    pub fn open(mut helper: Child, input: impl Write + Send + 'static, output: impl Read + Send + 'static) -> Channel {
+        let mux = Mux::new(input);
+        let (control_tx, control) = mpsc::channel::<ToApp>();
+        let (exited_tx, helper_exited) = mpsc::channel();
+        let listener: Arc<Mutex<Option<Arc<Listener>>>> = Arc::default();
+        std::thread::spawn({
+            let (mux, listener) = (mux.clone(), listener.clone());
+            move || {
+                let result = mux.run(
+                    output,
+                    // The app opens every stream; the helper never asks to.
+                    |mux, id, _| drop(mux.send(&Frame::Close { id })),
+                    |json| match serde_json::from_slice(json) {
+                        Ok(message) => drop(control_tx.send(message)),
+                        Err(e) => eprintln!("endeavor-remote sent an unreadable message: {e}"),
+                    },
+                );
+                if let Some(listener) = listener.lock().unwrap().take() {
+                    listener.forget(&mux);
+                }
+                let status = helper.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
+                eprintln!("endeavor-remote exited ({status}){}", result.err().map(|e| format!(": {e}")).unwrap_or_default());
+                let _ = exited_tx.send(());
             }
-            Ok(ToApp::Died { status, log_tail }) => {
-                return Err(format!("Julia stopped before Pluto was ready ({status}). {}", diagnose(&log_tail)));
+        });
+        Channel { mux, control, helper_exited, listener }
+    }
+
+    /// Wait until the runtime is up. `on_message` hears `Progress` and
+    /// `FoundJulia` meanwhile; `vanished` says why when the helper just ends.
+    pub fn wait_hello(&self, mut on_message: impl FnMut(ToApp), vanished: impl FnOnce() -> String) -> Result<Hello, String> {
+        loop {
+            match self.control.recv() {
+                Ok(message @ (ToApp::Progress { .. } | ToApp::FoundJulia { .. })) => on_message(message),
+                Ok(ToApp::Hello { token, pluto_secret, reattached, node, pid, .. }) => {
+                    return Ok(Hello { node, pid, token, pluto_secret, reattached });
+                }
+                Ok(ToApp::Died { status, log_tail }) => {
+                    return Err(format!("Julia stopped before Pluto was ready ({status}). {}", diagnose(&log_tail)));
+                }
+                Ok(ToApp::Error { message }) => return Err(message),
+                Ok(ToApp::Replaced) => return Err("Another connection took Julia over while it was starting.".into()),
+                Err(_) => return Err(vanished()),
             }
-            Ok(ToApp::Error { message }) => return Err(message),
-            Ok(ToApp::Replaced) => return Err("Another connection took Julia over while it was starting.".into()),
-            Err(_) => return Err("Endeavor's runtime helper stopped unexpectedly. Show logs has the details.".into()),
+        }
+    }
+
+    /// Relay `listener`'s connections to this runtime from now on.
+    pub fn attach(self, listener: &Arc<Listener>, hello: &Hello, notices: UnboundedSender<Notice>) -> Runtime {
+        *self.listener.lock().unwrap() = Some(listener.clone());
+        *listener.current.lock().unwrap() = Some(self.mux.clone());
+        let leaving = Arc::new(AtomicBool::new(false));
+        forward_notices(self.control, notices, leaving.clone());
+        Runtime {
+            pluto_url: listener.pluto_url(&hello.pluto_secret),
+            mcp_url: listener.mcp_url(),
+            reattached: hello.reattached,
+            mux: self.mux,
+            helper_exited: self.helper_exited,
+            leaving,
         }
     }
 }
