@@ -1701,9 +1701,7 @@ impl Workspace {
             runtime::Notice::Died(reason) | runtime::Notice::Lost(reason) => {
                 format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts.")
             }
-            runtime::Notice::Replaced => "⚠ Another connection took over this Mac's Julia, so Endeavor let go of it. \
-                 Notebook tools are unavailable until you reconnect."
-                .into(),
+            runtime::Notice::Replaced => "⚠ Another connection took over Julia.\nNotebook tools are unavailable until you reconnect.".into(),
         }
         .into();
         cx.notify();
