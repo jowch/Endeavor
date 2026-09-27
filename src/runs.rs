@@ -173,6 +173,7 @@ mod tests {
             output: None,
             diffs: Vec::new(),
             expanded: false,
+            approval: None,
         }
     }
 

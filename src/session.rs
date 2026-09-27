@@ -47,10 +47,15 @@ pub enum Entry {
         /// Cell edits made by this call, shown inline.
         diffs: Vec<celldiff::CellDiff>,
         expanded: bool,
+        /// How the user answered its prompt, if it asked.
+        approval: Option<Approval>,
     },
     Thought { text: String, expanded: bool },
     Plan(Vec<PlanEntry>),
+    /// A prompt for the call `call`. Once answered it stays, unseen, so it
+    /// doesn't split the run it belongs to; the call's row shows the answer.
     Permission {
+        call: ToolCallId,
         title: String,
         /// Code the call would run, when known.
         code: Option<String>,
@@ -67,6 +72,28 @@ pub enum Entry {
         plan: Option<String>,
     },
     Note(SharedString),
+}
+
+/// The answer to a call's prompt, shown on its row.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Approval {
+    Allowed,
+    /// Allowed, and later runs in this session don't ask.
+    AllowedFromNowOn,
+    Denied,
+    /// "Always this session" was on, so it didn't ask.
+    WithoutAsking,
+}
+
+impl Approval {
+    pub fn label(self) -> &'static str {
+        match self {
+            Approval::Allowed => "allowed",
+            Approval::AllowedFromNowOn => "allowed, won't ask again",
+            Approval::Denied => "denied",
+            Approval::WithoutAsking => "ran without asking",
+        }
+    }
 }
 
 /// Work a session hands back to the workspace.
@@ -503,8 +530,7 @@ impl Session {
                     if let Some(allow) = option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
                         let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
                         let _ = responder.respond(RequestPermissionResponse::new(outcome));
-                        let what = runs::asked(&title, &input).unwrap_or(title);
-                        self.note(format!("▶ Ran without asking: {what}"));
+                        self.approve(&request.tool_call.tool_call_id, Approval::WithoutAsking, &title, &input);
                         return effects;
                     }
                 }
@@ -522,7 +548,8 @@ impl Session {
                     .iter()
                     .any(|o| o.option_id.to_string().starts_with("exit-plan-"))
                     .then(|| input["plan"].as_str().unwrap_or("").to_owned());
-                self.push(Entry::Permission { title, code, options: request.options, responder: Some(responder), runs_code, tool, input, preview: None, plan });
+                let call = request.tool_call.tool_call_id.clone();
+                self.push(Entry::Permission { call, title, code, options: request.options, responder: Some(responder), runs_code, tool, input, preview: None, plan });
             }
             SessionEvent::Update(update) => self.apply_update(update, &mut effects),
         }
@@ -601,6 +628,7 @@ impl Session {
                 output: call.raw_output,
                 diffs: Vec::new(),
                 expanded: false,
+                approval: None,
             }),
             SessionUpdate::ToolCallUpdate(update) => {
                 if let Some((id, path)) = self.on_tool_update(update) {
@@ -803,27 +831,42 @@ impl Session {
 
     /// Answer a permission request; `stop_asking` approves this session's later runs.
     pub fn answer(&mut self, ix: usize, option: &PermissionOption, stop_asking: bool) {
-        let Some(Entry::Permission { title, responder, input, .. }) = self.entries.get_mut(ix) else { return };
+        let Some(Entry::Permission { call, title, responder, input, .. }) = self.entries.get_mut(ix) else { return };
         if let Some(responder) = responder.take() {
             let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
             let _ = responder.respond(RequestPermissionResponse::new(outcome));
             let allowed = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
-            self.entries[ix] = Entry::Note(answer_note(allowed, stop_asking, title, input).into());
+            let approval = match (allowed, stop_asking) {
+                (true, true) => Approval::AllowedFromNowOn,
+                (true, false) => Approval::Allowed,
+                (false, _) => Approval::Denied,
+            };
+            let (call, title, input) = (call.clone(), title.clone(), input.clone());
             self.mark(ix);
+            self.approve(&call, approval, &title, &input);
             self.run_without_asking |= stop_asking;
         }
     }
-}
 
-/// The transcript's record of an answered prompt: "Allowed: edit a cell".
-fn answer_note(allowed: bool, stop_asking: bool, title: &str, input: &serde_json::Value) -> String {
-    let verb = match (allowed, stop_asking) {
-        (true, true) => "Allowed, and won't ask again this session",
-        (true, false) => "Allowed",
-        (false, _) => "Denied",
-    };
-    let what = runs::asked(title, input).unwrap_or_else(|| title.to_string());
-    format!("{verb}: {what}")
+    /// Show an answer on its call's row; a prompt with no call in the
+    /// transcript gets a note instead.
+    fn approve(&mut self, call: &ToolCallId, approval: Approval, title: &str, input: &serde_json::Value) {
+        let found = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if id == call));
+        match found {
+            Some(ix) => {
+                if let Entry::Tool { approval: slot, .. } = &mut self.entries[ix] {
+                    *slot = Some(approval);
+                }
+                self.mark(ix);
+            }
+            None => {
+                let what = runs::asked(title, input).unwrap_or_else(|| title.to_string());
+                let mut label = approval.label().to_string();
+                label[..1].make_ascii_uppercase();
+                self.note(format!("{label}: {what}"));
+            }
+        }
+    }
 }
 
 /// The current value of a select config option, by id.
@@ -1061,10 +1104,15 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
     let calls: Vec<usize> = rows.iter().copied().filter(|&i| matches!(session.entries[i], Entry::Tool { .. })).collect();
     let mut first = None;
     let mut failed = 0;
+    let mut denied = 0;
     let mut summed = Vec::new();
     for &i in &calls {
-        let Entry::Tool { id, title, kind, status, input, output, .. } = &session.entries[i] else { continue };
+        let Entry::Tool { id, title, kind, status, input, output, approval, .. } = &session.entries[i] else { continue };
         first.get_or_insert(id);
+        if *approval == Some(Approval::Denied) {
+            denied += 1;
+            continue;
+        }
         failed += runs::failed(*status, title, output.as_ref()) as usize;
         summed.push((title.as_str(), *kind, input.as_ref().unwrap_or(&serde_json::Value::Null)));
     }
@@ -1075,11 +1123,16 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
     // One run of text, so a long summary wraps with the failures and the chevron in line.
     let mut text = summary;
     let mut highlights = Vec::new();
-    if failed > 0 {
-        text.push_str(", ");
-        let failures = format!("{failed} failed");
-        highlights.push((text.len()..text.len() + failures.len(), HighlightStyle { color: Some(theme::danger().into()), ..Default::default() }));
-        text.push_str(&failures);
+    for (n, what) in [(failed, "failed"), (denied, "denied")] {
+        if n == 0 {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str(", ");
+        }
+        let counted = format!("{n} {what}");
+        highlights.push((text.len()..text.len() + counted.len(), HighlightStyle { color: Some(theme::danger().into()), ..Default::default() }));
+        text.push_str(&counted);
     }
     text.push_str(if open { " ⌄" } else { " ›" });
     let header = div()
@@ -1139,7 +1192,7 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
                 )
             })
             .into_any_element(),
-        Entry::Tool { title, kind, path, status, input, output, diffs, expanded, .. } => {
+        Entry::Tool { title, kind, path, status, input, output, diffs, expanded, approval, .. } => {
             let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
             let pluto = celldiff::pluto_tool(title).is_some();
             let file_diff = if pluto { None } else { file_diff(*kind, path.as_deref(), args) };
@@ -1151,7 +1204,9 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
             });
             let summary = if pluto { pluto_line(title, diffs, args) } else { tool_line(title, *kind, path.as_deref(), args) };
             let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
-            let state = if runs::failed(*status, title, output.as_ref()) {
+            let state = if *approval == Some(Approval::Denied) {
+                Some(div().flex_none().text_color(theme::danger()).child("denied"))
+            } else if runs::failed(*status, title, output.as_ref()) {
                 Some(div().flex_none().text_color(theme::danger()).child("failed"))
             } else if matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress) {
                 Some(div().flex_none().child("…"))
@@ -1195,6 +1250,7 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
                         .children(object)
                         .when(added > 0, |d| d.child(mono(format!("+{added}"), theme::diff_add())))
                         .when(removed > 0, |d| d.child(mono(format!("−{removed}"), theme::diff_del())))
+                        .children(approval.filter(|a| *a != Approval::Denied).map(|a| div().flex_none().whitespace_nowrap().child(format!("· {}", a.label()))))
                         .children(state)
                         .child(div().flex_none().child(if *expanded { "⌄" } else { "›" }))
                         .on_click(toggle),
@@ -1764,16 +1820,44 @@ mod tests {
     };
 
     #[test]
-    fn answered_prompts_are_noted_in_plain_words() {
-        use serde_json::json;
-        let null = serde_json::Value::Null;
-        assert_eq!(super::answer_note(true, false, "mcp__pluto__edit_cell", &null), "Allowed: edit a cell");
-        assert_eq!(super::answer_note(false, false, "mcp__pluto__execute_cell", &null), "Denied: run a cell");
-        assert_eq!(
-            super::answer_note(true, true, "mcp__pluto__submit_changes", &json!({"cell_ids": ["a", "b"]})),
-            "Allowed, and won't ask again this session: run 2 cells"
-        );
-        assert_eq!(super::answer_note(true, false, "Write notes.md", &null), "Allowed: Write notes.md");
+    fn answers_show_on_their_calls_and_dont_split_runs() {
+        use super::Approval;
+        use agent_client_protocol::schema::v1::{ToolCall, ToolCallId};
+        let call = |id: &str, title: &str| SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), title.to_string())));
+        let asked = |id: &str, title: &str| Entry::Permission {
+            call: ToolCallId::new(id.to_string()),
+            title: title.into(),
+            code: None,
+            options: Vec::new(),
+            responder: None,
+            runs_code: true,
+            tool: None,
+            input: serde_json::Value::Null,
+            preview: None,
+            plan: None,
+        };
+        let approval = |s: &Session, ix: usize| match &s.entries[ix] {
+            Entry::Tool { approval, .. } => *approval,
+            _ => panic!("not a call"),
+        };
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.apply(call("t1", "mcp__pluto__edit_cell"));
+        s.push(asked("t1", "mcp__pluto__edit_cell"));
+        s.approve(&"t1".to_string().into(), Approval::Allowed, "mcp__pluto__edit_cell", &serde_json::Value::Null);
+        s.apply(call("t2", "mcp__pluto__execute_cell"));
+        s.approve(&"t2".to_string().into(), Approval::WithoutAsking, "mcp__pluto__execute_cell", &serde_json::Value::Null);
+        s.apply(call("t3", "mcp__pluto__execute_cell"));
+        s.push(asked("t3", "mcp__pluto__execute_cell"));
+        s.approve(&"t3".to_string().into(), Approval::Denied, "mcp__pluto__execute_cell", &serde_json::Value::Null);
+        assert!(!s.entries.iter().any(|e| matches!(e, Entry::Note(_))), "no notes in the transcript");
+        assert_eq!(crate::runs::run_at(&s.entries, 0), Some(0..s.entries.len()), "one run");
+        assert_eq!(approval(&s, 0), Some(Approval::Allowed));
+        assert_eq!(approval(&s, 2), Some(Approval::WithoutAsking));
+        assert_eq!(approval(&s, 3), Some(Approval::Denied));
+
+        // A prompt whose call isn't in the transcript is still recorded, as a note.
+        s.approve(&"gone".to_string().into(), Approval::Denied, "mcp__pluto__edit_cell", &serde_json::Value::Null);
+        assert!(matches!(s.entries.last(), Some(Entry::Note(text)) if text.as_ref() == "Denied: edit a cell"));
     }
 
     #[test]
