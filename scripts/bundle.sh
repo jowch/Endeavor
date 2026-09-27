@@ -1,7 +1,8 @@
 #!/bin/sh
 # Build target/release/Endeavor.app: the release binaries (the app and its
 # runtime helper, endeavor-remote) plus the app's own files
-# (runtime/, plugin/, adapter/) in Contents/Resources. Julia, Node and the ACP
+# (runtime/, plugin/, adapter/) and any helpers built for Linux servers
+# (target/helpers) in Contents/Resources. Julia, Node and the ACP
 # adapter are not bundled; the app installs them on first launch.
 # ponytail: ad-hoc signed; Developer ID signing + notarization come with sharing.
 set -eu
@@ -14,6 +15,12 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/endeavor target/release/endeavor-remote "$app/Contents/MacOS/"
 cp -R runtime plugin adapter "$app/Contents/Resources/"
+# Helpers for Linux servers, if built (scripts/build-helpers.sh).
+if [ -d target/helpers ]; then
+  cp -R target/helpers "$app/Contents/Resources/"
+else
+  echo "note: no target/helpers; this build can't connect to Linux servers (see scripts/build-helpers.sh)" >&2
+fi
 
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
