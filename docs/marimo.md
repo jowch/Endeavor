@@ -137,9 +137,9 @@ files) applies here too.
 - **Running a cell runs its stale ancestors first.** marimo's `run_cell` does
   not, and the result is a `NameError`. `execute_cell` runs the unrun
   ancestors, then the cell, matching Pluto.
-- **Opening a notebook runs it** (subject to run policy, as with Pluto's safe
-  preview). marimo's default is `auto_instantiate = false`; the runtime calls
-  instantiate once policy allows execution.
+- **Opening a notebook doesn't run it**, keeping marimo's default
+  (`auto_instantiate = false`) so marimo notebooks behave the way marimo
+  users know. Running a cell runs its unrun ancestors first.
 - **Lazy mode for external edits.** With `--watch`, marimo marks changed cells
   stale rather than running them. The runtime reports them as `unrun`, the
   same state Pluto's staged edits produce.
