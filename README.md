@@ -1,4 +1,9 @@
-# Endeavor
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/icon/logo-dark.svg">
+    <img src="assets/icon/logo-light.svg" alt="Endeavor" height="46">
+  </picture>
+</h1>
 
 A native macOS app with a Claude Code agent beside a live Pluto.jl notebook.
 See [docs/roadmap.md](docs/roadmap.md) for status and
@@ -6,6 +11,7 @@ See [docs/roadmap.md](docs/roadmap.md) for status and
 
 - Run from source: `cargo run`
 - Build the app: `scripts/bundle.sh` → `target/release/Endeavor.app` (ad-hoc signed)
+- App icon and logo: `python3 assets/icon/build.py` regenerates them from the artwork in that script.
 - Page script (the code injected into the notebook page): `frontend/`, TypeScript.
   After changing it: `cd frontend && npm install && npm test` (builds
   `dist/page.js`, which is committed so `cargo build` needs no Node).
