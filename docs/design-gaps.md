@@ -44,6 +44,7 @@ _Listed 2026-09-25._
 - [ ] "▸ Thinking" blocks — improvised
 - [ ] Non-notebook tool calls (shell, Read, Write, ToolSearch) and their expanded input/output view — improvised (raw JSON)
 - [x] Shell tool lines print the whole command (multi-line scripts) in the transcript; spec says one collapsed line each (grey verb, mono name, `›` to expand), like "Ran `python3 -c …`" — improvised
+- [ ] A run of tool calls between two agent messages folds into one line ("Used 5 tools ›": list_folder, read_file, run_shell…) that expands to the individual lines; the transcript should read as the agent's replies, as with folding long user messages. The expanded tool view should be tighter too (less padding, smaller input/output panels) — missing
 - [ ] Transcript notes: "Allowed: …", "Denied: …", "Turn ended", end-of-turn run warnings — improvised
 - [ ] Failure states: turn failed, agent disconnected, Julia crashed and notebooks reopened, "Open a copy" for a session still open in the Claude Code CLI — improvised
 - [ ] Opening a past session: loading and replay — improvised
