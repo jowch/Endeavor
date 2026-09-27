@@ -1194,6 +1194,14 @@ fn markdown(id: ElementId, text: String) -> TextView {
             .font_family(theme::SANS)
             .text_size(theme::size_meta_small())
             .text_color(theme::text_faint())
+            // Out of the flow so the library's opaque holder for it stays empty and
+            // doesn't hide the code's top-right corner while the button is invisible.
+            // Changing display on hover instead panics when hover flips mid-frame.
+            .absolute()
+            .top_0()
+            .right_0()
+            .whitespace_nowrap()
+            .bg(theme::bg_card())
             .opacity(0.)
             .group_hover(REPLY, |s| s.opacity(1.))
             .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
