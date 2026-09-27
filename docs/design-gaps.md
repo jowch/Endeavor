@@ -68,6 +68,7 @@ _Listed 2026-09-25._
 - [ ] Context ring hover label ("N% context") — improvised
 - [ ] "+" button (attach / @ cell): its menu — missing
 - [ ] Steering feedback (a message joining the running turn) — missing
+- [ ] The new-session screen's composer doesn't match the chat composer. It needn't be identical, but it should mostly be the chat composer's refined design, with the new-session parts added (the Where / folder / notebook chips above it). Reference (Claude desktop, 2026-09-27): its new-session composer keeps the chat's elements (chips above; the input; "+", model and effort under it) and adds only what starting needs. Keeping the orange send button is optional — improvised
 
 ## Notebook pane
 
