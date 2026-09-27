@@ -61,6 +61,24 @@ fn local_offset() -> i64 {
     if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() { 0 } else { tm.tm_gmtoff as i64 }
 }
 
+/// A moment (Unix seconds) as a local clock time, "18:40", with the weekday
+/// ("Sat 09:10") when it isn't today.
+pub fn clock(at: u64) -> String {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    clock_at(at, now, local_offset())
+}
+
+fn clock_at(at: u64, now: u64, offset: i64) -> String {
+    let local = at as i64 + offset;
+    let (h, m) = (local.rem_euclid(86400) / 3600, local.rem_euclid(3600) / 60);
+    let day = local.div_euclid(86400);
+    if day == (now as i64 + offset).div_euclid(86400) {
+        return format!("{h}:{m:02}");
+    }
+    const WEEKDAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    format!("{} {h}:{m:02}", WEEKDAYS[day.rem_euclid(7) as usize])
+}
+
 fn ago_at(then: SystemTime, now: SystemTime, offset: i64) -> String {
     let secs = now.duration_since(then).unwrap_or_default().as_secs() as i64;
     let then_secs = then.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 + offset;
@@ -95,6 +113,15 @@ mod tests {
         assert_eq!(at("2026-09-26T12:00:00.500Z"), at("2026-09-26T14:00:00+02:00"));
         assert_eq!(at("2026-09-26T12:00:00Z").duration_since(UNIX_EPOCH).unwrap().as_secs(), 1790424000);
         assert_eq!(parse_iso8601("yesterday"), None);
+    }
+
+    #[test]
+    fn clock_times_say_the_day_when_it_isnt_today() {
+        let secs = |t: &str| at(t).duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = secs("2026-09-26T15:00:00Z");
+        assert_eq!(clock_at(secs("2026-09-26T18:40:00Z"), now, 0), "18:40");
+        assert_eq!(clock_at(secs("2026-09-27T09:05:00Z"), now, 0), "Sun 9:05");
+        assert_eq!(clock_at(secs("2026-09-26T22:30:00Z"), now, 7200), "Sun 0:30");
     }
 
     #[test]

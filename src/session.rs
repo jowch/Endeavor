@@ -145,6 +145,8 @@ pub struct Session {
     pub commands: Vec<AvailableCommand>,
     /// The policy last sent to the runtime.
     policy_sent: &'static str,
+    /// On a cluster: what its job asks for (from the resources chip).
+    pub resources: Option<wire::slurm::Resources>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -228,6 +230,7 @@ impl Session {
             usage: None,
             commands: Vec::new(),
             policy_sent: "ask",
+            resources: None,
         }
     }
 

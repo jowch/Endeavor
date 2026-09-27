@@ -13,6 +13,8 @@ use futures::StreamExt;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+use wire::slurm::JobRequest;
+
 use crate::hosts::HostId;
 use crate::pluto::{self, Bridge};
 use crate::remote::{self, Askpass, Cancel, Event};
@@ -47,6 +49,11 @@ pub struct Connection {
     pub runtime: Option<Runtime>,
     /// Start Julia once connected (a session is waiting for it).
     start_when_connected: bool,
+    /// On a cluster: the job the next start submits (the resources of the
+    /// session that asked for it); else the cluster's defaults.
+    pub job_request: Option<JobRequest>,
+    /// Cancel was pressed while Julia started (a job waited in the queue).
+    cancelling: bool,
     /// ssh may ask again (a reconnect inside it, a key's passphrase), so it lives as long as the connection.
     _askpass: Option<Askpass>,
     cancel: Arc<Cancel>,
@@ -146,6 +153,8 @@ impl Connection {
             hello: None,
             runtime: None,
             start_when_connected: false,
+            job_request: None,
+            cancelling: false,
             _askpass: None,
             cancel: Arc::default(),
             steps,
@@ -262,15 +271,22 @@ impl Workspace {
     /// Start Julia on a connected host (or attach to the one running there).
     pub fn start_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Ok(listener) = self.listener(host) else { return };
+        // A cluster restarted from its pane runs the shown session's resources.
+        let shown = self.active_session().filter(|s| s.place.host == *host).and_then(|s| s.resources.clone());
         let Some(connection) = self.connections.get_mut(host) else { return };
         if !matches!(connection.status, Status::Browsing | Status::Died(_)) {
             return;
         }
         let Some(channel) = connection.channel.clone() else { return };
         connection.status = Status::Starting;
+        connection.cancelling = false;
         connection.steps = match host {
             HostId::ThisMac => Steps::new("Starting Julia"),
             HostId::Server(_) => Steps { done: vec![format!("Connected to {}", self.hosts.name(host))], ..Steps::new("Finding Julia") },
+        };
+        let job = match host {
+            HostId::Server(id) => self.hosts.server(id).and_then(|s| s.cluster.as_ref()).map(|c| connection.job_request.take().unwrap_or_else(|| c.job(shown.as_ref().unwrap_or(&c.resources)))),
+            HostId::ThisMac => None,
         };
         let id = connection.id;
         let (tx, rx) = futures::channel::mpsc::unbounded::<Update>();
@@ -283,7 +299,7 @@ impl Workspace {
                 runtime::start_local(&channel, &listener, &progress, notice)
             } else {
                 let on = |event| drop(tx.unbounded_send(Update::Event(event)));
-                remote::start(&channel, &listener, &on, notice)
+                remote::start(&channel, &listener, job, &on, notice)
             };
             let _ = tx.unbounded_send(Update::Started(result));
         });
@@ -337,6 +353,7 @@ impl Workspace {
     fn on_update(&mut self, host: HostId, id: u64, update: Update, cx: &mut Context<Self>) {
         let local = host == HostId::ThisMac;
         let name = self.hosts.name(&host);
+        let cluster = self.is_cluster(&host);
         let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
         match update {
             Update::Event(Event::Connected { .. }) => connection.steps.advance(format!("Connected to {name}"), "Checking Endeavor's helper"),
@@ -345,10 +362,21 @@ impl Workspace {
             }
             Update::Event(Event::FoundJulia { version, .. }) => {
                 connection.steps.found_julia = true;
-                connection.steps.advance(format!("Julia {version}"), "Starting Julia");
+                connection.steps.advance(format!("Julia {version}"), if cluster { "Submitting a job" } else { "Starting Julia" });
+            }
+            Update::Event(Event::Submitted { job, summary }) => {
+                connection.steps.found_julia = true;
+                connection.steps.advance(format!("Submitted job {job} ({summary})"), "Waiting for a node");
+            }
+            Update::Event(Event::Queued { state, reason }) if state == "RUNNING" => {
+                connection.steps.advance(format!("Got a node: {reason}"), "Starting Julia");
+            }
+            Update::Event(Event::Queued { reason, .. }) => {
+                connection.steps.now("Waiting for a node");
+                connection.steps.detail = wire::slurm::reason_text(&reason).map(|r| format!("Slurm: {r}"));
             }
             Update::Event(Event::Progress(line)) => connection.steps.log(&line),
-            Update::Event(Event::Started { .. } | Event::Finished { .. }) => {}
+            Update::Event(Event::Started { .. } | Event::Finished { .. } | Event::Slurm(_)) => {}
             Update::Local(p) => {
                 if connection.status == Status::Starting && p.log {
                     connection.steps.found_julia = true;
@@ -388,6 +416,11 @@ impl Workspace {
                 connection.status = Status::Ready;
                 connection.runtime = Some(runtime);
                 self.on_ready(&host, cx);
+                self.warn_before_job_ends(&host, cx);
+            }
+            Update::Started(Err(_)) if connection.cancelling => {
+                connection.cancelling = false;
+                connection.status = Status::Died(String::new());
             }
             Update::Started(Err(e)) => {
                 connection.status = Status::Died(e.clone());
@@ -427,6 +460,7 @@ impl Workspace {
 
     /// Connected, before any runtime: the new-session screen can use its files.
     fn on_connected(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        self.fetch_partitions(host, cx);
         if self.draft.host == *host {
             if self.draft.folder.is_none() {
                 self.draft.folder = self.connections.get(host).and_then(|c| c.hello.as_ref()).map(|h| h.home.clone());
@@ -608,6 +642,73 @@ impl Workspace {
         cx.background_executor().spawn(async move { pluto::set_idle_limit(&bridge, hours) }).detach();
     }
 
+    /// "Job ends 18:40", for the notebook header of a session on a cluster.
+    pub fn job_ends(&self, host: &HostId) -> Option<AnyElement> {
+        let connection = self.connections.get(host).filter(|c| c.status == Status::Ready)?;
+        let job = connection.runtime.as_ref()?.job.as_ref()?;
+        let at = job.ends_at?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let soon = at.saturating_sub(now) <= job_warning_window().as_secs();
+        Some(
+            div()
+                .flex_shrink_0()
+                .mr(px(8.))
+                .px(px(6.))
+                .rounded(px(3.))
+                .bg(theme::bg_tag())
+                .text_size(theme::size_meta_small())
+                .text_color(if soon { theme::accent_text() } else { theme::text_faint() })
+                .child(format!("Job ends {}", crate::when::clock(at)))
+                .into_any_element(),
+        )
+    }
+
+    pub fn is_cluster(&self, host: &HostId) -> bool {
+        matches!(host, HostId::Server(id) if self.hosts.server(id).is_some_and(|s| s.cluster.is_some()))
+    }
+
+    /// Cancel starting Julia on a cluster: the queued job is cancelled.
+    pub fn cancel_start(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let Some(connection) = self.connections.get_mut(host).filter(|c| c.status == Status::Starting) else { return };
+        let Some(channel) = connection.channel.clone() else { return };
+        connection.cancelling = true;
+        connection.steps.now("Cancelling the job");
+        cx.background_executor().spawn(async move { channel.stop() }).detach();
+        cx.notify();
+    }
+
+    /// When a cluster job's end is near, say so in the chat of each session on
+    /// it: the notebook file is saved, and a new job can run it again.
+    fn warn_before_job_ends(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let Some(connection) = self.connections.get(host) else { return };
+        let Some(ends_at) = connection.runtime.as_ref().and_then(|r| r.job.as_ref()).and_then(|j| j.ends_at) else { return };
+        let window = job_warning_window();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let wait = Duration::from_secs(ends_at.saturating_sub(window.as_secs()).saturating_sub(now));
+        let (watching, mine) = (connection.watching.clone(), connection.watching.load(Ordering::SeqCst));
+        let host = host.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            if watching.load(Ordering::SeqCst) != mine {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                let name = this.hosts.name(&host);
+                let left = ends_at.saturating_sub(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()));
+                let minutes = left.div_ceil(60);
+                let text = format!(
+                    "⚠ The cluster job running Julia on {name} ends at {} (in {minutes} min), and its notebooks stop then. The notebook file is already saved; Start Julia afterwards runs it in a new job.",
+                    crate::when::clock(ends_at)
+                );
+                for session in this.sessions.iter_mut().filter(|s| s.place.host == host) {
+                    session.note(text.clone());
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Leave a host (its server was removed): its runtime keeps running.
     pub fn disconnect_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(mut connection) = self.connections.remove(host) else { return };
@@ -658,7 +759,21 @@ impl Workspace {
             Status::Ready => return None,
             Status::Connecting | Status::Browsing | Status::Starting => {
                 let steps = connection.map_or_else(|| Steps::new(format!("Connecting to {name}")), |c| c.steps.clone());
-                return Some(starting_pane(&steps).into_any_element());
+                let cancel = (status == Status::Starting && self.is_cluster(host) && connection.is_some_and(|c| !c.cancelling)).then(|| {
+                    let host = host.clone();
+                    div()
+                        .id("cancel-start")
+                        .role(Role::Button)
+                        .mt(px(4.))
+                        .cursor_pointer()
+                        .underline()
+                        .text_size(theme::size_meta())
+                        .text_color(theme::text_muted())
+                        .hover(|s| s.text_color(theme::text_primary()))
+                        .child("Cancel")
+                        .on_click(cx.listener(move |this, _, _, cx| this.cancel_start(&host, cx)))
+                });
+                return Some(starting_pane(&steps).children(cancel).into_any_element());
             }
             Status::Died(reason) => {
                 let headline = if reason.is_empty() { format!("Julia on {name} is stopped.") } else { format!("Julia on {name} stopped.") };
@@ -674,6 +789,16 @@ impl Workspace {
         };
         Some(pane.into_any_element())
     }
+}
+
+/// How long before a cluster job's end the chat warns: 15 minutes, or in a
+/// debug build `ENDEAVOR_JOB_WARNING_SECONDS` (to try it on a short job).
+fn job_warning_window() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(secs) = std::env::var("ENDEAVOR_JOB_WARNING_SECONDS").ok().and_then(|v| v.parse().ok()) {
+        return Duration::from_secs(secs);
+    }
+    Duration::from_secs(15 * 60)
 }
 
 /// Elapsed time as "0:12" or "1:02:03".

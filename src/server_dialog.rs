@@ -1,6 +1,6 @@
-//! Adding a server and its settings (the Where menu's gear), with Test
-//! connection; and the modal that shows ssh's password, two-factor and
-//! host-key prompts.
+//! Adding a server or a cluster and its settings (the Where menu's gear),
+//! with Test connection; and the modal that shows ssh's password, two-factor
+//! and host-key prompts.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,7 +11,10 @@ use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use wire::askpass::Kind;
 
-use crate::hosts::{HostId, Server};
+use wire::slurm::{Partition, Resources};
+
+use crate::hosts::{Cluster, HostId, Server};
+use crate::resources::Target;
 use crate::new_session::{Glyph, glyph, menu_row};
 use crate::remote::{self, Askpass, Cancel, Event, Question};
 use crate::settings::IdleStop;
@@ -30,7 +33,20 @@ pub struct ServerDialog {
     test: Option<TestRun>,
     confirm_remove: bool,
     error: Option<String>,
+    /// A cluster's own settings; None for a plain server.
+    pub cluster: Option<ClusterFields>,
     _subscriptions: Vec<Subscription>,
+}
+
+pub struct ClusterFields {
+    account: Entity<InputState>,
+    depot: Entity<InputState>,
+    pub resources: Resources,
+    pub partitions: Vec<Partition>,
+    pub partition_menu: bool,
+    scratch: Option<String>,
+    /// Test connection found Slurm (this time).
+    detected: bool,
 }
 
 struct TestRun {
@@ -58,6 +74,15 @@ pub struct AskModal {
 impl Workspace {
     pub fn open_server_dialog(&mut self, editing: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let server = editing.as_deref().and_then(|id| self.hosts.server(id)).cloned().unwrap_or_default();
+        self.open_host_dialog(editing, server, window, cx);
+    }
+
+    /// Add a server or (with `cluster` set) a cluster, starting from `template`'s fields.
+    pub fn open_new_host(&mut self, template: Server, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_host_dialog(None, template, window, cx);
+    }
+
+    fn open_host_dialog(&mut self, editing: Option<String>, server: Server, window: &mut Window, cx: &mut Context<Self>) {
         let input = |value: String, placeholder: &str, window: &mut Window, cx: &mut Context<Self>| {
             let placeholder = placeholder.to_owned();
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value))
@@ -72,6 +97,21 @@ impl Workspace {
             }
         })];
         name.update(cx, |s, cx| s.focus(window, cx));
+        let cluster = server.cluster.as_ref().map(|c| {
+            let depot_hint = match &c.scratch {
+                Some(scratch) => format!("{scratch}/endeavor/depot"),
+                None => "$SCRATCH/endeavor/depot, else ~/.cache/endeavor/depot".into(),
+            };
+            ClusterFields {
+                account: input(c.account.clone().unwrap_or_default(), "Default account", window, cx),
+                depot: input(c.depot.clone().unwrap_or_default(), &depot_hint, window, cx),
+                resources: c.resources.clone(),
+                partitions: c.partitions.clone(),
+                partition_menu: false,
+                scratch: c.scratch.clone(),
+                detected: false,
+            }
+        });
         self.server_dialog = Some(ServerDialog {
             editing,
             name,
@@ -83,6 +123,7 @@ impl Workspace {
             test: None,
             confirm_remove: false,
             error: None,
+            cluster,
             _subscriptions: subscriptions,
         });
         cx.notify();
@@ -101,6 +142,14 @@ impl Workspace {
         let (ssh_host, port) = Server::parse_target(&dialog.host.read(cx).value())?;
         let name = dialog.name.read(cx).value().trim().to_owned();
         let julia = dialog.julia.read(cx).value().trim().replace('\n', "; ");
+        let text = |input: &Entity<InputState>| Some(input.read(cx).value().trim().to_owned()).filter(|t| !t.is_empty());
+        let cluster = dialog.cluster.as_ref().map(|c| Cluster {
+            account: text(&c.account),
+            resources: c.resources.clone(),
+            depot: text(&c.depot),
+            partitions: c.partitions.clone(),
+            scratch: c.scratch.clone(),
+        });
         Ok(Server {
             id: dialog.editing.clone().unwrap_or_else(Server::new_id),
             name: if name.is_empty() { ssh_host.clone() } else { name },
@@ -108,6 +157,7 @@ impl Workspace {
             port,
             julia: (!julia.is_empty()).then_some(julia),
             idle_stop: dialog.idle_stop,
+            cluster,
         })
     }
 
@@ -126,6 +176,10 @@ impl Workspace {
         let host = HostId::Server(id);
         if adding {
             self.set_draft_host(host, window, cx);
+        } else if self.draft.host == host {
+            // New default resources for the session being set up.
+            self.draft.resources = self.draft_cluster().map(|c| c.resources.clone());
+            self.send_idle_limit(&host, cx);
         } else {
             // Its idle override may have changed.
             self.send_idle_limit(&host, cx);
@@ -213,8 +267,26 @@ impl Workspace {
             TestUpdate::Event(Event::Connected { os, arch }) => step(test, format!("Connected ({os} {arch})"), Some("Checking Endeavor's helper…".into())),
             TestUpdate::Event(Event::Helper { installed }) => {
                 let done = if installed { "Installed helper" } else { "Helper already installed" };
-                step(test, done.into(), Some("Starting Julia…".into()));
+                let cluster = self.server_dialog.as_ref().is_some_and(|d| d.cluster.is_some());
+                let Some(test) = self.server_dialog.as_mut().and_then(|d| d.test.as_mut()) else { return };
+                step(test, done.into(), Some(if cluster { "Checking Slurm…" } else { "Starting Julia…" }.into()));
             }
+            TestUpdate::Event(Event::Slurm(scheduler)) => {
+                let names: Vec<&str> = scheduler.partitions.iter().map(|p| p.name.as_str()).collect();
+                step(test, format!("Slurm found; partitions: {}", names.join(", ")), None);
+                if let Some(cluster) = self.server_dialog.as_mut().and_then(|d| d.cluster.as_mut()) {
+                    cluster.detected = true;
+                    cluster.scratch = scheduler.scratch;
+                    cluster.partitions = scheduler.partitions;
+                    let default = cluster.partitions.iter().find(|p| p.default).cloned();
+                    if cluster.resources.partition.as_ref().is_some_and(|name| !cluster.partitions.iter().any(|p| &p.name == name)) {
+                        cluster.resources.partition = None;
+                    }
+                    let partition = cluster.resources.partition.clone();
+                    cluster.resources.clip(cluster.partitions.iter().find(|p| Some(&p.name) == partition.as_ref()).or(default.as_ref()));
+                }
+            }
+            TestUpdate::Event(Event::Submitted { .. } | Event::Queued { .. }) => {}
             TestUpdate::Event(Event::FoundJulia { path, version }) => step(test, format!("Found Julia {version} at {path}"), Some("Starting the runtime…".into())),
             TestUpdate::Event(Event::Progress(line)) => {
                 let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
@@ -271,9 +343,11 @@ impl Workspace {
     pub fn render_server_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.server_dialog.as_ref()?;
         let editing = dialog.editing.is_some();
+        let is_cluster = dialog.cluster.is_some();
+        let kind = if is_cluster { "cluster" } else { "server" };
         let title = match dialog.editing.as_deref().and_then(|id| self.hosts.server(id)) {
             Some(server) => server.name.clone(),
-            None => "Add server".into(),
+            None => format!("Add {kind}"),
         };
         let testing = dialog.test.as_ref().is_some_and(|t| t.working.is_some());
         let query = dialog.host.read(cx).value().trim().to_lowercase();
@@ -355,9 +429,11 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .child(div().flex_1().min_w_0().text_size(theme::size_meta()).text_color(theme::text_secondary()).child(format!(
-                    "Remove {title}? Endeavor forgets it; anything running there keeps running."
-                )))
+                .child(div().flex_1().min_w_0().text_size(theme::size_meta()).text_color(theme::text_secondary()).child(if is_cluster {
+                    format!("Remove {title}? Endeavor forgets it; a job running there keeps running until its time limit.")
+                } else {
+                    format!("Remove {title}? Endeavor forgets it; anything running there keeps running.")
+                }))
                 .child(button("cancel-remove", "Cancel", false).on_click(cx.listener(|this, _, _, cx| {
                     if let Some(dialog) = &mut this.server_dialog {
                         dialog.confirm_remove = false;
@@ -376,7 +452,7 @@ impl Workspace {
                             .id("remove-server")
                             .cursor_pointer()
                             .text_color(theme::danger())
-                            .child("Remove server…")
+                            .child(if is_cluster { "Remove cluster…" } else { "Remove server…" })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(dialog) = &mut this.server_dialog {
                                     dialog.confirm_remove = true;
@@ -407,11 +483,14 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(glyph(Glyph::Server, theme::text_muted()))
+                    .child(glyph(if is_cluster { Glyph::Cluster } else { Glyph::Server }, theme::text_muted()))
                     .child(div().text_size(theme::size_subhead()).font_weight(FontWeight::SEMIBOLD).child(title)),
             )
             .child(
                 div()
+                    .id("server-dialog-body")
+                    .max_h(px(620.))
+                    .overflow_y_scroll()
                     .px(px(20.))
                     .pb(px(14.))
                     .flex()
@@ -430,10 +509,12 @@ impl Workspace {
                     .child(hint("An alias from ~/.ssh/config, or user@host (add :port if it isn't 22). Endeavor uses the keys and settings there."))
                     .children(suggestions)
                     .children(dialog.test.as_ref().map(render_test))
-                    .child(row("How to get Julia", div().w(px(260.)).child(field(&dialog.julia, true))))
-                    .child(hint(
-                        "A path to julia, or a shell line that puts it on the PATH. Empty: the julia on the server's PATH, else Endeavor downloads its own.",
-                    ))
+                    .when(is_cluster, |d| d.children(self.cluster_rows(cx)))
+                    .when(!is_cluster, |d| {
+                        d.child(row("How to get Julia", div().w(px(260.)).child(field(&dialog.julia, true)))).child(hint(
+                            "A path to julia, or a shell line that puts it on the PATH. Empty: the julia on the server's PATH, else Endeavor downloads its own.",
+                        ))
+                    })
                     .child(divider())
                     .child(section("Notebooks"))
                     .child(row(
@@ -466,6 +547,57 @@ impl Workspace {
             )
             .child(div().px(px(20.)).py(px(12.)).border_t_1().border_color(theme::composer_edge()).child(footer));
         Some(modal_backdrop("server-dialog-backdrop").child(card).into_any_element())
+    }
+
+    /// Starting a session on a plain server where Slurm is installed: probably
+    /// a cluster's login node, which stops long-running programs.
+    pub fn render_login_node_warning(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let id = self.login_node_warning.as_ref()?;
+        let name = self.hosts.server(id).map(|s| s.name.clone()).unwrap_or_default();
+        let card = div()
+            .id("login-node")
+            .w(px(440.))
+            .p(px(20.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(theme::composer_edge())
+            .bg(theme::bg_card())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(glyph(Glyph::Cluster, theme::text_muted()))
+                    .child(div().text_size(theme::size_subhead()).font_weight(FontWeight::SEMIBOLD).child(name.clone())),
+            )
+            .child(div().text_color(theme::text_secondary()).child(
+                "This looks like a cluster's login node. Clusters stop long-running programs here. Add it as a cluster instead?",
+            ))
+            .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(
+                "As a cluster, Julia runs in a Slurm job on a compute node, and this server entry stays as it is.",
+            ))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.))
+                    .child(button("login-node-anyway", "Start anyway", false).on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(id) = this.login_node_warning.take() {
+                            this.login_node_ok.insert(id);
+                        }
+                        this.start_session(window, cx);
+                    })))
+                    .child(button("login-node-cluster", "Add as cluster", true).on_click(cx.listener(|this, _, window, cx| {
+                        let Some(id) = this.login_node_warning.take() else { return };
+                        let Some(server) = this.hosts.server(&id).cloned() else { return };
+                        let template = Server { id: String::new(), name: format!("{} (cluster)", server.name), cluster: Some(Cluster::default()), ..server };
+                        this.open_new_host(template, window, cx);
+                    }))),
+            );
+        Some(modal_backdrop("login-node-backdrop").child(card).into_any_element())
     }
 
     pub fn render_askpass(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -510,6 +642,35 @@ impl Workspace {
                     .child(button("askpass-yes", yes, true).on_click(cx.listener(|this, _, window, cx| this.answer_ask(true, window, cx)))),
             );
         Some(modal_backdrop("askpass-backdrop").child(card).into_any_element())
+    }
+}
+
+impl Workspace {
+    /// A cluster's Scheduler and Default resources sections.
+    fn cluster_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(dialog) = &self.server_dialog else { return Vec::new() };
+        let Some(c) = &dialog.cluster else { return Vec::new() };
+        let detected = div()
+            .flex()
+            .items_baseline()
+            .gap(px(6.))
+            .child("Slurm")
+            .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(if c.detected { "detected" } else { "Test connection checks it" }));
+        let mut rows = vec![
+            divider().into_any_element(),
+            section("Scheduler").into_any_element(),
+            row("Type", detected).into_any_element(),
+            row("Account", div().w(px(220.)).child(field(&c.account, false))).into_any_element(),
+            row("How to get Julia", div().w(px(220.)).child(field(&dialog.julia, true))).into_any_element(),
+            hint("A path to julia, or a shell line that puts it on the PATH (module load julia). Empty: the julia on the login node's PATH, else Endeavor downloads its own.").into_any_element(),
+            row("Where to keep Julia packages", div().w(px(220.)).child(field(&c.depot, true))).into_any_element(),
+            hint("Home folders on clusters are usually small, so packages go to scratch space by default.").into_any_element(),
+            divider().into_any_element(),
+            section("Default resources for new sessions").into_any_element(),
+        ];
+        rows.extend(self.resource_rows(Target::Dialog, &c.resources, &c.partitions, c.partition_menu, false, cx));
+        rows.push(hint("Each session can change these from the resources chip. The cluster may end jobs sooner than this.").pt(px(4.)).into_any_element());
+        rows
     }
 }
 

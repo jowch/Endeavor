@@ -21,6 +21,7 @@ mod outbox;
 mod overlay;
 mod pluto;
 mod remote;
+mod resources;
 mod runtime;
 mod server_dialog;
 mod session;
@@ -473,6 +474,14 @@ pub struct Workspace {
     server_dialog: Option<server_dialog::ServerDialog>,
     /// ssh's prompts waiting for an answer, the first on screen.
     asks: VecDeque<server_dialog::AskModal>,
+    /// Each cluster session's resources, by session id (persisted), for the
+    /// job that runs it after a reopen.
+    session_resources: HashMap<String, wire::slurm::Resources>,
+    /// Starting a session on a server that looks like a cluster's login node
+    /// waits on this question (the server's id).
+    login_node_warning: Option<String>,
+    /// Servers the user chose to use as plain servers anyway, this launch.
+    login_node_ok: HashSet<String>,
     questions_tx: UnboundedSender<remote::Question>,
 }
 
@@ -624,6 +633,9 @@ impl Workspace {
             hosts: hosts::Hosts::load(),
             server_dialog: None,
             asks: VecDeque::new(),
+            session_resources: load_json("resources.json"),
+            login_node_warning: None,
+            login_node_ok: HashSet::new(),
             questions_tx,
         };
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
@@ -687,6 +699,14 @@ impl Workspace {
         if host == HostId::ThisMac {
             let _ = std::fs::create_dir_all(&folder);
         }
+        if let HostId::Server(id) = &host
+            && !self.is_cluster(&host)
+            && !self.login_node_ok.contains(id)
+            && self.connection(&host).and_then(|c| c.hello.as_ref()).is_some_and(|h| h.slurm)
+        {
+            self.login_node_warning = Some(id.clone());
+            return cx.notify();
+        }
         let place = Place { host: host.clone(), path: folder.clone() };
         let server = match &host {
             HostId::ThisMac => None,
@@ -702,6 +722,11 @@ impl Workspace {
         }
         let mut session = Session::new(key, place, server.clone());
         session.run_without_asking = self.settings.run_without_asking;
+        session.resources = self.draft.resources.clone().filter(|_| self.is_cluster(&host));
+        let job = session.resources.as_ref().zip(self.draft_cluster()).map(|(resources, cluster)| cluster.job(resources));
+        if let (Some(job), Some(connection)) = (job, self.connections.get_mut(&host)) {
+            connection.job_request = Some(job);
+        }
         let existing = match &self.draft.notebook {
             NotebookChoice::New => None,
             NotebookChoice::Existing(path) => Some(path.display().to_string()),
@@ -716,6 +741,13 @@ impl Workspace {
                  approves each command), with the server's paths.",
                 folder.display()
             ));
+            if let Some(resources) = &session.resources {
+                context.push(format!(
+                    "[Endeavor] {server} is a Slurm cluster: Julia runs in a batch job ({}) on a compute node, and \
+                     run_shell runs there too, inside that job. The notebooks stop when the job's time limit is reached.",
+                    resources.summary()
+                ));
+            }
         }
         if let Some(path) = &existing {
             session.open_on_start(path.clone());
@@ -775,6 +807,7 @@ impl Workspace {
         let key = self.next_key;
         self.next_key += 1;
         let named = self.titles.get(&info.session_id.to_string()).cloned();
+        let resources = self.session_resources.get(&info.session_id.to_string()).cloned();
         let title = named.clone().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into());
         let notebook = self.session_notebooks.get(&info.session_id.to_string()).map(|p| p.path.display().to_string());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
@@ -784,6 +817,7 @@ impl Workspace {
         }
         session.named = named.is_some();
         session.run_without_asking = self.settings.run_without_asking;
+        session.resources = resources;
         self.sessions.push(session);
         if let Some(path) = notebook {
             self.bind_notebook(key, path, cx);
@@ -1504,6 +1538,11 @@ impl Workspace {
                         let place = session.place.clone();
                         if self.ours.insert(id.to_string(), place.clone()).as_ref() != Some(&place) {
                             save_json("sessions.json", &self.ours);
+                        }
+                        if let Some(resources) = self.session_mut(key).and_then(|s| s.resources.clone())
+                            && self.session_resources.insert(id.to_string(), resources.clone()).as_ref() != Some(&resources)
+                        {
+                            save_json("resources.json", &self.session_resources);
                         }
                         // Renamed before the agent assigned an id.
                         if let Some(name) = self.session_mut(key).filter(|s| s.named).map(|s| s.title.clone()) {
@@ -2436,7 +2475,7 @@ impl Render for Workspace {
         let stand_in = active.and_then(|ix| self.notebook_stand_in(&self.sessions[ix], cx));
         // The web view is a native view over the window: hidden behind the setup
         // screen, and wherever the notebook pane is drawn natively.
-        let modal = self.server_dialog.is_some() || !self.asks.is_empty();
+        let modal = self.server_dialog.is_some() || !self.asks.is_empty() || self.login_node_warning.is_some();
         let show_webview = self.setup.is_none() && active.is_some() && stand_in.is_none() && !modal;
         if self.webview.read(cx).visible() != show_webview {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
@@ -2476,11 +2515,12 @@ impl Render for Workspace {
             .children(folder.map(|f| {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family(theme::MONO).text_size(theme::size_meta_small()).child(f)
             }));
+        let job_ends = active.and_then(|ix| self.job_ends(&self.sessions[ix].place.host));
         let notebook_header = column_header("notebook-header").map(|d| match active {
             None => d.child(self.draft_pane_header()),
             Some(ix) => match self.sessions[ix].notebook_path.as_deref() {
-                Some(path) => d.child(new_session::notebook_title(Path::new(path))).child(div().flex_1()).child(self.notebook_more(self.sessions[ix].key, cx)),
-                None => d,
+                Some(path) => d.child(new_session::notebook_title(Path::new(path))).child(div().flex_1()).children(job_ends).child(self.notebook_more(self.sessions[ix].key, cx)),
+                None => d.child(div().flex_1()).children(job_ends),
             },
         });
         let notebook = match (active, stand_in) {
@@ -2559,6 +2599,7 @@ impl Render for Workspace {
             // Deferred so they paint, and take clicks, above everything else.
             .children(self.render_server_dialog(cx).map(|d| deferred(d).with_priority(3)))
             .children(self.render_askpass(cx).map(|d| deferred(d).with_priority(5)))
+            .children(self.render_login_node_warning(cx).map(|d| deferred(d).with_priority(4)))
             // A click outside the menu only closes it, as with a native menu.
             .when(self.menu.is_some(), |d| {
                 d.child(

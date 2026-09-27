@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use wire::files;
+use wire::slurm::JobRequest;
 use wire::relay::Mux;
 use wire::{Frame, Target, ToApp, ToHelper};
 
@@ -85,6 +86,8 @@ pub struct Runtime {
     pub reattached: bool,
     /// The machine it runs on.
     pub node: String,
+    /// The cluster job it runs in.
+    pub job: Option<wire::slurm::Job>,
 }
 
 /// Why a runtime went away.
@@ -185,7 +188,7 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
 /// `notice` hears if it goes away later.
 pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn Fn(Progress), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     progress(Progress::new(Step::Packages, "Starting Julia…"));
-    let runtime = channel.start_runtime(listener, &mut |message| {
+    let runtime = channel.start_runtime(listener, None, &mut |message| {
         if let ToApp::Progress { line } = message {
             eprintln!("{line}");
             // Package installs and precompiles show on the setup screen.
@@ -207,6 +210,8 @@ pub struct Hello {
     pub node: String,
     /// The home folder on its machine.
     pub home: PathBuf,
+    /// Slurm's commands are there: probably a cluster's login node.
+    pub slurm: bool,
 }
 
 /// The app's end of a helper's stdin/stdout, on This Mac or over ssh. It lasts
@@ -296,7 +301,7 @@ impl Channel {
     pub fn wait_hello(&self, vanished: impl FnOnce() -> String) -> Result<Hello, String> {
         let Some(hello) = self.hello.lock().unwrap().take() else { return Err("Already said hello.".into()) };
         match hello.recv() {
-            Ok(ToApp::Hello { node, home, .. }) => Ok(Hello { node, home: PathBuf::from(home) }),
+            Ok(ToApp::Hello { node, home, slurm, .. }) => Ok(Hello { node, home: PathBuf::from(home), slurm }),
             Ok(ToApp::Error { message }) => Err(message),
             Ok(other) => Err(format!("Endeavor's helper said {other:?} before hello.")),
             Err(_) => Err(vanished()),
@@ -321,27 +326,29 @@ impl Channel {
     }
 
     /// Start the runtime (or attach to the running one) and relay `listener`'s
-    /// connections to it from now on. Blocks until it's ready; `on_message`
-    /// hears `Progress` and `FoundJulia` meanwhile, and `notice` the first word
-    /// of the runtime going away later, unless the app is the one stopping it.
+    /// connections to it from now on; on a cluster, `job` is what to submit.
+    /// Blocks until it's ready; `on_message` hears `Progress`, `FoundJulia`,
+    /// `Submitted` and `Queued` meanwhile, and `notice` the first word of the
+    /// runtime going away later, unless the app is the one stopping it.
     pub fn start_runtime(
         &self,
         listener: &Arc<Listener>,
+        job: Option<JobRequest>,
         on_message: &mut dyn FnMut(ToApp),
         notice: impl FnOnce(Notice) + Send + 'static,
     ) -> Result<Runtime, String> {
         let events = self.subscribe();
         let leaving = Arc::new(AtomicBool::new(false));
         *self.leaving.lock().unwrap() = leaving.clone();
-        self.mux.send(&ToHelper::StartRuntime { job: None }.frame()).map_err(|_| "The connection to Endeavor's helper closed.".to_owned())?;
+        self.mux.send(&ToHelper::StartRuntime { job }.frame()).map_err(|_| "The connection to Endeavor's helper closed.".to_owned())?;
         let runtime = loop {
             match events.recv() {
                 Ok(message @ (ToApp::Progress { .. } | ToApp::FoundJulia { .. } | ToApp::Submitted { .. } | ToApp::Queued { .. })) => on_message(message),
-                Ok(ToApp::Ready { node, token, pluto_secret, reattached, .. }) => {
+                Ok(ToApp::Ready { node, token, pluto_secret, reattached, job, .. }) => {
                     *self.listener.lock().unwrap() = Some(listener.clone());
                     *listener.current.lock().unwrap() = Some(self.mux.clone());
                     let bridge = Bridge { url: listener.mcp_url(), token };
-                    break Runtime { pluto_url: listener.pluto_url(&pluto_secret), bridge, reattached, node };
+                    break Runtime { pluto_url: listener.pluto_url(&pluto_secret), bridge, reattached, node, job };
                 }
                 Ok(ToApp::StartFailed { message } | ToApp::Error { message }) => return Err(message),
                 Ok(ToApp::Died { status, log_tail }) => {

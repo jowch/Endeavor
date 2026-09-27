@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use wire::slurm::{JobRequest, Partition, Resources};
+
 use crate::settings::IdleStop;
 
 const FILE: &str = "hosts.json";
@@ -16,7 +18,8 @@ pub struct Hosts {
     pub servers: Vec<Server>,
 }
 
-/// A plain server reached over SSH, where the runtime runs as a detached process.
+/// A machine reached over SSH: a plain server, where the runtime runs as a
+/// detached process, or a cluster's login node, where it runs in a Slurm job.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Server {
@@ -31,6 +34,38 @@ pub struct Server {
     pub julia: Option<String>,
     /// Overrides Settings' "Stop idle notebooks after" for this server.
     pub idle_stop: Option<IdleStop>,
+    /// Set for a cluster: Julia runs in a Slurm job.
+    pub cluster: Option<Cluster>,
+}
+
+/// A cluster's Slurm settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Cluster {
+    /// The account jobs are charged to; None is the user's default.
+    pub account: Option<String>,
+    /// What a new session's job asks for (its resources chip starts here).
+    pub resources: Resources,
+    /// Where Julia keeps packages; None is `$SCRATCH/endeavor/depot` if the
+    /// cluster sets `$SCRATCH` (home quotas are small), else ~/.cache/endeavor/depot.
+    pub depot: Option<String>,
+    /// As the last Test connection found them.
+    pub partitions: Vec<Partition>,
+    pub scratch: Option<String>,
+}
+
+impl Cluster {
+    pub fn partition(&self, name: Option<&str>) -> Option<&Partition> {
+        match name {
+            Some(name) => self.partitions.iter().find(|p| p.name == name),
+            None => self.partitions.iter().find(|p| p.default),
+        }
+    }
+
+    /// The job a session with `resources` asks for.
+    pub fn job(&self, resources: &Resources) -> JobRequest {
+        JobRequest { resources: resources.clone(), account: self.account.clone(), depot: self.depot.clone() }
+    }
 }
 
 /// A machine sessions run on: This Mac, or a server by its id.
@@ -141,6 +176,16 @@ impl Server {
     pub fn new_id() -> String {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         format!("server-{nanos:x}")
+    }
+
+    /// The helper's launcher and its state folder's name in ~/.cache/endeavor.
+    /// A cluster's folder is its own, so the same machine can also be a plain
+    /// server entry without the two sharing a runtime.
+    pub fn launcher(&self) -> [String; 2] {
+        match &self.cluster {
+            None => ["process".into(), "state".into()],
+            Some(_) => ["slurm".into(), format!("cluster-{}", self.id)],
+        }
     }
 
     /// The dialog's SSH host field: `host`, or `host:port`.
@@ -289,6 +334,17 @@ mod tests {
         assert_eq!(with(Some("/Users/jc/Library/Application Support/julia/bin/julia")), ["--julia", "/Users/jc/Library/Application Support/julia/bin/julia"]);
         assert_eq!(with(Some("module load julia/1.11")), ["--julia-shell", "module load julia/1.11"]);
         assert_eq!(with(Some("/opt/lmod/setup.sh && module load julia")), ["--julia-shell", "/opt/lmod/setup.sh && module load julia"]);
+    }
+
+    #[test]
+    fn a_cluster_keeps_its_own_state_folder() {
+        let server = Server { id: "server-1".into(), ..Default::default() };
+        assert_eq!(server.launcher(), ["process", "state"]);
+        let cluster = Server { cluster: Some(Cluster::default()), ..server };
+        assert_eq!(cluster.launcher(), ["slurm", "cluster-server-1"]);
+        let saved = serde_json::to_string(&cluster).unwrap();
+        assert_eq!(serde_json::from_str::<Server>(&saved).unwrap(), cluster);
+        assert!(serde_json::from_str::<Server>(r#"{"id":"a","ssh_host":"lab"}"#).unwrap().cluster.is_none());
     }
 
     #[test]

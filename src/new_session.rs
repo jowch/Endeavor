@@ -4,6 +4,7 @@
 //! session starts): an empty state for a new notebook, or a static preview of
 //! the chosen one's first cells. On a server, picking it connects (Julia waits
 //! for the session), and its folders and notebooks come through the helper.
+//! On a cluster, a resources chip sets what the session's job asks for.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -14,8 +15,11 @@ use gpui_component::input::{Input, InputEvent, InputState, Textarea};
 use wire::files::{self, Entry, Reply, Request};
 use wire::notebooks::{Found, Preview};
 
+use wire::slurm::{Resources, duration_text};
+
 use crate::connection::Status;
-use crate::hosts::{HostId, Place};
+use crate::hosts::{Cluster, HostId, Place, Server};
+use crate::resources::Target;
 use crate::session::folder_name;
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme, when};
@@ -34,6 +38,8 @@ pub enum Chip {
     Notebook,
     /// The in-app folder browser for a server's disk.
     Browse,
+    /// A cluster job's resources.
+    Resources,
 }
 
 /// The new-session screen's state.
@@ -54,6 +60,12 @@ pub struct Draft {
     pub search: Entity<InputState>,
     pub selected: usize,
     pub browser: Option<Browser>,
+    /// On a cluster: what this session's job asks for.
+    pub resources: Option<Resources>,
+    pub partition_menu: bool,
+    /// The resources popover's "Paste an salloc line…" box, while it's open.
+    pub salloc: Option<Entity<InputState>>,
+    pub salloc_error: Option<String>,
 }
 
 /// The server folder browser: the folder shown, and its folders and notebooks once listed.
@@ -156,6 +168,10 @@ impl Draft {
             search,
             selected: 0,
             browser: None,
+            resources: None,
+            partition_menu: false,
+            salloc: None,
+            salloc_error: None,
         }
     }
 }
@@ -176,6 +192,76 @@ impl Workspace {
                 Some(cx.background_spawn(async move { channel.files(request) }))
             }
         }
+    }
+
+    /// The draft host's cluster settings, if it's a cluster.
+    pub fn draft_cluster(&self) -> Option<&Cluster> {
+        match &self.draft.host {
+            HostId::Server(id) => self.hosts.server(id)?.cluster.as_ref(),
+            HostId::ThisMac => None,
+        }
+    }
+
+    /// Paste an salloc line: open its box, or apply what's in it.
+    fn paste_salloc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.draft.salloc.clone() else {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("salloc -p gpu -c 8 --mem=32G -t 8:00:00"));
+            cx.subscribe_in(&input, window, |this: &mut Workspace, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.paste_salloc(window, cx);
+                }
+            })
+            .detach();
+            input.update(cx, |s, cx| s.focus(window, cx));
+            self.draft.salloc = Some(input);
+            self.draft.salloc_error = None;
+            return cx.notify();
+        };
+        let line = input.read(cx).value().to_string();
+        let base = self.draft.resources.clone().unwrap_or_default();
+        match wire::slurm::parse_salloc(&line, &base) {
+            Ok((mut resources, account)) => {
+                if let Some(account) = account {
+                    resources.extra.insert(0, format!("--account={account}"));
+                }
+                let partitions = self.draft_cluster().map(|c| c.partitions.clone()).unwrap_or_default();
+                let known = |name: &String| partitions.is_empty() || partitions.iter().any(|p| &p.name == name);
+                if let Some(name) = resources.partition.as_ref().filter(|n| !known(n)) {
+                    self.draft.salloc_error = Some(format!("This cluster has no partition \"{name}\"."));
+                    return cx.notify();
+                }
+                let partition = partitions.iter().find(|p| Some(&p.name) == resources.partition.as_ref()).or_else(|| partitions.iter().find(|p| p.default));
+                resources.clip(partition);
+                self.draft.resources = Some(resources);
+                self.draft.salloc = None;
+                self.draft.salloc_error = None;
+            }
+            Err(e) => self.draft.salloc_error = Some(e),
+        }
+        cx.notify();
+    }
+
+    /// Ask a connected cluster for its partitions, when the last Test
+    /// connection didn't list them (the resources chip needs them).
+    pub fn fetch_partitions(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let HostId::Server(id) = host else { return };
+        if self.hosts.server(id).and_then(|s| s.cluster.as_ref()).is_none_or(|c| !c.partitions.is_empty()) {
+            return;
+        }
+        let Some(ask) = self.ask_files(host, Request::Slurm, cx) else { return };
+        let id = id.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(Reply::Slurm { scheduler }) = ask.await else { return };
+            let _ = this.update(cx, |this, cx| {
+                let Some(server) = this.hosts.servers.iter_mut().find(|s| s.id == id) else { return };
+                let Some(cluster) = server.cluster.as_mut() else { return };
+                cluster.partitions = scheduler.partitions;
+                cluster.scratch = scheduler.scratch;
+                let _ = this.hosts.save();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// The draft host's home folder: This Mac's, or what a connected server said.
@@ -259,6 +345,11 @@ impl Workspace {
                 });
             }
             Chip::Notebook => self.scan_notebooks(cx),
+            Chip::Resources => {
+                self.draft.partition_menu = false;
+                self.draft.salloc = None;
+                self.draft.salloc_error = None;
+            }
             Chip::Where | Chip::Browse => {}
         }
         cx.notify();
@@ -502,22 +593,22 @@ impl Workspace {
         };
         let mono = matches!(self.draft.notebook, NotebookChoice::Existing(_));
         let (where_icon, where_label) = match &self.draft.host {
+            HostId::Server(_) if self.draft_cluster().is_some() => (Glyph::Cluster, self.hosts.name(&self.draft.host)),
             HostId::Server(_) => (Glyph::Server, self.hosts.name(&self.draft.host)),
             HostId::ThisMac => (Glyph::Laptop, "This Mac".to_string()),
         };
+        let resources = self.draft.resources.as_ref().filter(|_| self.draft_cluster().is_some()).map(|r| (Chip::Resources, "resources", Glyph::Chip, r.summary(), false));
         let folder_label = match (&self.draft.folder, self.status(&self.draft.host)) {
             (Some(folder), _) => folder_name(folder),
             (None, Some(Status::Failed(_) | Status::Replaced)) => "Not connected".into(),
             (None, _) => format!("Connecting to {where_label}…"),
         };
-        let chips = [
-            (Chip::Where, "where", where_icon, where_label, false),
-            (Chip::Folder, "folder", Glyph::Folder, folder_label, false),
-            (Chip::Notebook, "notebook", Glyph::File, notebook_label, mono),
-        ];
-        let chips = div().flex().gap(px(6.)).children(chips.map(|(chip, id, icon, label, mono)| {
+        let chips = std::iter::once((Chip::Where, "where", where_icon, where_label, false))
+            .chain(resources)
+            .chain([(Chip::Folder, "folder", Glyph::Folder, folder_label, false), (Chip::Notebook, "notebook", Glyph::File, notebook_label, mono)]);
+        let chips = div().flex().flex_wrap().gap(px(6.)).children(chips.map(|(chip, id, icon, label, mono)| {
             let open = self.draft.popover == Some(chip) || (chip == Chip::Folder && self.draft.popover == Some(Chip::Browse));
-            let waiting = connecting && chip != Chip::Where;
+            let waiting = connecting && !matches!(chip, Chip::Where | Chip::Resources);
             div()
                 .relative()
                 .child(
@@ -560,12 +651,13 @@ impl Workspace {
             Chip::Folder => (360., self.folder_menu(cx).into_any_element()),
             Chip::Notebook => (320., self.notebook_menu(cx).into_any_element()),
             Chip::Browse => (380., self.browser_menu(cx).into_any_element()),
+            Chip::Resources => (300., self.resources_menu(cx).into_any_element()),
         };
         let body = div()
             .id("chip-menu")
             .occlude()
             .w(px(width))
-            .p(px(4.))
+            .p(px(if chip == Chip::Resources { 12. } else { 4. }))
             .flex()
             .flex_col()
             .rounded(px(8.))
@@ -589,6 +681,7 @@ impl Workspace {
                 _ => self.recent.iter().find(|p| p.host == host).map(|p| p.path.clone()),
             };
             self.draft.host = host.clone();
+            self.draft.resources = self.draft_cluster().map(|c| c.resources.clone());
             self.draft.notebooks.clear();
             self.choose_notebook(NotebookChoice::New, cx);
             if host != HostId::ThisMac {
@@ -611,40 +704,129 @@ impl Workspace {
             this.close_popover(window, cx);
             this.settings_open = true;
         })));
-        let servers = self.hosts.servers.iter().enumerate().map(|(i, server)| {
-            let group: SharedString = format!("host-gear-{i}").into();
-            let host = HostId::Server(server.id.clone());
-            let state = match self.status(&host) {
-                Some(Status::Connecting) => Some("Connecting…"),
-                Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) => Some("Connected"),
-                Some(Status::Failed(_) | Status::Replaced) => Some("Not connected"),
-                None => None,
-            };
-            let (pick, edit_id) = (host.clone(), server.id.clone());
-            host_row(("where-server", i), self.draft.host == host, Glyph::Server, server.name.clone(), state, group.clone(), cx)
-                .on_click(cx.listener(move |this, _, window, cx| this.set_draft_host(pick.clone(), window, cx)))
-                .child(gear_button(("gear-server", i), group).on_click(cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.close_popover(window, cx);
-                    this.open_server_dialog(Some(edit_id.clone()), window, cx);
-                })))
-        });
-        let servers: Vec<_> = servers.collect();
+        let rows = |clusters: bool, cx: &mut Context<Self>| -> Vec<Stateful<Div>> {
+            self.hosts
+                .servers
+                .iter()
+                .enumerate()
+                .filter(|(_, server)| server.cluster.is_some() == clusters)
+                .map(|(i, server)| {
+                    let group: SharedString = format!("host-gear-{i}").into();
+                    let host = HostId::Server(server.id.clone());
+                    let state = match self.status(&host) {
+                        Some(Status::Connecting) => Some("Connecting…"),
+                        Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) if !clusters => Some("Connected"),
+                        Some(Status::Failed(_) | Status::Replaced) => Some("Not connected"),
+                        _ if clusters => Some("Slurm"),
+                        _ => None,
+                    };
+                    let (pick, edit_id) = (host.clone(), server.id.clone());
+                    let icon = if clusters { Glyph::Cluster } else { Glyph::Server };
+                    host_row(("where-server", i), self.draft.host == host, icon, server.name.clone(), state, group.clone(), cx)
+                        .on_click(cx.listener(move |this, _, window, cx| this.set_draft_host(pick.clone(), window, cx)))
+                        .child(gear_button(("gear-server", i), group).on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.close_popover(window, cx);
+                            this.open_server_dialog(Some(edit_id.clone()), window, cx);
+                        })))
+                })
+                .collect()
+        };
+        let servers = rows(false, cx);
+        let clusters = rows(true, cx);
+        let add = |id: &'static str, text: &'static str, cluster: bool, cx: &mut Context<Self>| {
+            menu_row(id, false, false).child(glyph(Glyph::Plus, theme::text_muted())).child(div().text_color(theme::text_muted()).child(text)).on_click(cx.listener(move |this, _, window, cx| {
+                this.close_popover(window, cx);
+                let template = Server { cluster: cluster.then(Cluster::default), ..Default::default() };
+                this.open_new_host(template, window, cx);
+            }))
+        };
         div()
             .flex()
             .flex_col()
             .child(this_mac)
             .child(section_label("Servers"))
             .children(servers)
-            .child(
-                menu_row("add-server", false, false)
-                    .child(glyph(Glyph::Plus, theme::text_muted()))
-                    .child(div().text_color(theme::text_muted()).child("Add server…"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.close_popover(window, cx);
-                        this.open_server_dialog(None, window, cx);
-                    })),
-            )
+            .child(add("add-server", "Add server…", false, cx))
+            .child(section_label("Clusters"))
+            .children(clusters)
+            .child(add("add-cluster", "Add cluster…", true, cx))
+    }
+
+    /// The resources chip's popover: presets, partition, CPUs, memory, time
+    /// limit, and pasting an salloc line.
+    fn resources_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let (Some(r), Some(cluster)) = (self.draft.resources.as_ref(), self.draft_cluster()) else { return div() };
+        let partition = cluster.partition(r.partition.as_deref());
+        let limit = partition.and_then(|p| p.max_minutes).map(|m| format!(" This partition allows up to {}.", duration_text(m))).unwrap_or_default();
+        let running = self.connection(&self.draft.host).filter(|c| c.status == Status::Ready).and_then(|c| c.runtime.as_ref()?.job.clone());
+        let note = match running {
+            Some(job) => format!(
+                "Julia already runs in job {} on {}{}; a new session joins it.",
+                job.id,
+                job.node,
+                job.ends_at.map(|at| format!(" until {}", crate::when::clock(at))).unwrap_or_default()
+            ),
+            None => format!("Notebooks stop when the job's time runs out.{limit}"),
+        };
+        let extra = (!r.extra.is_empty()).then(|| {
+            div().pt(px(2.)).font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(format!("Also: {}", r.extra.join(" ")))
+        });
+        let salloc = match &self.draft.salloc {
+            None => div()
+                .id("paste-salloc")
+                .cursor_pointer()
+                .text_size(theme::size_meta())
+                .text_color(theme::accent_text())
+                .child("Paste an salloc line…")
+                .on_click(cx.listener(|this, _, window, cx| this.paste_salloc(window, cx)))
+                .into_any_element(),
+            Some(input) => div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .h(px(28.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(theme::accent())
+                        .bg(theme::bg_card())
+                        .font_family(theme::MONO)
+                        .child(div().flex_1().child(Input::new(input).appearance(false).text_size(theme::size_code()))),
+                )
+                .children(self.draft.salloc_error.clone().map(|e| div().text_size(theme::size_meta()).text_color(theme::danger()).child(e)))
+                .child(
+                    div().flex().justify_end().child(
+                        div()
+                            .id("apply-salloc")
+                            .role(Role::Button)
+                            .px(px(10.))
+                            .h(px(24.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .bg(theme::accent())
+                            .text_color(gpui::white())
+                            .text_size(theme::size_meta())
+                            .child("Use these")
+                            .on_click(cx.listener(|this, _, window, cx| this.paste_salloc(window, cx))),
+                    ),
+                )
+                .into_any_element(),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .children(self.resource_rows(Target::Draft, r, &cluster.partitions, self.draft.partition_menu, true, cx))
+            .children(extra)
+            .child(div().pt(px(6.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(note))
+            .child(div().h(px(1.)).my(px(8.)).bg(theme::composer_edge()))
+            .child(salloc)
     }
 
     fn folder_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1012,6 +1194,10 @@ pub(crate) enum Glyph {
     Server,
     Plus,
     Gear,
+    /// A cluster: four nodes.
+    Cluster,
+    /// A cluster job's resources: a chip with pins.
+    Chip,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -1062,6 +1248,20 @@ pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
                 Glyph::Plus => {
                     polyline(&[(6., 1.5), (6., 10.5)]);
                     polyline(&[(1.5, 6.), (10.5, 6.)]);
+                }
+                Glyph::Cluster => {
+                    for (x, y) in [(1.5, 1.5), (7., 1.5), (1.5, 7.), (7., 7.)] {
+                        polyline(&[(x, y), (x + 3.5, y), (x + 3.5, y + 3.5), (x, y + 3.5), (x, y)]);
+                    }
+                }
+                Glyph::Chip => {
+                    polyline(&[(3., 3.), (9., 3.), (9., 9.), (3., 9.), (3., 3.)]);
+                    for p in [4.5, 7.5] {
+                        polyline(&[(p, 1.), (p, 3.)]);
+                        polyline(&[(p, 9.), (p, 11.)]);
+                        polyline(&[(1., p), (3., p)]);
+                        polyline(&[(9., p), (11., p)]);
+                    }
                 }
                 Glyph::Gear => {
                     let circle = |r: f32| -> Vec<(f32, f32)> {

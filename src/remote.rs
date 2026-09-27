@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use futures::channel::mpsc::UnboundedSender;
 use wire::ToApp;
+use wire::slurm::JobRequest;
 use wire::askpass::{Answer, Ask, SOCKET_ENV};
 
 use crate::hosts::Server;
@@ -35,8 +36,14 @@ pub enum Event {
     FoundJulia { path: String, version: String },
     /// A line of Julia's download or the runtime's boot log.
     Progress(String),
+    /// A cluster job for Julia was submitted.
+    Submitted { job: String, summary: String },
+    /// It waits in the queue (Slurm's state and reason).
+    Queued { state: String, reason: String },
     /// The runtime is up (or was already running) and its bridge answered through the app's listener.
     Started { node: String, reattached: bool },
+    /// Test connection on a cluster: what Slurm says there.
+    Slurm(wire::slurm::Scheduler),
     /// Test connection is done with it: stopped, or left running as it was found.
     Finished { stopped: bool },
 }
@@ -147,9 +154,10 @@ impl Fnv {
 /// (sh, bash, zsh, fish or csh) gets it inside single quotes, so it holds no
 /// quote, backslash, `!` or newline.
 ///
-/// It prints `ENDEAVOR <os> <arch> <have|need>`, reads two lines (the helper's
-/// Julia flag and its value), and if it needs the install, a byte count and
-/// then that many bytes of tar. Then it becomes the helper.
+/// It prints `ENDEAVOR <os> <arch> <have|need>`, reads four lines (the
+/// helper's Julia flag and its value, its launcher, and its state folder's
+/// name), and if it needs the install, a byte count and then that many bytes
+/// of tar. Then it becomes the helper.
 pub fn bootstrap_script(version: &str) -> String {
     [
         &format!("v={version}"),
@@ -157,9 +165,9 @@ pub fn bootstrap_script(version: &str) -> String {
         r#"d="$c/$v""#,
         r#"if [ -x "$d/endeavor-remote" ] && [ -f "$d/runtime/boot.jl" ]; then s=have; else s=need; fi"#,
         r#"echo "ENDEAVOR $(uname -s) $(uname -m) $s""#,
-        r#"read -r jf && read -r jv || exit 1"#,
+        r#"read -r jf && read -r jv && read -r ln && read -r sd || exit 1"#,
         r#"if [ $s = need ]; then read -r n || exit 1; t="$d.part.$$"; rm -rf "$t"; mkdir -p "$t" && head -c "$n" | (cd "$t" && tar xf -) || { rm -rf "$t"; echo "Endeavor: installing into $d failed" >&2; exit 1; }; rm -rf "$d"; mv "$t" "$d"; fi"#,
-        r#"exec "$d/endeavor-remote" connect --state-dir "$c/state" "$jf" "$jv" --runtime "$d/runtime" --depot "$c/depot:""#,
+        r#"exec "$d/endeavor-remote" connect --state-dir "$c/$sd" --launcher "$ln" "$jf" "$jv" --runtime "$d/runtime" --depot "$c/depot:""#,
     ]
     .join("; ")
 }
@@ -353,7 +361,8 @@ pub fn connect(server: &Server, transport: &Transport, askpass: Option<&Askpass>
         },
     };
     let [flag, value] = server.julia_args();
-    let mut preamble = format!("{flag}\n{value}\n").into_bytes();
+    let [launcher, state] = server.launcher();
+    let mut preamble = format!("{flag}\n{value}\n{launcher}\n{state}\n").into_bytes();
     if let Some(tar) = &install {
         preamble.extend(format!("{}\n", tar.len()).as_bytes());
         preamble.extend(tar);
@@ -368,14 +377,18 @@ pub fn connect(server: &Server, transport: &Transport, askpass: Option<&Askpass>
     Ok((channel, hello))
 }
 
-/// Start the runtime on a connected server's channel; `on` hears Julia being
-/// found and its log. `notice` hears if the runtime goes away later.
-pub fn start(channel: &Channel, listener: &Arc<Listener>, on: &dyn Fn(Event), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
+/// Start the runtime on a connected server's channel (on a cluster, `job` is
+/// what to submit); `on` hears Julia being found, the job queueing, and its
+/// log. `notice` hears if the runtime goes away later.
+pub fn start(channel: &Channel, listener: &Arc<Listener>, job: Option<JobRequest>, on: &dyn Fn(Event), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     let runtime = channel.start_runtime(
         listener,
+        job,
         &mut |message| match message {
             ToApp::Progress { line } => on(Event::Progress(line)),
             ToApp::FoundJulia { path, version } => on(Event::FoundJulia { path, version }),
+            ToApp::Submitted { job, summary } => on(Event::Submitted { job, summary }),
+            ToApp::Queued { state, reason, .. } => on(Event::Queued { state, reason }),
             _ => {}
         },
         notice,
@@ -385,12 +398,24 @@ pub fn start(channel: &Channel, listener: &Arc<Listener>, on: &dyn Fn(Event), no
 }
 
 /// Test connection: connect, check the runtime answers through the app's
-/// listener, then stop it (or leave it running if it already was).
+/// listener, then stop it (or leave it running if it already was). On a
+/// cluster, only ask Slurm about itself: starting Julia there means a job.
 pub fn test(server: &Server, askpass: Option<&Askpass>, cancel: &Cancel, on: &dyn Fn(Event)) -> Result<(), String> {
     let transport = Transport::for_server(server);
     let (channel, _) = connect(server, &transport, askpass, cancel, on)?;
+    if server.cluster.is_some() {
+        let reply = channel.files(wire::files::Request::Slurm);
+        channel.detach();
+        return match reply? {
+            wire::files::Reply::Slurm { scheduler } => {
+                on(Event::Slurm(scheduler));
+                Ok(())
+            }
+            other => Err(format!("The helper answered {other:?}.")),
+        };
+    }
     let listener = test_listener()?;
-    let runtime = start(&channel, &listener, on, |_| {})?;
+    let runtime = start(&channel, &listener, None, on, |_| {})?;
     let answered = bridge_ping(listener.bridge_port(), &runtime.bridge.token);
     if runtime.reattached {
         channel.detach();
@@ -750,7 +775,7 @@ mod tests {
 
         // Started on request, reachable through a listener like the app's.
         let listener = Listener::start().unwrap();
-        let runtime = start(&channel, &listener, &on, |_| {}).expect("start");
+        let runtime = start(&channel, &listener, None, &on, |_| {}).expect("start");
         assert!(runtime.reattached);
         assert_eq!((runtime.bridge.token.as_str(), runtime.node.clone()), (token, hostname()));
         assert!(runtime.pluto_url.ends_with("/?secret=s3cret"));
@@ -765,7 +790,7 @@ mod tests {
         let (seen, on) = events();
         let (channel, _) = connect(&server, &transport, None, &Cancel::default(), &on).expect("second connect");
         assert_eq!(seen.lock().unwrap()[1], Event::Helper { installed: false });
-        start(&channel, &listener, &on, |_| {}).expect("start again");
+        start(&channel, &listener, None, &on, |_| {}).expect("start again");
         channel.stop();
         assert!(!fake.alive(), "Stop reaches the runtime's bridge");
         // The helper stays connected after a stop.
