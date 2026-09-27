@@ -146,7 +146,12 @@ sends the launcher and the folder's name in the bootstrap's preamble.
   "pluto_port": 40211, "mcp_port": 40212, "token": "…", "pluto_secret": "…" }
 ```
 
-**Process (plain server).** The helper starts `boot.jl` with `setsid`/`nohup`.
+**Process (plain server).** The helper starts the runtime with `setsid`/`nohup`:
+`endeavor-remote core` ([runtime-core.md](runtime-core.md)), which starts
+`julia boot.jl` as its child in the same process group, serves the bridge port
+itself and writes `runtime.json` (its own pid and bridge port; Pluto's port is
+Julia's). A runtime an older helper started (Julia alone, `runtime.json` from
+`boot.jl`) is attached to the same way.
 The runtime runs until the user stops it from the app's per-host list, or
 until a long idle timeout (days, with no notebooks open and nothing running)
 so forgotten runtimes don't pile up on shared machines. The state file
@@ -175,9 +180,9 @@ submits, waits and relays; Julia runs in a batch job.
   node (the shared filesystem makes it the compute node's too), writes
   `job.sh` and runs `sbatch --parsable --job-name=endeavor` with the
   resources, the account and `--output` to the state folder's `runtime.log`.
-  The script is `endeavor-remote node-start`, which picks free ports on the
-  compute node and becomes Julia running `boot.jl`, which writes
-  `runtime.json` with the node and `SLURM_JOB_ID`. `job.json` records the
+  The script is `endeavor-remote node-start`, which becomes the core on the
+  compute node; it starts Julia on ports free there and writes `runtime.json`
+  with the node and `SLURM_JOB_ID`. `job.json` records the
   job until its runtime is up, so a reconnect waits for the same job instead
   of submitting another. Packages go to `$SCRATCH/endeavor/depot` when the
   cluster sets `$SCRATCH` (home quotas are small, and Pluto's per-notebook
