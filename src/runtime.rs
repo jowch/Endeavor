@@ -345,7 +345,8 @@ impl Channel {
                 }
                 Ok(ToApp::StartFailed { message } | ToApp::Error { message }) => return Err(message),
                 Ok(ToApp::Died { status, log_tail }) => {
-                    return Err(format!("Julia stopped before Pluto was ready ({status}). {}", diagnose(&log_tail)));
+                    let how = died_reason(&status, &[]);
+                    return Err(format!("Julia stopped before Pluto was ready. {how}{}{}", if how.is_empty() { "" } else { " " }, diagnose(&log_tail)));
                 }
                 Ok(ToApp::Stopped) => return Err("Julia was stopped while it started.".into()),
                 Ok(ToApp::Replaced) => return Err("Another connection took Julia over while it was starting.".into()),
@@ -356,11 +357,7 @@ impl Channel {
         std::thread::spawn(move || {
             let heard = loop {
                 match events.recv() {
-                    Ok(ToApp::Died { status, log_tail }) => {
-                        // A crash's log is just Pluto's startup banner: say why only if we know.
-                        let hint = hint(&log_tail.join("\n")).map(|h| format!(" {h}")).unwrap_or_default();
-                        break Notice::Died(format!("Julia exited ({status}).{hint}"));
-                    }
+                    Ok(ToApp::Died { status, log_tail }) => break Notice::Died(died_reason(&status, &log_tail)),
                     Ok(ToApp::Replaced) => break Notice::Replaced,
                     Ok(ToApp::Error { message }) => break Notice::Lost(message),
                     Ok(_) => continue,
@@ -452,6 +449,25 @@ fn hint(log: &str) -> Option<&'static str> {
     }
 }
 
+/// Why Julia stopped, in plain words, for "Julia on <host> stopped.": how a
+/// cluster job ended (the helper's sentence), else how the process exited,
+/// plus a cause from its log if one is recognized. A crash's log is mostly
+/// Pluto's startup banner, so only a recognized cause is shown. Empty when
+/// nothing is known.
+pub fn died_reason(status: &str, log_tail: &[String]) -> String {
+    let how = if status.ends_with('.') {
+        Some(status.to_owned())
+    } else if let Some(code) = status.strip_prefix("exit status: ") {
+        Some(format!("It exited with code {code}."))
+    } else if let Some(signal) = status.strip_prefix("signal: ") {
+        let memory = if signal.starts_with("9 ") { ", perhaps for using too much memory" } else { "" };
+        Some(format!("It was killed (signal {signal}){memory}."))
+    } else {
+        None
+    };
+    how.into_iter().chain(hint(&log_tail.join("\n")).map(str::to_owned)).collect::<Vec<_>>().join(" ")
+}
+
 /// Plain-language cause for common failures, else the end of Julia's log.
 fn diagnose(tail: &[String]) -> String {
     let hint = hint(&tail.join("\n"));
@@ -465,7 +481,16 @@ fn diagnose(tail: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{diagnose, parse_version};
+    use super::{diagnose, died_reason, parse_version};
+
+    #[test]
+    fn says_plainly_why_julia_stopped() {
+        assert_eq!(died_reason("exited", &[]), "");
+        assert_eq!(died_reason("exit status: 3", &[]), "It exited with code 3.");
+        assert_eq!(died_reason("signal: 9 (SIGKILL)", &[]), "It was killed (signal 9 (SIGKILL)), perhaps for using too much memory.");
+        assert_eq!(died_reason("Its Slurm job reached its time limit.", &[]), "Its Slurm job reached its time limit.");
+        assert!(died_reason("exited", &["IOError: listen: address already in use (EADDRINUSE)".into()]).contains("port"));
+    }
 
     #[test]
     fn parses_julia_version() {
@@ -507,7 +532,7 @@ fn live_die_and_restart() {
     match heard.recv_timeout(Duration::from_secs(30)).expect("death reported") {
         Notice::Died(reason) => {
             println!("died: {reason}");
-            assert!(reason.starts_with("Julia exited"));
+            assert!(!reason.contains("Julia exited"));
         }
         other => panic!("expected Died, got {other:?}"),
     }

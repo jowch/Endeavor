@@ -1090,7 +1090,8 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         (format!("Allow {}?", celldiff::pluto_tool(title).unwrap_or(title)), vec![])
     } else if tool == "run_shell" {
         let host = session.server.clone().unwrap_or_else(|| "the server".into());
-        let cwd = input["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or("~");
+        let folder = session.place.path.display().to_string();
+        let cwd = input["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or(&folder);
         (format!("Run a command on {host}?"), vec![div().text_color(theme::text_muted()).child(format!("In {cwd}")).into_any_element()])
     } else if tool == "add_cell" {
         ("Add a cell and run it?".into(), vec![])

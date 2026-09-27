@@ -744,7 +744,9 @@ impl Workspace {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let host = session.place.host.clone();
         let Some(bridge) = self.bridge(&host) else { return self.ensure_runtime(&host, cx) };
-        let tools = agent::Tools { bridge, server: session.server.clone() };
+        let tools = agent::Tools { bridge: bridge.clone(), server: session.server.clone() };
+        let folder = session.place.path.clone();
+        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
         let cwd = host.agent_cwd(&session.place.path);
         let _ = std::fs::create_dir_all(&cwd);
         let command = match session.id.clone() {
