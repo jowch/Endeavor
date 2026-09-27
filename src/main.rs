@@ -2067,7 +2067,11 @@ impl Workspace {
                             .text_size(theme::size_meta())
                             .text_color(theme::text_section())
                             .child(status.clone())
-                            .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(status.clone()).build(window, cx))
+                            // Wrapped narrow enough to stay clear of the notebook, which covers anything drawn over it.
+                            .tooltip(move |window, cx| {
+                                let status = status.clone();
+                                gpui_component::tooltip::Tooltip::element(move |_, _| div().max_w(px(260.)).child(status.clone())).build(window, cx)
+                            })
                     })
                     .child(
                         div()
@@ -2461,9 +2465,10 @@ impl Workspace {
                             .children(["model", "effort"].map(|id| {
                                 session.config_label(id).map(|label| {
                                     tool_button(id)
+                                        .min_w_0()
                                         .text_color(theme::text_secondary())
                                         .when(self.picker == Some(id), |d| d.bg(theme::row_active()))
-                                        .child(label)
+                                        .child(div().min_w_0().truncate().child(label))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.picker = if this.picker == Some(id) { None } else { Some(id) };
                                             cx.notify();
