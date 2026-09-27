@@ -1194,6 +1194,8 @@ pub(crate) enum Glyph {
     /// An error: a warning triangle.
     Warning,
     Picture,
+    /// A region drawn with Point: a dashed box.
+    Region,
     /// The pointing arrow (Point).
     Pointer,
     /// Slash commands: a boxed slash.
@@ -1287,6 +1289,15 @@ pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
                 Glyph::Picture => {
                     polyline(&[(1., 2.), (11., 2.), (11., 10.), (1., 10.), (1., 2.)]);
                     polyline(&[(1., 9.), (4.5, 5.5), (7., 8.), (8.5, 6.5), (11., 9.)]);
+                }
+                Glyph::Region => {
+                    for (a, b) in [((1.5, 2.), (4.5, 2.)), ((7.5, 2.), (10.5, 2.)), ((1.5, 10.), (4.5, 10.)), ((7.5, 10.), (10.5, 10.))] {
+                        polyline(&[a, b]);
+                    }
+                    for x in [1.5, 10.5] {
+                        polyline(&[(x, 2.), (x, 4.5)]);
+                        polyline(&[(x, 7.5), (x, 10.)]);
+                    }
                 }
                 Glyph::Pointer => polyline(&[(2.5, 1.5), (2.5, 10.), (4.8, 7.8), (6.6, 11.), (8., 10.3), (6.3, 7.1), (9.5, 7.1), (2.5, 1.5)]),
                 Glyph::Slash => {

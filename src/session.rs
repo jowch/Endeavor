@@ -657,12 +657,24 @@ impl Session {
                 // What the app added comes back as chips where it can (images and
                 // text files carry their contents), else not at all.
                 let (text, attachment) = match chunk.content {
-                    ContentBlock::Text(t) => match attach::replayed_text_file(&t.text) {
-                        Some(file) => (None, Some(file)),
+                    ContentBlock::Text(t) => match attach::replayed_text_file(&t.text).or_else(|| attach::replayed_notebook(&t.text)) {
+                        Some(attachment) => (None, Some(attachment)),
                         None if attach::is_app_text(&t.text) => return,
                         None => (Some(t.text), None),
                     },
-                    ContentBlock::Image(image) => (None, attach::replayed_image(&image.data, &image.mime_type)),
+                    ContentBlock::Image(image) => {
+                        // A region's image follows its block.
+                        if let Some(Entry::User { attachments, .. }) = self.entries.last_mut()
+                            && let Some(Attachment::Region { png, .. }) = attachments.last_mut()
+                            && png.is_empty()
+                        {
+                            if let Some(Attachment::Image { bytes, .. }) = attach::replayed_image(&image.data, &image.mime_type) {
+                                *png = bytes;
+                            }
+                            return self.mark(self.entries.len() - 1);
+                        }
+                        (None, attach::replayed_image(&image.data, &image.mime_type))
+                    }
                     _ => return,
                 };
                 if let Some(text) = &text {
@@ -2128,6 +2140,51 @@ mod tests {
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.apply(chunk("live echo"));
         assert_eq!(s.entries.len(), 1, "after loading, user chunks are ignored");
+    }
+
+    /// The blocks of a sent prompt as a reopened session replays them: the
+    /// adapter stores links and text files as text, and a text file's contents
+    /// after the rest (claude-agent-acp's `promptToClaude`).
+    fn as_replayed(blocks: Vec<agent_client_protocol::schema::v1::ContentBlock>) -> Vec<SessionEvent> {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, EmbeddedResourceResource, SessionUpdate, TextContent};
+        let text = |s: String| ContentBlock::Text(TextContent::new(s));
+        let (mut content, mut context) = (Vec::new(), Vec::new());
+        for block in blocks {
+            match block {
+                ContentBlock::ResourceLink(link) => content.push(text(link.uri)),
+                ContentBlock::Resource(r) => {
+                    if let EmbeddedResourceResource::TextResourceContents(t) = r.resource {
+                        content.push(text(t.uri.clone()));
+                        context.push(text(format!("\n<context ref=\"{}\">\n{}\n</context>", t.uri, t.text)));
+                    }
+                }
+                other => content.push(other),
+            }
+        }
+        content.into_iter().chain(context).map(|b| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(b)))).collect()
+    }
+
+    #[test]
+    fn a_reopened_session_gets_its_chips_back_as_sent() {
+        use crate::attach::{Cell, CellAsk};
+        use std::sync::Arc;
+        const NB: &str = "6a1b2c3d-0000-4000-8000-1234567890ab";
+        let cell = |id: &str, code: &str| Cell { id: id.into(), code: code.into() };
+        let sent = vec![
+            Attachment::Cells { notebook: NB.into(), cells: vec![cell("c1", "rates = map(fit, runs)")], ask: CellAsk::About },
+            Attachment::Error { notebook: NB.into(), cell: cell("c2", "fit = curve_fit(model, t, y, p0)"), text: "BoundsError: attempt to access 3-element Vector".into() },
+            Attachment::Selection { notebook: NB.into(), cell: cell("c1", "rates = map(fit, runs)"), text: "map(fit, runs)".into() },
+            Attachment::Region { notebook: NB.into(), cells: vec![cell("c3", "scatter(t, y)"), cell("c4", "")], png: Arc::new(vec![0x89, b'P', b'N', b'G', 1, 2, 3]) },
+            Attachment::Image { name: "image.png".into(), mime: "image/png", bytes: Arc::new(b"gel".to_vec()) },
+            Attachment::Text { name: "notes.txt".into(), text: "t,y\n1,2".into() },
+        ];
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
+        for event in as_replayed(crate::attach::prompt_blocks("why do these bunch up?", &sent, &[])) {
+            s.apply(event);
+        }
+        let [Entry::User { text, attachments, .. }] = s.entries.as_slice() else { panic!("one user entry") };
+        assert_eq!(text.as_ref(), "why do these bunch up?");
+        assert_eq!(attachments, &sent);
     }
 
     #[test]

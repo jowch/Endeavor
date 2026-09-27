@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
-    ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent, ResourceLink, TextContent, TextResourceContents,
+    ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent, TextContent, TextResourceContents,
 };
 
 use crate::annotate::cell_uri;
@@ -47,6 +47,9 @@ pub enum Attachment {
     Selection { notebook: String, cell: Cell, text: String },
     /// A cell's error, from Fix with Claude or Explain.
     Error { notebook: String, cell: Cell, text: String },
+    /// A box drawn with Point: a PNG of that part of the notebook, and the
+    /// cells it overlaps.
+    Region { notebook: String, cells: Vec<Cell>, png: Arc<Vec<u8>> },
     Image { name: String, mime: &'static str, bytes: Arc<Vec<u8>> },
     Text { name: String, text: String },
 }
@@ -64,6 +67,7 @@ pub enum Icon {
     Cells,
     Selection,
     Error,
+    Region,
     Image,
     File,
 }
@@ -91,6 +95,7 @@ impl Attachment {
             Attachment::Cells { cells, .. } => label(&format!("{} cells", cells.len()), ""),
             Attachment::Selection { text, .. } => label(&format!("selection · {}", lines(text.lines().count().max(1))), ""),
             Attachment::Error { cell, .. } => label("error in ", &cell.name()),
+            Attachment::Region { .. } => label("region", ""),
             Attachment::Image { name, .. } | Attachment::Text { name, .. } => label("", name),
         }
     }
@@ -101,6 +106,7 @@ impl Attachment {
             Attachment::Cells { .. } => Icon::Cells,
             Attachment::Selection { .. } => Icon::Selection,
             Attachment::Error { .. } => Icon::Error,
+            Attachment::Region { .. } => Icon::Region,
             Attachment::Image { .. } => Icon::Image,
             Attachment::Text { .. } => Icon::File,
         }
@@ -109,7 +115,7 @@ impl Attachment {
     /// The notebook cells it points at, for "show in notebook".
     pub fn cells(&self) -> Vec<&Cell> {
         match self {
-            Attachment::Cells { cells, .. } => cells.iter().collect(),
+            Attachment::Cells { cells, .. } | Attachment::Region { cells, .. } => cells.iter().collect(),
             Attachment::Selection { cell, .. } | Attachment::Error { cell, .. } => vec![cell],
             _ => Vec::new(),
         }
@@ -119,43 +125,33 @@ impl Attachment {
 /// The blocks a message sends: what the attachments are (notebook context the
 /// app explains, marked "[Endeavor]", then images and text files), then the
 /// user's own words. Mentioned files stay in the words as `@path`.
+///
+/// Each notebook attachment is one text block: a sentence for the agent, then
+/// an `<attached>` block with the cells as sent. The session's history keeps
+/// the blocks as sent, so a reopened session parses them back into chips
+/// (`replayed_notebook`); a region's image is the image block after it.
 pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String]) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     let note = |s: String| ContentBlock::Text(TextContent::new(s));
-    let link = |notebook: &str, cell: &Cell| ContentBlock::ResourceLink(ResourceLink::new(cell.name(), cell_uri(notebook, &cell.id)));
     if attachments.iter().any(|a| !a.cells().is_empty()) {
         blocks.push(note(
-            "[Endeavor] The user attached notebook cells to this message. Each \
-             pluto://notebook/{notebook_id}/cell/{cell_id} link names a cell; read its current \
-             code and output with the pluto MCP tools (the links are not fetchable URLs)."
+            "[Endeavor] The user attached notebook cells to this message. Each <cell> below shows a cell's \
+             code as it was when attached; its uri, pluto://notebook/{notebook_id}/cell/{cell_id}, names \
+             the cell (it is not a fetchable URL). Read its current code and output with the pluto MCP tools."
                 .into(),
         ));
     }
     for attachment in attachments {
+        if let Some(block) = notebook_block(attachment) {
+            blocks.push(note(block));
+        }
         match attachment {
-            Attachment::Cells { notebook, cells, ask } => {
-                blocks.extend(cells.iter().map(|c| link(notebook, c)));
-                let about = match (ask, cells.len()) {
-                    (CellAsk::About, 1) => "The message is about the cell above.".to_string(),
-                    (CellAsk::About, n) => format!("The message is about the {n} cells above."),
-                    (CellAsk::Fill, _) => "The cell above is empty: write its code as the message asks.".into(),
-                    (CellAsk::Before, _) => "Add a new cell right before the cell above, as the message asks.".into(),
-                    (CellAsk::After, _) => "Add a new cell right after the cell above, as the message asks.".into(),
-                };
-                blocks.push(note(format!("[Endeavor] {about}")));
-            }
-            Attachment::Selection { notebook, cell, text } => {
-                blocks.push(link(notebook, cell));
-                blocks.push(note(format!("[Endeavor] The message is about this text selected in the cell above:\n{text}")));
-            }
-            Attachment::Error { notebook, cell, text } => {
-                blocks.push(link(notebook, cell));
-                blocks.push(note(format!("[Endeavor] The cell above failed with this error:\n{text}")));
-            }
+            Attachment::Region { png, .. } => blocks.push(ContentBlock::Image(ImageContent::new(base64(png), "image/png"))),
             Attachment::Image { mime, bytes, .. } => blocks.push(ContentBlock::Image(ImageContent::new(base64(bytes), *mime))),
             Attachment::Text { name, text } => blocks.push(ContentBlock::Resource(EmbeddedResource::new(
                 EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(text.clone(), format!("attachment:{name}"))),
             ))),
+            Attachment::Cells { .. } | Attachment::Selection { .. } | Attachment::Error { .. } => {}
         }
     }
     if !mentioned.is_empty() {
@@ -169,6 +165,102 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
         blocks.push(note(text.to_string()));
     }
     blocks
+}
+
+/// A notebook attachment's text block, e.g.
+///
+/// ```text
+/// [Endeavor] The cell below failed with this error.
+/// <attached kind="error">
+/// <cell uri="pluto://notebook/…/cell/…">
+/// fit = curve_fit(model, t, y, p0)
+/// </cell>
+/// <error>
+/// BoundsError
+/// </error>
+/// </attached>
+/// ```
+fn notebook_block(attachment: &Attachment) -> Option<String> {
+    let region = |n: usize| {
+        let overlaps = match n {
+            0 => "It overlaps no cells.".to_string(),
+            1 => "It overlaps the cell below.".into(),
+            n => format!("It overlaps the {n} cells below."),
+        };
+        format!("The user drew a box over part of the notebook; the image after this shows what was in it. {overlaps}")
+    };
+    let (kind, sentence, notebook, cells, extra) = match attachment {
+        Attachment::Cells { notebook, cells, ask } => {
+            let (kind, sentence) = match (ask, cells.len()) {
+                (CellAsk::About, 1) => ("cells", "The message is about the cell below.".to_string()),
+                (CellAsk::About, n) => ("cells", format!("The message is about the {n} cells below.")),
+                (CellAsk::Fill, _) => ("fill", "The cell below is empty: write its code as the message asks.".into()),
+                (CellAsk::Before, _) => ("before", "Add a new cell right before the cell below, as the message asks.".into()),
+                (CellAsk::After, _) => ("after", "Add a new cell right after the cell below, as the message asks.".into()),
+            };
+            (kind, sentence, notebook, cells.as_slice(), None)
+        }
+        Attachment::Region { notebook, cells, .. } => ("region", region(cells.len()), notebook, cells.as_slice(), None),
+        Attachment::Selection { notebook, cell, text } => {
+            ("selection", "The message is about the text selected in the cell below.".into(), notebook, std::slice::from_ref(cell), Some(text))
+        }
+        Attachment::Error { notebook, cell, text } => ("error", "The cell below failed with this error.".into(), notebook, std::slice::from_ref(cell), Some(text)),
+        Attachment::Image { .. } | Attachment::Text { .. } => return None,
+    };
+    let mut out = format!("[Endeavor] {sentence}\n<attached kind=\"{kind}\" notebook=\"{notebook}\">\n");
+    for cell in cells {
+        out += &format!("<cell uri=\"{}\">\n{}\n</cell>\n", cell_uri(notebook, &cell.id), cell.code);
+    }
+    if let Some(text) = extra {
+        out += &format!("<{kind}>\n{text}\n</{kind}>\n");
+    }
+    out += "</attached>";
+    Some(out)
+}
+
+/// A notebook attachment back from its text block (see `notebook_block`). A
+/// region comes back without its image, which is the next block.
+pub fn replayed_notebook(text: &str) -> Option<Attachment> {
+    let rest = text.trim().strip_prefix("[Endeavor] ")?;
+    let (_, rest) = rest.split_once("\n<attached kind=\"")?;
+    let (kind, rest) = rest.split_once("\" notebook=\"")?;
+    let (notebook, mut rest) = rest.split_once("\">\n")?;
+    let notebook = notebook.to_string();
+    let mut cells = Vec::new();
+    while let Some(after) = rest.strip_prefix("<cell uri=\"") {
+        let (uri, after) = after.split_once("\">\n")?;
+        let (code, after) = element_body(after, "cell")?;
+        let id = uri.strip_prefix(&format!("pluto://notebook/{notebook}/cell/"))?;
+        cells.push(Cell { id: id.into(), code: code.into() });
+        rest = after;
+    }
+    let mut extra = None;
+    if let Some(after) = rest.strip_prefix(&format!("<{kind}>\n")) {
+        let (body, after) = element_body(after, kind)?;
+        extra = Some(body.to_string());
+        rest = after;
+    }
+    if rest != "</attached>" {
+        return None;
+    }
+    let only = |cells: Vec<Cell>| -> Option<Cell> { if cells.len() == 1 { cells.into_iter().next() } else { None } };
+    Some(match kind {
+        "cells" => Attachment::Cells { notebook, cells, ask: CellAsk::About },
+        "fill" => Attachment::Cells { notebook, cells, ask: CellAsk::Fill },
+        "before" => Attachment::Cells { notebook, cells, ask: CellAsk::Before },
+        "after" => Attachment::Cells { notebook, cells, ask: CellAsk::After },
+        "selection" => Attachment::Selection { notebook, cell: only(cells)?, text: extra? },
+        "error" => Attachment::Error { notebook, cell: only(cells)?, text: extra? },
+        "region" => Attachment::Region { notebook, cells, png: Arc::new(Vec::new()) },
+        _ => return None,
+    })
+}
+
+/// `body\n</tag>\n…` → (body, …).
+fn element_body<'a>(text: &'a str, tag: &str) -> Option<(&'a str, &'a str)> {
+    let end = format!("\n</{tag}>\n");
+    let at = text.find(&end)?;
+    Some((&text[..at], &text[at + end.len()..]))
 }
 
 /// Text the app adds to a message, which a replayed session doesn't show as
@@ -466,8 +558,11 @@ mod tests {
         assert_eq!(
             all[1..],
             [
-                format!("link fit pluto://notebook/{NB}/cell/c1"),
-                "[Endeavor] The cell above failed with this error:\nBoundsError".into(),
+                format!(
+                    "[Endeavor] The cell below failed with this error.\n<attached kind=\"error\" notebook=\"{NB}\">\n\
+                     <cell uri=\"pluto://notebook/{NB}/cell/c1\">\nfit = curve_fit(model, t, y, p0)\n</cell>\n\
+                     <error>\nBoundsError\n</error>\n</attached>"
+                ),
                 "image image/png aGkh".into(),
                 "resource attachment:notes.txt t,y\n1,2".into(),
                 "[Endeavor] Paths after @ in the message are files and folders in this session's folder, relative to it: \
@@ -478,7 +573,31 @@ mod tests {
         );
         assert_eq!(self::texts(&prompt_blocks("hi", &[], &[])), ["hi"], "a plain message is just its words");
         let fill = Attachment::Cells { notebook: NB.into(), cells: vec![cell("c2", "")], ask: CellAsk::Fill };
-        assert_eq!(self::texts(&prompt_blocks("plot it", &[fill], &[]))[2], "[Endeavor] The cell above is empty: write its code as the message asks.");
+        assert_eq!(
+            self::texts(&prompt_blocks("plot it", &[fill], &[]))[1],
+            format!(
+                "[Endeavor] The cell below is empty: write its code as the message asks.\n<attached kind=\"fill\" notebook=\"{NB}\">\n\
+                 <cell uri=\"pluto://notebook/{NB}/cell/c2\">\n\n</cell>\n</attached>"
+            )
+        );
+    }
+
+    #[test]
+    fn notebook_blocks_parse_back_as_sent() {
+        let attachments = [
+            Attachment::Cells { notebook: NB.into(), cells: vec![cell("c1", "rates = 1"), cell("c2", "")], ask: CellAsk::About },
+            Attachment::Cells { notebook: NB.into(), cells: vec![cell("c3", "")], ask: CellAsk::Before },
+            Attachment::Selection { notebook: NB.into(), cell: cell("c1", "s = sum(xs)\n"), text: "sum(xs)".into() },
+            // Code that looks like the block's own tags stays code.
+            Attachment::Error { notebook: NB.into(), cell: cell("c4", "html\"<cell uri=\\\"x\\\">\" # </error>"), text: "LoadError:\n  in expression".into() },
+            Attachment::Region { notebook: NB.into(), cells: Vec::new(), png: Arc::new(Vec::new()) },
+        ];
+        for attachment in attachments {
+            let block = notebook_block(&attachment).unwrap();
+            assert_eq!(replayed_notebook(&block), Some(attachment), "{block}");
+        }
+        assert_eq!(replayed_notebook("[Endeavor] The user is viewing Pluto notebook x."), None);
+        assert_eq!(replayed_notebook("<attached kind=\"cells\">"), None, "only the app's own blocks");
     }
 
     #[test]

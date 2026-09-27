@@ -99,6 +99,7 @@ fn icon_glyph(icon: Icon) -> Glyph {
         Icon::Cells => Glyph::Cells,
         Icon::Selection => Glyph::Lines,
         Icon::Error => Glyph::Warning,
+        Icon::Region => Glyph::Region,
         Icon::Image => Glyph::Picture,
         Icon::File => Glyph::File,
     }
@@ -174,15 +175,14 @@ fn preview_body(attachment: &Attachment) -> Div {
         Attachment::Cells { cells, .. } => div().flex().flex_col().gap(px(6.)).children(cells.iter().take(3).map(|c| text_panel(&c.code, 6, theme::text_secondary()))),
         Attachment::Selection { text, .. } => text_panel(text, 8, theme::text_secondary()),
         Attachment::Error { text, .. } => text_panel(text, 8, theme::danger()),
-        Attachment::Image { mime, bytes, .. } => div().child(
-            img(Arc::new(Image::from_bytes(image_format(mime), bytes.to_vec())))
-                .max_w(px(320.))
-                .max_h(px(200.))
-                .rounded(px(4.))
-                .object_fit(ObjectFit::Contain),
-        ),
+        Attachment::Region { png, .. } => thumbnail("image/png", png),
+        Attachment::Image { mime, bytes, .. } => thumbnail(mime, bytes),
         Attachment::Text { text, .. } => text_panel(text, 8, theme::text_secondary()),
     }
+}
+
+fn thumbnail(mime: &str, bytes: &[u8]) -> Div {
+    div().child(img(Arc::new(Image::from_bytes(image_format(mime), bytes.to_vec()))).max_w(px(320.)).max_h(px(200.)).rounded(px(4.)).object_fit(ObjectFit::Contain))
 }
 
 /// The preview's heading: the chip's name, and what it is.
@@ -192,6 +192,10 @@ fn preview_heading(attachment: &Attachment) -> String {
         Attachment::Cells { cells, .. } => format!("{} cells", cells.len()),
         Attachment::Selection { cell, .. } => format!("Selected in {}", cell.name()),
         Attachment::Error { cell, .. } => format!("Error in {}", cell.name()),
+        Attachment::Region { cells, .. } => match cells.len() {
+            1 => format!("Region over {}", cells[0].name()),
+            n => format!("Region over {n} cells"),
+        },
         Attachment::Image { name, bytes, .. } => format!("{name} · {}", attach::size_text(bytes.len() as u64)),
         Attachment::Text { name, text } => format!("{name} · {}", attach::size_text(text.len() as u64)),
     }
@@ -529,7 +533,7 @@ impl Workspace {
     pub fn click_sent_chip(&mut self, key: u64, entry: usize, chip: usize, cx: &mut Context<Self>) {
         let Some(Entry::User { attachments, .. }) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.entries.get(entry)) else { return };
         let Some(attachment) = attachments.get(chip) else { return };
-        if let Attachment::Cells { cells, .. } = attachment {
+        if let Attachment::Cells { cells, .. } | Attachment::Region { cells, .. } = attachment {
             let ids = cells.iter().map(|c| c.id.clone()).collect();
             self.chip_popover = None;
             return self.reveal_cells(ids, cx);
