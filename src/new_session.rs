@@ -737,14 +737,26 @@ impl Workspace {
                 .iter()
                 .enumerate()
                 .map(|(i, entry)| {
-                    let row = menu_row(("browse-row", i), false, false)
-                        .child(glyph(if entry.dir { Glyph::Folder } else { Glyph::File }, theme::text_muted()))
-                        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().when(!entry.dir, |d| d.font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_faint())).child(entry.name.clone()));
+                    let name = div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis();
                     if entry.dir {
                         let into = path.join(&entry.name);
-                        row.on_click(cx.listener(move |this, _, _, cx| this.browse_to(into.clone(), cx))).into_any_element()
+                        menu_row(("browse-row", i), false, false)
+                            .child(glyph(Glyph::Folder, theme::text_muted()))
+                            .child(name.child(entry.name.clone()))
+                            .on_click(cx.listener(move |this, _, _, cx| this.browse_to(into.clone(), cx)))
+                            .into_any_element()
                     } else {
-                        row.cursor_default().hover(|s| s).into_any_element()
+                        // Notebooks show where they are; only folders open.
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .h(px(28.))
+                            .px(px(8.))
+                            .child(div().w(px(10.)))
+                            .child(glyph(Glyph::File, theme::text_faint()))
+                            .child(name.font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_faint()).child(entry.name.clone()))
+                            .into_any_element()
                     }
                 })
                 .collect(),

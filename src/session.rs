@@ -97,6 +97,9 @@ pub struct Session {
     pub server: Option<String>,
     /// Its agent session opens once its host's runtime is ready (it needs the bridge).
     pub agent_waiting: bool,
+    /// What the app tells Claude about how the session started (its server,
+    /// its notebook), sent ahead of the first message whenever that comes.
+    pub start_context: Option<ContentBlock>,
     pub title: String,
     /// The user named it; the agent's titles no longer replace it.
     pub named: bool,
@@ -197,6 +200,7 @@ impl Session {
             place,
             server,
             agent_waiting: true,
+            start_context: None,
             title: "New session".into(),
             named: false,
             entries: Vec::new(),
@@ -404,10 +408,13 @@ impl Session {
     }
 
     /// Send or queue a message. Before the session exists everything queues.
-    pub fn submit(&mut self, message: Queued, now: bool) -> Vec<Effect> {
+    pub fn submit(&mut self, mut message: Queued, now: bool) -> Vec<Effect> {
         if self.failed.is_some() {
             self.note("This session isn't open, so nothing was sent.");
             return Vec::new();
+        }
+        if let Some(context) = self.start_context.take() {
+            message.blocks.insert(0, context);
         }
         if self.title == "New session" {
             self.title = short_title(message.label.lines().next().unwrap_or_default());

@@ -725,7 +725,7 @@ impl Workspace {
                  means this one; list_notebooks gives its id."
             ));
         }
-        let context = (!context.is_empty()).then(|| ContentBlock::Text(TextContent::new(context.join("\n\n"))));
+        session.start_context = (!context.is_empty()).then(|| ContentBlock::Text(TextContent::new(context.join("\n\n"))));
         self.sessions.push(session);
         if let Some(path) = existing {
             self.bind_notebook(key, path, cx);
@@ -734,7 +734,7 @@ impl Workspace {
         self.draft.notebook = NotebookChoice::New;
         self.draft.preview = None;
         self.activate(key, cx);
-        self.send(key, context, false, window, cx);
+        self.send(key, None, false, window, cx);
     }
 
     /// Open the agent side of a session (new, or its history reloaded) once its
