@@ -224,6 +224,8 @@ pub fn connect(
                     let _ = progress.unbounded_send(Progress { log: true, ..Progress::new(Step::Packages, text) });
                 }
             }
+            // This Mac's julia was checked before the helper started.
+            Ok(ToApp::FoundJulia { .. }) => {}
             Ok(ToApp::Hello { token, pluto_secret, reattached, node, pid, .. }) => {
                 let how = if reattached { "Reattached to" } else { "Started" };
                 eprintln!("{how} Julia on {node} (pid {pid}); its log is {}", state_dir.join("runtime.log").display());
