@@ -23,6 +23,9 @@ use crate::{Workspace, theme};
 pub struct ServerDialog {
     /// The server being edited; None adds one.
     editing: Option<String>,
+    /// The id a new server gets. Fixed for the dialog's life: Test connection
+    /// makes a state folder on the host named after it.
+    new_id: String,
     name: Entity<InputState>,
     host: Entity<InputState>,
     julia: Entity<InputState>,
@@ -114,6 +117,7 @@ impl Workspace {
         });
         self.server_dialog = Some(ServerDialog {
             editing,
+            new_id: Server::new_id(),
             name,
             host,
             julia,
@@ -151,7 +155,7 @@ impl Workspace {
             scratch: c.scratch.clone(),
         });
         Ok(Server {
-            id: dialog.editing.clone().unwrap_or_else(Server::new_id),
+            id: dialog.editing.clone().unwrap_or_else(|| dialog.new_id.clone()),
             name: if name.is_empty() { ssh_host.clone() } else { name },
             ssh_host,
             port,

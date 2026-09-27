@@ -2162,7 +2162,7 @@ impl Workspace {
             .child(self.render_hosts(cx))
             .child(heading("Stop idle notebooks after"))
             .child(
-                div().flex().gap_4().children(IdleStop::ALL.map(|(value, label)| {
+                div().flex().flex_wrap().gap_x_4().gap_y_2().children(IdleStop::ALL.map(|(value, label)| {
                     Radio::new(label).text_size(theme::size_body()).checked(s.idle_stop == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
                         this.update_settings(cx, |s| s.idle_stop = value);
                         let hosts: Vec<HostId> = this.connections.keys().cloned().collect();
