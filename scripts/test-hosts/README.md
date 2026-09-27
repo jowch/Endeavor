@@ -19,6 +19,8 @@ Development only; nothing here ships.
   4. `scripts/build-helpers.sh --via endeavor-linux` builds the Linux helper
      inside it. Rebuild after changing `crates/`, or the app installs a stale
      helper on the server.
+- **The app itself on Linux:** the same machine can build and run the app
+  under Xvfb; the packages and steps are in [docs/linux.md](../../docs/linux.md).
 - **This Mac as a server:** turn on Remote Login and add your public key to
   `~/.ssh/authorized_keys`, so `ssh localhost` works without a prompt.
 
