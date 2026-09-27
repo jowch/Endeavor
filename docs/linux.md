@@ -178,13 +178,7 @@ changes.
    CPU busy even when the app is idle. Better: add GLib's main-context file
    descriptors to GPUI's calloop loop, or pump only while the web view is
    visible.
-8. **Failing `wire` test on Linux (S).**
-   `relay::tests::a_channel_that_ends_closes_its_streams` fails every time.
-   When the channel ends, a client read returns `ECONNRESET` instead of EOF.
-   Either relax the test, or check whether the relay should shut down its
-   streams cleanly. The helper already runs on Linux servers, so a remote
-   client may also see the reset.
-9. **Untested on Linux (S each):**
+8. **Untested on Linux (S each):**
    - Finishing Claude sign-in.
    - The Browse… folder picker. GPUI uses xdg-desktop-portal, which must be
      installed and running.
