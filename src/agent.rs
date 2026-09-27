@@ -568,7 +568,7 @@ mod tests {
             PermissionOptionKind, RequestPermissionOutcome, SelectedPermissionOutcome, TextContent, ToolCallStatus,
         };
 
-        let runtime = crate::runtime::start(None, unbounded().0, unbounded().0).expect("runtime");
+        let runtime = crate::runtime::connect(crate::runtime::Listener::start().unwrap(), false, unbounded().0, unbounded().0).expect("runtime");
         let (tx, rx) = unbounded();
         let mut events = start(runtime.mcp_url.clone(), rx);
         tx.unbounded_send(Command::NewSession { key: 1, cwd: std::env::temp_dir() }).unwrap();
@@ -608,7 +608,7 @@ mod tests {
     #[ignore]
     fn live_modes() {
         use super::*;
-        let runtime = crate::runtime::start(None, unbounded().0, unbounded().0).expect("runtime");
+        let runtime = crate::runtime::connect(crate::runtime::Listener::start().unwrap(), false, unbounded().0, unbounded().0).expect("runtime");
         let (tx, rx) = unbounded();
         let mut events = start(runtime.mcp_url.clone(), rx);
         tx.unbounded_send(Command::NewSession { key: 1, cwd: std::env::temp_dir() }).unwrap();

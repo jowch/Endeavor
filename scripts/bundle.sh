@@ -1,5 +1,6 @@
 #!/bin/sh
-# Build target/release/Endeavor.app: the release binary plus the app's own files
+# Build target/release/Endeavor.app: the release binaries (the app and its
+# runtime helper, endeavor-remote) plus the app's own files
 # (runtime/, plugin/, adapter/) in Contents/Resources. Julia, Node and the ACP
 # adapter are not bundled; the app installs them on first launch.
 # ponytail: ad-hoc signed; Developer ID signing + notarization come with sharing.
@@ -11,7 +12,7 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app=target/release/Endeavor.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/endeavor "$app/Contents/MacOS/endeavor"
+cp target/release/endeavor target/release/endeavor-remote "$app/Contents/MacOS/"
 cp -R runtime plugin adapter "$app/Contents/Resources/"
 
 cat > "$app/Contents/Info.plist" <<EOF

@@ -30,6 +30,9 @@ pub struct Settings {
     pub zoom: f64,
     /// Open notebooks with no turns, edits or running cells for this long stop.
     pub idle_stop: IdleStop,
+    /// Julia and its open notebooks keep running after Endeavor quits; the next
+    /// launch reconnects to them.
+    pub keep_running: bool,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]

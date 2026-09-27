@@ -437,10 +437,12 @@ pub struct Workspace {
     status: SharedString,
     annotating: bool,
     runtime: Option<Runtime>,
+    /// The loopback ports the webview and the agent use, relayed to the runtime of the moment.
+    listener: Arc<runtime::Listener>,
     /// Booting or restarting Julia.
     starting: bool,
-    /// Ports of the runtime that died, reused on restart so the agent reconnects.
-    last_ports: Option<[u16; 2]>,
+    /// Another connection took the runtime over; Reconnect takes it back.
+    replaced: bool,
     /// Open notebooks (id, path) as last seen, to reopen after a restart.
     last_notebooks: Vec<(String, String)>,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
@@ -453,7 +455,7 @@ pub struct Workspace {
     placeholder: &'static str,
     /// Bumped when Julia boots or dies, so an old runtime's event reader stops.
     runtime_generation: Arc<AtomicU64>,
-    died_tx: UnboundedSender<String>,
+    notices_tx: UnboundedSender<runtime::Notice>,
 }
 
 impl Workspace {
@@ -530,13 +532,21 @@ impl Workspace {
         })
         .detach();
 
-        let (died_tx, mut died_rx) = futures::channel::mpsc::unbounded::<String>();
+        let (notices_tx, mut notices) = futures::channel::mpsc::unbounded::<runtime::Notice>();
         cx.spawn(async move |this, cx| {
-            while let Some(reason) = died_rx.next().await {
-                if this.update(cx, |this, cx| this.on_runtime_died(reason, cx)).is_err() {
+            while let Some(notice) = notices.next().await {
+                if this.update(cx, |this, cx| this.on_runtime_gone(notice, cx)).is_err() {
                     break;
                 }
             }
+        })
+        .detach();
+        // The helper finishes the job after the app is gone.
+        cx.on_app_quit(|this, _| {
+            if let Some(runtime) = &this.runtime {
+                runtime.quit(this.settings.keep_running);
+            }
+            async {}
         })
         .detach();
 
@@ -558,7 +568,9 @@ impl Workspace {
             input,
             sessions: Vec::new(),
             active: None,
-            next_key: 1,
+            // Keys name sessions to the runtime, which can outlive a launch (Keep notebooks
+            // running): starting from the clock keeps them from matching an earlier launch's.
+            next_key: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_millis() as u64),
             draft,
             recent,
             past: HashMap::new(),
@@ -584,19 +596,20 @@ impl Workspace {
             status: "".into(),
             annotating: false,
             runtime: None,
+            listener: runtime::Listener::start().expect("loopback ports"),
             starting: false,
-            last_ports: None,
+            replaced: false,
             last_notebooks: Vec::new(),
             notebooks: serde_json::Value::Null,
             cells: serde_json::Value::Null,
             idle_stopped: HashSet::new(),
             placeholder: "Type / for commands",
             runtime_generation: Arc::new(AtomicU64::new(0)),
-            died_tx,
+            notices_tx,
         };
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
         // Julia boots while the user picks a folder on the new-session screen.
-        this.boot(None, cx);
+        this.boot(cx);
         this.scan_notebooks(cx);
         this
     }
@@ -1033,7 +1046,7 @@ impl Workspace {
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         self.active = Some(key);
         self.settings_open = false;
-        self.follow_folder();
+        self.follow_folder(cx);
         if let Some(notebook) = self.active_session().and_then(|s| s.notebook.clone()) {
             self.load_notebook(&notebook, cx);
         }
@@ -1042,11 +1055,11 @@ impl Workspace {
 
     /// Pluto's new notebooks start unsaved; point its "Save notebook" suggestion
     /// at the active session's folder (the page picks it up on its next load).
-    fn follow_folder(&mut self) {
+    fn follow_folder(&mut self, cx: &mut Context<Self>) {
         let Some(cwd) = self.active_session().map(|s| s.cwd.clone()) else { return };
-        if let Some(runtime) = &mut self.runtime {
-            runtime.suggest_folder(&cwd);
-        }
+        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        // ponytail: a failed send leaves Pluto suggesting the previous folder.
+        cx.background_executor().spawn(async move { pluto::set_folder(&mcp_url, &cwd) }).detach();
     }
 
     fn apply_effects(&mut self, key: u64, effects: Vec<Effect>, cx: &mut Context<Self>) {
@@ -1488,14 +1501,29 @@ impl Workspace {
     // Julia runtime
     // -----------------------------------------------------------------------
 
-    /// Start Julia, or restart it on the previous ports.
-    fn boot(&mut self, ports: Option<[u16; 2]>, cx: &mut Context<Self>) {
+    /// Connect to Julia, starting it if it isn't running. A running one is
+    /// stopped first (Restart Julia).
+    fn boot(&mut self, cx: &mut Context<Self>) {
+        let old = self.runtime.take();
+        if old.is_some() {
+            self.forget_runtime();
+        }
         self.starting = true;
-        self.status = if ports.is_some() { "Restarting Julia…" } else { "Starting Julia…" }.into();
-        let died = self.died_tx.clone();
+        self.status = match (&old, self.replaced) {
+            (None, true) => "Reconnecting to Julia…",
+            (None, false) if self.agent_rx.is_some() => "Starting Julia…",
+            _ => "Restarting Julia…",
+        }
+        .into();
+        let (listener, keep_running, notices) = (self.listener.clone(), self.settings.keep_running, self.notices_tx.clone());
         // First run downloads Julia, then instantiates + precompiles (~1 min); later launches are seconds.
         let (progress_tx, mut progress) = futures::channel::mpsc::unbounded::<Progress>();
-        let boot = cx.background_executor().spawn(async move { runtime::start(ports, died, progress_tx) });
+        let boot = cx.background_executor().spawn(async move {
+            if let Some(old) = old {
+                old.stop();
+            }
+            runtime::connect(listener, keep_running, notices, progress_tx)
+        });
         cx.spawn(async move |this, cx| {
             while let Some(p) = progress.next().await {
                 // Julia's log keeps coming after it's up; only show it while starting.
@@ -1601,7 +1629,7 @@ impl Workspace {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
         match self.runtime.as_ref().map(|r| r.mcp_url.clone()) {
-            None if !self.starting => self.boot(None, cx),
+            None if !self.starting => self.boot(cx),
             None => {}
             Some(mcp_url) => {
                 // The failed agent thread dropped its command channel; start with a new one.
@@ -1638,9 +1666,10 @@ impl Workspace {
             }
         };
         self.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
-        let mcp_url = runtime.mcp_url.clone();
+        let (mcp_url, reattached) = (runtime.mcp_url.clone(), runtime.reattached);
         self.runtime = Some(runtime);
-        self.follow_folder();
+        self.replaced = false;
+        self.follow_folder(cx);
         self.send_idle_limit(cx);
         // A new runtime knows no session's notebook.
         let bound: Vec<(u64, String)> = self.sessions.iter().filter_map(|s| Some((s.key, s.notebook_path.clone()?))).collect();
@@ -1651,7 +1680,7 @@ impl Workspace {
             self.on_progress(Progress::new(Step::Agent, "Pluto ready · starting Claude…"), cx);
             self.start_agent(mcp_url.clone(), commands, cx);
         } else {
-            self.status = "Julia restarted.".into();
+            self.status = if reattached { "Reconnected to Julia." } else { "Julia restarted." }.into();
             // Captures the notebooks to reopen before the new list starts arriving.
             self.reopen_notebooks(cx);
             // The new runtime starts with every session on "ask".
@@ -1664,14 +1693,27 @@ impl Workspace {
         cx.notify();
     }
 
-    fn on_runtime_died(&mut self, reason: String, cx: &mut Context<Self>) {
-        self.last_ports = self.runtime.take().map(|r| r.ports);
-        // Stop following the dead runtime; `last_notebooks` stays for the reopen.
+    fn on_runtime_gone(&mut self, notice: runtime::Notice, cx: &mut Context<Self>) {
+        self.runtime = None;
+        self.forget_runtime();
+        self.replaced = matches!(notice, runtime::Notice::Replaced);
+        self.status = match notice {
+            runtime::Notice::Died(reason) | runtime::Notice::Lost(reason) => {
+                format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts.")
+            }
+            runtime::Notice::Replaced => "⚠ Another connection took over this Mac's Julia, so Endeavor let go of it. \
+                 Notebook tools are unavailable until you reconnect."
+                .into(),
+        }
+        .into();
+        cx.notify();
+    }
+
+    /// Stop following the runtime that's going; `last_notebooks` stays for the reopen.
+    fn forget_runtime(&mut self) {
         self.runtime_generation.fetch_add(1, Ordering::SeqCst);
         self.notebooks = serde_json::Value::Null;
         self.cells = serde_json::Value::Null;
-        self.status = format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts.").into();
-        cx.notify();
     }
 
     /// Follow the runtime's notebook list (pushed on every change) for the
@@ -1756,18 +1798,24 @@ impl Workspace {
         self.notebooks = list;
     }
 
-    /// Reopen the notebooks that were open when Julia died, and point each session
-    /// (and the pane) at the reopened copy. Pluto saves on every change, so the
-    /// files are current.
+    /// Reopen the notebooks that were open in the last runtime (unless this one
+    /// has them open already, as after a reconnect), and point each session (and
+    /// the pane) at the reopened copy. Pluto saves on every change, so the files
+    /// are current.
     fn reopen_notebooks(&mut self, cx: &mut Context<Self>) {
         let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
         let before = self.last_notebooks.clone();
         let paths: Vec<String> = before.iter().map(|(_, p)| p.clone()).collect();
         let reopen = cx.background_executor().spawn(async move {
+            let listed = pluto::call_tool(&mcp_url, "list_notebooks", serde_json::json!({})).ok();
+            let open = |path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
             paths
                 .into_iter()
                 .filter_map(|path| {
-                    let result = pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path })).ok()?;
+                    let result = match open(&path) {
+                        Some(nb) => nb,
+                        None => pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path })).ok()?,
+                    };
                     Some((result["notebook_id"].as_str()?.to_owned(), path))
                 })
                 .collect::<Vec<_>>()
@@ -1785,7 +1833,7 @@ impl Workspace {
                 if let Some(id) = this.active_session().and_then(|s| s.notebook.clone()) {
                     this.load_notebook(&id, cx);
                 }
-                if !reopened.is_empty() {
+                if !reopened.is_empty() && !this.runtime.as_ref().is_some_and(|r| r.reattached) {
                     this.status = format!("Julia restarted; reopened {} notebook(s) in safe preview.", reopened.len()).into();
                 }
                 this.last_notebooks = reopened;
@@ -2060,8 +2108,8 @@ impl Workspace {
                 d.child(
                     sidebar_row("restart".into(), false)
                         .text_color(theme::accent_text())
-                        .child("↻ Restart Julia")
-                        .on_click(cx.listener(|this, _, _, cx| this.boot(this.last_ports, cx))),
+                        .child(if self.replaced { "↻ Reconnect to Julia" } else { "↻ Restart Julia" })
+                        .on_click(cx.listener(|this, _, _, cx| this.boot(cx))),
                 )
             })
             .child(
@@ -2186,6 +2234,12 @@ impl Workspace {
             .child(note(
                 "A notebook nobody has used for this long (no edits, runs, or Claude working in it) stops, even with Endeavor open. Start brings it back.".into(),
             ))
+            .child(check_row("keep-running", s.keep_running, "Keep notebooks running after Endeavor quits").on_click(
+                cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.keep_running = !s.keep_running)),
+            ))
+            .child(note(
+                "Julia and its open notebooks carry on while Endeavor is closed, and Endeavor reconnects to them when it opens. They still stop when idle for the time above.".into(),
+            ))
             .child(heading("Appearance"))
             .child(
                 div()
@@ -2246,9 +2300,21 @@ impl Workspace {
                     ),
             )
             .children(s.julia.as_ref().map(|p| note(p.display().to_string())))
-            // ponytail: no live switch; restarting Julia under running sessions needs
-            // the old process gone before its ports are reused.
-            .child(note("Takes effect the next time Julia starts (relaunching Endeavor, or Restart Julia).".into()))
+            .child(note("Takes effect the next time Julia starts (Restart Julia).".into()))
+            .when(self.runtime.is_some() && !self.starting, |d| {
+                d.child(
+                    div()
+                        .id("restart-julia")
+                        .self_start()
+                        .px_2()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .bg(theme::bg_raised())
+                        .child("Restart Julia")
+                        .on_click(cx.listener(|this, _, _, cx| this.boot(cx))),
+                )
+            })
+            .child(note("Stops Julia and every open notebook, then starts them again. Notebook files are already saved.".into()))
             .child(heading("Troubleshooting"))
             .child(
                 div()
@@ -2728,7 +2794,6 @@ fn main() {
             },
         )
         .unwrap();
-        // Quitting closes Julia's stdin, which shuts the runtime down.
         cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.activate(true);
     });

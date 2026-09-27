@@ -9,15 +9,16 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-/// The bearer token the runtime's bridge requires: random, one per app launch (it
-/// must survive Julia restarts, since the agent's MCP config carries it).
-pub fn bridge_token() -> &'static str {
-    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    TOKEN.get_or_init(|| {
-        let mut bytes = [0u8; 32];
-        std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).expect("/dev/urandom");
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
-    })
+static TOKEN: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+/// The bearer token the runtime's bridge requires, from the helper's `Hello`. It
+/// stays the same across runtimes, since the agent's MCP config carries it.
+pub fn bridge_token() -> String {
+    TOKEN.read().unwrap().clone()
+}
+
+pub fn set_bridge_token(token: &str) {
+    *TOKEN.write().unwrap() = token.to_owned();
 }
 
 /// `127.0.0.1:PORT` from the bridge URL `http://127.0.0.1:PORT/sse`.
@@ -61,6 +62,11 @@ pub fn set_policy(mcp_url: &str, owner: u64, policy: &str) -> Result<(), String>
 /// then refuses its opening, creating, editing or running any other.
 pub fn set_notebook(mcp_url: &str, owner: u64, path: &str) -> Result<(), String> {
     rpc(mcp_url, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
+}
+
+/// Make `dir` the folder Pluto suggests when saving a new notebook.
+pub fn set_folder(mcp_url: &str, dir: &Path) -> Result<(), String> {
+    rpc(mcp_url, "endeavor/set_folder", json!({ "path": dir })).map(|_| ())
 }
 
 /// Stop open notebooks after `hours` with no activity; 0 never stops them.

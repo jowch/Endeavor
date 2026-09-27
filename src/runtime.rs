@@ -1,38 +1,108 @@
-//! The app-owned Julia process (design doc §11): starts Pluto + EndeavorRuntime (runtime/EndeavorRuntime) via
-//! runtime/boot.jl, explains failures in plain terms, and reports if it dies.
+//! The Julia runtime (Pluto + EndeavorRuntime, runtime/boot.jl), reached through
+//! the endeavor-remote helper (docs/remote-sessions.md): the app runs it as a
+//! child, and the helper attaches to the runtime in the state folder or starts
+//! one. The webview and the agent reach the runtime through the app's local
+//! listener, whose two loopback ports stay the same for the whole launch.
 
-use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::ErrorKind;
 use std::net::TcpListener;
-use std::process::{ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use futures::channel::mpsc::UnboundedSender;
+use wire::relay::Mux;
+use wire::{Frame, Target, ToApp, ToHelper};
 
 use crate::splash::{Progress, Step};
 
 /// Julia needed by runtime/Project.toml's `[sources]` section.
 const MIN_JULIA: (u32, u32) = (1, 11);
-const STDERR_TAIL: usize = 40;
 
+/// The app's loopback ports for Pluto and the bridge. Each connection is
+/// relayed to the runtime of the moment; with none, it's closed.
+pub struct Listener {
+    ports: [u16; 2],
+    current: Mutex<Option<Arc<Mux>>>,
+}
+
+impl Listener {
+    pub fn start() -> Result<Arc<Listener>, String> {
+        let pluto = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+        let bridge = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+        let ports = [&pluto, &bridge].map(|l| l.local_addr().unwrap().port());
+        let listener = Arc::new(Listener { ports, current: Mutex::new(None) });
+        for (socket, target) in [(pluto, Target::Pluto), (bridge, Target::Bridge)] {
+            let listener = listener.clone();
+            std::thread::spawn(move || {
+                for connection in socket.incoming().map_while(Result::ok) {
+                    let _ = connection.set_nodelay(true);
+                    let mux = listener.current.lock().unwrap().clone();
+                    if let Some(mux) = mux {
+                        let _ = mux.open(target, connection);
+                    }
+                }
+            });
+        }
+        Ok(listener)
+    }
+
+    /// The bridge URL the agent's MCP config carries; the same for the whole launch.
+    pub fn mcp_url(&self) -> String {
+        format!("http://127.0.0.1:{}/sse", self.ports[1])
+    }
+
+    fn pluto_url(&self, secret: &str) -> String {
+        format!("http://127.0.0.1:{}/?secret={secret}", self.ports[0])
+    }
+
+    fn forget(&self, mux: &Arc<Mux>) {
+        let mut current = self.current.lock().unwrap();
+        if current.as_ref().is_some_and(|m| Arc::ptr_eq(m, mux)) {
+            *current = None;
+        }
+    }
+}
+
+/// A connected runtime.
 pub struct Runtime {
-    // boot.jl exits when its stdin closes, so this handle is Julia's lifetime.
-    stdin: ChildStdin,
     pub pluto_url: String,
     pub mcp_url: String,
-    /// Reused on restart so the agent's MCP connection to the bridge reconnects.
-    pub ports: [u16; 2],
+    /// It was already running (kept after the last quit); this launch didn't start it.
+    pub reattached: bool,
+    mux: Arc<Mux>,
+    /// Signalled once the helper process has exited.
+    helper_exited: mpsc::Receiver<()>,
+    /// The app is stopping or leaving this runtime, so its end is no news.
+    leaving: Arc<AtomicBool>,
+}
+
+/// Why a connected runtime went away.
+pub enum Notice {
+    Died(String),
+    /// Another client took the runtime over.
+    Replaced,
+    /// The helper failed or vanished.
+    Lost(String),
 }
 
 impl Runtime {
-    /// Make `dir` the folder Pluto suggests when saving a new notebook.
-    pub fn suggest_folder(&mut self, dir: &std::path::Path) {
-        use std::io::Write;
-        let dir = dir.display().to_string();
-        if !dir.contains('\n') {
-            // ponytail: a dead Julia is reported by the crash watcher, not here.
-            let _ = writeln!(self.stdin, "folder {dir}");
-        }
+    /// Stop Julia and wait until the helper is done with it (blocks up to ~30 s).
+    pub fn stop(self) {
+        self.leaving.store(true, Ordering::SeqCst);
+        let _ = self.mux.send(&ToHelper::Stop.frame());
+        let _ = self.helper_exited.recv_timeout(Duration::from_secs(30));
+    }
+
+    /// The app is quitting: leave Julia running for the next launch, or stop it.
+    /// The helper does the rest after the app has gone.
+    pub fn quit(&self, keep_running: bool) {
+        self.leaving.store(true, Ordering::SeqCst);
+        let message = if keep_running { ToHelper::Detach } else { ToHelper::Stop };
+        let _ = self.mux.send(&message.frame());
     }
 }
 
@@ -67,89 +137,140 @@ fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String
     Ok(bin.display().to_string())
 }
 
+/// The helper, next to the app's own executable (`cargo test` runs from target/*/deps).
+fn helper_binary() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().ok_or("no executable folder")?;
+    [Some(dir), dir.parent()]
+        .into_iter()
+        .flatten()
+        .map(|d| d.join("endeavor-remote"))
+        .find(|p| p.exists())
+        .ok_or_else(|| format!("Endeavor's runtime helper (endeavor-remote) is missing from {}. Reinstall Endeavor.", dir.display()))
+}
 
-/// Start Julia and block until boot.jl reports `READY`. `ports` pins the Pluto
-/// and MCP ports (restart); `died` gets a message if Julia exits afterwards;
-/// `progress` hears about setup: Julia's install, then its package output.
-pub fn start(ports: Option<[u16; 2]>, died: UnboundedSender<String>, progress: UnboundedSender<Progress>) -> Result<Runtime, String> {
-    let root = crate::install::resources().display().to_string();
+/// Connect to the runtime on This Mac, starting it if it isn't running, and
+/// relay `listener` to it. Blocks until it's ready. `keep_running` leaves it
+/// running if the app goes away without quitting; `notices` hears if it goes
+/// away later; `progress` hears about setup: Julia's install, then its log.
+pub fn connect(
+    listener: Arc<Listener>,
+    keep_running: bool,
+    notices: UnboundedSender<Notice>,
+    progress: UnboundedSender<Progress>,
+) -> Result<Runtime, String> {
     let julia = julia_binary(&|detail, fraction| {
         let _ = progress.unbounded_send(Progress { fraction, ..Progress::new(Step::Julia, detail) });
     })?;
     let _ = progress.unbounded_send(Progress::new(Step::Packages, "Starting Julia…"));
     check_version(&julia)?;
+    let app_dir = crate::install::app_dir()?;
+    let state_dir = app_dir.join("runtime");
     // Trailing ':' stacks the default depots (~/.julia) read-only behind ours.
-    let depot = format!("{}/depot:", crate::install::app_dir()?.display());
-    let ports = match ports {
-        Some(ports) => ports,
-        None => free_ports()?,
-    };
+    let depot = format!("{}/depot:", app_dir.display());
 
-    let mut child = Command::new(&julia)
-        .arg("--color=no") // its log is shown in the panel on failure
-        .arg(format!("--project={root}/runtime"))
-        .arg(format!("{root}/runtime/boot.jl"))
-        .args(ports.map(|p| p.to_string()))
-        .env("JULIA_DEPOT_PATH", depot)
-        .env("ENDEAVOR_TOKEN", crate::pluto::bridge_token())
+    let mut command = Command::new(helper_binary()?);
+    command
+        .args(["connect", "--state-dir"])
+        .arg(&state_dir)
+        .args(["--julia", &julia, "--runtime"])
+        .arg(crate::install::resources().join("runtime"))
+        .args(["--depot", &depot])
+        // This Mac's state folder is its own, so another node name means a renamed Mac.
+        .arg("--any-node");
+    if !keep_running {
+        command.arg("--quit-with-client");
+    }
+    // Its own process group: a Ctrl-C meant for the app in a terminal must not
+    // kill the helper before it can stop Julia.
+    let mut helper = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .process_group(0)
         .spawn()
-        .map_err(|e| format!("Couldn't start {julia}: {e}"))?;
+        .map_err(|e| format!("Couldn't start Endeavor's runtime helper: {e}"))?;
 
-    // Echo Julia's log to our stderr and keep its tail for error messages.
-    let tail = Arc::new(Mutex::new(VecDeque::new()));
-    let stderr = BufReader::new(child.stderr.take().unwrap());
-    let log = tail.clone();
-    std::thread::spawn(move || {
-        for line in stderr.lines().map_while(Result::ok) {
-            // Pluto prints its URL with the access secret; keep it out of logs and the UI.
-            let line = redact_secret(&line);
-            eprintln!("{line}");
-            // Package installs and precompiles show on the setup screen.
-            let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
-            if !text.is_empty() {
-                let _ = progress.unbounded_send(Progress { log: true, ..Progress::new(Step::Packages, text) });
-            }
-            let mut log = log.lock().unwrap();
-            if log.len() == STDERR_TAIL {
-                log.pop_front();
-            }
-            log.push_back(line);
+    let mux = Mux::new(helper.stdin.take().unwrap());
+    let stdout = helper.stdout.take().unwrap();
+    let (control_tx, control) = mpsc::channel::<ToApp>();
+    let (exited_tx, helper_exited) = mpsc::channel();
+    std::thread::spawn({
+        let (mux, listener) = (mux.clone(), listener.clone());
+        move || {
+            let result = mux.run(
+                stdout,
+                // The app opens every stream; the helper never asks to.
+                |mux, id, _| drop(mux.send(&Frame::Close { id })),
+                |json| match serde_json::from_slice(json) {
+                    Ok(message) => drop(control_tx.send(message)),
+                    Err(e) => eprintln!("endeavor-remote sent an unreadable message: {e}"),
+                },
+            );
+            listener.forget(&mux);
+            let status = helper.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
+            eprintln!("endeavor-remote exited ({status}){}", result.err().map(|e| format!(": {e}")).unwrap_or_default());
+            let _ = exited_tx.send(());
         }
     });
-    let tail_text = move || tail.lock().unwrap().iter().cloned().collect::<Vec<_>>();
 
-    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-    for line in lines.by_ref() {
-        let line = line.map_err(|e| e.to_string())?;
-        let Some((pluto_url, mcp_url)) = line.strip_prefix("READY ").and_then(|r| r.split_once(' ')) else {
-            println!("{}", redact_secret(&line));
-            continue;
-        };
-        let (pluto_url, mcp_url) = (pluto_url.to_owned(), mcp_url.to_owned());
-        let stdin = child.stdin.take().unwrap();
-        // Keep draining stdout so a chatty Julia never blocks on a full pipe.
-        std::thread::spawn(move || lines.map_while(Result::ok).for_each(|l| println!("{}", redact_secret(&l))));
-        // Report an unexpected exit. When the app quits, this thread dies with it first.
-        std::thread::spawn(move || {
-            let status = child.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
-            // A crash's log is just Pluto's startup banner: say why only if we know.
-            let hint = hint(&tail_text().join("\n")).map(|h| format!(" {h}")).unwrap_or_default();
-            let _ = died.unbounded_send(format!("Julia exited ({status}).{hint}"));
-        });
-        return Ok(Runtime { stdin, pluto_url, mcp_url, ports });
+    loop {
+        match control.recv() {
+            Ok(ToApp::Progress { line }) => {
+                eprintln!("{line}");
+                // Package installs and precompiles show on the setup screen.
+                let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
+                if !text.is_empty() {
+                    let _ = progress.unbounded_send(Progress { log: true, ..Progress::new(Step::Packages, text) });
+                }
+            }
+            Ok(ToApp::Hello { token, pluto_secret, reattached, node, pid, .. }) => {
+                let how = if reattached { "Reattached to" } else { "Started" };
+                eprintln!("{how} Julia on {node} (pid {pid}); its log is {}", state_dir.join("runtime.log").display());
+                crate::pluto::set_bridge_token(&token);
+                *listener.current.lock().unwrap() = Some(mux.clone());
+                let leaving = Arc::new(AtomicBool::new(false));
+                forward_notices(control, notices, leaving.clone());
+                return Ok(Runtime {
+                    pluto_url: listener.pluto_url(&pluto_secret),
+                    mcp_url: listener.mcp_url(),
+                    reattached,
+                    mux,
+                    helper_exited,
+                    leaving,
+                });
+            }
+            Ok(ToApp::Died { status, log_tail }) => {
+                return Err(format!("Julia stopped before Pluto was ready ({status}). {}", diagnose(&log_tail)));
+            }
+            Ok(ToApp::Error { message }) => return Err(message),
+            Ok(ToApp::Replaced) => return Err("Another connection took Julia over while it was starting.".into()),
+            Err(_) => return Err("Endeavor's runtime helper stopped unexpectedly. Show logs has the details.".into()),
+        }
     }
-    let status = child.wait().map(|s| s.to_string()).unwrap_or_default();
-    Err(format!("Julia stopped before Pluto was ready ({status}). {}", diagnose(&tail_text())))
 }
 
-fn free_ports() -> Result<[u16; 2], String> {
-    // Hold both listeners at once so the OS can't hand out the same port twice.
-    let pluto = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let mcp = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    Ok([&pluto, &mcp].map(|l| l.local_addr().unwrap().port()))
+/// After `Hello`: the first word of the runtime going away, unless the app is
+/// the one leaving it.
+fn forward_notices(control: mpsc::Receiver<ToApp>, notices: UnboundedSender<Notice>, leaving: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        let notice = loop {
+            match control.recv() {
+                Ok(ToApp::Died { status, log_tail }) => {
+                    // A crash's log is just Pluto's startup banner: say why only if we know.
+                    let hint = hint(&log_tail.join("\n")).map(|h| format!(" {h}")).unwrap_or_default();
+                    break Notice::Died(format!("Julia exited ({status}).{hint}"));
+                }
+                Ok(ToApp::Replaced) => break Notice::Replaced,
+                Ok(ToApp::Error { message }) => break Notice::Lost(message),
+                Ok(_) => continue,
+                Err(_) => break Notice::Lost("The connection to Julia closed unexpectedly.".into()),
+            }
+        };
+        if !leaving.load(Ordering::SeqCst) {
+            let _ = notices.unbounded_send(notice);
+        }
+    });
 }
 
 fn check_version(julia: &str) -> Result<(), String> {
@@ -178,13 +299,6 @@ fn check_version(julia: &str) -> Result<(), String> {
 fn parse_version(text: &str) -> Option<(u32, u32)> {
     let mut parts = text.trim().rsplit(' ').next()?.split('.');
     Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
-}
-
-/// Mask Pluto's `secret=…` URL token.
-fn redact_secret(line: &str) -> String {
-    let Some(start) = line.find("secret=").map(|i| i + "secret=".len()) else { return line.to_string() };
-    let end = line[start..].find(|c: char| !c.is_ascii_alphanumeric()).map_or(line.len(), |i| start + i);
-    format!("{}…{}", &line[..start], &line[end..])
 }
 
 /// Plain-language cause for common failures in Julia's log, if recognized.
@@ -216,14 +330,7 @@ fn diagnose(tail: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{diagnose, parse_version, redact_secret};
-
-    #[test]
-    fn redacts_pluto_secret() {
-        let line = "│ Go to http://localhost:58250/?secret=wwD760ru in your browser";
-        assert_eq!(redact_secret(line), "│ Go to http://localhost:58250/?secret=… in your browser");
-        assert_eq!(redact_secret("no token here"), "no token here");
-    }
+    use super::{diagnose, parse_version};
 
     #[test]
     fn parses_julia_version() {
@@ -245,28 +352,38 @@ mod tests {
     }
 }
 
-/// Live check of the recovery path (slow; starts Julia twice):
+/// Live check of the recovery path through the helper (slow; starts Julia twice;
+/// stop any Endeavor first, since it shares the state folder):
 /// `cargo test -- --ignored live_die_and_restart --nocapture`.
 #[cfg(test)]
 #[test]
 #[ignore]
 fn live_die_and_restart() {
     use futures::StreamExt;
-    let (died, mut deaths) = futures::channel::mpsc::unbounded();
-    let first = start(None, died.clone(), futures::channel::mpsc::unbounded().0).expect("start");
-    // SIGKILL, like a crash or OOM kill. (SIGTERM can leave Julia hung mid-exit; the
-    // app never sends it: quitting closes stdin and boot.jl exits itself.)
-    let pattern = format!("boot.jl {} {}", first.ports[0], first.ports[1]);
-    Command::new("pkill").args(["-9", "-f", &pattern]).status().unwrap();
-    let reason = futures::executor::block_on(deaths.next()).expect("death reported");
-    println!("died: {reason}");
-    assert!(reason.starts_with("Julia exited"));
+    let listener = Listener::start().unwrap();
+    let (notices, mut heard) = futures::channel::mpsc::unbounded();
+    let first = connect(listener.clone(), false, notices.clone(), futures::channel::mpsc::unbounded().0).expect("connect");
+    let list = crate::pluto::call_tool(&first.mcp_url, "list_notebooks", serde_json::json!({})).unwrap();
+    println!("connected (reattached: {}); list_notebooks = {list}", first.reattached);
+    // SIGKILL, like a crash or OOM kill.
+    let state = std::fs::read_to_string(crate::install::app_dir().unwrap().join("runtime/runtime.json")).unwrap();
+    let pid = serde_json::from_str::<serde_json::Value>(&state).unwrap()["pid"].to_string();
+    Command::new("kill").args(["-9", &pid]).status().unwrap();
+    match futures::executor::block_on(heard.next()).expect("death reported") {
+        Notice::Died(reason) => {
+            println!("died: {reason}");
+            assert!(reason.starts_with("Julia exited"));
+        }
+        _ => panic!("expected Died"),
+    }
 
-    let second = start(Some(first.ports), died, futures::channel::mpsc::unbounded().0).expect("restart on the same ports");
+    let second = connect(listener, false, notices, futures::channel::mpsc::unbounded().0).expect("connect again");
+    assert!(!second.reattached);
     assert_eq!(second.mcp_url, first.mcp_url, "agent's MCP URL must survive a restart");
     assert_ne!(second.pluto_url, first.pluto_url, "new Pluto secret");
     let list = crate::pluto::call_tool(&second.mcp_url, "list_notebooks", serde_json::json!({})).unwrap();
     println!("restarted; list_notebooks = {list}");
+    second.stop();
 }
 
 #[cfg(test)]
