@@ -1,6 +1,14 @@
+[workspace]
+members = ["crates/wire", "crates/endeavor-remote"]
+# `cargo build` and `cargo test` also cover the helper the app runs.
+default-members = [".", "crates/wire", "crates/endeavor-remote"]
+
+[workspace.package]
+version = "0.1.0"
+
 [package]
 name = "endeavor"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 
 [dependencies]
@@ -16,6 +24,7 @@ agent-client-protocol = { version = "=2.2.0", features = ["unstable_session_fork
 futures = "0.3"
 serde_json = "1"
 libc = "0.2"
+wire = { path = "crates/wire" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Same versions wry uses: the webview's light/dark appearance.

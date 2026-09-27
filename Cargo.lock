@@ -1785,6 +1785,16 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "wire",
+]
+
+[[package]]
+name = "endeavor-remote"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde_json",
+ "wire",
 ]
 
 [[package]]
@@ -9605,6 +9615,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d129932f4644ac2396cb456385cbf9e63b5b30c6e8dc4820bdca4eb082037a5"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "wire"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
