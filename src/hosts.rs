@@ -1,7 +1,8 @@
 //! The machines sessions can run on besides This Mac, kept in `hosts.json` in
-//! Application Support. This Mac is implicit and never stored.
+//! Application Support (This Mac is implicit and never stored), and how the app
+//! names a host and a folder or file on it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -32,12 +33,63 @@ pub struct Server {
     pub idle_stop: Option<IdleStop>,
 }
 
-/// Which machine a session runs on.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum Where {
+/// A machine sessions run on: This Mac, or a server by its id.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostId {
     #[default]
     ThisMac,
     Server(String),
+}
+
+impl HostId {
+    /// The local folder Claude Code works in for sessions on this host: the
+    /// session's own folder on This Mac; for a server, one folder per server in
+    /// Application Support (its files are out of reach of Claude's own tools).
+    pub fn agent_cwd(&self, folder: &Path) -> PathBuf {
+        match self {
+            HostId::ThisMac => folder.to_path_buf(),
+            HostId::Server(id) => crate::install::app_dir().unwrap_or_default().join("hosts").join(id),
+        }
+    }
+
+    /// The server whose agent folder `cwd` is, if it is one.
+    pub fn of_agent_cwd(cwd: &Path) -> Option<HostId> {
+        let hosts = crate::install::app_dir().ok()?.join("hosts");
+        let id = cwd.strip_prefix(&hosts).ok()?.to_str()?;
+        (!id.is_empty() && !id.contains('/')).then(|| HostId::Server(id.to_owned()))
+    }
+}
+
+/// A folder or file on a host. Saved lists from before servers hold plain
+/// paths, which are This Mac's.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "SavedPlace")]
+pub struct Place {
+    pub host: HostId,
+    pub path: PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SavedPlace {
+    Local(PathBuf),
+    Hosted { host: HostId, path: PathBuf },
+}
+
+impl From<SavedPlace> for Place {
+    fn from(saved: SavedPlace) -> Place {
+        match saved {
+            SavedPlace::Local(path) => Place { host: HostId::ThisMac, path },
+            SavedPlace::Hosted { host, path } => Place { host, path },
+        }
+    }
+}
+
+impl Place {
+    pub fn local(path: impl Into<PathBuf>) -> Place {
+        Place { host: HostId::ThisMac, path: path.into() }
+    }
 }
 
 impl Hosts {
@@ -62,6 +114,14 @@ impl Hosts {
 
     pub fn server(&self, id: &str) -> Option<&Server> {
         self.servers.iter().find(|s| s.id == id)
+    }
+
+    /// A host's name as the app shows it.
+    pub fn name(&self, host: &HostId) -> String {
+        match host {
+            HostId::ThisMac => "This Mac".into(),
+            HostId::Server(id) => self.server(id).map_or_else(|| "a removed server".into(), |s| s.name.clone()),
+        }
     }
 
     /// Add `server`, or replace the one with its id.
@@ -184,6 +244,27 @@ mod tests {
         hosts.remove("a");
         assert_eq!(hosts.servers.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn places_read_old_plain_paths_as_this_macs() {
+        let saved = r#"["/Users/jc/decay-fits", {"host": {"server": "server-1"}, "path": "/home/jc/qpcr"}, {"host": "this_mac", "path": "/tmp/x"}]"#;
+        let places: Vec<Place> = serde_json::from_str(saved).unwrap();
+        assert_eq!(places[0], Place::local("/Users/jc/decay-fits"));
+        assert_eq!(places[1], Place { host: HostId::Server("server-1".into()), path: "/home/jc/qpcr".into() });
+        assert_eq!(places[2], Place::local("/tmp/x"));
+        let again: Vec<Place> = serde_json::from_str(&serde_json::to_string(&places).unwrap()).unwrap();
+        assert_eq!(again, places);
+    }
+
+    #[test]
+    fn server_sessions_share_one_agent_folder_per_server() {
+        let lab = HostId::Server("server-1".into());
+        let cwd = lab.agent_cwd(Path::new("/home/jc/qpcr"));
+        assert_eq!(cwd, lab.agent_cwd(Path::new("/srv/other")));
+        assert_eq!(HostId::of_agent_cwd(&cwd), Some(lab));
+        assert_eq!(HostId::ThisMac.agent_cwd(Path::new("/Users/jc/x")), PathBuf::from("/Users/jc/x"));
+        assert_eq!(HostId::of_agent_cwd(Path::new("/Users/jc/x")), None);
     }
 
     #[test]

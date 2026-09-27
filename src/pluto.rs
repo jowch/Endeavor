@@ -9,30 +9,29 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-static TOKEN: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
-
-/// The bearer token the runtime's bridge requires, from the helper's `Hello`. It
-/// stays the same across runtimes, since the agent's MCP config carries it.
-pub fn bridge_token() -> String {
-    TOKEN.read().unwrap().clone()
+/// One runtime's bridge as its host's listener serves it: the URL the agent's
+/// MCP config and the app use, and the bearer token it requires. Both stay the
+/// same across that host's runtimes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bridge {
+    pub url: String,
+    pub token: String,
 }
 
-pub fn set_bridge_token(token: &str) {
-    *TOKEN.write().unwrap() = token.to_owned();
-}
-
-/// `127.0.0.1:PORT` from the bridge URL `http://127.0.0.1:PORT/sse`.
-fn host_of(mcp_url: &str) -> Result<&str, String> {
-    mcp_url.strip_prefix("http://").and_then(|rest| rest.split('/').next()).ok_or_else(|| format!("bad MCP url {mcp_url}"))
+impl Bridge {
+    /// `127.0.0.1:PORT` from the bridge URL `http://127.0.0.1:PORT/sse`.
+    fn host(&self) -> Result<&str, String> {
+        self.url.strip_prefix("http://").and_then(|rest| rest.split('/').next()).ok_or_else(|| format!("bad MCP url {}", self.url))
+    }
 }
 
 /// Follow the runtime's notebook state (`GET /events`): `on_event` gets
 /// `{"notebooks": [list_notebooks summary], "cells": {id: [cell states]}}` now and
 /// after every change, until the runtime goes away.
-pub fn watch_notebooks(mcp_url: &str, mut on_event: impl FnMut(Value)) -> Result<(), String> {
-    let host = host_of(mcp_url)?;
+pub fn watch_notebooks(bridge: &Bridge, mut on_event: impl FnMut(Value)) -> Result<(), String> {
+    let host = bridge.host()?;
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
-    write!(stream, "GET /events HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge_token())
+    write!(stream, "GET /events HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge.token)
         .map_err(|e| e.to_string())?;
     for line in std::io::BufReader::new(stream).lines() {
         let line = line.map_err(|e| e.to_string())?;
@@ -44,8 +43,8 @@ pub fn watch_notebooks(mcp_url: &str, mut on_event: impl FnMut(Value)) -> Result
 }
 
 /// Call a runtime tool and return its decoded JSON result.
-pub fn call_tool(mcp_url: &str, tool: &str, arguments: Value) -> Result<Value, String> {
-    let rpc = rpc(mcp_url, "tools/call", json!({ "name": tool, "arguments": arguments }))?;
+pub fn call_tool(bridge: &Bridge, tool: &str, arguments: Value) -> Result<Value, String> {
+    let rpc = rpc(bridge, "tools/call", json!({ "name": tool, "arguments": arguments }))?;
     let text = rpc["result"]["content"][0]["text"]
         .as_str()
         .ok_or_else(|| format!("tool error: {}", rpc["result"]))?;
@@ -54,24 +53,24 @@ pub fn call_tool(mcp_url: &str, tool: &str, arguments: Value) -> Result<Value, S
 
 /// Set an agent session's policy in the runtime ("plan" refuses its notebook
 /// writes and runs); `owner` is the session's key, sent as its MCP header.
-pub fn set_policy(mcp_url: &str, owner: u64, policy: &str) -> Result<(), String> {
-    rpc(mcp_url, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy })).map(|_| ())
+pub fn set_policy(bridge: &Bridge, owner: u64, policy: &str) -> Result<(), String> {
+    rpc(bridge, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy })).map(|_| ())
 }
 
 /// Bind an agent session (`owner`, its key) to its one notebook file; the runtime
 /// then refuses its opening, creating, editing or running any other.
-pub fn set_notebook(mcp_url: &str, owner: u64, path: &str) -> Result<(), String> {
-    rpc(mcp_url, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
+pub fn set_notebook(bridge: &Bridge, owner: u64, path: &str) -> Result<(), String> {
+    rpc(bridge, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
 }
 
 /// Make `dir` the folder Pluto suggests when saving a new notebook.
-pub fn set_folder(mcp_url: &str, dir: &Path) -> Result<(), String> {
-    rpc(mcp_url, "endeavor/set_folder", json!({ "path": dir })).map(|_| ())
+pub fn set_folder(bridge: &Bridge, dir: &Path) -> Result<(), String> {
+    rpc(bridge, "endeavor/set_folder", json!({ "path": dir })).map(|_| ())
 }
 
 /// Stop open notebooks after `hours` with no activity; 0 never stops them.
-pub fn set_idle_limit(mcp_url: &str, hours: u32) -> Result<(), String> {
-    rpc(mcp_url, "endeavor/set_idle_limit", json!({ "hours": hours })).map(|_| ())
+pub fn set_idle_limit(bridge: &Bridge, hours: u32) -> Result<(), String> {
+    rpc(bridge, "endeavor/set_idle_limit", json!({ "hours": hours })).map(|_| ())
 }
 
 /// Notebooks the runtime stopped for being idle, from its event stream:
@@ -87,8 +86,8 @@ pub fn idle_stopped(event: &serde_json::Value) -> Vec<(String, u64, bool)> {
 
 /// Shut down the open notebook at `path`. Returns whether it was in safe preview,
 /// or None if it wasn't open.
-pub fn stop_notebook(mcp_url: &str, path: &str) -> Result<Option<bool>, String> {
-    let reply = rpc(mcp_url, "endeavor/stop_notebook", json!({ "path": path }))?;
+pub fn stop_notebook(bridge: &Bridge, path: &str) -> Result<Option<bool>, String> {
+    let reply = rpc(bridge, "endeavor/stop_notebook", json!({ "path": path }))?;
     let result = &reply["result"];
     Ok(result["stopped"].as_bool().unwrap_or(false).then(|| result["safe_preview"].as_bool().unwrap_or(false)))
 }
@@ -111,8 +110,8 @@ pub struct PreviewCell {
     pub code: String,
 }
 
-pub fn run_preview(mcp_url: &str, tool: &str, arguments: &Value) -> Result<RunPreview, String> {
-    let reply = rpc(mcp_url, "endeavor/run_preview", json!({ "tool": tool, "arguments": arguments }))?;
+pub fn run_preview(bridge: &Bridge, tool: &str, arguments: &Value) -> Result<RunPreview, String> {
+    let reply = rpc(bridge, "endeavor/run_preview", json!({ "tool": tool, "arguments": arguments }))?;
     if let Some(error) = reply.get("error") {
         return Err(error["message"].as_str().unwrap_or("run_preview failed").to_string());
     }
@@ -120,8 +119,8 @@ pub fn run_preview(mcp_url: &str, tool: &str, arguments: &Value) -> Result<RunPr
 }
 
 /// One JSON-RPC request to the bridge's app-only `/call` endpoint.
-fn rpc(mcp_url: &str, method: &str, params: Value) -> Result<Value, String> {
-    let host = host_of(mcp_url)?;
+fn rpc(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
+    let host = bridge.host()?;
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
 
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
@@ -131,7 +130,7 @@ fn rpc(mcp_url: &str, method: &str, params: Value) -> Result<Value, String> {
     write!(
         stream,
         "POST /call HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-        bridge_token(),
+        bridge.token,
         body.len()
     )
     .map_err(|e| e.to_string())?;
@@ -235,13 +234,14 @@ mod tests {
 }
 
 /// Live check against a running bridge: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/sse
-/// cargo test -- --ignored live_bridge`.
+/// ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_bridge`.
 #[cfg(test)]
 #[test]
 #[ignore]
 fn live_bridge() {
     let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
-    let list = call_tool(&url, "list_notebooks", json!({})).expect("list_notebooks");
+    let bridge = Bridge { url, token: std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default() };
+    let list = call_tool(&bridge, "list_notebooks", json!({})).expect("list_notebooks");
     println!("list_notebooks: {list}\nwarnings: {:?}", run_warnings(&list));
     assert!(list.as_array().is_some_and(|a| a.iter().all(|nb| nb.get("pending_run").is_some())));
 }

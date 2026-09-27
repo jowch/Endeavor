@@ -11,7 +11,7 @@ use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use wire::askpass::Kind;
 
-use crate::hosts::{Server, Where};
+use crate::hosts::{HostId, Server};
 use crate::new_session::{Glyph, glyph, menu_row};
 use crate::remote::{self, Askpass, Cancel, Event, Question};
 use crate::settings::IdleStop;
@@ -122,24 +122,29 @@ impl Workspace {
         if let Err(e) = self.hosts.save() {
             return self.dialog_error(e, cx);
         }
-        if adding {
-            self.draft.host = Where::Server(id);
-            self.draft.notice = None;
-        }
         self.close_server_dialog(cx);
+        let host = HostId::Server(id);
+        if adding {
+            self.set_draft_host(host, window, cx);
+        } else {
+            // Its idle override may have changed.
+            self.send_idle_limit(&host, cx);
+        }
         self.input.update(cx, |s, cx| s.focus(window, cx));
     }
 
-    fn remove_server(&mut self, cx: &mut Context<Self>) {
+    fn remove_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.server_dialog.as_ref().and_then(|d| d.editing.clone()) else { return };
         self.hosts.remove(&id);
         if let Err(e) = self.hosts.save() {
             return self.dialog_error(e, cx);
         }
-        if self.draft.host == Where::Server(id) {
-            self.draft.host = Where::ThisMac;
-        }
         self.close_server_dialog(cx);
+        let host = HostId::Server(id);
+        if self.draft.host == host {
+            self.set_draft_host(HostId::ThisMac, window, cx);
+        }
+        self.disconnect_host(&host, cx);
     }
 
     fn dialog_error(&mut self, error: String, cx: &mut Context<Self>) {
@@ -359,7 +364,7 @@ impl Workspace {
                         cx.notify();
                     }
                 })))
-                .child(button("confirm-remove", "Remove", false).text_color(theme::danger()).on_click(cx.listener(|this, _, _, cx| this.remove_server(cx))))
+                .child(button("confirm-remove", "Remove", false).text_color(theme::danger()).on_click(cx.listener(|this, _, window, cx| this.remove_server(window, cx))))
         } else {
             div()
                 .flex()

@@ -21,6 +21,7 @@ use futures::future::{Either, LocalBoxFuture, select};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 
+use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
 
 /// In the app's resources, `adapter/` holds package.json + package-lock.json
@@ -131,19 +132,48 @@ fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     Ok(vec![format!("ENDEAVOR_BIN={exe}"), node.display().to_string(), entry.display().to_string()])
 }
 
+/// Claude Code's own tools that read, write or run things on this Mac: off in
+/// sessions on a server, whose files they can't reach (the runtime's host tools
+/// stand in for them).
+const LOCAL_TOOLS: [&str; 8] = ["Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "NotebookEdit"];
+
 /// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
 /// skills and guards) always; the project's settings and CLAUDE.md (from the
 /// working directory) always; the user's personal setup (user settings, their MCP
-/// servers) only when they opt in (Settings).
-fn session_options(personal: bool, plugin_dir: &str) -> serde_json::Value {
+/// servers) only when they opt in (Settings). On a server, no local file tools.
+fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
+    let disallowed: &[&str] = if on_server { &LOCAL_TOOLS } else { &[] };
     serde_json::json!({
         "claudeCode": { "options": {
             "settingSources": sources,
             "strictMcpConfig": !personal,
             "plugins": [{ "type": "local", "path": plugin_dir }],
+            "disallowedTools": disallowed,
         } }
     })
+}
+
+/// Where a session's notebook tools are: its host's runtime bridge, and the
+/// server's name when that host is a server (which also gives it the host tools).
+#[derive(Clone, Debug)]
+pub struct Tools {
+    pub bridge: Bridge,
+    pub server: Option<String>,
+}
+
+impl Tools {
+    /// Each session's tool calls carry its key, so the runtime applies its policy.
+    fn mcp_server(&self, key: u64) -> McpServer {
+        let mut headers = vec![
+            HttpHeader::new("Authorization", format!("Bearer {}", self.bridge.token)),
+            HttpHeader::new("X-Endeavor-Session", key.to_string()),
+        ];
+        if let Some(server) = &self.server {
+            headers.push(HttpHeader::new("X-Endeavor-Host", server.clone()));
+        }
+        McpServer::Sse(McpServerSse::new("pluto", self.bridge.url.clone()).headers(headers))
+    }
 }
 
 
@@ -159,14 +189,14 @@ pub enum Turn {
 
 pub enum Command {
     /// Create a session in `cwd`; answered by [`AgentEvent::Started`] with the same `key`.
-    NewSession { key: u64, cwd: PathBuf },
+    NewSession { key: u64, cwd: PathBuf, tools: Tools },
     /// Reopen a past session. Its history replays as session updates for `id`,
     /// then [`AgentEvent::Started`] with the same `key`.
-    LoadSession { key: u64, id: SessionId, cwd: PathBuf },
+    LoadSession { key: u64, id: SessionId, cwd: PathBuf, tools: Tools },
     /// Open a copy of a past session (e.g. one still live in the Claude Code CLI):
     /// [`AgentEvent::Forked`] with the copy's id, its history replays, then
     /// [`AgentEvent::Started`] with the same `key`.
-    ForkSession { key: u64, source: SessionId, cwd: PathBuf },
+    ForkSession { key: u64, source: SessionId, cwd: PathBuf, tools: Tools },
     /// Past sessions in `cwd`; answered by [`AgentEvent::Listed`].
     ListSessions { cwd: PathBuf },
     /// Switch a session's mode (e.g. plan); fire and forget.
@@ -223,9 +253,10 @@ pub enum AgentEvent {
     Failed(String),
 }
 
-/// Start the agent with the runtime's MCP bridge (`mcp_url`, legacy SSE) attached
-/// to every session. Commands sent before the connection is up wait in `commands`.
-pub fn start(mcp_url: String, commands: UnboundedReceiver<Command>) -> UnboundedReceiver<AgentEvent> {
+/// Start the agent. Each session gets its host's runtime bridge (legacy SSE MCP)
+/// from the command that opens it. Commands sent before the connection is up
+/// wait in `commands`.
+pub fn start(commands: UnboundedReceiver<Command>) -> UnboundedReceiver<AgentEvent> {
     let (event_tx, event_rx) = unbounded();
     std::thread::spawn(move || {
         let events = event_tx.clone();
@@ -239,7 +270,7 @@ pub fn start(mcp_url: String, commands: UnboundedReceiver<Command>) -> Unbounded
         }
         let reason = match command {
             Err(e) => e,
-            Ok(command) => match futures::executor::block_on(run(command, mcp_url, commands, event_tx)) {
+            Ok(command) => match futures::executor::block_on(run(command, commands, event_tx)) {
                 Ok(()) => "agent connection closed".to_string(),
                 Err(e) => e.to_string(),
             },
@@ -254,13 +285,12 @@ enum Done {
     Turn(SessionId, Result<PromptResponse, agent_client_protocol::Error>),
     Started(u64, Result<Started, agent_client_protocol::Error>),
     Listed(PathBuf, Result<Vec<SessionInfo>, agent_client_protocol::Error>),
-    Forked(u64, PathBuf, Result<SessionId, agent_client_protocol::Error>),
+    Forked(u64, PathBuf, Tools, Result<SessionId, agent_client_protocol::Error>),
     Config(SessionId, Result<SetSessionConfigOptionResponse, agent_client_protocol::Error>),
 }
 
 async fn run(
     command: Vec<String>,
-    mcp_url: String,
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<AgentEvent>,
 ) -> Result<(), agent_client_protocol::Error> {
@@ -296,15 +326,9 @@ async fn run(
                 .as_ref()
                 .and_then(|m| m.get("steering")?.get("supported")?.as_bool())
                 .unwrap_or(false);
-            // Each session's tool calls carry its key, so the runtime applies its policy.
-            let pluto = |key: u64| {
-                let auth = HttpHeader::new("Authorization", format!("Bearer {}", crate::pluto::bridge_token()));
-                let owner = HttpHeader::new("X-Endeavor-Session", key.to_string());
-                McpServer::Sse(McpServerSse::new("pluto", mcp_url.clone()).headers(vec![auth, owner]))
-            };
             // Read per session, so a Settings change applies to the next one.
             let plugin = crate::install::resources().join("plugin").display().to_string();
-            let options = || session_options(crate::settings::Settings::load().personal_claude, &plugin).as_object().cloned();
+            let options = |tools: &Tools| session_options(crate::settings::Settings::load().personal_claude, &plugin, tools.server.is_some()).as_object().cloned();
             let _ = events.unbounded_send(AgentEvent::Ready);
 
             let mut pending: FuturesUnordered<LocalBoxFuture<'_, Done>> = FuturesUnordered::new();
@@ -349,12 +373,12 @@ async fn run(
                         }
                         continue;
                     }
-                    Either::Left(Some(Done::Forked(key, cwd, result))) => {
+                    Either::Left(Some(Done::Forked(key, cwd, tools, result))) => {
                         match result {
                             Ok(id) => {
                                 let _ = events.unbounded_send(AgentEvent::Forked { key, id: id.clone() });
                                 // Load the copy so its history replays into the new session.
-                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto(key)]).meta(options());
+                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![tools.mcp_server(key)]).meta(options(&tools));
                                 let loaded = connection.send_request(request).block_task();
                                 pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
                             }
@@ -369,20 +393,20 @@ async fn run(
                     Either::Right(Some(command)) => command,
                 };
                 match command {
-                    Command::NewSession { key, cwd } => {
-                        let request = NewSessionRequest::new(cwd).mcp_servers(vec![pluto(key)]).meta(options());
+                    Command::NewSession { key, cwd, tools } => {
+                        let request = NewSessionRequest::new(cwd).mcp_servers(vec![tools.mcp_server(key)]).meta(options(&tools));
                         let started = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, started.await.map(|r| Started::new(r.session_id, r.modes, r.config_options))) }.boxed_local());
                     }
-                    Command::LoadSession { key, id, cwd } => {
-                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![pluto(key)]).meta(options());
+                    Command::LoadSession { key, id, cwd, tools } => {
+                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![tools.mcp_server(key)]).meta(options(&tools));
                         let loaded = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
                     }
-                    Command::ForkSession { key, source, cwd } => {
-                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![pluto(key)]).meta(options());
+                    Command::ForkSession { key, source, cwd, tools } => {
+                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![tools.mcp_server(key)]).meta(options(&tools));
                         let forked = connection.send_request(request).block_task();
-                        pending.push(async move { Done::Forked(key, cwd, forked.await.map(|r| r.session_id)) }.boxed_local());
+                        pending.push(async move { Done::Forked(key, cwd, tools, forked.await.map(|r| r.session_id)) }.boxed_local());
                     }
                     Command::ListSessions { cwd } => {
                         // ponytail: first page only; a folder with a long history shows its newest sessions.
@@ -452,21 +476,37 @@ async fn run(
 mod tests {
     use super::session_options;
 
+    /// A bridge from the environment, for the live tests that bring their own runtime:
+    /// `ENDEAVOR_TEST_MCP_URL` and `ENDEAVOR_TEST_TOKEN`.
+    fn test_tools() -> super::Tools {
+        let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
+        let token = std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default();
+        super::Tools { bridge: crate::pluto::Bridge { url, token }, server: None }
+    }
+
+    /// This Mac's runtime, started for a live test.
+    fn local_tools() -> (crate::runtime::Channel, super::Tools) {
+        let listener = crate::runtime::Listener::start().unwrap();
+        let (channel, _) = crate::runtime::connect(false, &|_| {}).expect("helper");
+        let runtime = crate::runtime::start_local(&channel, &listener, &|_| {}, |_| {}).expect("runtime");
+        (channel, super::Tools { bridge: runtime.bridge, server: None })
+    }
+
     /// A finished session is listed for its folder and reloads with its history:
-    /// `ENDEAVOR_TEST_MCP_URL=… cargo test -- --ignored live_list_and_load`.
+    /// `ENDEAVOR_TEST_MCP_URL=… ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_list_and_load`.
     #[test]
     #[ignore]
     fn live_list_and_load() {
         use super::*;
         use agent_client_protocol::schema::v1::TextContent;
 
-        let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
+        let tools = test_tools();
         let cwd = std::env::temp_dir().join(format!("endeavor-history-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();
         let cwd = cwd.canonicalize().unwrap();
         let (tx, rx) = unbounded();
-        let mut events = start(url, rx);
-        tx.unbounded_send(Command::NewSession { key: 1, cwd: cwd.clone() }).unwrap();
+        let mut events = start(rx);
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: cwd.clone(), tools: tools.clone() }).unwrap();
         futures::executor::block_on(async {
             let mut id = None;
             let mut replayed_user = String::new();
@@ -485,7 +525,7 @@ mod tests {
                     AgentEvent::Listed { sessions, .. } => {
                         let sid = id.clone().unwrap();
                         assert!(sessions.iter().any(|s| s.session_id == sid), "listed: {sessions:?}");
-                        tx.unbounded_send(Command::LoadSession { key: 2, id: sid, cwd: cwd.clone() }).unwrap();
+                        tx.unbounded_send(Command::LoadSession { key: 2, id: sid, cwd: cwd.clone(), tools: tools.clone() }).unwrap();
                     }
                     AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::UserMessageChunk(c))) => {
                         if let ContentBlock::Text(t) = c.content {
@@ -511,20 +551,20 @@ mod tests {
     }
 
     /// Forking a session gives a new id whose load replays the original's history:
-    /// `ENDEAVOR_TEST_MCP_URL=… cargo test -- --ignored live_fork`.
+    /// `ENDEAVOR_TEST_MCP_URL=… ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_fork`.
     #[test]
     #[ignore]
     fn live_fork() {
         use super::*;
         use agent_client_protocol::schema::v1::TextContent;
 
-        let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
+        let tools = test_tools();
         let cwd = std::env::temp_dir().join(format!("endeavor-fork-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();
         let cwd = cwd.canonicalize().unwrap();
         let (tx, rx) = unbounded();
-        let mut events = start(url, rx);
-        tx.unbounded_send(Command::NewSession { key: 1, cwd: cwd.clone() }).unwrap();
+        let mut events = start(rx);
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: cwd.clone(), tools: tools.clone() }).unwrap();
         futures::executor::block_on(async {
             let (mut original, mut copy, mut replayed) = (None, None, String::new());
             while let Some(event) = events.next().await {
@@ -536,7 +576,7 @@ mod tests {
                         tx.unbounded_send(Command::Turn(id, Turn::Prompt(prompt))).unwrap();
                     }
                     AgentEvent::Session(id, SessionEvent::TurnEnded(_)) if Some(&id) == original.as_ref() => {
-                        tx.unbounded_send(Command::ForkSession { key: 2, source: id, cwd: cwd.clone() }).unwrap();
+                        tx.unbounded_send(Command::ForkSession { key: 2, source: id, cwd: cwd.clone(), tools: tools.clone() }).unwrap();
                     }
                     AgentEvent::Forked { key: 2, id } => copy = Some(id),
                     AgentEvent::Session(id, SessionEvent::Update(SessionUpdate::AgentMessageChunk(c))) if Some(&id) == copy.as_ref() => {
@@ -568,10 +608,10 @@ mod tests {
             PermissionOptionKind, RequestPermissionOutcome, SelectedPermissionOutcome, TextContent, ToolCallStatus,
         };
 
-        let runtime = crate::runtime::connect(crate::runtime::Listener::start().unwrap(), false, unbounded().0, unbounded().0).expect("runtime");
+        let (_runtime, tools) = local_tools();
         let (tx, rx) = unbounded();
-        let mut events = start(runtime.mcp_url.clone(), rx);
-        tx.unbounded_send(Command::NewSession { key: 1, cwd: std::env::temp_dir() }).unwrap();
+        let mut events = start(rx);
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: std::env::temp_dir(), tools }).unwrap();
         futures::executor::block_on(async {
             let (mut call, mut completed) = (None, false);
             while let Some(event) = events.next().await {
@@ -608,10 +648,10 @@ mod tests {
     #[ignore]
     fn live_modes() {
         use super::*;
-        let runtime = crate::runtime::connect(crate::runtime::Listener::start().unwrap(), false, unbounded().0, unbounded().0).expect("runtime");
+        let (_runtime, tools) = local_tools();
         let (tx, rx) = unbounded();
-        let mut events = start(runtime.mcp_url.clone(), rx);
-        tx.unbounded_send(Command::NewSession { key: 1, cwd: std::env::temp_dir() }).unwrap();
+        let mut events = start(rx);
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: std::env::temp_dir(), tools }).unwrap();
         futures::executor::block_on(async {
             while let Some(event) = events.next().await {
                 match event {
@@ -644,7 +684,7 @@ mod tests {
     }
 
     /// Two sessions on one connection with overlapping turns, each reply routed to its
-    /// own session: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/sse cargo test -- --ignored live_two_sessions`.
+    /// own session: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/sse ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_two_sessions`.
     #[test]
     #[ignore]
     fn live_two_sessions() {
@@ -652,11 +692,11 @@ mod tests {
         use agent_client_protocol::schema::v1::TextContent;
         use std::collections::HashMap;
 
-        let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
+        let tools = test_tools();
         let (tx, rx) = unbounded();
-        let mut events = start(url, rx);
+        let mut events = start(rx);
         for key in [1, 2] {
-            tx.unbounded_send(Command::NewSession { key, cwd: "/tmp".into() }).unwrap();
+            tx.unbounded_send(Command::NewSession { key, cwd: "/tmp".into(), tools: tools.clone() }).unwrap();
         }
         futures::executor::block_on(async {
             let mut ids: HashMap<u64, SessionId> = HashMap::new();
@@ -698,14 +738,30 @@ mod tests {
 
     #[test]
     fn personal_setup_is_opt_in_and_the_app_plugin_always_loads() {
-        let default = &session_options(false, "/p")["claudeCode"]["options"];
+        let default = &session_options(false, "/p", false)["claudeCode"]["options"];
         assert_eq!(default["settingSources"], serde_json::json!(["project", "local"]));
         assert_eq!(default["strictMcpConfig"], true);
         assert_eq!(default["plugins"][0]["path"], "/p");
+        assert_eq!(default["disallowedTools"], serde_json::json!([]));
 
-        let personal = &session_options(true, "/p")["claudeCode"]["options"];
+        let personal = &session_options(true, "/p", false)["claudeCode"]["options"];
         assert_eq!(personal["settingSources"], serde_json::json!(["user", "project", "local"]));
         assert_eq!(personal["strictMcpConfig"], false);
         assert_eq!(personal["plugins"][0]["path"], "/p");
+    }
+
+    #[test]
+    fn server_sessions_lose_local_file_tools_and_gain_the_host_header() {
+        let off = &session_options(false, "/p", true)["claudeCode"]["options"]["disallowedTools"];
+        for tool in ["Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "NotebookEdit"] {
+            assert!(off.as_array().unwrap().iter().any(|t| t == tool), "{tool} still on");
+        }
+        let bridge = crate::pluto::Bridge { url: "http://127.0.0.1:9/sse".into(), token: "t".into() };
+        let header = |tools: super::Tools| {
+            let super::McpServer::Sse(sse) = tools.mcp_server(7) else { panic!() };
+            sse.headers.iter().find(|h| h.name == "X-Endeavor-Host").map(|h| h.value.clone())
+        };
+        assert_eq!(header(super::Tools { bridge: bridge.clone(), server: Some("lab".into()) }), Some("lab".into()));
+        assert_eq!(header(super::Tools { bridge, server: None }), None);
     }
 }

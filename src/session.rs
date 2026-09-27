@@ -26,6 +26,7 @@ use crate::theme;
 use crate::agent::{SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
 use crate::gate;
+use crate::hosts::Place;
 use crate::pluto;
 use crate::outbox::{Dispatch, Outbox, Queued};
 
@@ -90,7 +91,12 @@ pub struct Session {
     /// App-local identity, stable before and after the agent assigns `id`.
     pub key: u64,
     pub id: Option<SessionId>,
-    pub cwd: PathBuf,
+    /// The host it runs on, and its working folder there.
+    pub place: Place,
+    /// The server's name, for a session on a server.
+    pub server: Option<String>,
+    /// Its agent session opens once its host's runtime is ready (it needs the bridge).
+    pub agent_waiting: bool,
     pub title: String,
     /// The user named it; the agent's titles no longer replace it.
     pub named: bool,
@@ -184,13 +190,15 @@ pub fn folder_name(path: &Path) -> String {
 }
 
 impl Session {
-    pub fn new(key: u64, cwd: PathBuf) -> Self {
+    pub fn new(key: u64, place: Place, server: Option<String>) -> Self {
         Self {
             key,
             id: None,
+            place,
+            server,
+            agent_waiting: true,
             title: "New session".into(),
             named: false,
-            cwd,
             entries: Vec::new(),
             outbox: Outbox::waiting(),
             cell_codes: CellCodes::default(),
@@ -241,8 +249,8 @@ impl Session {
 
     /// A past session being reopened: its id is known up front so the replayed
     /// history (which arrives before the load completes) lands here.
-    pub fn loading(key: u64, id: SessionId, cwd: PathBuf, title: String) -> Self {
-        let mut session = Self::new(key, cwd);
+    pub fn loading(key: u64, id: SessionId, place: Place, server: Option<String>, title: String) -> Self {
+        let mut session = Self::new(key, place, server);
         session.id = Some(id);
         session.title = title;
         session.replaying = true;
@@ -467,7 +475,7 @@ impl Session {
                     .map(str::to_owned)
                     .or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned));
                 let tool = title.strip_prefix("mcp__pluto__").map(str::to_owned);
-                if let Some(tool) = tool.clone().filter(|_| runs_code) {
+                if let Some(tool) = tool.clone().filter(|t| runs_code && t != "run_shell") {
                     effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
                 }
                 // The adapter's ExitPlanMode prompt: its options carry these ids.
@@ -1073,6 +1081,10 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
 
     let (heading, body): (String, Vec<AnyElement>) = if !*runs_code {
         (format!("Allow {}?", celldiff::pluto_tool(title).unwrap_or(title)), vec![])
+    } else if tool == "run_shell" {
+        let host = session.server.clone().unwrap_or_else(|| "the server".into());
+        let cwd = input["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or("~");
+        (format!("Run a command on {host}?"), vec![div().text_color(theme::text_muted()).child(format!("In {cwd}")).into_any_element()])
     } else if tool == "add_cell" {
         ("Add a cell and run it?".into(), vec![])
     } else if let Some(p) = preview {
@@ -1106,6 +1118,7 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
     let code = code
         .clone()
         .or_else(|| input["code"].as_str().map(str::to_owned))
+        .or_else(|| input["command"].as_str().map(str::to_owned))
         .or_else(|| preview.as_ref().and_then(|p| p.cells.first()).map(|c| c.code.clone())).filter(|_| preview.as_ref().is_none_or(|p| p.count <= 1 && !p.all));
 
     let mut buttons: Vec<(String, &'static str, PermissionOption, bool)> = Vec::new();
@@ -1535,6 +1548,7 @@ fn detail(id: ElementId, sections: Vec<(&'static str, String)>) -> impl IntoElem
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
     use super::{Effect, Entry, Session, SessionEvent, Started, Turn};
+    use crate::hosts::Place;
     use crate::outbox::Queued;
     use agent_client_protocol::schema::v1::{
         AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, SessionId, SessionMode, SessionModeState, SessionUpdate,
@@ -1598,7 +1612,7 @@ mod tests {
 
     #[test]
     fn modes_usage_and_commands_follow_the_agent() {
-        let mut s = Session::new(1, "/tmp/project".into());
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
         let modes = SessionModeState::new("default", vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
         s.started(Started::new(SessionId::new("s1"), Some(modes), None));
         assert_eq!(s.mode_name().as_deref(), Some("Manual"), "another agent mode: its own name");
@@ -1625,7 +1639,7 @@ mod tests {
         assert_eq!(s.commands.len(), 1);
 
         // No modes offered: nothing to cycle.
-        let mut plain = Session::new(2, "/tmp/project".into());
+        let mut plain = Session::new(2, Place::local("/tmp/project"), None);
         assert!(plain.cycle_mode().is_empty() && plain.mode_name().is_none());
     }
 
@@ -1635,7 +1649,7 @@ mod tests {
 
     #[test]
     fn a_new_session_queues_until_started_then_sends_the_first_message() {
-        let mut s = Session::new(1, "/tmp/project".into());
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
         assert!(s.submit(text("plot sin"), true).is_empty(), "nothing sent before the session exists");
         assert_eq!(s.title, "plot sin");
         let effects = s.started(Started::new(SessionId::new("abc"), None, None));
@@ -1645,7 +1659,7 @@ mod tests {
 
     #[test]
     fn a_user_message_unfolds_and_folds_again() {
-        let mut s = Session::new(1, "/tmp/project".into());
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
         s.submit(text("plot sin"), true);
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.toggle(0);
@@ -1659,7 +1673,7 @@ mod tests {
         use agent_client_protocol::schema::v1::{ContentChunk, SessionUpdate, TextContent};
         use agent_client_protocol::schema::v1::ContentBlock;
         let chunk = |s: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
-        let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old chat".into());
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
         s.apply(chunk("[Endeavor] The user is viewing Pluto notebook …"));
         s.apply(chunk("plot sin"));
         assert!(matches!(s.entries.as_slice(), [Entry::User { text, .. }] if text.as_ref() == "plot sin"));
@@ -1670,7 +1684,7 @@ mod tests {
 
     #[test]
     fn a_failed_reopen_stops_looking_busy_and_explains() {
-        let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old chat".into());
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
         s.fail(r#"Internal error: { "details": "Claude Code process exited with code 1. stderr: Error: Session abc is running as a background session (abc). Run `claude attach abc` to open it" }"#);
         assert!(!s.outbox.busy);
         let failure = s.failed.as_ref().unwrap();
@@ -1678,7 +1692,7 @@ mod tests {
         assert_eq!(s.reopen_as_copy(), Some(SessionId::new("abc")));
         assert!(s.failed.is_none() && s.id.is_none() && s.title.ends_with("(copy)"));
 
-        let mut other = Session::new(2, "/tmp".into());
+        let mut other = Session::new(2, Place::local("/tmp"), None);
         other.fail(r#"Internal error: { "details": "boom happened
 more" }"#);
         assert_eq!(other.failed.unwrap().message, "Couldn't open the session: boom happened");
@@ -1687,7 +1701,7 @@ more" }"#);
     #[test]
     fn replayed_notebook_opens_are_reopened_by_path_not_shown_by_stale_id() {
         use agent_client_protocol::schema::v1::{SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
-        let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old".into());
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
         s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__pluto__open_notebook"))));
         let output = serde_json::json!([{ "type": "text", "text": "{\"notebook_id\":\"old-id\",\"path\":\"/tmp/a.jl\"}" }]);
         let done = ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output));
@@ -1700,7 +1714,7 @@ more" }"#);
     #[test]
     fn a_live_notebook_creation_is_shown_with_its_file() {
         use agent_client_protocol::schema::v1::{SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
-        let mut s = Session::new(1, "/tmp".into());
+        let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
         let tool_update = |text: &str| {
             let output = serde_json::json!([{ "type": "text", "text": text }]);
@@ -1725,7 +1739,7 @@ more" }"#);
 
     #[test]
     fn the_virtual_list_tracks_entries_through_pushes_edits_and_clears() {
-        let mut s = Session::loading(1, SessionId::new("abc"), "/tmp".into(), "Old".into());
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
         s.note("a");
         s.note("b");
         s.sync_list();
@@ -1742,7 +1756,7 @@ more" }"#);
 
     #[test]
     fn busy_time_runs_from_sending_until_idle() {
-        let mut s = Session::new(1, "/tmp".into());
+        let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
         assert!(s.busy_since.is_none());
         s.submit(text("hi"), false);
@@ -1754,7 +1768,7 @@ more" }"#);
     #[test]
     fn the_plan_is_pinned_while_the_turn_runs() {
         use agent_client_protocol::schema::v1::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
-        let mut s = Session::new(1, "/tmp".into());
+        let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.submit(text("hi"), false);
         let plan = |status| SessionUpdate::Plan(Plan::new(vec![PlanEntry::new("step", PlanEntryPriority::Medium, status)]));
@@ -1769,7 +1783,7 @@ more" }"#);
 
     #[test]
     fn going_idle_asks_for_a_run_state_check() {
-        let mut s = Session::new(1, "/tmp".into());
+        let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.submit(text("hi"), false);
         let effects = s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));

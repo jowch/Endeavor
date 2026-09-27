@@ -13,6 +13,8 @@ pub fn runs_code(tool: &str, input: &Value) -> bool {
     match tool {
         // delete_cell re-runs the deleted cell's dependents (and can't be undone).
         "execute_cell" | "submit_changes" | "run_all_cells" | "allow_execution" | "delete_cell" => true,
+        // A shell command on a session's server.
+        "run_shell" => true,
         "add_cell" | "edit_cell" => input["run_after"].as_bool() == Some(true),
         _ => false,
     }
@@ -56,6 +58,8 @@ mod tests {
         assert!(decide("mcp__pluto__submit_changes", json!({})));
         assert!(decide("mcp__pluto__allow_execution", json!({})));
         assert!(decide("mcp__pluto__delete_cell", json!({})));
+        assert!(decide("mcp__pluto__run_shell", json!({ "command": "uname -a" })));
+        assert!(!decide("mcp__pluto__read_file", json!({ "path": "/tmp/x" })));
         assert!(decide("mcp__pluto__add_cell", json!({ "code": "1", "run_after": true })));
         assert!(!decide("mcp__pluto__add_cell", json!({ "code": "1" })));
         assert!(!decide("mcp__pluto__edit_cell", json!({ "code": "1", "run_after": false })));

@@ -5,19 +5,18 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 mod webkeys;
 mod agent;
 mod annotate;
 mod celldiff;
+mod connection;
 mod gate;
 mod hosts;
 mod install;
 mod logs;
 mod new_session;
-mod notebook_files;
 mod outbox;
 mod overlay;
 mod pluto;
@@ -41,10 +40,10 @@ use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaSta
 use gpui_component::radio::Radio;
 use gpui_component::{Root, Sizable, Theme, ThemeConfig, ThemeMode};
 use gpui_wry::WebView;
+use hosts::{HostId, Place};
 use outbox::Queued;
 use new_session::{Draft, Glyph, NotebookChoice, glyph, menu_row};
 use raw_window_handle::HasWindowHandle;
-use runtime::Runtime;
 use session::{Effect, Session, Stopped, folder_name};
 use settings::{Appearance, IdleStop, NotebookTheme, Settings};
 use splash::{Progress, Setup, Step};
@@ -223,7 +222,7 @@ const PAST_SHOWN: usize = 8;
 #[derive(Clone, PartialEq)]
 enum Row {
     Open(u64),
-    Past(SessionId, PathBuf),
+    Past(SessionId, Place),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -264,10 +263,12 @@ impl RowAction {
 
     /// A row's menu; Delete comes last, after a separator. `archived` is None for
     /// a session the agent hasn't given an id yet, which can't be archived.
-    fn for_row(row: &Row, archived: Option<bool>) -> Vec<RowAction> {
+    /// Finder can only reveal This Mac's folders.
+    fn for_row(row: &Row, archived: Option<bool>, local: bool) -> Vec<RowAction> {
         Self::ALL
             .into_iter()
             .filter(|action| match action {
+                RowAction::Reveal => local,
                 RowAction::Archive => archived == Some(false),
                 RowAction::Unarchive => archived == Some(true),
                 RowAction::Close => matches!(row, Row::Open(_)),
@@ -308,9 +309,11 @@ impl NotebookAction {
         }
     }
 
-    /// The notebook's menu; Stop comes last, after a separator, once it's open and running.
-    fn for_notebook(running: bool) -> Vec<NotebookAction> {
-        let mut actions = vec![NotebookAction::Reveal, NotebookAction::NewSession];
+    /// The notebook's menu; Stop comes last, after a separator, once it's open and
+    /// running. Finder can only reveal This Mac's files.
+    fn for_notebook(running: bool, local: bool) -> Vec<NotebookAction> {
+        let mut actions = if local { vec![NotebookAction::Reveal] } else { Vec::new() };
+        actions.push(NotebookAction::NewSession);
         if running {
             actions.push(NotebookAction::Stop);
         }
@@ -381,9 +384,26 @@ fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> St
         .child("⋮")
 }
 
-/// Recently used working folders, most recent first, kept across launches.
-fn load_recent() -> Vec<PathBuf> {
-    load_json::<Vec<PathBuf>>("recent.json").into_iter().filter(|p| p.is_dir()).collect()
+/// Recently used working folders on every host, most recent first, kept across
+/// launches. Only This Mac's can be checked for still being there.
+fn load_recent() -> Vec<Place> {
+    load_json::<Vec<Place>>("recent.json").into_iter().filter(|p| p.host != HostId::ThisMac || p.path.is_dir()).collect()
+}
+
+/// sessions.json: the sessions Endeavor created, with where each works. Before
+/// servers it was a list of ids, all This Mac's (their folder is their cwd).
+fn load_ours() -> HashMap<String, Place> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Saved {
+        Places(HashMap<String, Place>),
+        Ids(Vec<String>),
+    }
+    match load_json::<Option<Saved>>("sessions.json") {
+        Some(Saved::Places(places)) => places,
+        Some(Saved::Ids(ids)) => ids.into_iter().map(|id| (id, Place::local(PathBuf::new()))).collect(),
+        None => HashMap::new(),
+    }
 }
 
 pub struct Workspace {
@@ -396,13 +416,14 @@ pub struct Workspace {
     next_key: u64,
     /// The new-session screen's choices.
     draft: Draft,
-    /// Working folders, most recent first (persisted).
-    recent: Vec<PathBuf>,
+    /// Working folders on every host, most recent first (persisted).
+    recent: Vec<Place>,
     /// Past sessions per folder, from the agent's history.
-    past: HashMap<PathBuf, Vec<SessionInfo>>,
-    /// Ids of sessions Endeavor created (persisted). Only these are listed: Claude
-    /// Code's history for a folder also holds CLI sessions, which aren't ours.
-    ours: HashSet<String>,
+    past: HashMap<Place, Vec<SessionInfo>>,
+    /// Sessions Endeavor created, by id, with their host and folder (persisted).
+    /// Only these are listed: Claude Code's history for a folder also holds CLI
+    /// sessions, which aren't ours. A This Mac entry's folder is its cwd.
+    ours: HashMap<String, Place>,
     /// Session names the user gave, by session id (persisted).
     titles: HashMap<String, String>,
     /// Ids of archived sessions (persisted): hidden from the sidebar's Active view.
@@ -411,12 +432,12 @@ pub struct Workspace {
     filter_menu: bool,
     /// Each session's notebook file, by session id (persisted), for reopening it
     /// with the session: one the app opened isn't in the agent's history.
-    session_notebooks: HashMap<String, String>,
+    session_notebooks: HashMap<String, Place>,
     /// The session being renamed, and its name box.
     renaming: Option<(Row, Entity<InputState>)>,
     menu: Option<PopupMenu>,
     /// Folders showing all their past sessions, not just the newest.
-    expanded: HashSet<PathBuf>,
+    expanded: HashSet<Place>,
     settings: Settings,
     /// The divider being dragged.
     resizing: Option<Divider>,
@@ -434,31 +455,18 @@ pub struct Workspace {
     signing_in: bool,
     sign_in_error: Option<String>,
     agent_tx: UnboundedSender<Command>,
-    /// Handed to the agent thread once Julia is up (it needs the MCP URL).
+    /// Handed to the agent thread once This Mac's Julia is up (setup's order).
     agent_rx: Option<UnboundedReceiver<Command>>,
     /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
     annotating: bool,
-    runtime: Option<Runtime>,
-    /// The loopback ports the webview and the agent use, relayed to the runtime of the moment.
-    listener: Arc<runtime::Listener>,
-    /// Booting or restarting Julia.
-    starting: bool,
-    /// Another connection took the runtime over; Reconnect takes it back.
-    replaced: bool,
-    /// Open notebooks (id, path) as last seen, to reopen after a restart.
-    last_notebooks: Vec<(String, String)>,
-    /// The runtime's notebook list as last pushed (`list_notebooks` shape).
-    notebooks: serde_json::Value,
-    /// Per-notebook cell states as last pushed ({notebook_id: [state]}).
-    cells: serde_json::Value,
-    /// Paths the runtime listed as stopped for being idle, as last pushed.
-    idle_stopped: HashSet<String>,
+    /// Each host's connection and runtime.
+    connections: HashMap<HostId, connection::Connection>,
+    /// Each host's loopback ports for the webview and the agent, relayed to its
+    /// runtime of the moment; kept for the whole launch.
+    listeners: HashMap<HostId, Arc<runtime::Listener>>,
     /// The composer's placeholder as last set (it changes while Claude works).
     placeholder: &'static str,
-    /// Bumped when Julia boots or dies, so an old runtime's event reader stops.
-    runtime_generation: Arc<AtomicU64>,
-    notices_tx: UnboundedSender<runtime::Notice>,
     /// Servers sessions can run on (persisted in hosts.json).
     hosts: hosts::Hosts,
     /// Adding a server, or its settings.
@@ -474,6 +482,8 @@ impl Workspace {
         let webview = cx.new(|cx| {
             let handle = window.window_handle().expect("window handle");
             let webview = wry::WebViewBuilder::new()
+                // wry's url() panics on a web view that has never loaded a page.
+                .with_url("about:blank")
                 .with_devtools(true)
                 .with_initialization_script(&annotate::script())
                 // The bundled JuliaMono for Pluto's page, which otherwise loads it from a CDN.
@@ -542,15 +552,6 @@ impl Workspace {
         })
         .detach();
 
-        let (notices_tx, mut notices) = futures::channel::mpsc::unbounded::<runtime::Notice>();
-        cx.spawn(async move |this, cx| {
-            while let Some(notice) = notices.next().await {
-                if this.update(cx, |this, cx| this.on_runtime_gone(notice, cx)).is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
         let (questions_tx, mut questions) = futures::channel::mpsc::unbounded::<remote::Question>();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(question) = questions.next().await {
@@ -560,19 +561,22 @@ impl Workspace {
             }
         })
         .detach();
-        // The helper finishes the job after the app is gone.
+        // The helpers finish the job after the app is gone.
         cx.on_app_quit(|this, _| {
-            if let Some(runtime) = &this.runtime {
-                runtime.quit(this.settings.keep_running);
-            }
+            this.quit_runtimes();
             async {}
         })
         .detach();
 
-        // Tick the "Working · 12s" timers once a second while any session is busy.
+        // Tick the "Working · 12s" and "Starting Julia · 0:12" timers once a second.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
-            let Ok(busy) = this.update(cx, |this, _| this.sessions.iter().any(|s| s.busy_since.is_some())) else { break };
+            let Ok(busy) = this.update(cx, |this, _| {
+                this.sessions.iter().any(|s| s.busy_since.is_some())
+                    || this.connections.values().any(|c| matches!(c.status, connection::Status::Connecting | connection::Status::Starting))
+            }) else {
+                break;
+            };
             if busy {
                 let _ = this.update(cx, |_, cx| cx.notify());
             }
@@ -593,7 +597,7 @@ impl Workspace {
             draft,
             recent,
             past: HashMap::new(),
-            ours: load_json("sessions.json"),
+            ours: load_ours(),
             titles: load_json("titles.json"),
             archived: load_json("archived.json"),
             filter_menu: false,
@@ -614,25 +618,17 @@ impl Workspace {
             agent_rx: Some(agent_rx),
             status: "".into(),
             annotating: false,
-            runtime: None,
-            listener: runtime::Listener::start().expect("loopback ports"),
-            starting: false,
-            replaced: false,
-            last_notebooks: Vec::new(),
-            notebooks: serde_json::Value::Null,
-            cells: serde_json::Value::Null,
-            idle_stopped: HashSet::new(),
+            connections: HashMap::new(),
+            listeners: HashMap::new(),
             placeholder: "Type / for commands",
-            runtime_generation: Arc::new(AtomicU64::new(0)),
-            notices_tx,
             hosts: hosts::Hosts::load(),
             server_dialog: None,
             asks: VecDeque::new(),
             questions_tx,
         };
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
-        // Julia boots while the user picks a folder on the new-session screen.
-        this.boot(cx);
+        // This Mac's Julia boots while the user picks a folder on the new-session screen.
+        this.connect_host(&HostId::ThisMac, true, cx);
         this.scan_notebooks(cx);
         this
     }
@@ -679,50 +675,98 @@ impl Workspace {
     }
 
     /// Start a session with the new-session screen's choices, and the input's
-    /// text (if any) as its first message. A chosen notebook opens in safe preview.
+    /// text (if any) as its first message. A chosen notebook opens in safe
+    /// preview. On a server, Julia starts now if it isn't running.
     fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popover(window, cx);
-        if let hosts::Where::Server(_) = self.draft.host {
-            self.draft.notice = Some("Sessions on servers are coming next.".into());
+        let host = self.draft.host.clone();
+        let Some(folder) = self.draft.folder.clone() else {
+            self.draft.notice = Some(format!("Waiting for the connection to {}.", self.hosts.name(&host)).into());
             return cx.notify();
+        };
+        if host == HostId::ThisMac {
+            let _ = std::fs::create_dir_all(&folder);
         }
-        let cwd = self.draft.folder.clone();
-        let _ = std::fs::create_dir_all(&cwd);
+        let place = Place { host: host.clone(), path: folder.clone() };
+        let server = match &host {
+            HostId::ThisMac => None,
+            HostId::Server(_) => Some(self.hosts.name(&host)),
+        };
         let key = self.next_key;
         self.next_key += 1;
-        self.recent.retain(|p| p != &cwd);
-        self.recent.insert(0, cwd.clone());
+        self.recent.retain(|p| p != &place);
+        self.recent.insert(0, place.clone());
         save_json("recent.json", &self.recent);
-        if !self.past.contains_key(&cwd) {
-            let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
+        if !self.past.contains_key(&place) {
+            let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: host.agent_cwd(&folder) });
         }
-        let _ = self.agent_tx.unbounded_send(Command::NewSession { key, cwd: cwd.clone() });
-        let mut session = Session::new(key, cwd);
+        let mut session = Session::new(key, place, server.clone());
         session.run_without_asking = self.settings.run_without_asking;
         let existing = match &self.draft.notebook {
             NotebookChoice::New => None,
             NotebookChoice::Existing(path) => Some(path.display().to_string()),
         };
-        let context = existing.as_ref().map(|path| {
+        let mut context = Vec::new();
+        if let (Some(server), HostId::Server(id)) = (&server, &host) {
+            let ssh = self.hosts.server(id).map(|s| s.ssh_host.clone()).unwrap_or_default();
+            context.push(format!(
+                "[Endeavor] This session works on the server {server} (ssh host {ssh}), in the folder {}. Julia, Pluto, \
+                 the notebook and the files are all on that server; your own file and shell tools are off because \
+                 they'd see the user's Mac instead. Use the pluto tools list_folder, read_file and run_shell (the user \
+                 approves each command), with the server's paths.",
+                folder.display()
+            ));
+        }
+        if let Some(path) = &existing {
             session.open_on_start(path.clone());
-            ContentBlock::Text(TextContent::new(format!(
+            context.push(format!(
                 "[Endeavor] The user started this session on the Pluto notebook {path}, which is open in the \
                  notebook pane in safe preview (nothing has run). Unless they say otherwise, \"the notebook\" \
                  means this one; list_notebooks gives its id."
-            )))
-        });
+            ));
+        }
+        let context = (!context.is_empty()).then(|| ContentBlock::Text(TextContent::new(context.join("\n\n"))));
         self.sessions.push(session);
         if let Some(path) = existing {
             self.bind_notebook(key, path, cx);
         }
+        self.request_agent(key, cx);
         self.draft.notebook = NotebookChoice::New;
         self.draft.preview = None;
         self.activate(key, cx);
         self.send(key, context, false, window, cx);
     }
 
+    /// Open the agent side of a session (new, or its history reloaded) once its
+    /// host's runtime is ready, since its tools go to that runtime's bridge.
+    /// Until then it waits, and the host connects and starts Julia.
+    pub fn request_agent(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
+        let host = session.place.host.clone();
+        let Some(bridge) = self.bridge(&host) else { return self.ensure_runtime(&host, cx) };
+        let tools = agent::Tools { bridge, server: session.server.clone() };
+        let cwd = host.agent_cwd(&session.place.path);
+        let _ = std::fs::create_dir_all(&cwd);
+        let command = match session.id.clone() {
+            Some(id) => Command::LoadSession { key, id, cwd, tools },
+            None => Command::NewSession { key, cwd, tools },
+        };
+        let _ = self.agent_tx.unbounded_send(command);
+        if let Some(session) = self.session_mut(key) {
+            session.agent_waiting = false;
+        }
+    }
+
+    /// Where a past session works: This Mac's by the folder it ran in, a server's as recorded.
+    fn past_place(&self, info: &SessionInfo) -> Option<Place> {
+        match self.ours.get(&info.session_id.to_string())? {
+            Place { host: HostId::ThisMac, .. } => Some(Place::local(info.cwd.clone())),
+            place => Some(place.clone()),
+        }
+    }
+
     /// Reopen a past session (or switch to it if it's already open).
-    fn open_past(&mut self, info: SessionInfo, cx: &mut Context<Self>) {
+    fn open_past(&mut self, info: SessionInfo, place: Place, cx: &mut Context<Self>) {
         if let Some(key) = self.sessions.iter().find(|s| s.id.as_ref() == Some(&info.session_id)).map(|s| s.key) {
             return self.activate(key, cx);
         }
@@ -730,9 +774,9 @@ impl Workspace {
         self.next_key += 1;
         let named = self.titles.get(&info.session_id.to_string()).cloned();
         let title = named.clone().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into());
-        let _ = self.agent_tx.unbounded_send(Command::LoadSession { key, id: info.session_id.clone(), cwd: info.cwd.clone() });
-        let notebook = self.session_notebooks.get(&info.session_id.to_string()).cloned();
-        let mut session = Session::loading(key, info.session_id, info.cwd, title);
+        let notebook = self.session_notebooks.get(&info.session_id.to_string()).map(|p| p.path.display().to_string());
+        let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
+        let mut session = Session::loading(key, info.session_id, place, server, title);
         if let Some(path) = &notebook {
             session.open_on_start(path.clone());
         }
@@ -742,6 +786,7 @@ impl Workspace {
         if let Some(path) = notebook {
             self.bind_notebook(key, path, cx);
         }
+        self.request_agent(key, cx);
         self.activate(key, cx);
     }
 
@@ -752,7 +797,7 @@ impl Workspace {
         if let Some(id) = session.id {
             let _ = self.agent_tx.unbounded_send(Command::CloseSession(id));
         }
-        let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: session.cwd });
+        let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: session.place.host.agent_cwd(&session.place.path) });
         if self.renaming.as_ref().is_some_and(|(row, _)| *row == Row::Open(key)) {
             self.renaming = None;
         }
@@ -807,7 +852,11 @@ impl Workspace {
 
     fn row_actions(&self, row: &Row) -> Vec<RowAction> {
         let archived = self.row_session_id(row).map(|id| self.archived.contains(&id.to_string()));
-        RowAction::for_row(row, archived)
+        let local = match row {
+            Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).is_some_and(|s| s.place.host == HostId::ThisMac),
+            Row::Past(_, place) => place.host == HostId::ThisMac,
+        };
+        RowAction::for_row(row, archived, local)
     }
 
     /// Archive a session (closing it if it's open), or bring it back.
@@ -843,8 +892,10 @@ impl Workspace {
         match target {
             MenuTarget::Row(row) => self.row_actions(row).into_iter().map(|action| MenuPick::Row(row.clone(), action)).collect(),
             MenuTarget::Notebook(key) => {
-                let running = self.sessions.iter().find(|s| s.key == *key).is_some_and(|s| s.notebook.is_some() && s.stopped.is_none());
-                NotebookAction::for_notebook(running).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
+                let session = self.sessions.iter().find(|s| s.key == *key);
+                let running = session.is_some_and(|s| s.notebook.is_some() && s.stopped.is_none());
+                let local = session.is_some_and(|s| s.place.host == HostId::ThisMac);
+                NotebookAction::for_notebook(running, local).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
             }
         }
     }
@@ -883,10 +934,10 @@ impl Workspace {
                 let _ = std::process::Command::new("open").arg("-R").arg(&path).spawn();
             }
             NotebookAction::NewSession => {
-                let folder = session.cwd.clone();
+                let folder = session.place.clone();
                 self.new_session_on(folder, PathBuf::from(path), cx);
             }
-            NotebookAction::Stop => self.stop_notebook(path, cx),
+            NotebookAction::Stop => self.stop_notebook(key, path, cx),
         }
     }
 
@@ -895,10 +946,10 @@ impl Workspace {
             RowAction::Rename => self.start_rename(row, window, cx),
             RowAction::Reveal => {
                 let folder = match &row {
-                    Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.cwd.clone()),
-                    Row::Past(_, folder) => Some(folder.clone()),
+                    Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.place.clone()),
+                    Row::Past(_, place) => Some(place.clone()),
                 };
-                if let Some(folder) = folder {
+                if let Some(Place { host: HostId::ThisMac, path: folder }) = folder {
                     let _ = std::process::Command::new("open").arg("-R").arg(folder).spawn();
                 }
             }
@@ -971,10 +1022,12 @@ impl Workspace {
 
     /// Continue a session that couldn't be reopened (e.g. live in the CLI) as a copy.
     fn open_copy(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(bridge) = self.session_bridge(key) else { return };
         let Some(session) = self.session_mut(key) else { return };
-        let cwd = session.cwd.clone();
+        let cwd = session.place.host.agent_cwd(&session.place.path);
+        let tools = agent::Tools { bridge, server: session.server.clone() };
         if let Some(source) = session.reopen_as_copy() {
-            let _ = self.agent_tx.unbounded_send(Command::ForkSession { key, source, cwd });
+            let _ = self.agent_tx.unbounded_send(Command::ForkSession { key, source, cwd, tools });
         }
         cx.notify();
     }
@@ -983,15 +1036,15 @@ impl Workspace {
     /// already open; otherwise running it only if `run`) and point the session, the
     /// pane if active, and any session whose copy was stopped, at it.
     fn open_for_session(&mut self, key: u64, path: String, run: bool, cx: &mut Context<Self>) {
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        let Some(bridge) = self.session_bridge(key) else { return };
         let opened = cx.background_executor().spawn({
             let path = path.clone();
             async move {
-                let listed = pluto::call_tool(&mcp_url, "list_notebooks", serde_json::json!({})).ok();
+                let listed = pluto::call_tool(&bridge, "list_notebooks", serde_json::json!({})).ok();
                 let open = listed.as_ref().and_then(|l| l.as_array()?.iter().find(|nb| nb["path"] == path.as_str()).cloned());
                 let nb = match open {
                     Some(nb) => nb,
-                    None => pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path, "run_notebook": run })).ok()?,
+                    None => pluto::call_tool(&bridge, "open_notebook", serde_json::json!({ "path": path, "run_notebook": run })).ok()?,
                 };
                 nb["notebook_id"].as_str().map(str::to_owned)
             }
@@ -1000,10 +1053,11 @@ impl Workspace {
             // ponytail: a notebook file that's gone just leaves the pane where it is.
             let Some(id) = opened.await else { return };
             let _ = this.update(cx, |this, cx| {
+                let Some(host) = this.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
                 let keys: Vec<u64> = this
                     .sessions
                     .iter()
-                    .filter(|s| s.key == key || (s.stopped.is_some() && s.notebook_path.as_deref() == Some(path.as_str())))
+                    .filter(|s| s.key == key || (s.place.host == host && s.stopped.is_some() && s.notebook_path.as_deref() == Some(path.as_str())))
                     .map(|s| s.key)
                     .collect();
                 for key in keys {
@@ -1019,28 +1073,30 @@ impl Workspace {
     fn bind_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(session) = self.session_mut(key) else { return };
         session.notebook_path = Some(path.clone());
+        let place = Place { host: session.place.host.clone(), path: PathBuf::from(&path) };
         if let Some(id) = session.id.as_ref().map(ToString::to_string)
-            && self.session_notebooks.get(&id) != Some(&path)
+            && self.session_notebooks.get(&id) != Some(&place)
         {
-            self.session_notebooks.insert(id, path.clone());
+            self.session_notebooks.insert(id, place);
             save_json("notebooks.json", &self.session_notebooks);
         }
         self.send_binding(key, path, cx);
     }
 
     fn send_binding(&self, key: u64, path: String, cx: &mut Context<Self>) {
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+        let Some(bridge) = self.session_bridge(key) else { return };
         // ponytail: a failed send leaves the session unbound until its first open binds it.
-        cx.background_executor().spawn(async move { pluto::set_notebook(&mcp_url, key, &path) }).detach();
+        cx.background_executor().spawn(async move { pluto::set_notebook(&bridge, key, &path) }).detach();
     }
 
-    /// Stop the notebook at `path` (Pluto shuts it down); every session on it
-    /// shows it stopped, with Start.
-    fn stop_notebook(&mut self, path: String, cx: &mut Context<Self>) {
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+    /// Stop session `key`'s notebook at `path` (Pluto shuts it down); every
+    /// session on it shows it stopped, with Start.
+    fn stop_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
+        let Some(bridge) = self.session_bridge(key) else { return };
+        let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
         let stop = cx.background_executor().spawn({
             let path = path.clone();
-            async move { pluto::stop_notebook(&mcp_url, &path) }
+            async move { pluto::stop_notebook(&bridge, &path) }
         });
         cx.spawn(async move |this, cx| {
             let result = stop.await;
@@ -1049,7 +1105,7 @@ impl Workspace {
                     // Not open (already stopped elsewhere): Start reopens it in safe preview.
                     Ok(safe_preview) => {
                         let stopped = Stopped { safe_preview: safe_preview.unwrap_or(true), idle_hours: None };
-                        for session in this.sessions.iter_mut().filter(|s| s.notebook_path.as_deref() == Some(path.as_str())) {
+                        for session in this.sessions.iter_mut().filter(|s| s.place.host == host && s.notebook_path.as_deref() == Some(path.as_str())) {
                             session.notebook = None;
                             session.stopped = Some(stopped);
                         }
@@ -1074,19 +1130,19 @@ impl Workspace {
         self.active = Some(key);
         self.settings_open = false;
         self.follow_folder(cx);
-        if let Some(notebook) = self.active_session().and_then(|s| s.notebook.clone()) {
-            self.load_notebook(&notebook, cx);
+        if let Some((host, notebook)) = self.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
+            self.load_notebook(&host, &notebook, cx);
         }
         cx.notify();
     }
 
     /// Pluto's new notebooks start unsaved; point its "Save notebook" suggestion
     /// at the active session's folder (the page picks it up on its next load).
-    fn follow_folder(&mut self, cx: &mut Context<Self>) {
-        let Some(cwd) = self.active_session().map(|s| s.cwd.clone()) else { return };
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+    pub fn follow_folder(&mut self, cx: &mut Context<Self>) {
+        let Some((key, folder)) = self.active_session().map(|s| (s.key, s.place.path.clone())) else { return };
+        let Some(bridge) = self.session_bridge(key) else { return };
         // ponytail: a failed send leaves Pluto suggesting the previous folder.
-        cx.background_executor().spawn(async move { pluto::set_folder(&mcp_url, &cwd) }).detach();
+        cx.background_executor().spawn(async move { pluto::set_folder(&bridge, &folder) }).detach();
     }
 
     fn apply_effects(&mut self, key: u64, effects: Vec<Effect>, cx: &mut Context<Self>) {
@@ -1098,22 +1154,22 @@ impl Workspace {
                     }
                 }
                 Effect::ShowNotebook { id, path } => {
-                    if let Some(session) = self.session_mut(key) {
-                        session.notebook = Some(id.clone());
-                        session.stopped = None;
-                    }
+                    let Some(session) = self.session_mut(key) else { continue };
+                    session.notebook = Some(id.clone());
+                    session.stopped = None;
+                    let host = session.place.host.clone();
                     if let Some(path) = path {
                         self.bind_notebook(key, path, cx);
                     }
                     if self.active == Some(key) {
-                        self.load_notebook(&id, cx);
+                        self.load_notebook(&host, &id, cx);
                     }
                 }
                 Effect::CheckRunState => self.check_run_state(key, cx),
                 Effect::SetPolicy(policy) => self.send_policy(key, policy, cx),
                 Effect::PreviewRun { ix, tool, input } => {
-                    let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { continue };
-                    let task = cx.background_executor().spawn(async move { pluto::run_preview(&mcp_url, &tool, &input) });
+                    let Some(bridge) = self.session_bridge(key) else { continue };
+                    let task = cx.background_executor().spawn(async move { pluto::run_preview(&bridge, &tool, &input) });
                     cx.spawn(async move |this, cx| match task.await {
                         Ok(preview) => {
                             let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.set_preview(ix, preview)));
@@ -1186,17 +1242,10 @@ impl Workspace {
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
     }
 
-    fn send_idle_limit(&self, cx: &mut Context<Self>) {
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
-        let hours = self.settings.idle_stop.hours();
-        // ponytail: a failed send leaves the runtime on its default (48 hours) until the next start.
-        cx.background_executor().spawn(async move { pluto::set_idle_limit(&mcp_url, hours) }).detach();
-    }
-
-    fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
+    pub fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
+        let Some(bridge) = self.session_bridge(key) else { return };
         // ponytail: a failed send leaves the runtime's policy stale until the next change.
-        cx.background_executor().spawn(async move { pluto::set_policy(&mcp_url, key, policy) }).detach();
+        cx.background_executor().spawn(async move { pluto::set_policy(&bridge, key, policy) }).detach();
     }
 
     /// ⇧⇥: the active session's next mode (e.g. default → plan → auto).
@@ -1401,8 +1450,12 @@ impl Workspace {
                 self.status = "Claude connected.".into();
                 self.agent_ready = true;
                 self.finish_setup(cx);
-                for cwd in &self.recent {
-                    let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() });
+                let mut listed = HashSet::new();
+                for place in &self.recent {
+                    let cwd = place.host.agent_cwd(&place.path);
+                    if listed.insert(cwd.clone()) {
+                        let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd });
+                    }
                 }
             }
             AgentEvent::Setup(p) => self.on_progress(p, cx),
@@ -1413,9 +1466,20 @@ impl Workspace {
                     self.status = "Not signed in to Claude.".into();
                 }
             }
-            AgentEvent::Listed { cwd, sessions } => {
-                self.past.insert(cwd, sessions);
-            }
+            AgentEvent::Listed { cwd, sessions } => match HostId::of_agent_cwd(&cwd) {
+                // One listing holds all of a server's folders.
+                Some(host) => {
+                    self.past.retain(|place, _| place.host != host);
+                    for info in sessions {
+                        if let Some(place) = self.past_place(&info).filter(|p| p.host == host) {
+                            self.past.entry(place).or_default().push(info);
+                        }
+                    }
+                }
+                None => {
+                    self.past.insert(Place::local(cwd), sessions);
+                }
+            },
             AgentEvent::Forked { key, id } => {
                 if let Some(session) = self.session_mut(key) {
                     session.id = Some(id);
@@ -1435,7 +1499,8 @@ impl Workspace {
                 match result {
                     Ok(started) => {
                         let id = started.id.clone();
-                        if self.ours.insert(id.to_string()) {
+                        let place = session.place.clone();
+                        if self.ours.insert(id.to_string(), place.clone()).as_ref() != Some(&place) {
                             save_json("sessions.json", &self.ours);
                         }
                         // Renamed before the agent assigned an id.
@@ -1478,8 +1543,9 @@ impl Workspace {
     // Notebook pane and annotation mode
     // -----------------------------------------------------------------------
 
-    fn load_notebook(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(runtime) = &self.runtime else { return };
+    /// Show notebook `id` of `host`'s Pluto in the pane.
+    pub fn load_notebook(&mut self, host: &HostId, id: &str, cx: &mut Context<Self>) {
+        let Some(runtime) = self.connection(host).and_then(|c| c.runtime.as_ref()) else { return };
         // pluto_url is `http://host:port/?secret=…`; keep the secret app-side.
         let url = runtime.pluto_url.replacen("/?", &format!("/edit?id={id}&"), 1);
         self.webview.update(cx, |w, _| w.load_url(&url));
@@ -1528,50 +1594,8 @@ impl Workspace {
     // Julia runtime
     // -----------------------------------------------------------------------
 
-    /// Connect to Julia, starting it if it isn't running. A running one is
-    /// stopped first (Restart Julia).
-    fn boot(&mut self, cx: &mut Context<Self>) {
-        let old = self.runtime.take();
-        if old.is_some() {
-            self.forget_runtime();
-        }
-        self.starting = true;
-        self.status = match (&old, self.replaced) {
-            (None, true) => "Reconnecting to Julia…",
-            (None, false) if self.agent_rx.is_some() => "Starting Julia…",
-            _ => "Restarting Julia…",
-        }
-        .into();
-        let (listener, keep_running, notices) = (self.listener.clone(), self.settings.keep_running, self.notices_tx.clone());
-        // First run downloads Julia, then instantiates + precompiles (~1 min); later launches are seconds.
-        let (progress_tx, mut progress) = futures::channel::mpsc::unbounded::<Progress>();
-        let boot = cx.background_executor().spawn(async move {
-            if let Some(old) = old {
-                old.stop();
-            }
-            runtime::connect(listener, keep_running, notices, progress_tx)
-        });
-        cx.spawn(async move |this, cx| {
-            while let Some(p) = progress.next().await {
-                // Julia's log keeps coming after it's up; only show it while starting.
-                let _ = this.update(cx, |this, cx| {
-                    if this.starting {
-                        this.on_progress(p, cx);
-                    }
-                });
-            }
-        })
-        .detach();
-        cx.spawn(async move |this, cx| {
-            let result = boot.await;
-            let _ = this.update(cx, |this, cx| this.on_booted(result, cx));
-        })
-        .detach();
-        cx.notify();
-    }
-
     /// Setup is under way: the status line, and the setup screen on first launch.
-    fn on_progress(&mut self, p: Progress, cx: &mut Context<Self>) {
+    pub fn on_progress(&mut self, p: Progress, cx: &mut Context<Self>) {
         if !p.log {
             self.status = p.detail.clone().into();
         }
@@ -1655,122 +1679,22 @@ impl Workspace {
     pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
-        match self.runtime.as_ref().map(|r| r.mcp_url.clone()) {
-            None if !self.starting => self.boot(cx),
-            None => {}
-            Some(mcp_url) => {
-                // The failed agent thread dropped its command channel; start with a new one.
-                let (tx, rx) = futures::channel::mpsc::unbounded();
-                self.agent_tx = tx;
-                self.start_agent(mcp_url, rx, cx);
-            }
+        if self.bridge(&HostId::ThisMac).is_some() {
+            // The failed agent thread dropped its command channel; start with a new one.
+            let (tx, rx) = futures::channel::mpsc::unbounded();
+            self.agent_tx = tx;
+            self.start_agent(rx, cx);
+        } else {
+            self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
     }
 
-    fn start_agent(&mut self, mcp_url: String, commands: UnboundedReceiver<Command>, cx: &mut Context<Self>) {
-        let mut events = agent::start(mcp_url, commands);
+    pub fn start_agent(&mut self, commands: UnboundedReceiver<Command>, cx: &mut Context<Self>) {
+        let mut events = agent::start(commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
                 if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-    }
-
-    fn on_booted(&mut self, result: Result<Runtime, String>, cx: &mut Context<Self>) {
-        self.starting = false;
-        let runtime = match result {
-            Ok(runtime) => runtime,
-            Err(e) => {
-                self.status = format!("⚠ {e}").into();
-                if let Some(setup) = &mut self.setup {
-                    setup.fail(e);
-                }
-                return cx.notify();
-            }
-        };
-        self.webview.update(cx, |w, _| w.load_url(&runtime.pluto_url));
-        let (mcp_url, reattached) = (runtime.mcp_url.clone(), runtime.reattached);
-        self.runtime = Some(runtime);
-        self.replaced = false;
-        self.follow_folder(cx);
-        self.send_idle_limit(cx);
-        // A new runtime knows no session's notebook.
-        let bound: Vec<(u64, String)> = self.sessions.iter().filter_map(|s| Some((s.key, s.notebook_path.clone()?))).collect();
-        for (key, path) in bound {
-            self.send_binding(key, path, cx);
-        }
-        if let Some(commands) = self.agent_rx.take() {
-            self.on_progress(Progress::new(Step::Agent, "Pluto ready · starting Claude…"), cx);
-            self.start_agent(mcp_url.clone(), commands, cx);
-        } else {
-            self.status = if reattached { "Reconnected to Julia." } else { "Julia restarted." }.into();
-            // Captures the notebooks to reopen before the new list starts arriving.
-            self.reopen_notebooks(cx);
-            // The new runtime starts with every session on "ask".
-            let planning: Vec<u64> = self.sessions.iter().filter(|s| s.policy() == "plan").map(|s| s.key).collect();
-            for key in planning {
-                self.send_policy(key, "plan", cx);
-            }
-        }
-        self.watch_notebooks(mcp_url, cx);
-        cx.notify();
-    }
-
-    fn on_runtime_gone(&mut self, notice: runtime::Notice, cx: &mut Context<Self>) {
-        self.runtime = None;
-        self.forget_runtime();
-        self.replaced = matches!(notice, runtime::Notice::Replaced);
-        self.status = match notice {
-            runtime::Notice::Died(reason) | runtime::Notice::Lost(reason) => {
-                format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts.")
-            }
-            runtime::Notice::Replaced => "⚠ Another connection took over Julia.\nNotebook tools are unavailable until you reconnect.".into(),
-        }
-        .into();
-        cx.notify();
-    }
-
-    /// Stop following the runtime that's going; `last_notebooks` stays for the reopen.
-    fn forget_runtime(&mut self) {
-        self.runtime_generation.fetch_add(1, Ordering::SeqCst);
-        self.notebooks = serde_json::Value::Null;
-        self.cells = serde_json::Value::Null;
-    }
-
-    /// Follow the runtime's notebook list (pushed on every change) for the
-    /// end-of-turn run check and for reopening notebooks after a crash.
-    fn watch_notebooks(&self, mcp_url: String, cx: &mut Context<Self>) {
-        let (tx, mut rx) = futures::channel::mpsc::unbounded::<serde_json::Value>();
-        let generation = self.runtime_generation.clone();
-        let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
-        // A long-lived blocking read: its own thread, not the executor's pool. If the
-        // stream drops it reconnects, until this runtime is replaced or dies.
-        std::thread::spawn(move || {
-            while generation.load(Ordering::SeqCst) == mine {
-                let _ = pluto::watch_notebooks(&mcp_url, |event| {
-                    let _ = tx.unbounded_send(event);
-                });
-                std::thread::sleep(Duration::from_secs(1));
-            }
-        });
-        cx.spawn(async move |this, cx| {
-            while let Some(mut event) = rx.next().await {
-                let updated = this.update(cx, |this, cx| {
-                    this.note_idle_stops(&event);
-                    this.remember_notebooks(event["notebooks"].take());
-                    for (notebook, cell, name) in pluto::user_edits(&this.cells, &event["cells"]) {
-                        for session in this.sessions.iter_mut().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())) {
-                            session.note_user_edit(cell.clone(), name.clone());
-                        }
-                    }
-                    this.cells = event["cells"].take();
-                    this.push_cells(cx);
-                });
-                if updated.is_err() {
                     break;
                 }
             }
@@ -1788,90 +1712,18 @@ impl Workspace {
     }
 
     /// Mark the shown notebook's cells in the page (unrun, author).
-    fn push_cells(&self, cx: &mut Context<Self>) {
+    pub fn push_cells(&self, cx: &mut Context<Self>) {
         let url = self.webview.read(cx).raw().url().unwrap_or_default();
         let Some(id) = viewed_notebook_id(&url) else { return };
-        let cells = self.cells.get(id).cloned().unwrap_or_else(|| serde_json::json!([]));
+        let cells = self.connections.values().find_map(|c| c.cells.get(id).cloned()).unwrap_or_else(|| serde_json::json!([]));
         self.send_to_page(&serde_json::json!({ "type": "cells", "cells": cells }), cx);
-    }
-
-    /// A notebook the runtime just stopped for being idle shows stopped, with
-    /// Start, in every session on it. Only new entries count: a stale one must not
-    /// stop a notebook the user has started again since.
-    fn note_idle_stops(&mut self, event: &serde_json::Value) {
-        let stops = pluto::idle_stopped(event);
-        for (path, hours, safe_preview) in &stops {
-            if self.idle_stopped.contains(path) {
-                continue;
-            }
-            let stopped = Stopped { safe_preview: *safe_preview, idle_hours: Some(*hours) };
-            for session in self.sessions.iter_mut().filter(|s| s.notebook_path.as_deref() == Some(path.as_str())) {
-                session.notebook = None;
-                session.stopped = Some(stopped);
-            }
-        }
-        self.idle_stopped = stops.into_iter().map(|(path, ..)| path).collect();
-    }
-
-    fn remember_notebooks(&mut self, list: serde_json::Value) {
-        self.last_notebooks = list
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|nb| Some((nb["notebook_id"].as_str()?.to_owned(), nb["path"].as_str()?.to_owned())))
-            .collect();
-        self.notebooks = list;
-    }
-
-    /// Reopen the notebooks that were open in the last runtime (unless this one
-    /// has them open already, as after a reconnect), and point each session (and
-    /// the pane) at the reopened copy. Pluto saves on every change, so the files
-    /// are current.
-    fn reopen_notebooks(&mut self, cx: &mut Context<Self>) {
-        let Some(mcp_url) = self.runtime.as_ref().map(|r| r.mcp_url.clone()) else { return };
-        let before = self.last_notebooks.clone();
-        let paths: Vec<String> = before.iter().map(|(_, p)| p.clone()).collect();
-        let reopen = cx.background_executor().spawn(async move {
-            let listed = pluto::call_tool(&mcp_url, "list_notebooks", serde_json::json!({})).ok();
-            let open = |path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
-            paths
-                .into_iter()
-                .filter_map(|path| {
-                    let result = match open(&path) {
-                        Some(nb) => nb,
-                        None => pluto::call_tool(&mcp_url, "open_notebook", serde_json::json!({ "path": path })).ok()?,
-                    };
-                    Some((result["notebook_id"].as_str()?.to_owned(), path))
-                })
-                .collect::<Vec<_>>()
-        });
-        cx.spawn(async move |this, cx| {
-            let reopened = reopen.await;
-            let _ = this.update(cx, |this, cx| {
-                let new_id = |old: &str| {
-                    let path = before.iter().find(|(id, _)| id == old).map(|(_, p)| p)?;
-                    reopened.iter().find(|(_, p)| p == path).map(|(id, _)| id.clone())
-                };
-                for session in &mut this.sessions {
-                    session.notebook = session.notebook.as_deref().and_then(new_id);
-                }
-                if let Some(id) = this.active_session().and_then(|s| s.notebook.clone()) {
-                    this.load_notebook(&id, cx);
-                }
-                if !reopened.is_empty() && !this.runtime.as_ref().is_some_and(|r| r.reattached) {
-                    this.status = format!("Julia restarted; reopened {} notebook(s) in safe preview.", reopened.len()).into();
-                }
-                this.last_notebooks = reopened;
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     /// After a session goes idle, say if it left edited cells unrun or still running.
     fn check_run_state(&mut self, key: u64, cx: &mut Context<Self>) {
-        // ponytail: warns about every open notebook, not only the ones this session touched.
-        let warnings = pluto::run_warnings(&self.notebooks);
+        let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| &s.place.host) else { return };
+        // ponytail: warns about every open notebook on the host, not only the ones this session touched.
+        let warnings = self.connection(host).map(|c| pluto::run_warnings(&c.notebooks)).unwrap_or_default();
         self.with_session(key, cx, |s| warnings.into_iter().for_each(|w| s.note(format!("⚠ {w}"))));
     }
 
@@ -2005,12 +1857,20 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A folder's name, with its server's for a folder on one ("decay-fits · lab").
+    fn folder_heading(&self, place: &Place) -> String {
+        match place.host {
+            HostId::ThisMac => folder_name(&place.path),
+            _ => format!("{} · {}", folder_name(&place.path), self.hosts.name(&place.host)),
+        }
+    }
+
     fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // Folders: recent ones, then any other folder with an open session.
-        let mut folders: Vec<&PathBuf> = self.recent.iter().collect();
+        let mut folders: Vec<&Place> = self.recent.iter().collect();
         for s in &self.sessions {
-            if !folders.contains(&&s.cwd) {
-                folders.push(&s.cwd);
+            if !folders.contains(&&s.place) {
+                folders.push(&s.place);
             }
         }
         let groups: Vec<_> = folders
@@ -2019,7 +1879,7 @@ impl Workspace {
                 let open: Vec<_> = self
                     .sessions
                     .iter()
-                    .filter(|s| &s.cwd == folder)
+                    .filter(|s| &s.place == folder)
                     .map(|s| {
                         let key = s.key;
                         let active = self.active == Some(key) && !self.settings_open;
@@ -2054,7 +1914,7 @@ impl Workspace {
                 // Past sessions not already open, newest first; the newest few unless expanded.
                 let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
                 let is_archived = |info: &SessionInfo| self.archived.contains(&info.session_id.to_string());
-                let shown = |info: &SessionInfo| self.ours.contains(&info.session_id.to_string()) && (self.settings.show_archived || !is_archived(info));
+                let shown = |info: &SessionInfo| self.ours.contains_key(&info.session_id.to_string()) && (self.settings.show_archived || !is_archived(info));
                 let all: Vec<_> = self.past.get(folder).into_iter().flatten().filter(|info| !is_open(info) && shown(info)).collect();
                 let expanded = self.expanded.contains(folder);
                 let limit = if expanded { all.len() } else { PAST_SHOWN };
@@ -2065,8 +1925,9 @@ impl Workspace {
                     .map(|(i, info)| {
                         let row = Row::Past(info.session_id.clone(), folder.clone());
                         let title = self.row_label(&row, self.row_title(&row).unwrap_or_default());
-                        let group: SharedString = format!("past-{}-{i}", folder.display()).into();
+                        let group: SharedString = format!("past-{:?}-{}-{i}", folder.host, folder.path.display()).into();
                         let open = (*info).clone();
+                        let place = folder.clone();
                         let archived = is_archived(info);
                         self.session_row(row.clone(), group.clone(), false, cx)
                             .when(archived, |d| d.text_color(theme::text_section()))
@@ -2075,7 +1936,7 @@ impl Workspace {
                             .child(self.row_more(row.clone(), group, false, cx))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.renaming.as_ref().is_some_and(|(renaming, _)| *renaming == row) {
-                                    this.open_past(open.clone(), cx);
+                                    this.open_past(open.clone(), place.clone(), cx);
                                 }
                             }))
                     })
@@ -2083,7 +1944,7 @@ impl Workspace {
                 let more = (all.len() > PAST_SHOWN).then(|| {
                     let label = if expanded { "Show fewer".to_string() } else { format!("Show {} more", all.len() - PAST_SHOWN) };
                     let folder = folder.clone();
-                    sidebar_row(ElementId::Name(format!("more-{}", folder.display()).into()), false)
+                    sidebar_row(ElementId::Name(format!("more-{:?}-{}", folder.host, folder.path.display()).into()), false)
                         .text_color(theme::text_faint())
                         .child(label)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -2096,7 +1957,7 @@ impl Workspace {
                 div()
                     .flex()
                     .flex_col()
-                    .child(div().mt(px(18.)).px(px(10.)).pb_1().text_size(theme::size_meta_small()).text_color(theme::text_section()).child(folder_name(folder)))
+                    .child(div().mt(px(18.)).px(px(10.)).pb_1().text_size(theme::size_meta_small()).text_color(theme::text_section()).child(self.folder_heading(folder)))
                     .children(open)
                     .children(past)
                     .children(more)
@@ -2129,12 +1990,17 @@ impl Workspace {
             )
             .child(div().id("sessions").flex_1().overflow_y_scroll().flex().flex_col().children(groups))
             .children(self.render_sign_in(cx))
-            .when(self.runtime.is_none() && !self.starting, |d| {
+            .map(|d| {
+                let label = match self.status(&HostId::ThisMac) {
+                    Some(connection::Status::Replaced) => "↻ Reconnect to Julia",
+                    Some(connection::Status::Died(_) | connection::Status::Failed(_)) => "↻ Restart Julia",
+                    _ => return d,
+                };
                 d.child(
                     sidebar_row("restart".into(), false)
                         .text_color(theme::accent_text())
-                        .child(if self.replaced { "↻ Reconnect to Julia" } else { "↻ Restart Julia" })
-                        .on_click(cx.listener(|this, _, _, cx| this.boot(cx))),
+                        .child(label)
+                        .on_click(cx.listener(|this, _, _, cx| this.ensure_runtime(&HostId::ThisMac, cx))),
                 )
             })
             .child(
@@ -2252,7 +2118,10 @@ impl Workspace {
                 div().flex().gap_4().children(IdleStop::ALL.map(|(value, label)| {
                     Radio::new(label).text_size(theme::size_body()).checked(s.idle_stop == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
                         this.update_settings(cx, |s| s.idle_stop = value);
-                        this.send_idle_limit(cx);
+                        let hosts: Vec<HostId> = this.connections.keys().cloned().collect();
+                        for host in hosts {
+                            this.send_idle_limit(&host, cx);
+                        }
                     }))
                 })),
             )
@@ -2326,7 +2195,7 @@ impl Workspace {
             )
             .children(s.julia.as_ref().map(|p| note(p.display().to_string())))
             .child(note("Takes effect the next time Julia starts (Restart Julia).".into()))
-            .when(self.runtime.is_some() && !self.starting, |d| {
+            .when(self.status(&HostId::ThisMac) == Some(&connection::Status::Ready), |d| {
                 d.child(
                     div()
                         .id("restart-julia")
@@ -2336,7 +2205,7 @@ impl Workspace {
                         .cursor_pointer()
                         .bg(theme::bg_raised())
                         .child("Restart Julia")
-                        .on_click(cx.listener(|this, _, _, cx| this.boot(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.restart_local(cx))),
                 )
             })
             .child(note("Stops Julia and every open notebook, then starts them again. Notebook files are already saved.".into()))
@@ -2388,12 +2257,15 @@ impl Workspace {
     /// before Claude creates it, while it opens, and once it's stopped. None shows
     /// the web view (Pluto's start page never shows for a session).
     fn notebook_stand_in(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if let Some(pane) = self.host_pane(&session.place.host, cx) {
+            return Some(pane);
+        }
         let line = || div().flex().items_baseline().text_color(theme::text_muted());
         let Some(path) = session.notebook_path.as_deref() else {
             if session.notebook.is_some() {
                 return None;
             }
-            let folder = new_session::file_name(folder_name(&session.cwd));
+            let folder = new_session::file_name(folder_name(&session.place.path));
             return Some(new_session::turtle_pane().child(line().child("Claude will create the notebook in ").child(folder).child(".")).into_any_element());
         };
         let file = new_session::file_name(folder_name(Path::new(path)));
@@ -2593,7 +2465,7 @@ impl Render for Workspace {
         // Chat header: the session and its folder; the notebook header: its file.
         let (title, folder) = match active {
             _ if self.settings_open => ("Settings".into(), None),
-            Some(ix) => (self.sessions[ix].title.clone(), Some(folder_name(&self.sessions[ix].cwd))),
+            Some(ix) => (self.sessions[ix].title.clone(), Some(self.folder_heading(&self.sessions[ix].place))),
             None => ("New session".into(), None),
         };
         let chat_header = column_header("chat-header")
@@ -2843,18 +2715,20 @@ mod tests {
 
     #[test]
     fn row_menu_items() {
-        let labels = |row: &Row, archived| RowAction::for_row(row, archived).into_iter().map(RowAction::label).collect::<Vec<_>>();
-        let past = Row::Past("s1".to_string().into(), "/tmp".into());
-        assert_eq!(labels(&Row::Open(1), Some(false)), ["Rename", "Reveal folder in Finder", "Archive", "Close", "Delete…"]);
-        assert_eq!(labels(&Row::Open(1), None), ["Rename", "Reveal folder in Finder", "Close", "Delete…"]);
-        assert_eq!(labels(&past, Some(true)), ["Rename", "Reveal folder in Finder", "Unarchive", "Delete…"]);
+        let labels = |row: &Row, archived, local| RowAction::for_row(row, archived, local).into_iter().map(RowAction::label).collect::<Vec<_>>();
+        let past = Row::Past("s1".to_string().into(), crate::hosts::Place::local("/tmp"));
+        assert_eq!(labels(&Row::Open(1), Some(false), true), ["Rename", "Reveal folder in Finder", "Archive", "Close", "Delete…"]);
+        assert_eq!(labels(&Row::Open(1), None, true), ["Rename", "Reveal folder in Finder", "Close", "Delete…"]);
+        assert_eq!(labels(&past, Some(true), true), ["Rename", "Reveal folder in Finder", "Unarchive", "Delete…"]);
+        assert_eq!(labels(&Row::Open(1), Some(false), false), ["Rename", "Archive", "Close", "Delete…"]);
     }
 
     #[test]
     fn notebook_menu_items() {
-        let labels = |running| NotebookAction::for_notebook(running).into_iter().map(NotebookAction::label).collect::<Vec<_>>();
-        assert_eq!(labels(true), ["Reveal in Finder", "Open in a new session…", "Stop notebook"]);
-        assert_eq!(labels(false), ["Reveal in Finder", "Open in a new session…"]);
+        let labels = |running, local| NotebookAction::for_notebook(running, local).into_iter().map(NotebookAction::label).collect::<Vec<_>>();
+        assert_eq!(labels(true, true), ["Reveal in Finder", "Open in a new session…", "Stop notebook"]);
+        assert_eq!(labels(false, true), ["Reveal in Finder", "Open in a new session…"]);
+        assert_eq!(labels(true, false), ["Open in a new session…", "Stop notebook"]);
         assert!(MenuPick::Notebook(1, NotebookAction::Stop).danger());
         assert!(!MenuPick::Notebook(1, NotebookAction::Reveal).danger());
     }

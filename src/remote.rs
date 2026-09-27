@@ -23,7 +23,7 @@ use wire::ToApp;
 use wire::askpass::{Answer, Ask, SOCKET_ENV};
 
 use crate::hosts::Server;
-use crate::runtime::{Channel, Hello, Listener};
+use crate::runtime::{Channel, Hello, Listener, Notice, Runtime};
 
 /// What happened so far while connecting, for Test connection's steps.
 #[derive(Clone, Debug, PartialEq)]
@@ -304,7 +304,8 @@ fn kill_group(pid: u32) {
     unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
 }
 
-/// Run the bootstrap on `server` and wait until its runtime is up.
+/// Run the bootstrap on `server` and wait for the helper's hello. The runtime
+/// starts later, when the channel is asked to (`Channel::start_runtime`).
 pub fn connect(server: &Server, transport: &Transport, askpass: Option<&Askpass>, cancel: &Cancel, on: &dyn Fn(Event)) -> Result<(Channel, Hello), String> {
     let version = version()?;
     let mut command = transport.command(&bootstrap_script(&version), askpass)?;
@@ -363,35 +364,42 @@ pub fn connect(server: &Server, transport: &Transport, askpass: Option<&Askpass>
     on(Event::Helper { installed: install.is_some() });
 
     let channel = Channel::open(child, stdin, stdout);
-    let hello = channel.wait_hello(
-        |message| match message {
+    let hello = channel.wait_hello(|| explain(host, &stderr.finish(), None, cancel.cancelled.load(Ordering::SeqCst)))?;
+    Ok((channel, hello))
+}
+
+/// Start the runtime on a connected server's channel; `on` hears Julia being
+/// found and its log. `notice` hears if the runtime goes away later.
+pub fn start(channel: &Channel, listener: &Arc<Listener>, on: &dyn Fn(Event), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
+    let runtime = channel.start_runtime(
+        listener,
+        &mut |message| match message {
             ToApp::Progress { line } => on(Event::Progress(line)),
             ToApp::FoundJulia { path, version } => on(Event::FoundJulia { path, version }),
             _ => {}
         },
-        || explain(host, &stderr.finish(), None, cancel.cancelled.load(Ordering::SeqCst)),
+        notice,
     )?;
-    Ok((channel, hello))
+    on(Event::Started { node: runtime.node.clone(), reattached: runtime.reattached });
+    Ok(runtime)
 }
 
 /// Test connection: connect, check the runtime answers through the app's
 /// listener, then stop it (or leave it running if it already was).
 pub fn test(server: &Server, askpass: Option<&Askpass>, cancel: &Cancel, on: &dyn Fn(Event)) -> Result<(), String> {
     let transport = Transport::for_server(server);
-    let (channel, hello) = connect(server, &transport, askpass, cancel, on)?;
+    let (channel, _) = connect(server, &transport, askpass, cancel, on)?;
     let listener = test_listener()?;
-    let runtime = channel.attach(&listener, &hello, futures::channel::mpsc::unbounded().0);
-    let answered = bridge_ping(listener.bridge_port(), &hello.token);
-    if answered.is_ok() {
-        on(Event::Started { node: hello.node.clone(), reattached: hello.reattached });
-    }
-    if hello.reattached {
-        runtime.detach();
+    let runtime = start(&channel, &listener, on, |_| {})?;
+    let answered = bridge_ping(listener.bridge_port(), &runtime.bridge.token);
+    if runtime.reattached {
+        channel.detach();
     } else {
-        runtime.stop();
+        channel.stop();
+        channel.detach();
     }
-    answered.map_err(|e| format!("Julia started on {}, but it didn't answer through Endeavor's connection ({e}).", hello.node))?;
-    on(Event::Finished { stopped: !hello.reattached });
+    answered.map_err(|e| format!("Julia started on {}, but it didn't answer through Endeavor's connection ({e}).", runtime.node))?;
+    on(Event::Finished { stopped: !runtime.reattached });
     Ok(())
 }
 
@@ -578,6 +586,7 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use wire::askpass::Kind;
+    use wire::files;
 
     #[test]
     fn the_bootstrap_survives_any_login_shell() {
@@ -726,27 +735,42 @@ mod tests {
 
         let (seen, on) = events();
         let (channel, hello) = connect(&server, &transport, None, &Cancel::default(), &on).expect("first connect");
-        assert!(hello.reattached);
-        assert_eq!((hello.token.as_str(), hello.pluto_secret.as_str(), hello.node.clone()), (token, "s3cret", hostname()));
-        let seen = seen.lock().unwrap().clone();
-        assert!(matches!(&seen[0], Event::Connected { os, .. } if os == "Darwin"), "{seen:?}");
-        assert_eq!(seen[1], Event::Helper { installed: true });
+        assert_eq!((hello.node.as_str(), hello.home.as_path()), (hostname().as_str(), home.as_path()));
         let installed = home.join(".cache/endeavor").join(version().unwrap());
         assert!(installed.join("endeavor-remote").is_file() && installed.join("runtime/boot.jl").is_file());
 
-        // Reachable through a listener, like the app's.
+        // Its files before any runtime: a folder under the (fake) home.
+        std::fs::create_dir_all(home.join("decay-fits")).unwrap();
+        std::fs::write(home.join("decay-fits/fit.jl"), "### A Pluto.jl notebook ###\n").unwrap();
+        let listed = channel.files(files::Request::List { path: "~".into() }).expect("list");
+        assert!(matches!(&listed, files::Reply::List { entries, .. } if entries.iter().any(|e| e.name == "decay-fits" && e.dir)), "{listed:?}");
+        let found = channel.files(files::Request::Notebooks { path: "~/decay-fits".into() }).expect("scan");
+        assert!(matches!(&found, files::Reply::Notebooks { found } if found.len() == 1), "{found:?}");
+        assert!(channel.files(files::Request::Preview { path: "~/nope.jl".into() }).is_err());
+
+        // Started on request, reachable through a listener like the app's.
         let listener = Listener::start().unwrap();
-        let runtime = channel.attach(&listener, &hello, futures::channel::mpsc::unbounded().0);
+        let runtime = start(&channel, &listener, &on, |_| {}).expect("start");
+        assert!(runtime.reattached);
+        assert_eq!((runtime.bridge.token.as_str(), runtime.node.clone()), (token, hostname()));
+        assert!(runtime.pluto_url.ends_with("/?secret=s3cret"));
+        let seen = seen.lock().unwrap().clone();
+        assert!(matches!(&seen[0], Event::Connected { os, .. } if os == "Darwin"), "{seen:?}");
+        assert_eq!(seen[1], Event::Helper { installed: true });
+        assert!(matches!(&seen[2], Event::Started { reattached: true, .. }), "{seen:?}");
         bridge_ping(listener.bridge_port(), token).expect("ping through the listener");
-        runtime.detach();
+        channel.detach();
         assert!(fake.alive(), "detaching leaves it running");
 
         let (seen, on) = events();
-        let (channel, hello) = connect(&server, &transport, None, &Cancel::default(), &on).expect("second connect");
+        let (channel, _) = connect(&server, &transport, None, &Cancel::default(), &on).expect("second connect");
         assert_eq!(seen.lock().unwrap()[1], Event::Helper { installed: false });
-        let runtime = channel.attach(&listener, &hello, futures::channel::mpsc::unbounded().0);
-        runtime.stop();
+        start(&channel, &listener, &on, |_| {}).expect("start again");
+        channel.stop();
         assert!(!fake.alive(), "Stop reaches the runtime's bridge");
+        // The helper stays connected after a stop.
+        assert!(channel.files(files::Request::List { path: "~".into() }).is_ok());
+        channel.detach();
         let _ = std::fs::remove_dir_all(&home);
     }
 
