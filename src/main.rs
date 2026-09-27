@@ -16,6 +16,7 @@ mod attach;
 mod celldiff;
 mod composer;
 mod connection;
+mod details;
 mod gate;
 mod host_list;
 mod hosts;

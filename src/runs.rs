@@ -203,7 +203,7 @@ mod tests {
     }
 
     fn thought() -> Entry {
-        Entry::Thought { text: "hmm".into(), expanded: false }
+        Entry::Thought { text: "hmm".into(), expanded: false, started: None, took: None }
     }
 
     #[test]
