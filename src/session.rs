@@ -32,7 +32,7 @@ use crate::gate;
 use crate::hosts::Place;
 use crate::pluto;
 use crate::runs;
-use crate::outbox::{Dispatch, Outbox, Queued};
+use crate::outbox::{Copying, Dispatch, Outbox, Queued};
 
 pub enum Entry {
     /// The user's words and, above them, their chips.
@@ -576,6 +576,14 @@ impl Session {
         self.title_from(&message.text);
         let mut effects = Vec::new();
         let dispatch = self.outbox.submit(message, now && self.id.is_some());
+        self.dispatch(dispatch, &mut effects);
+        effects
+    }
+
+    /// A queued message's files are copied (see `Outbox::copied`).
+    pub fn copied(&mut self, ticket: Copying, done: Option<(Vec<Attachment>, Vec<ContentBlock>)>) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        let dispatch = self.outbox.copied(ticket, done);
         self.dispatch(dispatch, &mut effects);
         effects
     }
@@ -1915,6 +1923,7 @@ pub fn render_queue(this: &Workspace, session: &Session, cx: &mut Context<Worksp
             .border_color(theme::border())
             .child(this.render_queued(i, &q.attachments, &q.text))
             .when(q.in_flight(), |d| d.child("sending now…"))
+            .when(q.is_copying(), |d| d.child(div().flex_shrink_0().child("copying files…")))
             .when(!q.in_flight(), |d| {
                 d.child(div().id(id("edit")).cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✎").on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(q) = this.session_mut(key).and_then(|s| s.outbox.take(i)) {

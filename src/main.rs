@@ -1342,6 +1342,7 @@ impl Workspace {
     /// (off the main thread; to a server, through its helper, with progress
     /// under the box for a big one), so a chip removed before sending leaves
     /// nothing.
+    /// Meanwhile the message waits in the queue, and what's sent after it waits behind it.
     fn send(&mut self, key: u64, context: Option<ContentBlock>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
         /// Smaller files are sent before progress would be worth reading.
         const SHOW_PROGRESS: u64 = 4_000_000;
@@ -1350,6 +1351,10 @@ impl Workspace {
         if !attachments.iter().any(|a| matches!(a, attach::Attachment::Upload { .. })) {
             return self.submit_message(key, context, (text, attachments, mentioned), now, cx);
         }
+        let (queued, ticket) = Queued::copying(text.clone(), attachments.clone(), context.into_iter().collect());
+        let Some(session) = self.session_mut(key) else { return };
+        let effects = session.submit(queued, now);
+        self.apply_effects(key, effects, cx);
         let (progress, mut progressed) = futures::channel::mpsc::unbounded::<attach::Progress>();
         let channel = self.connection(&place.host).and_then(|c| c.channel.clone());
         let (dest, fallback) = match (&place.host, channel) {
@@ -1388,10 +1393,13 @@ impl Workspace {
                     let why = [fallback.unwrap_or_default(), &refused.join(" "), "The message went without it."].join(" ");
                     this.composer.notice = Some(why.trim_start().into());
                 }
-                if !text.is_empty() || !attachments.is_empty() {
-                    this.submit_message(key, context, (text, attachments, mentioned), now, cx);
-                }
-                cx.notify();
+                let done = (!text.is_empty() || !attachments.is_empty()).then(|| {
+                    let blocks = attach::prompt_blocks(&text, &attachments, &mentioned);
+                    (attachments, blocks)
+                });
+                let Some(session) = this.session_mut(key) else { return };
+                let effects = session.copied(ticket, done);
+                this.apply_effects(key, effects, cx);
             });
         })
         .detach();

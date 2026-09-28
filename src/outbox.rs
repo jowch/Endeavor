@@ -3,9 +3,11 @@
 //! messages go out one per turn, in order, and stay editable until they do.
 //! While Claude can't be reached (offline, signed out) the outbox is held:
 //! everything queues, and a turn that failed for that reason keeps its message
-//! to send again first.
+//! to send again first. A message whose files are still being copied waits in
+//! the queue, and so does everything sent after it.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_client_protocol::schema::v1::ContentBlock;
 
@@ -21,15 +23,34 @@ pub struct Queued {
     pub blocks: Vec<ContentBlock>,
     /// Handed to the agent as a SendNow and awaiting Steered/Unsent.
     in_flight: bool,
+    /// Its files are being copied; `blocks` gets the rest of the message after.
+    copying: Option<Copying>,
+    /// Sent with Cmd+Enter while its files were being copied: steer once they are.
+    steer: bool,
 }
+
+/// Names a message whose files are being copied, for `Outbox::copied`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Copying(u64);
 
 impl Queued {
     pub fn new(text: String, attachments: Vec<Attachment>, blocks: Vec<ContentBlock>) -> Self {
-        Self { text, attachments, blocks, in_flight: false }
+        Self { text, attachments, blocks, in_flight: false, copying: None, steer: false }
+    }
+
+    /// A message that can't go until its files are copied.
+    pub fn copying(text: String, attachments: Vec<Attachment>, blocks: Vec<ContentBlock>) -> (Self, Copying) {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let ticket = Copying(NEXT.fetch_add(1, Ordering::Relaxed));
+        (Self { copying: Some(ticket), ..Self::new(text, attachments, blocks) }, ticket)
     }
 
     pub fn in_flight(&self) -> bool {
         self.in_flight
+    }
+
+    pub fn is_copying(&self) -> bool {
+        self.copying.is_some()
     }
 }
 
@@ -63,18 +84,53 @@ impl Outbox {
     }
 
     pub fn submit(&mut self, mut q: Queued, now: bool) -> Option<Dispatch> {
+        if q.is_copying() {
+            q.steer = now;
+            self.items.push_back(q);
+            return None;
+        }
         if !self.busy && !self.held && self.items.is_empty() && self.unanswered.is_none() {
             return Some(self.start(q));
         }
-        // One SendNow at a time: its fallback needs the front slot.
-        if now && self.busy && !self.held && !self.front_in_flight() {
-            q.in_flight = true;
-            let turn = Turn::SendNow(q.blocks.clone());
-            self.items.push_front(q);
-            return Some(Dispatch { turn, shown: None });
+        if now && self.can_steer(self.items.len()) {
+            return Some(self.steer(q));
         }
         self.items.push_back(q);
         self.next()
+    }
+
+    /// The message's files are copied: the rest of its blocks, and its chips
+    /// as copied (None: nothing of it is left to send). It goes when it's its turn.
+    pub fn copied(&mut self, ticket: Copying, done: Option<(Vec<Attachment>, Vec<ContentBlock>)>) -> Option<Dispatch> {
+        // Gone: pulled back to edit, or dropped.
+        let ix = self.items.iter().position(|q| q.copying == Some(ticket))?;
+        let Some((attachments, blocks)) = done else {
+            self.items.remove(ix);
+            return self.next();
+        };
+        let q = &mut self.items[ix];
+        q.copying = None;
+        q.attachments = attachments;
+        q.blocks.extend(blocks);
+        if q.steer && self.can_steer(ix) {
+            let q = self.items.remove(ix).expect("found above");
+            return Some(self.steer(q));
+        }
+        self.next()
+    }
+
+    /// A message queued behind `ahead` others can join the running turn: one
+    /// SendNow at a time (its fallback needs the front slot), and never ahead
+    /// of a message still being copied.
+    fn can_steer(&self, ahead: usize) -> bool {
+        self.busy && !self.held && !self.front_in_flight() && !self.items.iter().take(ahead).any(Queued::is_copying)
+    }
+
+    fn steer(&mut self, mut q: Queued) -> Dispatch {
+        q.in_flight = true;
+        let turn = Turn::SendNow(q.blocks.clone());
+        self.items.push_front(q);
+        Dispatch { turn, shown: None }
     }
 
     pub fn turn_ended(&mut self) -> Option<Dispatch> {
@@ -131,7 +187,8 @@ impl Outbox {
     }
 
     /// Start the next turn if idle. Waits while a SendNow's outcome is pending, so
-    /// a message is never both steered in and re-sent.
+    /// a message is never both steered in and re-sent, and while the next
+    /// message's files are being copied, so messages go in the order sent.
     fn next(&mut self) -> Option<Dispatch> {
         if self.busy || self.held || self.front_in_flight() {
             return None;
@@ -140,6 +197,9 @@ impl Outbox {
             self.busy = true;
             self.current = Some(blocks.clone());
             return Some(Dispatch { turn: Turn::Prompt(blocks), shown: None });
+        }
+        if self.items.front()?.is_copying() {
+            return None;
         }
         let q = self.items.pop_front()?;
         Some(self.start(q))
@@ -235,6 +295,64 @@ mod tests {
         assert!(matches!(again.turn, Turn::Prompt(blocks) if blocks == words()));
         assert!(!o.has_unanswered());
         assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("later"));
+    }
+
+    fn copying(s: &str) -> (Queued, Copying) {
+        Queued::copying(s.into(), vec![], vec![])
+    }
+
+    fn done() -> Option<(Vec<Attachment>, Vec<ContentBlock>)> {
+        Some((vec![], vec![]))
+    }
+
+    #[test]
+    fn a_message_sent_while_an_earlier_one_copies_waits_behind_it() {
+        let mut o = Outbox::default();
+        let (big, ticket) = copying("big file");
+        assert!(o.submit(big, false).is_none());
+        assert!(o.submit(msg("after"), false).is_none());
+        assert!(o.submit(msg("urgent"), true).is_none());
+        assert_eq!(o.items.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["big file", "after", "urgent"]);
+        assert_eq!(prompt_label(o.copied(ticket, done())).as_deref(), Some("big file"));
+        assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("after"));
+        assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("urgent"));
+    }
+
+    #[test]
+    fn a_copied_message_waits_for_the_running_turn_and_those_queued_before_it() {
+        let mut o = Outbox::default();
+        o.submit(msg("a"), false);
+        o.submit(msg("b"), false);
+        let (big, ticket) = copying("big file");
+        o.submit(big, false);
+        assert!(o.copied(ticket, done()).is_none());
+        assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("b"));
+        assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("big file"));
+    }
+
+    #[test]
+    fn a_copying_send_now_steers_once_copied() {
+        let mut o = Outbox::default();
+        o.submit(msg("a"), false);
+        let (big, ticket) = copying("big file");
+        assert!(o.submit(big, true).is_none());
+        let d = o.copied(ticket, done()).unwrap();
+        assert!(matches!(d.turn, Turn::SendNow(_)));
+        assert_eq!(o.steered().map(|(text, _)| text).as_deref(), Some("big file"));
+    }
+
+    #[test]
+    fn a_copy_left_with_nothing_to_send_or_pulled_back_lets_the_next_go() {
+        let mut o = Outbox::default();
+        let (big, ticket) = copying("");
+        o.submit(big, false);
+        o.submit(msg("after"), false);
+        assert_eq!(prompt_label(o.copied(ticket, None)).as_deref(), Some("after"));
+        let (big, ticket) = copying("edit me");
+        o.submit(big, false);
+        assert!(o.take(0).is_some());
+        assert!(o.copied(ticket, done()).is_none());
+        assert!(o.items.is_empty());
     }
 
     #[test]
