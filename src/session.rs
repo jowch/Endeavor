@@ -1557,9 +1557,9 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         }
     }
     if buttons.is_empty() {
-        buttons = options.iter().map(|o| (o.name.clone(), "", o.clone(), false)).collect();
+        buttons = option_buttons(options);
     }
-    let primary = buttons.len() - 1;
+    let primary = buttons.iter().rposition(|(_, _, o, _)| matches!(o.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways));
     let code = code.map(|code| {
         const LINES: usize = 8;
         let mut shown: Vec<&str> = code.lines().take(LINES).collect();
@@ -1573,7 +1573,7 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         .into_iter()
         .enumerate()
         .map(|(i, (label, hint, option, stop))| {
-            approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, i == primary)
+            approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, Some(i) == primary)
                 .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, stop))))
                 .into_any_element()
         })
@@ -1583,6 +1583,28 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         code.into_iter().chain(body).collect(),
         buttons,
     ))
+}
+
+/// The agent's own options as buttons: declining first, allowing once last
+/// (the primary one), with the keys that answer them (⏎ allows once, Esc declines).
+fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, PermissionOption, bool)> {
+    let rank = |o: &PermissionOption| match o.kind {
+        PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways => 0,
+        PermissionOptionKind::AllowOnce => 2,
+        _ => 1,
+    };
+    let mut sorted: Vec<&PermissionOption> = options.iter().collect();
+    sorted.sort_by_key(|o| rank(o));
+    let keyed = |kind: PermissionOptionKind, hint: &'static str, o: &PermissionOption| {
+        option_of_kind(options, kind).is_some_and(|k| k.option_id == o.option_id).then_some(hint)
+    };
+    sorted
+        .into_iter()
+        .map(|o| {
+            let hint = keyed(PermissionOptionKind::AllowOnce, "⏎", o).or_else(|| keyed(PermissionOptionKind::RejectOnce, "esc", o)).unwrap_or("");
+            (o.name.clone(), hint, o.clone(), false)
+        })
+        .collect()
 }
 
 /// Plan mode's end: the plan, then Keep planning · Start in Auto · **Start**.
@@ -2001,6 +2023,19 @@ mod tests {
         AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, SessionId, SessionMode, SessionModeState, SessionUpdate,
         StopReason, UsageUpdate,
     };
+
+    #[test]
+    fn the_agents_own_options_put_allowing_last_and_declining_first() {
+        use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind};
+        // The adapter's order for a tool it has no special wording for.
+        let options = [
+            PermissionOption::new("allow-once", "Yes", PermissionOptionKind::AllowOnce),
+            PermissionOption::new("allow-with-updates", "Yes, and don't ask again", PermissionOptionKind::AllowAlways),
+            PermissionOption::new("reject", "No", PermissionOptionKind::RejectOnce),
+        ];
+        let buttons: Vec<(String, &str)> = super::option_buttons(&options).into_iter().map(|(label, hint, _, _)| (label, hint)).collect();
+        assert_eq!(buttons, vec![("No".into(), "esc"), ("Yes, and don't ask again".into(), ""), ("Yes".into(), "⏎")]);
+    }
 
     #[test]
     fn answers_show_on_their_calls_and_dont_split_runs() {
