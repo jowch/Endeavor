@@ -232,7 +232,7 @@ impl Render for PaneTooltip {
             move |bounds, _, cx| {
                 let webview = webview.read(cx);
                 let rect = Bounds { origin: bounds.origin - webview.bounds().origin, size: bounds.size };
-                overlay::set_hole(webview.raw(), Some(rect));
+                overlay::set_hole(webview.raw(), overlay::Hole::Tooltip, Some(rect));
                 hole.set(Some(rect));
             },
             |_, _, _, _| (),
@@ -263,7 +263,7 @@ impl Drop for PaneTooltip {
     fn drop(&mut self) {
         TOOLTIPS.fetch_sub(1, Ordering::Relaxed);
         if let Some(rect) = self.hole.get() {
-            overlay::close_hole_at(rect);
+            overlay::close_hole_at(overlay::Hole::Tooltip, rect);
         }
     }
 }
@@ -472,9 +472,8 @@ impl Workspace {
         });
 
         let open = |target: MenuTarget| self.menu.as_ref().is_some_and(|m| m.target == target);
-        // The tip and a tooltip would fight over the web view's one hole.
         let point_tip = self.point_tip_shows(shown);
-        let tip = |d: Stateful<Div>, text: &'static str| if point_tip { d } else { d.tooltip(tooltip(text, &self.webview)) };
+        let tip = |d: Stateful<Div>, text: &'static str| d.tooltip(tooltip(text, &self.webview));
         let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating), "Pick cells or draw a box to ask Claude about  ⌘⇧K")
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, cx)));
@@ -483,7 +482,7 @@ impl Workspace {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             [
                 header_button("header-share", Glyph::Share, None, open(MenuTarget::Share(key)))
-                    .when(share_menu.is_none() && !point_tip, |d| d.tooltip(tooltip("Share and export", &self.webview)))
+                    .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.open_menu(MenuTarget::Share(key), None, window, cx);

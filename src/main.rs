@@ -2013,7 +2013,7 @@ impl Workspace {
         let hole = notebook_menu.then(|| {
             let webview = self.webview.read(cx);
             let (handle, under) = (webview.handle(), webview.bounds());
-            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ()).absolute().size_full()
+            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Menu, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ()).absolute().size_full()
         });
         let body = div()
             .id("popup-menu")
@@ -2500,7 +2500,7 @@ impl Workspace {
                 cx.stop_propagation();
                 this.open_menu(MenuTarget::Notebook(key), None, window, cx);
             }))
-            .when(menu.is_none() && !self.point_tip_shows(true), |d| d.tooltip(notebook_pane::tooltip("More", &self.webview)))
+            .when(menu.is_none(), |d| d.tooltip(notebook_pane::tooltip("More", &self.webview)))
             .child("⋮")
             .children(menu.map(|menu| self.render_menu(menu, cx)))
     }
@@ -2573,8 +2573,11 @@ impl Render for Workspace {
         }
         let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
         let point_tip = self.point_tip_shows(show_webview && active.is_some_and(|ix| self.sessions[ix].notebook_path.is_some()));
-        if !menu_over_notebook && !notebook_pane::tooltip_over_notebook() && !point_tip {
-            overlay::set_hole(self.webview.read(cx).raw(), None);
+        let webview = self.webview.read(cx).raw();
+        for (hole, open) in [(overlay::Hole::Menu, menu_over_notebook), (overlay::Hole::Tip, point_tip), (overlay::Hole::Tooltip, notebook_pane::tooltip_over_notebook())] {
+            if !open {
+                overlay::set_hole(webview, hole, None);
+            }
         }
         if let Some(setup) = &self.setup {
             let below = match self.render_sign_in_panel(cx) {

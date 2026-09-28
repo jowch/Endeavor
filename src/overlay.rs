@@ -1,7 +1,8 @@
 //! A GPUI menu over the notebook. The notebook's web view is a native view on top
 //! of everything GPUI draws, so a menu drawn there would be hidden and its clicks
 //! would go to the page. While one is open, the web view gets a hole where the
-//! menu is: its layer is masked there, and clicks there go to GPUI.
+//! menu is: its layer is masked there, and clicks there go to GPUI. A menu, a
+//! tip and a tooltip can each have a hole at the same time.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -60,15 +61,22 @@ impl CGRect {
     }
 }
 
-/// The open hole, in the web view's coordinates from its top-left corner, and
+/// What a hole in the web view is for; each has at most one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hole {
+    Menu,
+    Tip,
+    Tooltip,
+}
+
+/// The open holes, in the web view's coordinates from its top-left corner, and
 /// the web view (an address: it lives as long as the app).
-#[derive(Clone, Copy)]
-struct Hole {
-    rect: CGRect,
+struct Holes {
+    rects: Vec<(Hole, CGRect)>,
     view: usize,
 }
 
-static HOLE: Mutex<Option<Hole>> = Mutex::new(None);
+static HOLES: Mutex<Holes> = Mutex::new(Holes { rects: Vec::new(), view: 0 });
 
 type SendEvent = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
 static GPUI_SEND_EVENT: OnceLock<SendEvent> = OnceLock::new();
@@ -85,18 +93,19 @@ const LEFT_DRAGGED: usize = 6;
 /// recognizers take mouse-downs over the whole view).
 unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
     unsafe {
-        let hole = *HOLE.lock().unwrap();
+        let (rects, view) = {
+            let holes = HOLES.lock().unwrap();
+            (holes.rects.iter().map(|(_, rect)| *rect).collect::<Vec<_>>(), holes.view)
+        };
         let kind: usize = msg_send![event, type];
-        if let Some(hole) = hole
-            && [LEFT_DOWN, LEFT_UP, RIGHT_DOWN, RIGHT_UP, LEFT_DRAGGED].contains(&kind)
-        {
-            let view = hole.view as *mut AnyObject;
+        if !rects.is_empty() && [LEFT_DOWN, LEFT_UP, RIGHT_DOWN, RIGHT_UP, LEFT_DRAGGED].contains(&kind) {
+            let view = view as *mut AnyObject;
             let in_window: CGPoint = msg_send![event, locationInWindow];
             let local: CGPoint = msg_send![view, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
             let flipped: Bool = msg_send![view, isFlipped];
             let bounds: CGRect = msg_send![view, bounds];
             let y = if flipped.as_bool() { local.y } else { bounds.size.height - local.y };
-            if hole.rect.contains(local.x, y) {
+            if rects.iter().any(|rect| rect.contains(local.x, y)) {
                 let gpui: *mut AnyObject = msg_send![view, superview];
                 match kind {
                     LEFT_DOWN => msg_send![gpui, mouseDown: event],
@@ -129,17 +138,34 @@ fn install_send_event() {
     }
 }
 
-/// Everything in `bounds` but `hole` (both from the top-left), as a mask layer.
-unsafe fn mask_around(bounds: CGRect, hole: CGRect, flipped: bool) -> *mut AnyObject {
+/// Everything in a `w` by `h` area but `holes` (all from the top-left), as
+/// rectangles: the cells of the grid their edges make that no hole covers.
+fn around(w: f64, h: f64, holes: &[CGRect]) -> Vec<CGRect> {
+    let edges = |ends: fn(&CGRect) -> [f64; 2], max: f64| {
+        let mut at: Vec<f64> = holes.iter().flat_map(ends).map(|v| v.clamp(0., max)).chain([0., max]).collect();
+        at.sort_by(f64::total_cmp);
+        at.dedup();
+        at
+    };
+    let xs = edges(|r| [r.origin.x, r.origin.x + r.size.width], w);
+    let ys = edges(|r| [r.origin.y, r.origin.y + r.size.height], h);
+    let mut cells = Vec::new();
+    for x in xs.windows(2) {
+        for y in ys.windows(2) {
+            let (mid_x, mid_y) = ((x[0] + x[1]) / 2., (y[0] + y[1]) / 2.);
+            if !holes.iter().any(|hole| hole.contains(mid_x, mid_y)) {
+                cells.push(CGRect::new(x[0], y[0], x[1] - x[0], y[1] - y[0]));
+            }
+        }
+    }
+    cells
+}
+
+/// Everything in `bounds` but `holes` (all from the top-left), as a mask layer.
+unsafe fn mask_around(bounds: CGRect, holes: &[CGRect], flipped: bool) -> *mut AnyObject {
     unsafe {
         let (w, h) = (bounds.size.width, bounds.size.height);
-        let (x, y, hw, hh) = (hole.origin.x, hole.origin.y, hole.size.width, hole.size.height);
-        let around = [
-            CGRect::new(0., 0., w, y),
-            CGRect::new(0., y + hh, w, h - y - hh),
-            CGRect::new(0., y, x, hh),
-            CGRect::new(x + hw, y, w - x - hw, hh),
-        ];
+        let around = around(w, h, holes);
         let mask: *mut AnyObject = msg_send![class!(CALayer), layer];
         let _: () = msg_send![mask, setFrame: bounds];
         let black: *mut AnyObject = msg_send![class!(NSColor), blackColor];
@@ -157,21 +183,48 @@ unsafe fn mask_around(bounds: CGRect, hole: CGRect, flipped: bool) -> *mut AnyOb
     }
 }
 
-/// Cut a hole in the web view at `hole` (relative to the web view's top-left
-/// corner), or close it with None.
-pub fn set_hole(webview: &wry::WebView, hole: Option<Bounds<Pixels>>) {
+fn cg_rect(b: Bounds<Pixels>) -> CGRect {
+    CGRect::new(f64::from(b.origin.x), f64::from(b.origin.y), f64::from(b.size.width), f64::from(b.size.height))
+}
+
+/// Cut `owner`'s hole in the web view at `hole` (relative to the web view's
+/// top-left corner), or close it with None. Other holes stay.
+pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>>) {
     use wry::WebViewExtMacOS;
-    let rect = hole.map(|b| CGRect::new(f64::from(b.origin.x), f64::from(b.origin.y), f64::from(b.size.width), f64::from(b.size.height)));
     let view = webview.webview();
-    let view: *mut AnyObject = &*view as *const _ as *mut AnyObject;
-    {
-        let mut current = HOLE.lock().unwrap();
-        if current.map(|hole| hole.rect) == rect {
+    let view = &*view as *const _ as *mut AnyObject as usize;
+    let rects = {
+        let mut holes = HOLES.lock().unwrap();
+        let before = holes.rects.clone();
+        holes.rects.retain(|(o, _)| *o != owner);
+        holes.rects.extend(hole.map(|b| (owner, cg_rect(b))));
+        if holes.rects == before {
             return;
         }
-        *current = rect.map(|rect| Hole { rect, view: view as usize });
-    }
+        holes.view = view;
+        holes.rects.iter().map(|(_, rect)| *rect).collect::<Vec<_>>()
+    };
     install_send_event();
+    unsafe { mask(view as *mut AnyObject, &rects) }
+}
+
+/// Close `owner`'s hole if it's still the one at `hole` (a tooltip's that
+/// another tooltip hasn't replaced since).
+pub fn close_hole_at(owner: Hole, hole: Bounds<Pixels>) {
+    let (view, rects) = {
+        let mut holes = HOLES.lock().unwrap();
+        let open = (owner, cg_rect(hole));
+        if !holes.rects.contains(&open) {
+            return;
+        }
+        holes.rects.retain(|r| *r != open);
+        (holes.view, holes.rects.iter().map(|(_, rect)| *rect).collect::<Vec<_>>())
+    };
+    unsafe { mask(view as *mut AnyObject, &rects) }
+}
+
+/// Mask the web view's layer around `holes`, or not at all when there are none.
+unsafe fn mask(view: *mut AnyObject, holes: &[CGRect]) {
     unsafe {
         let layer: *mut AnyObject = msg_send![view, layer];
         if layer.is_null() {
@@ -179,35 +232,35 @@ pub fn set_hole(webview: &wry::WebView, hole: Option<Bounds<Pixels>>) {
         }
         let _: () = msg_send![class!(CATransaction), begin];
         let _: () = msg_send![class!(CATransaction), setDisableActions: true];
-        let mask = match rect {
-            None => std::ptr::null_mut(),
-            Some(rect) => {
-                let bounds: CGRect = msg_send![layer, bounds];
-                let flipped: Bool = msg_send![layer, isGeometryFlipped];
-                mask_around(bounds, rect, flipped.as_bool())
-            }
+        let mask = if holes.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            let bounds: CGRect = msg_send![layer, bounds];
+            let flipped: Bool = msg_send![layer, isGeometryFlipped];
+            mask_around(bounds, holes, flipped.as_bool())
         };
         let _: () = msg_send![layer, setMask: mask];
         let _: () = msg_send![class!(CATransaction), commit];
     }
 }
 
-/// Close the hole if it's still the one at `hole` (a tooltip's, say, and not
-/// a menu's opened since).
-pub fn close_hole_at(hole: Bounds<Pixels>) {
-    let rect = CGRect::new(f64::from(hole.origin.x), f64::from(hole.origin.y), f64::from(hole.size.width), f64::from(hole.size.height));
-    let Some(open) = *HOLE.lock().unwrap() else { return };
-    if open.rect != rect {
-        return;
+#[cfg(test)]
+mod tests {
+    use super::{CGRect, around};
+
+    fn area(rects: &[CGRect]) -> f64 {
+        rects.iter().map(|r| r.size.width * r.size.height).sum()
     }
-    *HOLE.lock().unwrap() = None;
-    unsafe {
-        let layer: *mut AnyObject = msg_send![open.view as *mut AnyObject, layer];
-        if !layer.is_null() {
-            let _: () = msg_send![class!(CATransaction), begin];
-            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
-            let _: () = msg_send![layer, setMask: std::ptr::null_mut::<AnyObject>()];
-            let _: () = msg_send![class!(CATransaction), commit];
-        }
+
+    #[test]
+    fn the_mask_covers_everything_but_the_holes_even_where_they_overlap() {
+        let tip = CGRect::new(100., 10., 400., 50.);
+        let tooltip = CGRect::new(450., 0., 100., 20.);
+        let visible = around(1000., 800., &[tip, tooltip]);
+        // 400×50 and 100×20 less the 50×10 they share.
+        assert_eq!(area(&visible), 1000. * 800. - 21_500.);
+        assert!(visible.iter().all(|cell| !cell.contains(120., 30.) && !cell.contains(540., 5.)));
+        assert!(visible.iter().any(|cell| cell.contains(50., 30.)));
+        assert_eq!(area(&around(1000., 800., &[])), 1000. * 800.);
     }
 }

@@ -161,7 +161,7 @@ impl Workspace {
     }
 
     /// Whether Point's tip shows, given that the notebook is on screen. Not
-    /// while a menu is open: the web view has one hole at a time.
+    /// while a menu is open: the menu would cover it.
     pub fn point_tip_shows(&self, notebook_shown: bool) -> bool {
         notebook_shown && !self.settings.point_tip_seen && self.menu.is_none()
     }
@@ -178,7 +178,7 @@ impl Workspace {
         let cut = canvas(
             move |bounds, _, _| {
                 let rect = Bounds { origin: bounds.origin - under.origin, size: bounds.size };
-                overlay::set_hole(handle.raw(), Some(rect));
+                overlay::set_hole(handle.raw(), overlay::Hole::Tip, Some(rect));
             },
             |_, _, _, _| (),
         )

@@ -125,9 +125,16 @@ pub fn webview_parent(window: &gpui::Window) -> XlibParent {
 pub mod overlay {
     use gpui::{Bounds, Pixels};
 
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Hole {
+        Menu,
+        Tip,
+        Tooltip,
+    }
+
     /// Menus over the notebook: on Linux the web view's X11 window still covers them.
-    pub fn set_hole(_: &wry::WebView, _: Option<Bounds<Pixels>>) {}
-    pub fn close_hole_at(_: Bounds<Pixels>) {}
+    pub fn set_hole(_: &wry::WebView, _: Hole, _: Option<Bounds<Pixels>>) {}
+    pub fn close_hole_at(_: Hole, _: Bounds<Pixels>) {}
 }
 
 #[cfg(not(target_os = "macos"))]
