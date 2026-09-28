@@ -967,7 +967,9 @@ impl Workspace {
                     .into_any_element(),
             );
         }
-        if session.notebook.is_some() {
+        // A page taken down with its runtime (`close_page`) stays covered until the reopened one loads.
+        let blank = self.webview.read(cx).raw().url().is_ok_and(|url| url == "about:blank");
+        if session.notebook.is_some() && !blank {
             return None;
         }
         Some(new_session::turtle_pane().child(div().flex().items_baseline().text_color(theme::text_muted()).child("Opening ").child(new_session::file_name(file)).child("…")).into_any_element())

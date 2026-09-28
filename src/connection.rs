@@ -198,11 +198,13 @@ impl Connection {
     }
 
     /// Stop following the runtime that's going; `last_notebooks` stays for the reopen.
-    fn forget_runtime(&mut self) {
-        self.runtime = None;
+    /// Returns it, for `Workspace::close_page`.
+    #[must_use]
+    fn forget_runtime(&mut self) -> Option<Runtime> {
         self.watching.fetch_add(1, Ordering::SeqCst);
         self.notebooks = serde_json::Value::Null;
         self.cells = serde_json::Value::Null;
+        self.runtime.take()
     }
 }
 
@@ -224,6 +226,17 @@ impl Workspace {
     pub fn session_bridge(&self, key: u64) -> Option<Bridge> {
         let session = self.sessions.iter().find(|s| s.key == key)?;
         self.bridge(&session.place.host)
+    }
+
+    /// Take `gone`'s notebook page out of the web view. Left there, it keeps
+    /// reconnecting to its port, where the host's next runtime listens with a
+    /// new Pluto secret, and Pluto then alerts that it "has lost authentication".
+    fn close_page(&mut self, gone: Option<Runtime>, cx: &mut Context<Self>) {
+        let Some((origin, _)) = gone.as_ref().and_then(|r| r.pluto_url.split_once('?')) else { return };
+        let shown = self.webview.read(cx).raw().url().unwrap_or_default();
+        if shown.starts_with(origin) {
+            self.webview.update(cx, |w, _| w.load_url("about:blank"));
+        }
     }
 
     fn listener(&mut self, host: &HostId) -> Result<Arc<Listener>, String> {
@@ -343,9 +356,10 @@ impl Workspace {
         let Some(connection) = self.connections.get_mut(&host) else { return self.connect_host(&host, true, cx) };
         let Some(channel) = connection.channel.clone().filter(|_| connection.status == Status::Ready) else { return };
         let running = connection.bridge().map(|bridge| (bridge, connection.notebooks.clone()));
-        connection.forget_runtime();
+        let gone = connection.forget_runtime();
         connection.status = Status::Starting;
         connection.steps = Steps::new("Stopping Julia");
+        self.close_page(gone, cx);
         self.status = "Restarting Julia…".into();
         let stop = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
@@ -411,21 +425,22 @@ impl Workspace {
     /// (`runtime::clear_state`), then connect and start again.
     pub fn repair_local(&mut self, cx: &mut Context<Self>) {
         let host = HostId::ThisMac;
-        let (channel, running) = match self.connections.get_mut(&host) {
+        let (channel, running, gone) = match self.connections.get_mut(&host) {
             // Still installing Julia: nothing to repair yet.
             Some(c) if c.status == Status::Connecting => return,
             Some(c) => {
                 let running = c.bridge().map(|bridge| (bridge, c.notebooks.clone()));
                 // Updates from the connect or start under way are dropped from now on.
                 c.id = next_connect_id();
-                c.forget_runtime();
+                let gone = c.forget_runtime();
                 c.status = Status::Starting;
                 c.steps = Steps::new("Repairing the runtime");
                 c.stopping = false;
-                (c.channel.take(), running)
+                (c.channel.take(), running, gone)
             }
-            None => (None, None),
+            None => (None, None, None),
         };
+        self.close_page(gone, cx);
         self.status = "Repairing the runtime…".into();
         let work = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
@@ -565,7 +580,7 @@ impl Workspace {
                 }
             }
             Update::Notice(notice) => {
-                connection.forget_runtime();
+                let gone = connection.forget_runtime();
                 connection.status = match notice {
                     Notice::Died(reason) => Status::Died(reason),
                     Notice::Replaced => {
@@ -577,6 +592,7 @@ impl Workspace {
                         Status::Failed(reason)
                     }
                 };
+                self.close_page(gone, cx);
                 if local {
                     self.status = JULIA_NOT_RUNNING.into();
                 }
@@ -880,18 +896,20 @@ impl Workspace {
         }
         let Some(connection) = self.connections.get_mut(host) else { return };
         let Some(channel) = connection.channel.clone().filter(|_| !connection.stopping) else { return };
-        if connection.status == Status::Starting {
+        let gone = if connection.status == Status::Starting {
             // The start under way ends as cancelled (Update::Started).
             connection.cancelling = true;
+            None
         } else {
-            connection.forget_runtime();
             connection.status = Status::Died(String::new());
-        }
+            connection.forget_runtime()
+        };
         connection.stop_when_connected = false;
         connection.stopping = true;
         connection.found = None;
         connection.check += 1;
         let id = connection.id;
+        self.close_page(gone, cx);
         if *host == HostId::ThisMac {
             self.status = "Stopping Julia…".into();
         }
@@ -980,7 +998,8 @@ impl Workspace {
     /// Leave a host (its server was removed): its runtime keeps running.
     pub fn disconnect_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(mut connection) = self.connections.remove(host) else { return };
-        connection.forget_runtime();
+        let gone = connection.forget_runtime();
+        self.close_page(gone, cx);
         if let Some(channel) = connection.channel.take() {
             cx.background_executor().spawn(async move { channel.detach() }).detach();
         }
