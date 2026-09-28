@@ -1339,20 +1339,54 @@ impl Workspace {
 
     /// Send what's in the composer (if anything) to a session, after `context`.
     /// Files added from outside the session's folder are copied into it first
-    /// (off the main thread), so a chip removed before sending leaves nothing.
+    /// (off the main thread; to a server, through its helper, with progress
+    /// under the box for a big one), so a chip removed before sending leaves
+    /// nothing.
     fn send(&mut self, key: u64, context: Option<ContentBlock>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
+        /// Smaller files are sent before progress would be worth reading.
+        const SHOW_PROGRESS: u64 = 4_000_000;
         let Some(place) = self.session_mut(key).map(|s| s.place.clone()) else { return };
         let Some((text, attachments, mentioned)) = self.take_composer(window, cx) else { return };
         if !attachments.iter().any(|a| matches!(a, attach::Attachment::Upload { .. })) {
             return self.submit_message(key, context, (text, attachments, mentioned), now, cx);
         }
-        let folder = (place.host == HostId::ThisMac).then_some(place.path);
-        let placing = cx.background_spawn(async move { attach::place_uploads(attachments, folder.as_deref()) });
+        let (progress, mut progressed) = futures::channel::mpsc::unbounded::<attach::Progress>();
+        let channel = self.connection(&place.host).and_then(|c| c.channel.clone());
+        let (dest, fallback) = match (&place.host, channel) {
+            (HostId::ThisMac, _) => (attach::Dest::Here(place.path), None),
+            (host, _) if !self.helper_saves_files(host) => (attach::Dest::Message, Some(attach::UNWRITABLE)),
+            (_, Some(channel)) => {
+                let ask = Box::new(move |request| channel.files(request));
+                let progress = Box::new(move |p| drop(progress.unbounded_send(p)));
+                (attach::Dest::Server { folder: place.path, ask, progress }, None)
+            }
+            (_, None) => (attach::Dest::Message, Some("The server isn't connected, so files went in the message instead (text up to 250 KB).")),
+        };
+        let placing = cx.background_spawn(async move { attach::place_uploads(attachments, &dest) });
         cx.spawn(async move |this, cx| {
+            let mut shown = None;
+            while let Some(p) = progressed.next().await {
+                if p.size < SHOW_PROGRESS {
+                    continue;
+                }
+                let line = format!("Copying {} to the server: {} of {}", p.name, attach::size_text(p.sent), attach::size_text(p.size));
+                shown = Some(line.clone());
+                let _ = this.update(cx, |this, cx| {
+                    this.composer.notice = Some(line);
+                    cx.notify();
+                });
+            }
             let (attachments, refused) = placing.await;
             let _ = this.update(cx, |this, cx| {
+                if shown.is_some() && this.composer.notice == shown {
+                    this.composer.notice = None;
+                }
+                if let Some(why) = fallback {
+                    this.composer.notice = Some(why.into());
+                }
                 if !refused.is_empty() {
-                    this.composer.notice = Some(format!("{} The message went without it.", refused.join(" ")));
+                    let why = [fallback.unwrap_or_default(), &refused.join(" "), "The message went without it."].join(" ");
+                    this.composer.notice = Some(why.trim_start().into());
                 }
                 if !text.is_empty() || !attachments.is_empty() {
                     this.submit_message(key, context, (text, attachments, mentioned), now, cx);

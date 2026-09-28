@@ -490,17 +490,28 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The folder on this Mac that added files are copied into (or mentioned
-    /// from): the session's, or the draft's. None on a server.
-    fn local_folder(&self) -> Option<PathBuf> {
-        self.composer_place().filter(|p| p.host == HostId::ThisMac).map(|p| p.path)
+    /// Where added files are copied into (or mentioned from): the session's
+    /// folder, or the draft's.
+    fn attach_folder(&self) -> attach::Folder {
+        match self.composer_place() {
+            Some(Place { host: HostId::ThisMac, path }) => attach::Folder::Here(path),
+            Some(Place { host, .. }) if !self.helper_saves_files(&host) => attach::Folder::Unwritable,
+            _ => attach::Folder::Elsewhere,
+        }
+    }
+
+    /// Whether `host`'s helper can save files into a session's folder, as far
+    /// as the app knows: yes until a connected one says otherwise.
+    pub(crate) fn helper_saves_files(&self, host: &HostId) -> bool {
+        self.connection(host).and_then(|c| c.hello.as_ref()).is_none_or(|h| h.uploads)
     }
 
     /// Added files become chips or @ mentions (`attach::add_file`, off the
     /// main thread); refusals say why.
     pub fn attach_paths(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
-        let folder = self.local_folder();
-        let read = cx.background_spawn(async move { paths.iter().map(|p| attach::add_file(p, folder.as_deref())).collect::<Vec<_>>() });
+        let folder = self.attach_folder();
+        let unwritable = matches!(folder, attach::Folder::Unwritable);
+        let read = cx.background_spawn(async move { paths.iter().map(|p| attach::add_file(p, &folder)).collect::<Vec<_>>() });
         cx.spawn_in(window, async move |this, cx| {
             let results = read.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -516,6 +527,9 @@ impl Workspace {
                         }
                         Err(why) => refused.push(why),
                     }
+                }
+                if unwritable {
+                    refused.insert(0, attach::UNWRITABLE.into());
                 }
                 this.composer.notice = (!refused.is_empty()).then(|| refused.join(" "));
                 cx.notify();

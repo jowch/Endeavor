@@ -93,7 +93,13 @@ separate `endeavor-remote` binary is what servers are sent. It:
    answers file requests itself, without Julia: list a folder (folders and
    `.jl` files), find the Pluto notebooks under a folder, and the first cells
    of a notebook (`crates/wire`'s `files` and `notebooks`). The new-session
-   screen browses a server with these before any runtime exists.
+   screen browses a server with these before any runtime exists. The one
+   write is a file attached in the chat: `Place` picks its name in the
+   session folder's `data/` (or finds the same contents there by size and
+   SHA-256), and `Write` sends it in 1 MB pieces to a hidden `.part` file,
+   renamed into place after the last piece. Paths stay inside the session's
+   folder, links resolved; parts the app never finished are deleted when it
+   goes. Hello's `uploads` tells a helper with these from an older one.
 2. When the app sends `StartRuntime` (a session needs Julia), takes an
    exclusive lock on the runtime's state file (one client), then reads it. If
    the runtime is alive, it connects to its ports. If not, it starts one (see

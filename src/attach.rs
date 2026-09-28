@@ -13,6 +13,8 @@ use agent_client_protocol::schema::v1::{
     ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent, TextContent, TextResourceContents,
 };
 
+use wire::files::{self, DATA, Reply, Request, numbered};
+
 use crate::annotate::cell_uri;
 use crate::session::defined_name;
 
@@ -311,14 +313,11 @@ pub fn replayed_image(data: &str, mime: &str) -> Option<Attachment> {
 /// The Claude API takes images up to 5 MB once base64-encoded (4/3 larger).
 pub const IMAGE_MAX: u64 = 3_700_000;
 /// A text file read into the message, where there's no copying into the
-/// folder (a server session).
+/// folder (a server whose helper can't save files).
 pub const TEXT_MAX: u64 = 250_000;
 /// A file copied into the session's folder: a large dataset is fine, but a
 /// copy of a disk image or a video most likely isn't what was meant.
 pub const FILE_MAX: u64 = 2_000_000_000;
-
-/// Where copied files go, inside the session's folder.
-const DATA: &str = "data";
 
 /// The agent's note for a file copied into the session's folder; the path
 /// follows it, alone on the last line, so a replayed session can read it back.
@@ -395,21 +394,37 @@ pub enum Added {
     Mention(String),
 }
 
-/// A picked file for a session whose folder is `folder` on this Mac. Images
-/// go in the message; a file already in the folder is mentioned; any other
-/// file is copied in when the message is sent. With no local folder (a
-/// server session), files are read into the message as before.
-pub fn add_file(path: &Path, folder: Option<&Path>) -> Result<Added, String> {
-    let Some(folder) = folder else { return upload_file(path).map(Added::Chip) };
+/// Where the session's folder is, for what an added file becomes.
+#[derive(Clone, Debug)]
+pub enum Folder {
+    /// On this Mac.
+    Here(PathBuf),
+    /// On a server whose helper can save files into it, or not chosen yet.
+    Elsewhere,
+    /// On a server whose helper can't (an older one).
+    Unwritable,
+}
+
+/// Why files go in the message on a server whose helper is too old to save them.
+pub const UNWRITABLE: &str = "This server's copy of Endeavor's helper can't save files into the session's folder, \
+    so files go in the message instead (text up to 250 KB).";
+
+/// A picked file for a session whose folder is `folder`. Images go in the
+/// message; a file already in a folder on this Mac is mentioned; any other
+/// file is copied in when the message is sent. Where the folder can't take
+/// files, files are read into the message instead.
+pub fn add_file(path: &Path, folder: &Folder) -> Result<Added, String> {
     let name = file_name(path);
-    if image_type(&name).is_some() {
+    if matches!(folder, Folder::Unwritable) || image_type(&name).is_some() {
         return upload_file(path).map(Added::Chip);
     }
     let meta = std::fs::metadata(path).map_err(|e| format!("Couldn't read {name}: {e}"))?;
     if meta.is_dir() {
         return Err(format!("{name} is a folder; attach the files in it instead."));
     }
-    if let Some(inside) = relative_inside(folder, path) {
+    if let Folder::Here(folder) = folder
+        && let Some(inside) = relative_inside(folder, path)
+    {
         return Ok(Added::Mention(inside));
     }
     if meta.len() > FILE_MAX {
@@ -426,17 +441,6 @@ pub fn relative_inside(folder: &Path, file: &Path) -> Option<String> {
     let rest = file.strip_prefix(&folder).ok()?;
     let parts: Vec<String> = rest.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
     (!parts.is_empty()).then(|| parts.join("/"))
-}
-
-/// The name for the `n`th file of this name: `decay.csv`, `decay (2).csv`, …
-fn numbered(name: &str, n: u32) -> String {
-    if n == 1 {
-        return name.to_string();
-    }
-    match name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()) {
-        Some((stem, ext)) => format!("{stem} ({n}).{ext}"),
-        None => format!("{name} ({n})"),
-    }
 }
 
 fn same_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
@@ -490,10 +494,77 @@ pub fn save_into(folder: &Path, source: &Path) -> Result<String, String> {
     }
 }
 
-/// Before a message goes: each `Upload` is copied into `folder` and becomes
-/// `Saved`, or, with no local folder (the draft moved to a server before
-/// sending), is read into the message. Also returns why any couldn't be.
-pub fn place_uploads(attachments: Vec<Attachment>, folder: Option<&Path>) -> (Vec<Attachment>, Vec<String>) {
+/// A file request to a server's helper, and its answer.
+pub type Ask = dyn Fn(Request) -> Result<Reply, String> + Send;
+
+/// How far a file being sent to a server has got: `sent` of `size` bytes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Progress {
+    pub name: String,
+    pub sent: u64,
+    pub size: u64,
+}
+
+/// Where a message's `Upload`s go when it's sent.
+pub enum Dest {
+    /// The session's folder on this Mac.
+    Here(PathBuf),
+    /// The session's folder on a server, through its helper.
+    Server { folder: PathBuf, ask: Box<Ask>, progress: Box<dyn Fn(Progress) + Send> },
+    /// Into the message: the server's helper can't save files, or isn't connected.
+    Message,
+}
+
+/// How much of a file goes in one `Write`: small enough not to hold up the
+/// notebook's traffic on the same connection for long.
+const PIECE: usize = 1 << 20;
+
+/// Send `source` into the session's folder `folder` on a server and return
+/// its path relative to the folder, by the same rule as `save_into`: a file
+/// in `data/` with the same contents (size and SHA-256, so nothing is sent),
+/// else a new one, numbered past names whose contents differ.
+pub fn send_to_server(folder: &Path, source: &Path, ask: &Ask, progress: &dyn Fn(Progress)) -> Result<String, String> {
+    use std::io::Read;
+    let name = file_name(source);
+    let couldnt = |why: String| format!("Couldn't copy {name} into the session's folder: {}.", why.trim_end_matches('.'));
+    let io = |e: std::io::Error| couldnt(e.to_string());
+    let size = std::fs::metadata(source).map_err(io)?.len();
+    let sha256 = files::sha256_file(source).map_err(io)?;
+    let folder = folder.display().to_string();
+    let path = match ask(Request::Place { folder: folder.clone(), name: name.clone(), size, sha256 }).map_err(couldnt)? {
+        Reply::Place { path, have: true } => return Ok(path),
+        Reply::Place { path, have: false } => path,
+        other => return Err(couldnt(format!("the server answered {other:?}"))),
+    };
+    let mut file = std::fs::File::open(source).map_err(io)?;
+    let mut piece = vec![0; PIECE];
+    let mut offset = 0;
+    loop {
+        let mut n = 0;
+        while n < PIECE {
+            match file.read(&mut piece[n..]).map_err(io)? {
+                0 => break,
+                read => n += read,
+            }
+        }
+        let last = n < PIECE;
+        let bytes = piece[..n].to_vec();
+        match ask(Request::Write { folder: folder.clone(), path: path.clone(), offset, bytes, last }).map_err(couldnt)? {
+            Reply::Written => {}
+            other => return Err(couldnt(format!("the server answered {other:?}"))),
+        }
+        offset += n as u64;
+        progress(Progress { name: name.clone(), sent: offset, size });
+        if last {
+            return Ok(path);
+        }
+    }
+}
+
+/// Before a message goes: each `Upload` is copied into the session's folder
+/// and becomes `Saved`, or is read into the message where it can't be. Also
+/// returns why any couldn't be.
+pub fn place_uploads(attachments: Vec<Attachment>, dest: &Dest) -> (Vec<Attachment>, Vec<String>) {
     let mut placed = Vec::new();
     let mut refused = Vec::new();
     for attachment in attachments {
@@ -501,9 +572,10 @@ pub fn place_uploads(attachments: Vec<Attachment>, folder: Option<&Path>) -> (Ve
             placed.push(attachment);
             continue;
         };
-        let result = match folder {
-            Some(folder) => save_into(folder, source).map(|path| Attachment::Saved { path }),
-            None => upload_file(source),
+        let result = match dest {
+            Dest::Here(folder) => save_into(folder, source).map(|path| Attachment::Saved { path }),
+            Dest::Server { folder, ask, progress } => send_to_server(folder, source, ask.as_ref(), progress.as_ref()).map(|path| Attachment::Saved { path }),
+            Dest::Message => upload_file(source),
         };
         match result {
             Ok(attachment) => placed.push(attachment),
@@ -875,13 +947,13 @@ mod tests {
     fn a_file_from_elsewhere_is_copied_into_data_on_send() {
         let (session, elsewhere) = scratch("copy");
         let csv = write(&elsewhere.join("decay.csv"), b"t,y\n0,1.0\n");
-        let added = add_file(&csv, Some(&session)).unwrap();
+        let added = add_file(&csv, &Folder::Here(session.clone())).unwrap();
         assert_eq!(added, Added::Chip(Attachment::Upload { source: csv.clone(), size: 10 }));
         let Added::Chip(chip) = added else { unreachable!() };
         assert_eq!(chip.label(), Label { plain: "".into(), mono: "data/decay.csv".into() });
         assert!(!session.join("data").exists(), "nothing is copied when the file is picked");
 
-        let (placed, refused) = place_uploads(vec![chip], Some(&session));
+        let (placed, refused) = place_uploads(vec![chip], &Dest::Here(session.clone()));
         assert_eq!((placed.as_slice(), refused.as_slice()), (&[Attachment::Saved { path: "data/decay.csv".into() }][..], &[][..]));
         assert_eq!(std::fs::read(session.join("data/decay.csv")).unwrap(), b"t,y\n0,1.0\n");
         assert_eq!(std::fs::read_dir(session.join("data")).unwrap().count(), 1, "no temporary file left behind");
@@ -909,7 +981,7 @@ mod tests {
     fn a_file_already_in_the_folder_is_mentioned_not_copied() {
         let (session, _) = scratch("inside");
         let csv = write(&session.join("raw/run 1.csv"), b"t,y");
-        assert_eq!(add_file(&csv, Some(&session)), Ok(Added::Mention("raw/run 1.csv".into())));
+        assert_eq!(add_file(&csv, &Folder::Here(session.clone())), Ok(Added::Mention("raw/run 1.csv".into())));
         // The same folder by another route (macOS's /tmp → /private/tmp).
         let other_route = session.join("raw/../raw/run 1.csv");
         assert_eq!(relative_inside(&session, &other_route).as_deref(), Some("raw/run 1.csv"));
@@ -922,21 +994,73 @@ mod tests {
     fn added_files_keep_images_in_the_message_and_take_any_data() {
         let (session, elsewhere) = scratch("kinds");
         let gel = write(&elsewhere.join("gel.png"), b"png");
-        assert!(matches!(add_file(&gel, Some(&session)), Ok(Added::Chip(Attachment::Image { mime: "image/png", .. }))));
+        assert!(matches!(add_file(&gel, &Folder::Here(session.clone())), Ok(Added::Chip(Attachment::Image { mime: "image/png", .. }))));
         let sheet = write(&elsewhere.join("plate.xlsx"), &[0x50, 0x4b, 0x00, 0xff]);
-        assert!(matches!(add_file(&sheet, Some(&session)), Ok(Added::Chip(Attachment::Upload { size: 4, .. }))));
-        assert_eq!(add_file(&elsewhere, Some(&session)), Err("elsewhere is a folder; attach the files in it instead.".into()));
-        // No folder on this Mac (a server session): read into the message, as before.
+        assert!(matches!(add_file(&sheet, &Folder::Here(session.clone())), Ok(Added::Chip(Attachment::Upload { size: 4, .. }))));
+        assert_eq!(add_file(&elsewhere, &Folder::Here(session.clone())), Err("elsewhere is a folder; attach the files in it instead.".into()));
+        // A server's folder: every non-image file is sent, even one that's in
+        // a folder on this Mac of the same path.
+        assert!(matches!(add_file(&gel, &Folder::Elsewhere), Ok(Added::Chip(Attachment::Image { .. }))));
+        assert!(matches!(add_file(&sheet, &Folder::Elsewhere), Ok(Added::Chip(Attachment::Upload { size: 4, .. }))));
+        let inside = write(&session.join("raw/run.csv"), b"t,y");
+        assert_eq!(add_file(&inside, &Folder::Elsewhere), Ok(Added::Chip(Attachment::Upload { source: inside.clone(), size: 3 })));
+        // A server whose helper can't save files: read into the message, as before.
         let notes = write(&elsewhere.join("notes.txt"), b"t,y");
-        assert_eq!(add_file(&notes, None), Ok(Added::Chip(Attachment::Text { name: "notes.txt".into(), text: "t,y".into() })));
-        assert_eq!(add_file(&sheet, None), Err("plate.xlsx isn't text or a PNG, JPEG, GIF or WebP image, so it can't be attached yet.".into()));
+        assert_eq!(add_file(&notes, &Folder::Unwritable), Ok(Added::Chip(Attachment::Text { name: "notes.txt".into(), text: "t,y".into() })));
+        assert_eq!(add_file(&sheet, &Folder::Unwritable), Err("plate.xlsx isn't text or a PNG, JPEG, GIF or WebP image, so it can't be attached yet.".into()));
+    }
+
+    /// A server's folder at `folder`, its helper's answers given here.
+    fn server(folder: &Path, progress: Arc<std::sync::Mutex<Vec<(u64, u64)>>>) -> Dest {
+        Dest::Server {
+            folder: folder.to_path_buf(),
+            ask: Box::new(|request| match files::answer(&request) {
+                Reply::Error { message } => Err(message),
+                reply => Ok(reply),
+            }),
+            progress: Box::new(move |p: Progress| progress.lock().unwrap().push((p.sent, p.size))),
+        }
+    }
+
+    #[test]
+    fn a_file_is_sent_to_a_server_in_pieces_by_the_same_clash_rule() {
+        let (session, elsewhere) = scratch("server");
+        let big: Vec<u8> = (0..PIECE * 2 + 5).map(|i| (i % 251) as u8).collect();
+        let csv = write(&elsewhere.join("a/decay.csv"), &big);
+        let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let dest = server(&session, progress.clone());
+        let upload = |source: &Path| Attachment::Upload { source: source.to_path_buf(), size: 0 };
+        let saved = |path: &str| Attachment::Saved { path: path.into() };
+
+        let (placed, refused) = place_uploads(vec![upload(&csv)], &dest);
+        assert_eq!((placed, refused), (vec![saved("data/decay.csv")], vec![]));
+        assert_eq!(std::fs::read(session.join("data/decay.csv")).unwrap(), big);
+        let size = big.len() as u64;
+        assert_eq!(*progress.lock().unwrap(), [(PIECE as u64, size), (2 * PIECE as u64, size), (size, size)]);
+
+        // The same contents again: found, nothing sent.
+        progress.lock().unwrap().clear();
+        let same = write(&elsewhere.join("b/decay.csv"), &big);
+        assert_eq!(place_uploads(vec![upload(&same)], &dest).0, [saved("data/decay.csv")]);
+        assert!(progress.lock().unwrap().is_empty(), "nothing was sent");
+        // Different contents under the same name: numbered.
+        let other = write(&elsewhere.join("c/decay.csv"), b"t,y\n0,2\n");
+        assert_eq!(place_uploads(vec![upload(&other)], &dest).0, [saved("data/decay (2).csv")]);
+        assert_eq!(std::fs::read(session.join("data/decay (2).csv")).unwrap(), b"t,y\n0,2\n");
+        assert_eq!(std::fs::read_dir(session.join("data")).unwrap().count(), 2, "no parts left behind");
+
+        // A helper that answers with an error: refused, in plain words.
+        let failing = Dest::Server { folder: session.join("nope"), ask: Box::new(|_| Err("The connection closed.".into())), progress: Box::new(|_| {}) };
+        let (placed, refused) = place_uploads(vec![upload(&other)], &failing);
+        assert!(placed.is_empty());
+        assert_eq!(refused, ["Couldn't copy decay.csv into the session's folder: The connection closed."]);
     }
 
     #[test]
     fn a_file_gone_before_sending_is_refused_plainly() {
         let (session, elsewhere) = scratch("gone");
         let upload = Attachment::Upload { source: elsewhere.join("gone.csv"), size: 3 };
-        let (placed, refused) = place_uploads(vec![upload], Some(&session));
+        let (placed, refused) = place_uploads(vec![upload], &Dest::Here(session.clone()));
         assert!(placed.is_empty());
         assert_eq!(refused.len(), 1);
         assert!(refused[0].starts_with("Couldn't copy gone.csv into the session's folder: "), "{}", refused[0]);

@@ -297,6 +297,8 @@ pub struct Hello {
     pub home: PathBuf,
     /// Slurm's commands are there: probably a cluster's login node.
     pub slurm: bool,
+    /// It can save attached files into a session's folder (`files::Request::Write`).
+    pub uploads: bool,
 }
 
 /// The app's end of a helper's stdin/stdout, on This Mac or over ssh. It lasts
@@ -386,7 +388,7 @@ impl Channel {
     pub fn wait_hello(&self, vanished: impl FnOnce() -> String) -> Result<Hello, String> {
         let Some(hello) = self.hello.lock().unwrap().take() else { return Err("Already said hello.".into()) };
         match hello.recv() {
-            Ok(ToApp::Hello { node, home, slurm, .. }) => Ok(Hello { node, home: PathBuf::from(home), slurm }),
+            Ok(ToApp::Hello { node, home, slurm, uploads, .. }) => Ok(Hello { node, home: PathBuf::from(home), slurm, uploads }),
             Ok(ToApp::Error { message }) => Err(message),
             Ok(other) => Err(format!("Endeavor's helper said {other:?} before hello.")),
             Err(_) => Err(vanished()),
