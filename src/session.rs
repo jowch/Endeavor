@@ -1368,7 +1368,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             });
             let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
             let running = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
-            let summary = if pluto { pluto_line(title, diffs, args, output.as_ref(), running, &name) } else { tool_line(title, *kind, path.as_deref(), args) };
+            let summary = if pluto { pluto_line(title, diffs, args, output.as_ref(), running, &name) } else { running_line(tool_line(title, *kind, path.as_deref(), args), title, *kind, args, running) };
             let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
             let failed = runs::failed(*status, title, output.as_ref());
             let state = if *approval == Some(Approval::Denied) {
@@ -2020,6 +2020,18 @@ fn tool_line(title: &str, kind: ToolKind, path: Option<&Path>, input: &serde_jso
     }
 }
 
+/// A running call that names nothing yet (its input still on the way) says
+/// what it's doing ("Running a command"), not a bare past tense.
+fn running_line(mut line: ToolLine, title: &str, kind: ToolKind, input: &serde_json::Value, running: bool) -> ToolLine {
+    if running
+        && line.object.is_none()
+        && let Some((_, phrase, _)) = runs::doing(title, kind, input)
+    {
+        line.verb = phrase;
+    }
+    line
+}
+
 /// The file a call touches: its first location, else a path in its input.
 fn file_path(path: Option<&Path>, input: &serde_json::Value) -> Option<String> {
     path.map(|p| p.display().to_string())
@@ -2212,6 +2224,7 @@ mod tests {
 
     #[test]
     fn notebook_rows_name_what_they_act_on() {
+        use agent_client_protocol::schema::v1::ToolKind;
         use serde_json::json;
         let seen = |id: &str| (id == "c-fit").then(|| "fit".to_string());
         let line = |title: &str, input: serde_json::Value, output: Option<serde_json::Value>, running: bool| {
@@ -2229,7 +2242,9 @@ mod tests {
         assert_eq!(line("read_notebook_code", json!({"notebook_id": "n"}), out(json!({"path": "/w/fit.jl", "code": ""})), false), ("Read".into(), Some("fit.jl".into())));
         assert_eq!(line("read_notebook_code", json!({"notebook_id": "n"}), None, true), ("Reading the notebook".into(), None));
         assert_eq!(line("list_notebooks", null.clone(), None, false), ("Listed notebooks".into(), None));
-        assert_eq!(line("fold_cell", null, None, false), ("fold_cell".into(), None));
+        assert_eq!(line("fold_cell", null.clone(), None, false), ("fold_cell".into(), None));
+        let bash = super::running_line(super::tool_line("Terminal", ToolKind::Execute, None, &null), "Terminal", ToolKind::Execute, &null, true);
+        assert_eq!((bash.verb, bash.object), ("Running a command".into(), None), "a command before its input arrives");
     }
 
     #[test]
