@@ -785,6 +785,10 @@ impl Session {
                     }
                 }
             }
+            SessionUpdate::Notice(notice) => match notice.description.filter(|d| !d.trim().is_empty()) {
+                Some(description) => self.note(format!("{}: {description}", notice.title)),
+                None => self.note(notice.title),
+            },
             // ponytail: modes, usage, available commands not shown yet.
             _ => {}
         }
@@ -2226,6 +2230,19 @@ mod tests {
         assert_eq!(line("read_notebook_code", json!({"notebook_id": "n"}), None, true), ("Reading the notebook".into(), None));
         assert_eq!(line("list_notebooks", null.clone(), None, false), ("Listed notebooks".into(), None));
         assert_eq!(line("fold_cell", null, None, false), ("fold_cell".into(), None));
+    }
+
+    #[test]
+    fn a_notice_is_its_own_note_not_part_of_the_reply() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, Notice, NoticeSeverity, TextContent};
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        let notice = Notice::new(NoticeSeverity::Warning, "Auto mode unavailable").description("The selected model does not support Auto mode; using Accept edits instead.".to_string());
+        s.apply(SessionEvent::Update(SessionUpdate::Notice(notice)));
+        s.apply(SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("Yes — it runs."))))));
+        assert!(matches!(&s.entries[..], [
+            Entry::Note(note),
+            Entry::Agent(reply),
+        ] if note.as_ref() == "Auto mode unavailable: The selected model does not support Auto mode; using Accept edits instead." && reply == "Yes — it runs."));
     }
 
     #[test]

@@ -20,7 +20,7 @@ gpui-wry = "=0.6.6"
 wry = { package = "lb-wry", version = "0.53.3" }
 raw-window-handle = "0.6"
 gpui-component = "=0.6.6"
-agent-client-protocol = { version = "=2.2.0", features = ["unstable_session_fork"] }
+agent-client-protocol = { version = "=2.2.0", features = ["unstable_session_fork", "unstable_session_notices"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
