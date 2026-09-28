@@ -768,6 +768,7 @@ impl Workspace {
                     let host = HostId::Server(server.id.clone());
                     let running = self.host_state(&host).running();
                     let state = match self.status(&host) {
+                        _ if self.connection(&host).is_some_and(|c| c.lost.is_some()) => Some("Can't reach"),
                         Some(Status::Connecting) => Some("Connecting…"),
                         // The dot says it.
                         _ if running && !clusters => None,

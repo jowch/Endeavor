@@ -88,16 +88,20 @@ pub struct Connection {
     pub idle_stopped: HashSet<String>,
     /// Bumped when the runtime starts or goes, so an old runtime's event reader stops.
     watching: Arc<AtomicU64>,
-    /// A server's connection dropped while its notebook showed: the page
-    /// stays, read-only, while Endeavor tries again.
+    /// A server's connection dropped by itself (not a Stop, disconnect or
+    /// remove) and hasn't come back: Endeavor tries again, its sessions'
+    /// messages wait, and it shows as "Can't reach". None for a connect that
+    /// never got through (a bad host name, a wrong password): that stays
+    /// "Not connected", with Reconnect.
     pub lost: Option<Lost>,
 }
 
-/// What a dropped connection left showing.
+/// A dropped server connection.
 #[derive(Clone)]
 pub struct Lost {
-    /// The dropped runtime's Pluto address (`http://host:port/`), whose page stays.
-    origin: String,
+    /// The dropped runtime's Pluto address (`http://host:port/`), if its
+    /// notebook was showing: that page stays, read-only.
+    page: Option<String>,
 }
 
 /// The starting pane's step log: what's done, what's under way (since when),
@@ -206,6 +210,11 @@ impl Connection {
 
     pub fn bridge(&self) -> Option<Bridge> {
         self.runtime.as_ref().map(|r| r.bridge.clone())
+    }
+
+    /// Dropped, and between tries to reconnect.
+    pub fn waiting_to_reconnect(&self) -> bool {
+        self.lost.is_some() && matches!(self.status, Status::Failed(_))
     }
 
     /// Stop following the runtime that's going; `last_notebooks` stays for the reopen.
@@ -521,7 +530,7 @@ impl Workspace {
         let local = host == HostId::ThisMac;
         let name = self.hosts.name(&host);
         let cluster = self.is_cluster(&host);
-        let keep_page = !local && matches!(update, Update::Notice(Notice::Lost(_))) && self.shows_page_of(&host, cx);
+        let shown = !local && matches!(update, Update::Notice(Notice::Lost(_))) && self.shows_page_of(&host, cx);
         let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
         match update {
             Update::Event(Event::Connected { .. }) => connection.steps.advance(format!("Connected to {name}"), "Checking Endeavor's helper"),
@@ -576,8 +585,8 @@ impl Workspace {
                 self.retry_lost(host.clone(), crate::offline::RETRY_EVERY, cx);
             }
             Update::Connected(Err(e)) => {
-                if let Some(lost) = connection.lost.take() {
-                    self.blank_page(&lost.origin, cx);
+                if let Some(page) = connection.lost.take().and_then(|l| l.page) {
+                    self.blank_page(&page, cx);
                 }
                 let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
                 connection.status = Status::Failed(e.clone());
@@ -608,8 +617,8 @@ impl Workspace {
                 connection.status = Status::Died(String::new());
             }
             Update::Started(Err(e)) => {
-                if let Some(lost) = connection.lost.take() {
-                    self.blank_page(&lost.origin, cx);
+                if let Some(page) = connection.lost.take().and_then(|l| l.page) {
+                    self.blank_page(&page, cx);
                 }
                 let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
                 connection.job = None;
@@ -622,12 +631,13 @@ impl Workspace {
                     }
                 }
             }
-            // A server's notebook that was showing stays, read-only, while it reconnects.
-            Update::Notice(Notice::Lost(reason)) if keep_page => {
-                let origin = connection.forget_runtime().and_then(|r| r.pluto_url.split_once('?').map(|(o, _)| o.to_owned())).unwrap_or_default();
+            // A server that drops reconnects by itself; its notebook, if showing, stays up read-only meanwhile.
+            Update::Notice(Notice::Lost(reason)) if !local => {
+                let gone = connection.forget_runtime();
+                let page = gone.as_ref().and_then(|r| r.pluto_url.split_once('?')).map(|(origin, _)| origin.to_owned()).filter(|_| shown);
                 connection.channel = None;
                 connection.status = Status::Failed(reason);
-                connection.lost = Some(Lost { origin });
+                connection.lost = Some(Lost { page });
                 // A blip often passes: the first try comes soon.
                 if self.offline_since().is_none() {
                     self.retry_lost(host.clone(), std::time::Duration::from_secs(2), cx);
@@ -992,6 +1002,9 @@ impl Workspace {
         if c.stopping {
             return HostState::Stopping;
         }
+        if c.lost.is_some() {
+            return HostState::Lost;
+        }
         match &c.status {
             Status::Connecting => HostState::Connecting,
             Status::Browsing => match &c.found {
@@ -1075,12 +1088,17 @@ impl Workspace {
     /// new-session screen only browses the host's files.
     pub fn host_pane(&self, host: &HostId, start: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let connection = self.connections.get(host);
-        // Its notebook's page stays up, read-only, while it reconnects.
-        if connection.is_some_and(|c| c.lost.is_some()) {
-            return None;
+        let name = self.hosts.name(host);
+        if let Some(lost) = connection.and_then(|c| c.lost.as_ref()) {
+            // Its notebook's page stays up, read-only, while it reconnects.
+            let shown = self.webview.read(cx).raw().url().unwrap_or_default();
+            if lost.page.as_deref().is_some_and(|page| shown.starts_with(page)) {
+                return None;
+            }
+            let text = if self.offline_since().is_some() { format!("Endeavor reconnects to {name} when you're back online.") } else { format!("Endeavor reconnects to {name} by itself.") };
+            return Some(crate::new_session::turtle_pane().child(div().text_color(theme::text_muted()).child(text)).into_any_element());
         }
         let status = connection.map_or(Status::Connecting, |c| c.status.clone());
-        let name = self.hosts.name(host);
         let action = |id: &'static str, label: &'static str, host: HostId, start_julia: bool| {
             div()
                 .id(id)

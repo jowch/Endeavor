@@ -10,7 +10,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::Workspace;
-use crate::connection::Status;
 use crate::hosts::HostId;
 use crate::new_session::{Glyph, glyph, glyph_at};
 use crate::session::Session;
@@ -104,7 +103,7 @@ impl Workspace {
         if self.setup.as_ref().is_some_and(Setup::failed) {
             self.retry_setup(cx);
         }
-        let lost: Vec<HostId> = self.connections.iter().filter(|(_, c)| c.lost.is_some() && matches!(c.status, Status::Failed(_))).map(|(h, _)| h.clone()).collect();
+        let lost: Vec<HostId> = self.connections.iter().filter(|(_, c)| c.waiting_to_reconnect()).map(|(h, _)| h.clone()).collect();
         for host in lost {
             self.connect_host(&host, true, cx);
         }
@@ -153,13 +152,13 @@ impl Workspace {
         .detach();
     }
 
-    /// A server's connection dropped while its notebook showed: try again after
-    /// `wait`, unless it's back, given up on, or waiting for the network.
+    /// A server's connection dropped: try again after `wait`, unless it's
+    /// back, given up on, or waiting for the network.
     pub fn retry_lost(&mut self, host: HostId, wait: Duration, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
             let _ = this.update(cx, |this, cx| {
-                let waiting = this.connections.get(&host).is_some_and(|c| c.lost.is_some() && matches!(c.status, Status::Failed(_)));
+                let waiting = this.connections.get(&host).is_some_and(|c| c.waiting_to_reconnect());
                 if waiting && this.offline_since.is_none() {
                     this.connect_host(&host, true, cx);
                 }
@@ -207,7 +206,7 @@ impl Workspace {
 
     /// The one warning at the top of a server's notebook pane while it's out of reach.
     pub fn render_pane_warning(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.read_only(session) || session.notebook_path.is_none() {
+        if !self.read_only(session) {
             return None;
         }
         let frame = div()

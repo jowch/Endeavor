@@ -1310,6 +1310,10 @@ impl Workspace {
     /// Which notebook the user is looking at, so "the notebook" is unambiguous.
     /// Also remembered as the active session's notebook.
     fn viewing_context(&mut self, cx: &mut Context<Self>) -> Option<ContentBlock> {
+        // Hidden under a drawn pane, the web view can still hold another session's notebook.
+        if !self.webview.read(cx).visible() {
+            return None;
+        }
         let url = self.webview.read(cx).raw().url().unwrap_or_default();
         let id = viewed_notebook_id(&url)?.to_owned();
         let mut edits = Vec::new();

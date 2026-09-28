@@ -27,6 +27,8 @@ pub enum HostState {
     Queued { job: String, starting: bool },
     NotRunning,
     Replaced,
+    /// The connection dropped; Endeavor reconnects by itself.
+    Lost,
     Failed(String),
 }
 
@@ -62,6 +64,7 @@ impl HostState {
             HostState::Queued { job, starting: true } => format!("Starting · job {job}"),
             HostState::NotRunning => "Not running".into(),
             HostState::Replaced => "In use from another connection".into(),
+            HostState::Lost => "Can't reach · reconnects by itself".into(),
             HostState::Failed(_) => "Couldn't connect".into(),
         }
     }
@@ -143,6 +146,7 @@ impl Workspace {
         let action = match &state {
             s if s.stoppable() => Some(("Stop", HostAction::Stop)),
             HostState::NotRunning | HostState::Failed(_) if this_mac => Some(("Start", HostAction::Start)),
+            HostState::Lost => Some(("Connect", HostAction::Start)),
             HostState::Unknown | HostState::Failed(_) | HostState::Replaced => Some(("Connect", HostAction::Check)),
             HostState::NotRunning | HostState::Connected => Some(("Check", HostAction::Check)),
             _ => None,
