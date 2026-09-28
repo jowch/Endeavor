@@ -65,8 +65,9 @@ export type ToPage =
   // The header's Live docs / Status buttons: open that tab, or shut the drawer (null).
   | { type: "drawer"; tab: "docs" | "status" | null }
   // What the safe-preview callout and Status say: where the notebook runs, and
-  // whether the agent is asking to run it (the chat's card is up).
-  | { type: "context"; host: string; asking: boolean }
+  // whether the agent is asking to run it (the chat's card is up). `readonly`:
+  // its server is out of reach, so the page can be read but not changed.
+  | { type: "context"; host: string; asking: boolean; readonly: boolean }
   // Share and ⋮ items that act in the page, with Pluto's own functions.
   | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" };
 

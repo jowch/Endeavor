@@ -25,7 +25,9 @@ mod hosts;
 mod install;
 mod logs;
 mod new_session;
+mod network;
 mod notebook_pane;
+mod offline;
 mod outbox;
 #[cfg(target_os = "macos")]
 mod overlay;
@@ -477,6 +479,10 @@ pub struct Workspace {
     account: signin::Account,
     /// When the sign-in was last checked on coming to the front.
     sign_in_checked: Option<std::time::Instant>,
+    /// Since when the network has been unreachable (None: online).
+    offline_since: Option<std::time::Instant>,
+    /// Try now is looking at the network.
+    probing: bool,
     agent_tx: UnboundedSender<Command>,
     /// Handed to the agent thread once This Mac's Julia is up (setup's order).
     agent_rx: Option<UnboundedReceiver<Command>>,
@@ -672,6 +678,8 @@ impl Workspace {
             agent_failed: false,
             account: signin::Account::Unknown,
             sign_in_checked: None,
+            offline_since: None,
+            probing: false,
             agent_tx,
             agent_rx: Some(agent_rx),
             status: "".into(),
@@ -697,6 +705,7 @@ impl Workspace {
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
         this.scan_notebooks(cx);
+        this.watch_network(cx);
         this
     }
 
@@ -1736,6 +1745,10 @@ impl Workspace {
 
     /// The sidebar's status line: a mark when it matters to every session, and the words.
     fn status_line(&self) -> (Option<AnyElement>, SharedString) {
+        if self.offline_since.is_some() {
+            let mark = new_session::glyph(new_session::Glyph::WifiOff, theme::text_muted());
+            return (Some(mark.into_any_element()), "Offline · reconnects by itself".into());
+        }
         if self.account.signed_out() {
             let dot = div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::accent());
             return (Some(dot.into_any_element()), "Signed out of Claude.".into());
@@ -2485,7 +2498,7 @@ impl Workspace {
                     })
             }))
             .child(session::render_transcript(session, cx))
-            .children(session::render_activity(session, cx))
+            .children(session::render_activity(session, self.offline_since, cx))
             .child(
                 div()
                     .px_4()
@@ -2495,6 +2508,7 @@ impl Workspace {
                     .gap_2()
                     .children(self.render_commands(session, cx))
                     .children(session::render_pinned_plan(session, cx))
+                    .children(self.render_offline_line(Some(session), cx))
                     .children(self.render_sign_in_card(cx))
                     .children(session::render_approval(session, cx))
                     .child(session::render_queue(self, session, cx))
@@ -2522,6 +2536,7 @@ impl Render for Workspace {
         }
         if let Some(setup) = &self.setup {
             let below = match self.render_sign_in_panel(cx) {
+                _ if self.offline_since.is_some() => splash::Below::Card(self.render_offline_setup(setup, cx)),
                 Some((panel, bar, tucked)) => splash::Below::Panel { line: "Sign in to finish setting up", bar: bar.then_some(0.78), panel, tucked },
                 None => splash::Below::Progress,
             };
@@ -2532,6 +2547,7 @@ impl Render for Workspace {
         let placeholder = match active {
             None => "What do you want to work on?",
             Some(_) if working => "Queue a message, or ⌘⏎ to steer",
+            Some(_) if self.offline_since.is_some() => "Write a message. It sends when you're back online.",
             Some(_) => "Type / for commands",
         };
         if self.placeholder != placeholder {
@@ -2608,6 +2624,7 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .child(notebook_header)
+                    .children(active.and_then(|ix| self.render_pane_warning(&self.sessions[ix], cx)))
                     .child(div().flex_1().min_h_0().child(notebook)),
             )
             // A click outside a chip's menu only closes it.

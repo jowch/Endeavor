@@ -23,9 +23,9 @@ pub enum Step {
 }
 
 impl Step {
-    const ALL: [Step; 4] = [Step::Julia, Step::Packages, Step::Agent, Step::Claude];
+    pub const ALL: [Step; 4] = [Step::Julia, Step::Packages, Step::Agent, Step::Claude];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Step::Julia => "Julia",
             Step::Packages => "Pluto and its packages",
@@ -113,6 +113,15 @@ impl Setup {
 
     pub fn clear_error(&mut self) {
         self.error = None;
+    }
+
+    pub fn failed(&self) -> bool {
+        self.error.is_some()
+    }
+
+    /// The step under way, or the one that failed.
+    pub fn step(&self) -> Step {
+        self.step
     }
 
     fn overall(&self) -> f32 {
@@ -227,6 +236,8 @@ pub enum Below {
     /// A panel under a line of its own and, optionally, the bar filled this far
     /// (sign-in); `tucked` is when the turtle drew its head in.
     Panel { line: &'static str, bar: Option<f32>, panel: AnyElement, tucked: Option<Instant> },
+    /// A card in place of the progress (no network).
+    Card(AnyElement),
 }
 
 /// `retry` restarts the failed step.
@@ -240,6 +251,7 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
     let tucked = match &below {
         Below::Panel { tucked, .. } => *tucked,
         Below::Progress => setup.error.as_ref().map(|(_, at)| *at),
+        Below::Card(_) => None,
     };
     let tuck = tucked.map_or(0., |at| if still { 1. } else { ease(at.elapsed().as_secs_f32() / 0.4) });
     let (name_in, tagline_in) = (ease((t - 1.8) / 0.6), ease((t - 2.3) / 0.6));
@@ -341,6 +353,7 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
                         )
                         .child(panel),
                 ),
+                Below::Card(card) => d.child(div().mt(px(26.)).w(px(PANEL)).opacity(tagline_in).child(card)),
                 Below::Progress => match failure {
                     Some(failure) => d.child(failure),
                     None => d.child(progress),

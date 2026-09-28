@@ -540,6 +540,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(10.))
+                    .children(self.render_offline_line(None, cx))
                     .children(self.render_sign_in_card(cx))
                     .child(self.render_chips(cx))
                     .child(self.render_composer(None, false, window, cx))
@@ -1364,6 +1365,9 @@ pub(crate) enum Glyph {
     Cap,
     /// Waiting to send: a clock face.
     Clock,
+    /// Offline: wifi arcs struck through.
+    WifiOff,
+    Check,
     /// Read-only, and a password kept in the browser.
     Lock,
     /// Opens a web page: an arrow out of a box.
@@ -1620,6 +1624,20 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&[(10.5, 1.5), (5.5, 6.5)]);
                 }
                 Glyph::Back => polyline(&[(7.5, 3.), (4.5, 6.), (7.5, 9.)]),
+                Glyph::WifiOff => {
+                    for (r, half) in [(6.75f32, 0.77f32), (4.3, 0.75), (1.95, 0.66)] {
+                        let arc: Vec<(f32, f32)> = (0..=12)
+                            .map(|i| {
+                                let a = -std::f32::consts::FRAC_PI_2 - half + 2. * half * i as f32 / 12.;
+                                (6. + r * a.cos(), 9.5 + r * a.sin())
+                            })
+                            .collect();
+                        polyline(&arc);
+                    }
+                    polyline(&[(5.8, 9.8), (6.2, 9.8)]);
+                    polyline(&[(1.7, 1.7), (10.3, 10.3)]);
+                }
+                Glyph::Check => polyline(&[(2.6, 6.4), (4.9, 8.6), (9.4, 3.4)]),
             }
             if let Ok(path) = path.build() {
                 window.paint_path(path, color);

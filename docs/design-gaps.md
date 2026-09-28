@@ -26,7 +26,7 @@ _Listed 2026-09-25._
 - [ ] Appearance "Light": native chrome stays dark while the notebook turns Pluto-light — improvised (mismatched until light mode exists)
 - [x] Window minimum size — missing (the window can shrink with no floor). Built: 862 × 600, every column at its minimum (sidebar 180, chat 320, notebook 360); the sidebar and chat shrink to their minimums before the notebook does
 - [ ] Julia picker's prompt text ("Use this julia") in Settings — improvised
-- [ ] Offline: no network shows as a generic setup failure; losing it mid-session has no state — missing
+- [x] Offline: no network shows as a generic setup failure; losing it mid-session has no state — missing. Built as waiting, not failure (nothing red or orange; every state has a grey Try now; Endeavor reconnects by itself), from the system's network status (Network framework on macOS, netlink route changes on Linux). First launch: "No internet connection" with each step done, paused or needing internet, "Waiting for a connection", and setup carries on when the network is back. On This Mac: "You're offline. The notebook still works. Claude will continue when you're back." above the composer, "Offline · reconnects by itself" in the sidebar, and a turn that hears nothing shows "Waiting for the connection · 0:42". On a server: the notebook stays up, read-only and slightly dimmed, tagged "Read-only", under "Looks like you're offline. Endeavor will reconnect when you're back online."; with the Mac online but the server silent, "Can't reach lab-server" with the VPN hint, retried every 15 seconds. Messages sent meanwhile queue under "These send in order when you're back." and go in order
 
 ## Sidebar
 

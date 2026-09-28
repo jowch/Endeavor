@@ -88,6 +88,16 @@ pub struct Connection {
     pub idle_stopped: HashSet<String>,
     /// Bumped when the runtime starts or goes, so an old runtime's event reader stops.
     watching: Arc<AtomicU64>,
+    /// A server's connection dropped while its notebook showed: the page
+    /// stays, read-only, while Endeavor tries again.
+    pub lost: Option<Lost>,
+}
+
+/// What a dropped connection left showing.
+#[derive(Clone)]
+pub struct Lost {
+    /// The dropped runtime's Pluto address (`http://host:port/`), whose page stays.
+    origin: String,
 }
 
 /// The starting pane's step log: what's done, what's under way (since when),
@@ -190,6 +200,7 @@ impl Connection {
             cells: serde_json::Value::Null,
             idle_stopped: HashSet::new(),
             watching: Arc::default(),
+            lost: None,
         }
     }
 
@@ -233,10 +244,21 @@ impl Workspace {
     /// new Pluto secret, and Pluto then alerts that it "has lost authentication".
     fn close_page(&mut self, gone: Option<Runtime>, cx: &mut Context<Self>) {
         let Some((origin, _)) = gone.as_ref().and_then(|r| r.pluto_url.split_once('?')) else { return };
+        self.blank_page(origin, cx);
+    }
+
+    /// Take down the page if it's from `origin` (a runtime that went away).
+    fn blank_page(&mut self, origin: &str, cx: &mut Context<Self>) {
         let shown = self.webview.read(cx).raw().url().unwrap_or_default();
-        if shown.starts_with(origin) {
+        if !origin.is_empty() && shown.starts_with(origin) {
             self.webview.update(cx, |w, _| w.load_url("about:blank"));
         }
+    }
+
+    /// The web view shows a page of `host`'s runtime.
+    fn shows_page_of(&self, host: &HostId, cx: &App) -> bool {
+        let Some((origin, _)) = self.connections.get(host).and_then(|c| c.runtime.as_ref()).and_then(|r| r.pluto_url.split_once('?')) else { return false };
+        self.webview.read(cx).raw().url().is_ok_and(|shown| shown.starts_with(origin))
     }
 
     fn listener(&mut self, host: &HostId) -> Result<Arc<Listener>, String> {
@@ -277,6 +299,7 @@ impl Workspace {
             connection.last_notebooks = old.last_notebooks;
             connection.resume = old.resume;
             connection.failures = old.failures;
+            connection.lost = old.lost;
         }
         let cancel = connection.cancel.clone();
         self.connections.insert(host.clone(), connection);
@@ -493,6 +516,7 @@ impl Workspace {
         let local = host == HostId::ThisMac;
         let name = self.hosts.name(&host);
         let cluster = self.is_cluster(&host);
+        let keep_page = !local && matches!(update, Update::Notice(Notice::Lost(_))) && self.shows_page_of(&host, cx);
         let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
         match update {
             Update::Event(Event::Connected { .. }) => connection.steps.advance(format!("Connected to {name}"), "Checking Endeavor's helper"),
@@ -542,7 +566,15 @@ impl Workspace {
                     self.start_host(&host, cx);
                 }
             }
+            Update::Connected(Err(e)) if connection.lost.is_some() && crate::offline::unreachable(&e) => {
+                connection.status = Status::Failed(e);
+                self.retry_lost(host.clone(), crate::offline::RETRY_EVERY, cx);
+            }
             Update::Connected(Err(e)) => {
+                if let Some(lost) = connection.lost.take() {
+                    self.blank_page(&lost.origin, cx);
+                }
+                let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
                 connection.status = Status::Failed(e.clone());
                 connection.failures += 1;
                 if local {
@@ -553,6 +585,8 @@ impl Workspace {
                 }
             }
             Update::Started(Ok(runtime)) => {
+                // The kept page gives way to the notebook reopened on the new connection.
+                connection.lost = None;
                 connection.job = None;
                 connection.failures = 0;
                 connection.steps.found_julia = true;
@@ -569,6 +603,10 @@ impl Workspace {
                 connection.status = Status::Died(String::new());
             }
             Update::Started(Err(e)) => {
+                if let Some(lost) = connection.lost.take() {
+                    self.blank_page(&lost.origin, cx);
+                }
+                let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
                 connection.job = None;
                 connection.status = Status::Died(e.clone());
                 connection.failures += 1;
@@ -577,6 +615,17 @@ impl Workspace {
                     if let Some(setup) = &mut self.setup {
                         setup.fail(e);
                     }
+                }
+            }
+            // A server's notebook that was showing stays, read-only, while it reconnects.
+            Update::Notice(Notice::Lost(reason)) if keep_page => {
+                let origin = connection.forget_runtime().and_then(|r| r.pluto_url.split_once('?').map(|(o, _)| o.to_owned())).unwrap_or_default();
+                connection.channel = None;
+                connection.status = Status::Failed(reason);
+                connection.lost = Some(Lost { origin });
+                // A blip often passes: the first try comes soon.
+                if self.offline_since().is_none() {
+                    self.retry_lost(host.clone(), std::time::Duration::from_secs(2), cx);
                 }
             }
             Update::Notice(notice) => {
@@ -1021,6 +1070,10 @@ impl Workspace {
     /// new-session screen only browses the host's files.
     pub fn host_pane(&self, host: &HostId, start: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let connection = self.connections.get(host);
+        // Its notebook's page stays up, read-only, while it reconnects.
+        if connection.is_some_and(|c| c.lost.is_some()) {
+            return None;
+        }
         let status = connection.map_or(Status::Connecting, |c| c.status.clone());
         let name = self.hosts.name(host);
         let action = |id: &'static str, label: &'static str, host: HostId, start_julia: bool| {

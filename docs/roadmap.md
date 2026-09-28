@@ -63,6 +63,15 @@ process running Pluto + PlutoMCP.
   offers Sign in the way it was done last (`sign_in_method` in
   settings.json) or another account, and the sidebar says "Signed out of
   Claude."; after signing in the kept message sends by itself.
+- **Offline** (`network.rs`, `offline.rs`). The system's network status
+  (Network framework's path monitor on macOS; netlink route changes and
+  `/proc/net/*route` on Linux) holds Claude's messages while offline and
+  sends them in order once back; first-launch setup pauses and carries on by
+  itself; a server's notebook stays up read-only while its connection is out
+  of reach, retried every 15 seconds, and reloads once it's back. Try now
+  checks right away (a TCP connect to Claude's API). Debug builds take
+  `ENDEAVOR_FORCE_OFFLINE` (a file: offline while it exists) and
+  `ENDEAVOR_TEST_UNREACHABLE` (the `local-test` server can't be reached).
 - **First-launch setup screen** (`splash.rs`, `turtle.rs`): the turtle walks
   in and looks around; one line and a thin bar report the setup steps (Julia,
   Pluto packages, Claude agent, connecting); on failure the step list, Retry

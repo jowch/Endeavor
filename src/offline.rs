@@ -1,0 +1,303 @@
+//! Offline is waiting, not failure: nothing turns red or orange, every offline
+//! state has a quiet Try now, and Endeavor carries on by itself when the
+//! network is back. Claude's messages wait in the queue, the notebook on This
+//! Mac keeps working, a server's notebook stays readable but read-only, and a
+//! first launch's setup pauses.
+
+use std::time::{Duration, Instant};
+
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+
+use crate::Workspace;
+use crate::connection::Status;
+use crate::hosts::HostId;
+use crate::new_session::{Glyph, glyph, glyph_at};
+use crate::session::Session;
+use crate::signin::{Look, button};
+use crate::splash::{Setup, Step};
+use crate::theme;
+
+/// How long a server that can't be reached waits between tries.
+pub const RETRY_EVERY: Duration = Duration::from_secs(15);
+
+/// A connect error that means the server couldn't be reached (as opposed to,
+/// say, a refused key): worth trying again by itself.
+pub fn unreachable(error: &str) -> bool {
+    let error = error.to_lowercase();
+    [
+        "timed out",
+        "timeout",
+        "could not resolve",
+        "network is unreachable",
+        "no route to host",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "broken pipe",
+        "host is down",
+        "closed unexpectedly",
+    ]
+    .iter()
+    .any(|w| error.contains(w))
+}
+
+impl Workspace {
+    /// Follow the system's network status for the life of the window.
+    pub fn watch_network(&mut self, cx: &mut Context<Self>) {
+        let mut changes = crate::network::watch();
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt;
+            while let Some(online) = changes.next().await {
+                if this.update(cx, |this, cx| this.set_online(online, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn offline_since(&self) -> Option<Instant> {
+        self.offline_since
+    }
+
+    fn set_online(&mut self, online: bool, cx: &mut Context<Self>) {
+        if online == self.offline_since.is_none() {
+            return;
+        }
+        self.offline_since = (!online).then(Instant::now);
+        self.sync_holds(cx);
+        if online {
+            self.carry_on(cx);
+        }
+        cx.notify();
+    }
+
+    /// Try now: look at the network this moment and pick up whatever waits.
+    pub fn try_now(&mut self, cx: &mut Context<Self>) {
+        if self.probing {
+            return;
+        }
+        self.probing = true;
+        let probe = cx.background_executor().spawn(async { crate::network::probe() });
+        cx.spawn(async move |this, cx| {
+            let online = probe.await;
+            // Only good news is taken from here: the system's status says when
+            // the network goes, and it won't say again if this was wrong.
+            let _ = this.update(cx, |this, cx| {
+                this.probing = false;
+                if online && this.offline_since.is_none() {
+                    this.carry_on(cx);
+                }
+                if online {
+                    this.set_online(true, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Back online: setup goes on, and servers that dropped reconnect.
+    fn carry_on(&mut self, cx: &mut Context<Self>) {
+        if self.setup.as_ref().is_some_and(Setup::failed) {
+            self.retry_setup(cx);
+        }
+        let lost: Vec<HostId> = self.connections.iter().filter(|(_, c)| c.lost.is_some() && matches!(c.status, Status::Failed(_))).map(|(h, _)| h.clone()).collect();
+        for host in lost {
+            self.connect_host(&host, true, cx);
+        }
+    }
+
+    /// A server's connection dropped while its notebook showed: try again after
+    /// `wait`, unless it's back, given up on, or waiting for the network.
+    pub fn retry_lost(&mut self, host: HostId, wait: Duration, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |this, cx| {
+                let waiting = this.connections.get(&host).is_some_and(|c| c.lost.is_some() && matches!(c.status, Status::Failed(_)));
+                if waiting && this.offline_since.is_none() {
+                    this.connect_host(&host, true, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The session's notebook can be read but not changed: its server is out of reach.
+    pub fn read_only(&self, session: &Session) -> bool {
+        match &session.place.host {
+            HostId::ThisMac => false,
+            host => self.offline_since.is_some() || self.connections.get(host).is_some_and(|c| c.lost.is_some()),
+        }
+    }
+
+    fn try_now_button(&self, id: &'static str, height: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+        button(id, if self.probing { "Trying…" } else { "Try now" }, Look::Secondary).h(px(height)).on_click(cx.listener(|this, _, _, cx| this.try_now(cx)))
+    }
+
+    /// One grey line above the composer while offline.
+    pub fn render_offline_line(&self, session: Option<&Session>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.offline_since?;
+        let on_server = session.is_some_and(|s| s.place.host != HostId::ThisMac);
+        let text = if on_server {
+            "You're offline. Claude will continue when you're back."
+        } else {
+            "You're offline. The notebook still works. Claude will continue when you're back."
+        };
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .pl(px(2.))
+                .text_size(theme::size_meta())
+                .line_height(px(17.))
+                .text_color(theme::text_new())
+                .child(glyph_at(Glyph::WifiOff, theme::text_muted(), 13. / 12.))
+                .child(div().flex_1().min_w_0().child(text))
+                .child(self.try_now_button("try-now-chat", 24., cx))
+                .into_any_element(),
+        )
+    }
+
+    /// The one warning at the top of a server's notebook pane while it's out of reach.
+    pub fn render_pane_warning(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.read_only(session) || session.notebook_path.is_none() {
+            return None;
+        }
+        let frame = div()
+            .flex_shrink_0()
+            .mx(px(16.))
+            .mt(px(4.))
+            .mb(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .pl(px(10.))
+            .pr(px(6.))
+            .py(px(6.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::bg_card())
+            .text_size(theme::size_meta())
+            .line_height(px(17.))
+            .text_color(theme::text_secondary())
+            .child(glyph_at(Glyph::WifiOff, theme::text_muted(), 13. / 12.));
+        let body = if self.offline_since.is_some() {
+            div().flex_1().min_w_0().child("Looks like you're offline. Endeavor will reconnect when you're back online.")
+        } else {
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .child(div().text_size(theme::size_body()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(format!("Can't reach {}", self.hosts.name(&session.place.host))))
+                .child(div().text_color(theme::text_new()).child("If it needs your university's VPN, check that it's on."))
+        };
+        Some(frame.child(body).child(self.try_now_button("try-now-pane", 24., cx)).into_any_element())
+    }
+
+    /// The queue's heading while its messages wait for Claude to be reachable.
+    pub fn render_queue_heading(&self, session: &Session) -> Option<AnyElement> {
+        if !self.out_of_reach() || session.outbox.items.is_empty() {
+            return None;
+        }
+        let when = if self.offline_since.is_some() { "These send in order when you're back." } else { "These send in order once you sign in." };
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(theme::size_meta())
+                .line_height(px(17.))
+                .text_color(theme::text_muted())
+                .child(glyph(Glyph::Clock, theme::text_muted()))
+                .child(when)
+                .into_any_element(),
+        )
+    }
+
+    /// First launch without a network: each step says whether it needs the
+    /// internet, and setup carries on by itself once it's back.
+    pub fn render_offline_setup(&self, setup: &Setup, cx: &mut Context<Self>) -> AnyElement {
+        let current = setup.step();
+        let steps = Step::ALL.map(|step| {
+            let needs = |paused: bool| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .text_color(theme::text_muted())
+                    .when(paused, |d| d.child("paused ·"))
+                    .child(glyph_at(Glyph::WifiOff, theme::text_muted(), 11. / 12.))
+                    .child("needs internet")
+            };
+            let (mark, name_color, state) = match step.cmp(&current) {
+                std::cmp::Ordering::Less => (glyph(Glyph::Check, theme::diff_add()).into_any_element(), theme::text_secondary(), div().text_color(theme::text_muted()).child("done")),
+                std::cmp::Ordering::Equal => (div().size(px(8.)).rounded_full().border(px(1.5)).border_color(theme::text_muted()).into_any_element(), theme::text_primary(), needs(true)),
+                std::cmp::Ordering::Greater => (div().size(px(6.)).rounded_full().bg(theme::composer_edge()).into_any_element(), theme::text_muted(), needs(false)),
+            };
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .h(px(24.))
+                .text_size(theme::size_meta())
+                .child(div().w(px(12.)).flex().justify_center().child(mark))
+                .child(div().flex_1().text_color(name_color).child(step.label()))
+                .child(state)
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .p(px(16.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::bg_card())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(theme::size_subhead())
+                    .line_height(px(22.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(glyph_at(Glyph::WifiOff, theme::text_secondary(), 15. / 12.))
+                    .child("No internet connection"),
+            )
+            .child(div().mt(px(-6.)).text_color(theme::text_secondary()).child("Setup needs the internet once. It will continue when you're back online."))
+            .child(div().py(px(4.)).flex().flex_col().children(steps))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(crate::session::orbit("setup-offline-orbit".into(), 14., cx))
+                    .child(div().flex_1().text_size(theme::size_meta()).text_color(theme::text_muted()).child("Waiting for a connection"))
+                    .child(self.try_now_button("try-now-setup", 26., cx)),
+            )
+            .child(div().h(px(1.)).mx(px(-16.)).bg(theme::border()))
+            .child(div().text_size(theme::size_meta()).line_height(px(17.)).text_color(theme::text_muted()).child("After setup, only Claude needs the internet."))
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unreachable;
+
+    #[test]
+    fn network_failures_are_worth_retrying_and_refusals_are_not() {
+        assert!(unreachable("ssh: connect to host lab port 22: Operation timed out"));
+        assert!(unreachable("ssh: Could not resolve hostname lab: nodename nor servname provided"));
+        assert!(unreachable("The connection to Julia closed unexpectedly."));
+        assert!(!unreachable("Permission denied (publickey)."));
+        assert!(!unreachable("Host key verification failed."));
+    }
+}

@@ -289,7 +289,10 @@ pub fn start(commands: UnboundedReceiver<Command>) -> UnboundedReceiver<AgentEve
         let command = adapter_command(&|p| {
             let _ = events.unbounded_send(AgentEvent::Setup(p));
         });
-        let _ = events.unbounded_send(AgentEvent::Setup(Progress::new(Step::Claude, "Connecting…")));
+        // A failed install stays the Claude agent's step, not connecting's.
+        if command.is_ok() {
+            let _ = events.unbounded_send(AgentEvent::Setup(Progress::new(Step::Claude, "Connecting…")));
+        }
         // Checked again when the window comes back to the front, and a turn that fails for want of sign-in says so.
         if let (true, Ok(method)) = (command.is_ok(), crate::signin::status()) {
             let _ = events.unbounded_send(AgentEvent::SignedIn(method));

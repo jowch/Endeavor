@@ -209,6 +209,8 @@ pub struct Session {
     pub busy_since: Option<Instant>,
     /// The user message the running turn answers.
     turn_entry: Option<usize>,
+    /// When the agent last said anything about this session.
+    heard: Option<Instant>,
     /// A user message Claude couldn't answer (signed out, offline); it goes
     /// again by itself once Claude can be reached.
     pub unanswered: Option<usize>,
@@ -325,6 +327,7 @@ impl Session {
             dirty_from: Cell::new(None),
             busy_since: None,
             turn_entry: None,
+            heard: None,
             unanswered: None,
             plan_folded: false,
             open_runs: HashSet::new(),
@@ -699,7 +702,10 @@ impl Session {
                 let call = request.tool_call.tool_call_id.clone();
                 self.push(Entry::Permission { call, title, code, options: request.options, responder: Some(responder), runs_code, tool, input, preview: None, plan });
             }
-            SessionEvent::Update(update) => self.apply_update(update, &mut effects),
+            SessionEvent::Update(update) => {
+                self.heard = Some(Instant::now());
+                self.apply_update(update, &mut effects);
+            }
         }
         effects
     }
@@ -1076,11 +1082,30 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
 
 /// The working line: an orbit, then what the agent is doing and for how long
 /// ("Adding `residuals` · 12s"), or nothing while it waits on the user.
-pub fn render_activity(session: &Session, cx: &App) -> Option<impl IntoElement + use<>> {
+/// `offline_since`: the network went away then; a turn that has heard nothing
+/// since is waiting for it.
+pub fn render_activity(session: &Session, offline_since: Option<Instant>, cx: &App) -> Option<impl IntoElement + use<>> {
     let since = session.busy_since?;
     // The approval card above the composer says it all.
     if session.needs_approval() {
         return None;
+    }
+    let waiting = offline_since.filter(|offline| session.heard.is_none_or(|heard| heard <= *offline));
+    if let Some(offline) = waiting {
+        let secs = offline.max(since).elapsed().as_secs();
+        return Some(
+            div()
+                .px_3()
+                .pb_2()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .text_size(theme::size_meta())
+                .text_color(theme::text_muted())
+                .child(div().mr(px(4.)).child(orbit_with(ElementId::NamedInteger("orbit".into(), session.key), ORBIT, theme::text_muted(), cx)))
+                .child(format!("Waiting for the connection · {}:{:02}", secs / 60, secs % 60))
+                .into_any_element(),
+        );
     }
     let (verb, object) = session.activity();
     Some(
@@ -1110,19 +1135,24 @@ const ORBIT: f32 = 14.;
 /// The working mark: a dot circling a small disc on a tilted ring, one lap a
 /// second. With reduce motion it stands still at the front of the ring.
 pub fn orbit(id: ElementId, size: f32, cx: &App) -> AnyElement {
+    orbit_with(id, size, theme::accent(), cx)
+}
+
+/// The orbit with a dot of another colour (grey while waiting for the network).
+pub fn orbit_with(id: ElementId, size: f32, dot: Rgba, cx: &App) -> AnyElement {
     if cx.reduce_motion() {
-        return orbit_at(0.25, size).into_any_element();
+        return orbit_at(0.25, size, dot).into_any_element();
     }
     div()
         .size(px(size))
-        .with_animation(id, Animation::new(Duration::from_secs(1)).repeat(), move |d, t| d.child(orbit_at(t, size)))
+        .with_animation(id, Animation::new(Duration::from_secs(1)).repeat(), move |d, t| d.child(orbit_at(t, size, dot)))
         .into_any_element()
 }
 
 /// The orbit `t` of the way round a lap (0.25: in front of the disc). The dot
 /// passes behind the disc on the ring's far half, so the ring's back half, a
 /// dot there, the disc, the front half and a dot there are drawn in that order.
-fn orbit_at(t: f32, size_px: f32) -> impl IntoElement {
+fn orbit_at(t: f32, size_px: f32, dot_color: Rgba) -> impl IntoElement {
     use std::f32::consts::{PI, TAU};
     canvas(
         |_, _, _| (),
@@ -1151,7 +1181,7 @@ fn orbit_at(t: f32, size_px: f32) -> impl IntoElement {
             let angle = t * TAU;
             // sin < 0: the far half, above the disc on screen.
             let behind = angle > PI;
-            let dot = |window: &mut Window| disc(on_ring(angle), size_px * 1.7 / 14., theme::accent(), window);
+            let dot = |window: &mut Window| disc(on_ring(angle), size_px * 1.7 / 14., dot_color, window);
             half(PI, window);
             if behind {
                 dot(window);
@@ -1871,7 +1901,7 @@ pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Opt
 pub fn render_queue(this: &Workspace, session: &Session, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     let muted = theme::text_muted();
     let key = session.key;
-    div().flex().flex_col().gap_1().children(session.outbox.items.iter().enumerate().map(|(i, q)| {
+    div().flex().flex_col().gap_1().children(this.render_queue_heading(session)).children(session.outbox.items.iter().enumerate().map(|(i, q)| {
         let id = |name: &'static str| ElementId::NamedInteger(name.into(), (key << 32) | i as u64);
         div()
             .flex()

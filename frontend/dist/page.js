@@ -138,9 +138,9 @@
     };
   }
   function initActions() {
-    const style = document.createElement("style");
-    style.textContent = css;
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.textContent = css;
+    document.head.append(style2);
     on("action", (msg) => {
       const w = window;
       if (msg.name === "present") w.present?.();
@@ -187,9 +187,9 @@
     setTimeout(() => cells.forEach((c) => c.classList.remove("endeavor-flash", "fading")), 1300);
   }
   function initReveal() {
-    const style = document.createElement("style");
-    style.textContent = css2;
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.textContent = css2;
+    document.head.append(style2);
     on("reveal", (msg) => reveal(msg.cells));
     on("code", (msg) => {
       const cell = document.getElementById(msg.cell);
@@ -241,8 +241,8 @@
     let region = null;
     const active = () => document.body.classList.contains("annotating");
     const cells = () => [...document.querySelectorAll("pluto-cell")];
-    const style = document.createElement("style");
-    style.textContent = css3;
+    const style2 = document.createElement("style");
+    style2.textContent = css3;
     const frame2 = document.createElement("div");
     frame2.id = "annotate-frame";
     const box = document.createElement("div");
@@ -253,7 +253,7 @@
     const bar = document.createElement("div");
     bar.id = "annotate-bar";
     bar.innerHTML = `<span class="status"></span><textarea rows="1" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Comment for Claude\u2026" title="\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 Esc or \u2318\u21E7K exit"></textarea><button class="primary send">Send</button>`;
-    document.head.append(style);
+    document.head.append(style2);
     document.body.append(frame2, box, hint, bar);
     const status = bar.querySelector(".status");
     const text = bar.querySelector("textarea");
@@ -484,12 +484,12 @@
     );
   }
   function initRail() {
-    const style = document.createElement("style");
-    style.textContent = css4;
+    const style2 = document.createElement("style");
+    style2.textContent = css4;
     rail = document.createElement("div");
     rail.id = "endeavor-rail";
     rail.dataset.endeavorUi = "";
-    document.head.append(style);
+    document.head.append(style2);
     document.body.append(rail);
     onRedraw(draw);
     window.addEventListener("resize", draw);
@@ -527,9 +527,9 @@
     }
   }
   function initCells() {
-    const style = document.createElement("style");
-    style.textContent = css5;
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.textContent = css5;
+    document.head.append(style2);
     on("cells", (msg) => {
       states = new Map(msg.cells.map((c) => [c.cell_id, c]));
       apply();
@@ -695,9 +695,9 @@
     }
   }
   function initDiffs() {
-    const style = document.createElement("style");
-    style.textContent = css6;
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.textContent = css6;
+    document.head.append(style2);
     on("cells", (msg) => {
       befores.clear();
       for (const c of msg.cells) if (typeof c.before === "string") befores.set(c.cell_id, c.before);
@@ -1115,9 +1115,9 @@
     render();
   }
   function initDrawer() {
-    const style = document.createElement("style");
-    style.textContent = css7;
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.textContent = css7;
+    document.head.append(style2);
     setHeight(height());
     drawer = document.createElement("div");
     drawer.id = "endeavor-drawer";
@@ -1252,9 +1252,9 @@
     requestAnimationFrame(() => text.focus());
   }
   function initPrompt() {
-    const style = document.createElement("style");
-    style.textContent = css8;
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.textContent = css8;
+    document.head.append(style2);
     window.addEventListener(
       "keydown",
       (e) => {
@@ -1335,6 +1335,49 @@
     document.addEventListener("keydown", hide, true);
   }
 
+  // src/readonly.ts
+  var CLASS = "endeavor-readonly";
+  var readonly = false;
+  function holdReconnects() {
+    const Real = window.WebSocket;
+    const Held = function(url, protocols) {
+      return new Real(readonly ? "ws://127.0.0.1:9/" : url, protocols);
+    };
+    Held.prototype = Real.prototype;
+    Object.assign(Held, { CONNECTING: Real.CONNECTING, OPEN: Real.OPEN, CLOSING: Real.CLOSING, CLOSED: Real.CLOSED });
+    window.WebSocket = Held;
+  }
+  function style() {
+    const css11 = document.createElement("style");
+    css11.textContent = `
+    body.${CLASS} pluto-notebook { opacity: 0.85; }
+    body.${CLASS} pluto-notebook, body.${CLASS} pluto-notebook * { pointer-events: none !important; }
+  `;
+    document.head.append(css11);
+  }
+  function blockKeys(e) {
+    if (!readonly) return;
+    const inNotebook = e.target instanceof Element && e.target.closest("pluto-notebook");
+    const copying = (e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "a");
+    if (inNotebook && !copying) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }
+  function setReadonly(on2) {
+    readonly = on2;
+    document.body?.classList.toggle(CLASS, on2);
+    if (on2 && document.activeElement instanceof HTMLElement && document.activeElement.closest("pluto-notebook")) {
+      document.activeElement.blur();
+    }
+  }
+  holdReconnects();
+  function initReadonly() {
+    style();
+    window.addEventListener("keydown", blockKeys, true);
+    on("context", (msg) => setReadonly(msg.readonly));
+  }
+
   // src/errors.ts
   var AGENT2 = "Claude";
   var css9 = `
@@ -1362,9 +1405,9 @@
     }
   }
   function initErrors() {
-    const style = document.createElement("style");
-    style.textContent = css9;
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.textContent = css9;
+    document.head.append(style2);
     onRedraw(decorate2);
   }
 
@@ -1406,9 +1449,9 @@
     if (notebook && callout.nextElementSibling !== notebook) notebook.before(callout);
   }
   function initSafe() {
-    const style = document.createElement("style");
-    style.textContent = css10;
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.textContent = css10;
+    document.head.append(style2);
     callout = document.createElement("div");
     callout.id = "endeavor-safe";
     callout.dataset.endeavorUi = "";
@@ -1496,13 +1539,13 @@ footer form#feedback { display: none !important; }
     { file: "Bold", weight: 700, style: "normal" },
     { file: "RegularItalic", weight: 400, style: "italic" }
   ].map(
-    ({ file, weight, style }) => `
+    ({ file, weight, style: style2 }) => `
 @font-face {
   font-family: JuliaMono;
   src: url("endeavor://localhost/fonts/JuliaMono-${file}.ttf") format("truetype");
   font-display: swap;
   font-weight: ${weight};
-  font-style: ${style};
+  font-style: ${style2};
 }`
   ).join("");
   function initTheme() {
@@ -1510,11 +1553,11 @@ footer form#feedback { display: none !important; }
     fonts.id = "endeavor-fonts";
     fonts.textContent = juliaMono;
     document.head.append(fonts);
-    const style = document.createElement("style");
-    style.id = "endeavor-theme";
-    document.head.append(style);
+    const style2 = document.createElement("style");
+    style2.id = "endeavor-theme";
+    document.head.append(style2);
     on("theme", (msg) => {
-      style.textContent = both + (msg.name === "endeavor" ? endeavorDark : classic);
+      style2.textContent = both + (msg.name === "endeavor" ? endeavorDark : classic);
       document.documentElement.dataset.endeavorLook = msg.name;
     });
   }
@@ -1533,6 +1576,7 @@ footer form#feedback { display: none !important; }
     initDrawer();
     initSafe();
     initState();
+    initReadonly();
     watchRedraws();
     send({ type: "ready" });
   }

@@ -64,8 +64,13 @@ impl Transport {
     pub fn for_server(server: &Server) -> Transport {
         #[cfg(debug_assertions)]
         {
+            // While the file ENDEAVOR_TEST_UNREACHABLE names exists, `local-test`
+            // fails to connect as a server out of reach does.
+            let unreachable = std::env::var("ENDEAVOR_TEST_UNREACHABLE").ok().map(|file| {
+                format!("{{ test ! -e '{file}' || {{ echo 'ssh: connect to host {} port 22: Operation timed out' >&2; exit 255; }}; }}", server.name)
+            });
             let ask = match server.ssh_host.as_str() {
-                "local-test" => Some(None),
+                "local-test" => Some(unreachable),
                 "local-test-password" => Some(Some(FAKE_PASSWORD.to_owned())),
                 "local-test-hostkey" => Some(Some(FAKE_HOST_KEY.to_owned())),
                 _ => None,

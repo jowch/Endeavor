@@ -8,6 +8,7 @@ import { initCells } from "./cells";
 import { initDiffs } from "./diff";
 import { initDrawer } from "./drawer";
 import { initPrompt } from "./prompt";
+import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
 import { initRail } from "./rail";
 import { initReveal } from "./reveal";
@@ -29,6 +30,7 @@ function init() {
   initDrawer();
   initSafe();
   initState();
+  initReadonly();
   watchRedraws();
   // Ask for the current state: this page may have loaded after it last changed.
   send({ type: "ready" });

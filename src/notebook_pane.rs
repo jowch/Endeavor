@@ -365,7 +365,8 @@ impl Workspace {
         let endeavor = self.settings.notebook_theme == NotebookTheme::Endeavor;
         let page = self.page_for(session).filter(|_| shown);
         let host = self.host_label(&session.place.host);
-        let reconnecting = page.is_some_and(|p| !p.connected);
+        let read_only = self.read_only(session);
+        let reconnecting = page.is_some_and(|p| !p.connected) && !read_only;
         let host_icon = match &session.place.host {
             HostId::ThisMac => Glyph::Laptop,
             HostId::Server(_) if self.is_cluster(&session.place.host) => Glyph::Cluster,
@@ -412,6 +413,9 @@ impl Workspace {
         };
 
         let mut chips: Vec<AnyElement> = Vec::new();
+        if read_only {
+            chips.push(chip(Some(Glyph::Lock), "Read-only", theme::text_tag()).into_any_element());
+        }
         if session.missing {
             chips.push(chip(Some(Glyph::Warning), "Not found", theme::danger()).into_any_element());
         } else if session.stopped.is_some() {
@@ -533,7 +537,7 @@ impl Workspace {
             HostId::ThisMac => "This Mac".to_string(),
             host => self.hosts.name(host),
         };
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run() });
+        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session) });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;

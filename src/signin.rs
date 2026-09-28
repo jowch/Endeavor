@@ -663,7 +663,8 @@ impl Workspace {
     /// Mid-use, above the composer: sign in again, waiting for the browser, or why it didn't finish.
     pub fn render_sign_in_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let Account::SignedOut(stage) = &self.account else { return None };
-        if self.setup.is_some() {
+        // Offline isn't a sign-in problem: that line says what's going on, and sign-in waits.
+        if self.setup.is_some() || self.offline_since().is_some() {
             return None;
         }
         let card = |urgent: bool| {
@@ -743,13 +744,17 @@ impl Workspace {
             .line_height(px(17.))
             .text_color(theme::text_muted())
             .child(glyph(Glyph::Clock, theme::text_muted()))
-            .child("Not answered yet. It sends again once you sign in.")
+            .child(if self.offline_since().is_some() {
+                "Not answered yet. It sends again when you're back."
+            } else {
+                "Not answered yet. It sends again once you sign in."
+            })
             .into_any_element()
     }
 
     /// Claude can't answer now: messages wait.
     pub fn out_of_reach(&self) -> bool {
-        self.account.signed_out()
+        self.account.signed_out() || self.offline_since().is_some()
     }
 
     /// Hold every session's messages while Claude can't be reached; send what
