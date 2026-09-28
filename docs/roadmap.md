@@ -115,6 +115,7 @@ Everything here is a known `ponytail:` shortcut that's fine for one developer.
 - **Other ACP agents** (Codex, Gemini). The plugin is Claude Code-specific;
   other agents need the skills as plain prompt context (§5), and steering is
   only available where the agent advertises it.
+  Cursor was tried and parked: see [cursor-agent.md](cursor-agent.md).
 - **Jupyter (§7.5, milestone 8).** Design the notebook-model boundary against
   Jupyter's kernel/`.ipynb` model before writing a second backend.
 - **Plugin slash commands** in the panel (the plugin can carry them; the
