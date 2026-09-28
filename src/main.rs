@@ -2639,6 +2639,13 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("hook-pretool") {
         gate::run_pretool_hook();
     }
+    // This Mac's runtime helper (runtime::connect), and ssh's askpass (remote::Askpass).
+    if std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG) {
+        endeavor_remote::run(std::env::args().skip(2).collect());
+    }
+    if std::env::var_os(wire::askpass::SOCKET_ENV).is_some() {
+        endeavor_remote::run(std::env::args().skip(1).collect());
+    }
     logs::start();
     gpui_platform::application().run(|cx: &mut App| {
         platform::init(cx);

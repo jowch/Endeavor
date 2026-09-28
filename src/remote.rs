@@ -573,7 +573,7 @@ impl Askpass {
 
     fn set_env(&self, command: &mut Command) -> Result<(), String> {
         command
-            .env("SSH_ASKPASS", crate::runtime::helper_binary()?)
+            .env("SSH_ASKPASS", crate::runtime::helper_program()?)
             .env("SSH_ASKPASS_REQUIRE", "force")
             // ssh before 8.4 only uses askpass with a DISPLAY; a Mac app has none.
             .env("DISPLAY", std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()))

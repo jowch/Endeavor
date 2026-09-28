@@ -10,6 +10,8 @@ See [docs/roadmap.md](docs/roadmap.md) for status and
 [docs/pluto-agent-design-doc.md](docs/pluto-agent-design-doc.md) for the design.
 
 - Run from source: `cargo run`
+- Connect to Linux servers from a source build: `scripts/build-helpers.sh` first
+  (builds their runtime helper into `target/helpers`)
 - Build the app: `scripts/bundle.sh` → `target/release/Endeavor.app` (ad-hoc signed)
 - App icon and logo: `python3 assets/icon/build.py` regenerates them from the artwork in that script.
 - Page script (the code injected into the notebook page): `frontend/`, TypeScript.

@@ -144,7 +144,12 @@ fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String
     Ok(bin.display().to_string())
 }
 
-/// The helper, next to the app's own executable (`cargo test` runs from target/*/deps).
+/// `endeavor --helper ARGS…` runs `endeavor-remote ARGS…` (see main).
+pub const HELPER_FLAG: &str = "--helper";
+
+/// The helper binary next to the app's own executable (`cargo test` runs from
+/// target/*/deps): what a macOS server is sent. This Mac runs the app itself
+/// as its helper instead (`helper_command`).
 pub fn helper_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("no executable folder")?;
@@ -153,7 +158,28 @@ pub fn helper_binary() -> Result<PathBuf, String> {
         .flatten()
         .map(|d| d.join("endeavor-remote"))
         .find(|p| p.exists())
-        .ok_or_else(|| format!("Endeavor's runtime helper (endeavor-remote) is missing from {}. Reinstall Endeavor.", dir.display()))
+        .ok_or_else(|| format!("Endeavor's runtime helper (endeavor-remote) is missing from {}.", dir.display()))
+}
+
+/// This Mac's helper: the app itself in helper mode, named `endeavor-remote`
+/// in its argv[0] so `ps` and `pgrep -x endeavor` tell it from the app. A
+/// test binary can't act as the helper, so tests run the built one.
+pub fn helper_command() -> Result<Command, String> {
+    if cfg!(test) {
+        return Ok(Command::new(helper_binary()?));
+    }
+    let mut command = Command::new(helper_program()?);
+    command.arg0("endeavor-remote").arg(HELPER_FLAG);
+    Ok(command)
+}
+
+/// The program ssh runs as its askpass: the app, which acts as the helper's
+/// askpass mode when started with its socket in the environment (see main).
+pub fn helper_program() -> Result<PathBuf, String> {
+    if cfg!(test) {
+        return helper_binary();
+    }
+    std::env::current_exe().map_err(|e| format!("Couldn't find Endeavor's own program: {e}"))
 }
 
 /// Run This Mac's helper and wait for its hello. `keep_running` leaves the
@@ -167,7 +193,7 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
     // Trailing ':' stacks the default depots (~/.julia) read-only behind ours.
     let depot = format!("{}/depot:", app_dir.display());
 
-    let mut command = Command::new(helper_binary()?);
+    let mut command = helper_command()?;
     command
         .args(["connect", "--state-dir"])
         .arg(&state_dir)
