@@ -19,7 +19,7 @@ use agent_client_protocol::schema::v1::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::text::TextView;
+use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::tooltip::Tooltip;
 
 use crate::Workspace;
@@ -27,6 +27,7 @@ use crate::attach::{self, Attachment};
 use crate::theme;
 use crate::agent::{SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
+use crate::details;
 use crate::gate;
 use crate::hosts::Place;
 use crate::pluto;
@@ -52,7 +53,9 @@ pub enum Entry {
         /// How the user answered its prompt, if it asked.
         approval: Option<Approval>,
     },
-    Thought { text: String, expanded: bool },
+    /// A stretch of thinking: when it started (not known for replayed history)
+    /// and, once something follows it, how long it took.
+    Thought { text: String, expanded: bool, started: Option<Instant>, took: Option<Duration> },
     Plan(Vec<PlanEntry>),
     /// A prompt for the call `call`. Once answered it stays, unseen, so it
     /// doesn't split the run it belongs to; the call's row shows the answer.
@@ -496,8 +499,17 @@ impl Session {
     }
 
     fn push(&mut self, entry: Entry) {
+        self.end_thought();
         self.mark(self.entries.len());
         self.entries.push(entry);
+    }
+
+    /// Thinking ends when anything follows it, or the turn ends.
+    fn end_thought(&mut self) {
+        if let Some(Entry::Thought { started: Some(started), took: took @ None, .. }) = self.entries.last_mut() {
+            *took = Some(started.elapsed());
+            self.mark(self.entries.len() - 1);
+        }
     }
 
     /// Entry `ix` (and anything after it) changed; the list re-measures it. A run
@@ -647,6 +659,7 @@ impl Session {
                 self.mark(ix);
             }
             self.busy_since = None;
+            self.end_thought();
             // A run still going folds away its live row.
             self.mark(self.entries.len());
         }
@@ -710,7 +723,10 @@ impl Session {
                 if let ContentBlock::Text(t) = chunk.content {
                     match self.entries.last_mut() {
                         Some(Entry::Thought { text, .. }) => text.push_str(&t.text),
-                        _ => self.push(Entry::Thought { text: t.text, expanded: false }),
+                        _ => {
+                            let started = (!self.replaying).then(Instant::now);
+                            self.push(Entry::Thought { text: t.text, expanded: false, started, took: None })
+                        }
                     }
                     self.mark(self.entries.len() - 1);
                 }
@@ -835,8 +851,9 @@ impl Session {
     }
 
     /// What the agent is doing, for the working line: this turn's latest running tool
-    /// call, else thinking or working. The second part (a cell or file name) is code-like.
-    fn activity(&self) -> (String, Option<String>) {
+    /// call in the folded runs' words, else thinking or working. The second part
+    /// (a cell or file name) is code-like.
+    pub(crate) fn activity(&self) -> (String, Option<String>) {
         let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap_or(0);
         let running = self.entries[turn_start..].iter().rev().find_map(|e| match e {
             Entry::Tool { title, kind, path, status: ToolCallStatus::Pending | ToolCallStatus::InProgress, input, .. } => {
@@ -849,52 +866,18 @@ impl Session {
             return (verb.into(), None);
         };
         let input = input.as_ref().unwrap_or(&serde_json::Value::Null);
-        let named = |field: &str| input[field].as_str().and_then(|id| self.cell_codes.get(id)).and_then(defined_name);
-        let cells = |n: usize| if n == 1 { "1 cell".to_string() } else { format!("{n} cells") };
-        match celldiff::pluto_tool(title) {
-            Some(tool) => {
-                let (verb, object) = match tool {
-                    "read_cell" | "view_cell_output" => ("Reading", named("cell_id")),
-                    "edit_cell" => ("Editing", input["code"].as_str().and_then(defined_name).or_else(|| named("cell_id"))),
-                    "add_cell" => ("Adding", input["code"].as_str().and_then(defined_name)),
-                    "delete_cell" => ("Deleting", named("cell_id")),
-                    "move_cell" => ("Moving", named("cell_id")),
-                    "execute_cell" => ("Running", named("cell_id")),
-                    "edit_cells" => return (format!("Editing {}", cells(input["cells"].as_array().map_or(0, Vec::len))), None),
-                    "submit_changes" => match input["cell_ids"].as_array() {
-                        Some(ids) => return (format!("Running {}", cells(ids.len())), None),
-                        None => return ("Running changed cells".into(), None),
-                    },
-                    "run_all_cells" => return ("Running all cells".into(), None),
-                    "read_notebook_code" => return ("Reading the notebook".into(), None),
-                    "search_code" => return ("Searching the notebook".into(), None),
-                    "open_notebook" => return ("Opening a notebook".into(), None),
-                    "new_notebook" => return ("Creating a notebook".into(), None),
-                    _ => return ("Working".into(), None),
-                };
-                match object {
-                    Some(name) => (verb.into(), Some(name)),
-                    None => (format!("{verb} a cell"), None),
-                }
-            }
-            None => {
-                let file = path.as_deref().and_then(Path::file_name).map(|f| f.to_string_lossy().into_owned());
-                let verb = match kind {
-                    ToolKind::Read => "Reading",
-                    ToolKind::Edit => "Editing",
-                    ToolKind::Delete => "Deleting",
-                    ToolKind::Move => "Moving",
-                    ToolKind::Search => return ("Searching".into(), None),
-                    ToolKind::Execute => return ("Running a command".into(), None),
-                    ToolKind::Think => return ("Thinking".into(), None),
-                    ToolKind::Fetch => return ("Fetching".into(), None),
-                    _ => return ("Working".into(), None),
-                };
-                match file {
-                    Some(file) => (verb.into(), Some(file)),
-                    None => (format!("{verb} a file"), None),
-                }
-            }
+        let Some((verb, phrase, names)) = runs::doing(title, kind, input) else { return ("Working".into(), None) };
+        let name = match names {
+            runs::Names::File => file_path(path.as_deref(), input).map(|p| file_name(&p)),
+            runs::Names::Cell => input["code"]
+                .as_str()
+                .and_then(defined_name)
+                .or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).and_then(defined_name)),
+            runs::Names::Nothing => None,
+        };
+        match name {
+            Some(name) => (verb.into(), Some(name)),
+            None => (phrase, None),
         }
     }
 
@@ -1019,7 +1002,7 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
                 let element = match runs::run_at(&session.entries, ix) {
                     Some(run) if run.start == ix => Some(render_run(session, run, window, cx)),
                     Some(_) => None,
-                    None => render_entry(this, key, ix, entry, window, cx),
+                    None => render_entry(this, session, ix, entry, window, cx),
                 };
                 match element {
                     Some(element) => div().px_4().pb_4().child(element).into_any_element(),
@@ -1033,15 +1016,13 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
 }
 
 /// The working line: an orbit, then what the agent is doing and for how long
-/// ("Editing `residuals` · 12s"), or nothing while it waits on the user.
-pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
+/// ("Adding `residuals` · 12s"), or nothing while it waits on the user.
+pub fn render_activity(session: &Session, cx: &App) -> Option<impl IntoElement + use<>> {
     let since = session.busy_since?;
     // The approval card above the composer says it all.
     if session.needs_approval() {
         return None;
     }
-    let secs = since.elapsed().as_secs();
-    let elapsed = if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) };
     let (verb, object) = session.activity();
     Some(
         div()
@@ -1052,35 +1033,43 @@ pub fn render_activity(session: &Session) -> Option<impl IntoElement + use<>> {
             .gap(px(4.))
             .text_size(theme::size_meta())
             .text_color(theme::text_muted())
-            .child(
-                div()
-                    .mr(px(4.))
-                    .size(px(ORBIT))
-                    .with_animation(
-                        ElementId::NamedInteger("orbit".into(), session.key),
-                        Animation::new(Duration::from_secs(1)).repeat(),
-                        |d, t| d.child(orbit(t)),
-                    ),
-            )
+            .child(div().mr(px(4.)).child(orbit(ElementId::NamedInteger("orbit".into(), session.key), ORBIT, cx)))
             .child(verb)
             .children(object.map(|o| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_secondary()).child(o)))
-            .child(format!("· {elapsed}"))
+            .child(format!("· {}", elapsed(since.elapsed().as_secs())))
             .into_any_element(),
     )
 }
 
+/// "12s", "1m 05s".
+pub(crate) fn elapsed(secs: u64) -> String {
+    if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) }
+}
+
 const ORBIT: f32 = 14.;
 
-/// A dot circling a small sphere on a tilted ring, `t` of the way round a lap.
-/// It passes behind the sphere on the ring's far half, so the ring's back half,
-/// a dot there, the sphere, the front half and a dot there are drawn in that order.
-fn orbit(t: f32) -> impl IntoElement {
+/// The working mark: a dot circling a small disc on a tilted ring, one lap a
+/// second. With reduce motion it stands still at the front of the ring.
+pub fn orbit(id: ElementId, size: f32, cx: &App) -> AnyElement {
+    if cx.reduce_motion() {
+        return orbit_at(0.25, size).into_any_element();
+    }
+    div()
+        .size(px(size))
+        .with_animation(id, Animation::new(Duration::from_secs(1)).repeat(), move |d, t| d.child(orbit_at(t, size)))
+        .into_any_element()
+}
+
+/// The orbit `t` of the way round a lap (0.25: in front of the disc). The dot
+/// passes behind the disc on the ring's far half, so the ring's back half, a
+/// dot there, the disc, the front half and a dot there are drawn in that order.
+fn orbit_at(t: f32, size_px: f32) -> impl IntoElement {
     use std::f32::consts::{PI, TAU};
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
             let center = bounds.center();
-            let (rx, tilt) = (ORBIT * 0.36, -25f32.to_radians());
+            let (rx, tilt) = (size_px * 0.36, -25f32.to_radians());
             let ry = rx * 0.36;
             let on_ring = |a: f32| {
                 let (x, y) = (rx * a.cos(), ry * a.sin());
@@ -1101,21 +1090,21 @@ fn orbit(t: f32) -> impl IntoElement {
                 window.paint_quad(fill(Bounds::centered_at(at, size(px(2. * r), px(2. * r))), color).corner_radii(px(r)));
             };
             let angle = t * TAU;
-            // sin < 0: the far half, above the sphere on screen.
+            // sin < 0: the far half, above the disc on screen.
             let behind = angle > PI;
-            let dot = |window: &mut Window| disc(on_ring(angle), ORBIT * 1.7 / 14., theme::accent(), window);
+            let dot = |window: &mut Window| disc(on_ring(angle), size_px * 1.7 / 14., theme::accent(), window);
             half(PI, window);
             if behind {
                 dot(window);
             }
-            disc(center, ORBIT * 3.4 / 14., theme::orbit_sphere(), window);
+            disc(center, size_px * 3.4 / 14., theme::orbit_sphere(), window);
             half(0., window);
             if !behind {
                 dot(window);
             }
         },
     )
-    .size(px(ORBIT))
+    .size(px(size_px))
 }
 
 /// User messages taller than this many wrapped lines fold to their first
@@ -1136,7 +1125,8 @@ fn bubble_lines(text: &SharedString, window: &Window) -> usize {
         .map_or(0, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum())
 }
 
-fn render_entry(this: &Workspace, key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, window: &mut Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+    let key = session.key;
     let muted = theme::text_muted();
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     Some(match entry {
@@ -1184,9 +1174,9 @@ fn render_entry(this: &Workspace, key: u64, ix: usize, entry: &Entry, window: &m
                 )
                 .into_any_element()
         }
-        Entry::Agent(text) => TextView::markdown(id("agent"), text.clone()).into_any_element(),
+        Entry::Agent(text) => div().group(REPLY).child(markdown(id("agent"), text.clone())).into_any_element(),
         Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
-        Entry::Tool { .. } | Entry::Thought { .. } => render_row(key, ix, entry, window, cx),
+        Entry::Tool { .. } | Entry::Thought { .. } => render_row(session, ix, false, window, cx),
         Entry::Plan(entries) => div()
             .flex()
             .flex_col()
@@ -1197,6 +1187,62 @@ fn render_entry(this: &Workspace, key: u64, ix: usize, entry: &Entry, window: &m
         // Pending: shown as the approval card above the composer (render_approval).
         Entry::Permission { .. } => return None,
     })
+}
+
+/// An agent reply, for its code blocks' copy buttons to show on hover.
+const REPLY: &str = "agent-reply";
+
+/// An agent reply's markdown, with a copy button on each code block.
+fn markdown(id: ElementId, text: String) -> TextView {
+    TextView::markdown(id, text).style(markdown_style()).code_block_actions(|block, _, _| {
+        let code = block.code().to_string();
+        div()
+            .id("copy")
+            .px(px(6.))
+            .py(px(2.))
+            .rounded(px(4.))
+            .cursor_pointer()
+            .font_family(theme::SANS)
+            .text_size(theme::size_meta_small())
+            .text_color(theme::text_faint())
+            // Out of the flow so the library's opaque holder for it stays empty and
+            // doesn't hide the code's top-right corner while the button is invisible.
+            // Changing display on hover instead panics when hover flips mid-frame.
+            .absolute()
+            .top_0()
+            .right_0()
+            .whitespace_nowrap()
+            .bg(theme::bg_card())
+            .opacity(0.)
+            .group_hover(REPLY, |s| s.opacity(1.))
+            .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
+            .child("Copy")
+            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(code.clone())))
+    })
+}
+
+/// Markdown on the type scale: headings at 15 px (h1, h2) and 13 px (h3 on),
+/// code in JuliaMono 12 on the card colour, tag-coloured inline code, compact
+/// tables with a muted 12 px header row. Borders, links and backgrounds come
+/// from the component theme (set in main).
+fn markdown_style() -> TextViewStyle {
+    let code_block = StyleRefinement::default()
+        .p(px(10.))
+        .rounded(px(8.))
+        .bg(theme::bg_card())
+        .font_family(theme::MONO)
+        .text_size(theme::size_code());
+    let table = StyleRefinement::default().rounded(px(8.));
+    let table_head = StyleRefinement::default().text_size(theme::size_meta()).text_color(theme::text_muted());
+    let table_cell = StyleRefinement::default().px(px(8.)).py(px(3.));
+    TextViewStyle::default()
+        .paragraph_gap(rems(0.75))
+        .heading_font_size(|level, _| if level <= 2 { theme::size_subhead() } else { theme::size_body() })
+        .code_block(code_block)
+        .table(table)
+        .table_head(table_head)
+        .table_cell(table_cell)
+        .inline_code(HighlightStyle { background_color: Some(theme::bg_tag().into()), ..Default::default() })
 }
 
 /// A tool call's input and output panels scroll past this height.
@@ -1210,7 +1256,7 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
     let key = session.key;
     let rows: Vec<usize> = run.clone().filter(|&i| matches!(session.entries[i], Entry::Tool { .. } | Entry::Thought { .. })).collect();
     if let [only] = rows[..] {
-        return render_row(key, only, &session.entries[only], window, cx);
+        return render_row(session, only, true, window, cx);
     }
     let calls: Vec<usize> = rows.iter().copied().filter(|&i| matches!(session.entries[i], Entry::Tool { .. })).collect();
     let mut first = None;
@@ -1265,7 +1311,7 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
                 .px(px(8.))
                 .py(px(4.))
                 .when(n > 0, |d| d.border_t_1().border_color(theme::border()))
-                .child(render_row(key, i, &session.entries[i], window, cx))
+                .child(render_row(session, i, true, window, cx))
         }))
     });
     div().flex().flex_col().gap(px(6.)).child(header).children(list).into_any_element()
@@ -1273,7 +1319,8 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
 
 /// One call's line (grey verb, what it acted on, ± counts, `›`), opening in
 /// place to its edits or input, then its output; or a stretch of thinking.
-fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut Context<Workspace>) -> AnyElement {
+fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, cx: &mut Context<Workspace>) -> AnyElement {
+    let (key, entry) = (session.key, &session.entries[ix]);
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     let toggle = cx.listener(move |this: &mut Workspace, _: &ClickEvent, _: &mut Window, cx: &mut Context<Workspace>| this.with_session(key, cx, |s| s.toggle(ix)));
     let line = |name: &'static str| {
@@ -1288,15 +1335,17 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
             .hover(|s| s.text_color(theme::text_secondary()))
     };
     match entry {
-        Entry::Thought { text, expanded } => div()
+        Entry::Thought { text, expanded, started, took } => div()
             .flex()
             .flex_col()
             .gap_1()
-            .child(line("thought").child("Thinking").child(if *expanded { "⌄" } else { "›" }).on_click(toggle))
+            .child(line("thought").child(thought_label(in_run, *started, *took)).child(if *expanded { "⌄" } else { "›" }).on_click(toggle))
             .when(*expanded, |d| {
                 d.child(
                     scroll_y(div().id(id("thought-text")).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE))
-                        .italic()
+                        .pl(px(10.))
+                        .border_l_1()
+                        .border_color(theme::border())
                         .text_size(theme::size_meta())
                         .text_color(theme::text_muted())
                         .child(text.clone()),
@@ -1306,7 +1355,7 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
         Entry::Tool { title, kind, path, status, input, output, diffs, expanded, approval, .. } => {
             let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
             let pluto = celldiff::pluto_tool(title).is_some();
-            let file_diff = if pluto { None } else { file_diff(*kind, path.as_deref(), args) };
+            let file_diff = if pluto { None } else { file_diff(*kind, title, path.as_deref(), args) };
             let all_diffs: Vec<&celldiff::CellDiff> = diffs.iter().chain(&file_diff).collect();
             let (added, removed) = all_diffs.iter().flat_map(|d| &d.lines).fold((0, 0), |(a, r), (change, _)| match change {
                 celldiff::Change::Added => (a + 1, r),
@@ -1315,9 +1364,10 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
             });
             let summary = if pluto { pluto_line(title, diffs, args) } else { tool_line(title, *kind, path.as_deref(), args) };
             let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
+            let failed = runs::failed(*status, title, output.as_ref());
             let state = if *approval == Some(Approval::Denied) {
                 Some(div().flex_none().text_color(theme::danger()).child("denied"))
-            } else if runs::failed(*status, title, output.as_ref()) {
+            } else if failed {
                 Some(div().flex_none().text_color(theme::danger()).child("failed"))
             } else if matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress) {
                 Some(div().flex_none().child("…"))
@@ -1332,25 +1382,13 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
                     None => d,
                 }
             });
-            let (input_text, output_text) = if *expanded { call_details(title, *kind, path.as_deref(), input.as_ref(), output.as_ref()) } else { (None, None) };
-            let input_panel = input_text.filter(|_| all_diffs.is_empty()).map(|text| {
-                scroll_y(div().id(id("tool-input")).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE))
-                    .px(px(8.))
-                    .py(px(5.))
-                    .rounded(px(4.))
-                    .bg(theme::bg_card())
-                    .font_family(theme::MONO)
-                    .text_size(theme::size_meta_small())
-                    .text_color(theme::text_secondary())
-                    .child(text)
-            });
-            let output_panel = output_text.map(|text| {
-                scroll_y(div().id(id("tool-output")).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE))
-                    .font_family(theme::MONO)
-                    .text_size(theme::size_meta_small())
-                    .text_color(theme::text_muted())
-                    .child(text)
-            });
+            let (input_panel, output_panel) = if *expanded {
+                let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
+                let details = details::details(title, *kind, path.as_deref(), args, output.as_ref(), failed, !all_diffs.is_empty(), &name);
+                (render_parts(details.input, id("tool-input"), window, cx), render_parts(details.output, id("tool-output"), window, cx))
+            } else {
+                (None, None)
+            };
             div()
                 .flex()
                 .flex_col()
@@ -1371,6 +1409,53 @@ fn render_row(key: u64, ix: usize, entry: &Entry, window: &mut Window, cx: &mut 
         }
         _ => div().into_any_element(),
     }
+}
+
+/// A stretch of thinking's line: "Thought for 8s" once it's over, "Thinking"
+/// while it goes on and inside a folded run of calls, "Thought" when replayed
+/// history doesn't say how long.
+fn thought_label(in_run: bool, started: Option<Instant>, took: Option<Duration>) -> String {
+    match (in_run, started, took) {
+        (true, _, _) | (false, Some(_), None) => "Thinking".into(),
+        (false, _, Some(took)) => format!("Thought for {}", elapsed(took.as_secs().max(1))),
+        (false, None, None) => "Thought".into(),
+    }
+}
+
+/// An opened call's input or output: commands and code in a block, label and
+/// value rows, sentences, plain mono text, failures in red, numbered lines.
+fn render_parts(parts: Vec<details::Part>, id: ElementId, window: &mut Window, cx: &mut App) -> Option<Stateful<Div>> {
+    use details::Part;
+    if parts.is_empty() {
+        return None;
+    }
+    let mono = |text: String, color: Rgba| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
+    let parts = parts.into_iter().map(|part| match part {
+        Part::Code(code) => mono(code, theme::text_secondary()).px(px(8.)).py(px(5.)).rounded(px(4.)).bg(theme::bg_card()),
+        Part::Fields(rows) => div().flex().flex_col().children(rows.into_iter().map(|(label, value)| {
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(div().flex_none().min_w(px(44.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(label))
+                .child(mono(value.replace('`', ""), theme::text_secondary()).min_w_0())
+        })),
+        Part::Line(text) => div().flex().flex_wrap().text_size(theme::size_meta()).text_color(theme::text_muted()).children(text.split('`').enumerate().map(|(i, piece)| {
+            // Flex drops a piece's edge spaces; non-breaking ones survive.
+            let piece = piece.replace(' ', "\u{a0}");
+            if i % 2 == 1 { mono(piece, theme::text_secondary()) } else { div().child(piece) }
+        })),
+        Part::Text(text) => mono(text, theme::text_muted()),
+        Part::Error(text) => mono(text, theme::danger()),
+        Part::Numbered(lines) => {
+            let numbers: Vec<String> = lines.iter().map(|(n, _)| n.to_string()).collect();
+            let code: Vec<&str> = lines.iter().map(|(_, l)| l.as_str()).collect();
+            div()
+                .flex()
+                .child(mono(numbers.join("\n"), theme::text_section()).flex_none().text_right().pr(px(10.)))
+                .child(mono(code.join("\n"), theme::text_muted()).min_w_0().overflow_hidden().whitespace_nowrap())
+        }
+    });
+    Some(scroll_y(div().id(id).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE)).flex().flex_col().gap(px(4.)).children(parts))
 }
 
 /// A panel that scrolls up to its max height, and hands the wheel on to the
@@ -1515,7 +1600,7 @@ fn render_plan_card(key: u64, ix: usize, plan: &str, options: &[PermissionOption
                 .id(ElementId::NamedInteger("plan".into(), key))
                 .max_h(px(260.))
                 .overflow_y_scroll()
-                .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan.to_string()))
+                .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan.to_string()).style(markdown_style()))
                 .into_any_element(),
         ],
         buttons
@@ -1891,84 +1976,18 @@ fn first_line(text: &str) -> String {
     if lines.next().is_some() { format!("{first} …") } else { first }
 }
 
-/// A file edit's old and new text as a diff.
-fn file_diff(kind: ToolKind, path: Option<&Path>, input: &serde_json::Value) -> Option<celldiff::CellDiff> {
-    let (old, new) = (input["old_string"].as_str(), input["new_string"].as_str());
-    if kind != ToolKind::Edit || (old.is_none() && new.is_none()) {
+/// A file edit's old and new text as a diff; a written file is all new.
+fn file_diff(kind: ToolKind, title: &str, path: Option<&Path>, input: &serde_json::Value) -> Option<celldiff::CellDiff> {
+    if kind != ToolKind::Edit {
         return None;
     }
+    let (old, new) = match (input["old_string"].as_str(), input["new_string"].as_str(), input["content"].as_str()) {
+        (None, None, Some(content)) if title.starts_with("Write") || input["file_path"].is_string() => ("", content),
+        (None, None, _) => return None,
+        (old, new, _) => (old.unwrap_or(""), new.unwrap_or("")),
+    };
     let label = file_path(path, input).map_or_else(|| "edit".into(), |p| file_name(&p));
-    Some(celldiff::CellDiff { label, lines: celldiff::line_diff(old.unwrap_or(""), new.unwrap_or("")) })
-}
-
-/// What an expanded call shows: its input (the command, or its fields) and its
-/// output as text. JSON only when the input isn't flat.
-fn tool_details(
-    kind: ToolKind,
-    path: Option<&Path>,
-    input: Option<&serde_json::Value>,
-    output: Option<&serde_json::Value>,
-) -> Vec<(&'static str, String)> {
-    let args = input.unwrap_or(&serde_json::Value::Null);
-    let input = match (kind, args["command"].as_str()) {
-        (ToolKind::Execute, Some(command)) => Some(("command", command.to_string())),
-        _ => match args.as_object() {
-            Some(fields) if fields.values().all(|v| !v.is_object() && !v.is_array()) => {
-                let lines: Vec<String> = fields
-                    .iter()
-                    .map(|(k, v)| {
-                        let v = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
-                        if v.contains('\n') { format!("{k}:\n{v}") } else { format!("{k}: {v}") }
-                    })
-                    .collect();
-                (!lines.is_empty()).then(|| ("input", lines.join("\n")))
-            }
-            Some(_) => Some(("input", serde_json::to_string_pretty(args).unwrap_or_default())),
-            None => file_path(path, args).map(|p| ("path", p)),
-        },
-    };
-    let output = output.map(plain_text).filter(|t| !t.trim().is_empty()).map(|t| ("output", t));
-    input.into_iter().chain(output).collect()
-}
-
-/// A tool result as text: the text itself, the MCP content array's texts, else JSON.
-fn plain_text(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(text) => text.clone(),
-        serde_json::Value::Array(items) if items.iter().all(|i| i["text"].is_string()) => {
-            items.iter().filter_map(|i| i["text"].as_str()).collect::<Vec<_>>().join("\n")
-        }
-        other => serde_json::to_string_pretty(other).unwrap_or_default(),
-    }
-}
-
-/// An expanded call's input (the command, or its fields as text) and output as text.
-fn call_details(
-    title: &str,
-    kind: ToolKind,
-    path: Option<&Path>,
-    input: Option<&serde_json::Value>,
-    output: Option<&serde_json::Value>,
-) -> (Option<String>, Option<String>) {
-    const MAX_CHARS: usize = 20_000;
-    let cut = |text: String| match text.char_indices().nth(MAX_CHARS) {
-        Some((at, _)) => format!("{}\n…", &text[..at]),
-        None => text,
-    };
-    let pluto = celldiff::pluto_tool(title).is_some();
-    let mut input_text = None;
-    let mut output_text = None;
-    for (label, text) in tool_details(kind, path, input, output.filter(|_| !pluto)) {
-        if label == "output" {
-            output_text = Some(text);
-        } else {
-            input_text = Some(text);
-        }
-    }
-    if pluto {
-        output_text = output.map(|o| celldiff::tool_json(o).map_or_else(|| plain_text(o), |v| serde_json::to_string_pretty(&v).unwrap_or_default()));
-    }
-    (input_text.map(cut), output_text.filter(|t| !t.trim().is_empty()).map(cut))
+    Some(celldiff::CellDiff { label, lines: celldiff::line_diff(old, new) })
 }
 
 #[cfg(test)]
@@ -2085,20 +2104,18 @@ mod tests {
     }
 
     #[test]
-    fn expanded_tool_calls_show_text_not_json() {
+    fn file_edits_and_writes_show_as_diffs() {
+        use crate::celldiff::Change;
         use agent_client_protocol::schema::v1::ToolKind;
         use serde_json::json;
-        let input = json!({"command": "echo hi\nls", "description": "Say hi"});
-        let output = json!([{"type": "text", "text": "hi\nREADME.md"}]);
-        assert_eq!(
-            super::tool_details(ToolKind::Execute, None, Some(&input), Some(&output)),
-            vec![("command", "echo hi\nls".to_string()), ("output", "hi\nREADME.md".to_string())]
-        );
-        let read = json!({"file_path": "/repo/README.md", "limit": 20});
-        assert_eq!(super::tool_details(ToolKind::Read, None, Some(&read), None), vec![("input", "file_path: /repo/README.md\nlimit: 20".to_string())]);
         let edit = json!({"file_path": "/repo/a.rs", "old_string": "a\nb", "new_string": "a\nc"});
-        let diff = super::file_diff(ToolKind::Edit, None, &edit).unwrap();
+        let diff = super::file_diff(ToolKind::Edit, "Edit /repo/a.rs", None, &edit).unwrap();
         assert_eq!(diff.label, "a.rs");
+        assert_eq!(diff.lines, vec![(Change::Same, "a".into()), (Change::Removed, "b".into()), (Change::Added, "c".into())]);
+        let write = json!({"file_path": "/repo/n.txt", "content": "one\ntwo"});
+        let diff = super::file_diff(ToolKind::Edit, "Write /repo/n.txt", None, &write).unwrap();
+        assert_eq!((diff.label.as_str(), diff.lines), ("n.txt", vec![(Change::Added, "one".into()), (Change::Added, "two".into())]));
+        assert!(super::file_diff(ToolKind::Read, "Read /repo/a.rs", None, &edit).is_none());
     }
 
     #[test]
@@ -2370,6 +2387,63 @@ more" }"#);
         assert!(s.busy_since.is_some());
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(s.busy_since.is_none());
+    }
+
+    #[test]
+    fn the_working_line_says_what_the_running_call_does() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind};
+        use serde_json::json;
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("hi"), false);
+        assert_eq!(s.activity(), ("Working".into(), None));
+        s.apply(SessionEvent::Update(SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::from("hmm")))));
+        assert_eq!(s.activity(), ("Thinking".into(), None));
+        let call = |id: &str, title: &str, kind, input| {
+            SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), title.to_string()).kind(kind).raw_input(input)))
+        };
+        s.apply(call("t1", "Read /data/data.csv", ToolKind::Read, json!({"file_path": "/data/data.csv"})));
+        assert_eq!(s.activity(), ("Reading".into(), Some("data.csv".into())));
+        s.apply(call("t2", "mcp__pluto__add_cell", ToolKind::Other, json!({"code": "residuals = y .- ŷ"})));
+        assert_eq!(s.activity(), ("Adding".into(), Some("residuals".into())));
+        s.apply(call("t3", "mcp__pluto__add_cell", ToolKind::Other, json!({"code": "md\"# Fit\""})));
+        assert_eq!(s.activity(), ("Adding a cell".into(), None));
+        s.apply(call("t4", "ls", ToolKind::Execute, json!({"command": "ls"})));
+        assert_eq!(s.activity(), ("Running a command".into(), None));
+        s.apply(call("t5", "ToolSearch", ToolKind::Other, json!({"query": "fetch"})));
+        assert_eq!(s.activity(), ("Working".into(), None));
+        let done = |id: &str| SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_string(), ToolCallUpdateFields::new().status(ToolCallStatus::Completed))));
+        s.apply(done("t5"));
+        s.apply(done("t4"));
+        assert_eq!(s.activity(), ("Adding a cell".into(), None), "the latest call still running");
+        assert_eq!(super::elapsed(12), "12s");
+        assert_eq!(super::elapsed(65), "1m 05s");
+    }
+
+    #[test]
+    fn thinking_says_how_long_it_took_once_something_follows() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk};
+        use std::time::Duration;
+        let thought = |s: &Session, ix: usize| match &s.entries[ix] {
+            Entry::Thought { started, took, .. } => (started.is_some(), *took),
+            _ => panic!("not thinking"),
+        };
+        let think = SessionEvent::Update(SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::from("hmm"))));
+        let reply = || SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from("Done."))));
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("hi"), false);
+        s.apply(think);
+        let ix = s.entries.len() - 1;
+        assert_eq!(thought(&s, ix), (true, None), "still thinking");
+        s.apply(reply());
+        assert!(thought(&s, ix).1.is_some(), "the reply ends it");
+
+        assert_eq!(super::thought_label(false, None, Some(Duration::from_millis(8_400))), "Thought for 8s");
+        assert_eq!(super::thought_label(false, None, Some(Duration::from_millis(200))), "Thought for 1s");
+        assert_eq!(super::thought_label(false, Some(std::time::Instant::now()), None), "Thinking");
+        assert_eq!(super::thought_label(true, None, Some(Duration::from_secs(8))), "Thinking", "inside a folded run");
+        assert_eq!(super::thought_label(false, None, None), "Thought", "replayed");
     }
 
     #[test]

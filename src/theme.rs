@@ -60,6 +60,12 @@ pub fn orbit_sphere() -> Rgba { rgb(0x9A9AA0) }
 /// The stars over the setup screen's turtle.
 pub fn star() -> Rgba { rgb(0xF2E6D0) }
 
+/// "#2A2A2E", for the component library's theme config.
+pub fn hex(color: Rgba) -> gpui::SharedString {
+    let byte = |c: f32| (c * 255.).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", byte(color.r), byte(color.g), byte(color.b)).into()
+}
+
 /// The interface font (fonts/README.md) and the code font, for cell names, paths,
 /// counts, code and tool names. Bundled, so they look the same everywhere.
 pub const SANS: &str = "Endeavor Sans";
@@ -94,3 +100,12 @@ pub fn size_title() -> Pixels { px(21.) }
 /// JuliaMono inside body text: a size smaller, since it looks larger than the
 /// interface font at the same size.
 pub fn size_code() -> Pixels { px(12.) }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn colours_go_to_the_component_theme_as_hex() {
+        assert_eq!(super::hex(super::border()).as_ref(), "#2A2A2E");
+        assert_eq!(super::hex(super::accent_text()).as_ref(), "#E08A5E");
+    }
+}

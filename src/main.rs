@@ -16,6 +16,7 @@ mod attach;
 mod celldiff;
 mod composer;
 mod connection;
+mod details;
 mod gate;
 mod host_list;
 mod hosts;
@@ -2045,11 +2046,11 @@ impl Workspace {
                         let group: SharedString = format!("session-{key}").into();
                         let title = self.row_label(&Row::Open(key), s.title.clone());
                         let archived = s.id.as_ref().is_some_and(|id| self.archived.contains(&id.to_string()));
-                        // Status at the row's end: a ring waits for you, a dot is working.
+                        // Status at the row's end: a ring waits for you, the working orbit is working.
                         let mark = if s.needs_approval() {
                             Some(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element())
                         } else if s.outbox.busy {
-                            Some(div().size(px(6.)).rounded_full().bg(theme::accent()).into_any_element())
+                            Some(session::orbit(ElementId::NamedInteger("row-orbit".into(), key), 12., cx))
                         } else if archived {
                             Some(glyph(Glyph::Archive, theme::text_section()).into_any_element())
                         } else {
@@ -2470,7 +2471,7 @@ impl Workspace {
                     })
             }))
             .child(session::render_transcript(session, cx))
-            .children(session::render_activity(session))
+            .children(session::render_activity(session, cx))
             .child(
                 div()
                     .px_4()
@@ -2645,10 +2646,19 @@ fn main() {
         theme::load_fonts(cx);
         // Theme::change applies these before building the component defaults from them.
         let ui = Theme::global_mut(cx);
+        let mut colors = ui.dark_theme.colors.clone();
+        // What agent replies' markdown is drawn with: hairlines, link colour,
+        // code block and table header backgrounds.
+        colors.border = Some(theme::hex(theme::border()));
+        colors.link = Some(theme::hex(theme::accent_text()));
+        colors.muted = Some(theme::hex(theme::bg_card()));
+        colors.table_head = Some(theme::hex(theme::bg_card()));
+        colors.table_head_foreground = Some(theme::hex(theme::text_muted()));
         ui.dark_theme = std::rc::Rc::new(ThemeConfig {
             font_family: Some(theme::SANS.into()),
             mono_font_family: Some(theme::MONO.into()),
             mono_font_size: Some(f32::from(theme::size_code())),
+            colors,
             ..(*ui.dark_theme).clone()
         });
         cx.set_reduce_motion(platform::reduces_motion());
