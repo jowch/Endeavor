@@ -551,7 +551,7 @@ impl Workspace {
                         .flex()
                         .items_baseline()
                         .gap(px(8.))
-                        .child(div().flex_1().text_color(theme::danger()).child(text))
+                        .child(div().flex_1().min_w_0().text_color(theme::danger()).child(text))
                         .child(
                             div()
                                 .id("retry-connect")
