@@ -406,7 +406,7 @@ impl Workspace {
     }
 
     /// Show `path` in the server folder browser.
-    fn browse_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub(crate) fn browse_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let host = self.draft.host.clone();
         self.draft.browser = Some(Browser { path: path.clone(), listing: None });
         let Some(list) = self.ask_files(&host, Request::List { path: path.display().to_string() }, cx) else { return };
@@ -1096,7 +1096,7 @@ impl Workspace {
     /// The notebook pane before the session starts (the web view is hidden).
     pub fn render_draft_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let host = self.draft.host.clone();
-        let unreachable = matches!(self.status(&host), Some(Status::Failed(_) | Status::Replaced));
+        let unreachable = matches!(self.status(&host), Some(Status::Failed(_) | Status::Replaced)) || self.connection(&host).is_some_and(|c| c.lost.is_some());
         let Some(folder) = self.draft.folder.as_ref().filter(|_| !unreachable) else {
             return self.host_pane(&host, false, cx).unwrap_or_else(|| turtle_pane().into_any_element());
         };

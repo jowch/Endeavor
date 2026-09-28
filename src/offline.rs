@@ -105,7 +105,7 @@ impl Workspace {
         }
         let lost: Vec<HostId> = self.connections.iter().filter(|(_, c)| c.waiting_to_reconnect()).map(|(h, _)| h.clone()).collect();
         for host in lost {
-            self.connect_host(&host, true, cx);
+            self.reconnect_lost(&host, cx);
         }
     }
 
@@ -160,7 +160,7 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 let waiting = this.connections.get(&host).is_some_and(|c| c.waiting_to_reconnect());
                 if waiting && this.offline_since.is_none() {
-                    this.connect_host(&host, true, cx);
+                    this.reconnect_lost(&host, cx);
                 }
             });
         })

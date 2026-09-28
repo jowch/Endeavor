@@ -87,7 +87,10 @@ impl Transport {
         let mut command = match self {
             Transport::Ssh { host, port } => {
                 let mut command = Command::new("ssh");
-                command.args(["-T", "-o", "ServerAliveInterval=15", "-o", "ConnectTimeout=20", "-o", "ForwardX11=no"]);
+                // A keepalive every 10 s of silence, and ssh quits after two go
+                // unanswered: a dead link ends the helper's channel within
+                // about 30 s, even while nothing else is sent.
+                command.args(["-T", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=2", "-o", "ConnectTimeout=20", "-o", "ForwardX11=no"]);
                 if let Some(port) = port {
                     command.arg("-p").arg(port.to_string());
                 }
@@ -859,6 +862,33 @@ mod tests {
         // The helper stays connected after a stop.
         assert!(channel.files(files::Request::List { path: "~".into() }).is_ok());
         channel.detach();
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_helper_that_ends_with_no_julia_is_a_drop_and_a_detach_is_not() {
+        let home = temp_home("closed");
+        let transport = Transport::Shell { env: vec![("HOME".into(), home.display().to_string())], ask: None };
+        let server = Server { ssh_host: "local-test".into(), ..Default::default() };
+        let (_, on) = events();
+
+        let (channel, _) = connect(&server, &transport, None, &Cancel::default(), &on).expect("connect");
+        let channel = Arc::new(channel);
+        let (heard_tx, heard) = mpsc::channel();
+        std::thread::spawn({
+            let channel = channel.clone();
+            move || heard_tx.send(channel.closed()).unwrap()
+        });
+        assert!(heard.recv_timeout(Duration::from_millis(500)).is_err(), "nothing while it's up");
+        let killed = Command::new("pkill").arg("-f").arg(format!("{}/.cache/endeavor/state", home.display())).status().unwrap();
+        assert!(killed.success(), "the helper was running");
+        let notice = heard.recv_timeout(Duration::from_secs(10)).expect("its end is heard");
+        assert!(matches!(&notice, Some(Notice::Lost(reason)) if reason == "The connection closed unexpectedly."), "{notice:?}");
+        assert!(channel.files(files::Request::List { path: "~".into() }).is_err());
+
+        let (channel, _) = connect(&server, &transport, None, &Cancel::default(), &on).expect("connect again");
+        channel.detach();
+        assert!(channel.closed().is_none(), "the app let it go");
         let _ = std::fs::remove_dir_all(&home);
     }
 

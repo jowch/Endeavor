@@ -13,7 +13,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::Duration;
 
 use wire::files;
@@ -312,7 +312,10 @@ pub struct Channel {
     hello: Mutex<Option<mpsc::Receiver<ToApp>>>,
     files: Arc<Mutex<HashMap<u32, mpsc::Sender<files::Reply>>>>,
     next_file: AtomicU32,
-    helper_exited: Mutex<mpsc::Receiver<()>>,
+    /// Set once the helper has exited (or its end of the channel closed).
+    ended: Arc<(Mutex<bool>, Condvar)>,
+    /// The app let the helper go (a detach or a quit), so its end is no drop.
+    left: AtomicBool,
     /// The listener relaying to this channel, which forgets it when it ends.
     listener: Arc<Mutex<Option<Arc<Listener>>>>,
     /// Set when the app stops the current runtime or leaves the helper, so its
@@ -326,11 +329,11 @@ impl Channel {
         let mux = Mux::new(input);
         let (hello_tx, hello) = mpsc::channel::<ToApp>();
         let sink = Arc::new(Mutex::new(Some(hello_tx)));
-        let (exited_tx, helper_exited) = mpsc::channel();
+        let ended: Arc<(Mutex<bool>, Condvar)> = Arc::default();
         let listener: Arc<Mutex<Option<Arc<Listener>>>> = Arc::default();
         let files: Arc<Mutex<HashMap<u32, mpsc::Sender<files::Reply>>>> = Arc::default();
         std::thread::spawn({
-            let (mux, sink, listener, files) = (mux.clone(), sink.clone(), listener.clone(), files.clone());
+            let (mux, sink, listener, files, ended) = (mux.clone(), sink.clone(), listener.clone(), files.clone(), ended.clone());
             move || {
                 let result = mux.run(
                     output,
@@ -358,7 +361,8 @@ impl Channel {
                 files.lock().unwrap().clear();
                 let status = helper.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
                 eprintln!("endeavor-remote exited ({status}){}", result.err().map(|e| format!(": {e}")).unwrap_or_default());
-                let _ = exited_tx.send(());
+                *ended.0.lock().unwrap() = true;
+                ended.1.notify_all();
             }
         });
         Channel {
@@ -367,7 +371,8 @@ impl Channel {
             hello: Mutex::new(Some(hello)),
             files,
             next_file: AtomicU32::new(0),
-            helper_exited: Mutex::new(helper_exited),
+            ended,
+            left: AtomicBool::new(false),
             listener,
             leaving: Mutex::default(),
         }
@@ -455,7 +460,8 @@ impl Channel {
                     Ok(ToApp::Replaced) => break Notice::Replaced,
                     Ok(ToApp::Error { message }) => break Notice::Lost(message),
                     Ok(_) => continue,
-                    Err(_) => break Notice::Lost("The connection to Julia closed unexpectedly.".into()),
+                    // The helper ended: `closed` tells of that.
+                    Err(_) => return,
                 }
             };
             if !leaving.load(Ordering::SeqCst) {
@@ -486,14 +492,34 @@ impl Channel {
     /// Leave the runtime running and wait until the helper has gone.
     pub fn detach(&self) {
         self.leave();
+        self.left.store(true, Ordering::SeqCst);
         let _ = self.mux.send(&ToHelper::Detach.frame());
-        let _ = self.helper_exited.lock().unwrap().recv_timeout(Duration::from_secs(30));
+        self.wait_end(Some(Duration::from_secs(30)));
+    }
+
+    /// Block until the helper has gone, or `timeout` passes.
+    fn wait_end(&self, timeout: Option<Duration>) {
+        let (ended, changed) = &*self.ended;
+        let ended = ended.lock().unwrap();
+        match timeout {
+            Some(timeout) => drop(changed.wait_timeout_while(ended, timeout, |ended| !*ended)),
+            None => drop(changed.wait_while(ended, |ended| !*ended)),
+        }
+    }
+
+    /// Block until the helper has gone, whether or not Julia runs: `Lost` if
+    /// it went by itself (ssh or the helper exited, or the network dropped and
+    /// ssh's keepalive gave up), None if the app let it go.
+    pub fn closed(&self) -> Option<Notice> {
+        self.wait_end(None);
+        (!self.left.load(Ordering::SeqCst)).then(|| Notice::Lost("The connection closed unexpectedly.".into()))
     }
 
     /// The app is quitting: leave Julia running, or stop it. The helper does
     /// the rest after the app has gone.
     pub fn quit(&self, keep_running: bool) {
         self.leave();
+        self.left.store(true, Ordering::SeqCst);
         let message = if keep_running { ToHelper::Detach } else { ToHelper::Stop };
         let _ = self.mux.send(&message.frame());
     }

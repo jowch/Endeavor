@@ -102,6 +102,15 @@ pub struct Lost {
     /// The dropped runtime's Pluto address (`http://host:port/`), if its
     /// notebook was showing: that page stays, read-only.
     page: Option<String>,
+    /// Its status when it dropped: the reconnect starts Julia again if it ran
+    /// or was starting, and shows it stopped if it was.
+    was: Status,
+}
+
+impl Lost {
+    fn had_julia(&self) -> bool {
+        matches!(self.was, Status::Starting | Status::Ready)
+    }
 }
 
 /// The starting pane's step log: what's done, what's under way (since when),
@@ -319,7 +328,7 @@ impl Workspace {
                 std::thread::spawn(move || {
                     let progress = |p: Progress| drop(tx.unbounded_send(Update::Local(p)));
                     let result = runtime::connect(keep_running, &progress).map(|(channel, hello)| (Arc::new(channel), hello, None));
-                    let _ = tx.unbounded_send(Update::Connected(result));
+                    report_until_closed(&tx, result);
                 });
             }
             HostId::Server(server_id) => {
@@ -333,7 +342,7 @@ impl Workspace {
                         let transport = remote::Transport::for_server(&server);
                         remote::connect(&server, &transport, Some(&askpass), &cancel, &on).map(|(channel, hello)| (Arc::new(channel), hello, Some(askpass)))
                     });
-                    let _ = tx.unbounded_send(Update::Connected(result));
+                    report_until_closed(&tx, result);
                 });
             }
         }
@@ -573,6 +582,11 @@ impl Workspace {
                     connection.steps.advance(format!("Connected to {name}"), "Finding Julia");
                 }
                 let (start, stop) = (connection.start_when_connected, connection.stop_when_connected);
+                // Back as it was; one that starts Julia stays lost until it's up.
+                let back = if start { None } else { connection.lost.take() };
+                if let Some(Lost { was: Status::Died(reason), .. }) = back {
+                    connection.status = Status::Died(reason);
+                }
                 self.on_connected(&host, !stop && !start, cx);
                 if stop {
                     self.stop_host(&host, cx);
@@ -611,6 +625,8 @@ impl Workspace {
                 self.on_ready(&host, cx);
                 self.warn_before_job_ends(&host, cx);
             }
+            // The connection dropped under the start: it reconnects as lost.
+            Update::Started(Err(_)) if connection.lost.is_some() && connection.channel.is_none() => {}
             Update::Started(Err(_)) if connection.cancelling => {
                 connection.cancelling = false;
                 connection.job = None;
@@ -631,13 +647,16 @@ impl Workspace {
                     }
                 }
             }
+            // Heard already, from the runtime or the helper's end.
+            Update::Notice(Notice::Lost(_)) if connection.channel.is_none() => {}
             // A server that drops reconnects by itself; its notebook, if showing, stays up read-only meanwhile.
             Update::Notice(Notice::Lost(reason)) if !local => {
+                let was = connection.status.clone();
                 let gone = connection.forget_runtime();
                 let page = gone.as_ref().and_then(|r| r.pluto_url.split_once('?')).map(|(origin, _)| origin.to_owned()).filter(|_| shown);
                 connection.channel = None;
                 connection.status = Status::Failed(reason);
-                connection.lost = Some(Lost { page });
+                connection.lost = Some(Lost { page, was });
                 // A blip often passes: the first try comes soon.
                 if self.offline_since().is_none() {
                     self.retry_lost(host.clone(), std::time::Duration::from_secs(2), cx);
@@ -665,6 +684,12 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A dropped server's reconnect: it starts Julia again only if it ran.
+    pub fn reconnect_lost(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let julia = self.connections.get(host).and_then(|c| c.lost.as_ref()).is_some_and(Lost::had_julia);
+        self.connect_host(host, julia, cx);
+    }
+
     /// Connected, before any runtime: the new-session screen can use its files,
     /// and (with `check`) the host list hears what runs there.
     fn on_connected(&mut self, host: &HostId, check: bool, cx: &mut Context<Self>) {
@@ -673,6 +698,10 @@ impl Workspace {
         }
         self.fetch_partitions(host, cx);
         if self.draft.host == *host {
+            // An open folder browser lists again, after a reconnect.
+            if let Some(path) = self.draft.browser.as_ref().map(|b| b.path.clone()) {
+                self.browse_to(path, cx);
+            }
             if self.draft.folder.is_none() {
                 self.draft.folder = self.connections.get(host).and_then(|c| c.hello.as_ref()).map(|h| h.home.clone());
             }
@@ -1095,8 +1124,17 @@ impl Workspace {
             if lost.page.as_deref().is_some_and(|page| shown.starts_with(page)) {
                 return None;
             }
-            let text = if self.offline_since().is_some() { format!("Endeavor reconnects to {name} when you're back online.") } else { format!("Endeavor reconnects to {name} by itself.") };
-            return Some(crate::new_session::turtle_pane().child(div().text_color(theme::text_muted()).child(text)).into_any_element());
+            let offline = self.offline_since().is_some();
+            let pane = crate::new_session::turtle_pane();
+            // A session's pane has "Can't reach" above it already.
+            let pane = if start {
+                let text = if offline { format!("Endeavor reconnects to {name} when you're back online.") } else { format!("Endeavor reconnects to {name} by itself.") };
+                pane.child(div().text_color(theme::text_muted()).child(text))
+            } else {
+                let text = if offline { "Endeavor reconnects when you're back online." } else { "Endeavor reconnects by itself." };
+                pane.child(div().text_color(theme::text_primary()).child(format!("Can't reach {name}"))).child(div().text_color(theme::text_muted()).child(text))
+            };
+            return Some(pane.into_any_element());
         }
         let status = connection.map_or(Status::Connecting, |c| c.status.clone());
         let action = |id: &'static str, label: &'static str, host: HostId, start_julia: bool| {
@@ -1162,6 +1200,16 @@ impl Workspace {
             }
         };
         Some(pane.into_any_element())
+    }
+}
+
+/// Send how the connect went, then, if it got through, wait for the helper's
+/// end: a drop is heard as `Notice::Lost` whether or not Julia runs.
+fn report_until_closed(tx: &futures::channel::mpsc::UnboundedSender<Update>, result: Result<(Arc<Channel>, Hello, Option<Askpass>), String>) {
+    let channel = result.as_ref().ok().map(|(channel, ..)| channel.clone());
+    let _ = tx.unbounded_send(Update::Connected(result));
+    if let Some(notice) = channel.and_then(|channel| channel.closed()) {
+        let _ = tx.unbounded_send(Update::Notice(notice));
     }
 }
 

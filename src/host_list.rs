@@ -146,7 +146,7 @@ impl Workspace {
         let action = match &state {
             s if s.stoppable() => Some(("Stop", HostAction::Stop)),
             HostState::NotRunning | HostState::Failed(_) if this_mac => Some(("Start", HostAction::Start)),
-            HostState::Lost => Some(("Connect", HostAction::Start)),
+            HostState::Lost => Some(("Connect", HostAction::Reconnect)),
             HostState::Unknown | HostState::Failed(_) | HostState::Replaced => Some(("Connect", HostAction::Check)),
             HostState::NotRunning | HostState::Connected => Some(("Check", HostAction::Check)),
             _ => None,
@@ -156,6 +156,7 @@ impl Workspace {
             small_button(("host-action", i), label).on_click(cx.listener(move |this, _, window, cx| match what {
                 HostAction::Stop => this.confirm_stop(host.clone(), window, cx),
                 HostAction::Start => this.ensure_runtime(&host, cx),
+                HostAction::Reconnect => this.reconnect_lost(&host, cx),
                 HostAction::Check => this.check_host(&host, cx),
             }))
         });
@@ -227,6 +228,8 @@ impl Workspace {
 enum HostAction {
     Stop,
     Start,
+    /// Connect a dropped server again, starting Julia only if it ran.
+    Reconnect,
     Check,
 }
 
