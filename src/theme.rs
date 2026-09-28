@@ -16,6 +16,10 @@ pub fn bg_card() -> Rgba { rgb(0x1C1C1F) }
 pub fn bg_raised() -> Rgba { rgb(0x26262A) }
 /// The active sidebar row.
 pub fn row_active() -> Rgba { rgb(0x1E1E21) }
+/// The choice to pick when unsure (sign-in's first account kind).
+pub fn bg_choice() -> Rgba { rgb(0x212124) }
+/// Below the card colour: other choices, queued messages, details.
+pub fn bg_sunken() -> Rgba { rgb(0x18181A) }
 /// Tags (the chat header's folder, inline code).
 pub fn bg_tag() -> Rgba { rgb(0x222225) }
 pub fn text_tag() -> Rgba { rgb(0x9A9A9A) }

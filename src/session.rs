@@ -119,6 +119,8 @@ pub enum Effect {
     PreviewRun { ix: usize, tool: String, input: serde_json::Value },
     /// Tell the runtime this session's policy changed ("plan" | "ask").
     SetPolicy(&'static str),
+    /// A turn failed for want of sign-in: Claude is signed out.
+    SignedOut,
 }
 
 /// A select config option's current value and its choices.
@@ -205,6 +207,11 @@ pub struct Session {
     dirty_from: Cell<Option<usize>>,
     /// When the current turn started, for the "Working · 12s" indicator.
     pub busy_since: Option<Instant>,
+    /// The user message the running turn answers.
+    turn_entry: Option<usize>,
+    /// A user message Claude couldn't answer (signed out, offline); it goes
+    /// again by itself once Claude can be reached.
+    pub unanswered: Option<usize>,
     /// The pinned plan (above the composer) is folded.
     pub plan_folded: bool,
     /// Runs of tool calls the user opened, by their first call.
@@ -317,6 +324,8 @@ impl Session {
             list_len: Cell::new(0),
             dirty_from: Cell::new(None),
             busy_since: None,
+            turn_entry: None,
+            unanswered: None,
             plan_folded: false,
             open_runs: HashSet::new(),
             replaying: false,
@@ -582,13 +591,52 @@ impl Session {
 
     fn dispatch(&mut self, dispatch: Option<Dispatch>, effects: &mut Vec<Effect>) {
         let Some(Dispatch { turn, shown }) = dispatch else { return };
+        let again = shown.is_none() && matches!(turn, Turn::Prompt(_));
         effects.push(Effect::Send(turn));
         if let Some((text, attachments)) = shown {
             self.push(Entry::User { text: text.into(), expanded: false, attachments });
+            self.turn_entry = Some(self.entries.len() - 1);
             self.busy_since.get_or_insert_with(Instant::now);
             // Sending jumps back to the bottom even if the user had scrolled up.
             self.list.set_follow_mode(FollowMode::Tail);
+        } else if again {
+            // The unanswered message went again: its bubble is already there.
+            self.turn_entry = self.unanswered.take();
+            if let Some(ix) = self.turn_entry {
+                self.mark(ix);
+            }
+            self.busy_since.get_or_insert_with(Instant::now);
         }
+    }
+
+    /// Claude can't be reached: messages queue until `release`.
+    pub fn hold(&mut self) {
+        self.outbox.hold();
+    }
+
+    /// Claude can be reached again: the unanswered message goes first, then the queue.
+    pub fn release(&mut self) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        if self.outbox.held && self.id.is_some() {
+            let next = self.outbox.release();
+            self.dispatch(next, &mut effects);
+        } else {
+            self.outbox.held = false;
+        }
+        effects
+    }
+
+    /// The turn got no answer because Claude couldn't be reached: its message
+    /// stays, marked, and goes again on `release`.
+    fn turn_unanswered(&mut self) {
+        self.outbox.turn_unanswered();
+        self.unanswered = self.turn_entry.take().or(self.unanswered);
+        if let Some(ix) = self.unanswered {
+            self.mark(ix);
+        }
+        self.busy_since = None;
+        self.end_thought();
+        self.mark(self.entries.len());
     }
 
     pub fn apply(&mut self, event: SessionEvent) -> Vec<Effect> {
@@ -600,6 +648,12 @@ impl Session {
                 }
                 self.turn_ended(&mut effects);
             }
+            SessionEvent::AuthRequired => {
+                self.turn_unanswered();
+                effects.push(Effect::SignedOut);
+            }
+            // Held: Claude went out of reach while it worked.
+            SessionEvent::TurnFailed(_) if self.outbox.held => self.turn_unanswered(),
             SessionEvent::TurnFailed(e) => {
                 self.note(format!("⚠ Turn failed: {e}"));
                 self.turn_ended(&mut effects);
@@ -651,6 +705,7 @@ impl Session {
     }
 
     fn turn_ended(&mut self, effects: &mut Vec<Effect>) {
+        self.turn_entry = None;
         let next = self.outbox.turn_ended();
         let idle = next.is_none();
         if idle {
@@ -1149,9 +1204,10 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .font_family(theme::SANS)
                 .text_size(theme::size_body())
                 .line_height(theme::line_body());
+            let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered());
             let line_height = theme::line_body();
             if bubble_lines(text, window) <= FOLD_AFTER {
-                return Some(column.child(bubble.child(text.clone())).into_any_element());
+                return Some(column.child(bubble.child(text.clone())).children(unanswered).into_any_element());
             }
             let fade = div()
                 .absolute()
@@ -1176,6 +1232,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                         .child(if *expanded { "Show less" } else { "Show more" })
                         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle(ix)))),
                 )
+                .children(unanswered)
                 .into_any_element()
         }
         Entry::Agent(text) => div().group(REPLY).child(markdown(id("agent"), text.clone())).into_any_element(),
@@ -2332,6 +2389,25 @@ mod tests {
         let effects = s.started(Started::new(SessionId::new("abc"), None, None));
         assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
         assert!(matches!(s.entries.as_slice(), [Entry::User { .. }]));
+    }
+
+    #[test]
+    fn a_message_claude_could_not_answer_waits_marked_and_goes_again_after_sign_in() {
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("plot the residuals"), false);
+        let effects = s.apply(SessionEvent::AuthRequired);
+        assert!(matches!(effects.as_slice(), [Effect::SignedOut]));
+        assert_eq!(s.unanswered, Some(0));
+        assert!(s.busy_since.is_none());
+        assert!(s.submit(text("and label the axes"), false).is_empty(), "waits while signed out");
+        let effects = s.release();
+        assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
+        assert_eq!(s.unanswered, None);
+        assert_eq!(s.entries.len(), 1, "the kept message goes again without a second bubble");
+        let effects = s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
+        assert!(matches!(&s.entries[1], Entry::User { text, .. } if text.as_ref() == "and label the axes"));
     }
 
     #[test]

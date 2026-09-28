@@ -540,6 +540,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(10.))
+                    .children(self.render_sign_in_card(cx))
                     .child(self.render_chips(cx))
                     .child(self.render_composer(None, false, window, cx))
                     .children(self.render_file_tip(cx)),
@@ -1361,6 +1362,14 @@ pub(crate) enum Glyph {
     Curve,
     /// Learning: a mortarboard.
     Cap,
+    /// Waiting to send: a clock face.
+    Clock,
+    /// Read-only, and a password kept in the browser.
+    Lock,
+    /// Opens a web page: an arrow out of a box.
+    External,
+    /// Back: a chevron pointing left.
+    Back,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -1585,6 +1594,32 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                         polyline(&[(6. + 3. * a.cos(), 6. + 3. * a.sin()), (6. + 5. * a.cos(), 6. + 5. * a.sin())]);
                     }
                 }
+                Glyph::Clock => {
+                    let face: Vec<(f32, f32)> = (0..=24).map(|i| {
+                        let a = std::f32::consts::TAU * i as f32 / 24.;
+                        (6. + 4.3 * a.cos(), 6. + 4.3 * a.sin())
+                    }).collect();
+                    polyline(&face);
+                    polyline(&[(6., 3.75), (6., 6.2), (7.5, 7.1)]);
+                }
+                Glyph::Lock => {
+                    polyline(&[(2.4, 5.25), (9.6, 5.25), (9.6, 10.3), (2.4, 10.3), (2.4, 5.25)]);
+                    let shackle: Vec<(f32, f32)> = (0..=12)
+                        .map(|i| {
+                            let a = std::f32::consts::PI + std::f32::consts::PI * i as f32 / 12.;
+                            (6. + 1.9 * a.cos(), 3.75 + 1.9 * a.sin())
+                        })
+                        .collect();
+                    polyline(&[(4.1, 5.25), (4.1, 3.75)]);
+                    polyline(&shackle);
+                    polyline(&[(7.9, 3.75), (7.9, 5.25)]);
+                }
+                Glyph::External => {
+                    polyline(&[(5., 2.), (2., 2.), (2., 10.), (10., 10.), (10., 7.)]);
+                    polyline(&[(6.5, 1.5), (10.5, 1.5), (10.5, 5.5)]);
+                    polyline(&[(10.5, 1.5), (5.5, 6.5)]);
+                }
+                Glyph::Back => polyline(&[(7.5, 3.), (4.5, 6.), (7.5, 9.)]),
             }
             if let Ok(path) = path.build() {
                 window.paint_path(path, color);

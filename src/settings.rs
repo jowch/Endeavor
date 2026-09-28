@@ -37,6 +37,8 @@ pub struct Settings {
     pub file_tip_seen: bool,
     /// The one-time tip under the notebook header's Point button is done.
     pub point_tip_seen: bool,
+    /// How Claude was last signed in to, for signing in again the same way.
+    pub sign_in_method: Option<crate::signin::Method>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]

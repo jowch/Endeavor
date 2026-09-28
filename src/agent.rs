@@ -16,7 +16,7 @@ use agent_client_protocol::schema::v1::{
     ConfigOptionUpdate, SessionConfigValueId, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
     StopReason,
 };
-use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder, UntypedMessage};
+use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, ErrorCode, Responder, UntypedMessage};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures::future::{Either, LocalBoxFuture, select};
 use futures::stream::FuturesUnordered;
@@ -83,32 +83,29 @@ fn adapter_paths() -> Result<(PathBuf, PathBuf), String> {
     Ok((node, entry))
 }
 
-/// The Claude Code CLI bundled with the adapter (`claude <args>`).
-fn claude_cli(args: &[&str]) -> Result<std::process::Command, String> {
+/// The Claude Code CLI bundled with the adapter (`claude <args>`). Debug builds
+/// run `ENDEAVOR_CLAUDE_CLI` instead when it is set, to test sign-in without an account.
+pub(crate) fn claude_cli(args: &[&str]) -> Result<std::process::Command, String> {
+    #[cfg(debug_assertions)]
+    if let Some(fake) = std::env::var_os("ENDEAVOR_CLAUDE_CLI") {
+        let mut command = std::process::Command::new(fake);
+        command.args(args).stdin(std::process::Stdio::null());
+        return Ok(command);
+    }
     let (node, entry) = adapter_paths()?;
     let mut command = std::process::Command::new(node);
     command.arg(entry).arg("--cli").args(args).stdin(std::process::Stdio::null());
     Ok(command)
 }
 
-/// Whether Claude Code is signed in on this Mac.
-pub fn signed_in() -> Result<bool, String> {
-    let out = claude_cli(&["auth", "status"])?.output().map_err(|e| e.to_string())?;
-    let status: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("Couldn't read Claude's sign-in status: {e}"))?;
-    status["loggedIn"].as_bool().ok_or_else(|| "Couldn't read Claude's sign-in status.".into())
-}
-
-/// Sign in to Claude: the CLI opens the browser and waits for it to finish.
-/// `console` picks Anthropic Console (API billing) over a Claude subscription.
-// ponytail: no cancel; closing the browser leaves the CLI waiting until it gives up.
-pub fn sign_in(console: bool) -> Result<(), String> {
-    let method = if console { "--console" } else { "--claudeai" };
-    let out = claude_cli(&["auth", "login", method])?.output().map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("Sign-in didn't finish: {}", err.lines().last().unwrap_or("unknown error").trim()));
+/// Debug builds only: while the file `ENDEAVOR_FAKE_AUTH_ERROR` names exists,
+/// turns fail as an expired sign-in makes them fail, without reaching Claude.
+fn fake_auth_error() -> bool {
+    #[cfg(debug_assertions)]
+    if let Some(file) = std::env::var_os("ENDEAVOR_FAKE_AUTH_ERROR") {
+        return Path::new(&file).exists();
     }
-    if signed_in()? { Ok(()) } else { Err("Sign-in didn't finish. Try again.".into()) }
+    false
 }
 
 /// The command that runs the ACP adapter: the app's own Node and a `npm ci` of
@@ -245,6 +242,8 @@ pub enum SessionEvent {
     TurnEnded(StopReason),
     /// The turn failed outright (the session stays usable).
     TurnFailed(String),
+    /// The turn failed because Claude's sign-in ran out.
+    AuthRequired,
     /// A `SendNow` joined the running turn.
     Steered,
     /// A `SendNow` couldn't join the running turn; it goes back to the queue.
@@ -274,8 +273,8 @@ pub enum AgentEvent {
     Session(SessionId, SessionEvent),
     /// Setup progress (installing Node and the adapter, then connecting).
     Setup(Progress),
-    /// Whether Claude Code is signed in, checked before connecting.
-    SignedIn(bool),
+    /// Claude Code's sign-in, checked before connecting: how, or None when signed out.
+    SignedIn(Option<crate::signin::Method>),
     /// The connection is gone; no session works any more.
     Failed(String),
 }
@@ -291,9 +290,9 @@ pub fn start(commands: UnboundedReceiver<Command>) -> UnboundedReceiver<AgentEve
             let _ = events.unbounded_send(AgentEvent::Setup(p));
         });
         let _ = events.unbounded_send(AgentEvent::Setup(Progress::new(Step::Claude, "Connecting…")));
-        // ponytail: checked at startup only; a login that expires mid-use shows up as failed turns.
-        if let (true, Ok(signed_in)) = (command.is_ok(), signed_in()) {
-            let _ = events.unbounded_send(AgentEvent::SignedIn(signed_in));
+        // Checked again when the window comes back to the front, and a turn that fails for want of sign-in says so.
+        if let (true, Ok(method)) = (command.is_ok(), crate::signin::status()) {
+            let _ = events.unbounded_send(AgentEvent::SignedIn(method));
         }
         let reason = match command {
             Err(e) => e,
@@ -381,6 +380,7 @@ async fn run(
                         running.remove(&session);
                         match result {
                             Ok(response) => emit(&session, SessionEvent::TurnEnded(response.stop_reason)),
+                            Err(e) if e.code == ErrorCode::AuthRequired => emit(&session, SessionEvent::AuthRequired),
                             Err(e) => emit(&session, SessionEvent::TurnFailed(e.to_string())),
                         }
                         continue;
@@ -459,6 +459,9 @@ async fn run(
                     Command::DeleteSession(session) => {
                         running.remove(&session);
                         connection.send_request(DeleteSessionRequest::new(session)).on_receiving_result(async |_| Ok(()))?;
+                    }
+                    Command::Turn(session, Turn::Prompt(_) | Turn::SendNow(_)) if !running.contains(&session) && fake_auth_error() => {
+                        emit(&session, SessionEvent::AuthRequired);
                     }
                     Command::Turn(session, Turn::Prompt(prompt) | Turn::SendNow(prompt)) if !running.contains(&session) => {
                         running.insert(session.clone());

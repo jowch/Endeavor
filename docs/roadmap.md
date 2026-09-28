@@ -48,10 +48,21 @@ process running Pluto + PlutoMCP.
 - **Logs.** Launched from Finder, output goes to
   `~/Library/Logs/Endeavor/endeavor.log` (previous run: `endeavor.old.log`),
   with Pluto's secret redacted; "Show logs" in Settings and on setup errors.
-- **Claude sign-in.** Signed out, the setup screen (or, later, the session
-  bar) offers Claude subscription / Anthropic Console sign-in via the bundled
-  CLI's `auth login` in the browser; setup finishes once signed in.
-  Verified end to end with a throwaway config folder.
+- **Claude sign-in** (`signin.rs`). First launch asks under the splash: the
+  assistant (Claude; Cursor, Codex and Gemini listed as not available yet),
+  then a Claude plan or an Anthropic Console account, each with its own Sign
+  in, which runs the bundled CLI's `auth login` in the browser. Waiting shows
+  the choice with "Open it again" (the page address, kept by acting as the
+  CLI's `$BROWSER`) and Cancel (stops the CLI's process group); a failure
+  names the reason it can (browser closed, free Claude account, Console
+  account without access) with the CLI's last line under Details. Setup
+  finishes once signed in. **Sign-in expiring mid-use**: a turn the adapter
+  fails with `authRequired`, or the `auth status` check when the window comes
+  to the front, signs the app out: the unanswered message stays, marked "Not
+  answered yet", every session's messages wait, a card above the composer
+  offers Sign in the way it was done last (`sign_in_method` in
+  settings.json) or another account, and the sidebar says "Signed out of
+  Claude."; after signing in the kept message sends by itself.
 - **First-launch setup screen** (`splash.rs`, `turtle.rs`): the turtle walks
   in and looks around; one line and a thin bar report the setup steps (Julia,
   Pluto packages, Claude agent, connecting); on failure the step list, Retry
@@ -102,10 +113,6 @@ Everything here is a known `ponytail:` shortcut that's fine for one developer.
 
 - **Logo and style system.** The app's inline colors are placeholders for the designed logo and UI style
   system (in progress separately).
-- **Sign-in expiring mid-use.** Sign-in is checked at startup only; a login
-  that expires while the app runs shows up as failed turns, not the sign-in
-  panel.
-
 - **Signing and notarization.** `scripts/bundle.sh` builds an ad-hoc signed
   `Endeavor.app` (resources in `Contents/Resources`); sharing it needs a
   Developer ID signature, hardened runtime, and notarization.

@@ -38,6 +38,7 @@ mod runtime;
 mod server_dialog;
 mod session;
 mod settings;
+mod signin;
 #[cfg(target_os = "macos")]
 mod snapshot;
 mod splash;
@@ -64,7 +65,7 @@ use new_session::{Draft, Glyph, NotebookChoice, glyph, menu_row};
 use notebook_pane::NotebookAction;
 use session::{Effect, Session, Stopped, folder_name};
 use settings::{Appearance, IdleStop, NotebookTheme, Settings};
-use splash::{Progress, Setup, Step};
+use splash::{Progress, Setup};
 
 /// Notebook id from a Pluto `/edit?id=…` URL. Only the id is used: the URL also
 /// carries Pluto's secret, which must never reach the agent.
@@ -471,11 +472,11 @@ pub struct Workspace {
     agent_ready: bool,
     /// The agent stopped with an error (often a failed adapter install); About offers Update.
     agent_failed: bool,
-    /// Claude Code's sign-in state, checked when the agent starts.
-    signed_in: Option<bool>,
-    /// A browser sign-in is under way.
-    signing_in: bool,
-    sign_in_error: Option<String>,
+    /// Claude Code's sign-in: checked when the agent starts and when the window
+    /// comes back to the front, and lost when a turn fails for want of it.
+    account: signin::Account,
+    /// When the sign-in was last checked on coming to the front.
+    sign_in_checked: Option<std::time::Instant>,
     agent_tx: UnboundedSender<Command>,
     /// Handed to the agent thread once This Mac's Julia is up (setup's order).
     agent_rx: Option<UnboundedReceiver<Command>>,
@@ -577,6 +578,10 @@ impl Workspace {
                 cx.notify();
             }
             if let InputEvent::PressEnter { secondary, shift: false } = event {
+                // An empty box answers the sign-in card: ⏎ signs in again.
+                if input.read(cx).value().trim().is_empty() && this.sign_in_again(cx) {
+                    return;
+                }
                 // An empty box answers a pending approval: ⏎ allow, ⌘⏎ allow and stop asking.
                 if input.read(cx).value().trim().is_empty()
                     && let Some(key) = this.active
@@ -627,6 +632,13 @@ impl Workspace {
         })
         .detach();
 
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.recheck_sign_in(cx);
+            }
+        })
+        .detach();
+
         let (agent_tx, agent_rx) = futures::channel::mpsc::unbounded();
         let recent = load_recent();
         let draft = Draft::new(new_session::default_folder(&recent), window, cx);
@@ -658,9 +670,8 @@ impl Workspace {
             setup: Setup::needed().then(Setup::default),
             agent_ready: false,
             agent_failed: false,
-            signed_in: None,
-            signing_in: false,
-            sign_in_error: None,
+            account: signin::Account::Unknown,
+            sign_in_checked: None,
             agent_tx,
             agent_rx: Some(agent_rx),
             status: "".into(),
@@ -806,6 +817,9 @@ impl Workspace {
             ));
         }
         session.start_context = (!context.is_empty()).then(|| ContentBlock::Text(TextContent::new(context.join("\n\n"))));
+        if self.out_of_reach() {
+            session.hold();
+        }
         self.sessions.push(session);
         if let Some(path) = existing {
             self.bind_notebook(key, path, cx);
@@ -878,6 +892,9 @@ impl Workspace {
         session.untitled = untitled;
         session.run_without_asking = self.settings.run_without_asking;
         session.resources = resources;
+        if self.out_of_reach() {
+            session.hold();
+        }
         self.sessions.push(session);
         if let Some(path) = notebook {
             self.bind_notebook(key, path, cx);
@@ -1249,6 +1266,7 @@ impl Workspace {
                 }
                 Effect::CheckRunState => self.check_run_state(key, cx),
                 Effect::SetPolicy(policy) => self.send_policy(key, policy, cx),
+                Effect::SignedOut => self.signed_out(cx),
                 Effect::PreviewRun { ix, tool, input } => {
                     let Some(bridge) = self.session_bridge(key) else { continue };
                     let task = cx.background_executor().spawn(async move { pluto::run_preview(&bridge, &tool, &input) });
@@ -1478,6 +1496,9 @@ impl Workspace {
         if self.draft.popover.is_some() {
             return self.close_popover(window, cx);
         }
+        if self.setup.is_none() && self.cancel_sign_in(cx) {
+            return;
+        }
         let Some(key) = self.active else { return };
         // Esc denies a pending approval before it stops the turn.
         if let Some(s) = self.session_mut(key)
@@ -1507,13 +1528,7 @@ impl Workspace {
                 }
             }
             AgentEvent::Setup(p) => self.on_progress(p, cx),
-            AgentEvent::SignedIn(signed_in) => {
-                self.signed_in = Some(signed_in);
-                if !signed_in {
-                    self.on_progress(Progress::new(Step::Claude, "Sign in to continue"), cx);
-                    self.status = "Not signed in to Claude.".into();
-                }
-            }
+            AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::Listed { cwd, sessions } => match HostId::of_agent_cwd(&cwd) {
                 // One listing holds all of a server's folders.
                 Some(host) => {
@@ -1712,72 +1727,20 @@ impl Workspace {
 
     /// Setup is done once the agent is up and Claude is signed in.
     fn finish_setup(&mut self, cx: &mut Context<Self>) {
-        if self.setup.is_some() && self.agent_ready && self.signed_in != Some(false) {
+        if self.setup.is_some() && self.agent_ready && !self.account.signed_out() {
             self.setup = None;
             Setup::finish();
             cx.notify();
         }
     }
 
-    fn sign_in(&mut self, console: bool, cx: &mut Context<Self>) {
-        self.signing_in = true;
-        self.sign_in_error = None;
-        let signing = cx.background_executor().spawn(async move { agent::sign_in(console) });
-        cx.spawn(async move |this, cx| {
-            let result = signing.await;
-            let _ = this.update(cx, |this, cx| {
-                this.signing_in = false;
-                match result {
-                    Ok(()) => {
-                        this.signed_in = Some(true);
-                        this.status = "Signed in to Claude.".into();
-                        this.finish_setup(cx);
-                    }
-                    Err(e) => this.sign_in_error = Some(e),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    /// Shown while Claude isn't signed in: on the setup screen, else in the session bar.
-    fn render_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.signed_in != Some(false) {
-            return None;
+    /// The sidebar's status line: a mark when it matters to every session, and the words.
+    fn status_line(&self) -> (Option<AnyElement>, SharedString) {
+        if self.account.signed_out() {
+            let dot = div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::accent());
+            return (Some(dot.into_any_element()), "Signed out of Claude.".into());
         }
-        let muted = theme::text_muted();
-        let button = |id: &'static str, label: &'static str, primary: bool| {
-            div()
-                .id(id)
-                .px_3()
-                .py_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .bg(if primary { theme::accent() } else { theme::bg_raised() })
-                .child(label)
-        };
-        let waiting = self.signing_in.then(|| div().text_size(theme::size_meta()).text_color(muted).child("Waiting for you to finish in your browser…"));
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .p_2()
-                .rounded_md()
-                .bg(theme::bg_card())
-                .child(div().text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).child("Sign in to Claude"))
-                .child(div().text_size(theme::size_meta()).text_color(muted).child("Endeavor runs Claude Code with your account. Sign-in opens in your browser."))
-                .child(button("sign-in-claude", "Claude subscription", true).on_click(cx.listener(|this, _, _, cx| this.sign_in(false, cx))))
-                .child(
-                    button("sign-in-console", "Anthropic Console (API billing)", false)
-                        .on_click(cx.listener(|this, _, _, cx| this.sign_in(true, cx))),
-                )
-                .children(waiting)
-                .children(self.sign_in_error.clone().map(|e| div().text_size(theme::size_meta()).text_color(theme::danger()).child(e)))
-                .into_any_element(),
-        )
+        (None, self.status.clone())
     }
 
     /// Retry the failed setup step: start Julia again, or the agent once Julia is up.
@@ -2187,7 +2150,6 @@ impl Workspace {
                     })),
             )
             .child(div().id("sessions").flex_1().overflow_y_scroll().flex().flex_col().children(groups))
-            .children(self.render_sign_in(cx))
             .map(|d| {
                 let label = match self.status(&HostId::ThisMac) {
                     Some(connection::Status::Replaced) => "↻ Reconnect to Julia",
@@ -2208,16 +2170,19 @@ impl Workspace {
                     .pt(px(6.))
                     .px_1()
                     .child({
-                        let status = self.status.clone();
+                        let (mark, status) = self.status_line();
                         div()
                             .id("status")
                             .flex_1()
                             .min_w_0()
                             .pl(px(6.))
-                            .truncate()
+                            .flex()
+                            .items_center()
+                            .gap(px(7.))
                             .text_size(theme::size_meta())
-                            .text_color(theme::text_section())
-                            .child(status.clone())
+                            .text_color(if mark.is_some() { theme::text_new() } else { theme::text_section() })
+                            .children(mark)
+                            .child(div().min_w_0().truncate().child(status.clone()))
                             // Wrapped narrow enough to stay clear of the notebook, which covers anything drawn over it.
                             .tooltip(move |window, cx| {
                                 let status = status.clone();
@@ -2530,6 +2495,7 @@ impl Workspace {
                     .gap_2()
                     .children(self.render_commands(session, cx))
                     .children(session::render_pinned_plan(session, cx))
+                    .children(self.render_sign_in_card(cx))
                     .children(session::render_approval(session, cx))
                     .child(session::render_queue(self, session, cx))
                     .child(self.render_composer(Some(session), notebook_open, window, cx)),
@@ -2555,9 +2521,12 @@ impl Render for Workspace {
             overlay::set_hole(self.webview.read(cx).raw(), None);
         }
         if let Some(setup) = &self.setup {
-            let sign_in = self.render_sign_in(cx);
+            let below = match self.render_sign_in_panel(cx) {
+                Some((panel, bar, tucked)) => splash::Below::Panel { line: "Sign in to finish setting up", bar: bar.then_some(0.78), panel, tucked },
+                None => splash::Below::Progress,
+            };
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
-            return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(splash::render(setup, sign_in, retry, cx)).into_any_element();
+            return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(splash::render(setup, below, retry, cx)).into_any_element();
         }
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
         let placeholder = match active {
@@ -2686,6 +2655,8 @@ impl Render for Workspace {
 }
 
 fn main() {
+    // `claude auth login` opens its page through this app (signin::Login).
+    signin::browser_shim();
     // Claude Code runs the plugin's execution-gate hook as `endeavor hook-pretool`.
     if std::env::args().nth(1).as_deref() == Some("hook-pretool") {
         gate::run_pretool_hook();

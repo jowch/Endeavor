@@ -220,14 +220,28 @@ fn scene(t: f32, tuck: f32) -> impl IntoElement {
     .h(px(SCENE_HEIGHT))
 }
 
-/// `extra` goes under the progress (e.g. the sign-in panel); `retry` restarts the failed step.
-pub fn render(setup: &Setup, extra: Option<AnyElement>, retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, cx: &App) -> Div {
+/// What shows under the turtle and the name.
+pub enum Below {
+    /// Setup's progress line and bar, or its failure.
+    Progress,
+    /// A panel under a line of its own and, optionally, the bar filled this far
+    /// (sign-in); `tucked` is when the turtle drew its head in.
+    Panel { line: &'static str, bar: Option<f32>, panel: AnyElement, tucked: Option<Instant> },
+}
+
+/// `retry` restarts the failed step.
+pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, cx: &App) -> Div {
     const BAR: f32 = 240.;
     const WIDE: f32 = 360.;
+    const PANEL: f32 = 376.;
     let muted = theme::text_muted();
     let still = cx.reduce_motion();
     let t = if still { STILL } else { setup.shown.elapsed().as_secs_f32() };
-    let tuck = setup.error.as_ref().map_or(0., |(_, at)| if still { 1. } else { ease(at.elapsed().as_secs_f32() / 0.4) });
+    let tucked = match &below {
+        Below::Panel { tucked, .. } => *tucked,
+        Below::Progress => setup.error.as_ref().map(|(_, at)| *at),
+    };
+    let tuck = tucked.map_or(0., |at| if still { 1. } else { ease(at.elapsed().as_secs_f32() / 0.4) });
     let (name_in, tagline_in) = (ease((t - 1.8) / 0.6), ease((t - 2.3) / 0.6));
     let n = Step::ALL.iter().position(|s| *s == setup.step).unwrap_or(0) + 1;
     let progress = div()
@@ -304,16 +318,34 @@ pub fn render(setup: &Setup, extra: Option<AnyElement>, retry: impl Fn(&ClickEve
         .child(div().mt(px(4.)).relative().top(px((1. - tagline_in) * 8.)).opacity(tagline_in).text_color(muted).child("Build our future"))
         .child(
             // Room for the failure message and sign-in, so the turtle stays put when they appear.
-            div()
-                .min_h(px(300.))
-                .flex()
-                .flex_col()
-                .items_center()
-                .map(|d| match failure {
+            div().min_h(px(300.)).flex().flex_col().items_center().map(|d| match below {
+                Below::Panel { line, bar, panel, .. } => d.child(
+                    div()
+                        .mt(px(26.))
+                        .w(px(PANEL))
+                        .flex()
+                        .flex_col()
+                        .gap(px(14.))
+                        .opacity(tagline_in)
+                        .child(
+                            div()
+                                .mb(px(4.))
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(div().text_size(theme::size_meta()).text_color(muted).child(format!("{line} · {n} of {}", Step::ALL.len())))
+                                .children(bar.map(|f| {
+                                    div().w(px(BAR)).h(px(2.)).rounded_full().bg(theme::border()).child(div().h_full().rounded_full().bg(theme::accent()).w(px(BAR * f)))
+                                })),
+                        )
+                        .child(panel),
+                ),
+                Below::Progress => match failure {
                     Some(failure) => d.child(failure),
                     None => d.child(progress),
-                })
-                .children(extra.map(|e| div().mt_4().w(px(WIDE)).child(e))),
+                },
+            }),
         )
 }
 
@@ -376,7 +408,7 @@ pub mod preview {
                 this.setup.clear_error();
                 cx.notify();
             });
-            div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(super::render(&self.setup, None, retry, cx))
+            div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(super::render(&self.setup, super::Below::Progress, retry, cx))
         }
     }
 }

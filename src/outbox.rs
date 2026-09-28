@@ -1,6 +1,9 @@
 //! The chat's outgoing messages. Enter sends when the agent is idle and queues
 //! while it works; Cmd+Enter sends now (steers the running turn). Queued
 //! messages go out one per turn, in order, and stay editable until they do.
+//! While Claude can't be reached (offline, signed out) the outbox is held:
+//! everything queues, and a turn that failed for that reason keeps its message
+//! to send again first.
 
 use std::collections::VecDeque;
 
@@ -34,7 +37,7 @@ impl Queued {
 pub type Shown = (String, Vec<Attachment>);
 
 /// What to hand the agent, and the message to add to the transcript (None while
-/// a SendNow's outcome is still unknown).
+/// a SendNow's outcome is still unknown, and for a message sent again).
 pub struct Dispatch {
     pub turn: Turn,
     pub shown: Option<Shown>,
@@ -44,22 +47,27 @@ pub struct Dispatch {
 pub struct Outbox {
     pub items: VecDeque<Queued>,
     pub busy: bool,
+    /// Nothing goes out until `release`: Claude can't be reached.
+    pub held: bool,
+    /// The running turn's message, so one Claude couldn't answer can go again.
+    current: Option<Vec<ContentBlock>>,
+    /// A message Claude couldn't answer: it goes again, first, on `release`.
+    unanswered: Option<Vec<ContentBlock>>,
 }
 
 impl Outbox {
     /// For a session that doesn't exist yet: messages queue until `turn_ended()`
     /// is called once it's up, which sends the first of them.
     pub fn waiting() -> Self {
-        Self { items: VecDeque::new(), busy: true }
+        Self { busy: true, ..Self::default() }
     }
 
     pub fn submit(&mut self, mut q: Queued, now: bool) -> Option<Dispatch> {
-        if !self.busy && self.items.is_empty() {
-            self.busy = true;
-            return Some(Dispatch { turn: Turn::Prompt(q.blocks), shown: Some((q.text, q.attachments)) });
+        if !self.busy && !self.held && self.items.is_empty() && self.unanswered.is_none() {
+            return Some(self.start(q));
         }
         // One SendNow at a time: its fallback needs the front slot.
-        if now && self.busy && !self.front_in_flight() {
+        if now && self.busy && !self.held && !self.front_in_flight() {
             q.in_flight = true;
             let turn = Turn::SendNow(q.blocks.clone());
             self.items.push_front(q);
@@ -71,7 +79,30 @@ impl Outbox {
 
     pub fn turn_ended(&mut self) -> Option<Dispatch> {
         self.busy = false;
+        self.current = None;
         self.next()
+    }
+
+    /// The turn ended without an answer Claude could give (signed out, offline):
+    /// hold, and keep its message to send again first.
+    pub fn turn_unanswered(&mut self) {
+        self.busy = false;
+        self.held = true;
+        self.unanswered = self.current.take().or(self.unanswered.take());
+    }
+
+    pub fn hold(&mut self) {
+        self.held = true;
+    }
+
+    /// Claude can be reached again: the unanswered message goes, else the next queued one.
+    pub fn release(&mut self) -> Option<Dispatch> {
+        self.held = false;
+        self.next()
+    }
+
+    pub fn has_unanswered(&self) -> bool {
+        self.unanswered.is_some()
     }
 
     /// The SendNow joined the running turn: returns it for the transcript.
@@ -102,12 +133,22 @@ impl Outbox {
     /// Start the next turn if idle. Waits while a SendNow's outcome is pending, so
     /// a message is never both steered in and re-sent.
     fn next(&mut self) -> Option<Dispatch> {
-        if self.busy || self.front_in_flight() {
+        if self.busy || self.held || self.front_in_flight() {
             return None;
         }
+        if let Some(blocks) = self.unanswered.take() {
+            self.busy = true;
+            self.current = Some(blocks.clone());
+            return Some(Dispatch { turn: Turn::Prompt(blocks), shown: None });
+        }
         let q = self.items.pop_front()?;
+        Some(self.start(q))
+    }
+
+    fn start(&mut self, q: Queued) -> Dispatch {
         self.busy = true;
-        Some(Dispatch { turn: Turn::Prompt(q.blocks), shown: Some((q.text, q.attachments)) })
+        self.current = Some(q.blocks.clone());
+        Dispatch { turn: Turn::Prompt(q.blocks), shown: Some((q.text, q.attachments)) }
     }
 }
 
@@ -168,6 +209,32 @@ mod tests {
         assert!(o.submit(msg("first"), false).is_none());
         assert!(o.submit(msg("second"), false).is_none());
         assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn a_held_outbox_queues_and_sends_in_order_on_release() {
+        let mut o = Outbox::default();
+        o.hold();
+        assert!(o.submit(msg("a"), false).is_none());
+        assert!(o.submit(msg("b"), true).is_none());
+        assert_eq!(o.items.len(), 2);
+        assert_eq!(prompt_label(o.release()).as_deref(), Some("a"));
+        assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn an_unanswered_message_goes_again_first_without_a_new_bubble() {
+        let mut o = Outbox::default();
+        let words = || vec![ContentBlock::from("plot it".to_string())];
+        o.submit(Queued::new("plot it".into(), vec![], words()), false);
+        o.turn_unanswered();
+        assert!(o.held && !o.busy && o.has_unanswered());
+        assert!(o.submit(msg("later"), false).is_none());
+        let again = o.release().unwrap();
+        assert!(again.shown.is_none());
+        assert!(matches!(again.turn, Turn::Prompt(blocks) if blocks == words()));
+        assert!(!o.has_unanswered());
+        assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("later"));
     }
 
     #[test]
