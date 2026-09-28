@@ -1589,11 +1589,17 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
     let tool = tool.as_deref().unwrap_or("");
 
     let (heading, body): (String, Vec<AnyElement>) = if !*runs_code {
-        let heading = match runs::asked(title, input) {
-            Some(what) => format!("Let Claude {what}?"),
-            None => format!("Allow {title}?"),
-        };
-        (heading, vec![])
+        let muted = |text: &str| div().text_color(theme::text_muted()).child(text.to_owned()).into_any_element();
+        if let Some(what) = runs::asked(title, input) {
+            (format!("Let Claude {what}?"), vec![])
+        } else if input["command"].is_string() {
+            // Claude Code's own shell: its title is the whole command, shown below instead.
+            ("Run a command on This Mac?".into(), input["description"].as_str().map(muted).into_iter().collect())
+        } else {
+            let short = cut_line(title, 60);
+            let full = (short != title.trim()).then(|| muted(title));
+            (format!("Allow {short}?"), full.into_iter().collect())
+        }
     } else if tool == "run_shell" {
         let host = session.server.clone().unwrap_or_else(|| "the server".into());
         let folder = session.place.path.display().to_string();
@@ -1773,14 +1779,17 @@ fn imported_packages<'a>(codes: impl Iterator<Item = &'a str>) -> Vec<String> {
     names
 }
 
+/// `text`'s first non-blank line, cut to `max` characters with "…".
+fn cut_line(text: &str, max: usize) -> String {
+    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    match line.char_indices().nth(max) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
+}
+
 fn run_heading(tool: &str, p: &pluto::RunPreview, input: &serde_json::Value) -> (String, Vec<String>) {
-    let first_line = |code: &str| {
-        let line = code.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-        match line.char_indices().nth(60) {
-            Some((cut, _)) => format!("{}…", &line[..cut]),
-            None => line.to_string(),
-        }
-    };
+    let first_line = |code: &str| cut_line(code, 60);
     let new_code = input["code"].as_str().filter(|_| tool == "edit_cell");
     let names: Vec<String> = p
         .cells
@@ -1845,6 +1854,10 @@ fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool) -> Sta
 
 /// A card title with `backticked` spans in mono, a size smaller (as in body text).
 fn inline_code(text: &str) -> Div {
+    // Plain text wraps as text does, even inside a long word.
+    if !text.contains('`') {
+        return div().child(text.to_owned());
+    }
     div().flex().flex_wrap().children(text.split('`').enumerate().map(|(i, part)| {
         // Flex drops a part's edge spaces; non-breaking ones survive.
         let d = div().child(part.replace(' ', "\u{a0}"));
