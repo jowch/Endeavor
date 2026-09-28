@@ -252,7 +252,7 @@
     hint.innerHTML = `<span>Click a cell or drag a box</span><span>\xB7</span><span class="done" role="button">Done</span>`;
     const bar = document.createElement("div");
     bar.id = "annotate-bar";
-    bar.innerHTML = `<span class="status"></span><textarea rows="1" placeholder="Comment for Claude\u2026" title="\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 Esc or \u2318\u21E7K exit"></textarea><button class="primary send">Send</button>`;
+    bar.innerHTML = `<span class="status"></span><textarea rows="1" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Comment for Claude\u2026" title="\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 Esc or \u2318\u21E7K exit"></textarea><button class="primary send">Send</button>`;
     document.head.append(style);
     document.body.append(frame2, box, hint, bar);
     const status = bar.querySelector(".status");
