@@ -557,7 +557,7 @@ impl Workspace {
                 .id(("example", i))
                 .flex()
                 .items_center()
-                .gap(px(10.))
+                .gap(px(8.))
                 .min_h(px(34.))
                 .px(px(8.))
                 .py(px(6.))
@@ -568,8 +568,9 @@ impl Workspace {
                 .text_color(theme::text_secondary())
                 .hover(|s| s.bg(theme::row_active()))
                 .child(glyph_at(icon, theme::text_muted(), 14. / 12.))
-                .child(div().flex_1().min_w_0().child(prompt))
-                .child(div().flex_shrink_0().pl(px(8.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(if uses_file { "Uses your file" } else { "No data needed" }))
+                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(prompt))
+                .child(div().flex_shrink_0().pl(px(4.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(if uses_file { "Uses your file" } else { "No data needed" }))
+                .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(prompt).build(window, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.input.update(cx, |s, cx| {
                         s.set_value(prompt, window, cx);
