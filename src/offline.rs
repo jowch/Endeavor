@@ -110,6 +110,49 @@ impl Workspace {
         }
     }
 
+    /// Claude's API failed a session's turn. If it can't be reached from here
+    /// either, that's offline even while the system has a network (a dead
+    /// Wi-Fi, say): the message waits and goes again once it can be reached.
+    /// Otherwise the turn failed.
+    pub fn api_failed(&mut self, key: u64, error: String, cx: &mut Context<Self>) {
+        let probe = self.offline_since.is_none().then(|| cx.background_executor().spawn(async { crate::network::probe() }));
+        cx.spawn(async move |this, cx| {
+            let reachable = match probe {
+                Some(probe) => probe.await,
+                None => false,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if !reachable && this.offline_since.is_none() {
+                    this.set_online(false, cx);
+                    this.recheck(cx);
+                }
+                let Some(session) = this.session_mut(key) else { return };
+                let effects = session.api_failed(&error);
+                this.apply_effects(key, effects, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Offline on Claude's API's word, not the system's, which won't say when
+    /// it's back: look again every `RETRY_EVERY` until it is.
+    fn recheck(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(RETRY_EVERY).await;
+                let Ok(offline) = this.update(cx, |this, _| this.offline_since.is_some()) else { return };
+                if !offline {
+                    return;
+                }
+                if cx.background_executor().spawn(async { crate::network::probe() }).await {
+                    let _ = this.update(cx, |this, cx| this.set_online(true, cx));
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// A server's connection dropped while its notebook showed: try again after
     /// `wait`, unless it's back, given up on, or waiting for the network.
     pub fn retry_lost(&mut self, host: HostId, wait: Duration, cx: &mut Context<Self>) {

@@ -665,6 +665,7 @@ impl Session {
             }
             // Held: Claude went out of reach while it worked.
             SessionEvent::TurnFailed(_) if self.outbox.held => self.turn_unanswered(),
+            SessionEvent::ApiFailed(error) => return self.api_failed(&error),
             SessionEvent::TurnFailed(e) => {
                 self.note(format!("⚠ Turn failed: {e}"));
                 self.turn_ended(&mut effects);
@@ -716,6 +717,25 @@ impl Session {
             }
         }
         effects
+    }
+
+    /// Claude's API failed the turn: the reply that only repeats the error goes,
+    /// then the turn fails, or, held because Claude is out of reach, its message
+    /// waits to go again.
+    pub fn api_failed(&mut self, error: &str) -> Vec<Effect> {
+        let last = self.entries.len().saturating_sub(1);
+        if let Some(Entry::Agent(text)) = self.entries.last_mut()
+            && let Some(before) = text.trim_end().strip_suffix(error)
+        {
+            let before = before.trim_end().to_owned();
+            self.mark(last);
+            if before.is_empty() {
+                self.entries.pop();
+            } else if let Some(Entry::Agent(text)) = self.entries.last_mut() {
+                *text = before;
+            }
+        }
+        self.apply(SessionEvent::TurnFailed(error.to_owned()))
     }
 
     fn turn_ended(&mut self, effects: &mut Vec<Effect>) {
@@ -2460,6 +2480,29 @@ mod tests {
         let effects = s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
         assert!(matches!(&s.entries[1], Entry::User { text, .. } if text.as_ref() == "and label the axes"));
+    }
+
+    #[test]
+    fn an_api_error_is_not_left_as_the_reply() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+        const ERROR: &str = "API Error: Unable to connect to API. Check your internet connection";
+        let reply = |text: &str| SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(text)))));
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+
+        s.submit(text("plot it"), false);
+        s.apply(reply(ERROR));
+        s.hold();
+        s.apply(SessionEvent::ApiFailed(ERROR.into()));
+        assert!(matches!(s.entries.as_slice(), [Entry::User { .. }]), "offline: only the message, kept");
+        assert_eq!(s.unanswered, Some(0));
+
+        s.release();
+        s.apply(reply("Here it is.\n\n"));
+        s.apply(reply(ERROR));
+        s.apply(SessionEvent::ApiFailed(ERROR.into()));
+        assert!(matches!(&s.entries[1..], [Entry::Agent(said), Entry::Note(note)]
+            if said == "Here it is." && note.as_ref() == format!("⚠ Turn failed: {ERROR}")));
     }
 
     #[test]

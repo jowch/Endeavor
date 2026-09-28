@@ -1653,6 +1653,10 @@ impl Workspace {
                     Err(e) => session.fail(&e),
                 }
             }
+            AgentEvent::Session(id, agent::SessionEvent::ApiFailed(error)) => {
+                let Some(key) = self.sessions.iter().find(|s| s.id.as_ref() == Some(&id)).map(|s| s.key) else { return };
+                self.api_failed(key, error, cx);
+            }
             AgentEvent::Session(id, event) => {
                 let Some(session) = self.sessions.iter_mut().find(|s| s.id.as_ref() == Some(&id)) else { return };
                 let key = session.key;

@@ -242,6 +242,9 @@ pub enum SessionEvent {
     TurnEnded(StopReason),
     /// The turn failed outright (the session stays usable).
     TurnFailed(String),
+    /// The turn failed because Claude's API couldn't be reached or failed
+    /// ("API Error: …"); the agent also wrote the error as its reply.
+    ApiFailed(String),
     /// The turn failed because Claude's sign-in ran out.
     AuthRequired,
     /// A `SendNow` joined the running turn.
@@ -384,6 +387,12 @@ async fn run(
                         match result {
                             Ok(response) => emit(&session, SessionEvent::TurnEnded(response.stop_reason)),
                             Err(e) if e.code == ErrorCode::AuthRequired => emit(&session, SessionEvent::AuthRequired),
+                            // claude-agent-acp's mark for Claude's API failing the turn with a
+                            // connection or server error, after Claude Code's retries.
+                            Err(e) if e.code == ErrorCode::InternalError && e.data.as_ref().and_then(|d| d.get("errorKind")?.as_str()) == Some("server_error") => {
+                                let error = e.message.strip_prefix("Internal error: ").unwrap_or(&e.message).to_owned();
+                                emit(&session, SessionEvent::ApiFailed(error));
+                            }
                             Err(e) => emit(&session, SessionEvent::TurnFailed(e.to_string())),
                         }
                         continue;
