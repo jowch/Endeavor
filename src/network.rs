@@ -15,15 +15,150 @@ pub fn watch() -> UnboundedReceiver<bool> {
     rx
 }
 
-/// Try now: can Claude's API be reached this moment? DNS and a TCP connect, a few seconds at most.
+const API: (&str, u16) = ("api.anthropic.com", 443);
+
+/// Try now: can Claude's API be reached this moment, the way Claude Code
+/// reaches it? A few seconds at most.
 pub fn probe() -> bool {
+    !forced_offline() && reachable(&route(|name| std::env::var(name).ok()), API)
+}
+
+/// How Claude Code gets to the API, from the environment the agent inherits
+/// from this app. It reads the proxy variables only, never the system's proxy
+/// settings, so neither does this.
+#[derive(Debug, PartialEq)]
+enum Route {
+    Direct,
+    Proxy(Proxy),
+}
+
+#[derive(Debug, PartialEq)]
+struct Proxy {
+    host: String,
+    port: u16,
+    /// `user:password` from the proxy's URL, decoded.
+    auth: Option<String>,
+    /// An `http://` proxy, which takes a CONNECT. Any other (TLS to the proxy,
+    /// SOCKS) is only checked for being there.
+    http: bool,
+}
+
+/// Claude Code's choice: the first of `https_proxy`, `HTTPS_PROXY`,
+/// `http_proxy` and `HTTP_PROXY` that is set, unless `no_proxy`/`NO_PROXY`
+/// names the API's host.
+fn route(env: impl Fn(&str) -> Option<String>) -> Route {
+    let set = |name: &str| env(name).filter(|v| !v.is_empty());
+    let Some(url) = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"].into_iter().find_map(set) else { return Route::Direct };
+    let no_proxy = [set("no_proxy"), set("NO_PROXY")];
+    if no_proxy.iter().flatten().any(|list| bypasses(list, API)) {
+        return Route::Direct;
+    }
+    proxy(&url).map_or(Route::Direct, Route::Proxy)
+}
+
+/// A `NO_PROXY` list names `host`: `*`, the host, `.domain` for it and its
+/// subdomains, or `host:port`.
+fn bypasses(list: &str, (host, port): (&str, u16)) -> bool {
+    if list.trim() == "*" {
+        return true;
+    }
+    list.split([',', ' ', '\t']).map(|entry| entry.trim().to_lowercase()).filter(|entry| !entry.is_empty()).any(|entry| {
+        if entry.contains(':') {
+            entry == format!("{host}:{port}")
+        } else if let Some(domain) = entry.strip_prefix('.') {
+            host == domain || host.ends_with(&entry)
+        } else {
+            host == entry
+        }
+    })
+}
+
+/// A proxy URL; a bare `host:port` is taken as `http://`.
+fn proxy(url: &str) -> Option<Proxy> {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("http", url));
+    let scheme = scheme.to_lowercase();
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let (auth, hostport) = match authority.rsplit_once('@') {
+        Some((auth, hostport)) => (Some(percent_decode(auth)), hostport),
+        None => (None, authority),
+    };
+    let default = match scheme.as_str() {
+        "http" => 80,
+        "https" => 443,
+        _ => 1080,
+    };
+    let (host, port) = match hostport.strip_prefix('[') {
+        Some(v6) => v6.split_once(']')?,
+        None => hostport.rsplit_once(':').unwrap_or((hostport, "")),
+    };
+    let port = match port.trim_start_matches(':') {
+        "" => default,
+        port => port.parse().ok()?,
+    };
+    (!host.is_empty()).then(|| Proxy { host: host.to_owned(), port, auth, http: scheme == "http" })
+}
+
+/// Can `target` be reached by `route`: a TCP connect straight to it, or a
+/// CONNECT through the proxy that the proxy answers with 200.
+fn reachable(route: &Route, (host, port): (&str, u16)) -> bool {
+    use std::io::{BufRead, BufReader, Write};
     use std::net::{TcpStream, ToSocketAddrs};
     use std::time::Duration;
-    if forced_offline() {
+    let connect = |host: &str, port: u16| -> Option<TcpStream> {
+        (host, port).to_socket_addrs().ok()?.take(2).find_map(|addr| TcpStream::connect_timeout(&addr, Duration::from_secs(3)).ok())
+    };
+    let proxy = match route {
+        Route::Direct => return connect(host, port).is_some(),
+        Route::Proxy(proxy) => proxy,
+    };
+    let Some(mut stream) = connect(&proxy.host, proxy.port) else { return false };
+    if !proxy.http {
+        return true;
+    }
+    let auth = proxy.auth.as_ref().map(|a| format!("Proxy-Authorization: Basic {}\r\n", base64(a.as_bytes()))).unwrap_or_default();
+    let request = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{auth}\r\n");
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
-    let Ok(addrs) = ("api.anthropic.com", 443).to_socket_addrs() else { return false };
-    addrs.take(2).any(|addr| TcpStream::connect_timeout(&addr, Duration::from_secs(3)).is_ok())
+    let mut status = String::new();
+    if BufReader::new(stream).read_line(&mut status).is_err() {
+        return false;
+    }
+    status.split_whitespace().nth(1) == Some("200")
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(if i <= chunk.len() { ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
 }
 
 /// Debug builds only: offline while the file `ENDEAVOR_FORCE_OFFLINE` names
@@ -163,7 +298,69 @@ fn has_default_route(v4: &str, v6: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::has_default_route;
+    use super::{API, Proxy, Route, has_default_route, reachable, route};
+
+    fn route_with(vars: &[(&str, &str)]) -> Route {
+        route(|name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string()))
+    }
+
+    fn proxy(host: &str, port: u16, auth: Option<&str>, http: bool) -> Route {
+        Route::Proxy(Proxy { host: host.into(), port, auth: auth.map(Into::into), http })
+    }
+
+    #[test]
+    fn the_probe_takes_the_proxy_claude_code_would() {
+        assert_eq!(route_with(&[]), Route::Direct);
+        assert_eq!(route_with(&[("HTTPS_PROXY", "http://proxy.lab:3128")]), proxy("proxy.lab", 3128, None, true));
+        // Lowercase first, then HTTP_PROXY when no HTTPS one is set; an empty value doesn't count.
+        assert_eq!(route_with(&[("HTTPS_PROXY", "http://upper:1"), ("https_proxy", "http://lower:2")]), proxy("lower", 2, None, true));
+        assert_eq!(route_with(&[("https_proxy", ""), ("HTTP_PROXY", "plain:8080")]), proxy("plain", 8080, None, true));
+        assert_eq!(route_with(&[("HTTPS_PROXY", "http://me%40lab:p%3Ass@proxy/")]), proxy("proxy", 80, Some("me@lab:p:ss"), true));
+        assert_eq!(route_with(&[("HTTPS_PROXY", "https://[::1]")]), proxy("::1", 443, None, false));
+        assert_eq!(route_with(&[("HTTPS_PROXY", "socks5://gate:1081")]), proxy("gate", 1081, None, false));
+    }
+
+    #[test]
+    fn no_proxy_sends_the_probe_straight() {
+        let with = |no_proxy: &str| route_with(&[("HTTPS_PROXY", "http://proxy:3128"), ("NO_PROXY", no_proxy)]);
+        for bypass in ["*", "api.anthropic.com", ".anthropic.com", "localhost, .ANTHROPIC.com", "api.anthropic.com:443"] {
+            assert_eq!(with(bypass), Route::Direct, "{bypass}");
+        }
+        for through in ["anthropic.com", "*.anthropic.com", "api.anthropic.com:8443", "localhost,*"] {
+            assert_eq!(with(through), proxy("proxy", 3128, None, true), "{through}");
+        }
+        assert_eq!(route_with(&[("HTTPS_PROXY", "http://proxy:3128"), ("no_proxy", "x"), ("NO_PROXY", ".anthropic.com")]), Route::Direct);
+    }
+
+    /// A one-shot proxy on localhost that answers a CONNECT with `status`
+    /// and hands back the request it got.
+    fn fake_proxy(status: &'static str) -> (u16, std::thread::JoinHandle<String>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            while reader.read_line(&mut request).unwrap() > 2 {}
+            (&stream).write_all(format!("HTTP/1.1 {status}\r\n\r\n").as_bytes()).unwrap();
+            request
+        });
+        (port, thread)
+    }
+
+    #[test]
+    fn the_probe_connects_through_the_proxy() {
+        let (port, request) = fake_proxy("200 Connection Established");
+        assert!(reachable(&proxy("127.0.0.1", port, Some("me:pw"), true), API));
+        assert_eq!(request.join().unwrap(), "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\nProxy-Authorization: Basic bWU6cHc=\r\n\r\n");
+
+        let (port, _) = fake_proxy("502 Bad Gateway");
+        assert!(!reachable(&proxy("127.0.0.1", port, None, true), API));
+
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert!(!reachable(&proxy("127.0.0.1", closed, None, true), API));
+    }
 
     const V4_ONLINE: &str = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
         eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
