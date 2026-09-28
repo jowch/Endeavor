@@ -68,8 +68,10 @@ const endeavorDark = `
   nav#slide_controls > button { border-radius: 5px; opacity: 0.8; }
   nav#slide_controls > button:hover { background: #26262A; opacity: 1; }
 }
-header#pluto-nav, footer, #helpbox-wrapper { display: none !important; }
-html[data-endeavor-drawer="docs"] #helpbox-wrapper { display: block !important; }
+header#pluto-nav, footer { display: none !important; }
+/* Not display: none — Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
+html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
+  position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
 pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
 pluto-editor > main { padding-top: 16px; }

@@ -217,17 +217,16 @@
   #annotate-hint .done { color: #fff; cursor: pointer; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
-    z-index: 10000; display: none; flex-direction: column; gap: 8px;
-    width: min(640px, 90vw); padding: 12px; border-radius: 12px;
+    z-index: 10000; display: none; flex-direction: row; align-items: flex-end; gap: 8px;
+    width: min(640px, 90vw); padding: 6px; border-radius: 10px;
     background: rgba(28, 28, 30, 0.72); color: #ddd; font: 13px system-ui;
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); }
   body.annotating #annotate-bar, body.annotating #annotate-frame, body.annotating #annotate-hint { display: flex; }
-  #annotate-bar textarea { resize: vertical; min-height: 3.5em; padding: 6px 8px; border-radius: 6px;
-    border: 1px solid #555; background: rgba(0, 0, 0, 0.35); color: #eee; font: 13px system-ui; }
-  #annotate-bar .row { display: flex; gap: 8px; align-items: center; }
-  #annotate-bar .status { flex: 1; color: #aaa; }
-  #annotate-bar button { padding: 4px 10px; border-radius: 6px; border: 0; cursor: pointer;
+  #annotate-bar textarea { flex: 1; resize: none; height: 28px; max-height: 120px; padding: 5px 8px; border-radius: 6px;
+    border: 1px solid #555; background: rgba(0, 0, 0, 0.35); color: #eee; font: 13px/18px system-ui; box-sizing: border-box; }
+  #annotate-bar .status { flex: none; align-self: center; color: #aaa; font-size: 12px; white-space: nowrap; }
+  #annotate-bar button { height: 28px; padding: 0 10px; border-radius: 6px; border: 0; cursor: pointer;
     background: #3a3a3c; color: #eee; font: 13px system-ui; }
   #annotate-bar button.primary { background: #CC3F00; color: #fff; }
   #annotate-bar button:disabled { opacity: 0.4; cursor: default; }
@@ -253,16 +252,17 @@
     hint.innerHTML = `<span>Click a cell or drag a box</span><span>\xB7</span><span class="done" role="button">Done</span>`;
     const bar = document.createElement("div");
     bar.id = "annotate-bar";
-    bar.innerHTML = `
-    <div class="row"><span class="status"></span></div>
-    <textarea placeholder="Comment for Claude on the selected cells\u2026"></textarea>
-    <div class="row"><span class="status">\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 \u2318\u21E7K exit</span>
-      <button class="primary send">Send</button></div>`;
+    bar.innerHTML = `<span class="status"></span><textarea rows="1" placeholder="Comment for Claude\u2026" title="\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 \u2318\u21E7K exit"></textarea><button class="primary send">Send</button>`;
     document.head.append(style);
     document.body.append(frame2, box, hint, bar);
     const status = bar.querySelector(".status");
     const text = bar.querySelector("textarea");
     const sendButton = bar.querySelector(".send");
+    const fit = () => {
+      text.style.height = "28px";
+      text.style.height = `${Math.min(text.scrollHeight + 2, 120)}px`;
+    };
+    text.addEventListener("input", fit);
     const pageBox = (r) => ({
       left: r.left + window.scrollX,
       top: r.top + window.scrollY,
@@ -348,6 +348,7 @@
       if (region) void sendRegion(region, ids, codes, notebook, comment, now);
       else send({ type: "annotation", notebook, cells: ids, codes, comment, now });
       text.value = "";
+      fit();
       picked.clear();
       region = null;
       refresh2();
@@ -1009,6 +1010,7 @@
     document.documentElement.style.setProperty("--endeavor-drawer-h", `${clamped}px`);
     return clamped;
   }
+  var echoing = false;
   function openDrawer(next, byItself = false) {
     tab = next;
     auto = byItself;
@@ -1016,7 +1018,9 @@
     else delete document.documentElement.dataset.endeavorDrawer;
     drawer.dataset.tab = next ?? "";
     for (const b of drawer.querySelectorAll("header [data-tab]")) b.classList.toggle("active", b.dataset.tab === next);
+    echoing = true;
     window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: next === "docs" ? "docs" : null }));
+    echoing = false;
     if (next === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), 50);
     render();
     report();
@@ -1129,6 +1133,9 @@
       grip.addEventListener("pointermove", move);
       grip.addEventListener("pointerup", up, { once: true });
     };
+    window.addEventListener("open_bottom_right_panel", (e) => {
+      if (!echoing && e.detail === "docs" && tab !== "docs") openDrawer("docs");
+    });
     setDrawerSource(() => tab);
     on("drawer", (msg) => openDrawer(msg.tab));
     on("context", (msg) => {
@@ -1380,7 +1387,7 @@
     callout.classList.toggle("shown", !!safe);
     if (!safe) return;
     const asking = context.asking ? `<div class="asking">Claude is asking to run it. Answer in the chat, or here.</div>` : "";
-    const html = `${shield}<div class="text"><b>Nothing runs until you say so.</b>You can read and edit this notebook; when it runs, its code can read and change files on ${escape3(context.host)}.${asking}</div><button class="run">${play}Run notebook</button>`;
+    const html = `${shield}<div class="text"><b>Safe preview</b>You're reading and editing this file without running any code.${asking}</div><button class="run">${play}Run notebook</button>`;
     if (callout.innerHTML !== html) {
       callout.innerHTML = html;
       callout.querySelector(".run").onclick = (e) => byUser(e) && send({ type: "run_notebook", notebook: notebookId() });
@@ -1390,7 +1397,6 @@
     const notebook = document.querySelector("main pluto-notebook");
     if (notebook && callout.nextElementSibling !== notebook) notebook.before(callout);
   }
-  var escape3 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   function initSafe() {
     const style = document.createElement("style");
     style.textContent = css10;
@@ -1461,8 +1467,10 @@
   nav#slide_controls > button { border-radius: 5px; opacity: 0.8; }
   nav#slide_controls > button:hover { background: #26262A; opacity: 1; }
 }
-header#pluto-nav, footer, #helpbox-wrapper { display: none !important; }
-html[data-endeavor-drawer="docs"] #helpbox-wrapper { display: block !important; }
+header#pluto-nav, footer { display: none !important; }
+/* Not display: none \u2014 Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
+html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
+  position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
 pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
 pluto-editor > main { padding-top: 16px; }

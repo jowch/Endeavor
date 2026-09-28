@@ -122,6 +122,9 @@ function setHeight(h: number) {
   return clamped;
 }
 
+/** Set while the drawer tells Pluto's panel which tab to show, so that isn't taken for Pluto asking. */
+let echoing = false;
+
 export function openDrawer(next: Drawer, byItself = false): void {
   tab = next;
   auto = byItself;
@@ -130,7 +133,9 @@ export function openDrawer(next: Drawer, byItself = false): void {
   drawer.dataset.tab = next ?? "";
   for (const b of drawer.querySelectorAll<HTMLElement>("header [data-tab]")) b.classList.toggle("active", b.dataset.tab === next);
   // Pluto's panel shows its Live docs tab only while ours is on it.
+  echoing = true;
   window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: next === "docs" ? "docs" : null }));
+  echoing = false;
   if (next === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
   render();
   report();
@@ -276,6 +281,11 @@ export function initDrawer(): void {
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", up, { once: true });
   };
+
+  // Pluto opens Live docs itself (F1, a docs link in autocomplete or an error): open ours there.
+  window.addEventListener("open_bottom_right_panel", (e) => {
+    if (!echoing && (e as CustomEvent).detail === "docs" && tab !== "docs") openDrawer("docs");
+  });
 
   setDrawerSource(() => tab);
   on("drawer", (msg) => openDrawer(msg.tab));

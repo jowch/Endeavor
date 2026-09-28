@@ -29,17 +29,16 @@ const css = `
   #annotate-hint .done { color: #fff; cursor: pointer; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
-    z-index: 10000; display: none; flex-direction: column; gap: 8px;
-    width: min(640px, 90vw); padding: 12px; border-radius: 12px;
+    z-index: 10000; display: none; flex-direction: row; align-items: flex-end; gap: 8px;
+    width: min(640px, 90vw); padding: 6px; border-radius: 10px;
     background: rgba(28, 28, 30, 0.72); color: #ddd; font: 13px system-ui;
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); }
   body.annotating #annotate-bar, body.annotating #annotate-frame, body.annotating #annotate-hint { display: flex; }
-  #annotate-bar textarea { resize: vertical; min-height: 3.5em; padding: 6px 8px; border-radius: 6px;
-    border: 1px solid #555; background: rgba(0, 0, 0, 0.35); color: #eee; font: 13px system-ui; }
-  #annotate-bar .row { display: flex; gap: 8px; align-items: center; }
-  #annotate-bar .status { flex: 1; color: #aaa; }
-  #annotate-bar button { padding: 4px 10px; border-radius: 6px; border: 0; cursor: pointer;
+  #annotate-bar textarea { flex: 1; resize: none; height: 28px; max-height: 120px; padding: 5px 8px; border-radius: 6px;
+    border: 1px solid #555; background: rgba(0, 0, 0, 0.35); color: #eee; font: 13px/18px system-ui; box-sizing: border-box; }
+  #annotate-bar .status { flex: none; align-self: center; color: #aaa; font-size: 12px; white-space: nowrap; }
+  #annotate-bar button { height: 28px; padding: 0 10px; border-radius: 6px; border: 0; cursor: pointer;
     background: #3a3a3c; color: #eee; font: 13px system-ui; }
   #annotate-bar button.primary { background: #CC3F00; color: #fff; }
   #annotate-bar button:disabled { opacity: 0.4; cursor: default; }
@@ -72,17 +71,19 @@ export function initAnnotate(): void {
   hint.innerHTML = `<span>Click a cell or drag a box</span><span>·</span><span class="done" role="button">Done</span>`;
   const bar = document.createElement("div");
   bar.id = "annotate-bar";
-  bar.innerHTML = `
-    <div class="row"><span class="status"></span></div>
-    <textarea placeholder="Comment for Claude on the selected cells…"></textarea>
-    <div class="row"><span class="status">↩ send · ⌘↩ send now · ⇧↩ newline · ⌘⇧K exit</span>
-      <button class="primary send">Send</button></div>`;
+  bar.innerHTML = `<span class="status"></span><textarea rows="1" placeholder="Comment for Claude…" title="↩ send · ⌘↩ send now · ⇧↩ newline · ⌘⇧K exit"></textarea><button class="primary send">Send</button>`;
   document.head.append(style);
   document.body.append(frame, box, hint, bar);
 
   const status = bar.querySelector<HTMLElement>(".status")!;
   const text = bar.querySelector<HTMLTextAreaElement>("textarea")!;
   const sendButton = bar.querySelector<HTMLButtonElement>(".send")!;
+  // One line until the comment needs more, so the bar covers as little of the notebook as it can.
+  const fit = () => {
+    text.style.height = "28px";
+    text.style.height = `${Math.min(text.scrollHeight + 2, 120)}px`;
+  };
+  text.addEventListener("input", fit);
 
   const pageBox = (r: DOMRect): Box => ({
     left: r.left + window.scrollX,
@@ -181,6 +182,7 @@ export function initAnnotate(): void {
     if (region) void sendRegion(region, ids, codes, notebook, comment, now);
     else send({ type: "annotation", notebook, cells: ids, codes, comment, now });
     text.value = "";
+    fit();
     picked.clear();
     region = null;
     refresh();

@@ -38,8 +38,8 @@ function render() {
   if (!safe) return;
   const asking = context.asking ? `<div class="asking">Claude is asking to run it. Answer in the chat, or here.</div>` : "";
   const html =
-    `${shield}<div class="text"><b>Nothing runs until you say so.</b>` +
-    `You can read and edit this notebook; when it runs, its code can read and change files on ${escape(context.host)}.${asking}</div>` +
+    `${shield}<div class="text"><b>Safe preview</b>` +
+    `You're reading and editing this file without running any code.${asking}</div>` +
     `<button class="run">${play}Run notebook</button>`;
   if (callout.innerHTML !== html) {
     callout.innerHTML = html;
@@ -53,7 +53,6 @@ function place() {
   if (notebook && callout.nextElementSibling !== notebook) notebook.before(callout);
 }
 
-const escape = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
 export function initSafe(): void {
   const style = document.createElement("style");
