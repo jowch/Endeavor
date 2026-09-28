@@ -42,6 +42,7 @@ mod settings;
 mod snapshot;
 mod splash;
 mod theme;
+mod tips;
 mod turtle;
 mod when;
 #[cfg(not(target_os = "macos"))]
@@ -481,6 +482,9 @@ pub struct Workspace {
     /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
     annotating: bool,
+    /// "Two ways to add your file" shows over the composer (a "Uses your file"
+    /// example was clicked and the tip isn't done yet).
+    file_tip: bool,
     /// Each host's connection and runtime.
     connections: HashMap<HostId, connection::Connection>,
     /// Each host's loopback ports for the webview and the agent, relayed to its
@@ -661,6 +665,7 @@ impl Workspace {
             agent_rx: Some(agent_rx),
             status: "".into(),
             annotating: false,
+            file_tip: false,
             connections: HashMap::new(),
             listeners: HashMap::new(),
             placeholder: "Type / for commands",
@@ -1599,7 +1604,12 @@ impl Workspace {
                 }
             }
             Some(annotate::Message::FixPackage { notebook, name, log }) => self.fix_package(notebook, name, log, cx),
-            Some(annotate::Message::Mode(on)) => self.annotating = on,
+            Some(annotate::Message::Mode(on)) => {
+                self.annotating = on;
+                if on {
+                    self.point_tip_done();
+                }
+            }
             Some(annotate::Message::Ask(ask)) => {
                 let Some(key) = self.active else { return };
                 let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
@@ -2447,7 +2457,7 @@ impl Workspace {
                 cx.stop_propagation();
                 this.open_menu(MenuTarget::Notebook(key), None, window, cx);
             }))
-            .when(menu.is_none(), |d| d.tooltip(notebook_pane::tooltip("More", &self.webview)))
+            .when(menu.is_none() && !self.point_tip_shows(true), |d| d.tooltip(notebook_pane::tooltip("More", &self.webview)))
             .child("⋮")
             .children(menu.map(|menu| self.render_menu(menu, cx)))
     }
@@ -2517,7 +2527,8 @@ impl Render for Workspace {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
         let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
-        if !menu_over_notebook && !notebook_pane::tooltip_over_notebook() {
+        let point_tip = self.point_tip_shows(show_webview && active.is_some_and(|ix| self.sessions[ix].notebook_path.is_some()));
+        if !menu_over_notebook && !notebook_pane::tooltip_over_notebook() && !point_tip {
             overlay::set_hole(self.webview.read(cx).raw(), None);
         }
         if let Some(setup) = &self.setup {

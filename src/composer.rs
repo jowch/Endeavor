@@ -329,6 +329,7 @@ impl Workspace {
     /// Put the picked path in the text where "@query" was.
     fn pick_mention(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some((range, _)) = self.composer.typing.take() else { return };
+        self.file_tip_done();
         if !self.composer.mentions.contains(&path) {
             self.composer.mentions.push(path.clone());
         }
@@ -476,7 +477,10 @@ impl Workspace {
                 let mut refused = Vec::new();
                 for result in results {
                     match result {
-                        Ok(attachment) => this.composer.attachments.push(attachment),
+                        Ok(attachment) => {
+                            this.composer.attachments.push(attachment);
+                            this.file_tip_done();
+                        }
                         Err(why) => refused.push(why),
                     }
                 }

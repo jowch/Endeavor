@@ -92,6 +92,21 @@ enum ResumeTarget {
 
 const RESUME_SHOWN: usize = 3;
 
+/// A first prompt to try, for someone with nothing to pick up.
+struct Example {
+    icon: Glyph,
+    prompt: &'static str,
+    /// It asks for the user's own data ("Uses your file"), else it needs none.
+    uses_file: bool,
+}
+
+const EXAMPLES: [Example; 4] = [
+    Example { icon: Glyph::Dice, prompt: "Simulate 1,000 coin flips and plot how often heads comes up", uses_file: false },
+    Example { icon: Glyph::Table, prompt: "Load a CSV file I'll attach and show me what's in it", uses_file: true },
+    Example { icon: Glyph::Curve, prompt: "Fit an exponential decay to measurements I'll attach, and plot the fit", uses_file: true },
+    Example { icon: Glyph::Cap, prompt: "Show me the basics of Julia with a small worked example", uses_file: false },
+];
+
 /// The folder a new session on This Mac starts in: the last one used there,
 /// else ~/Documents/Endeavor, created at launch so the folder chip and
 /// Browse… have somewhere real to point.
@@ -508,21 +523,70 @@ impl Workspace {
                     .px(px(20.))
                     .pt(px(28.))
                     .child(div().text_size(theme::size_title()).font_weight(FontWeight::SEMIBOLD).child("Start a session"))
-                    .when(!rows.is_empty(), |d| {
-                        d.child(div().mt(px(18.)).mb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("Pick up where you left off"))
-                            .children(rows)
+                    .map(|d| {
+                        if rows.is_empty() {
+                            d.child(self.render_examples(cx))
+                        } else {
+                            d.child(div().mt(px(18.)).mb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("Pick up where you left off"))
+                                .children(rows)
+                        }
                     }),
             )
             .child(
                 div()
+                    .relative()
                     .px_4()
                     .pb(px(11.))
                     .flex()
                     .flex_col()
                     .gap(px(10.))
                     .child(self.render_chips(cx))
-                    .child(self.render_composer(None, false, window, cx)),
+                    .child(self.render_composer(None, false, window, cx))
+                    .children(self.render_file_tip(cx)),
             )
+    }
+
+    /// Example prompts for someone with no sessions to pick up. A click puts
+    /// the prompt in the composer; one that uses a file shows how to add it.
+    fn render_examples(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let rows = EXAMPLES.iter().enumerate().map(|(i, example)| {
+            let &Example { icon, prompt, uses_file } = example;
+            div()
+                .id(("example", i))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .min_h(px(34.))
+                .px(px(8.))
+                .py(px(6.))
+                .ml(px(-4.))
+                .mr(px(-8.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .text_color(theme::text_secondary())
+                .hover(|s| s.bg(theme::row_active()))
+                .child(glyph_at(icon, theme::text_muted(), 14. / 12.))
+                .child(div().flex_1().min_w_0().child(prompt))
+                .child(div().flex_shrink_0().pl(px(8.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(if uses_file { "Uses your file" } else { "No data needed" }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.input.update(cx, |s, cx| {
+                        s.set_value(prompt, window, cx);
+                        s.focus(window, cx);
+                    });
+                    window.dispatch_action(Box::new(gpui_component::input::MoveToEnd), cx);
+                    if uses_file {
+                        this.file_tip = true;
+                    }
+                    cx.notify();
+                }))
+        });
+        div()
+            .mt(px(18.))
+            .pl(px(4.))
+            .flex()
+            .flex_col()
+            .child(div().mb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_muted()).child("Try one of these, or ask in your own words"))
+            .children(rows)
     }
 
     /// Julia on the draft host stopping, in plain words, with Start Julia (and
@@ -1034,9 +1098,37 @@ impl Workspace {
         };
         match (&self.draft.notebook, &self.draft.preview) {
             (NotebookChoice::New, _) => {
-                let line = div().flex().items_baseline().text_color(theme::text_muted());
-                let line = line.child("A new notebook will be created in ").child(file_name(folder_name(folder))).child(" when you start.");
-                turtle_pane().child(line).into_any_element()
+                let saved_in = div()
+                    .max_w_full()
+                    .flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .items_baseline()
+                    .text_size(theme::size_meta())
+                    .child("It's saved as a file in\u{a0}")
+                    .child(
+                        div()
+                            .min_w_0()
+                            .max_w_full()
+                            .flex()
+                            .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::text_secondary()).child(self.draft_tilde(folder)))
+                            .child(div().flex_shrink_0().child(".")),
+                    );
+                turtle_pane()
+                    .child(
+                        div()
+                            .max_w(px(390.))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(4.))
+                            .text_center()
+                            .text_color(theme::text_muted())
+                            .child(div().text_size(theme::size_subhead()).line_height(px(22.)).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child("Your notebook will appear here"))
+                            .child("Claude writes the code in it and runs it. You can read and change every cell yourself.")
+                            .child(saved_in),
+                    )
+                    .into_any_element()
             }
             (NotebookChoice::Existing(_), None) => div().into_any_element(),
             (NotebookChoice::Existing(_), Some(preview)) => {
@@ -1261,6 +1353,14 @@ pub(crate) enum Glyph {
     Record,
     /// Frontmatter: a tag.
     Tag,
+    /// A die: a rounded square with five pips.
+    Dice,
+    /// A table: a box with a header row and a first column.
+    Table,
+    /// A fitted curve: axes and a decaying line.
+    Curve,
+    /// Learning: a mortarboard.
+    Cap,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -1442,6 +1542,34 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                 Glyph::Tag => {
                     polyline(&[(1., 1.), (6., 1.), (11., 6.), (6., 11.), (1., 6.), (1., 1.)]);
                     polyline(&[(3.5, 3.5), (4.2, 3.5)]);
+                }
+                Glyph::Dice => {
+                    polyline(&[(2., 2.), (10., 2.), (10., 10.), (2., 10.), (2., 2.)]);
+                    for (x, y) in [(4.1, 4.1), (7.9, 4.1), (6., 6.), (4.1, 7.9), (7.9, 7.9)] {
+                        polyline(&[(x - 0.4, y), (x + 0.4, y)]);
+                    }
+                }
+                Glyph::Table => {
+                    polyline(&[(1.5, 2.25), (10.5, 2.25), (10.5, 9.75), (1.5, 9.75), (1.5, 2.25)]);
+                    polyline(&[(1.5, 4.9), (10.5, 4.9)]);
+                    polyline(&[(4.9, 4.9), (4.9, 9.75)]);
+                }
+                Glyph::Curve => {
+                    polyline(&[(1.9, 1.9), (1.9, 10.1), (10.1, 10.1)]);
+                    let bezier: Vec<(f32, f32)> = (0..=16)
+                        .map(|i| {
+                            let t = i as f32 / 16.;
+                            let u = 1. - t;
+                            let [p0, p1, p2, p3] = [(3., 3.4), (4.1, 7.1), (6., 8.6), (9.75, 8.8)];
+                            let at = |a: f32, b: f32, c: f32, d: f32| u * u * u * a + 3. * u * u * t * b + 3. * u * t * t * c + t * t * t * d;
+                            (at(p0.0, p1.0, p2.0, p3.0), at(p0.1, p1.1, p2.1, p3.1))
+                        })
+                        .collect();
+                    polyline(&bezier);
+                }
+                Glyph::Cap => {
+                    polyline(&[(1.3, 4.5), (6., 2.25), (10.7, 4.5), (6., 6.75), (1.3, 4.5)]);
+                    polyline(&[(3.2, 5.4), (3.2, 8.1), (4.3, 8.9), (6., 9.2), (7.7, 8.9), (8.8, 8.1), (8.8, 5.4)]);
                 }
                 Glyph::Gear => {
                     let circle = |r: f32| -> Vec<(f32, f32)> {

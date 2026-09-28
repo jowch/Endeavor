@@ -468,27 +468,28 @@ impl Workspace {
         });
 
         let open = |target: MenuTarget| self.menu.as_ref().is_some_and(|m| m.target == target);
-        let point = header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating)
-            .tooltip(tooltip("Pick cells or draw a box to ask Claude about  ⌘⇧K", &self.webview))
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)));
+        // The tip and a tooltip would fight over the web view's one hole.
+        let point_tip = self.point_tip_shows(shown);
+        let tip = |d: Stateful<Div>, text: &'static str| if point_tip { d } else { d.tooltip(tooltip(text, &self.webview)) };
+        let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating), "Pick cells or draw a box to ask Claude about  ⌘⇧K")
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
+            .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());
         let tools = (endeavor && shown).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             [
                 header_button("header-share", Glyph::Share, None, open(MenuTarget::Share(key)))
-                    .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
+                    .when(share_menu.is_none() && !point_tip, |d| d.tooltip(tooltip("Share and export", &self.webview)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.open_menu(MenuTarget::Share(key), None, window, cx);
                     }))
                     .children(share_menu.map(|menu| self.render_menu(menu, cx)))
                     .into_any_element(),
-                header_button("header-docs", Glyph::Book, None, drawer.as_deref() == Some("docs"))
-                    .tooltip(tooltip("Live docs", &self.webview))
+                tip(header_button("header-docs", Glyph::Book, None, drawer.as_deref() == Some("docs")), "Live docs")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
                     .into_any_element(),
-                header_button("header-status", Glyph::Pulse, None, drawer.as_deref() == Some("status"))
-                    .tooltip(tooltip("Status", &self.webview))
+                tip(header_button("header-status", Glyph::Pulse, None, drawer.as_deref() == Some("status")), "Status")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
                     .into_any_element(),
             ]

@@ -33,6 +33,10 @@ pub struct Settings {
     /// Julia and its open notebooks keep running after Endeavor quits; the next
     /// launch reconnects to them.
     pub keep_running: bool,
+    /// The one-time tip on how to add a file ("Two ways to add your file") is done.
+    pub file_tip_seen: bool,
+    /// The one-time tip under the notebook header's Point button is done.
+    pub point_tip_seen: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
