@@ -1,8 +1,8 @@
 // Share and ⋮ items that act in the page, through Pluto's own functions:
 // Present (window.present), Record (the Editor's recording state), Frontmatter
 // (Pluto's own dialog). Also two sheets of our own: Pluto shows its keyboard
-// shortcuts with alert() and asks for feedback with prompt(), and the web view
-// shows neither, so the list and the feedback box are drawn here (both looks).
+// shortcuts in a plain alert() and takes feedback in a small form in its
+// footer, so the list and a feedback box are drawn here (both looks).
 
 import { on } from "./bridge";
 
@@ -18,6 +18,10 @@ const css = `
   #endeavor-sheet p { margin: 10px 0 0; color: #8C8C8C; font-size: 12px; }
   #endeavor-sheet textarea { width: 100%; box-sizing: border-box; min-height: 90px; padding: 8px; border-radius: 6px;
     border: 1px solid #3A3A40; background: #151517; color: #ECECEC; font: inherit; resize: vertical; }
+  #endeavor-sheet input.email { width: 100%; box-sizing: border-box; margin-top: 8px; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid #3A3A40; background: #151517; color: #ECECEC; font: inherit; }
+  #endeavor-sheet p.said { white-space: pre-wrap; color: #B4B4B4; }
+  #endeavor-sheet button:disabled { opacity: 0.5; cursor: default; }
   #endeavor-sheet .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   #endeavor-sheet button { padding: 4px 12px; border-radius: 5px; border: 1px solid #3A3A40; background: #26262A; color: #ECECEC;
     font: 12.5px system-ui, sans-serif; cursor: pointer; }
@@ -76,23 +80,69 @@ export function showShortcuts(): void {
   done.focus();
 }
 
-/** Pluto's Instant feedback: filled into its own (hidden) form, which sends it to Pluto's developers. */
+/** How long to wait for Pluto's feedback form to say how sending went (it gives up after 5 s once loaded). */
+const FEEDBACK_WAIT_MS = 20_000;
+
+/**
+ * Hand `opinion` to Pluto's own (hidden) feedback form and resolve with what
+ * Pluto says: the message it would alert(), or null if it says nothing in
+ * `waitMs`. Its form asks for an email with prompt(), answered here with `email`.
+ */
+export function submitFeedback(opinion: string, email: string, waitMs = FEEDBACK_WAIT_MS): Promise<string | null> {
+  const form = document.querySelector<HTMLFormElement>("form#feedback");
+  const field = form?.querySelector<HTMLInputElement>("#opinion");
+  if (!form || !field) return Promise.resolve(null);
+  const w = window as any;
+  const { alert, prompt } = w;
+  return new Promise((resolve) => {
+    const done = (message: string | null) => {
+      clearTimeout(timer);
+      w.alert = alert;
+      resolve(message);
+    };
+    const timer = setTimeout(() => done(null), waitMs);
+    w.alert = (message: unknown) => done(String(message ?? ""));
+    w.prompt = () => email;
+    field.value = opinion;
+    try {
+      form.requestSubmit();
+    } finally {
+      w.prompt = prompt;
+    }
+  });
+}
+
+/** What the sheet says about Pluto's answer: its own words, under a heading that says whether it went. */
+export function feedbackOutcome(message: string | null): { sent: boolean; title: string; body: string } {
+  if (message === null) {
+    return { sent: false, title: "No answer from Pluto's feedback form", body: "It may not have been sent. Check your internet connection and try again." };
+  }
+  const sent = message.startsWith("Submitted");
+  return { sent, title: sent ? "Sent to Pluto's developers" : "Pluto couldn't send it", body: message.trim() };
+}
+
+/** Pluto's Instant feedback, sent through its own form, which sends it to Pluto's developers. */
 function showFeedback(): void {
   const el = sheet(
     `<h2>Feedback for Pluto's developers</h2><textarea placeholder="What would you tell the people who make Pluto?"></textarea>` +
-      `<p>This goes to the Pluto.jl team, not to Endeavor, anonymously.</p><div class="buttons"><button class="cancel">Cancel</button><button class="primary send">Send</button></div>`,
+      `<input class="email" type="email" placeholder="Email, if you'd like a reply (optional)">` +
+      `<p>This goes to the Pluto.jl team, not to Endeavor.</p><div class="buttons"><button class="cancel">Cancel</button><button class="primary send" disabled>Send</button></div>`,
   );
   const text = el.querySelector("textarea")!;
+  const email = el.querySelector<HTMLInputElement>("input.email")!;
+  const send = el.querySelector<HTMLButtonElement>(".send")!;
   text.focus();
+  // Pluto's form drops anything shorter.
+  text.oninput = () => (send.disabled = text.value.trim().length < 4);
   el.querySelector<HTMLButtonElement>(".cancel")!.onclick = () => el.remove();
-  el.querySelector<HTMLButtonElement>(".send")!.onclick = () => {
-    const form = document.querySelector<HTMLFormElement>("form#feedback");
-    const opinion = form?.querySelector<HTMLInputElement>("#opinion");
-    if (!form || !opinion || text.value.trim().length < 4) return el.remove();
-    opinion.value = text.value.trim();
-    form.requestSubmit();
-    el.querySelector(".card")!.innerHTML = `<h2>Sent to Pluto's developers</h2><p>Thank you.</p><div class="buttons"><button class="primary">Done</button></div>`;
-    el.querySelector<HTMLButtonElement>("button")!.onclick = () => el.remove();
+  send.onclick = async () => {
+    const card = el.querySelector(".card")!;
+    card.innerHTML = `<h2>Sending…</h2>`;
+    const outcome = feedbackOutcome(await submitFeedback(text.value.trim(), email.value.trim()));
+    card.innerHTML = `<h2>${escape(outcome.title)}</h2><p class="said">${escape(outcome.body)}</p><div class="buttons"><button class="primary">Done</button></div>`;
+    const done = card.querySelector<HTMLButtonElement>("button")!;
+    done.onclick = () => el.remove();
+    done.focus();
   };
 }
 
@@ -108,7 +158,7 @@ export function initActions(): void {
     else if (msg.name === "shortcuts") showShortcuts();
     else if (msg.name === "feedback") showFeedback();
   });
-  // Pluto's own F1 / ⌘? list is an alert(), which the web view doesn't show.
+  // Pluto's own F1 / ⌘? list is a plain alert(); this one is laid out.
   window.addEventListener(
     "keydown",
     (e) => {

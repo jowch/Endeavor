@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
+mod dialogs;
+#[cfg(target_os = "macos")]
 mod webkeys;
 mod about;
 mod agent;
@@ -43,7 +45,7 @@ mod theme;
 mod turtle;
 mod when;
 #[cfg(not(target_os = "macos"))]
-use platform::{overlay, snapshot, webkeys};
+use platform::{dialogs, overlay, snapshot, webkeys};
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
@@ -544,6 +546,7 @@ impl Workspace {
                 .expect("child webview");
             webkeys::fix_key_handling();
             webkeys::allow_pinch_zoom(&webview);
+            dialogs::show_page_dialogs(&webview);
             WebView::new(webview, window, cx)
         });
 

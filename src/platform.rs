@@ -146,3 +146,9 @@ pub mod webkeys {
     pub fn fix_key_handling() {}
     pub fn allow_pinch_zoom(_: &wry::WebView) {}
 }
+
+#[cfg(not(target_os = "macos"))]
+pub mod dialogs {
+    /// The page's alert(), confirm() and prompt(): WebKitGTK's own dialogs, untested (docs/linux.md).
+    pub fn show_page_dialogs(_: &wry::WebView) {}
+}

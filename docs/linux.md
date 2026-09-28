@@ -50,9 +50,12 @@ Screenshots of each step are in the L1 run's `shots/l1-*.png`.
     GTK is initialised at launch and its events are pumped every 8 ms from
     GPUI's loop. GPUI gives an XCB window handle, but wry accepts only Xlib, so
     `webview_parent` passes the same X window ID as an Xlib handle.
-  - **No-op stubs** stand in for `overlay` (menus over the notebook) and
-    `webkeys` (key routing and pinch zoom). Both use Objective-C class swizzling
-    and stay macOS-only.
+  - **No-op stubs** stand in for `overlay` (menus over the notebook),
+    `webkeys` (key routing and pinch zoom) and `dialogs` (the page's alert(),
+    confirm() and prompt() as macOS sheets). All three use Objective-C and stay
+    macOS-only. WebKitGTK shows the page's dialogs with its own GTK dialogs by
+    default, so they may already work here; that is untested, including
+    whether the dialog appears over the app's window.
 - **Files:** app data goes to `$XDG_DATA_HOME/endeavor` (default
   `~/.local/share/endeavor`). The log goes to `$XDG_STATE_HOME/endeavor/endeavor.log`
   (default `~/.local/state/endeavor/endeavor.log`).

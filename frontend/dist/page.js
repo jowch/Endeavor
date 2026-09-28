@@ -31,6 +31,10 @@
   #endeavor-sheet p { margin: 10px 0 0; color: #8C8C8C; font-size: 12px; }
   #endeavor-sheet textarea { width: 100%; box-sizing: border-box; min-height: 90px; padding: 8px; border-radius: 6px;
     border: 1px solid #3A3A40; background: #151517; color: #ECECEC; font: inherit; resize: vertical; }
+  #endeavor-sheet input.email { width: 100%; box-sizing: border-box; margin-top: 8px; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid #3A3A40; background: #151517; color: #ECECEC; font: inherit; }
+  #endeavor-sheet p.said { white-space: pre-wrap; color: #B4B4B4; }
+  #endeavor-sheet button:disabled { opacity: 0.5; cursor: default; }
   #endeavor-sheet .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   #endeavor-sheet button { padding: 4px 12px; border-radius: 5px; border: 1px solid #3A3A40; background: #26262A; color: #ECECEC;
     font: 12.5px system-ui, sans-serif; cursor: pointer; }
@@ -82,21 +86,55 @@
     done.onclick = () => el.remove();
     done.focus();
   }
+  var FEEDBACK_WAIT_MS = 2e4;
+  function submitFeedback(opinion, email, waitMs = FEEDBACK_WAIT_MS) {
+    const form = document.querySelector("form#feedback");
+    const field = form?.querySelector("#opinion");
+    if (!form || !field) return Promise.resolve(null);
+    const w = window;
+    const { alert, prompt } = w;
+    return new Promise((resolve) => {
+      const done = (message) => {
+        clearTimeout(timer);
+        w.alert = alert;
+        resolve(message);
+      };
+      const timer = setTimeout(() => done(null), waitMs);
+      w.alert = (message) => done(String(message ?? ""));
+      w.prompt = () => email;
+      field.value = opinion;
+      try {
+        form.requestSubmit();
+      } finally {
+        w.prompt = prompt;
+      }
+    });
+  }
+  function feedbackOutcome(message) {
+    if (message === null) {
+      return { sent: false, title: "No answer from Pluto's feedback form", body: "It may not have been sent. Check your internet connection and try again." };
+    }
+    const sent = message.startsWith("Submitted");
+    return { sent, title: sent ? "Sent to Pluto's developers" : "Pluto couldn't send it", body: message.trim() };
+  }
   function showFeedback() {
     const el = sheet(
-      `<h2>Feedback for Pluto's developers</h2><textarea placeholder="What would you tell the people who make Pluto?"></textarea><p>This goes to the Pluto.jl team, not to Endeavor, anonymously.</p><div class="buttons"><button class="cancel">Cancel</button><button class="primary send">Send</button></div>`
+      `<h2>Feedback for Pluto's developers</h2><textarea placeholder="What would you tell the people who make Pluto?"></textarea><input class="email" type="email" placeholder="Email, if you'd like a reply (optional)"><p>This goes to the Pluto.jl team, not to Endeavor.</p><div class="buttons"><button class="cancel">Cancel</button><button class="primary send" disabled>Send</button></div>`
     );
     const text = el.querySelector("textarea");
+    const email = el.querySelector("input.email");
+    const send2 = el.querySelector(".send");
     text.focus();
+    text.oninput = () => send2.disabled = text.value.trim().length < 4;
     el.querySelector(".cancel").onclick = () => el.remove();
-    el.querySelector(".send").onclick = () => {
-      const form = document.querySelector("form#feedback");
-      const opinion = form?.querySelector("#opinion");
-      if (!form || !opinion || text.value.trim().length < 4) return el.remove();
-      opinion.value = text.value.trim();
-      form.requestSubmit();
-      el.querySelector(".card").innerHTML = `<h2>Sent to Pluto's developers</h2><p>Thank you.</p><div class="buttons"><button class="primary">Done</button></div>`;
-      el.querySelector("button").onclick = () => el.remove();
+    send2.onclick = async () => {
+      const card = el.querySelector(".card");
+      card.innerHTML = `<h2>Sending\u2026</h2>`;
+      const outcome = feedbackOutcome(await submitFeedback(text.value.trim(), email.value.trim()));
+      card.innerHTML = `<h2>${escape(outcome.title)}</h2><p class="said">${escape(outcome.body)}</p><div class="buttons"><button class="primary">Done</button></div>`;
+      const done = card.querySelector("button");
+      done.onclick = () => el.remove();
+      done.focus();
     };
   }
   function initActions() {
