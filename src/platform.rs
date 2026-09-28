@@ -127,6 +127,7 @@ pub mod overlay {
 
     /// Menus over the notebook: on Linux the web view's X11 window still covers them.
     pub fn set_hole(_: &wry::WebView, _: Option<Bounds<Pixels>>) {}
+    pub fn close_hole_at(_: Bounds<Pixels>) {}
 }
 
 #[cfg(not(target_os = "macos"))]

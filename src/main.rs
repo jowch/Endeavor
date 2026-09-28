@@ -2435,6 +2435,7 @@ impl Workspace {
                 cx.stop_propagation();
                 this.open_menu(MenuTarget::Notebook(key), None, window, cx);
             }))
+            .when(menu.is_none(), |d| d.tooltip(notebook_pane::tooltip("More", &self.webview)))
             .child("⋮")
             .children(menu.map(|menu| self.render_menu(menu, cx)))
     }
@@ -2503,7 +2504,8 @@ impl Render for Workspace {
         if self.webview.read(cx).visible() != show_webview {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
-        if !self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_))) {
+        let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
+        if !menu_over_notebook && !notebook_pane::tooltip_over_notebook() {
             overlay::set_hole(self.webview.read(cx).raw(), None);
         }
         if let Some(setup) = &self.setup {
