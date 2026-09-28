@@ -136,9 +136,14 @@ export function openDrawer(next: Drawer, byItself = false): void {
   echoing = true;
   window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: next === "docs" ? "docs" : null }));
   echoing = false;
-  if (next === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
   render();
   report();
+}
+
+/** The user chose a tab. Only then does the docs search take the cursor: Pluto opens docs while someone types in a cell. */
+function pick(next: Drawer): void {
+  openDrawer(next);
+  if (next === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
 }
 
 const markFor = (state: string) =>
@@ -265,7 +270,7 @@ export function initDrawer(): void {
   body = drawer.querySelector(".status")!;
   document.body.append(drawer);
 
-  for (const b of drawer.querySelectorAll<HTMLElement>("header [data-tab]")) b.onclick = () => openDrawer(b.dataset.tab as Drawer);
+  for (const b of drawer.querySelectorAll<HTMLElement>("header [data-tab]")) b.onclick = () => pick(b.dataset.tab as Drawer);
   drawer.querySelector<HTMLElement>(".close")!.onclick = () => openDrawer(null);
 
   const grip = drawer.querySelector<HTMLElement>(".grip")!;
@@ -282,13 +287,13 @@ export function initDrawer(): void {
     grip.addEventListener("pointerup", up, { once: true });
   };
 
-  // Pluto opens Live docs itself (F1, a docs link in autocomplete or an error): open ours there.
+  // Pluto opens Live docs itself (a cell starting with ?, ? in autocomplete, a docs link in an error): open ours there.
   window.addEventListener("open_bottom_right_panel", (e) => {
     if (!echoing && (e as CustomEvent).detail === "docs" && tab !== "docs") openDrawer("docs");
   });
 
   setDrawerSource(() => tab);
-  on("drawer", (msg) => openDrawer(msg.tab));
+  on("drawer", (msg) => pick(msg.tab));
   on("context", (msg) => {
     hostName = msg.host;
     lastHtml = "";

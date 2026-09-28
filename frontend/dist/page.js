@@ -252,7 +252,7 @@
     hint.innerHTML = `<span>Click a cell or drag a box</span><span>\xB7</span><span class="done" role="button">Done</span>`;
     const bar = document.createElement("div");
     bar.id = "annotate-bar";
-    bar.innerHTML = `<span class="status"></span><textarea rows="1" placeholder="Comment for Claude\u2026" title="\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 \u2318\u21E7K exit"></textarea><button class="primary send">Send</button>`;
+    bar.innerHTML = `<span class="status"></span><textarea rows="1" placeholder="Comment for Claude\u2026" title="\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 Esc or \u2318\u21E7K exit"></textarea><button class="primary send">Send</button>`;
     document.head.append(style);
     document.body.append(frame2, box, hint, bar);
     const status = bar.querySelector(".status");
@@ -416,6 +416,11 @@
         if (e.key.toLowerCase() === "k" && e.metaKey && e.shiftKey) {
           e.preventDefault();
           return set(!active());
+        }
+        if (e.key === "Escape" && active()) {
+          e.preventDefault();
+          e.stopPropagation();
+          return set(false);
         }
         if (!active() || !bar.contains(e.target)) return;
         e.stopPropagation();
@@ -1021,9 +1026,12 @@
     echoing = true;
     window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: next === "docs" ? "docs" : null }));
     echoing = false;
-    if (next === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), 50);
     render();
     report();
+  }
+  function pick(next) {
+    openDrawer(next);
+    if (next === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), 50);
   }
   var markFor = (state) => state === "done" || state === "ready" ? `<span class="mark">\u2713</span>` : state === "failed" ? `<span class="mark failed">\u2715</span>` : state === "waiting" ? `<span class="mark waiting"></span>` : `<span class="mark busy"></span>`;
   function group(name, busy, summary, right, rows) {
@@ -1117,7 +1125,7 @@
     drawer.innerHTML = `<div class="grip"></div><header><button data-tab="docs">${book}Live docs</button><button data-tab="status">${pulse}Status</button><span class="grow"></span><button class="close" title="Close">\xD7</button></header><section class="status"></section>`;
     body = drawer.querySelector(".status");
     document.body.append(drawer);
-    for (const b of drawer.querySelectorAll("header [data-tab]")) b.onclick = () => openDrawer(b.dataset.tab);
+    for (const b of drawer.querySelectorAll("header [data-tab]")) b.onclick = () => pick(b.dataset.tab);
     drawer.querySelector(".close").onclick = () => openDrawer(null);
     const grip = drawer.querySelector(".grip");
     grip.onpointerdown = (e) => {
@@ -1137,7 +1145,7 @@
       if (!echoing && e.detail === "docs" && tab !== "docs") openDrawer("docs");
     });
     setDrawerSource(() => tab);
-    on("drawer", (msg) => openDrawer(msg.tab));
+    on("drawer", (msg) => pick(msg.tab));
     on("context", (msg) => {
       hostName = msg.host;
       lastHtml = "";
