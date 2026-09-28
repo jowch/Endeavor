@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
+    ClientCapabilities, ClientSessionCapabilities, NoticeCapabilities,
     CancelNotification, CloseSessionRequest, ContentBlock, DeleteSessionRequest, ForkSessionRequest, HttpHeader, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
     McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionConfigOption, SessionId, SessionInfo,
@@ -344,7 +345,10 @@ async fn run(
         )
         .connect_with(agent, async move |connection: ConnectionTo<Agent>| {
             let init = connection
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(ClientCapabilities::new().session(
+                    // Without it the agent writes notices ("Auto mode unavailable: …") into its reply.
+                    ClientSessionCapabilities::new().notices(NoticeCapabilities::new()),
+                )))
                 .block_task()
                 .await?;
             let steering = init

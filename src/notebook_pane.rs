@@ -5,7 +5,10 @@
 //! pane"). In the Pluto classic look the header keeps only the logo, file,
 //! host, Point and ⋮, since Pluto's own page has the rest.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -17,6 +20,7 @@ use crate::new_session::{self, Glyph, glyph};
 use crate::resources::Target;
 use crate::session::{Effect, Session, folder_name};
 use crate::settings::NotebookTheme;
+use crate::overlay;
 use crate::{MenuTarget, Workspace, platform, pluto, theme};
 
 /// An item in the notebook's ⋮ menu or its Share menu.
@@ -196,6 +200,72 @@ fn chip(icon: Option<Glyph>, text: impl Into<SharedString>, color: Rgba) -> Div 
         .text_color(color)
         .children(icon.map(|g| glyph(g, color)))
         .child(text.into())
+}
+
+/// Header buttons' tooltips showing now; while one is, the web view keeps its hole.
+static TOOLTIPS: AtomicUsize = AtomicUsize::new(0);
+
+pub fn tooltip_over_notebook() -> bool {
+    TOOLTIPS.load(Ordering::Relaxed) > 0
+}
+
+/// A header button's tooltip. It hangs over the notebook, whose web view (a
+/// native view on top of what GPUI draws) gets a hole there, as for menus.
+struct PaneTooltip {
+    text: SharedString,
+    webview: Entity<gpui_wry::WebView>,
+    hole: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+pub fn tooltip(text: &'static str, webview: &Entity<gpui_wry::WebView>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let webview = webview.clone();
+    move |_, cx| {
+        TOOLTIPS.fetch_add(1, Ordering::Relaxed);
+        cx.new(|_| PaneTooltip { text: text.into(), webview: webview.clone(), hole: Rc::default() }).into()
+    }
+}
+
+impl Render for PaneTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (webview, hole) = (self.webview.clone(), self.hole.clone());
+        let cut = canvas(
+            move |bounds, _, cx| {
+                let webview = webview.read(cx);
+                let rect = Bounds { origin: bounds.origin - webview.bounds().origin, size: bounds.size };
+                overlay::set_hole(webview.raw(), Some(rect));
+                hole.set(Some(rect));
+            },
+            |_, _, _, _| (),
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        div().p(px(8.)).child(
+            div()
+                .relative()
+                .px(px(8.))
+                .py(px(3.))
+                .rounded(px(5.))
+                .border_1()
+                .border_color(theme::composer_edge())
+                .bg(theme::bg_raised())
+                .font_family(theme::SANS)
+                .text_size(theme::size_meta())
+                .text_color(theme::text_primary())
+                .child(self.text.clone())
+                .child(cut),
+        )
+    }
+}
+
+impl Drop for PaneTooltip {
+    fn drop(&mut self) {
+        TOOLTIPS.fetch_sub(1, Ordering::Relaxed);
+        if let Some(rect) = self.hole.get() {
+            overlay::close_hole_at(rect);
+        }
+    }
 }
 
 /// A 24px header button: an icon, maybe a label; lit while its panel or menu is open.
@@ -399,12 +469,14 @@ impl Workspace {
 
         let open = |target: MenuTarget| self.menu.as_ref().is_some_and(|m| m.target == target);
         let point = header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating)
+            .tooltip(tooltip("Pick cells or draw a box to ask Claude about  ⌘⇧K", &self.webview))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());
         let tools = (endeavor && shown).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             [
                 header_button("header-share", Glyph::Share, None, open(MenuTarget::Share(key)))
+                    .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.open_menu(MenuTarget::Share(key), None, window, cx);
@@ -412,9 +484,11 @@ impl Workspace {
                     .children(share_menu.map(|menu| self.render_menu(menu, cx)))
                     .into_any_element(),
                 header_button("header-docs", Glyph::Book, None, drawer.as_deref() == Some("docs"))
+                    .tooltip(tooltip("Live docs", &self.webview))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
                     .into_any_element(),
                 header_button("header-status", Glyph::Pulse, None, drawer.as_deref() == Some("status"))
+                    .tooltip(tooltip("Status", &self.webview))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
                     .into_any_element(),
             ]

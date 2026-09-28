@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
+mod dialogs;
+#[cfg(target_os = "macos")]
 mod webkeys;
 mod about;
 mod agent;
@@ -43,7 +45,7 @@ mod theme;
 mod turtle;
 mod when;
 #[cfg(not(target_os = "macos"))]
-use platform::{overlay, snapshot, webkeys};
+use platform::{dialogs, overlay, snapshot, webkeys};
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
@@ -544,6 +546,7 @@ impl Workspace {
                 .expect("child webview");
             webkeys::fix_key_handling();
             webkeys::allow_pinch_zoom(&webview);
+            dialogs::show_page_dialogs(&webview);
             WebView::new(webview, window, cx)
         });
 
@@ -2444,6 +2447,7 @@ impl Workspace {
                 cx.stop_propagation();
                 this.open_menu(MenuTarget::Notebook(key), None, window, cx);
             }))
+            .when(menu.is_none(), |d| d.tooltip(notebook_pane::tooltip("More", &self.webview)))
             .child("⋮")
             .children(menu.map(|menu| self.render_menu(menu, cx)))
     }
@@ -2512,7 +2516,8 @@ impl Render for Workspace {
         if self.webview.read(cx).visible() != show_webview {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
-        if !self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_))) {
+        let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
+        if !menu_over_notebook && !notebook_pane::tooltip_over_notebook() {
             overlay::set_hole(self.webview.read(cx).raw(), None);
         }
         if let Some(setup) = &self.setup {

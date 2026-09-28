@@ -370,8 +370,21 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
             if rows.is_empty() { vec![Part::Line("No notebooks open".into())] } else { vec![Part::Text(rows.join("\n"))] }
         }
         "read_notebook_code" => {
-            let n = json["cell_ids"].as_array().map_or(0, Vec::len);
-            vec![Part::Line(format!("{n} cells")), Part::Code(cut(json["code"].as_str().unwrap_or_default()))]
+            let cells = celldiff::split_notebook_code(json["code"].as_str().unwrap_or_default());
+            let n = json["cell_ids"].as_array().map_or(cells.len(), Vec::len);
+            let mut parts = vec![Part::Line(format!("{n} cells"))];
+            let mut shown = 0;
+            for (i, (_, code)) in cells.iter().enumerate() {
+                if shown > MAX_CHARS {
+                    parts.push(Part::Line(format!("and {} more", cells.len() - i)));
+                    break;
+                }
+                if !code.trim().is_empty() {
+                    shown += code.len();
+                    parts.push(Part::Code(cut(code)));
+                }
+            }
+            parts
         }
         _ if json.get("mutation").is_some() => receipt(&json, &named),
         _ if json["code"].is_string() && json["cell_id"].is_string() => {
@@ -597,5 +610,9 @@ mod tests {
         assert_eq!(d.output, vec![Part::Code("x = 1".into()), Part::Text("1".into())]);
         let d = open("mcp__pluto__list_notebooks", ToolKind::Other, json!({}), out(json!([{"path": "/w/a.jl", "cell_count": 4, "execution_allowed": false}])), false, false);
         assert_eq!(d.output, vec![Part::Text("/w/a.jl · 4 cells · safe preview".into())]);
+        let code = "# ╔═╡ 11111111-2222-4333-8444-555555555555\nusing Plots\n\n# ╔═╡ 66666666-7777-4888-9999-aaaaaaaaaaaa\n# (empty)\n\n# ╔═╡ 77777777-7777-4888-9999-aaaaaaaaaaaa\nx = 1\ny = 2";
+        let ids = ["11111111-2222-4333-8444-555555555555", "66666666-7777-4888-9999-aaaaaaaaaaaa", "77777777-7777-4888-9999-aaaaaaaaaaaa"];
+        let d = open("mcp__pluto__read_notebook_code", ToolKind::Other, json!({"notebook_id": "n"}), out(json!({"cell_ids": ids, "code": code})), false, false);
+        assert_eq!(d.output, vec![Part::Line("3 cells".into()), Part::Code("using Plots".into()), Part::Code("x = 1\ny = 2".into())]);
     }
 }

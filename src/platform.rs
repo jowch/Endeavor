@@ -127,6 +127,7 @@ pub mod overlay {
 
     /// Menus over the notebook: on Linux the web view's X11 window still covers them.
     pub fn set_hole(_: &wry::WebView, _: Option<Bounds<Pixels>>) {}
+    pub fn close_hole_at(_: Bounds<Pixels>) {}
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -145,4 +146,10 @@ pub mod snapshot {
 pub mod webkeys {
     pub fn fix_key_handling() {}
     pub fn allow_pinch_zoom(_: &wry::WebView) {}
+}
+
+#[cfg(not(target_os = "macos"))]
+pub mod dialogs {
+    /// The page's alert(), confirm() and prompt(): WebKitGTK's own dialogs, untested (docs/linux.md).
+    pub fn show_page_dialogs(_: &wry::WebView) {}
 }

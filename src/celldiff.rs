@@ -96,7 +96,7 @@ impl CellCodes {
 }
 
 /// Per-cell code from `read_notebook_code`, undoing its markdown/empty markers.
-fn split_notebook_code(code: &str) -> Vec<(String, String)> {
+pub fn split_notebook_code(code: &str) -> Vec<(String, String)> {
     code.split(MARKER)
         .filter_map(|block| {
             let (id, body) = block.split_once('\n').unwrap_or((block, ""));

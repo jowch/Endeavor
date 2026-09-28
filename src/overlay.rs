@@ -191,3 +191,23 @@ pub fn set_hole(webview: &wry::WebView, hole: Option<Bounds<Pixels>>) {
         let _: () = msg_send![class!(CATransaction), commit];
     }
 }
+
+/// Close the hole if it's still the one at `hole` (a tooltip's, say, and not
+/// a menu's opened since).
+pub fn close_hole_at(hole: Bounds<Pixels>) {
+    let rect = CGRect::new(f64::from(hole.origin.x), f64::from(hole.origin.y), f64::from(hole.size.width), f64::from(hole.size.height));
+    let Some(open) = *HOLE.lock().unwrap() else { return };
+    if open.rect != rect {
+        return;
+    }
+    *HOLE.lock().unwrap() = None;
+    unsafe {
+        let layer: *mut AnyObject = msg_send![open.view as *mut AnyObject, layer];
+        if !layer.is_null() {
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+            let _: () = msg_send![layer, setMask: std::ptr::null_mut::<AnyObject>()];
+            let _: () = msg_send![class!(CATransaction), commit];
+        }
+    }
+}
