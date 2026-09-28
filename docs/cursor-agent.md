@@ -54,11 +54,12 @@ In order of importance:
 1. **Tool results are never sent.**
    - A finished MCP call's `rawOutput` is only `{"success": true}` or
      `{"rejected": true}`.
-   - The call starts titled "MCP: tool". An update renames it "pluto:
-     edit_cell" and sets `rawInput` to `{providerIdentifier, toolName, args}`.
-   - Endeavor recognises pluto calls by Claude's `mcp__pluto__<tool>` title in
-     `celldiff.rs`, `runs.rs`, `details.rs` and `session.rs`
-     (`on_tool_update`). So under Cursor there are no cell diffs, no run
+   - The call starts titled "MCP: tool". An update renames it
+     "<server>: edit_cell" (then "pluto: edit_cell"; the server is now named
+     `notebook`) and sets `rawInput` to `{providerIdentifier, toolName, args}`.
+   - Endeavor recognises notebook tool calls by Claude's
+     `mcp__notebook__<tool>` title (`celldiff::notebook_tool`, used in
+     `runs.rs`, `details.rs` and `session.rs`'s `on_tool_update`). So under Cursor there are no cell diffs, no run
      summaries and no tool details. The pane also doesn't follow a notebook
      the agent opens.
    - **Fix.** Identify tools by `rawInput.toolName` as well as by the title.
@@ -78,18 +79,19 @@ In order of importance:
    - Cursor always loads the user's global `~/.claude/skills` and
      `~/.cursor/skills-cursor`. Endeavor has no way to keep the user's personal
      setup off, as it can for Claude.
-   - **Preferred fix.** Deliver the skills through the pluto MCP server, which
+   - **Preferred fix.** Deliver the skills through the notebook MCP server, which
      works for any agent. That could be MCP `instructions`, or a guide tool
      that the model is told to call first. Whether Cursor passes
      `instructions` to the model is untested.
    - **Also worth doing.** Ask Cursor to honour `--plugin-dir` under `acp`.
 3. **Every notebook call asks for permission, reads included.**
    - The card offers Allow once, Allow always and Reject. Its title is like
-     "pluto-read_cell: read_cell", and its content is the arguments as JSON.
+     "pluto-read_cell: read_cell" (server name at the time; now `notebook`),
+     and its content is the arguments as JSON.
    - Reject works.
    - Allow always likely writes the user's global Cursor config, so Endeavor
      should never answer it for the user.
-   - Endeavor could answer Allow once to read-only pluto tools itself.
+   - Endeavor could answer Allow once to read-only notebook tools itself.
 4. **Plan approval is missing.**
    - In plan mode Cursor sends a standard `plan` update. It then sends its own
      request, `cursor/create_plan`, with the plan's name, overview and
@@ -137,7 +139,7 @@ In order of importance:
    - Run one ACP connection per agent.
 2. **An agent picker on the new-session panel.**
 3. **Cursor-specific handling.**
-   - Auto-approve read-only pluto tools.
+   - Auto-approve read-only notebook tools.
    - Show `cursor/create_plan` as a plan-approval card.
    - A model picker that warns it changes the Cursor CLI default.
    - Split joined user messages on replay.
