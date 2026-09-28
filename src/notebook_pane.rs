@@ -896,7 +896,7 @@ impl Workspace {
     /// None shows the web view. Our pages, not Pluto's welcome or "Can't find a
     /// file here": what happened, and at most two things to do.
     pub fn notebook_page(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if let Some(pane) = self.host_pane(&session.place.host, cx) {
+        if let Some(pane) = self.host_pane(&session.place.host, true, cx) {
             return Some(pane);
         }
         let key = session.key;

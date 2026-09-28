@@ -997,12 +997,14 @@ impl Workspace {
         }
     }
 
-    /// The notebook pane while `host` isn't ready: its state, and what to do about it.
-    pub fn host_pane(&self, host: &HostId, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The notebook pane while `host` isn't ready: its state, and what to do
+    /// about it. `start`: Reconnect also starts Julia, as a session needs; the
+    /// new-session screen only browses the host's files.
+    pub fn host_pane(&self, host: &HostId, start: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let connection = self.connections.get(host);
         let status = connection.map_or(Status::Connecting, |c| c.status.clone());
         let name = self.hosts.name(host);
-        let action = |id: &'static str, label: &'static str, host: HostId, start: bool| {
+        let action = |id: &'static str, label: &'static str, host: HostId, start_julia: bool| {
             div()
                 .id(id)
                 .role(Role::Button)
@@ -1014,10 +1016,10 @@ impl Workspace {
                 .text_color(theme::text_primary())
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if start {
+                    if start_julia {
                         this.start_host(&host, cx);
                     } else {
-                        this.connect_host(&host, true, cx);
+                        this.connect_host(&host, start, cx);
                     }
                 }))
         };

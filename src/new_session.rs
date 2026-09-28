@@ -526,8 +526,8 @@ impl Workspace {
     }
 
     /// The draft host's connection trouble, in plain words, with Retry (and
-    /// what else might help: `fixes`). This is the one place it's spelled out
-    /// on this screen; the sidebar only says Julia isn't running.
+    /// what else might help: `fixes`), beside the composer; the notebook pane
+    /// shows it too, and the sidebar only says Julia isn't running.
     fn connection_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let host = self.draft.host.clone();
         let name = self.hosts.name(&host);
@@ -1034,14 +1034,16 @@ impl Workspace {
     }
 
     /// The notebook pane before the session starts (the web view is hidden).
-    pub fn render_draft_pane(&self) -> AnyElement {
+    pub fn render_draft_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+        let host = self.draft.host.clone();
+        let unreachable = matches!(self.status(&host), Some(Status::Failed(_) | Status::Replaced));
+        let Some(folder) = self.draft.folder.as_ref().filter(|_| !unreachable) else {
+            return self.host_pane(&host, false, cx).unwrap_or_else(|| turtle_pane().into_any_element());
+        };
         match (&self.draft.notebook, &self.draft.preview) {
             (NotebookChoice::New, _) => {
                 let line = div().flex().items_baseline().text_color(theme::text_muted());
-                let line = match &self.draft.folder {
-                    Some(folder) => line.child("A new notebook will be created in ").child(file_name(folder_name(folder))).child(" when you start."),
-                    None => line.child(format!("Connecting to {}…", self.hosts.name(&self.draft.host))),
-                };
+                let line = line.child("A new notebook will be created in ").child(file_name(folder_name(folder))).child(" when you start.");
                 turtle_pane().child(line).into_any_element()
             }
             (NotebookChoice::Existing(_), None) => div().into_any_element(),

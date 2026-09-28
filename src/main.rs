@@ -2557,7 +2557,7 @@ impl Render for Workspace {
             Some(ix) => d.child(self.notebook_header(ix, stand_in.is_none(), cx)),
         });
         let notebook = match (active, stand_in) {
-            (None, _) => self.render_draft_pane(),
+            (None, _) => self.render_draft_pane(cx),
             (Some(_), Some(stand_in)) => stand_in,
             (Some(_), None) => self.webview.clone().into_any_element(),
         };
