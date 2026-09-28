@@ -147,7 +147,8 @@ sends the launcher and the folder's name in the bootstrap's preamble.
 ```
 
 **Process (plain server).** The helper starts the runtime with `setsid`/`nohup`:
-`endeavor-remote core` ([runtime-core.md](runtime-core.md)), which starts
+`endeavor-remote core` ([runtime-core.md](runtime-core.md); on This Mac, where
+the app is the helper, `endeavor --helper core`), which starts
 `julia boot.jl` as its child in the same process group, serves the bridge port
 itself and writes `runtime.json` (its own pid and bridge port; Pluto's port is
 Julia's). A runtime an older helper started (Julia alone, `runtime.json` from

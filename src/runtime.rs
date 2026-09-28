@@ -252,8 +252,9 @@ fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     Ok(removed)
 }
 
-/// The runtime runs in its own session, so its pid is its group's: end the
-/// group (Julia and its notebook workers), politely first.
+/// The runtime runs in its own session, so its recorded pid (the core's, or
+/// Julia's for a runtime an older helper started) is its group's: end the
+/// group (the core, Julia and its notebook workers), politely first.
 fn stop_group(pid: i32) {
     // SAFETY (both): plain syscalls; a group that's gone only returns ESRCH.
     let alive = || unsafe { libc::kill(-pid, 0) } == 0;
@@ -677,7 +678,7 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "x").unwrap();
     };
-    // A recorded runtime that still runs, in its own group like boot.jl's.
+    // A recorded runtime that still runs, in its own group like the core's (with Julia in it).
     let mut julia = Command::new("sleep").arg("600").process_group(0).spawn().unwrap();
     std::fs::create_dir_all(app.join("runtime")).unwrap();
     std::fs::write(app.join("runtime/runtime.json"), format!(r#"{{"pid": {}}}"#, julia.id())).unwrap();
