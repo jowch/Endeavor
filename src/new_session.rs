@@ -1251,11 +1251,16 @@ pub(crate) enum Glyph {
 
 /// A 12px line icon (the app ships no icon set).
 pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
+    glyph_at(glyph, color, 1.)
+}
+
+/// A line icon drawn `scale` times its 12px size (the stroke stays 1px).
+pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElement {
     const SIZE: f32 = 12.;
     canvas(
         |_, _, _| (),
         move |b, _, window, _| {
-            let at = |x: f32, y: f32| point(b.left() + px(x), b.top() + px(y));
+            let at = |x: f32, y: f32| point(b.left() + px(x * scale), b.top() + px(y * scale));
             let mut path = PathBuilder::stroke(px(1.));
             let mut polyline = |points: &[(f32, f32)]| {
                 for (i, &(x, y)) in points.iter().enumerate() {
@@ -1445,5 +1450,5 @@ pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
         },
     )
     .flex_shrink_0()
-    .size(px(SIZE))
+    .size(px(SIZE * scale))
 }

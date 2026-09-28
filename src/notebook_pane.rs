@@ -530,10 +530,12 @@ impl Workspace {
     pub fn fix_package(&mut self, notebook: String, name: String, log: String, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
         let text = format!("The package {name} failed to install or precompile, so the cells that use it can't run. Find out why and fix it.");
-        let context = format!("{text}\n\nPkg's log for {name} (its end):\n```\n{log}\n```");
-        let block = agent_client_protocol::schema::v1::ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(context));
+        // "[Endeavor]" marks it as context, so a reopened session's transcript shows only the words.
+        let context = format!("[Endeavor] Pkg's log for {name} (its end), from the notebook's Status:\n```\n{log}\n```");
+        use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+        let blocks = vec![ContentBlock::Text(TextContent::new(context)), ContentBlock::Text(TextContent::new(text.clone()))];
         let Some(session) = self.session_mut(key) else { return };
-        let effects = session.submit(crate::outbox::Queued::new(text, Vec::new(), vec![block]), false);
+        let effects = session.submit(crate::outbox::Queued::new(text, Vec::new(), blocks), false);
         self.apply_effects(key, effects, cx);
     }
 
@@ -837,9 +839,9 @@ impl Workspace {
                     .items_center()
                     .justify_center()
                     .gap(px(10.))
-                    .child(div().size(px(22.)).flex().items_center().justify_center().child(glyph(Glyph::FileX, theme::text_muted())))
+                    .child(new_session::glyph_at(Glyph::FileX, theme::text_muted(), 2.))
                     .child(page_title(div().flex().gap(px(6.)).child("Can't find").child(mono(file))))
-                    .child(div().font_family(theme::MONO).text_size(theme::size_meta()).text_color(theme::text_muted()).child(crate::new_session::tilde(Path::new(&path))))
+                    .child(div().max_w(px(460.)).px_4().text_center().font_family(theme::MONO).text_size(theme::size_meta()).text_color(theme::text_muted()).child(new_session::tilde(Path::new(&path))))
                     .child(page_text("Nothing is there anymore. It may have been moved, renamed or deleted outside Endeavor."))
                     .child(
                         div()
