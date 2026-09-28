@@ -504,7 +504,12 @@ impl Workspace {
     fn follow(&mut self, host: HostId, id: u64, mut rx: futures::channel::mpsc::UnboundedReceiver<Update>, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             while let Some(update) = rx.next().await {
-                if this.update(cx, |this, cx| this.on_update(host.clone(), id, update, cx)).is_err() {
+                let applied = this.update(cx, |this, cx| {
+                    this.on_update(host.clone(), id, update, cx);
+                    // A server's sessions wait while it reconnects, and go once it's back.
+                    this.sync_holds(cx);
+                });
+                if applied.is_err() {
                     break;
                 }
             }

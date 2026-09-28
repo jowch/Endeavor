@@ -744,10 +744,10 @@ impl Workspace {
             .line_height(px(17.))
             .text_color(theme::text_muted())
             .child(glyph(Glyph::Clock, theme::text_muted()))
-            .child(if self.offline_since().is_some() {
-                "Not answered yet. It sends again when you're back."
-            } else {
+            .child(if self.account.signed_out() {
                 "Not answered yet. It sends again once you sign in."
+            } else {
+                "Not answered yet. It sends again when you're back."
             })
             .into_any_element()
     }
@@ -757,12 +757,18 @@ impl Workspace {
         self.account.signed_out() || self.offline_since().is_some()
     }
 
-    /// Hold every session's messages while Claude can't be reached; send what
-    /// waited once it can.
+    /// A session's messages wait: Claude can't be reached, or its server is
+    /// reconnecting (its tools would fail).
+    pub fn holds(&self, session: &crate::session::Session) -> bool {
+        self.out_of_reach() || self.read_only(session)
+    }
+
+    /// Hold each session's messages while they can't go; send what waited once
+    /// they can.
     pub fn sync_holds(&mut self, cx: &mut Context<Self>) {
-        let hold = self.out_of_reach();
+        let holds: Vec<bool> = self.sessions.iter().map(|s| self.holds(s)).collect();
         let mut sends = Vec::new();
-        for session in &mut self.sessions {
+        for (session, hold) in self.sessions.iter_mut().zip(holds) {
             if hold {
                 session.hold();
             } else {

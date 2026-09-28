@@ -203,10 +203,16 @@ impl Workspace {
 
     /// The queue's heading while its messages wait for Claude to be reachable.
     pub fn render_queue_heading(&self, session: &Session) -> Option<AnyElement> {
-        if !self.out_of_reach() || session.outbox.items.is_empty() {
+        if !self.holds(session) || session.outbox.items.is_empty() {
             return None;
         }
-        let when = if self.offline_since.is_some() { "These send in order when you're back." } else { "These send in order once you sign in." };
+        let when = if self.offline_since.is_some() {
+            "These send in order when you're back.".to_owned()
+        } else if self.account.signed_out() {
+            "These send in order once you sign in.".to_owned()
+        } else {
+            format!("These send in order once {} is back.", self.hosts.name(&session.place.host))
+        };
         Some(
             div()
                 .flex()

@@ -826,7 +826,7 @@ impl Workspace {
             ));
         }
         session.start_context = (!context.is_empty()).then(|| ContentBlock::Text(TextContent::new(context.join("\n\n"))));
-        if self.out_of_reach() {
+        if self.holds(&session) {
             session.hold();
         }
         self.sessions.push(session);
@@ -901,7 +901,7 @@ impl Workspace {
         session.untitled = untitled;
         session.run_without_asking = self.settings.run_without_asking;
         session.resources = resources;
-        if self.out_of_reach() {
+        if self.holds(&session) {
             session.hold();
         }
         self.sessions.push(session);
