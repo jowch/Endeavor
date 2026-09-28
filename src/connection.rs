@@ -73,6 +73,11 @@ pub struct Connection {
     pub steps: Steps,
     /// Open notebooks (id, path) as last seen, to reopen after a restart.
     pub last_notebooks: Vec<(String, String)>,
+    /// The notebooks the user had let run when they restarted or repaired
+    /// Julia, with each file's modification time then: they reopen running if
+    /// the file is unchanged. A crash leaves this empty, so its notebooks
+    /// reopen in safe preview.
+    resume: Vec<(String, f64)>,
     /// Connects and starts that failed in a row, across reconnects.
     pub failures: u32,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
@@ -179,6 +184,7 @@ impl Connection {
             cancel: Arc::default(),
             steps,
             last_notebooks: Vec::new(),
+            resume: Vec::new(),
             failures: 0,
             notebooks: serde_json::Value::Null,
             cells: serde_json::Value::Null,
@@ -256,6 +262,7 @@ impl Workspace {
         // A reconnect keeps what the runtime last had open, to reopen it.
         if let Some(old) = self.connections.remove(host) {
             connection.last_notebooks = old.last_notebooks;
+            connection.resume = old.resume;
             connection.failures = old.failures;
         }
         let cancel = connection.cancel.clone();
@@ -335,16 +342,22 @@ impl Workspace {
         let host = HostId::ThisMac;
         let Some(connection) = self.connections.get_mut(&host) else { return self.connect_host(&host, true, cx) };
         let Some(channel) = connection.channel.clone().filter(|_| connection.status == Status::Ready) else { return };
+        let running = connection.bridge().map(|bridge| (bridge, connection.notebooks.clone()));
         connection.forget_runtime();
         connection.status = Status::Starting;
         connection.steps = Steps::new("Stopping Julia");
         self.status = "Restarting Julia…".into();
-        let stop = cx.background_executor().spawn(async move { channel.stop() });
+        let stop = cx.background_executor().spawn(async move {
+            let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
+            channel.stop();
+            resume
+        });
         cx.spawn(async move |this, cx| {
-            stop.await;
+            let resume = stop.await;
             let _ = this.update(cx, |this, cx| {
                 if let Some(connection) = this.connections.get_mut(&host) {
                     connection.status = Status::Died(String::new());
+                    connection.resume = resume;
                 }
                 this.start_host(&host, cx);
             });
@@ -398,30 +411,32 @@ impl Workspace {
     /// (`runtime::clear_state`), then connect and start again.
     pub fn repair_local(&mut self, cx: &mut Context<Self>) {
         let host = HostId::ThisMac;
-        let channel = match self.connections.get_mut(&host) {
+        let (channel, running) = match self.connections.get_mut(&host) {
             // Still installing Julia: nothing to repair yet.
             Some(c) if c.status == Status::Connecting => return,
             Some(c) => {
+                let running = c.bridge().map(|bridge| (bridge, c.notebooks.clone()));
                 // Updates from the connect or start under way are dropped from now on.
                 c.id = next_connect_id();
                 c.forget_runtime();
                 c.status = Status::Starting;
                 c.steps = Steps::new("Repairing the runtime");
                 c.stopping = false;
-                c.channel.take()
+                (c.channel.take(), running)
             }
-            None => None,
+            None => (None, None),
         };
         self.status = "Repairing the runtime…".into();
         let work = cx.background_executor().spawn(async move {
+            let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(channel) = channel {
                 channel.stop();
                 channel.detach();
             }
-            runtime::clear_state()
+            (runtime::clear_state(), resume)
         });
         cx.spawn(async move |this, cx| {
-            let cleared = work.await;
+            let (cleared, resume) = work.await;
             let _ = this.update(cx, |this, cx| {
                 match cleared {
                     Ok(paths) => eprintln!("Repair runtime cleared {paths:?}"),
@@ -430,6 +445,7 @@ impl Workspace {
                 if let Some(connection) = this.connections.get_mut(&host) {
                     connection.status = Status::Failed(String::new());
                     connection.failures = 0;
+                    connection.resume = resume;
                 }
                 this.connect_host(&host, true, cx);
             });
@@ -700,11 +716,13 @@ impl Workspace {
     /// Reopen the notebooks that were open in `host`'s last runtime (unless this
     /// one has them open already, as after a reconnect), and point each session
     /// (and the pane) at the reopened copy. Pluto saves on every change, so the
-    /// files are current.
+    /// files are current. They open in safe preview, except the ones in
+    /// `resume` whose files haven't changed since.
     fn reopen_notebooks(&mut self, host: &HostId, cx: &mut Context<Self>) {
-        let Some(connection) = self.connections.get(host) else { return };
+        let Some(connection) = self.connections.get_mut(host) else { return };
         let Some(bridge) = connection.bridge() else { return };
         let reattached = connection.runtime.as_ref().is_some_and(|r| r.reattached);
+        let resume = std::mem::take(&mut connection.resume);
         let before = connection.last_notebooks.clone();
         if before.is_empty() {
             return;
@@ -718,15 +736,21 @@ impl Workspace {
                 .filter_map(|path| {
                     let result = match open(&path) {
                         Some(nb) => nb,
-                        None => pluto::call_tool(&bridge, "open_notebook", serde_json::json!({ "path": path })).ok()?,
+                        None => {
+                            let run = resume.iter().any(|(p, modified)| *p == path && pluto::file_info(&bridge, &path) == Ok(Some(*modified)));
+                            pluto::call_tool(&bridge, "open_notebook", serde_json::json!({ "path": path, "run_notebook": run })).ok()?
+                        }
                     };
-                    Some((result["notebook_id"].as_str()?.to_owned(), path))
+                    let previewed = result["execution_allowed"] == false;
+                    Some((result["notebook_id"].as_str()?.to_owned(), path, previewed))
                 })
                 .collect::<Vec<_>>()
         });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             let reopened = reopen.await;
+            let previewed = reopened.iter().filter(|(.., previewed)| *previewed).count();
+            let reopened: Vec<(String, String)> = reopened.into_iter().map(|(id, path, _)| (id, path)).collect();
             let _ = this.update(cx, |this, cx| {
                 let new_id = |old: &str| {
                     let path = before.iter().find(|(id, _)| id == old).map(|(_, p)| p)?;
@@ -739,7 +763,11 @@ impl Workspace {
                     this.load_notebook(&host, &id, cx);
                 }
                 if host == HostId::ThisMac && !reopened.is_empty() && !reattached {
-                    this.status = format!("Julia restarted; reopened {} notebook(s) in safe preview.", reopened.len()).into();
+                    this.status = match previewed {
+                        0 => format!("Julia restarted; reopened {} notebook(s).", reopened.len()),
+                        n => format!("Julia restarted; reopened {} notebook(s), {n} in safe preview.", reopened.len()),
+                    }
+                    .into();
                 }
                 if let Some(connection) = this.connections.get_mut(&host) {
                     connection.last_notebooks = reopened;
@@ -1038,6 +1066,13 @@ impl Workspace {
         };
         Some(pane.into_any_element())
     }
+}
+
+/// Of the open notebooks (`list_notebooks` shape), the ones the user has let
+/// run, with each file's modification time now.
+fn running_files(bridge: &Bridge, notebooks: &serde_json::Value) -> Vec<(String, f64)> {
+    let allowed = notebooks.as_array().into_iter().flatten().filter(|nb| nb["execution_allowed"] == true);
+    allowed.filter_map(|nb| nb["path"].as_str()).filter_map(|path| Some((path.to_owned(), pluto::file_info(bridge, path).ok()??))).collect()
 }
 
 /// A new `Connection::id`.
