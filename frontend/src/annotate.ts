@@ -71,7 +71,7 @@ export function initAnnotate(): void {
   hint.innerHTML = `<span>Click a cell or drag a box</span><span>·</span><span class="done" role="button">Done</span>`;
   const bar = document.createElement("div");
   bar.id = "annotate-bar";
-  bar.innerHTML = `<span class="status"></span><textarea rows="1" placeholder="Comment for Claude…" title="↩ send · ⌘↩ send now · ⇧↩ newline · Esc or ⌘⇧K exit"></textarea><button class="primary send">Send</button>`;
+  bar.innerHTML = `<span class="status"></span><textarea rows="1" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Comment for Claude…" title="↩ send · ⌘↩ send now · ⇧↩ newline · Esc or ⌘⇧K exit"></textarea><button class="primary send">Send</button>`;
   document.head.append(style);
   document.body.append(frame, box, hint, bar);
 
