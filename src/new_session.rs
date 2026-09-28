@@ -525,21 +525,19 @@ impl Workspace {
             )
     }
 
-    /// The draft host's connection trouble, in plain words, with Retry (and
-    /// what else might help: `fixes`), beside the composer; the notebook pane
-    /// shows it too, and the sidebar only says Julia isn't running.
+    /// Julia on the draft host stopping, in plain words, with Start Julia (and
+    /// what else might help: `fixes`), beside the composer. A failed or
+    /// taken-over connection shows in the notebook pane instead, with Reconnect.
     fn connection_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let host = self.draft.host.clone();
         let name = self.hosts.name(&host);
-        let (text, reason, retry) = match self.status(&host)? {
-            Status::Failed(reason) => (format!("Couldn't connect to {name}. {reason}"), reason.clone(), "Retry"),
-            Status::Replaced => (format!("Another connection took over {name}."), String::new(), "Retry"),
-            Status::Died(reason) if !reason.is_empty() => (format!("Julia on {name} stopped. {reason}"), reason.clone(), "Start Julia"),
+        let reason = match self.status(&host)? {
+            Status::Died(reason) if !reason.is_empty() => reason.clone(),
             _ => return None,
         };
+        let text = format!("Julia on {name} stopped. {reason}");
         let fixes = self.fixes(&host, &reason);
         let repair = fixes.contains(&crate::connection::Fix::Repair);
-        let died = matches!(self.status(&host), Some(Status::Died(_)));
         Some(
             div()
                 .flex()
@@ -554,7 +552,7 @@ impl Workspace {
                         .child(div().flex_1().min_w_0().text_color(theme::danger()).child(text))
                         .child(
                             div()
-                                .id("retry-connect")
+                                .id("start-julia")
                                 .role(Role::Button)
                                 .flex_shrink_0()
                                 .px(px(8.))
@@ -562,14 +560,8 @@ impl Workspace {
                                 .cursor_pointer()
                                 .bg(theme::bg_raised())
                                 .text_color(theme::text_primary())
-                                .child(retry)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if died {
-                                        this.start_host(&host, cx);
-                                    } else {
-                                        this.connect_host(&host, false, cx);
-                                    }
-                                })),
+                                .child("Start Julia")
+                                .on_click(cx.listener(move |this, _, _, cx| this.start_host(&host, cx))),
                         )
                         .children(fixes.into_iter().map(|fix| self.fix_button(fix, true, cx))),
                 )
