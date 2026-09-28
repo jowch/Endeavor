@@ -17,7 +17,7 @@ use gpui_component::input::{InputEvent, Textarea};
 use wire::files::{Reply, Request};
 
 use crate::attach::{self, Attachment, Icon};
-use crate::hosts::Place;
+use crate::hosts::{HostId, Place};
 use crate::new_session::{Glyph, glyph};
 use crate::session::{self, Entry, ModeChoice, Session};
 use crate::{Workspace, context_ring, theme, tool_button};
@@ -181,7 +181,13 @@ fn preview_body(attachment: &Attachment) -> Div {
         Attachment::Region { png, .. } => thumbnail("image/png", png),
         Attachment::Image { mime, bytes, .. } => thumbnail(mime, bytes),
         Attachment::Text { text, .. } => text_panel(text, 8, theme::text_secondary()),
+        Attachment::Upload { .. } => note("A copy goes into this session's folder when you send, so Claude and the notebook can use it."),
+        Attachment::Saved { .. } => note("Saved in this session's folder."),
     }
+}
+
+fn note(text: &'static str) -> Div {
+    div().text_size(theme::size_meta()).text_color(theme::text_secondary()).child(text)
 }
 
 fn thumbnail(mime: &str, bytes: &[u8]) -> Div {
@@ -201,6 +207,10 @@ fn preview_heading(attachment: &Attachment) -> String {
         },
         Attachment::Image { name, bytes, .. } => format!("{name} · {}", attach::size_text(bytes.len() as u64)),
         Attachment::Text { name, text } => format!("{name} · {}", attach::size_text(text.len() as u64)),
+        Attachment::Upload { source, size } => {
+            format!("{} · {}", source.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(), attach::size_text(*size))
+        }
+        Attachment::Saved { path } => path.clone(),
     }
 }
 
@@ -324,6 +334,18 @@ impl Workspace {
             Some(Files::Ready(paths)) => attach::fuzzy(query, paths, MENTIONS_SHOWN).into_iter().map(str::to_owned).collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// Put an @ mention of `path` in the text at the cursor, as its own word.
+    fn insert_mention(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.composer.mentions.contains(&path) {
+            self.composer.mentions.push(path.clone());
+        }
+        let text = self.input.read(cx).value().to_string();
+        let cursor = self.input.read(cx).cursor();
+        let after_word = text.get(..cursor).and_then(|t| t.chars().next_back()).is_some_and(|c| !c.is_whitespace());
+        let token = format!("{}{} ", if after_word { " " } else { "" }, attach::token(&path));
+        self.input.update(cx, |s, cx| s.replace(token, window, cx));
     }
 
     /// Put the picked path in the text where "@query" was.
@@ -456,29 +478,40 @@ impl Workspace {
     }
 
     /// ⌘U and "+" → "Add files or photos": the native picker, several at once.
-    pub fn add_files(&mut self, _: &AddFiles, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn add_files(&mut self, _: &AddFiles, window: &mut Window, cx: &mut Context<Self>) {
         self.composer.menu = None;
         let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach".into()) });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picked.await {
-                let _ = this.update(cx, |this, cx| this.attach_paths(paths, cx));
+                let _ = this.update_in(cx, |this, window, cx| this.attach_paths(paths, window, cx));
             }
         })
         .detach();
         cx.notify();
     }
 
-    /// Read files into chips (off the main thread); refusals say why.
-    pub fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let read = cx.background_spawn(async move { paths.iter().map(|p| attach::upload_file(p)).collect::<Vec<_>>() });
-        cx.spawn(async move |this, cx| {
+    /// The folder on this Mac that added files are copied into (or mentioned
+    /// from): the session's, or the draft's. None on a server.
+    fn local_folder(&self) -> Option<PathBuf> {
+        self.composer_place().filter(|p| p.host == HostId::ThisMac).map(|p| p.path)
+    }
+
+    /// Added files become chips or @ mentions (`attach::add_file`, off the
+    /// main thread); refusals say why.
+    pub fn attach_paths(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        let folder = self.local_folder();
+        let read = cx.background_spawn(async move { paths.iter().map(|p| attach::add_file(p, folder.as_deref())).collect::<Vec<_>>() });
+        cx.spawn_in(window, async move |this, cx| {
             let results = read.await;
-            let _ = this.update(cx, |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
                 let mut refused = Vec::new();
                 for result in results {
                     match result {
-                        Ok(attachment) => {
-                            this.composer.attachments.push(attachment);
+                        Ok(added) => {
+                            match added {
+                                attach::Added::Chip(attachment) => this.composer.attachments.push(attachment),
+                                attach::Added::Mention(path) => this.insert_mention(path, window, cx),
+                            }
                             this.file_tip_done();
                         }
                         Err(why) => refused.push(why),
@@ -492,7 +525,7 @@ impl Workspace {
     }
 
     /// A pasted image (or copied files) becomes a chip; text pastes as usual.
-    pub fn paste_into_composer(&mut self, item: &ClipboardItem, cx: &mut Context<Self>) -> bool {
+    pub fn paste_into_composer(&mut self, item: &ClipboardItem, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut taken = false;
         for entry in item.entries() {
             match entry {
@@ -515,7 +548,7 @@ impl Workspace {
                 }
                 ClipboardEntry::ExternalPaths(paths) => {
                     taken = true;
-                    self.attach_paths(paths.paths().to_vec(), cx);
+                    self.attach_paths(paths.paths().to_vec(), window, cx);
                 }
                 ClipboardEntry::String(_) => {}
             }
@@ -624,8 +657,8 @@ impl Workspace {
         let chips: Vec<_> = chips.collect();
         let send = self.send_button(empty, busy, session.is_some(), cx);
         let weak = cx.entity().downgrade();
-        let text_box = Textarea::new(&self.input).appearance(false).text_size(theme::size_body()).on_paste(move |item, _, cx| {
-            weak.update(cx, |this, cx| this.paste_into_composer(item, cx)).unwrap_or(false)
+        let text_box = Textarea::new(&self.input).appearance(false).text_size(theme::size_body()).on_paste(move |item, window, cx| {
+            weak.update(cx, |this, cx| this.paste_into_composer(item, window, cx)).unwrap_or(false)
         });
         let token_marks = self.token_marks(cx);
         let the_box = div()
@@ -642,7 +675,7 @@ impl Workspace {
             .border_1()
             .border_color(theme::composer_edge())
             .bg(theme::bg_card())
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.attach_paths(paths.paths().to_vec(), cx)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.attach_paths(paths.paths().to_vec(), window, cx)))
             .when(!chips.is_empty(), |d| d.child(div().ml(px(10.)).flex().flex_wrap().gap(px(4.)).children(chips)))
             .child(div().flex().items_end().gap_2().child(div().relative().flex_1().min_w_0().child(text_box).child(token_marks)).child(div().mb(px(6.)).child(send)))
             .children(self.render_list(session, cx))

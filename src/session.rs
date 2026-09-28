@@ -676,7 +676,7 @@ impl Session {
                 // What the app added comes back as chips where it can (images and
                 // text files carry their contents), else not at all.
                 let (text, attachment) = match chunk.content {
-                    ContentBlock::Text(t) => match attach::replayed_text_file(&t.text).or_else(|| attach::replayed_notebook(&t.text)) {
+                    ContentBlock::Text(t) => match attach::replayed_text_file(&t.text).or_else(|| attach::replayed_notebook(&t.text)).or_else(|| attach::replayed_saved_file(&t.text)) {
                         Some(attachment) => (None, Some(attachment)),
                         None if attach::is_app_text(&t.text) => return,
                         None => (Some(t.text), None),
@@ -2398,6 +2398,8 @@ mod tests {
             Attachment::Selection { notebook: NB.into(), cell: cell("c1", "rates = map(fit, runs)"), text: "map(fit, runs)".into() },
             Attachment::Region { notebook: NB.into(), cells: vec![cell("c3", "scatter(t, y)"), cell("c4", "")], png: Arc::new(vec![0x89, b'P', b'N', b'G', 1, 2, 3]) },
             Attachment::Image { name: "image.png".into(), mime: "image/png", bytes: Arc::new(b"gel".to_vec()) },
+            Attachment::Saved { path: "data/decay (2).csv".into() },
+            // The adapter echoes a text file's contents after everything else.
             Attachment::Text { name: "notes.txt".into(), text: "t,y\n1,2".into() },
         ];
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());

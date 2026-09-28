@@ -1311,11 +1311,34 @@ impl Workspace {
     }
 
     /// Send what's in the composer (if anything) to a session, after `context`.
+    /// Files added from outside the session's folder are copied into it first
+    /// (off the main thread), so a chip removed before sending leaves nothing.
     fn send(&mut self, key: u64, context: Option<ContentBlock>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.session_mut(key).is_none() {
-            return;
-        }
+        let Some(place) = self.session_mut(key).map(|s| s.place.clone()) else { return };
         let Some((text, attachments, mentioned)) = self.take_composer(window, cx) else { return };
+        if !attachments.iter().any(|a| matches!(a, attach::Attachment::Upload { .. })) {
+            return self.submit_message(key, context, (text, attachments, mentioned), now, cx);
+        }
+        let folder = (place.host == HostId::ThisMac).then_some(place.path);
+        let placing = cx.background_spawn(async move { attach::place_uploads(attachments, folder.as_deref()) });
+        cx.spawn(async move |this, cx| {
+            let (attachments, refused) = placing.await;
+            let _ = this.update(cx, |this, cx| {
+                if !refused.is_empty() {
+                    this.composer.notice = Some(format!("{} The message went without it.", refused.join(" ")));
+                }
+                if !text.is_empty() || !attachments.is_empty() {
+                    this.submit_message(key, context, (text, attachments, mentioned), now, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Submit a message as `take_composer` gives it: words, chips, mentions.
+    fn submit_message(&mut self, key: u64, context: Option<ContentBlock>, message: (String, Vec<attach::Attachment>, Vec<String>), now: bool, cx: &mut Context<Self>) {
+        let (text, attachments, mentioned) = message;
         let mut blocks: Vec<_> = context.into_iter().collect();
         blocks.extend(attach::prompt_blocks(&text, &attachments, &mentioned));
         let Some(session) = self.session_mut(key) else { return };

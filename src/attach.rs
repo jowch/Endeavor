@@ -1,11 +1,12 @@
 //! What goes along with a chat message besides its words: chips for notebook
 //! cells, selected text, error messages and uploaded files, and @ mentions of
 //! files in the session's folder. Here: the chips' labels, the prompt blocks a
-//! message becomes, reading uploads within their size caps, and the text
-//! editing that keeps an @ mention whole.
+//! message becomes, what an added file becomes (an image in the message, an @
+//! mention of a file already in the folder, or a copy into the folder's
+//! `data/`), and the text editing that keeps an @ mention whole.
 
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
@@ -51,7 +52,13 @@ pub enum Attachment {
     /// cells it overlaps.
     Region { notebook: String, cells: Vec<Cell>, png: Arc<Vec<u8>> },
     Image { name: String, mime: &'static str, bytes: Arc<Vec<u8>> },
+    /// A text file read into the message (a server session's upload).
     Text { name: String, text: String },
+    /// A file from outside the session's folder on this Mac, copied into its
+    /// `data/` folder when the message is sent.
+    Upload { source: PathBuf, size: u64 },
+    /// A file copied into the session's folder, at `path` relative to it.
+    Saved { path: String },
 }
 
 /// A chip's label: plain words, then a name in mono (either may be empty).
@@ -97,6 +104,8 @@ impl Attachment {
             Attachment::Error { cell, .. } => label("error in ", &cell.name()),
             Attachment::Region { .. } => label("region", ""),
             Attachment::Image { name, .. } | Attachment::Text { name, .. } => label("", name),
+            Attachment::Upload { source, .. } => label("", &data_path(&file_name(source))),
+            Attachment::Saved { path } => label("", path),
         }
     }
 
@@ -108,7 +117,7 @@ impl Attachment {
             Attachment::Error { .. } => Icon::Error,
             Attachment::Region { .. } => Icon::Region,
             Attachment::Image { .. } => Icon::Image,
-            Attachment::Text { .. } => Icon::File,
+            Attachment::Text { .. } | Attachment::Upload { .. } | Attachment::Saved { .. } => Icon::File,
         }
     }
 
@@ -151,6 +160,9 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
             Attachment::Text { name, text } => blocks.push(ContentBlock::Resource(EmbeddedResource::new(
                 EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(text.clone(), format!("attachment:{name}"))),
             ))),
+            Attachment::Saved { path } => blocks.push(note(format!("{SAVED_NOTE}{path}"))),
+            // Copied in and turned into `Saved` before sending (`place_uploads`).
+            Attachment::Upload { .. } => {}
             Attachment::Cells { .. } | Attachment::Selection { .. } | Attachment::Error { .. } => {}
         }
     }
@@ -205,7 +217,7 @@ fn notebook_block(attachment: &Attachment) -> Option<String> {
             ("selection", "The message is about the text selected in the cell below.".into(), notebook, std::slice::from_ref(cell), Some(text))
         }
         Attachment::Error { notebook, cell, text } => ("error", "The cell below failed with this error.".into(), notebook, std::slice::from_ref(cell), Some(text)),
-        Attachment::Image { .. } | Attachment::Text { .. } => return None,
+        Attachment::Image { .. } | Attachment::Text { .. } | Attachment::Upload { .. } | Attachment::Saved { .. } => return None,
     };
     let mut out = format!("[Endeavor] {sentence}\n<attached kind=\"{kind}\" notebook=\"{notebook}\">\n");
     for cell in cells {
@@ -279,6 +291,12 @@ pub fn replayed_text_file(text: &str) -> Option<Attachment> {
     Some(Attachment::Text { name: name.into(), text: body.into() })
 }
 
+/// A file saved into the session's folder, back from its note.
+pub fn replayed_saved_file(text: &str) -> Option<Attachment> {
+    let path = text.strip_prefix(SAVED_NOTE)?;
+    (!path.is_empty() && !path.contains('\n')).then(|| Attachment::Saved { path: path.into() })
+}
+
 /// An attached image as a replayed session gives it back (its name is lost).
 pub fn replayed_image(data: &str, mime: &str) -> Option<Attachment> {
     let mime = ["image/png", "image/jpeg", "image/gif", "image/webp"].into_iter().find(|m| *m == mime)?;
@@ -292,7 +310,28 @@ pub fn replayed_image(data: &str, mime: &str) -> Option<Attachment> {
 
 /// The Claude API takes images up to 5 MB once base64-encoded (4/3 larger).
 pub const IMAGE_MAX: u64 = 3_700_000;
+/// A text file read into the message, where there's no copying into the
+/// folder (a server session).
 pub const TEXT_MAX: u64 = 250_000;
+/// A file copied into the session's folder: a large dataset is fine, but a
+/// copy of a disk image or a video most likely isn't what was meant.
+pub const FILE_MAX: u64 = 2_000_000_000;
+
+/// Where copied files go, inside the session's folder.
+const DATA: &str = "data";
+
+/// The agent's note for a file copied into the session's folder; the path
+/// follows it, alone on the last line, so a replayed session can read it back.
+const SAVED_NOTE: &str = "[Endeavor] The user attached a file. The app saved a copy into this session's folder, where \
+    your file tools can read it and notebook code can load it, at this path relative to the folder:\n";
+
+fn file_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+}
+
+fn data_path(name: &str) -> String {
+    format!("{DATA}/{name}")
+}
 
 fn image_type(name: &str) -> Option<&'static str> {
     let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
@@ -337,7 +376,7 @@ fn too_big(name: &str, size: u64) -> Result<(), String> {
 
 /// Read a picked file into an attachment (a file over its cap isn't read).
 pub fn upload_file(path: &Path) -> Result<Attachment, String> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
+    let name = file_name(path);
     let meta = std::fs::metadata(path).map_err(|e| format!("Couldn't read {name}: {e}"))?;
     if meta.is_dir() {
         return Err(format!("{name} is a folder; attach the files in it instead."));
@@ -345,6 +384,133 @@ pub fn upload_file(path: &Path) -> Result<Attachment, String> {
     too_big(&name, meta.len())?;
     let bytes = std::fs::read(path).map_err(|e| format!("Couldn't read {name}: {e}"))?;
     upload(&name, bytes)
+}
+
+/// What a file added with "+" (or dropped, or pasted) becomes.
+#[derive(Debug, PartialEq)]
+pub enum Added {
+    /// A chip: an image, or a file to copy into the folder on send.
+    Chip(Attachment),
+    /// A file already in the session's folder: an @ mention of this path.
+    Mention(String),
+}
+
+/// A picked file for a session whose folder is `folder` on this Mac. Images
+/// go in the message; a file already in the folder is mentioned; any other
+/// file is copied in when the message is sent. With no local folder (a
+/// server session), files are read into the message as before.
+pub fn add_file(path: &Path, folder: Option<&Path>) -> Result<Added, String> {
+    let Some(folder) = folder else { return upload_file(path).map(Added::Chip) };
+    let name = file_name(path);
+    if image_type(&name).is_some() {
+        return upload_file(path).map(Added::Chip);
+    }
+    let meta = std::fs::metadata(path).map_err(|e| format!("Couldn't read {name}: {e}"))?;
+    if meta.is_dir() {
+        return Err(format!("{name} is a folder; attach the files in it instead."));
+    }
+    if let Some(inside) = relative_inside(folder, path) {
+        return Ok(Added::Mention(inside));
+    }
+    if meta.len() > FILE_MAX {
+        return Err(format!("{name} is {}; files can be up to {}.", size_text(meta.len()), size_text(FILE_MAX)));
+    }
+    Ok(Added::Chip(Attachment::Upload { source: path.to_path_buf(), size: meta.len() }))
+}
+
+/// `file`'s path relative to `folder`, if it's inside it (through symlinks,
+/// such as /tmp → /private/tmp).
+pub fn relative_inside(folder: &Path, file: &Path) -> Option<String> {
+    let folder = folder.canonicalize().ok()?;
+    let file = file.canonicalize().ok()?;
+    let rest = file.strip_prefix(&folder).ok()?;
+    let parts: Vec<String> = rest.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// The name for the `n`th file of this name: `decay.csv`, `decay (2).csv`, …
+fn numbered(name: &str, n: u32) -> String {
+    if n == 1 {
+        return name.to_string();
+    }
+    match name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()) {
+        Some((stem, ext)) => format!("{stem} ({n}).{ext}"),
+        None => format!("{name} ({n})"),
+    }
+}
+
+fn same_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    if std::fs::metadata(a)?.len() != std::fs::metadata(b)?.len() {
+        return Ok(false);
+    }
+    let (mut a, mut b) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
+    let (mut x, mut y) = (vec![0; 1 << 16], vec![0; 1 << 16]);
+    loop {
+        let n = a.read(&mut x)?;
+        if n == 0 {
+            return Ok(true);
+        }
+        b.read_exact(&mut y[..n])?;
+        if x[..n] != y[..n] {
+            return Ok(false);
+        }
+    }
+}
+
+/// Put `source` in the session's folder and return its path relative to the
+/// folder: where it already is, if it's inside; else `data/<name>`, reusing a
+/// file there with the same contents, or numbering the name past ones that
+/// differ. A copy goes in under a temporary name first, so one cut short
+/// never looks finished.
+pub fn save_into(folder: &Path, source: &Path) -> Result<String, String> {
+    if let Some(inside) = relative_inside(folder, source) {
+        return Ok(inside);
+    }
+    let name = file_name(source);
+    let couldnt = |e: std::io::Error| format!("Couldn't copy {name} into the session's folder: {e}.");
+    let data = folder.join(DATA);
+    std::fs::create_dir_all(&data).map_err(couldnt)?;
+    let mut n = 1;
+    loop {
+        let candidate = numbered(&name, n);
+        let dest = data.join(&candidate);
+        if !dest.exists() {
+            let part = data.join(format!(".{candidate}.part"));
+            std::fs::copy(source, &part).and_then(|_| std::fs::rename(&part, &dest)).map_err(|e| {
+                let _ = std::fs::remove_file(&part);
+                couldnt(e)
+            })?;
+            return Ok(data_path(&candidate));
+        }
+        if same_contents(&dest, source).map_err(couldnt)? {
+            return Ok(data_path(&candidate));
+        }
+        n += 1;
+    }
+}
+
+/// Before a message goes: each `Upload` is copied into `folder` and becomes
+/// `Saved`, or, with no local folder (the draft moved to a server before
+/// sending), is read into the message. Also returns why any couldn't be.
+pub fn place_uploads(attachments: Vec<Attachment>, folder: Option<&Path>) -> (Vec<Attachment>, Vec<String>) {
+    let mut placed = Vec::new();
+    let mut refused = Vec::new();
+    for attachment in attachments {
+        let Attachment::Upload { source, .. } = &attachment else {
+            placed.push(attachment);
+            continue;
+        };
+        let result = match folder {
+            Some(folder) => save_into(folder, source).map(|path| Attachment::Saved { path }),
+            None => upload_file(source),
+        };
+        match result {
+            Ok(attachment) => placed.push(attachment),
+            Err(why) => refused.push(why),
+        }
+    }
+    (placed, refused)
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -686,5 +852,109 @@ mod tests {
         assert_eq!(fuzzy("dd", &paths, 10), ["docs/design.md", "data/raw/decay_old.csv", "README.md", "data/decay.csv"]);
         assert_eq!(fuzzy("", &paths, 2), ["data/", "README.md"]);
         assert!(fuzzy("zzz", &paths, 5).is_empty());
+    }
+
+    /// A fresh folder for one test: `session/` (the session's folder) and
+    /// `elsewhere/` beside it.
+    fn scratch(test: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("endeavor-attach-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (session, elsewhere) = (root.join("session"), root.join("elsewhere"));
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        (session, elsewhere)
+    }
+
+    fn write(path: &Path, contents: &[u8]) -> PathBuf {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+        path.to_path_buf()
+    }
+
+    #[test]
+    fn a_file_from_elsewhere_is_copied_into_data_on_send() {
+        let (session, elsewhere) = scratch("copy");
+        let csv = write(&elsewhere.join("decay.csv"), b"t,y\n0,1.0\n");
+        let added = add_file(&csv, Some(&session)).unwrap();
+        assert_eq!(added, Added::Chip(Attachment::Upload { source: csv.clone(), size: 10 }));
+        let Added::Chip(chip) = added else { unreachable!() };
+        assert_eq!(chip.label(), Label { plain: "".into(), mono: "data/decay.csv".into() });
+        assert!(!session.join("data").exists(), "nothing is copied when the file is picked");
+
+        let (placed, refused) = place_uploads(vec![chip], Some(&session));
+        assert_eq!((placed.as_slice(), refused.as_slice()), (&[Attachment::Saved { path: "data/decay.csv".into() }][..], &[][..]));
+        assert_eq!(std::fs::read(session.join("data/decay.csv")).unwrap(), b"t,y\n0,1.0\n");
+        assert_eq!(std::fs::read_dir(session.join("data")).unwrap().count(), 1, "no temporary file left behind");
+    }
+
+    #[test]
+    fn a_name_clash_reuses_the_same_contents_and_numbers_different_ones() {
+        let (session, elsewhere) = scratch("clash");
+        let first = write(&elsewhere.join("a/decay.csv"), b"run 1");
+        let same = write(&elsewhere.join("b/decay.csv"), b"run 1");
+        let other = write(&elsewhere.join("c/decay.csv"), b"run 2");
+        let third = write(&elsewhere.join("d/decay.csv"), b"run 3");
+        assert_eq!(save_into(&session, &first).unwrap(), "data/decay.csv");
+        assert_eq!(save_into(&session, &same).unwrap(), "data/decay.csv", "same contents: reused");
+        assert_eq!(save_into(&session, &other).unwrap(), "data/decay (2).csv");
+        assert_eq!(save_into(&session, &third).unwrap(), "data/decay (3).csv");
+        assert_eq!(save_into(&session, &other).unwrap(), "data/decay (2).csv", "found again under its number");
+        assert_eq!(std::fs::read(session.join("data/decay (3).csv")).unwrap(), b"run 3");
+        assert_eq!(numbered("README", 2), "README (2)");
+        assert_eq!(numbered(".env", 2), ".env (2)");
+        assert_eq!(numbered("scan.tar.gz", 4), "scan.tar (4).gz");
+    }
+
+    #[test]
+    fn a_file_already_in_the_folder_is_mentioned_not_copied() {
+        let (session, _) = scratch("inside");
+        let csv = write(&session.join("raw/run 1.csv"), b"t,y");
+        assert_eq!(add_file(&csv, Some(&session)), Ok(Added::Mention("raw/run 1.csv".into())));
+        // The same folder by another route (macOS's /tmp → /private/tmp).
+        let other_route = session.join("raw/../raw/run 1.csv");
+        assert_eq!(relative_inside(&session, &other_route).as_deref(), Some("raw/run 1.csv"));
+        assert_eq!(save_into(&session, &csv).unwrap(), "raw/run 1.csv");
+        assert!(!session.join("data").exists());
+        assert_eq!(relative_inside(&session, &session), None, "the folder itself isn't a file in it");
+    }
+
+    #[test]
+    fn added_files_keep_images_in_the_message_and_take_any_data() {
+        let (session, elsewhere) = scratch("kinds");
+        let gel = write(&elsewhere.join("gel.png"), b"png");
+        assert!(matches!(add_file(&gel, Some(&session)), Ok(Added::Chip(Attachment::Image { mime: "image/png", .. }))));
+        let sheet = write(&elsewhere.join("plate.xlsx"), &[0x50, 0x4b, 0x00, 0xff]);
+        assert!(matches!(add_file(&sheet, Some(&session)), Ok(Added::Chip(Attachment::Upload { size: 4, .. }))));
+        assert_eq!(add_file(&elsewhere, Some(&session)), Err("elsewhere is a folder; attach the files in it instead.".into()));
+        // No folder on this Mac (a server session): read into the message, as before.
+        let notes = write(&elsewhere.join("notes.txt"), b"t,y");
+        assert_eq!(add_file(&notes, None), Ok(Added::Chip(Attachment::Text { name: "notes.txt".into(), text: "t,y".into() })));
+        assert_eq!(add_file(&sheet, None), Err("plate.xlsx isn't text or a PNG, JPEG, GIF or WebP image, so it can't be attached yet.".into()));
+    }
+
+    #[test]
+    fn a_file_gone_before_sending_is_refused_plainly() {
+        let (session, elsewhere) = scratch("gone");
+        let upload = Attachment::Upload { source: elsewhere.join("gone.csv"), size: 3 };
+        let (placed, refused) = place_uploads(vec![upload], Some(&session));
+        assert!(placed.is_empty());
+        assert_eq!(refused.len(), 1);
+        assert!(refused[0].starts_with("Couldn't copy gone.csv into the session's folder: "), "{}", refused[0]);
+    }
+
+    #[test]
+    fn a_saved_file_is_a_note_with_its_path() {
+        let saved = Attachment::Saved { path: "data/decay (2).csv".into() };
+        let blocks = texts(&prompt_blocks("fit this", std::slice::from_ref(&saved), &[]));
+        assert_eq!(
+            blocks,
+            [
+                "[Endeavor] The user attached a file. The app saved a copy into this session's folder, where your file \
+                 tools can read it and notebook code can load it, at this path relative to the folder:\ndata/decay (2).csv",
+                "fit this",
+            ]
+        );
+        assert_eq!(replayed_saved_file(&blocks[0]), Some(saved));
+        assert_eq!(replayed_saved_file("fit this"), None);
     }
 }
