@@ -55,9 +55,12 @@ impl Listener {
         Ok(listener)
     }
 
-    /// The bridge URL the agent's MCP config carries; the same for the whole launch.
-    fn mcp_url(&self) -> String {
-        format!("http://127.0.0.1:{}/sse", self.ports[1])
+    /// The bridge URL the agent's MCP config carries; the same for the whole
+    /// launch. `/mcp` for a core that speaks Streamable HTTP, else the
+    /// deprecated SSE transport (`/sse`) a runtime from before that still serves.
+    fn mcp_url(&self, mcp: wire::McpTransport) -> String {
+        let path = match mcp { wire::McpTransport::Http => "mcp", wire::McpTransport::Sse => "sse" };
+        format!("http://127.0.0.1:{}/{path}", self.ports[1])
     }
 
     pub fn bridge_port(&self) -> u16 {
@@ -437,10 +440,10 @@ impl Channel {
         let runtime = loop {
             match events.recv() {
                 Ok(message @ (ToApp::Progress { .. } | ToApp::FoundJulia { .. } | ToApp::Submitted { .. } | ToApp::Queued { .. })) => on_message(message),
-                Ok(ToApp::Ready { node, token, pluto_secret, reattached, job, .. }) => {
+                Ok(ToApp::Ready { node, token, pluto_secret, reattached, job, mcp, .. }) => {
                     *self.listener.lock().unwrap() = Some(listener.clone());
                     *listener.current.lock().unwrap() = Some(self.mux.clone());
-                    let bridge = Bridge { url: listener.mcp_url(), token };
+                    let bridge = Bridge { url: listener.mcp_url(mcp), token, transport: mcp };
                     break Runtime { pluto_url: listener.pluto_url(&pluto_secret), bridge, reattached, node, job };
                 }
                 Ok(ToApp::StartFailed { message } | ToApp::Error { message }) => return Err(message),

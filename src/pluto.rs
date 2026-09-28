@@ -10,16 +10,18 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 /// One runtime's bridge as its host's listener serves it: the URL the agent's
-/// MCP config and the app use, and the bearer token it requires. Both stay the
-/// same across that host's runtimes.
+/// MCP config and the app use, the bearer token it requires, and how the
+/// agent reaches that URL (`url`'s path matches `transport`: `/mcp` for
+/// `Http`, `/sse` for `Sse`). All three stay the same across that host's runtimes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bridge {
     pub url: String,
     pub token: String,
+    pub transport: wire::McpTransport,
 }
 
 impl Bridge {
-    /// `127.0.0.1:PORT` from the bridge URL `http://127.0.0.1:PORT/sse`.
+    /// `127.0.0.1:PORT` from the bridge URL `http://127.0.0.1:PORT/mcp`.
     fn host(&self) -> Result<&str, String> {
         self.url.strip_prefix("http://").and_then(|rest| rest.split('/').next()).ok_or_else(|| format!("bad MCP url {}", self.url))
     }
@@ -325,14 +327,14 @@ mod tests {
     }
 }
 
-/// Live check against a running bridge: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/sse
+/// Live check against a running bridge: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/mcp
 /// ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_bridge`.
 #[cfg(test)]
 #[test]
 #[ignore]
 fn live_bridge() {
     let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
-    let bridge = Bridge { url, token: std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default() };
+    let bridge = Bridge { url, token: std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default(), transport: wire::McpTransport::Http };
     let list = call_tool(&bridge, "list_notebooks", json!({})).expect("list_notebooks");
     println!("list_notebooks: {list}\nwarnings: {:?}", run_warnings(&list));
     assert!(list.as_array().is_some_and(|a| a.iter().all(|nb| nb.get("pending_run").is_some())));

@@ -10,7 +10,7 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     ClientCapabilities, ClientSessionCapabilities, NoticeCapabilities,
     CancelNotification, CloseSessionRequest, ContentBlock, DeleteSessionRequest, ForkSessionRequest, HttpHeader, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
-    McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
+    McpServerHttp, McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionConfigOption, SessionId, SessionInfo,
     SessionModeId, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
     ConfigOptionUpdate, SessionConfigValueId, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
@@ -196,7 +196,11 @@ impl Tools {
         if let Some(server) = &self.server {
             headers.push(HttpHeader::new("X-Endeavor-Host", server.clone()));
         }
-        McpServer::Sse(McpServerSse::new(crate::celldiff::MCP_SERVER, self.bridge.url.clone()).headers(headers))
+        match self.bridge.transport {
+            wire::McpTransport::Http => McpServer::Http(McpServerHttp::new(crate::celldiff::MCP_SERVER, self.bridge.url.clone()).headers(headers)),
+            // TODO: drop once no runtime from before the Streamable HTTP switch (docs/endeavor-mcp.md) can still be running.
+            wire::McpTransport::Sse => McpServer::Sse(McpServerSse::new(crate::celldiff::MCP_SERVER, self.bridge.url.clone()).headers(headers)),
+        }
     }
 }
 
@@ -282,7 +286,8 @@ pub enum AgentEvent {
     Failed(String),
 }
 
-/// Start the agent. Each session gets its host's runtime bridge (legacy SSE MCP)
+/// Start the agent. Each session gets its host's runtime bridge (MCP over
+/// Streamable HTTP, or SSE for a runtime from before that switch)
 /// from the command that opens it. Commands sent before the connection is up
 /// wait in `commands`.
 pub fn start(commands: UnboundedReceiver<Command>) -> UnboundedReceiver<AgentEvent> {
@@ -521,12 +526,12 @@ async fn run(
 mod tests {
     use super::session_options;
 
-    /// A bridge from the environment, for the live tests that bring their own runtime:
-    /// `ENDEAVOR_TEST_MCP_URL` and `ENDEAVOR_TEST_TOKEN`.
+    /// A bridge from the environment, for the live tests that bring their own
+    /// runtime: `ENDEAVOR_TEST_MCP_URL` (its `/mcp` endpoint) and `ENDEAVOR_TEST_TOKEN`.
     fn test_tools() -> super::Tools {
         let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
         let token = std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default();
-        super::Tools { bridge: crate::pluto::Bridge { url, token }, server: None }
+        super::Tools { bridge: crate::pluto::Bridge { url, token, transport: wire::McpTransport::Http }, server: None }
     }
 
     /// This Mac's runtime, started for a live test.
@@ -729,7 +734,7 @@ mod tests {
     }
 
     /// Two sessions on one connection with overlapping turns, each reply routed to its
-    /// own session: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/sse ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_two_sessions`.
+    /// own session: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/mcp ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_two_sessions`.
     #[test]
     #[ignore]
     fn live_two_sessions() {
@@ -801,12 +806,21 @@ mod tests {
         for tool in ["Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "NotebookEdit"] {
             assert!(off.as_array().unwrap().iter().any(|t| t == tool), "{tool} still on");
         }
-        let bridge = crate::pluto::Bridge { url: "http://127.0.0.1:9/sse".into(), token: "t".into() };
+        let bridge = crate::pluto::Bridge { url: "http://127.0.0.1:9/mcp".into(), token: "t".into(), transport: wire::McpTransport::Http };
         let header = |tools: super::Tools| {
-            let super::McpServer::Sse(sse) = tools.mcp_server(7) else { panic!() };
-            sse.headers.iter().find(|h| h.name == "X-Endeavor-Host").map(|h| h.value.clone())
+            let super::McpServer::Http(http) = tools.mcp_server(7) else { panic!() };
+            http.headers.iter().find(|h| h.name == "X-Endeavor-Host").map(|h| h.value.clone())
         };
         assert_eq!(header(super::Tools { bridge: bridge.clone(), server: Some("lab".into()) }), Some("lab".into()));
         assert_eq!(header(super::Tools { bridge, server: None }), None);
+    }
+
+    /// A runtime the helper started before the Streamable HTTP switch (its
+    /// `Bridge` carries `McpTransport::Sse`) still gets registered over SSE.
+    #[test]
+    fn a_runtime_from_before_streamable_http_still_gets_sse() {
+        let bridge = crate::pluto::Bridge { url: "http://127.0.0.1:9/sse".into(), token: "t".into(), transport: wire::McpTransport::Sse };
+        let super::McpServer::Sse(sse) = (super::Tools { bridge, server: None }).mcp_server(7) else { panic!("expected Sse") };
+        assert_eq!(sse.url, "http://127.0.0.1:9/sse");
     }
 }
