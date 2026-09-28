@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use wire::files::{Reply, Request, RuntimeState};
@@ -72,6 +73,8 @@ pub struct Connection {
     pub steps: Steps,
     /// Open notebooks (id, path) as last seen, to reopen after a restart.
     pub last_notebooks: Vec<(String, String)>,
+    /// Connects and starts that failed in a row, across reconnects.
+    pub failures: u32,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
     pub notebooks: serde_json::Value,
     /// Per-notebook cell states as last pushed ({notebook_id: [state]}).
@@ -176,6 +179,7 @@ impl Connection {
             cancel: Arc::default(),
             steps,
             last_notebooks: Vec::new(),
+            failures: 0,
             notebooks: serde_json::Value::Null,
             cells: serde_json::Value::Null,
             idle_stopped: HashSet::new(),
@@ -241,8 +245,7 @@ impl Workspace {
                 return;
             }
         }
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let id = next_connect_id();
         let name = self.hosts.name(host);
         let first = match host {
             HostId::ThisMac => Steps::new("Starting Julia"),
@@ -253,6 +256,7 @@ impl Workspace {
         // A reconnect keeps what the runtime last had open, to reopen it.
         if let Some(old) = self.connections.remove(host) {
             connection.last_notebooks = old.last_notebooks;
+            connection.failures = old.failures;
         }
         let cancel = connection.cancel.clone();
         self.connections.insert(host.clone(), connection);
@@ -349,6 +353,91 @@ impl Workspace {
         cx.notify();
     }
 
+    /// What to offer beside Retry for `host`'s trouble: Repair once This
+    /// Mac's has outlasted Retry twice, and for a server with no helper for
+    /// its platform, how to get one.
+    pub fn fixes(&self, host: &HostId, reason: &str) -> Vec<Fix> {
+        let repair = *host == HostId::ThisMac && self.connections.get(host).is_some_and(|c| c.failures > REPAIR_AFTER);
+        let helper = remote::HelperFix::of(reason).map(|fix| match fix.command() {
+            Some(command) => Fix::CopyCommand(command),
+            None => Fix::Download,
+        });
+        repair.then_some(Fix::Repair).into_iter().chain(helper).collect()
+    }
+
+    /// A fix's button: `small` beside the new-session screen's notice, else a
+    /// secondary one beside a pane's primary action.
+    pub fn fix_button(&self, fix: Fix, small: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id(fix.id())
+            .role(Role::Button)
+            .flex_shrink_0()
+            .when(small, |d| d.px(px(8.)).rounded(px(4.)))
+            .when(!small, |d| d.px_3().py_1().rounded_sm())
+            .cursor_pointer()
+            .bg(theme::bg_raised())
+            .text_color(theme::text_primary())
+            .child(fix.label())
+            .on_click(cx.listener(move |this, _, _, cx| this.apply_fix(&fix, cx)))
+    }
+
+    pub fn apply_fix(&mut self, fix: &Fix, cx: &mut Context<Self>) {
+        match fix {
+            Fix::Repair => self.repair_local(cx),
+            Fix::Download => cx.open_url(crate::about::WEBSITE),
+            Fix::CopyCommand(command) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
+                self.status = "Copied the command; paste it in Terminal.".into();
+                cx.notify();
+            }
+        }
+    }
+
+    /// Settings → Repair runtime, or Repair beside This Mac's error: stop
+    /// Julia and the helper, clear the runtime's state that can go stale
+    /// (`runtime::clear_state`), then connect and start again.
+    pub fn repair_local(&mut self, cx: &mut Context<Self>) {
+        let host = HostId::ThisMac;
+        let channel = match self.connections.get_mut(&host) {
+            // Still installing Julia: nothing to repair yet.
+            Some(c) if c.status == Status::Connecting => return,
+            Some(c) => {
+                // Updates from the connect or start under way are dropped from now on.
+                c.id = next_connect_id();
+                c.forget_runtime();
+                c.status = Status::Starting;
+                c.steps = Steps::new("Repairing the runtime");
+                c.stopping = false;
+                c.channel.take()
+            }
+            None => None,
+        };
+        self.status = "Repairing the runtime…".into();
+        let work = cx.background_executor().spawn(async move {
+            if let Some(channel) = channel {
+                channel.stop();
+                channel.detach();
+            }
+            runtime::clear_state()
+        });
+        cx.spawn(async move |this, cx| {
+            let cleared = work.await;
+            let _ = this.update(cx, |this, cx| {
+                match cleared {
+                    Ok(paths) => eprintln!("Repair runtime cleared {paths:?}"),
+                    Err(e) => eprintln!("Repair runtime: {e}"),
+                }
+                if let Some(connection) = this.connections.get_mut(&host) {
+                    connection.status = Status::Failed(String::new());
+                    connection.failures = 0;
+                }
+                this.connect_host(&host, true, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Make sure `host`'s Julia is running or on its way (a session needs it).
     pub fn ensure_runtime(&mut self, host: &HostId, cx: &mut Context<Self>) {
         match self.status(host) {
@@ -424,8 +513,9 @@ impl Workspace {
             }
             Update::Connected(Err(e)) => {
                 connection.status = Status::Failed(e.clone());
+                connection.failures += 1;
                 if local {
-                    self.status = format!("⚠ {e}").into();
+                    self.status = JULIA_NOT_RUNNING.into();
                     if let Some(setup) = &mut self.setup {
                         setup.fail(e);
                     }
@@ -433,6 +523,7 @@ impl Workspace {
             }
             Update::Started(Ok(runtime)) => {
                 connection.job = None;
+                connection.failures = 0;
                 connection.steps.found_julia = true;
                 let started = if runtime.reattached { format!("Julia running on {}", runtime.node) } else { "Started Julia".to_owned() };
                 connection.steps.advance(started, "Opening the notebook");
@@ -449,8 +540,9 @@ impl Workspace {
             Update::Started(Err(e)) => {
                 connection.job = None;
                 connection.status = Status::Died(e.clone());
+                connection.failures += 1;
                 if local {
-                    self.status = format!("⚠ {e}").into();
+                    self.status = JULIA_NOT_RUNNING.into();
                     if let Some(setup) = &mut self.setup {
                         setup.fail(e);
                     }
@@ -470,13 +562,7 @@ impl Workspace {
                     }
                 };
                 if local {
-                    self.status = match &connection.status {
-                        Status::Replaced => "⚠ Another connection took over Julia.\nNotebook tools are unavailable until you reconnect.".into(),
-                        Status::Died(reason) => format!("⚠ Julia on This Mac stopped. {reason}\nNotebook tools are unavailable until Julia restarts."),
-                        Status::Failed(reason) => format!("⚠ {reason}\nNotebook tools are unavailable until Julia restarts."),
-                        _ => String::new(),
-                    }
-                    .into();
+                    self.status = JULIA_NOT_RUNNING.into();
                 }
             }
         }
@@ -934,12 +1020,65 @@ impl Workspace {
             Status::Replaced => resting
                 .child(div().text_color(theme::text_muted()).child(format!("Another connection took over Julia on {name}.")))
                 .child(action("host-reconnect", "Reconnect", host.clone(), false)),
-            Status::Failed(reason) => resting
-                .child(div().text_color(theme::text_muted()).child(format!("Not connected to {name}.")))
-                .child(message(reason))
-                .child(action("host-reconnect", "Reconnect", host.clone(), false)),
+            Status::Failed(reason) => {
+                let fixes = self.fixes(host, &reason);
+                let repair = fixes.contains(&Fix::Repair);
+                resting
+                    .child(div().text_color(theme::text_muted()).child(format!("Not connected to {name}.")))
+                    .child(message(reason))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(action("host-reconnect", "Reconnect", host.clone(), false))
+                            .children(fixes.into_iter().map(|fix| self.fix_button(fix, false, cx))),
+                    )
+                    .when(repair, |d| d.child(message(REPAIR_NOTE.into())))
+            }
         };
         Some(pane.into_any_element())
+    }
+}
+
+/// A new `Connection::id`.
+fn next_connect_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The sidebar's status while This Mac's Julia is down; why shows where it's
+/// down (the new-session screen's notice, the notebook pane).
+const JULIA_NOT_RUNNING: &str = "Julia not running";
+
+/// Failures in a row before Repair shows beside Retry: the first, and Retry twice.
+const REPAIR_AFTER: u32 = 2;
+
+/// What Repair does, in a line (Settings, and beside This Mac's error).
+pub const REPAIR_NOTE: &str = "Repair stops Julia, clears its saved state and compiled runtime, and starts it again. Notebooks, packages and settings stay.";
+
+/// An action offered beside a connection's error.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fix {
+    Repair,
+    Download,
+    CopyCommand(String),
+}
+
+impl Fix {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Fix::Repair => "fix-repair",
+            Fix::Download => "fix-download",
+            Fix::CopyCommand(_) => "fix-copy",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Fix::Repair => "Repair",
+            Fix::Download => "Download Endeavor",
+            Fix::CopyCommand(_) => "Copy command",
+        }
     }
 }
 

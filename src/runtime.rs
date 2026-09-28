@@ -221,6 +221,53 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
     Ok((channel, hello))
 }
 
+/// Repair runtime: stop the runtime recorded in This Mac's state folder if one
+/// still runs (no helper holds it by now), and remove what can go stale: the
+/// state and lock files, and the precompiled EndeavorRuntime. The bridge token
+/// (the agent's MCP config carries it), the log, the depot's packages and
+/// Julia stay. Returns what it removed.
+pub fn clear_state() -> Result<Vec<PathBuf>, String> {
+    clear_state_in(&crate::install::app_dir()?)
+}
+
+fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
+    let state_dir = app_dir.join("runtime");
+    let recorded = std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    if let Some(pid) = recorded.and_then(|v| v["pid"].as_i64()).and_then(|p| i32::try_from(p).ok()).filter(|&p| p > 1) {
+        stop_group(pid);
+    }
+    let mut stale: Vec<PathBuf> = ["runtime.json", "runtime.json.tmp", "lock"].iter().map(|f| state_dir.join(f)).collect();
+    if let Ok(versions) = std::fs::read_dir(app_dir.join("depot/compiled")) {
+        stale.extend(versions.flatten().map(|v| v.path().join("EndeavorRuntime")));
+    }
+    let mut removed = Vec::new();
+    for path in stale {
+        let result = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        match result {
+            Ok(()) => removed.push(path),
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Couldn't remove {}: {e}", path.display())),
+        }
+    }
+    Ok(removed)
+}
+
+/// The runtime runs in its own session, so its pid is its group's: end the
+/// group (Julia and its notebook workers), politely first.
+fn stop_group(pid: i32) {
+    // SAFETY (both): plain syscalls; a group that's gone only returns ESRCH.
+    let alive = || unsafe { libc::kill(-pid, 0) } == 0;
+    for signal in [libc::SIGTERM, libc::SIGKILL] {
+        unsafe { libc::kill(-pid, signal) };
+        for _ in 0..50 {
+            if !alive() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
 /// Start This Mac's runtime on `channel` (or attach to the one running) and
 /// relay `listener` to it. `progress` hears Julia's log while it starts;
 /// `notice` hears if it goes away later.
@@ -590,6 +637,37 @@ fn live_die_and_restart() {
     let list = crate::pluto::call_tool(&second.bridge, "list_notebooks", serde_json::json!({})).unwrap();
     println!("restarted; list_notebooks = {list}");
     channel.stop();
+}
+
+#[cfg(test)]
+#[test]
+fn repair_clears_stale_state_and_keeps_the_rest() {
+    let app = std::env::temp_dir().join(format!("endeavor-repair-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&app);
+    let write = |path: &str| {
+        let path = app.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "x").unwrap();
+    };
+    // A recorded runtime that still runs, in its own group like boot.jl's.
+    let mut julia = Command::new("sleep").arg("600").process_group(0).spawn().unwrap();
+    std::fs::create_dir_all(app.join("runtime")).unwrap();
+    std::fs::write(app.join("runtime/runtime.json"), format!(r#"{{"pid": {}}}"#, julia.id())).unwrap();
+    for kept in ["runtime/token", "runtime/runtime.log", "depot/compiled/v1.12/Pluto/a.ji", "depot/packages/Pluto/x/src/Pluto.jl", "sessions.json"] {
+        write(kept);
+    }
+    write("runtime/lock");
+    write("depot/compiled/v1.12/EndeavorRuntime/b.ji");
+
+    let removed = clear_state_in(&app).unwrap();
+    let removed: Vec<String> = removed.iter().map(|p| p.strip_prefix(&app).unwrap().display().to_string()).collect();
+    assert_eq!(removed, ["runtime/runtime.json", "runtime/lock", "depot/compiled/v1.12/EndeavorRuntime"]);
+    assert!(julia.try_wait().unwrap().is_some(), "the recorded runtime was stopped");
+    for kept in ["runtime/token", "runtime/runtime.log", "depot/compiled/v1.12/Pluto/a.ji", "depot/packages/Pluto/x/src/Pluto.jl", "sessions.json"] {
+        assert!(app.join(kept).exists(), "{kept} stays");
+    }
+    assert_eq!(clear_state_in(&app).unwrap(), Vec::<PathBuf>::new(), "nothing left to clear");
+    let _ = std::fs::remove_dir_all(&app);
 }
 
 #[cfg(test)]

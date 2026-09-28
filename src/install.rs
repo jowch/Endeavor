@@ -8,8 +8,17 @@ use std::time::Duration;
 /// The app's own files (`runtime/`, `plugin/`, `adapter/`): Contents/Resources
 /// inside Endeavor.app, else the source tree (`cargo run`).
 pub fn resources() -> PathBuf {
-    let bundled = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.parent()?.join("Resources")));
-    bundled.filter(|r| r.join("runtime").is_dir()).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+    bundle_resources().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
+/// Running from Endeavor.app, not a source checkout.
+pub fn bundled() -> bool {
+    bundle_resources().is_some()
+}
+
+fn bundle_resources() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.parent()?.join("Resources")).filter(|r| r.join("runtime").is_dir())
 }
 
 /// Endeavor's folder in Application Support, or on Linux in XDG_DATA_HOME

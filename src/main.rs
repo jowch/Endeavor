@@ -2405,6 +2405,18 @@ impl Workspace {
                     .on_click(|_, _, _| logs::reveal()),
             )
             .child(note("The log of this run and the one before, to attach to a bug report.".into()))
+            .child(
+                div()
+                    .id("repair-runtime")
+                    .self_start()
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .bg(theme::bg_raised())
+                    .child("Repair runtime")
+                    .on_click(cx.listener(|this, _, _, cx| this.repair_local(cx))),
+            )
+            .child(note(connection::REPAIR_NOTE.into()))
     }
 
     /// The notebook's ⋮ button in its header, and its menu while open.

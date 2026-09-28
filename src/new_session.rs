@@ -525,35 +525,55 @@ impl Workspace {
             )
     }
 
-    /// The draft host's connection trouble, in plain words, with Retry.
+    /// The draft host's connection trouble, in plain words, with Retry (and
+    /// what else might help: `fixes`). This is the one place it's spelled out
+    /// on this screen; the sidebar only says Julia isn't running.
     fn connection_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let host = self.draft.host.clone();
         let name = self.hosts.name(&host);
-        let text = match self.status(&host)? {
-            Status::Failed(reason) => format!("Couldn't connect to {name}. {reason}"),
-            Status::Replaced => format!("Another connection took over {name}."),
+        let (text, reason, retry) = match self.status(&host)? {
+            Status::Failed(reason) => (format!("Couldn't connect to {name}. {reason}"), reason.clone(), "Retry"),
+            Status::Replaced => (format!("Another connection took over {name}."), String::new(), "Retry"),
+            Status::Died(reason) if !reason.is_empty() => (format!("Julia on {name} stopped. {reason}"), reason.clone(), "Start Julia"),
             _ => return None,
         };
+        let fixes = self.fixes(&host, &reason);
+        let repair = fixes.contains(&crate::connection::Fix::Repair);
+        let died = matches!(self.status(&host), Some(Status::Died(_)));
         Some(
             div()
                 .flex()
-                .items_baseline()
-                .gap(px(8.))
+                .flex_col()
+                .gap(px(4.))
                 .text_size(theme::size_meta())
-                .child(div().flex_1().text_color(theme::danger()).child(text))
                 .child(
                     div()
-                        .id("retry-connect")
-                        .role(Role::Button)
-                        .flex_shrink_0()
-                        .px(px(8.))
-                        .rounded(px(4.))
-                        .cursor_pointer()
-                        .bg(theme::bg_raised())
-                        .text_color(theme::text_primary())
-                        .child("Retry")
-                        .on_click(cx.listener(move |this, _, _, cx| this.connect_host(&host, false, cx))),
+                        .flex()
+                        .items_baseline()
+                        .gap(px(8.))
+                        .child(div().flex_1().text_color(theme::danger()).child(text))
+                        .child(
+                            div()
+                                .id("retry-connect")
+                                .role(Role::Button)
+                                .flex_shrink_0()
+                                .px(px(8.))
+                                .rounded(px(4.))
+                                .cursor_pointer()
+                                .bg(theme::bg_raised())
+                                .text_color(theme::text_primary())
+                                .child(retry)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if died {
+                                        this.start_host(&host, cx);
+                                    } else {
+                                        this.connect_host(&host, false, cx);
+                                    }
+                                })),
+                        )
+                        .children(fixes.into_iter().map(|fix| self.fix_button(fix, true, cx))),
                 )
+                .when(repair, |d| d.child(div().text_color(theme::text_faint()).child(crate::connection::REPAIR_NOTE)))
                 .into_any_element(),
         )
     }

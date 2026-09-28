@@ -957,6 +957,8 @@ impl Workspace {
         });
         let start_label = if cluster || *host != HostId::ThisMac { format!("Start on {name}") } else { "Start Julia".to_string() };
         let host_for_start = host.clone();
+        let fixes = self.fixes(host, reason);
+        let repair = fixes.contains(&crate::connection::Fix::Repair);
         new_session::turtle_pane()
             .child(page_title(format!("Julia isn't running on {}", if *host == HostId::ThisMac { "This Mac".to_string() } else { name.clone() })))
             .child(page_text(text))
@@ -971,8 +973,10 @@ impl Workspace {
                     .child(page_button("host-start", Glyph::Play, start_label, true).on_click(cx.listener(move |this, _, _, cx| {
                         this.pane_resources = None;
                         this.start_host(&host_for_start, cx);
-                    }))),
+                    })))
+                    .children(fixes.into_iter().map(|fix| self.fix_button(fix, false, cx))),
             )
+            .when(repair, |d| d.child(page_text(crate::connection::REPAIR_NOTE.to_string()).text_size(theme::size_meta())))
             .into_any_element()
     }
 

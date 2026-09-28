@@ -222,11 +222,68 @@ fn helper_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     if let Some(helper) = helper_dirs().iter().map(|d| d.join(&platform).join("endeavor-remote")).find(|p| p.is_file()) {
         return Ok(helper);
     }
-    let here = (if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS }, std::env::consts::ARCH);
-    if (os.to_lowercase().as_str(), arch) == here {
-        return crate::runtime::helper_binary();
+    if (os.to_lowercase().as_str(), arch) == HERE
+        && let Ok(helper) = crate::runtime::helper_binary()
+    {
+        return Ok(helper);
     }
-    Err(format!("Endeavor can't run on {os} {arch} servers yet (missing helper)."))
+    Err(missing_helper(os, arch, crate::install::bundled()))
+}
+
+/// This Mac's platform as `helper_for` names a server's.
+const HERE: (&str, &str) = (if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS }, std::env::consts::ARCH);
+
+const BUILD_HELPERS: &str = "scripts/build-helpers.sh";
+const NO_HELPER: &str = " has no runtime helper for ";
+const DOWNLOAD_AGAIN: &str = "Download Endeavor again";
+
+/// Why a server can't be set up, and what to do: servers of a platform
+/// Endeavor supports need its helper built (in a source checkout) or come
+/// with a fresh download (in the app).
+fn missing_helper(os: &str, arch: &str, bundled: bool) -> String {
+    let linux = os.eq_ignore_ascii_case("linux") && matches!(arch, "x86_64" | "aarch64");
+    let mac = (os.to_lowercase().as_str(), arch) == HERE && os.eq_ignore_ascii_case("darwin");
+    if !linux && !mac {
+        return format!("Endeavor can't run on {os} {arch} servers.");
+    }
+    let platform = if mac { format!("macOS {}", if arch == "aarch64" { "arm64" } else { arch }) } else { format!("{os} {arch}") };
+    let build = if linux { BUILD_HELPERS } else { "cargo build" };
+    if bundled {
+        format!("This copy of Endeavor{NO_HELPER}{platform} servers. {DOWNLOAD_AGAIN} to get one.")
+    } else {
+        format!("This build of Endeavor{NO_HELPER}{platform} servers. Build it with {build} in Endeavor's source folder, then connect again.")
+    }
+}
+
+/// What the app can offer for a connection that failed for want of a helper.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HelperFix {
+    /// Open Endeavor's website to download it again.
+    Download,
+    /// Copy the command that builds it in the source folder.
+    Build(&'static str),
+}
+
+impl HelperFix {
+    pub fn of(reason: &str) -> Option<HelperFix> {
+        if !reason.contains(NO_HELPER) {
+            None
+        } else if reason.contains(DOWNLOAD_AGAIN) {
+            Some(HelperFix::Download)
+        } else if reason.contains(BUILD_HELPERS) {
+            Some(HelperFix::Build(BUILD_HELPERS))
+        } else {
+            Some(HelperFix::Build("cargo build"))
+        }
+    }
+
+    /// The command to paste in a terminal, from the source folder.
+    pub fn command(self) -> Option<String> {
+        match self {
+            HelperFix::Download => None,
+            HelperFix::Build(build) => Some(format!("cd '{}' && {build}", env!("CARGO_MANIFEST_DIR"))),
+        }
+    }
 }
 
 /// A tar stream (ustar) of the helper as `endeavor-remote` plus `runtime/`.
@@ -812,8 +869,27 @@ mod tests {
         let transport = Transport::Shell { env: vec![("HOME".into(), home.display().to_string()), ("PATH".into(), path)], ask: None };
         let (_, on) = events();
         let err = connect(&Server::default(), &transport, None, &Cancel::default(), &on).err().expect("refused");
-        assert_eq!(err, "Endeavor can't run on Plan9 mips servers yet (missing helper).");
+        assert_eq!(err, "Endeavor can't run on Plan9 mips servers.");
+        assert_eq!(HelperFix::of(&err), None);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_missing_helper_says_how_to_get_one() {
+        let linux = missing_helper("Linux", "x86_64", false);
+        assert_eq!(linux, "This build of Endeavor has no runtime helper for Linux x86_64 servers. Build it with scripts/build-helpers.sh in Endeavor's source folder, then connect again.");
+        assert_eq!(HelperFix::of(&linux), Some(HelperFix::Build("scripts/build-helpers.sh")));
+        let app = missing_helper("Linux", "aarch64", true);
+        assert_eq!(app, "This copy of Endeavor has no runtime helper for Linux aarch64 servers. Download Endeavor again to get one.");
+        assert_eq!(HelperFix::of(&app), Some(HelperFix::Download));
+        assert_eq!(HelperFix::Download.command(), None);
+        assert_eq!(missing_helper("Linux", "riscv64", false), "Endeavor can't run on Linux riscv64 servers.");
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            let mac = missing_helper("Darwin", "aarch64", false);
+            assert_eq!(mac, "This build of Endeavor has no runtime helper for macOS arm64 servers. Build it with cargo build in Endeavor's source folder, then connect again.");
+            assert_eq!(HelperFix::of(&mac).and_then(HelperFix::command), Some(format!("cd '{}' && cargo build", env!("CARGO_MANIFEST_DIR"))));
+            assert_eq!(missing_helper("Darwin", "x86_64", true), "Endeavor can't run on Darwin x86_64 servers.");
+        }
     }
 
     /// The app's side of askpass, answering from a thread as the modal would.
