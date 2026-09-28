@@ -1362,7 +1362,9 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 celldiff::Change::Removed => (a, r + 1),
                 celldiff::Change::Same => (a, r),
             });
-            let summary = if pluto { pluto_line(title, diffs, args) } else { tool_line(title, *kind, path.as_deref(), args) };
+            let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
+            let running = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
+            let summary = if pluto { pluto_line(title, diffs, args, output.as_ref(), running, &name) } else { tool_line(title, *kind, path.as_deref(), args) };
             let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
             let failed = runs::failed(*status, title, output.as_ref());
             let state = if *approval == Some(Approval::Denied) {
@@ -1383,7 +1385,6 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 }
             });
             let (input_panel, output_panel) = if *expanded {
-                let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
                 let details = details::details(title, *kind, path.as_deref(), args, output.as_ref(), failed, !all_diffs.is_empty(), &name);
                 (render_parts(details.input, id("tool-input"), window, cx), render_parts(details.output, id("tool-output"), window, cx))
             } else {
@@ -1892,18 +1893,57 @@ fn tool_verb(title: &str) -> String {
     .to_string()
 }
 
-/// A notebook call's line: its verb, then the cells it changed, the command it
-/// ran or the file it read.
-fn pluto_line(title: &str, diffs: &[celldiff::CellDiff], input: &serde_json::Value) -> ToolLine {
+/// A notebook call's line: its verb, then the cells it changed or acted on, the
+/// command it ran, the file it read or the notebook it read. A running call's
+/// verb is in the present ("Adding `x`", or "Adding a cell" before its input
+/// arrives); a bare verb with nothing to name says what it acted on ("Read a cell").
+fn pluto_line(
+    title: &str,
+    diffs: &[celldiff::CellDiff],
+    input: &serde_json::Value,
+    output: Option<&serde_json::Value>,
+    running: bool,
+    name: &dyn Fn(&str) -> Option<String>,
+) -> ToolLine {
+    let mut line = pluto_object(title, diffs, input, output, name);
+    let known = runs::doing(title, ToolKind::Other, input);
+    let doing = known.clone().filter(|_| running);
+    line.verb = match (doing, &line.object) {
+        (Some((verb, _, _)), Some(_)) => verb.to_string(),
+        (Some((_, phrase, _)), None) => phrase,
+        (None, None) if known.is_some() && !line.verb.contains(' ') => runs::summary([(title, ToolKind::Other, input)]),
+        (None, _) => std::mem::take(&mut line.verb),
+    };
+    line
+}
+
+fn pluto_object(
+    title: &str,
+    diffs: &[celldiff::CellDiff],
+    input: &serde_json::Value,
+    output: Option<&serde_json::Value>,
+    name: &dyn Fn(&str) -> Option<String>,
+) -> ToolLine {
     let verb = tool_verb(title);
     let names: Vec<String> = diffs.iter().map(cell_name).collect();
     if !names.is_empty() {
         return ToolLine { verb, object: Some(names.join(", ")), mono: true, full: None };
     }
     let field = |name: &str| input[name].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let answer = output.and_then(celldiff::tool_json);
+    let cell = || {
+        let read = answer.as_ref().filter(|a| a["cell_id"] == input["cell_id"]).and_then(|a| a["code"].as_str()).and_then(defined_name);
+        read.or_else(|| field("code").and_then(defined_name)).or_else(|| field("cell_id").and_then(name))
+    };
+    let names_a_cell = matches!(runs::doing(title, ToolKind::Other, input), Some((_, _, runs::Names::Cell)));
     match (celldiff::pluto_tool(title), field("path"), field("command")) {
         (Some("run_shell"), _, Some(command)) => ToolLine { verb, object: Some(first_line(command)), mono: true, full: None },
         (Some("read_file" | "list_folder"), Some(path), _) => ToolLine { verb, object: Some(file_name(path)), mono: true, full: Some(path.to_string()) },
+        (Some("read_notebook_code"), _, _) => {
+            let path = answer.as_ref().and_then(|a| a["path"].as_str()).filter(|p| !p.is_empty()).map(str::to_owned);
+            ToolLine { verb, object: path.as_deref().map(file_name), mono: true, full: path }
+        }
+        _ if names_a_cell => ToolLine { verb, object: cell(), mono: true, full: None },
         _ => ToolLine { verb, object: None, mono: true, full: None },
     }
 }
@@ -2164,6 +2204,28 @@ mod tests {
         assert_eq!(super::cell_name(&diff(&[(Change::Removed, "old = 1"), (Change::Added, "model(S, p) = p[1] * S")])), "model");
         assert_eq!(super::cell_name(&diff(&[(Change::Added, "function fit!(p) = 1")])), "fit!");
         assert_eq!(super::cell_name(&diff(&[(Change::Added, "scatter(data.S, r)")])), "cell 47ce3f7e");
+    }
+
+    #[test]
+    fn notebook_rows_name_what_they_act_on() {
+        use serde_json::json;
+        let seen = |id: &str| (id == "c-fit").then(|| "fit".to_string());
+        let line = |title: &str, input: serde_json::Value, output: Option<serde_json::Value>, running: bool| {
+            let l = super::pluto_line(&format!("mcp__pluto__{title}"), &[], &input, output.as_ref(), running, &seen);
+            (l.verb, l.object)
+        };
+        let out = |v: serde_json::Value| Some(json!([{ "type": "text", "text": v.to_string() }]));
+        let null = serde_json::Value::Null;
+        assert_eq!(line("add_cell", null.clone(), None, true), ("Adding a cell".into(), None), "before its input arrives");
+        assert_eq!(line("add_cell", json!({"code": "y = 2x"}), None, true), ("Adding".into(), Some("y".into())));
+        assert_eq!(line("add_cell", null.clone(), None, false), ("Added a cell".into(), None));
+        assert_eq!(line("read_cell", json!({"cell_id": "c-9"}), out(json!({"cell_id": "c-9", "code": "model(S, p) = p[1] * S"})), false), ("Read".into(), Some("model".into())));
+        assert_eq!(line("read_cell", json!({"cell_id": "c-fit"}), None, true), ("Reading".into(), Some("fit".into())));
+        assert_eq!(line("read_cell", json!({"cell_id": "c-9"}), out(json!({"cell_id": "c-9", "code": "scatter(x)"})), false), ("Read a cell".into(), None));
+        assert_eq!(line("read_notebook_code", json!({"notebook_id": "n"}), out(json!({"path": "/w/fit.jl", "code": ""})), false), ("Read".into(), Some("fit.jl".into())));
+        assert_eq!(line("read_notebook_code", json!({"notebook_id": "n"}), None, true), ("Reading the notebook".into(), None));
+        assert_eq!(line("list_notebooks", null.clone(), None, false), ("Listed notebooks".into(), None));
+        assert_eq!(line("fold_cell", null, None, false), ("fold_cell".into(), None));
     }
 
     #[test]
