@@ -718,7 +718,7 @@ impl Session {
                 let fields = &request.tool_call.fields;
                 let title = fields.title.clone().unwrap_or_else(|| "Tool call".into());
                 // Only runs get the run card ("Always this session"); other notebook
-                // prompts (e.g. plan mode asking before a read) get the agent's options.
+                // prompts (e.g. Manual asking before an edit) get the agent's options.
                 let input = fields.raw_input.clone().unwrap_or_default();
                 let runs_code = title.strip_prefix(celldiff::TOOL_PREFIX).is_some_and(|tool| gate::runs_code(tool, &input));
                 if runs_code && self.run_without_asking {

@@ -161,6 +161,28 @@ fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
 /// stand in for them).
 const LOCAL_TOOLS: [&str; 8] = ["Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "NotebookEdit"];
 
+/// The runtime's tools that only read: they run without asking in every mode, as
+/// Claude Code's own reads do in its default mode. Claude Code prompts for any
+/// MCP tool without an allow rule, `readOnlyHint` or not (2.1.280). Every other
+/// notebook and host tool (edits, runs, `run_shell`) still asks in Manual.
+const READ_ONLY_TOOLS: [&str; 15] = [
+    "mcp__notebook__list_notebooks",
+    "mcp__notebook__pluto_session_status",
+    "mcp__notebook__read_cell",
+    "mcp__notebook__read_notebook_code",
+    "mcp__notebook__view_cell_output",
+    "mcp__notebook__get_cell_order",
+    "mcp__notebook__get_execution_order",
+    "mcp__notebook__get_cell_dependencies",
+    "mcp__notebook__get_cell_dependents",
+    "mcp__notebook__find_symbol_definitions",
+    "mcp__notebook__find_symbol_references",
+    "mcp__notebook__search_code",
+    "mcp__notebook__validate_cell",
+    "mcp__notebook__list_folder",
+    "mcp__notebook__read_file",
+];
+
 /// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
 /// skills and guards) always; the project's settings and CLAUDE.md (from the
 /// working directory) always; the user's personal setup (user settings, their MCP
@@ -174,6 +196,7 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_j
             "strictMcpConfig": !personal,
             "plugins": [{ "type": "local", "path": plugin_dir }],
             "disallowedTools": disallowed,
+            "allowedTools": READ_ONLY_TOOLS,
         } }
     })
 }
@@ -803,6 +826,31 @@ mod tests {
         assert_eq!(personal["settingSources"], serde_json::json!(["user", "project", "local"]));
         assert_eq!(personal["strictMcpConfig"], false);
         assert_eq!(personal["plugins"][0]["path"], "/p");
+    }
+
+    /// Reads run without asking; edits, runs and commands still ask. Every tool
+    /// the runtime offers is on one side or the other, so a new tool needs a decision here.
+    #[test]
+    fn reads_run_without_asking_and_everything_else_asks() {
+        let tools: Vec<String> = serde_json::from_str::<Vec<serde_json::Value>>(include_str!("../crates/endeavor-remote/src/notebook_tools.json"))
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .chain(["list_folder", "read_file", "run_shell"].map(String::from))
+            .collect();
+        let asks = [
+            "edit_cell", "edit_cells", "add_cell", "delete_cell", "move_cell", "fold_cell", "execute_cell", "submit_changes", "run_all_cells",
+            "allow_execution", "new_notebook", "open_notebook", "keep_notebook_alive", "run_shell",
+        ];
+        for mode in [false, true] {
+            let allowed = session_options(false, "/p", mode)["claudeCode"]["options"]["allowedTools"].clone();
+            let allowed: Vec<String> = serde_json::from_value(allowed).unwrap();
+            for tool in &tools {
+                let full = format!("mcp__notebook__{tool}");
+                assert_ne!(allowed.contains(&full), asks.contains(&tool.as_str()), "{tool}: decide whether it asks");
+            }
+            assert_eq!(allowed.len() + asks.len(), tools.len(), "no allowed tool the runtime doesn't have");
+        }
     }
 
     #[test]
