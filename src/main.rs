@@ -88,6 +88,7 @@ actions!(
         ToggleAnnotation,
         CycleMode,
         ToggleSidebar,
+        NewSession,
         OpenSettings,
         FindSetting,
         Quit,
@@ -1779,6 +1780,13 @@ impl Workspace {
         cx.notify();
     }
 
+    /// ⌘N, and a click on the sidebar's "New session" row.
+    fn new_session(&mut self, _: &NewSession, _: &mut Window, cx: &mut Context<Self>) {
+        self.active = None;
+        self.scan_notebooks(cx);
+        cx.notify();
+    }
+
     /// A 1px column divider with a wider invisible grip for dragging. The grip
     /// sits left of the line: the notebook's web view covers anything to its right.
     fn divider(&self, which: Divider, color: Rgba, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2701,11 +2709,7 @@ impl Workspace {
                     .child(div().text_color(theme::text_faint()).child("+"))
                     .child(div().flex_1().child("New session"))
                     .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child("⌘N"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.active = None;
-                        this.scan_notebooks(cx);
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(|this, _, window, cx| this.new_session(&NewSession, window, cx))),
             )
             .when(self.any_sessions_at_all(), |d| {
                 d.child(match &self.sidebar_search {
@@ -3346,6 +3350,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_annotation))
             .on_action(cx.listener(Self::cycle_mode))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::new_session))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::find_setting))
             .on_action(cx.listener(Self::add_files))
@@ -3472,6 +3477,8 @@ fn main() {
             KeyBinding::new("shift-tab", CycleMode, Some("MentionList > Input")),
             KeyBinding::new("secondary-b", ToggleSidebar, Some("Input")),
             KeyBinding::new("secondary-b", ToggleSidebar, None),
+            KeyBinding::new("secondary-n", NewSession, Some("Input")),
+            KeyBinding::new("secondary-n", NewSession, None),
             KeyBinding::new("secondary-,", OpenSettings, None),
             KeyBinding::new("secondary-f", FindSetting, None),
             KeyBinding::new("secondary-q", Quit, None),
