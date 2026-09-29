@@ -28,6 +28,8 @@ _Listed 2026-09-25._
 - [ ] Julia picker's prompt text ("Use this julia") in Settings — improvised
 - [x] Offline: no network shows as a generic setup failure; losing it mid-session has no state — missing. Built as waiting, not failure (nothing red or orange; every state has a grey Try now; Endeavor reconnects by itself), from the system's network status (Network framework on macOS, netlink route changes on Linux). First launch: "No internet connection" with each step done, paused or needing internet, "Waiting for a connection", and setup carries on when the network is back. On This Mac: "You're offline. The notebook still works. Claude will continue when you're back." above the composer, "Offline · reconnects by itself" in the sidebar, and a turn that hears nothing shows "Waiting for the connection · 0:42". On a server: the notebook stays up, read-only and slightly dimmed, tagged "Read-only", under "Looks like you're offline. Endeavor will reconnect when you're back online."; with the Mac online but the server silent, "Can't reach lab-server" with the VPN hint, retried every 15 seconds. Messages sent meanwhile queue under "These send in order when you're back." and go in order
 
+- [ ] Menus close when you click outside them (and with Esc), like every macOS menu: today a context or ⋮ menu (session row, notebook ⋮, mode, model, chip popovers) stays open until you click its own button again — bug
+
 ## Sidebar
 
 - [ ] Session row states: active, working dot, needs-approval dot — improvised
