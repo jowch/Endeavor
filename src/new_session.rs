@@ -777,7 +777,7 @@ impl Workspace {
         let this_mac = this_mac.child(gear_button("gear-this-mac", "host-gear-this-mac").on_click(cx.listener(|this, _, window, cx| {
             cx.stop_propagation();
             this.close_popover(window, cx);
-            this.settings_open = true;
+            this.open_settings_at(crate::settings_panel::Page::Section(crate::settings_panel::Section::Hosts), window, cx);
         })));
         let rows = |clusters: bool, cx: &mut Context<Self>| -> Vec<Stateful<Div>> {
             self.hosts
@@ -1097,7 +1097,6 @@ impl Workspace {
     /// The new-session screen, set to start in `folder` on `notebook` (its preview shows).
     pub fn new_session_on(&mut self, folder: Place, notebook: PathBuf, cx: &mut Context<Self>) {
         self.active = None;
-        self.settings_open = false;
         if folder.host != self.draft.host || Some(&folder.path) != self.draft.folder.as_ref() {
             self.draft.host = folder.host;
             self.draft.folder = Some(folder.path);
@@ -1404,6 +1403,18 @@ pub(crate) enum Glyph {
     External,
     /// Back: a chevron pointing left.
     Back,
+    /// Onward: a chevron pointing right.
+    Forward,
+    /// Close: a cross.
+    Close,
+    /// Light or dark: a circle, its right half filled.
+    Contrast,
+    /// Troubleshooting: a wrench.
+    Wrench,
+    /// About, and a note: an i in a circle.
+    Info,
+    /// Finder: a window split down the middle.
+    Finder,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -1654,6 +1665,58 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&[(10.5, 1.5), (5.5, 6.5)]);
                 }
                 Glyph::Back => polyline(&[(7.5, 3.), (4.5, 6.), (7.5, 9.)]),
+                Glyph::Forward => polyline(&[(4.5, 3.), (7.5, 6.), (4.5, 9.)]),
+                Glyph::Close => {
+                    polyline(&[(3., 3.), (9., 9.)]);
+                    polyline(&[(9., 3.), (3., 9.)]);
+                }
+                Glyph::Contrast => {
+                    let r = 4.3;
+                    let ring: Vec<(f32, f32)> = (0..=24)
+                        .map(|i| {
+                            let a = std::f32::consts::TAU * i as f32 / 24.;
+                            (6. + r * a.cos(), 6. + r * a.sin())
+                        })
+                        .collect();
+                    polyline(&ring);
+                    // The stroke only draws lines, so the filled half is hatched densely.
+                    for i in 0..9 {
+                        let x = 6. + 0.5 * i as f32;
+                        let h = (r * r - (x - 6.) * (x - 6.)).max(0.).sqrt();
+                        polyline(&[(x, 6. - h), (x, 6. + h)]);
+                    }
+                }
+                Glyph::Wrench => {
+                    polyline(&[(1.9, 10.1), (6.1, 5.9)]);
+                    polyline(&[(2.8, 11.), (7., 6.8)]);
+                    polyline(&[(1.9, 10.1), (2.8, 11.)]);
+                    let jaw: Vec<(f32, f32)> = (0..=16)
+                        .map(|i| {
+                            let a = 2.2 + 4.2 * i as f32 / 16.;
+                            (8.2 + 2.6 * a.cos(), 3.8 + 2.6 * a.sin())
+                        })
+                        .collect();
+                    polyline(&jaw);
+                    polyline(&[(6.1, 5.9), (jaw[0].0, jaw[0].1)]);
+                    polyline(&[(7., 6.8), (jaw[16].0, jaw[16].1)]);
+                }
+                Glyph::Info => {
+                    let ring: Vec<(f32, f32)> = (0..=24)
+                        .map(|i| {
+                            let a = std::f32::consts::TAU * i as f32 / 24.;
+                            (6. + 4.3 * a.cos(), 6. + 4.3 * a.sin())
+                        })
+                        .collect();
+                    polyline(&ring);
+                    polyline(&[(6., 5.4), (6., 8.6)]);
+                    polyline(&[(6., 3.6), (6., 4.3)]);
+                }
+                Glyph::Finder => {
+                    polyline(&[(1.5, 2.), (10.5, 2.), (10.5, 10.), (1.5, 10.), (1.5, 2.)]);
+                    polyline(&[(6., 2.), (6., 10.)]);
+                    polyline(&[(3., 4.5), (4.5, 4.5)]);
+                    polyline(&[(7.5, 4.5), (9., 4.5)]);
+                }
                 Glyph::WifiOff => {
                     for (r, half) in [(6.75f32, 0.77f32), (4.3, 0.75), (1.95, 0.66)] {
                         let arc: Vec<(f32, f32)> = (0..=12)

@@ -325,6 +325,8 @@ impl Workspace {
         match host {
             HostId::ThisMac => {
                 let keep_running = self.settings.keep_running;
+                // The helper runs this Julia for as long as it lives (runtime::connect).
+                self.settings_checks.local_julia = Some(self.settings.julia.clone());
                 std::thread::spawn(move || {
                     let progress = |p: Progress| drop(tx.unbounded_send(Update::Local(p)));
                     let result = runtime::connect(keep_running, &progress).map(|(channel, hello)| (Arc::new(channel), hello, None));
@@ -392,7 +394,12 @@ impl Workspace {
     }
 
     /// Stop This Mac's Julia and start it again (Settings → Restart Julia).
+    /// Another Julia chosen since it started needs a new helper, which a
+    /// reconnect starts with it.
     pub fn restart_local(&mut self, cx: &mut Context<Self>) {
+        if self.julia_changed() {
+            return self.reconnect_local(false, cx);
+        }
         let host = HostId::ThisMac;
         let Some(connection) = self.connections.get_mut(&host) else { return self.connect_host(&host, true, cx) };
         let Some(channel) = connection.channel.clone().filter(|_| connection.status == Status::Ready) else { return };
@@ -464,10 +471,16 @@ impl Workspace {
         }
     }
 
-    /// Settings → Repair runtime, or Repair beside This Mac's error: stop
+    /// Settings → Repair Julia, or Repair beside This Mac's error: stop
     /// Julia and the helper, clear the runtime's state that can go stale
     /// (`runtime::clear_state`), then connect and start again.
     pub fn repair_local(&mut self, cx: &mut Context<Self>) {
+        self.reconnect_local(true, cx);
+    }
+
+    /// Stop This Mac's Julia and its helper, clear the runtime's state if
+    /// `clear`, then connect and start again.
+    fn reconnect_local(&mut self, clear: bool, cx: &mut Context<Self>) {
         let host = HostId::ThisMac;
         let (channel, running, gone) = match self.connections.get_mut(&host) {
             // Still installing Julia: nothing to repair yet.
@@ -478,28 +491,30 @@ impl Workspace {
                 c.id = next_connect_id();
                 let gone = c.forget_runtime();
                 c.status = Status::Starting;
-                c.steps = Steps::new("Repairing the runtime");
+                c.steps = Steps::new(if clear { "Clearing what Julia saved" } else { "Stopping Julia" });
                 c.stopping = false;
                 (c.channel.take(), running, gone)
             }
             None => (None, None, None),
         };
         self.close_page(gone, cx);
-        self.status = "Repairing the runtime…".into();
+        self.settings_checks.repairing = clear;
+        self.status = if clear { "Repairing Julia…" } else { "Restarting Julia…" }.into();
         let work = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(channel) = channel {
                 channel.stop();
                 channel.detach();
             }
-            (runtime::clear_state(), resume)
+            (if clear { runtime::clear_state() } else { Ok(Vec::new()) }, resume)
         });
         cx.spawn(async move |this, cx| {
             let (cleared, resume) = work.await;
             let _ = this.update(cx, |this, cx| {
                 match cleared {
-                    Ok(paths) => eprintln!("Repair runtime cleared {paths:?}"),
-                    Err(e) => eprintln!("Repair runtime: {e}"),
+                    Ok(paths) if clear => eprintln!("Repair Julia cleared {paths:?}"),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("Repair Julia: {e}"),
                 }
                 if let Some(connection) = this.connections.get_mut(&host) {
                     connection.status = Status::Failed(String::new());
@@ -721,6 +736,9 @@ impl Workspace {
     /// `host`'s runtime is up: tell it what the app knows, follow its notebooks,
     /// and start the sessions waiting on it.
     fn on_ready(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        if *host == HostId::ThisMac {
+            self.settings_checks.repairing = false;
+        }
         let Some(bridge) = self.bridge(host) else { return };
         let reattached = self.connections.get(host).and_then(|c| c.runtime.as_ref()).is_some_and(|r| r.reattached);
         if *host == HostId::ThisMac {

@@ -14,8 +14,8 @@ pub const WEBSITE: &str = "https://github.com/jowch/Endeavor";
 pub const HELP: &str = "https://github.com/jowch/Endeavor#readme";
 pub const REPORT_ISSUE: &str = "https://github.com/jowch/Endeavor/issues/new";
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const BUILD: &str = env!("ENDEAVOR_BUILD");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD: &str = env!("ENDEAVOR_BUILD");
 const ICON: &[u8] = include_bytes!("../assets/icon/endeavor-256.png");
 
 /// What the app knows about updates. The app can't update itself yet, so
@@ -75,6 +75,33 @@ pub fn notices(updates: &Updates) -> Vec<Notice> {
         rows.push(Notice { text: "Everything is up to date.".into(), button: Some(("Check now", Action::CheckNow, false)), ok: true });
     }
     rows
+}
+
+/// One part that updates, as Settings' About lists it: Endeavor, then the adapter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateRow {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub state: String,
+    /// Its button: label, action, and whether it's the primary one.
+    pub button: Option<(&'static str, Action, bool)>,
+    /// Something to do (orange words).
+    pub attention: bool,
+}
+
+/// The same updates as `notices`, one row per part.
+pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
+    let app = match &updates.app {
+        Some(version) => UpdateRow { key: "update-endeavor", name: "Endeavor", state: format!("Version {version} is ready. It installs when Endeavor restarts."), button: Some(("Restart", Action::Restart, true)), attention: true },
+        None => UpdateRow { key: "update-endeavor", name: "Endeavor", state: "Up to date".into(), button: Some(("Check now", Action::CheckNow, false)), attention: false },
+    };
+    let primary = updates.app.is_none();
+    let (state, button, attention) = match &updates.adapter {
+        Adapter::Current => ("Up to date".to_owned(), None, false),
+        Adapter::Installing(version) => (format!("Installing version {version}…"), None, false),
+        Adapter::Available(version) => (format!("Version {version} is available"), Some(("Update", Action::UpdateAdapter, primary)), true),
+    };
+    [app, UpdateRow { key: "update-adapter", name: "Claude Code adapter", state, button, attention }]
 }
 
 /// The About and Licences windows, so each opens once and comes forward after.
@@ -406,7 +433,18 @@ impl Render for Licences {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Adapter, BUILD, Notice, Updates, notices};
+    use super::{Action, Adapter, BUILD, Notice, Updates, notices, parts};
+
+    #[test]
+    fn settings_lists_each_part_with_its_own_button() {
+        let current = parts(&Updates { app: None, adapter: Adapter::Current });
+        let rows: Vec<_> = current.iter().map(|p| (p.name, p.state.as_str(), p.button.map(|b| b.0))).collect();
+        assert_eq!(rows, [("Endeavor", "Up to date", Some("Check now")), ("Claude Code adapter", "Up to date", None)]);
+        let adapter = parts(&Updates { app: None, adapter: Adapter::Available("0.4".into()) });
+        assert_eq!((adapter[1].state.as_str(), adapter[1].button, adapter[1].attention), ("Version 0.4 is available", Some(("Update", Action::UpdateAdapter, true)), true));
+        let both = parts(&Updates { app: Some("0.2.0".into()), adapter: Adapter::Available("0.4".into()) });
+        assert_eq!((both[0].button, both[1].button), (Some(("Restart", Action::Restart, true)), Some(("Update", Action::UpdateAdapter, false))));
+    }
 
     #[test]
     fn up_to_date_offers_check_now() {

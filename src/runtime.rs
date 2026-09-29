@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -207,11 +207,15 @@ const JULIA_TARBALL: (&str, &str, u64) = (
 );
 
 
-/// The julia binary to run: the user's (Settings), else the app's own,
-/// downloaded and verified on first run. `progress` hears how that's going.
+/// The julia binary to run: the user's (Settings) while it's there and is
+/// Julia, else the app's own, downloaded and verified on first run.
+/// `progress` hears how that's going.
 fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
     if let Some(julia) = crate::settings::Settings::load().julia {
-        return Ok(julia.display().to_string());
+        match check_chosen(&julia) {
+            ChosenJulia::Usable(_) => return Ok(julia.display().to_string()),
+            problem => eprintln!("The chosen Julia {} can't be used ({problem:?}); using Endeavor's.", julia.display()),
+        }
     }
     let dir = crate::install::app_dir()?.join(format!("julia-{JULIA_VERSION}"));
     let bin = dir.join("bin/julia");
@@ -625,6 +629,45 @@ fn check_version(julia: &str) -> Result<(), String> {
     }
 }
 
+/// What a julia the user chose in Settings turned out to be.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChosenJulia {
+    /// It runs and is new enough; its version, e.g. "1.11.5".
+    Usable(String),
+    /// Nothing is at the path any more.
+    Gone,
+    /// Something is there, but it didn't answer as Julia does.
+    NotJulia,
+    /// Julia, but older than Endeavor needs; its version.
+    TooOld(String),
+}
+
+/// Run the chosen file once to read its version (blocking; Julia answers in well under a second).
+pub fn check_chosen(path: &Path) -> ChosenJulia {
+    if !path.is_file() {
+        return ChosenJulia::Gone;
+    }
+    match Command::new(path).arg("--version").output() {
+        Ok(out) if out.status.success() => chosen_from_version(&String::from_utf8_lossy(&out.stdout)),
+        _ => ChosenJulia::NotJulia,
+    }
+}
+
+/// `julia --version`'s answer, as a check of the chosen file.
+fn chosen_from_version(text: &str) -> ChosenJulia {
+    let Some(version) = text.trim().strip_prefix("julia version ") else { return ChosenJulia::NotJulia };
+    match parse_version(text) {
+        Some(v) if v < MIN_JULIA => ChosenJulia::TooOld(version.to_owned()),
+        Some(_) => ChosenJulia::Usable(version.to_owned()),
+        None => ChosenJulia::NotJulia,
+    }
+}
+
+/// The oldest Julia Endeavor runs, for saying so ("1.11").
+pub fn min_julia() -> String {
+    format!("{}.{}", MIN_JULIA.0, MIN_JULIA.1)
+}
+
 /// "julia version 1.12.6" -> (1, 12)
 fn parse_version(text: &str) -> Option<(u32, u32)> {
     let mut parts = text.trim().rsplit(' ').next()?.split('.');
@@ -679,7 +722,15 @@ fn diagnose(tail: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{diagnose, died_reason, parse_version};
+    use super::{ChosenJulia, chosen_from_version, diagnose, died_reason, parse_version};
+
+    #[test]
+    fn a_chosen_file_is_julia_when_it_says_so() {
+        assert_eq!(chosen_from_version("julia version 1.11.5\n"), ChosenJulia::Usable("1.11.5".into()));
+        assert_eq!(chosen_from_version("julia version 1.10.4\n"), ChosenJulia::TooOld("1.10.4".into()));
+        assert_eq!(chosen_from_version("Python 3.12.1\n"), ChosenJulia::NotJulia);
+        assert_eq!(chosen_from_version(""), ChosenJulia::NotJulia);
+    }
 
     #[test]
     fn says_plainly_why_julia_stopped() {

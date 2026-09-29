@@ -85,7 +85,7 @@ impl Reason {
     }
 
     /// What happened, then what to do about it.
-    fn says(self) -> (&'static str, Option<&'static str>) {
+    pub fn says(self) -> (&'static str, Option<&'static str>) {
         match self {
             Reason::BrowserClosed => ("The browser page closed before sign-in finished.", None),
             Reason::FreePlan => (
@@ -100,10 +100,53 @@ impl Reason {
 
 /// Claude Code's sign-in on this computer: how it signed in, or None when signed out.
 pub fn status() -> Result<Option<Method>, String> {
+    Ok(profile()?.map(|p| p.method))
+}
+
+/// Who is signed in, as `claude auth status` tells it (Settings' Claude page).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub method: Method,
+    pub email: Option<String>,
+    /// The plan's name, as people call it ("Claude Max").
+    pub plan: String,
+    pub org: Option<String>,
+}
+
+/// Claude Code's sign-in on this computer, with the account's details; None when signed out.
+pub fn profile() -> Result<Option<Profile>, String> {
     let out = crate::agent::claude_cli(&["auth", "status"])?.output().map_err(|e| e.to_string())?;
     let status: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("Couldn't read Claude's sign-in status: {e}"))?;
+    profile_of(&status)
+}
+
+fn profile_of(status: &serde_json::Value) -> Result<Option<Profile>, String> {
     let signed_in = status["loggedIn"].as_bool().ok_or("Couldn't read Claude's sign-in status.")?;
-    Ok(signed_in.then(|| if status["authMethod"] == "claude.ai" { Method::ClaudeAi } else { Method::Console }))
+    if !signed_in {
+        return Ok(None);
+    }
+    let method = if status["authMethod"] == "claude.ai" { Method::ClaudeAi } else { Method::Console };
+    let text = |key: &str| status[key].as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned);
+    Ok(Some(Profile { method, email: text("email"), plan: plan_name(method, text("subscriptionType").as_deref()), org: text("orgName") }))
+}
+
+/// `subscriptionType` as the plan's name.
+pub fn plan_name(method: Method, subscription: Option<&str>) -> String {
+    match (method, subscription) {
+        (Method::Console, _) => "Anthropic Console, paid by use".into(),
+        (Method::ClaudeAi, None) => "A Claude plan".into(),
+        (Method::ClaudeAi, Some(kind)) => {
+            let mut chars = kind.chars();
+            let first: String = chars.next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+            format!("Claude {first}{}", chars.as_str().to_lowercase())
+        }
+    }
+}
+
+/// `claude auth logout` (blocking).
+fn log_out() -> Result<(), String> {
+    let out = crate::agent::claude_cli(&["auth", "logout"])?.output().map_err(|e| e.to_string())?;
+    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()) }
 }
 
 /// Set on `claude auth login`: the CLI opens its sign-in page through `$BROWSER`,
@@ -415,6 +458,7 @@ impl Workspace {
                 self.status = "Signed in to Claude.".into();
                 self.finish_setup(cx);
                 self.sync_holds(cx);
+                self.refresh_profile(cx);
             }
             // Not a sign-in failure: the offline state says what's going on.
             Outcome::Failed(Reason::Offline, _) => self.account = Account::SignedOut(self.back_stage()),
@@ -437,7 +481,7 @@ impl Workspace {
         true
     }
 
-    fn open_sign_in_again(&mut self, cx: &mut Context<Self>) {
+    pub fn open_sign_in_again(&mut self, cx: &mut Context<Self>) {
         let Account::SignedOut(Stage::Waiting(login)) = &self.account else { return };
         match login.url() {
             Some(url) => {
@@ -446,6 +490,35 @@ impl Workspace {
             // The CLI hasn't said where yet: start over, which opens a new page.
             None => self.begin_sign_in(login.method, cx),
         }
+    }
+
+    /// Settings' Sign out: asks first, then signs Claude Code out on this computer.
+    pub fn sign_out_of_claude(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Sign out of Claude?",
+            Some("Claude stops answering in every session until you sign in again."),
+            &[PromptButton::cancel("Cancel"), PromptButton::new("Sign out")],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if answer.await != Ok(1) {
+                return;
+            }
+            let done = cx.background_executor().spawn(async { log_out() }).await;
+            let _ = this.update(cx, |this, cx| {
+                match done {
+                    Ok(()) => {
+                        this.account = Account::SignedOut(Stage::Account);
+                        this.sync_holds(cx);
+                    }
+                    Err(e) => this.status = format!("Couldn't sign out: {e}").into(),
+                }
+                this.refresh_profile(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// The expired card's Enter: sign in the way it was done last.
@@ -789,7 +862,26 @@ const PLANS: &str = "https://claude.com/pricing";
 
 #[cfg(test)]
 mod tests {
-    use super::{Method, Reason};
+    use super::{Method, Profile, Reason, plan_name, profile_of};
+
+    #[test]
+    fn the_plan_reads_as_people_name_it() {
+        assert_eq!(plan_name(Method::ClaudeAi, Some("max")), "Claude Max");
+        assert_eq!(plan_name(Method::ClaudeAi, Some("pro")), "Claude Pro");
+        assert_eq!(plan_name(Method::ClaudeAi, Some("enterprise")), "Claude Enterprise");
+        assert_eq!(plan_name(Method::ClaudeAi, None), "A Claude plan");
+        assert_eq!(plan_name(Method::Console, None), "Anthropic Console, paid by use");
+    }
+
+    #[test]
+    fn auth_status_gives_the_account() {
+        let status = serde_json::json!({ "loggedIn": true, "authMethod": "claude.ai", "email": "s.okafor@lab.example.edu", "subscriptionType": "max", "orgName": "Okafor Lab" });
+        let expected = Profile { method: Method::ClaudeAi, email: Some("s.okafor@lab.example.edu".into()), plan: "Claude Max".into(), org: Some("Okafor Lab".into()) };
+        assert_eq!(profile_of(&status), Ok(Some(expected)));
+        assert_eq!(profile_of(&serde_json::json!({ "loggedIn": false, "authMethod": "none" })), Ok(None));
+        let console = profile_of(&serde_json::json!({ "loggedIn": true, "authMethod": "console", "orgName": "" })).unwrap().unwrap();
+        assert_eq!((console.method, console.org), (Method::Console, None));
+    }
 
     #[test]
     fn the_clis_last_line_names_the_reason() {

@@ -100,6 +100,7 @@ impl Workspace {
                 None => self.draft_pane_state(cx),
             },
             "composer": self.composer_state(active, cx),
+            "settings": self.settings_debug(cx),
             "page": page,
         })
     }
@@ -117,7 +118,6 @@ impl Workspace {
         let screen = match &self.setup {
             Some(_) if self.offline_since.is_none() && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
             Some(_) => "splash",
-            None if self.settings_open => "settings",
             None if self.active.is_some() => "session",
             None => "new_session",
         };
@@ -125,6 +125,7 @@ impl Workspace {
             "screen": screen,
             "setup": self.setup.as_ref().map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
             "modal": modal,
+            "settings_open": self.settings_panel.is_some(),
             "menu_open": self.menu.is_some(),
         })
     }
@@ -156,7 +157,7 @@ impl Workspace {
                     json!({
                         "title": s.title,
                         "open": true,
-                        "active": self.active == Some(s.key) && !self.settings_open,
+                        "active": self.active == Some(s.key),
                         "mark": self.row_mark(s).map(|m| match m {
                             RowMark::NeedsApproval => "needs_approval",
                             RowMark::Working => "working",

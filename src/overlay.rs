@@ -67,6 +67,8 @@ pub enum Hole {
     Menu,
     Tip,
     Tooltip,
+    /// The Settings panel.
+    Settings,
 }
 
 /// The open holes, in the web view's coordinates from its top-left corner, and
@@ -211,6 +213,23 @@ pub fn set_dismiss_on_click(webview: &wry::WebView, active: bool) {
         holes.dismiss = active;
     }
     install_send_event();
+}
+
+/// Dim the web view as the scrim behind a panel dims the rest of the window:
+/// drawn at 38% over the scrim, it matches a 62% black layer over it.
+pub fn set_dimmed(webview: &wry::WebView, dimmed: bool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use wry::WebViewExtMacOS;
+    static DIMMED: AtomicBool = AtomicBool::new(false);
+    if DIMMED.swap(dimmed, Ordering::Relaxed) == dimmed {
+        return;
+    }
+    let view = webview.webview();
+    let view = &*view as *const _ as *mut AnyObject;
+    let alpha: f64 = if dimmed { 0.38 } else { 1. };
+    unsafe {
+        let _: () = msg_send![view, setAlphaValue: alpha];
+    }
 }
 
 /// Cut `owner`'s hole in the web view at `hole` (relative to the web view's

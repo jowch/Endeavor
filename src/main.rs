@@ -42,6 +42,7 @@ mod runtime;
 mod server_dialog;
 mod session;
 mod settings;
+mod settings_panel;
 mod signin;
 #[cfg(target_os = "macos")]
 mod snapshot;
@@ -60,7 +61,7 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState, TextareaState};
-use gpui_component::radio::Radio;
+
 use gpui_component::{Root, Sizable, Theme, ThemeConfig, ThemeMode};
 use gpui_wry::WebView;
 use hosts::{HostId, Place};
@@ -68,7 +69,7 @@ use outbox::Queued;
 use new_session::{Draft, Glyph, NotebookChoice, glyph, menu_row};
 use notebook_pane::NotebookAction;
 use session::{Effect, Session, Stopped, folder_name};
-use settings::{Appearance, IdleStop, NotebookTheme, Settings};
+use settings::{NotebookTheme, Settings};
 use splash::{Progress, Setup};
 use wire::backend::Backend;
 
@@ -86,6 +87,7 @@ actions!(
         CycleMode,
         ToggleSidebar,
         OpenSettings,
+        FindSetting,
         Quit,
         ZoomIn,
         ZoomOut,
@@ -114,22 +116,6 @@ fn save_json(name: &str, value: &impl serde::Serialize) {
     if let (Some(file), Ok(json)) = (app_file(name), serde_json::to_string_pretty(value)) {
         let _ = std::fs::create_dir_all(file.parent().unwrap()).and_then(|_| std::fs::write(file, json));
     }
-}
-
-/// A checkbox row. Drawn here: gpui-component's Checkbox needs an icon asset set
-/// for its check mark, which the app doesn't ship.
-fn check_row(id: &'static str, checked: bool, label: &'static str) -> Stateful<Div> {
-    let mark = div()
-        .size_4()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_sm()
-        .border_1()
-        .border_color(theme::text_faint())
-        .text_size(theme::size_meta_small())
-        .when(checked, |d| d.bg(theme::accent()).border_color(theme::accent()).child("✓"));
-    div().id(id).flex().items_center().gap_2().cursor_pointer().child(mark).child(label)
 }
 
 /// The range a divider can drag the panes to (defaults: settings::Layout).
@@ -477,8 +463,12 @@ pub struct Workspace {
     /// The agent's config options (model, effort) as the last session offered
     /// them (persisted), so the new-session screen can offer them too.
     agent_options: Vec<agent_client_protocol::schema::v1::SessionConfigOption>,
-    /// The Settings screen is in the chat pane.
-    settings_open: bool,
+    /// The Settings panel, while open.
+    settings_panel: Option<settings_panel::Panel>,
+    /// Where Settings was last left, to open there again.
+    settings_page: settings_panel::Page,
+    /// What Settings found out: the account, the chosen Julia.
+    settings_checks: settings_panel::Checks,
     /// First launch: the setup screen covers the window until setup finishes.
     setup: Option<Setup>,
     /// The agent connected (setup's last step).
@@ -696,7 +686,9 @@ impl Workspace {
             menu: None,
             expanded: HashSet::new(),
             settings: Settings::load(),
-            settings_open: false,
+            settings_panel: None,
+            settings_page: settings_panel::Page::Section(settings_panel::Section::Assistants),
+            settings_checks: settings_panel::Checks::default(),
             resizing: None,
             composer: composer::Composer::new(cx),
             chip_popover: None,
@@ -772,21 +764,6 @@ impl Workspace {
         f(&mut self.settings);
         self.settings.save();
         cx.notify();
-    }
-
-    fn choose_julia(&mut self, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Use this julia".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(mut paths))) = picked.await {
-                let _ = this.update(cx, |this, cx| this.update_settings(cx, |s| s.julia = paths.pop()));
-            }
-        })
-        .detach();
     }
 
     /// Start a session with the new-session screen's choices, and the input's
@@ -1104,10 +1081,19 @@ impl Workspace {
             || self.chip_popover.is_some()
             || self.filter_menu
             || (self.draft.popover.is_some() && self.active.is_none())
+            || self.settings_panel.is_some()
     }
 
     /// Close whatever `dismissible_open` found, as a click outside it does.
     fn close_dismissible(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Settings closes on a click outside it only when nothing inside it was open.
+        if let Some(panel) = &mut self.settings_panel {
+            if panel.idle_menu {
+                panel.idle_menu = false;
+                return cx.notify();
+            }
+            return self.close_settings(window, cx);
+        }
         self.close_menu(window, cx);
         self.close_composer_menus(cx);
         self.filter_menu = false;
@@ -1310,7 +1296,6 @@ impl Workspace {
     /// (without one, the pane draws a stand-in over the hidden web view).
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         self.active = Some(key);
-        self.settings_open = false;
         self.follow_folder(cx);
         if let Some((host, notebook)) = self.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
             self.load_notebook(&host, &notebook, cx);
@@ -1511,9 +1496,12 @@ impl Workspace {
     }
 
     /// ⇧⇥: the active session's next mode (e.g. default → plan → auto).
-    fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
-        self.settings_open = true;
-        cx.notify();
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_last(window, cx);
+    }
+
+    fn find_setting(&mut self, _: &FindSetting, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_settings_search(window, cx);
     }
 
     /// "/" at the start of the box lists the agent's commands matching what follows;
@@ -1626,6 +1614,9 @@ impl Workspace {
     }
 
     fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_escape(window, cx) {
+            return;
+        }
         if self.close_composer_menus(cx) {
             return;
         }
@@ -2239,7 +2230,7 @@ impl Workspace {
                     .filter(|s| &s.place == folder)
                     .map(|s| {
                         let key = s.key;
-                        let active = self.active == Some(key) && !self.settings_open;
+                        let active = self.active == Some(key);
                         let group: SharedString = format!("session-{key}").into();
                         let title_text = s.title.clone();
                         let title = self.row_label(&Row::Open(key), title_text.clone());
@@ -2348,7 +2339,6 @@ impl Workspace {
                     .child(self.render_filter_button(cx))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active = None;
-                        this.settings_open = false;
                         this.scan_notebooks(cx);
                         cx.notify();
                     })),
@@ -2403,8 +2393,9 @@ impl Workspace {
                             .rounded(px(4.))
                             .cursor_pointer()
                             .text_size(px(16.))
-                            .text_color(if self.settings_open { theme::text_primary() } else { theme::text_faint() })
-                            .when(self.settings_open, |d| d.bg(theme::row_active()))
+                            .relative()
+                            .text_color(if self.settings_panel.is_some() { theme::text_primary() } else { theme::text_faint() })
+                            .when(self.settings_panel.is_some(), |d| d.bg(theme::row_active()))
                             .hover(|s| s.text_color(theme::text_primary()))
                             .child("⚙")
                             .on_click(cx.listener(|this, _, window, cx| this.open_settings(&OpenSettings, window, cx))),
@@ -2467,160 +2458,6 @@ impl Workspace {
                 this.filter_menu = !this.filter_menu;
                 cx.notify();
             }))
-    }
-
-    fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = theme::text_muted();
-        let s = &self.settings;
-        let heading = |text: &'static str| div().mt_2().text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).child(text);
-        let note = |text: String| div().pl_6().text_size(theme::size_meta()).text_color(muted).child(text);
-        let own = s.julia.is_none();
-        div()
-            .id("settings")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_4()
-            .child(heading("Claude"))
-            .child(check_row("personal-claude", s.personal_claude, "Use my Claude Code setup").on_click(
-                cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.personal_claude = !s.personal_claude)),
-            ))
-            .child(note(
-                "Adds your user settings and MCP servers to Endeavor's plugin and the project's settings. Applies to new sessions."
-                    .into(),
-            ))
-            .child(check_row("run-without-asking", s.run_without_asking, "Run notebook code without asking").on_click(
-                cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking)),
-            ))
-            .child(note(
-                "New sessions in Manual start as if you'd chosen \"Always this session\". A reopened session keeps the mode it was in.".into(),
-            ))
-            .child(heading("Where notebooks run"))
-            .child(self.render_hosts(cx))
-            .child(heading("Stop idle notebooks after"))
-            .child(
-                div().flex().flex_wrap().gap_x_4().gap_y_2().children(IdleStop::ALL.map(|(value, label)| {
-                    Radio::new(label).text_size(theme::size_body()).checked(s.idle_stop == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
-                        this.update_settings(cx, |s| s.idle_stop = value);
-                        let hosts: Vec<HostId> = this.connections.keys().cloned().collect();
-                        for host in hosts {
-                            this.send_idle_limit(&host, cx);
-                        }
-                    }))
-                })),
-            )
-            .child(note(
-                "A notebook nobody has used for this long (no edits, runs, or Claude working in it) stops, even with Endeavor open. Start brings it back.".into(),
-            ))
-            .child(check_row("keep-running", s.keep_running, "Keep notebooks running after Endeavor quits").on_click(
-                cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.keep_running = !s.keep_running)),
-            ))
-            .child(note(
-                "Julia and its open notebooks carry on while Endeavor is closed, and Endeavor reconnects to them when it opens. They still stop when idle for the time above.".into(),
-            ))
-            .child(heading("Appearance"))
-            .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .children([(Appearance::Dark, "Dark"), (Appearance::Light, "Light"), (Appearance::System, "Match system")].map(
-                        |(value, label)| {
-                            Radio::new(label).text_size(theme::size_body()).checked(s.appearance == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
-                                this.update_settings(cx, |s| s.appearance = value);
-                                this.apply_look(cx);
-                            }))
-                        },
-                    )),
-            )
-            .child(note("Only the notebook follows it for now; Endeavor itself stays dark.".into()))
-            .child(heading("Notebook look"))
-            .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .children([(NotebookTheme::Endeavor, "Endeavor"), (NotebookTheme::Pluto, "Pluto classic")].map(|(value, label)| {
-                        Radio::new(label).text_size(theme::size_body()).checked(s.notebook_theme == value).label(label).on_click(cx.listener(move |this, _, _, cx| {
-                            this.update_settings(cx, |s| s.notebook_theme = value);
-                            this.apply_look(cx);
-                        }))
-                    })),
-            )
-            .child(note("Endeavor puts Pluto's controls in the pane's header and a drawer, matched to the app in dark mode (light mode uses Pluto's light colours). Pluto classic is Pluto's own page. The notebook's ⋮ menu switches too.".into()))
-            .child(heading("Julia"))
-            .child(
-                Radio::new("julia-own")
-                    .text_size(theme::size_body())
-                    .checked(own)
-                    .label(format!("Endeavor's Julia ({})", runtime::JULIA_VERSION))
-                    .on_click(cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.julia = None))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Radio::new("julia-mine")
-                            .text_size(theme::size_body())
-                            .checked(!own)
-                            .label("My julia")
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_julia(cx))),
-                    )
-                    .child(
-                        div()
-                            .id("choose-julia")
-                            .px_2()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .bg(theme::bg_raised())
-                            .child("Choose…")
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_julia(cx))),
-                    ),
-            )
-            .children(s.julia.as_ref().map(|p| note(p.display().to_string())))
-            .child(note("Takes effect the next time Julia starts (Restart Julia).".into()))
-            .when(self.status(&HostId::ThisMac) == Some(&connection::Status::Ready), |d| {
-                d.child(
-                    div()
-                        .id("restart-julia")
-                        .self_start()
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .bg(theme::bg_raised())
-                        .child("Restart Julia")
-                        .on_click(cx.listener(|this, _, _, cx| this.restart_local(cx))),
-                )
-            })
-            .child(note("Stops Julia and every open notebook, then starts them again. Notebook files are already saved.".into()))
-            .child(heading("Troubleshooting"))
-            .child(
-                div()
-                    .id("show-logs")
-                    .self_start()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(theme::bg_raised())
-                    .child("Show logs")
-                    .on_click(|_, _, _| logs::reveal()),
-            )
-            .child(note("The log of this run and the one before, to attach to a bug report.".into()))
-            .child(
-                div()
-                    .id("repair-runtime")
-                    .self_start()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(theme::bg_raised())
-                    .child("Repair runtime")
-                    .on_click(cx.listener(|this, _, _, cx| this.repair_local(cx))),
-            )
-            .child(note(connection::REPAIR_NOTE.into()))
     }
 
     /// The notebook's ⋮ button in its header, and its menu while open.
@@ -2719,10 +2556,17 @@ impl Render for Workspace {
         if self.webview.read(cx).visible() != show_webview {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
+        overlay::set_dimmed(self.webview.read(cx).raw(), self.settings_panel.is_some());
         let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
         let point_tip = self.point_tip_shows(show_webview && active.is_some_and(|ix| self.sessions[ix].notebook_path.is_some()));
         let webview = self.webview.read(cx).raw();
-        for (hole, open) in [(overlay::Hole::Menu, menu_over_notebook), (overlay::Hole::Tip, point_tip), (overlay::Hole::Tooltip, notebook_pane::tooltip_over_notebook())] {
+        let settings_over_notebook = self.settings_panel.is_some() && show_webview;
+        for (hole, open) in [
+            (overlay::Hole::Menu, menu_over_notebook),
+            (overlay::Hole::Tip, point_tip),
+            (overlay::Hole::Tooltip, notebook_pane::tooltip_over_notebook()),
+            (overlay::Hole::Settings, settings_over_notebook),
+        ] {
             if !open {
                 overlay::set_hole(webview, hole, None);
             }
@@ -2735,13 +2579,17 @@ impl Render for Workspace {
                 None => splash::Below::Progress,
             };
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
+            let settings = self.render_settings_panel(window, cx).map(|d| deferred(d).with_priority(2));
             return div()
                 .size_full()
                 .bg(theme::bg_page())
                 .text_color(theme::text_primary())
                 .text_size(theme::size_body())
+                .on_action(cx.listener(Self::interrupt))
+                .on_action(cx.listener(Self::find_setting))
                 .child(div().track_focus(&self.keyboard_home))
                 .child(splash::render(setup, below, retry, cx))
+                .children(settings)
                 .into_any_element();
         }
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
@@ -2756,13 +2604,11 @@ impl Render for Workspace {
             self.input.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
         }
         let chat = match active {
-            _ if self.settings_open => self.render_settings(cx).into_any_element(),
             Some(ix) => self.render_chat(&self.sessions[ix], stand_in.is_none(), window, cx).into_any_element(),
             None => self.render_new_session(window, cx).into_any_element(),
         };
         // Chat header: the session and its folder; the notebook header: its file.
         let (title, folder) = match active {
-            _ if self.settings_open => ("Settings".into(), None),
             Some(ix) => (self.sessions[ix].title.clone(), Some(self.folder_heading(&self.sessions[ix].place))),
             None => ("New session".into(), None),
         };
@@ -2788,6 +2634,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::cycle_mode))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::find_setting))
             .on_action(cx.listener(Self::add_files))
             .on_mouse_move(cx.listener(Self::drag_divider))
             .on_mouse_up(
@@ -2830,6 +2677,7 @@ impl Render for Workspace {
                     .child(div().flex_1().min_h_0().child(notebook)),
             )
             // Deferred so they paint, and take clicks, above everything else.
+            .children(self.render_settings_panel(window, cx).map(|d| deferred(d).with_priority(2)))
             .children(self.render_server_dialog(window, cx).map(|d| deferred(d).with_priority(3)))
             .children(self.render_askpass(cx).map(|d| deferred(d).with_priority(5)))
             .children(self.render_login_node_warning(cx).map(|d| deferred(d).with_priority(4)))
@@ -2903,6 +2751,7 @@ fn main() {
             KeyBinding::new("secondary-b", ToggleSidebar, Some("Input")),
             KeyBinding::new("secondary-b", ToggleSidebar, None),
             KeyBinding::new("secondary-,", OpenSettings, None),
+            KeyBinding::new("secondary-f", FindSetting, None),
             KeyBinding::new("secondary-q", Quit, None),
             KeyBinding::new("secondary-m", Minimize, None),
             KeyBinding::new("secondary-=", ZoomIn, None),
@@ -3002,13 +2851,10 @@ fn main() {
                 cx.on_action(move |_: &ShowAbout, cx| about::open_about(ws.clone(), cx));
                 // Menu items and shortcuts pressed while the notebook has the keyboard reach
                 // no focused GPUI element; these app-wide handlers forward them.
-                let ws = workspace.downgrade();
+                let (ws, handle) = (workspace.downgrade(), window.window_handle());
                 cx.on_action(move |_: &OpenSettings, cx| {
-                    ws.update(cx, |this, cx| {
-                        this.settings_open = true;
-                        cx.notify();
-                    })
-                    .ok();
+                    let ws = ws.clone();
+                    cx.defer(move |cx| drop(handle.update(cx, |_, window, cx| ws.update(cx, |this, cx| this.open_settings_last(window, cx)))));
                 });
                 // The notebook's zoom, from anywhere (the notebook usually has the keyboard).
                 let ws = workspace.downgrade();

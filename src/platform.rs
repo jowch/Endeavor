@@ -130,13 +130,53 @@ pub mod overlay {
         Menu,
         Tip,
         Tooltip,
+        Settings,
     }
 
     /// Menus over the notebook: on Linux the web view's X11 window still covers them.
     pub fn set_hole(_: &wry::WebView, _: Hole, _: Option<Bounds<Pixels>>) {}
     pub fn close_hole_at(_: Hole, _: Bounds<Pixels>) {}
     pub fn set_dismiss_on_click(_: &wry::WebView, _: bool) {}
+    pub fn set_dimmed(_: &wry::WebView, _: bool) {}
 }
+
+/// Put `message` above the file picker that is opening (GPUI's picker takes
+/// only its button's label). The panel opens on the next turn of the main
+/// loop, so this looks for it shortly after.
+#[cfg(target_os = "macos")]
+pub fn set_open_panel_message(message: &'static str, cx: &mut gpui::App) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    cx.spawn(async move |cx| {
+        for _ in 0..20 {
+            cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
+            let Ok(text) = std::ffi::CString::new(message) else { return };
+            let found = unsafe {
+                let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                let windows: *mut AnyObject = msg_send![app, windows];
+                let count: usize = msg_send![windows, count];
+                let mut found = false;
+                for i in 0..count {
+                    let window: *mut AnyObject = msg_send![windows, objectAtIndex: i];
+                    let is_panel: bool = msg_send![window, isKindOfClass: class!(NSOpenPanel)];
+                    if is_panel {
+                        let text: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: text.as_ptr()];
+                        let _: () = msg_send![window, setMessage: text];
+                        found = true;
+                    }
+                }
+                found
+            };
+            if found {
+                return;
+            }
+        }
+    })
+    .detach();
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_open_panel_message(_: &'static str, _: &mut gpui::App) {}
 
 #[cfg(not(target_os = "macos"))]
 pub mod snapshot {
