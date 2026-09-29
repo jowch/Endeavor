@@ -25,10 +25,20 @@ pub fn run_at(entries: &[Entry], ix: usize) -> Option<Range<usize>> {
     entries[start..end].iter().any(|e| matches!(e, Entry::Tool { .. })).then_some(start..end)
 }
 
-/// A call failed: the agent says so, or a notebook tool answered with an error.
+/// A call failed: the agent says so, or a notebook tool refused it.
+///
+/// A refusal's JSON is `mcp.rs::tool_error`'s shape: `{"error": kind,
+/// "message": ...}`, and nothing else. A successful reply can also carry an
+/// `"error"` field (`read_cell` and `edit_cell` show the cell's own error
+/// alongside `cell_id`, `applied` and the rest), so only the two-key shape
+/// means the tool itself failed.
 pub fn failed(status: ToolCallStatus, title: &str, output: Option<&Value>) -> bool {
     status == ToolCallStatus::Failed
-        || (celldiff::notebook_tool(title).is_some() && output.and_then(celldiff::tool_json).is_some_and(|r| r.get("error").is_some()))
+        || (celldiff::notebook_tool(title).is_some() && output.and_then(celldiff::tool_json).as_ref().is_some_and(is_refusal))
+}
+
+fn is_refusal(reply: &Value) -> bool {
+    reply.as_object().is_some_and(|o| o.len() == 2 && o.contains_key("error") && o.contains_key("message"))
 }
 
 /// One kind of work, worded as "`verb` `one`" for a single one and
@@ -310,5 +320,22 @@ mod tests {
         assert!(!super::failed(ToolCallStatus::Completed, "mcp__notebook__read_cell", Some(&fine)));
         assert!(super::failed(ToolCallStatus::Failed, "Bash", None));
         assert!(!super::failed(ToolCallStatus::Completed, "Read", Some(&error)), "only notebook tools answer in JSON");
+    }
+
+    #[test]
+    fn a_cells_own_error_in_a_successful_reply_is_not_a_failure() {
+        // read_cell: the cell errored, but the read itself succeeded.
+        let read = json!([{"type": "text", "text":
+            "{\"cell_id\":\"c1\",\"code\":\"1/0\",\"output\":\"\",\"errored\":true,\"running\":false,\"queued\":false,\
+              \"code_folded\":false,\"stale\":false,\"error\":{\"msg\":\"DivideError\"}}"}]);
+        assert!(!super::failed(ToolCallStatus::Completed, "mcp__notebook__read_cell", Some(&read)), "the cell's own error isn't the tool's");
+
+        // edit_cell: the edit applied, but the cell still shows an earlier run's error.
+        let edit = json!([{"type": "text", "text":
+            "{\"applied\":true,\"mutation\":{},\"cell_order\":[],\"execution_order\":[],\"affected_cells\":[],\
+              \"execution\":{\"status\":\"idle\"},\"outputs\":{\"changed\":[]},\"pending_run\":[],\"warnings\":[],\
+              \"cell_id\":\"c1\",\"code\":\"2\",\"output\":\"\",\"errored\":true,\"running\":false,\"queued\":false,\
+              \"code_folded\":false,\"stale\":false,\"error\":{\"msg\":\"stale from before the edit\"}}"}]);
+        assert!(!super::failed(ToolCallStatus::Completed, "mcp__notebook__edit_cell", Some(&edit)), "an applied edit isn't failed by a stale error");
     }
 }
