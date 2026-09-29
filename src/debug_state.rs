@@ -223,7 +223,7 @@ impl Workspace {
                 "title": card.heading,
                 "code": card.code,
                 "lines": card.lines.into_iter().map(|(text, tone)| json!({ "text": text, "tone": match tone { Tone::Muted => "muted", Tone::Secondary => "secondary" } })).collect::<Vec<_>>(),
-                "plan": card.plan,
+                "plan": card.plan.map(|p| json!({ "title": p.title, "steps": p.steps, "open": p.open, "text": if p.open || p.steps.is_none() { Some(p.full) } else { None } })),
                 "buttons": card.buttons.iter().map(|b| json!({ "label": b.label, "key": b.hint, "weight": b.weight.label() })).collect::<Vec<_>>(),
             })),
         })

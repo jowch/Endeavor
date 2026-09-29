@@ -237,6 +237,8 @@ pub struct Session {
     pub unanswered: Option<usize>,
     /// The pinned plan (above the composer) is folded.
     pub plan_folded: bool,
+    /// The plan card shows the whole plan, not just its steps.
+    pub plan_open: bool,
     /// Runs of tool calls the user opened, by their first call.
     open_runs: HashSet<ToolCallId>,
     /// Reopening a past session: its history is replaying.
@@ -269,6 +271,8 @@ pub struct Session {
     approval_focus: RefCell<Vec<FocusHandle>>,
     /// The pinned plan's fold toggle's Tab-stop handle.
     pinned_plan_focus: RefCell<Option<FocusHandle>>,
+    /// The plan card's "Show the whole plan" toggle's Tab-stop handle.
+    plan_card_focus: RefCell<Option<FocusHandle>>,
     /// A folded run's header toggle, by the run's first entry index.
     run_focus: RefCell<HashMap<usize, FocusHandle>>,
     /// A tool/thought row's toggle, by its entry index.
@@ -364,6 +368,7 @@ impl Session {
             heard: None,
             unanswered: None,
             plan_folded: false,
+            plan_open: false,
             open_runs: HashSet::new(),
             replaying: false,
             replayed_path: None,
@@ -378,6 +383,7 @@ impl Session {
             focus: RefCell::new(None),
             approval_focus: RefCell::new(Vec::new()),
             pinned_plan_focus: RefCell::new(None),
+            plan_card_focus: RefCell::new(None),
             run_focus: RefCell::new(HashMap::new()),
             row_focus: RefCell::new(HashMap::new()),
         }
@@ -400,6 +406,11 @@ impl Session {
     /// The pinned plan's fold toggle's Tab-stop handle, created on first use.
     pub fn pinned_plan_focus(&self, cx: &App) -> FocusHandle {
         self.pinned_plan_focus.borrow_mut().get_or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
+    }
+
+    /// The plan card's toggle's Tab-stop handle, created on first use.
+    pub fn plan_card_focus(&self, cx: &App) -> FocusHandle {
+        self.plan_card_focus.borrow_mut().get_or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// A folded run header's Tab-stop handle, by the run's first entry index.
@@ -820,6 +831,9 @@ impl Session {
                     .any(|o| o.option_id.to_string().starts_with("exit-plan-"))
                     .then(|| input["plan"].as_str().unwrap_or("").to_owned());
                 let call = request.tool_call.tool_call_id.clone();
+                if plan.is_some() {
+                    self.plan_open = false;
+                }
                 self.push(Entry::Permission { call, title, code, options: request.options, responder: Some(responder), runs_code, tool, input, preview: None, plan });
             }
             SessionEvent::Update(update) => {
@@ -1810,8 +1824,8 @@ pub(crate) struct ApprovalView {
     /// Code it would run, cut to its first lines.
     pub code: Option<String>,
     pub lines: Vec<(String, Tone)>,
-    /// Plan mode's end: the plan to approve (markdown), in place of code and lines.
-    pub plan: Option<String>,
+    /// Plan mode's end: the plan to approve, in place of code and lines.
+    pub plan: Option<PlanCard>,
     pub buttons: Vec<CardButton>,
 }
 
@@ -1858,7 +1872,8 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
     let ix = session.pending_permission()?;
     let Entry::Permission { title, code, options, runs_code, tool, input, preview, plan, .. } = &session.entries[ix] else { return None };
     if let Some(plan) = plan {
-        return Some(ApprovalView { heading: "Ready to start?".into(), code: None, lines: vec![], plan: Some(plan.clone()), buttons: plan_buttons(options) });
+        let card = PlanCard { open: session.plan_open, ..plan_card(plan) };
+        return Some(ApprovalView { heading: "Plan".into(), code: None, lines: vec![], plan: Some(card), buttons: plan_buttons(options) });
     }
     let tool = tool.as_deref().unwrap_or("");
 
@@ -1979,13 +1994,40 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         })
         .collect();
     if let Some(plan) = view.plan {
-        let heading = card_heading(&view.heading);
-        let body = div()
+        let shown = match (&plan.steps, plan.open) {
+            (Some(steps), false) => steps.clone(),
+            _ => plan.full.clone(),
+        };
+        let title = plan.title.map(|title| div().text_size(theme::size_body()).text_color(theme::text_secondary()).child(title).into_any_element());
+        let text = div()
             .id(ElementId::NamedInteger("plan".into(), key))
             .max_h(px(260.))
             .overflow_y_scroll()
-            .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan).style(markdown_style()));
-        return Some(approval_card(heading, vec![body.into_any_element()], buttons));
+            .text_size(theme::size_body())
+            .text_color(theme::text_row_active())
+            .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), shown).style(plan_style()));
+        let toggle = plan.steps.is_some().then(|| {
+            let label = if plan.open { "Show only the steps" } else { "Show the whole plan" };
+            div()
+                .id(ElementId::NamedInteger("plan-toggle".into(), key))
+                .role(Role::Button)
+                .aria_label(label)
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .cursor_pointer()
+                .text_color(theme::text_faint())
+                .hover(|s| s.text_color(theme::text_secondary()))
+                .track_focus(&session.plan_card_focus(cx))
+                .tab_stop(true)
+                .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                .child(label)
+                .child(if plan.open { "⌄" } else { "›" })
+                .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.plan_open = !s.plan_open)))
+                .into_any_element()
+        });
+        let body = title.into_iter().chain([text.into_any_element()]).chain(toggle).collect();
+        return Some(approval_card(card_heading(&view.heading), body, buttons));
     }
     let code = view.code.map(|code| {
         div().font_family(theme::MONO).text_size(theme::size_code()).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).child(code).into_any_element()
@@ -2020,6 +2062,69 @@ fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, Pe
             (o.name.clone(), hint, o.clone(), false)
         })
         .collect()
+}
+
+/// Plan mode's plan, as its card shows it.
+pub(crate) struct PlanCard {
+    /// The plan's own title, from a heading that opens it ("Plan:" dropped).
+    pub title: Option<String>,
+    /// Its first numbered list, as written (markdown), when it has one: the
+    /// card shows these steps until the user asks for the whole plan.
+    pub steps: Option<String>,
+    /// The whole plan (markdown), without its title.
+    pub full: String,
+    /// The whole plan is showing.
+    pub open: bool,
+}
+
+/// Splits a plan (markdown) into its title, its numbered steps and the rest.
+/// Steps are the first run of top-level numbered items ("1. …", "2) …"),
+/// with the lines indented under them; the list needs two items or more.
+fn plan_card(markdown: &str) -> PlanCard {
+    let mut lines: Vec<&str> = markdown.lines().collect();
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+    let title = lines.first().and_then(|l| l.strip_prefix('#')).map(|l| l.trim_start_matches('#').trim()).map(|t| {
+        let t = t.strip_prefix("Plan:").or_else(|| t.strip_prefix("Plan -")).or_else(|| t.strip_prefix("Plan —")).unwrap_or(t).trim();
+        t.to_string()
+    });
+    if title.is_some() {
+        lines.remove(0);
+    }
+    let title = title.filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("plan"));
+    let full = lines.join("\n").trim().to_string();
+
+    let numbered = |line: &str| {
+        let digits = line.chars().take_while(char::is_ascii_digit).count();
+        digits > 0 && line[digits..].starts_with(['.', ')']) && line[digits + 1..].starts_with(' ')
+    };
+    let mut steps: Vec<&str> = Vec::new();
+    let mut items = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if numbered(line) {
+            items += 1;
+        } else if steps.is_empty() {
+            continue;
+        } else if line.trim().is_empty() {
+            // A blank line inside the list only if the list goes on after it.
+            let next = lines[i + 1..].iter().find(|l| !l.trim().is_empty());
+            if !next.is_some_and(|l| numbered(l) || l.starts_with([' ', '\t'])) {
+                break;
+            }
+        } else if !line.starts_with([' ', '\t']) {
+            break;
+        }
+        steps.push(line);
+    }
+    let steps = (items >= 2).then(|| steps.join("\n").trim_end().to_string());
+    PlanCard { title, steps, full, open: false }
+}
+
+/// A plan's markdown inside its card: headings at body size, so the steps and
+/// sections read as one plan rather than a document.
+fn plan_style() -> TextViewStyle {
+    markdown_style().heading_font_size(|_, _| theme::size_body())
 }
 
 /// Plan mode's end: Keep planning · Start in Auto · **Start**.
@@ -2601,6 +2706,23 @@ mod tests {
         assert_eq!(heading("delete_cell", &one(None, ""), json!({})), "Delete a cell?");
         assert_eq!(heading("execute_cell", &one(Some("fit, model"), "fit = 1"), json!({})), "Run `fit, model`?");
         assert_eq!(heading("execute_cell", &one(None, "md\"# Intro\""), json!({})), "Run `md\"# Intro\"`?");
+    }
+
+    #[test]
+    fn a_plan_card_shows_the_plans_numbered_steps() {
+        let plan = "# Plan: Add small analysis to cards.jl\n\n## Context\nThe notebook defines `a`.\n\n## Approach\nAdd 3 cells:\n\n1. **Values** — `values = [a, b]`\n2. **Mean** — `m = sum(values) / 2`\n   (no Statistics needed)\n\n3. **Plot** — `bar(values)`\n\n## Verification\n- read each cell\n";
+        let card = super::plan_card(plan);
+        assert_eq!(card.title.as_deref(), Some("Add small analysis to cards.jl"));
+        assert_eq!(
+            card.steps.as_deref(),
+            Some("1. **Values** — `values = [a, b]`\n2. **Mean** — `m = sum(values) / 2`\n   (no Statistics needed)\n\n3. **Plot** — `bar(values)`")
+        );
+        assert!(card.full.starts_with("## Context") && card.full.ends_with("- read each cell"));
+
+        let bullets = super::plan_card("I'll do this:\n- add a cell\n- run it");
+        assert_eq!((bullets.title, bullets.steps), (None, None), "no numbered steps: the whole plan shows");
+        assert_eq!(bullets.full, "I'll do this:\n- add a cell\n- run it");
+        assert_eq!(super::plan_card("# Plan\n1. one\n2. two").title, None, "a bare \"Plan\" heading is the card's own");
     }
 
     #[test]
