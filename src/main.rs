@@ -2462,11 +2462,9 @@ impl Workspace {
 
     /// Whether an open session's row shows the "waits for you" ring. The
     /// orbiting "working" indicator no longer shows on sidebar rows at all
-    /// (it still shows elsewhere, e.g. the composer and the offline card);
-    /// an open session is never archived (archiving closes it), so this is
-    /// false under Status = Archived.
+    /// (it still shows elsewhere, e.g. the composer and the offline card).
     fn row_mark(&self, s: &Session) -> bool {
-        sidebar_filter::status_matches(self.settings.sidebar_filters.status, false) && s.needs_approval()
+        s.needs_approval()
     }
 
     /// A folder's rows to show (Status- and search-filtered, sorted by Sort
@@ -2475,14 +2473,8 @@ impl Workspace {
     /// the `PAST_SHOWN` cut (0 means genuinely empty, for Show empty folders).
     fn folder_rows(&self, folder: &Place, query: &str, collapsed: bool) -> (Vec<Row>, Option<(String, bool)>, usize) {
         let searching = !query.trim().is_empty();
-        let with_titles = |rows: Vec<(Row, String)>| -> Vec<(Row, String)> { rows };
-        let mut open: Vec<(Row, String)> = with_titles(
-            self.sessions
-                .iter()
-                .filter(|s| &s.place == folder)
-                .map(|s| (Row::Open(s.key), s.title.clone()))
-                .collect(),
-        );
+        let mut open: Vec<(Row, String)> =
+            self.sessions.iter().filter(|s| &s.place == folder).map(|s| (Row::Open(s.key), s.title.clone())).collect();
         let mut past: Vec<(Row, String)> =
             self.past_rows(folder).iter().map(|info| (Row::Past(info.session_id.clone(), folder.clone()), self.past_title(info).0)).collect();
         if searching {
@@ -3113,8 +3105,8 @@ impl Workspace {
         div().absolute().top(px(26.)).right_0().child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(1))
     }
 
-    /// A filter row's flyout submenu: Status and Sort by are single-choice
-    /// (✓ radio), Where is several-choice (✓ checkbox, stays open).
+    /// A filter row's flyout submenu: Status, Group by and Sort by are
+    /// single-choice (✓ radio); Where is several-choice (✓ checkbox, stays open).
     fn render_filter_submenu(&self, submenu: FilterRow, menu: &FilterMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let picks = self.filter_picks(Some(submenu));
         let filters = &self.settings.sidebar_filters;
