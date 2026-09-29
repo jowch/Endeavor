@@ -527,7 +527,7 @@ impl Workspace {
     /// shows, the panel, and when the turtle tucked in (a failure).
     pub fn render_sign_in_panel(&self, cx: &mut Context<Self>) -> Option<(AnyElement, bool, Option<Instant>)> {
         let Account::SignedOut(stage) = &self.account else { return None };
-        let panel = div().flex().flex_col().gap(px(12.)).p(px(16.)).rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::bg_card());
+        let panel = div().flex().flex_col().gap(px(12.)).p(px(16.)).rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::dialog_bg());
         let tucked = match stage {
             Stage::Failed { at, .. } => Some(*at),
             _ => None,

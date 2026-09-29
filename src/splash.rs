@@ -285,7 +285,7 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
                 .child(div().w_4().text_color(color).child(mark))
                 .child(div().when(step > setup.step, |d| d.text_color(muted)).child(step.label()))
         });
-        let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).child(label);
+        let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).text_color(theme::text_primary()).child(label);
         div()
             .mt(px(36.))
             .w(px(WIDE))
@@ -306,16 +306,22 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
                 div()
                     .flex()
                     .gap_2()
-                    .child(button("retry-setup", "Retry").bg(theme::accent()).on_click(retry))
+                    .child(button("retry-setup", "Retry").bg(theme::accent()).text_color(gpui::white()).on_click(retry))
                     .child(button("setup-logs", "Show logs").on_click(|_, _, _| crate::logs::reveal())),
             )
     });
-    div()
-        .size_full()
+    // The night sky is a band over the steps: dark in both appearances, while
+    // the steps sit on the page. The two parts grow alike, so the whole stays
+    // centred; in dark they are one colour.
+    let sky = div()
+        .w_full()
+        .flex_grow(1.)
         .flex()
         .flex_col()
         .items_center()
-        .justify_center()
+        .justify_end()
+        .bg(theme::sky())
+        .when(theme::is_light(), |d| d.pb(px(28.)))
         .child(scene(t, tuck))
         .child(
             div()
@@ -325,41 +331,42 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
                 .opacity(name_in)
                 .text_size(theme::size_title())
                 .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::sky_text())
                 .child("Endeavor"),
         )
-        .child(div().mt(px(4.)).relative().top(px((1. - tagline_in) * 8.)).opacity(tagline_in).text_color(muted).child("Build our future"))
-        .child(
-            // Room for the failure message and sign-in, so the turtle stays put when they appear.
-            div().min_h(px(300.)).flex().flex_col().items_center().map(|d| match below {
-                Below::Panel { line, bar, panel, .. } => d.child(
-                    div()
-                        .mt(px(26.))
-                        .w(px(PANEL))
-                        .flex()
-                        .flex_col()
-                        .gap(px(14.))
-                        .opacity(tagline_in)
-                        .child(
-                            div()
-                                .mb(px(4.))
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(10.))
-                                .child(div().text_size(theme::size_meta()).text_color(muted).child(format!("{line} · {n} of {}", Step::ALL.len())))
-                                .children(bar.map(|f| {
-                                    div().w(px(BAR)).h(px(2.)).rounded_full().bg(theme::border()).child(div().h_full().rounded_full().bg(theme::accent()).w(px(BAR * f)))
-                                })),
-                        )
-                        .child(panel),
-                ),
-                Below::Card(card) => d.child(div().mt(px(26.)).w(px(PANEL)).opacity(tagline_in).child(card)),
-                Below::Progress => match failure {
-                    Some(failure) => d.child(failure),
-                    None => d.child(progress),
-                },
-            }),
-        )
+        .child(div().mt(px(4.)).relative().top(px((1. - tagline_in) * 8.)).opacity(tagline_in).text_color(theme::sky_muted()).child("Build our future"));
+    div().size_full().flex().flex_col().child(sky).child(
+        // Room for the failure message and sign-in, so the turtle stays put when they appear.
+        div().w_full().flex_grow(1.).flex().flex_col().items_center().child(div().min_h(px(300.)).flex().flex_col().items_center().map(|d| match below {
+            Below::Panel { line, bar, panel, .. } => d.child(
+                div()
+                    .mt(px(26.))
+                    .w(px(PANEL))
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .opacity(tagline_in)
+                    .child(
+                        div()
+                            .mb(px(4.))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(10.))
+                            .child(div().text_size(theme::size_meta()).text_color(muted).child(format!("{line} · {n} of {}", Step::ALL.len())))
+                            .children(bar.map(|f| {
+                                div().w(px(BAR)).h(px(2.)).rounded_full().bg(theme::border()).child(div().h_full().rounded_full().bg(theme::accent()).w(px(BAR * f)))
+                            })),
+                    )
+                    .child(panel),
+            ),
+            Below::Card(card) => d.child(div().mt(px(26.)).w(px(PANEL)).opacity(tagline_in).child(card)),
+            Below::Progress => match failure {
+                Some(failure) => d.child(failure),
+                None => d.child(progress),
+            },
+        })),
+    )
 }
 
 /// Debug builds only: `ENDEAVOR_SPLASH_PREVIEW=1` opens the setup screen with made-up
