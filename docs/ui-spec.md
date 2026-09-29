@@ -23,24 +23,37 @@ Handoff for implementing the redesigned chat + notebook interface.
 
 Replace the inline `rgb()` literals in `src/main.rs`, `src/session.rs`, `src/splash.rs` with one theme module.
 
-**Colour** (dark only; neutrals carry a faint cool tint — blue channel +10%)
+**Colour.** Dark and light, from Settings → Appearance (Dark, Light, or Match macOS, which follows the Mac's setting while the app runs). The whole window changes, notebook included. Neutrals carry a faint cool tint. `src/theme.rs` holds every value; the frontend's copies are CSS variables in `frontend/src/theme.ts`. The setup window's night sky stays dark as a band at the top in both.
 
-| Token | Value | Use |
-|---|---|---|
-| `bg.sidebar` | `#111113` | Sessions sidebar |
-| `bg.page` | `#151517` | Chat, notebook, headers (headers at 80% + blur) |
-| `bg.card` | `#1C1C1F` | Composer, cards |
-| `bg.raised` | `#26262A` | User bubble, active sidebar row `#1E1E21` |
-| `border` | `#2A2A2E` | Card / composer outlines; column dividers `#1F1F22` |
-| `text.primary` | `#ECECEC` | Chat body |
-| `text.secondary` | `#BDBDBD` | Cell names, model/effort |
-| `text.muted` | `#8C8C8C` | Sidebar rows |
-| `text.faint` | `#7A7A7A` | Tool lines, timestamps, section heads `#5E5E5E` |
-| `accent` | `#CC3F00` | Filled primary (white text, 4.9:1), unrun stripe, busy dot |
-| `accent.text` | `#E08A5E` | Orange text/icons on dark |
-| `accent.tint` | `rgba(204,63,0,.10–.30)` | Card fills, rings, stripe gaps |
-| `diff.add` / `diff.del` | `#6CC784` / `#E07A7A` | ± counts, gutter signs; line tints at ~12%, char highlights at ~28% |
-| `you.stripe` | `#9A9A9A` | Unrun cells edited by the user |
+| Token | Dark | Light | Use |
+|---|---|---|---|
+| `bg_sidebar` | `#111113` | `#F3F3F5` | Sessions sidebar |
+| `bg_page` | `#151517` | `#FCFCFD` | Chat, notebook, headers |
+| `bg_card` | `#1C1C1F` | `#F4F4F6` | Cards, inputs |
+| `bg_raised` | `#26262A` | `#EAEAED` | User bubble, secondary buttons |
+| `row_active` | `#1E1E21` | `#E6E6EA` | Active sidebar row |
+| `bg_urgent` | `#1F1712` | `#FCF1EB` | Approval and plan cards |
+| `bg_tag` | `#222225` | `#ECECEF` | Tags, inline code |
+| `border` | `#2A2A2E` | `#E1E1E6` | Card outlines (decorative) |
+| `divider` | `#1F1F22` | `#E6E6EA` | Column dividers |
+| `composer_bg` | `#1C1C1F` | `#FFFFFF` | Message box; light adds a faint shadow (0 1px 3px) |
+| `composer_edge` / focused | `#3A3A40` / `#55555C` | `#D6D6DC` / `#8A8A92` | Message box outline |
+| `control_edge` | `#3A3A40` | `#8A8A92` | Outlined buttons, text fields (3:1 in light) |
+| `popover_bg` / `popover_edge` | `#26262A` / `#3A3A40` | `#FFFFFF` / `#D9D9DF` | Menus, popovers, dialogs, with a soft shadow |
+| `scrim` | `rgba(8,8,10,.62)` | `rgba(24,24,30,.32)` | Behind Settings and dialogs |
+| `text_primary` | `#ECECEC` | `#1B1B1F` | Chat body |
+| `text_secondary` | `#BDBDBD` | `#45454C` | Cell names, model/effort |
+| `text_muted` | `#8C8C8C` | `#5C5C64` | Sidebar meta, status line |
+| `text_row` | `#BDBDBD` | `#5C5C64` | Sidebar session rows |
+| `text_faint` | `#858585` | `#66666E` | Tool lines, timestamps |
+| `text_section` | `#888888` | `#6B6B73` | Section heads |
+| `accent` | `#CC3F00` | `#CC3F00` | Filled primary (white text, 4.9:1), unrun stripe, busy dot |
+| `accent_text` | `#E08A5E` | `#B23600` | Orange text and icons |
+| `focus_ring` | `#E08A5E` | `#CC3F00` | Keyboard focus: a 2 px ring 2 px outside a button, with a gap; Outlined buttons, rows and fields recolour their own outline instead |
+| `diff_add` / `diff_del` | `#6CC784` / `#E07A7A` | `#1C7038` / `#B42A36` | ± counts, gutter signs; line tints ~12% |
+| `danger` | = `diff_del` | = `diff_del` | Errors |
+
+Every light text colour passes WCAG AA on the surfaces it sits on.
 
 **Type** — Geist (UI), Geist Mono (cell names, paths, counts). Sizes: chat 14px/1.6; tool lines 13px; sidebar 12.5px; section heads 11.5px; toolbar 12px. The notebook keeps Pluto's own fonts (Vollkorn, Alegreya Sans, JuliaMono).
 
@@ -79,7 +92,7 @@ Replace the inline `rgb()` literals in `src/main.rs`, `src/session.rs`, `src/spl
 
 ## Notebook (Pluto)
 
-- Real Pluto 1.0.3 frontend, forced dark (today it follows macOS appearance and can render light).
+- Real Pluto 1.0.3 frontend, in the app's appearance: the web view's own appearance is set to the resolved light or dark, and the Endeavor look maps Pluto's colour variables to the tokens in both.
 - **Theme CSS** (per notebook type): override Pluto's colour variables to the tokens; hide Pluto's header, footer and Live Docs/Status panel (via CSS, **not** `?disable_ui`, which makes it read-only); hide the "…" menu's "Ask AI" item. Keep Pluto's own cell anatomy, run tab, eye, "+".
 - **Cell states** via `data-endeavor` + `data-author` attributes, styled by the theme CSS:
   - Edited, not run: striped 4px gutter bar (`accent` for agent, `you.stripe` for user); stale output at 40% opacity. No text.
