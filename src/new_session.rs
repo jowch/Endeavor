@@ -688,6 +688,7 @@ impl Workspace {
                     div()
                         .id(id)
                         .role(Role::Button)
+                        .aria_label(label.clone())
                         .h(px(26.))
                         .flex()
                         .items_center()

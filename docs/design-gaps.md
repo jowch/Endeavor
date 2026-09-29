@@ -89,7 +89,7 @@ Direction chosen (2026-09-27; canvas row "Notebook pane"): our look is "Pluto pl
 
 ## Accessibility
 
-- [ ] VoiceOver labels for icon-only controls (×, ✦, point, gear) — missing
+- [x] VoiceOver labels for icon-only controls (×, ✦, point, gear) — missing. Built: GPUI 0.3.6 bridges `.role()`/`.aria_label()` into a real macOS accessibility tree (accesskit_macos), confirmed against a running build with `scripts/ax-tree.swift`. Fixed the sidebar toggle and Settings gear (no role or label at all), the notebook ⋯ menu (labelled "Notebook", its own tooltip says "More"), the notebook header's Share/Live docs/Status buttons (fell back to their raw element ids), the composer's icon-only Point button, the attachment-remove ×, the queued message's edit/remove icons, and tips' "Got it" (had visible text but no role, so VoiceOver skipped it entirely). Also found, and fixed on the new-session screen, that a button's visible text alone isn't an accessible name here — the Where/Folder/Notebook chips read as empty until given `.aria_label()` too; that pattern likely recurs on text-only buttons elsewhere in the app and is worth a follow-up sweep beyond icon-only controls, which was this item's stated scope. ✦ (the selection quote prompt) doesn't exist in the code yet (still improvised, see Notebook pane)
 - [ ] Keyboard focus styles across sidebar, cards and composer — missing
 
 ## Spec'd but not built yet
