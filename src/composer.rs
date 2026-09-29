@@ -738,6 +738,7 @@ impl Workspace {
             weak.update(cx, |this, cx| this.paste_into_composer(item, window, cx)).unwrap_or(false)
         });
         let token_marks = self.token_marks(cx);
+        let typing = self.input.read(cx).focus_handle(cx).is_focused(window);
         let the_box = div()
             .id("composer-box")
             .relative()
@@ -750,8 +751,9 @@ impl Workspace {
             .when(!chips.is_empty(), |d| d.pt(px(7.)))
             .rounded(px(8.))
             .border_1()
-            .border_color(theme::composer_edge())
-            .bg(theme::bg_card())
+            .border_color(if typing { theme::composer_focus_edge() } else { theme::composer_edge() })
+            .bg(theme::composer_bg())
+            .shadow(theme::composer_shadow())
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.attach_paths(paths.paths().to_vec(), window, cx)))
             .when(!chips.is_empty(), |d| d.child(div().ml(px(10.)).flex().flex_wrap().gap(px(4.)).children(chips)))
             .child(div().flex().items_end().gap_2().child(div().relative().flex_1().min_w_0().child(text_box).child(token_marks)).child(div().mb(px(6.)).child(send)))
@@ -1181,7 +1183,7 @@ impl Workspace {
                                 .py(px(3.))
                                 .rounded(px(4.))
                                 .border_1()
-                                .border_color(theme::composer_edge())
+                                .border_color(theme::control_edge())
                                 .cursor_pointer()
                                 .text_color(theme::text_primary())
                                 .hover(|s| s.bg(theme::composer_edge()))

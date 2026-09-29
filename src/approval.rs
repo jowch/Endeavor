@@ -437,13 +437,7 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
         .border_1()
         .border_color(theme::accent().opacity(0.7))
         .bg(theme::bg_urgent())
-        .shadow(vec![BoxShadow {
-            color: Hsla::from(theme::accent()).opacity(0.10),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(3.),
-            inset: false,
-        }])
+        .shadow(vec![BoxShadow { color: theme::approval_ring().into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(3.), inset: false }])
         .child(div().px(px(10.)).pt(px(10.)).pb(px(6.)).child(heading))
         .when(!body.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).px(px(10.)).pb(px(10.)).text_size(theme::size_meta()).children(body)))
         .child(

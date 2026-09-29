@@ -582,7 +582,14 @@ impl Workspace {
         };
         window.focus(&this.keyboard_home, cx);
         cx.on_focus_lost(window, |this, window, cx| window.focus(&this.keyboard_home, cx)).detach();
-        settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
+        settings::set_webview_appearance(this.webview.read(cx).raw(), theme::is_light());
+        // Under Match macOS, follow the Mac's own switch while running.
+        cx.observe_window_appearance(window, |this, _, cx| {
+            if this.settings.appearance == settings::Appearance::System {
+                this.apply_look(cx);
+            }
+        })
+        .detach();
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
         this.scan_notebooks(cx);
@@ -1647,7 +1654,8 @@ impl Workspace {
 
     /// The notebook's appearance and theme, from Settings.
     fn apply_look(&self, cx: &mut Context<Self>) {
-        settings::set_webview_appearance(self.webview.read(cx).raw(), self.settings.appearance);
+        let light = apply_appearance(self.settings.appearance, cx);
+        settings::set_webview_appearance(self.webview.read(cx).raw(), light);
         if self.settings.zoom > 0. {
             let _ = self.webview.read(cx).raw().zoom(self.settings.zoom);
         }
@@ -1740,6 +1748,7 @@ impl Workspace {
                                 .rounded_sm()
                                 .cursor_pointer()
                                 .bg(theme::accent())
+                                .text_color(gpui::white())
                                 .child("Open a copy")
                                 .on_click(cx.listener(move |this, _, _, cx| this.open_copy(key, cx))),
                         )
@@ -1953,26 +1962,7 @@ fn main() {
         platform::init(cx);
         gpui_component::init(cx);
         theme::load_fonts(cx);
-        // Theme::change applies these before building the component defaults from them.
-        let ui = Theme::global_mut(cx);
-        let mut colors = ui.dark_theme.colors.clone();
-        // What agent replies' markdown is drawn with: hairlines, link colour,
-        // code block and table header backgrounds.
-        colors.border = Some(theme::hex(theme::border()));
-        colors.link = Some(theme::hex(theme::accent_text()));
-        colors.muted = Some(theme::hex(theme::bg_card()));
-        colors.table_head = Some(theme::hex(theme::bg_card()));
-        colors.table_head_foreground = Some(theme::hex(theme::text_muted()));
-        // The library's own focus ring (Input, Textarea, and anything else built
-        // from it), so a tabbed-to text box matches our own focus_visible() rings.
-        colors.ring = Some(theme::hex(theme::focus_ring()));
-        ui.dark_theme = std::rc::Rc::new(ThemeConfig {
-            font_family: Some(theme::SANS.into()),
-            mono_font_family: Some(theme::MONO.into()),
-            mono_font_size: Some(f32::from(theme::size_code())),
-            colors,
-            ..(*ui.dark_theme).clone()
-        });
+        apply_appearance(Settings::load().appearance, cx);
         cx.set_reduce_motion(platform::reduces_motion());
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
@@ -2078,7 +2068,6 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                Theme::change(ThemeMode::Dark, Some(window), cx);
                 #[cfg(debug_assertions)]
                 if let Some(preview) = splash::preview::open(cx) {
                     return cx.new(|cx| Root::new(preview, window, cx));
@@ -2123,6 +2112,49 @@ fn main() {
         .detach();
         cx.activate(true);
     });
+}
+
+/// Resolve Settings → Appearance to light or dark and apply it everywhere
+/// native: the windows' own chrome, every token in `theme`, and the component
+/// library's mode. Returns whether it's light; the caller sets the notebook's.
+fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
+    use settings::Appearance;
+    cx.set_window_appearance(match appearance {
+        Appearance::Dark => Some(WindowAppearance::Dark),
+        Appearance::Light => Some(WindowAppearance::Light),
+        Appearance::System => None,
+    });
+    let light = match appearance {
+        Appearance::Dark => false,
+        Appearance::Light => true,
+        Appearance::System => matches!(cx.window_appearance(), WindowAppearance::Light | WindowAppearance::VibrantLight),
+    };
+    theme::set_light(light);
+    // Theme::change applies these before building the component defaults from them.
+    if !light {
+        let ui = Theme::global_mut(cx);
+        let mut colors = ui.dark_theme.colors.clone();
+        // What agent replies' markdown is drawn with: hairlines, link colour,
+        // code block and table header backgrounds.
+        colors.border = Some(theme::hex(theme::border()));
+        colors.link = Some(theme::hex(theme::accent_text()));
+        colors.muted = Some(theme::hex(theme::bg_card()));
+        colors.table_head = Some(theme::hex(theme::bg_card()));
+        colors.table_head_foreground = Some(theme::hex(theme::text_muted()));
+        // The library's own focus ring (Input, Textarea, and anything else built
+        // from it), so a tabbed-to text box matches our own focus rings.
+        colors.ring = Some(theme::hex(theme::focus_ring()));
+        ui.dark_theme = std::rc::Rc::new(ThemeConfig {
+            font_family: Some(theme::SANS.into()),
+            mono_font_family: Some(theme::MONO.into()),
+            mono_font_size: Some(f32::from(theme::size_code())),
+            colors,
+            ..(*ui.dark_theme).clone()
+        });
+    }
+    Theme::change(if light { ThemeMode::Light } else { ThemeMode::Dark }, None, cx);
+    cx.refresh_windows();
+    light
 }
 
 #[cfg(test)]

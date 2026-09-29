@@ -384,9 +384,9 @@ fn page_button(id: &'static str, icon: Glyph, label: impl Into<SharedString>, pr
         .text_size(theme::size_body())
         .map(|d| {
             if primary {
-                d.bg(theme::accent()).text_color(theme::text_primary()).child(glyph(icon, theme::text_primary()))
+                d.bg(theme::accent()).text_color(gpui::white()).child(glyph(icon, gpui::white().into()))
             } else {
-                d.border_1().border_color(theme::composer_edge()).text_color(theme::text_primary()).hover(|s| s.bg(theme::row_active())).child(glyph(icon, theme::text_muted()))
+                d.border_1().border_color(theme::control_edge()).text_color(theme::text_primary()).hover(|s| s.bg(theme::row_active())).child(glyph(icon, theme::text_muted()))
             }
         })
         .child(label.into())
@@ -1113,7 +1113,7 @@ impl Workspace {
                         .px(px(10.))
                         .rounded(px(5.))
                         .border_1()
-                        .border_color(theme::composer_edge())
+                        .border_color(theme::control_edge())
                         .cursor_pointer()
                         .text_size(theme::size_meta())
                         .text_color(theme::text_secondary())

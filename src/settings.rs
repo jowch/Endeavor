@@ -20,7 +20,7 @@ pub struct Settings {
     pub julia: Option<PathBuf>,
     /// New sessions run notebook code without asking first.
     pub run_without_asking: bool,
-    /// Light or dark (only the notebook follows it so far; the app is dark).
+    /// Light, dark, or follow macOS: the whole window, notebook included.
     pub appearance: Appearance,
     pub notebook_theme: NotebookTheme,
     /// The panes as the user left them.
@@ -109,7 +109,7 @@ pub enum Appearance {
 #[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NotebookTheme {
-    /// Pluto's colours mapped to Endeavor's (dark only for now).
+    /// Pluto's colours mapped to Endeavor's.
     #[default]
     Endeavor,
     /// Pluto's own look.
@@ -147,29 +147,22 @@ impl Settings {
     }
 }
 
-/// Make the notebook webview light, dark, or follow macOS: Pluto's own themes
-/// switch on the page's `prefers-color-scheme`, which follows the view's appearance.
+/// Make the notebook webview light or dark, as the rest of the window resolved
+/// it: Pluto's own themes and Endeavor's page colours switch on the page's
+/// `prefers-color-scheme`, which follows the view's appearance.
 #[cfg(target_os = "macos")]
-pub fn set_webview_appearance(webview: &wry::WebView, appearance: Appearance) {
+pub fn set_webview_appearance(webview: &wry::WebView, light: bool) {
     use objc2_app_kit::{NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua};
     use wry::WebViewExtMacOS;
-    let name = match appearance {
-        Appearance::Dark => Some(unsafe { NSAppearanceNameDarkAqua }),
-        Appearance::Light => Some(unsafe { NSAppearanceNameAqua }),
-        Appearance::System => None,
-    };
-    let look = name.and_then(NSAppearance::appearanceNamed);
+    let name = if light { unsafe { NSAppearanceNameAqua } } else { unsafe { NSAppearanceNameDarkAqua } };
+    let look = NSAppearance::appearanceNamed(name);
     webview.webview().setAppearance(look.as_deref());
 }
 
 /// WebKitGTK's `prefers-color-scheme` follows GTK's dark-theme preference.
 #[cfg(target_os = "linux")]
-pub fn set_webview_appearance(_: &wry::WebView, appearance: Appearance) {
+pub fn set_webview_appearance(_: &wry::WebView, light: bool) {
     use gtk::prelude::GtkSettingsExt;
     let Some(gtk) = gtk::Settings::default() else { return };
-    match appearance {
-        Appearance::Dark => gtk.set_gtk_application_prefer_dark_theme(true),
-        Appearance::Light => gtk.set_gtk_application_prefer_dark_theme(false),
-        Appearance::System => gtk.reset_property("gtk-application-prefer-dark-theme"),
-    }
+    gtk.set_gtk_application_prefer_dark_theme(!light);
 }

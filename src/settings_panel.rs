@@ -784,7 +784,7 @@ impl Workspace {
                     pic("look-system", Thumb::Match, "Match macOS", None, s.appearance == Appearance::System, Act::Appearance(Appearance::System)),
                 ])],
             )
-            .foot("For now only the notebook changes. The rest of Endeavor stays dark."),
+            .foot("The whole window changes, notebook included. Match macOS follows your Mac's setting."),
             group(
                 Some("Pluto notebook look"),
                 vec![Item::Pictures(vec![
@@ -1396,7 +1396,7 @@ impl Workspace {
             .rounded(px(7.))
             .bg(theme::bg_page())
             .border_1()
-            .border_color(if focused { theme::accent() } else { theme::composer_edge() })
+            .border_color(if focused { theme::accent() } else { theme::control_edge() })
             .child(glyph_at(Glyph::Search, theme::text_muted(), 13. / 12.))
             .child(div().flex_1().min_w_0().child(Input::new(&panel.search).appearance(false).text_size(theme::size_body())))
             .child(if searching {
@@ -1571,7 +1571,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .children(g.heading.map(|h| div().mb(px(6.)).ml(px(2.)).text_size(theme::size_meta()).line_height(px(16.)).font_weight(FontWeight::MEDIUM).text_color(theme::text_secondary()).child(h)))
-            .when(!items.is_empty(), |d| d.child(div().rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::bg_card()).flex().flex_col().children(items)))
+            .when(!items.is_empty(), |d| d.child(div().rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::panel_bg()).flex().flex_col().children(items)))
             .children(g.foot.clone().map(|f| div().mt(px(6.)).ml(px(2.)).text_size(theme::size_meta()).line_height(px(17.)).text_color(theme::text_faint()).child(f)))
     }
 
@@ -1741,12 +1741,12 @@ impl Workspace {
                     .border_1()
                     .map(|d| match look {
                         Look::Primary => d.bg(theme::accent()).border_color(theme::accent()).text_color(fg),
-                        _ => d.bg(theme::bg_tag()).border_color(theme::composer_edge()).text_color(fg),
+                        _ => d.bg(theme::bg_tag()).border_color(theme::control_edge()).text_color(fg),
                     })
                     .children(icon.map(|g| glyph_at(g, if *look == Look::Primary { Rgba::from(gpui::white()) } else { icon_grey() }, 13. / 12.)))
                     .child(*label);
                 match act.clone() {
-                    Some(act) if enabled => d.cursor_pointer().hover(|s| s.bg(theme::bg_raised())).on_click(on(act)).into_any_element(),
+                    Some(act) if enabled => d.cursor_pointer().hover(|s| if *look == Look::Primary { s } else { s.bg(theme::button_hover()) }).on_click(on(act)).into_any_element(),
                     _ => d.opacity(0.45).into_any_element(),
                 }
             }
@@ -1903,13 +1903,15 @@ fn thumb(kind: Thumb, selected: bool) -> AnyElement {
     let frame = |d: Div| {
         d.rounded(px(7.)).overflow_hidden().map(|d| if selected { d.border_2().border_color(theme::accent()) } else { d.border_1().border_color(theme::composer_edge()) })
     };
+    // Pictures of each appearance, so fixed colours: the page, sidebar, title
+    // line, blocks and accent line of the dark and the light window.
     let window = |light: bool| {
-        let (bg, line, block) = if light { (rgb(0xFAFAF7), rgb(0xD0CFC8), rgb(0xECEBE6)) } else { (theme::bg_page(), theme::composer_edge(), theme::bg_raised()) };
+        let [bg, side, line, block] = if light { [0xFCFCFD, 0xF3F3F5, 0x8A8A92, 0xEAEAED] } else { [0x151517, 0x111113, 0x3A3A40, 0x26262A] };
         div()
             .size_full()
             .flex()
-            .bg(bg)
-            .child(div().w(px(30.)).h_full().bg(theme::bg_sidebar()))
+            .bg(rgb(bg))
+            .child(div().w(px(30.)).h_full().bg(rgb(side)))
             .child(
                 div()
                     .flex_1()
@@ -1917,8 +1919,9 @@ fn thumb(kind: Thumb, selected: bool) -> AnyElement {
                     .py(px(10.))
                     .flex()
                     .flex_col()
-                    .child(div().h(px(4.)).w(relative(0.5)).rounded(px(2.)).bg(line).mb(px(8.)))
-                    .children([0.9, 0.7, 0.84].map(|w| div().h(px(9.)).w(relative(w)).rounded(px(2.)).bg(block).mb(px(5.)))),
+                    .child(div().h(px(4.)).w(relative(0.5)).rounded(px(2.)).bg(rgb(line)).mb(px(8.)))
+                    .children([0.9, 0.7, 0.84].map(|w| div().h(px(9.)).w(relative(w)).rounded(px(2.)).bg(rgb(block)).mb(px(5.))))
+                    .child(div().h(px(2.)).w(relative(0.3)).rounded(px(1.)).bg(theme::accent())),
             )
     };
     match kind {
@@ -1932,8 +1935,8 @@ fn thumb(kind: Thumb, selected: bool) -> AnyElement {
                     |_, _, _| (),
                     |b, _, window, _| {
                         let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
-                        // The light window's page and blocks, each cut along the diagonal.
-                        let rects = [(30., 0., w, h, 0xFAFAF7), (38., 10., 38. + 43., 14., 0xD0CFC8), (38., 22., 38. + 77.4, 31., 0xECEBE6), (38., 36., 38. + 60.2, 45., 0xECEBE6), (38., 50., 38. + 72.2, 59., 0xECEBE6)];
+                        // The light window's sidebar, page, blocks and accent line, each cut along the diagonal.
+                        let rects = [(0., 0., 30., h, 0xF3F3F5), (30., 0., w, h, 0xFCFCFD), (38., 10., 38. + 43., 14., 0x8A8A92), (38., 22., 38. + 77.4, 31., 0xEAEAED), (38., 36., 38. + 60.2, 45., 0xEAEAED), (38., 50., 38. + 72.2, 59., 0xEAEAED), (38., 64., 38. + 28.8, 66., 0xCC3F00)];
                         for (x0, y0, x1, y1, color) in rects {
                             let part = below_diagonal(&[(x0, y0), (x1, y0), (x1, y1), (x0, y1)], w, h);
                             let mut path = PathBuilder::fill();
@@ -1971,24 +1974,29 @@ fn thumb(kind: Thumb, selected: bool) -> AnyElement {
             )
             .children([12., 12., 22.].map(|h| div().h(px(h)).mx(px(10.)).mt(px(6.)).rounded(px(3.)).bg(theme::bg_card())))
             .into_any_element(),
-        Thumb::Classic => frame(div().w(px(236.)).h(px(110.)).bg(rgb(0x1F1F1F)))
-            .child(
-                div()
-                    .h(px(22.))
-                    .flex()
-                    .items_center()
-                    .gap(px(5.))
-                    .px(px(8.))
-                    .border_b_1()
-                    .border_color(rgb(0x333333))
-                    .child(div().w(px(6.)).h(px(9.)).rounded(px(1.)).bg(theme::text_muted()))
-                    .child(div().w(px(30.)).h(px(4.)).rounded(px(2.)).bg(rgb(0x6B6B6B)))
-                    .child(div().flex_1())
-                    .child(div().w(px(14.)).h(px(8.)).rounded(px(2.)).border_1().border_color(rgb(0x555555)))
-                    .child(div().w(px(14.)).h(px(8.)).rounded(px(2.)).border_1().border_color(rgb(0x555555))),
-            )
-            .children([12., 12., 18.].map(|h| div().h(px(h)).mx(px(10.)).mt(px(6.)).rounded(px(2.)).bg(rgb(0x2A2A2A)).border_l(px(3.)).border_color(rgb(0x3C3C3C))))
-            .into_any_element(),
+        Thumb::Classic => {
+            // Pluto's own page in the current appearance: page, rule, title, button edges, cell, cell edge.
+            let [bg, rule, title, edge, cell, cell_edge] =
+                if theme::is_light() { [0xFFFFFF, 0xE4E4E4, 0xB5B5B5, 0xBDBDBD, 0xF4F4F4, 0xDADADA] } else { [0x1F1F1F, 0x333333, 0x6B6B6B, 0x555555, 0x2A2A2A, 0x3C3C3C] };
+            frame(div().w(px(236.)).h(px(110.)).bg(rgb(bg)))
+                .child(
+                    div()
+                        .h(px(22.))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .px(px(8.))
+                        .border_b_1()
+                        .border_color(rgb(rule))
+                        .child(div().w(px(6.)).h(px(9.)).rounded(px(1.)).bg(theme::text_muted()))
+                        .child(div().w(px(30.)).h(px(4.)).rounded(px(2.)).bg(rgb(title)))
+                        .child(div().flex_1())
+                        .child(div().w(px(14.)).h(px(8.)).rounded(px(2.)).border_1().border_color(rgb(edge)))
+                        .child(div().w(px(14.)).h(px(8.)).rounded(px(2.)).border_1().border_color(rgb(edge))),
+                )
+                .children([12., 12., 18.].map(|h| div().h(px(h)).mx(px(10.)).mt(px(6.)).rounded(px(2.)).bg(rgb(cell)).border_l(px(3.)).border_color(rgb(cell_edge))))
+                .into_any_element()
+        }
     }
 }
 

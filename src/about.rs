@@ -275,7 +275,7 @@ impl Render for About {
                     .flex_shrink_0()
                     .border_t_1()
                     .border_color(theme::border())
-                    .bg(rgb(0x18181B))
+                    .bg(theme::about_footer())
                     .px(px(16.))
                     .py(px(10.))
                     .flex()

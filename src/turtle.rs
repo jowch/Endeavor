@@ -142,17 +142,17 @@ fn half_disc(window: &mut Window, center: Point<Pixels>, (rx, ry): (f32, f32), f
 pub fn paint(window: &mut Window, ground: Point<Pixels>, r: f32, p: &Pose) {
     let at = |x: f32, y: f32| point(ground.x + px(x * r), ground.y + px(y * r));
     for (fx, (dx, dy)) in FEET_X.into_iter().zip(p.feet) {
-        half_disc(window, at(fx + dx, -FOOT_R + dy), (FOOT_R * r, FOOT_R * r), 0., theme::accent_text());
+        half_disc(window, at(fx + dx, -FOOT_R + dy), (FOOT_R * r, FOOT_R * r), 0., theme::turtle_skin());
     }
     let base = -FOOT_R + p.bob;
     let hr = HEAD_R * r * p.head_scale;
     let head = at(HEAD_X + p.gaze.dx, base + HEAD_Y + p.gaze.dy);
     let paint_head = |window: &mut Window| {
-        disc(window, head, (hr, hr), theme::accent_text());
+        disc(window, head, (hr, hr), theme::turtle_skin());
         if p.head_scale > 0.3 {
             let eye = point(head.x + px(hr * 0.36 * p.gaze.eye_x), head.y - px(hr * (0.16 + 0.22 * p.gaze.look)));
             let er = hr * 0.13;
-            disc(window, eye, (er, er * p.blink.max(0.12)), theme::bg_page());
+            disc(window, eye, (er, er * p.blink.max(0.12)), theme::turtle_eye());
         }
     };
     if p.head_behind {

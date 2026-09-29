@@ -1187,7 +1187,7 @@ impl Workspace {
                 .rounded_sm()
                 .cursor_pointer()
                 .bg(theme::accent())
-                .text_color(theme::text_primary())
+                .text_color(gpui::white())
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if start_julia {

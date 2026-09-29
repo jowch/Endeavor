@@ -537,7 +537,7 @@ impl Workspace {
                                         .justify_between()
                                         .rounded(px(6.))
                                         .border_1()
-                                        .border_color(theme::composer_edge())
+                                        .border_color(theme::control_edge())
                                         .cursor_pointer()
                                         .child(idle_label)
                                         .child(glyph(Glyph::Chevron, theme::text_faint()))

@@ -91,7 +91,7 @@ fn got_it(id: &'static str) -> Stateful<Div> {
         .px(px(10.))
         .rounded(px(6.))
         .border_1()
-        .border_color(theme::composer_edge())
+        .border_color(theme::control_edge())
         .bg(theme::bg_tag())
         .cursor_pointer()
         .hover(|s| s.bg(theme::composer_edge()))
