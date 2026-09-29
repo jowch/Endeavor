@@ -21,6 +21,7 @@ use crate::new_session::{EXAMPLES, NotebookChoice};
 use crate::notebook_pane::PaneShows;
 use crate::session::{self, Entry, Session};
 use crate::signin::{Account, Stage};
+use crate::transcript;
 use crate::{Row, Workspace, runs};
 
 /// Wraps the page's `alert` to record what it showed, then shows it as before.
@@ -253,7 +254,7 @@ impl Workspace {
             "folder": self.folder_heading(&s.place),
             "failed": s.failed.as_ref().map(|f| json!({ "message": f.message, "can_copy": f.can_copy })),
             "transcript": self.transcript(s),
-            "activity": session::activity(s, self.offline_since).map(|a| [Some(a.verb), a.object, a.took].into_iter().flatten().collect::<Vec<_>>().join(" ")),
+            "activity": transcript::activity(s, self.offline_since).map(|a| [Some(a.verb), a.object, a.took].into_iter().flatten().collect::<Vec<_>>().join(" ")),
             "pinned_plan": s.pinned_plan().and_then(|ix| match &s.entries[ix] {
                 Entry::Plan(entries) => Some(json!({ "progress": approval::progress(entries), "folded": s.plan_folded, "items": plan_items(entries) })),
                 _ => None,
@@ -285,8 +286,8 @@ impl Workspace {
                     [only] => out.push(row(s, only, true)),
                     _ => out.push(json!({
                         "kind": "run",
-                        "summary": session::run_summary(s, run.clone()).0,
-                        "open": session::run_open(s, &run),
+                        "summary": transcript::run_summary(s, run.clone()).0,
+                        "open": transcript::run_open(s, &run),
                         "rows": rows.iter().map(|&i| row(s, i, true)).collect::<Vec<_>>(),
                     })),
                 }
@@ -294,7 +295,7 @@ impl Workspace {
                 continue;
             }
             if let Entry::RunState(warnings) = &s.entries[ix] {
-                out.extend(warnings.iter().map(|w| json!({ "kind": "note", "text": session::run_state_line(w) })));
+                out.extend(warnings.iter().map(|w| json!({ "kind": "note", "text": transcript::run_state_line(w) })));
                 ix += 1;
                 continue;
             }
@@ -303,7 +304,7 @@ impl Workspace {
                     "kind": "user",
                     "text": text.to_string(),
                     "actions": message_actions(!text.is_empty(), *sent, s.copied == Some(ix)),
-                    "delivery": session::delivery_note(*delivery),
+                    "delivery": transcript::delivery_note(*delivery),
                     "chips": attachments.iter().map(chip_label).collect::<Vec<_>>(),
                     "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text()),
                 })),
@@ -445,9 +446,9 @@ impl Workspace {
 /// A tool call or a stretch of thinking, as its row reads.
 fn row(s: &Session, ix: usize, in_run: bool) -> Value {
     match &s.entries[ix] {
-        Entry::Thought { started, took, expanded, .. } => json!({ "kind": "thought", "text": session::thought_label(in_run, *started, *took), "open": expanded }),
+        Entry::Thought { started, took, expanded, .. } => json!({ "kind": "thought", "text": transcript::thought_label(in_run, *started, *took), "open": expanded }),
         Entry::Tool { title, approval, diffs, expanded, .. } => {
-            let Some(r) = session::tool_row(s, &s.entries[ix]) else { return Value::Null };
+            let Some(r) = transcript::tool_row(s, &s.entries[ix]) else { return Value::Null };
             let mut text = r.line.verb;
             text.extend(r.line.object.map(|o| format!(" {o}")));
             let diff = |d: &crate::celldiff::CellDiff| {

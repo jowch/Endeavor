@@ -11,8 +11,9 @@ use gpui_component::text::{TextView, TextViewStyle};
 use crate::Workspace;
 use crate::pluto;
 use crate::runs;
-use crate::session::{Entry, Session, defined_name, folder_name, markdown_style, option_of_kind, plan_option};
+use crate::session::{Entry, Session, defined_name, folder_name, option_of_kind, plan_option};
 use crate::theme;
+use crate::transcript::markdown_style;
 
 /// The pending approval card, as it reads.
 pub(crate) struct ApprovalView {

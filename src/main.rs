@@ -53,6 +53,7 @@ mod snapshot;
 mod splash;
 mod theme;
 mod tips;
+mod transcript;
 mod turtle;
 mod when;
 #[cfg(not(target_os = "macos"))]
@@ -3268,8 +3269,8 @@ impl Workspace {
                         )
                     })
             }))
-            .child(session::render_transcript(session, cx))
-            .children(session::render_activity(session, self.offline_since, cx))
+            .child(transcript::render_transcript(session, cx))
+            .children(transcript::render_activity(session, self.offline_since, cx))
             .child(
                 div()
                     .px_4()
