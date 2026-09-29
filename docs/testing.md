@@ -4,6 +4,27 @@ How to check Endeavor from a script. Screenshots are for how things look.
 Everything else (which screen is up, what the transcript says, which card is
 waiting, what the notebook pane shows) comes from the state dump.
 
+## Checking changes
+
+- **A feature change.** Check the behavior you changed through the state dump.
+  Drive the app to the state, then read the part of the dump that shows it,
+  for example `scripts/app-state.sh .notebook.header.tags`. Take a screenshot
+  only when how it looks is part of the change.
+- **A runtime, transport or helper change.** Run the Julia tests (below).
+  Then do the smoke test in the app, with a real Claude turn:
+  1. Ask Claude for something that needs code. Claude makes its own notebook,
+     and the pane follows it: `.notebook.shows` is `page`, and
+     `.notebook.file` names the new file.
+  2. The transcript has a run summary and a cell diff: a `run` entry, and a
+     `tool` row with `diffs`.
+  3. Turn Point on, pick a cell, and send a comment. `.page.picked` has the
+     cell, the user entry's `chips` name it, and the reply is about that cell.
+  4. A session on a server makes one edit: a `tool` row whose `added` is more
+     than 0, with `.notebook.header.host` naming the server.
+
+  Check each step through the dump. Take one screenshot at the end, for how
+  it looks.
+
 ## The state dump
 
 A debug build writes what's on screen as JSON when a script asks for it. Release
