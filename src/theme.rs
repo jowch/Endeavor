@@ -20,6 +20,9 @@ pub fn row_active() -> Rgba { rgb(0x1E1E21) }
 pub fn bg_choice() -> Rgba { rgb(0x212124) }
 /// Below the card colour: other choices, queued messages, details.
 pub fn bg_sunken() -> Rgba { rgb(0x18181A) }
+/// Behind a card that needs the user now (approvals, plans): the card colour
+/// tinted with the accent.
+pub fn bg_urgent() -> Rgba { rgb(0x1F1712) }
 /// Tags (the chat header's folder, inline code).
 pub fn bg_tag() -> Rgba { rgb(0x222225) }
 pub fn text_tag() -> Rgba { rgb(0x9A9A9A) }

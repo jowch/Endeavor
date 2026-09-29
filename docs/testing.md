@@ -82,7 +82,8 @@ To wait for something, poll the dump. For example, loop until
   +/− counts, how it was answered, its state (`…`, `failed` or `denied`) and
   its cell diffs. Also `activity` (the working line), `pinned_plan`, and
   `approval`: the card above the composer (`approval` or `plan`) with its
-  title, code, lines and buttons.
+  title, code, lines and buttons (each with its label, key and `weight`:
+  `quiet` on the left, `outlined`, or `primary`).
 - `notebook`. What the notebook pane shows:
   - `page`: the notebook's page. `page` then has the notebook id, the
     backend, the look, safe preview, read-only and whether the page is

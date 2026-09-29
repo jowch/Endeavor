@@ -222,9 +222,9 @@ impl Workspace {
                 "kind": if card.plan.is_some() { "plan" } else { "approval" },
                 "title": card.heading,
                 "code": card.code,
-                "lines": card.lines.into_iter().map(|(text, tone)| json!({ "text": text, "tone": match tone { Tone::Muted => "muted", Tone::Secondary => "secondary", Tone::Name => "name" } })).collect::<Vec<_>>(),
+                "lines": card.lines.into_iter().map(|(text, tone)| json!({ "text": text, "tone": match tone { Tone::Muted => "muted", Tone::Secondary => "secondary" } })).collect::<Vec<_>>(),
                 "plan": card.plan,
-                "buttons": card.buttons.iter().map(|b| json!({ "label": b.label, "key": b.hint, "primary": b.primary })).collect::<Vec<_>>(),
+                "buttons": card.buttons.iter().map(|b| json!({ "label": b.label, "key": b.hint, "weight": b.weight.label() })).collect::<Vec<_>>(),
             })),
         })
     }

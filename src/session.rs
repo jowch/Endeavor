@@ -1815,22 +1815,40 @@ pub(crate) struct ApprovalView {
     pub buttons: Vec<CardButton>,
 }
 
+/// A line's colour; `backticked` names in it are mono.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Tone {
     Muted,
     Secondary,
-    /// A cell's name.
-    Name,
 }
 
 pub(crate) struct CardButton {
     pub label: String,
     /// The key that presses it.
     pub hint: &'static str,
-    pub primary: bool,
+    pub weight: Weight,
     option: PermissionOption,
     /// Approve this session's runs from now on.
     stop: bool,
+}
+
+/// How a card's button looks and where it sits: the answer that declines on
+/// the left, plain, then the others outlined, and the one ⏎ presses filled.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Weight {
+    Quiet,
+    Outlined,
+    Primary,
+}
+
+impl Weight {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Weight::Quiet => "quiet",
+            Weight::Outlined => "outlined",
+            Weight::Primary => "primary",
+        }
+    }
 }
 
 /// The pending approval, pinned above the composer: the only heavy element
@@ -1844,6 +1862,7 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
     }
     let tool = tool.as_deref().unwrap_or("");
 
+    let mut run_word = "Run";
     let (heading, lines): (String, Vec<(String, Tone)>) = if !*runs_code {
         let muted = |text: &str| (text.to_owned(), Tone::Muted);
         if let Some(what) = runs::asked(title, input) {
@@ -1870,27 +1889,25 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
         }
         lines.push((format!("Nothing runs yet. Running it lets its code read and change files on {host}."), Tone::Muted));
         ("Let this notebook run?".into(), lines)
-    } else if tool == "add_cell" {
-        ("Add a cell and run it?".into(), vec![])
-    } else if let Some(p) = preview {
-        let (heading, names) = run_heading(tool, p, input);
+    } else {
+        let question = run_question(tool, preview.as_ref(), input);
+        run_word = question.button;
         let mut lines = Vec::new();
-        if p.count > 1 && !p.all {
+        if question.names.len() > 1 && preview.as_ref().is_none_or(|p| !p.all) {
             const SHOWN: usize = 5;
-            lines.extend(names.iter().take(SHOWN).map(|n| (n.clone(), Tone::Name)));
-            if names.len() > SHOWN {
-                lines.push((format!("and {} more", names.len() - SHOWN), Tone::Muted));
+            let mut names = question.names.iter().take(SHOWN).map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
+            if question.names.len() > SHOWN {
+                names.push_str(&format!(" and {} more", question.names.len() - SHOWN));
             }
+            lines.push((names, Tone::Secondary));
         }
-        if p.dependents > 0 {
+        if let Some(p) = preview.as_ref().filter(|p| p.dependents > 0) {
             let them = if p.count == 1 { "it" } else { "them" };
             let n = p.dependents;
             let cells = if n == 1 { "cell" } else { "cells" };
             lines.push((format!("Also re-runs {n} {cells} that depend on {them}."), Tone::Muted));
         }
-        (heading, lines)
-    } else {
-        ("Run code?".into(), vec![])
+        (question.heading, lines)
     };
     // A single cell's code (or the new cell's) is short enough to show.
     let code = code
@@ -1907,6 +1924,7 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
         shown.join("\n")
     });
 
+    // (label, key, option, runs from now on without asking)
     let mut buttons: Vec<(String, &'static str, PermissionOption, bool)> = Vec::new();
     if tool == "allow_execution" {
         // The same question as the notebook's safe-preview callout: once, not "always".
@@ -1922,15 +1940,25 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
         }
         if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
             buttons.push(("Always this session".into(), "⌘⏎", allow.clone(), true));
-            let run = if tool == "delete_cell" { "Delete" } else { "Run" };
-            buttons.push((run.into(), "⏎", allow.clone(), false));
+            buttons.push((run_word.into(), "⏎", allow.clone(), false));
         }
     }
     if buttons.is_empty() {
         buttons = option_buttons(options);
     }
     let primary = buttons.iter().rposition(|(_, _, o, _)| matches!(o.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways));
-    let buttons = buttons.into_iter().enumerate().map(|(i, (label, hint, option, stop))| CardButton { label, hint, primary: Some(i) == primary, option, stop }).collect();
+    let buttons = buttons
+        .into_iter()
+        .enumerate()
+        .map(|(i, (label, hint, option, stop))| {
+            let weight = match option.kind {
+                _ if Some(i) == primary => Weight::Primary,
+                PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways => Weight::Quiet,
+                _ => Weight::Outlined,
+            };
+            CardButton { label, hint, weight, option, stop }
+        })
+        .collect();
     Some(ApprovalView { heading, code, lines, plan: None, buttons })
 }
 
@@ -1942,35 +1970,34 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         .buttons
         .into_iter()
         .enumerate()
-        .map(|(i, CardButton { label, hint, primary, option, stop })| {
+        .map(|(i, CardButton { label, hint, weight, option, stop })| {
             let focus = session.approval_focus(i, cx);
-            approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, primary, &focus)
+            let button = approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, weight, &focus)
                 .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, stop))))
-                .into_any_element()
+                .into_any_element();
+            (weight, button)
         })
         .collect();
     if let Some(plan) = view.plan {
-        let heading = div().text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(view.heading);
+        let heading = card_heading(&view.heading);
         let body = div()
             .id(ElementId::NamedInteger("plan".into(), key))
             .max_h(px(260.))
             .overflow_y_scroll()
             .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan).style(markdown_style()));
-        return Some(approval_card(heading.into_any_element(), vec![body.into_any_element()], buttons));
+        return Some(approval_card(heading, vec![body.into_any_element()], buttons));
     }
-    let mono = |text: String| div().font_family(theme::MONO).text_size(theme::size_code()).child(text);
-    let code = view.code.map(|code| mono(code).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).into_any_element());
-    let lines = view.lines.into_iter().map(|(text, tone)| match tone {
-        Tone::Muted => div().text_color(theme::text_muted()).child(text).into_any_element(),
-        Tone::Secondary => div().text_color(theme::text_secondary()).child(text).into_any_element(),
-        Tone::Name => mono(text).text_color(theme::text_secondary()).into_any_element(),
+    let code = view.code.map(|code| {
+        div().font_family(theme::MONO).text_size(theme::size_code()).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).child(code).into_any_element()
     });
-    // Wrap: the agent's own option labels can be long.
-    Some(approval_card(
-        inline_code(&view.heading).text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).into_any_element(),
-        code.into_iter().chain(lines).collect(),
-        buttons,
-    ))
+    let lines = view.lines.into_iter().map(|(text, tone)| {
+        let color = match tone {
+            Tone::Muted => theme::text_muted(),
+            Tone::Secondary => theme::text_secondary(),
+        };
+        inline_code(&text, theme::size_meta_small()).text_color(color).into_any_element()
+    });
+    Some(approval_card(card_heading(&view.heading), code.into_iter().chain(lines).collect(), buttons))
 }
 
 /// The agent's own options as buttons: declining first, allowing once last
@@ -1997,21 +2024,18 @@ fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, Pe
 
 /// Plan mode's end: Keep planning · Start in Auto · **Start**.
 fn plan_buttons(options: &[PermissionOption]) -> Vec<CardButton> {
-    // (label, key, option, runs without asking, primary)
-    let buttons: Vec<(&str, &'static str, Option<&PermissionOption>, bool, bool)> = vec![
-        ("Keep planning", "esc", option_of_kind(options, PermissionOptionKind::RejectOnce), false, false),
-        ("Start in Auto", "⌘⏎", plan_option(options), true, false),
-        ("Start", "⏎", plan_option(options), false, true),
+    // (label, key, option, runs without asking, weight)
+    let buttons: Vec<(&str, &'static str, Option<&PermissionOption>, bool, Weight)> = vec![
+        ("Keep planning", "esc", option_of_kind(options, PermissionOptionKind::RejectOnce), false, Weight::Quiet),
+        ("Start in Auto", "⌘⏎", plan_option(options), true, Weight::Outlined),
+        ("Start", "⏎", plan_option(options), false, Weight::Primary),
     ];
     buttons
         .into_iter()
-        .filter_map(|(label, hint, option, stop, primary)| Some(CardButton { label: label.into(), hint, primary, option: option?.clone(), stop }))
+        .filter_map(|(label, hint, option, stop, weight)| Some(CardButton { label: label.into(), hint, weight, option: option?.clone(), stop }))
         .collect()
 }
 
-/// A run card's heading and the names of the cells it lists. A cell is named by
-/// what it defines, else by its first line; an edit that runs is named by its
-/// new code, since the preview only knows the code before the edit.
 /// "Let this notebook run?"'s line about it: "bootstrap.jl · 7 cells · uses CSV, Plots".
 fn notebook_summary(file: Option<&str>, preview: Option<&pluto::RunPreview>) -> Option<String> {
     let mut parts: Vec<String> = file.map(str::to_owned).into_iter().collect();
@@ -2052,56 +2076,96 @@ fn cut_line(text: &str, max: usize) -> String {
     }
 }
 
-fn run_heading(tool: &str, p: &pluto::RunPreview, input: &serde_json::Value) -> (String, Vec<String>) {
-    let first_line = |code: &str| cut_line(code, 60);
-    let new_code = input["code"].as_str().filter(|_| tool == "edit_cell");
-    let names: Vec<String> = p
-        .cells
-        .iter()
-        .map(|c| match new_code {
-            Some(code) => first_line(code),
-            None => c.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| first_line(&c.code)),
-        })
-        .collect();
-    let named = |fallback: &str| match names.first().filter(|n| !n.is_empty()) {
-        Some(n) => format!("`{n}`"),
-        None => fallback.to_string(),
-    };
-    let heading = match (tool, p.all, p.count) {
-        ("delete_cell", _, _) => format!("Delete {}?", named("this cell")),
-        ("allow_execution", false, _) => "Let this notebook run? (Nothing runs yet.)".into(),
-        (_, true, n) => format!("Run all {n} cells?"),
-        (_, _, 1) => format!("Run {}?", named("1 cell")),
-        (_, _, n) => format!("Run {n} cells?"),
-    };
-    (heading, names)
+/// A run card's question ("Run `fit`?", "Delete a cell?", "Add `x` and run
+/// it?"), the word on its ⏎ button, and the cells it would run.
+pub(crate) struct RunQuestion {
+    pub heading: String,
+    pub button: &'static str,
+    pub names: Vec<String>,
 }
 
-/// The approval card's frame: accent edge, soft ring, buttons right-aligned.
-fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<AnyElement>) -> AnyElement {
+/// Every run card asks "<Verb> <what>?": `name` for one cell with a name, "a
+/// cell" for one without, "N cells", "all N cells". Before the runtime says
+/// what would run, the call's input says what it can. A cell is named by what
+/// it defines, else by its first line; a cell being edited or added by its new
+/// code, since the preview only knows the code before the edit.
+fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_json::Value) -> RunQuestion {
+    // The runtime can't say what a cell that doesn't exist yet would run.
+    let preview = preview.filter(|_| tool != "add_cell");
+    let first_line = |code: &str| cut_line(code, 60);
+    let new_code = input["code"].as_str().filter(|_| matches!(tool, "edit_cell" | "add_cell"));
+    let names: Vec<String> = match (preview, new_code) {
+        (_, Some(code)) => vec![defined_name(code).unwrap_or_else(|| first_line(code))],
+        (Some(p), None) => p.cells.iter().map(|c| c.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| first_line(&c.code))).collect(),
+        (None, None) => Vec::new(),
+    };
+    let listed = |field: &str| input[field].as_array().map(Vec::len);
+    let (all, count) = match preview {
+        Some(p) => (p.all, Some(p.count)),
+        None => (tool == "run_all_cells", listed("cell_ids").or(listed("cells")).or((tool != "submit_changes" && tool != "run_all_cells").then_some(1))),
+    };
+    let what = match (all, count) {
+        (true, Some(n)) if n > 1 => format!("all {n} cells"),
+        (true, _) => "all cells".into(),
+        (false, Some(1)) => match names.first().filter(|n| !n.is_empty()) {
+            Some(name) => format!("`{name}`"),
+            None => "a cell".into(),
+        },
+        (false, Some(n)) => format!("{n} cells"),
+        (false, None) => "the changed cells".into(),
+    };
+    let them = if count == Some(1) { "it" } else { "them" };
+    let (heading, button) = match tool {
+        "delete_cell" => (format!("Delete {what}?"), "Delete"),
+        "add_cell" => (format!("Add {what} and run it?"), "Add and run"),
+        "edit_cell" | "edit_cells" => (format!("Edit {what} and run {them}?"), "Edit and run"),
+        _ => (format!("Run {what}?"), "Run"),
+    };
+    RunQuestion { heading, button, names }
+}
+
+/// The approval card's frame: accent edge, soft ring, a heading, its body, and
+/// a footer of buttons (the one that declines on the left).
+fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weight, AnyElement)>) -> AnyElement {
+    let (left, right): (Vec<_>, Vec<_>) = buttons.into_iter().partition(|(weight, _)| *weight == Weight::Quiet);
     div()
         .flex()
         .flex_col()
-        .gap(px(8.))
-        .p(px(10.))
         .rounded(px(8.))
         .border_1()
-        .border_color(theme::accent())
-        .bg(theme::bg_card())
+        .border_color(theme::accent().opacity(0.7))
+        .bg(theme::bg_urgent())
         .shadow(vec![BoxShadow {
-            color: Hsla::from(theme::accent()).opacity(0.25),
+            color: Hsla::from(theme::accent()).opacity(0.10),
             offset: point(px(0.), px(0.)),
             blur_radius: px(0.),
             spread_radius: px(3.),
             inset: false,
         }])
-        .child(heading)
-        .children(body)
-        .child(div().flex().flex_wrap().justify_end().gap_2().children(buttons))
+        .child(div().px(px(10.)).pt(px(10.)).pb(px(6.)).child(heading))
+        .when(!body.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).px(px(10.)).pb(px(10.)).text_size(theme::size_meta()).children(body)))
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(6.))
+                .px(px(10.))
+                .py(px(8.))
+                .border_t_1()
+                .border_color(theme::accent().opacity(0.25))
+                .children(left.into_iter().map(|(_, b)| b.into_any_element()))
+                // The agent's own labels can be long: these wrap among themselves.
+                .child(div().flex_1().min_w_0().flex().flex_wrap().justify_end().gap(px(6.)).children(right.into_iter().map(|(_, b)| b))),
+        )
         .into_any_element()
 }
 
-fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool, focus: &FocusHandle) -> Stateful<Div> {
+/// A card's heading: body size, medium, with `backticked` names in mono.
+fn card_heading(text: &str) -> AnyElement {
+    inline_code(text, theme::size_code()).text_size(theme::size_body()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).into_any_element()
+}
+
+fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus: &FocusHandle) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
@@ -2109,28 +2173,33 @@ fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool, focus:
         .flex()
         .items_center()
         .gap(px(6.))
-        .h(px(26.))
-        .px(px(10.))
+        .h(px(30.))
+        .px(px(if weight == Weight::Primary { 14. } else { 10. }))
         .rounded(px(5.))
         .cursor_pointer()
+        .text_size(theme::size_meta())
         .track_focus(focus)
         .tab_stop(true)
         .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
-        .map(|d| if primary { d.bg(theme::accent()).text_color(gpui::white()) } else { d.bg(theme::bg_raised()).hover(|s| s.bg(theme::row_active())) })
+        .map(|d| match weight {
+            Weight::Primary => d.bg(theme::accent()).text_color(gpui::white()).font_weight(FontWeight::SEMIBOLD),
+            Weight::Outlined => d.border_1().border_color(theme::composer_edge()).text_color(theme::text_row_active()).hover(|s| s.bg(theme::bg_raised())),
+            Weight::Quiet => d.text_color(theme::text_secondary()).hover(|s| s.bg(theme::bg_raised())),
+        })
         .child(label.to_string())
-        .when(!hint.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).opacity(0.6).child(hint.to_string())))
+        .when(!hint.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).font_weight(FontWeight::NORMAL).opacity(0.6).child(hint.to_string())))
 }
 
-/// A card title with `backticked` spans in mono, a size smaller (as in body text).
-fn inline_code(text: &str) -> Div {
+/// Text with `backticked` spans in mono at `mono` size.
+fn inline_code(text: &str, mono: Pixels) -> Div {
     // Plain text wraps as text does, even inside a long word.
     if !text.contains('`') {
         return div().child(text.to_owned());
     }
-    div().flex().flex_wrap().children(text.split('`').enumerate().map(|(i, part)| {
+    div().flex().flex_wrap().children(text.split('`').enumerate().map(move |(i, part)| {
         // Flex drops a part's edge spaces; non-breaking ones survive.
         let d = div().child(part.replace(' ', "\u{a0}"));
-        if i % 2 == 1 { d.font_family(theme::MONO).font_weight(FontWeight::NORMAL).text_size(theme::size_body()) } else { d }
+        if i % 2 == 1 { d.font_family(theme::MONO).font_weight(FontWeight::NORMAL).text_size(mono) } else { d }
     }))
 }
 
@@ -2524,14 +2593,36 @@ mod tests {
             cells: vec![PreviewCell { name: name.map(str::to_owned), code: code.into() }],
             ..Default::default()
         };
-        let heading = |tool, p: &RunPreview, input| super::run_heading(tool, p, &input).0;
+        let heading = |tool, p: &RunPreview, input| super::run_question(tool, Some(p), &input).heading;
         // A new notebook's empty first cell, edited and run in one call.
-        assert_eq!(heading("edit_cell", &one(None, ""), json!({ "code": "x = 1\ny = 2", "run_after": true })), "Run `x = 1`?");
-        assert_eq!(heading("execute_cell", &one(None, ""), json!({})), "Run 1 cell?");
-        assert_eq!(heading("execute_cell", &one(Some(""), "  \n"), json!({})), "Run 1 cell?");
-        assert_eq!(heading("delete_cell", &one(None, ""), json!({})), "Delete this cell?");
+        assert_eq!(heading("edit_cell", &one(None, ""), json!({ "code": "x = 1\ny = 2", "run_after": true })), "Edit `x` and run it?");
+        assert_eq!(heading("execute_cell", &one(None, ""), json!({})), "Run a cell?");
+        assert_eq!(heading("execute_cell", &one(Some(""), "  \n"), json!({})), "Run a cell?");
+        assert_eq!(heading("delete_cell", &one(None, ""), json!({})), "Delete a cell?");
         assert_eq!(heading("execute_cell", &one(Some("fit, model"), "fit = 1"), json!({})), "Run `fit, model`?");
         assert_eq!(heading("execute_cell", &one(None, "md\"# Intro\""), json!({})), "Run `md\"# Intro\"`?");
+    }
+
+    #[test]
+    fn run_cards_ask_one_way_with_or_without_a_preview() {
+        use crate::pluto::RunPreview;
+        use serde_json::json;
+        let ask = |tool, p: Option<RunPreview>, input| {
+            let q = super::run_question(tool, p.as_ref(), &input);
+            (q.heading, q.button)
+        };
+        let cells = |count, all| Some(RunPreview { count, all, ..Default::default() });
+        assert_eq!(ask("submit_changes", cells(3, false), json!({})), ("Run 3 cells?".into(), "Run"));
+        assert_eq!(ask("run_all_cells", cells(7, true), json!({})), ("Run all 7 cells?".into(), "Run"));
+        assert_eq!(ask("run_all_cells", None, json!({})), ("Run all cells?".into(), "Run"));
+        assert_eq!(ask("submit_changes", None, json!({})), ("Run the changed cells?".into(), "Run"));
+        assert_eq!(ask("submit_changes", None, json!({ "cell_ids": ["a", "b"] })), ("Run 2 cells?".into(), "Run"));
+        assert_eq!(ask("execute_cell", None, json!({ "cell_id": "a" })), ("Run a cell?".into(), "Run"));
+        assert_eq!(ask("add_cell", None, json!({ "code": "residuals = y .- fit" })), ("Add `residuals` and run it?".into(), "Add and run"));
+        assert_eq!(ask("add_cell", cells(0, false), json!({ "code": "d = c + 1" })), ("Add `d` and run it?".into(), "Add and run"), "the runtime doesn't know a new cell");
+        assert_eq!(ask("add_cell", None, json!({ "code": "plot(x, y)" })), ("Add `plot(x, y)` and run it?".into(), "Add and run"));
+        assert_eq!(ask("edit_cells", None, json!({ "cells": [{}, {}] })), ("Edit 2 cells and run them?".into(), "Edit and run"));
+        assert_eq!(ask("delete_cell", None, json!({ "cell_id": "a" })), ("Delete a cell?".into(), "Delete"));
     }
 
     #[test]
