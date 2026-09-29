@@ -61,7 +61,6 @@ pub enum Files {
 /// How many rows the @ list shows.
 const MENTIONS_SHOWN: usize = 8;
 
-#[derive(Default)]
 pub struct Composer {
     /// Chips in the box, sent with the next message.
     pub attachments: Vec<Attachment>,
@@ -85,6 +84,50 @@ pub struct Composer {
     hovered_sent: Option<(u64, usize, usize)>,
     /// The box's height in lines as last set: (fewest, most).
     rows: std::cell::Cell<(usize, usize)>,
+    /// Toolbar buttons' Tab-stop handles.
+    focus_plus: FocusHandle,
+    focus_point: FocusHandle,
+    focus_mode: FocusHandle,
+    focus_model: FocusHandle,
+    focus_effort: FocusHandle,
+    focus_send: FocusHandle,
+    /// Draft-chip remove buttons, resized to match `attachments` each render.
+    /// A `RefCell` (like `rows` above) since render only has `&self`.
+    focus_chip_remove: std::cell::RefCell<Vec<FocusHandle>>,
+}
+
+impl Composer {
+    pub fn new(cx: &App) -> Self {
+        Self {
+            attachments: Vec::new(),
+            mentions: Vec::new(),
+            last_text: String::new(),
+            menu: None,
+            typing: None,
+            selected: 0,
+            files: HashMap::new(),
+            notice: None,
+            hovered: None,
+            hovered_sent: None,
+            rows: std::cell::Cell::new((0, 0)),
+            focus_plus: cx.focus_handle(),
+            focus_point: cx.focus_handle(),
+            focus_mode: cx.focus_handle(),
+            focus_model: cx.focus_handle(),
+            focus_effort: cx.focus_handle(),
+            focus_send: cx.focus_handle(),
+            focus_chip_remove: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    /// The remove button's handle for chip `i`, growing the pool if this is a new attachment.
+    fn chip_remove_focus(&self, i: usize, cx: &App) -> FocusHandle {
+        let mut pool = self.focus_chip_remove.borrow_mut();
+        while pool.len() <= i {
+            pool.push(cx.focus_handle());
+        }
+        pool[i].clone()
+    }
 }
 
 /// A sent chip's popover: which chip, and the cell's code now once the page
@@ -672,6 +715,10 @@ impl Workspace {
                         .cursor_pointer()
                         .text_color(theme::text_faint())
                         .hover(|s| s.text_color(theme::text_primary()))
+                        .aria_label("Remove attachment")
+                        .track_focus(&self.composer.chip_remove_focus(i, cx))
+                        .tab_stop(true)
+                        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
                         .child("×")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if i < this.composer.attachments.len() {
@@ -751,6 +798,7 @@ impl Workspace {
 
     fn send_button(&self, empty: bool, busy: bool, in_chat: bool, cx: &mut Context<Self>) -> AnyElement {
         let base = div().id("send").flex_shrink_0().size(px(24.)).flex().items_center().justify_center().rounded_full();
+        let focus = self.composer.focus_send.clone();
         if empty && busy {
             return base
                 .role(Role::Button)
@@ -758,6 +806,9 @@ impl Workspace {
                 .cursor_pointer()
                 .bg(theme::bg_raised())
                 .hover(|s| s.bg(theme::composer_edge()))
+                .track_focus(&focus)
+                .tab_stop(true)
+                .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
                 .child(div().size(px(8.)).rounded(px(1.5)).bg(theme::text_secondary()))
                 .on_click(cx.listener(|this, _, window, cx| this.interrupt(&crate::Interrupt, window, cx)))
                 .into_any_element();
@@ -769,6 +820,9 @@ impl Workspace {
             .aria_label("Send")
             .cursor_pointer()
             .bg(theme::accent())
+            .track_focus(&focus)
+            .tab_stop(true)
+            .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
             .child(glyph(Glyph::ArrowUp, theme::text_primary()))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if in_chat {
@@ -932,6 +986,9 @@ impl Workspace {
                     .role(Role::Button)
                     .aria_label("Add")
                     .when(open(Menu::Plus), |d| d.bg(theme::row_active()))
+                    .track_focus(&self.composer.focus_plus)
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
                     .child(glyph(Glyph::Plus, theme::text_secondary()))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Plus, window, cx))),
             )
@@ -941,6 +998,9 @@ impl Workspace {
                     .aria_label("Point")
                     .gap(px(4.))
                     .when(self.annotating, |d| d.text_color(theme::accent_text()))
+                    .track_focus(&self.composer.focus_point)
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
                     .child(glyph(Glyph::Pointer, if self.annotating { theme::accent_text() } else { theme::text_muted() }))
                     .when(!narrow, |d| d.child("Point"))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
@@ -960,6 +1020,9 @@ impl Workspace {
                 tool_button("mode")
                     .when(open(Menu::Mode), |d| d.bg(theme::row_active()))
                     .when(name == "Plan", |d| d.text_color(theme::accent_text()))
+                    .track_focus(&self.composer.focus_mode)
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
                     .child(name)
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Mode, window, cx)))
             }))
@@ -968,11 +1031,15 @@ impl Workspace {
                 ["model", "effort"]
                     .map(|id| {
                         let label = self.config_label(session, id)?;
+                        let focus = if id == "model" { &self.composer.focus_model } else { &self.composer.focus_effort };
                         Some(
                             tool_button(id)
                                 .min_w_0()
                                 .text_color(theme::text_secondary())
                                 .when(open(Menu::Config(id)), |d| d.bg(theme::row_active()))
+                                .track_focus(focus)
+                                .tab_stop(true)
+                                .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
                                 .child(div().min_w_0().truncate().child(label))
                                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(Menu::Config(id), window, cx))),
                         )

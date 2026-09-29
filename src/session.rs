@@ -3,8 +3,8 @@
 //! applied here; anything that needs the workspace (sending to the agent, driving
 //! the notebook pane, checking run state) comes back as an [`Effect`].
 
-use std::cell::Cell;
-use std::collections::HashSet;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::Instant;
@@ -262,6 +262,17 @@ pub struct Session {
     /// or the mode a reopened session was last in. The agent itself starts every
     /// session, new or reopened, in its settings' default mode.
     pub start_mode: Option<Mode>,
+    /// The sidebar row's Tab-stop handle. Lazily created (no `App` is available
+    /// in `Session::new`'s many test call sites) and cached, so it stays stable.
+    focus: RefCell<Option<FocusHandle>>,
+    /// The open approval card's button handles, resized to match its button count.
+    approval_focus: RefCell<Vec<FocusHandle>>,
+    /// The pinned plan's fold toggle's Tab-stop handle.
+    pinned_plan_focus: RefCell<Option<FocusHandle>>,
+    /// A folded run's header toggle, by the run's first entry index.
+    run_focus: RefCell<HashMap<usize, FocusHandle>>,
+    /// A tool/thought row's toggle, by its entry index.
+    row_focus: RefCell<HashMap<usize, FocusHandle>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -364,7 +375,41 @@ impl Session {
             policy_sent: "ask",
             resources: None,
             start_mode: None,
+            focus: RefCell::new(None),
+            approval_focus: RefCell::new(Vec::new()),
+            pinned_plan_focus: RefCell::new(None),
+            run_focus: RefCell::new(HashMap::new()),
+            row_focus: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// The sidebar row's Tab-stop handle, created on first use.
+    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.focus.borrow_mut().get_or_insert_with(|| cx.focus_handle()).clone()
+    }
+
+    /// The approval card's Tab-stop handle for button `i`, growing the pool if needed.
+    pub fn approval_focus(&self, i: usize, cx: &App) -> FocusHandle {
+        let mut pool = self.approval_focus.borrow_mut();
+        while pool.len() <= i {
+            pool.push(cx.focus_handle());
+        }
+        pool[i].clone()
+    }
+
+    /// The pinned plan's fold toggle's Tab-stop handle, created on first use.
+    pub fn pinned_plan_focus(&self, cx: &App) -> FocusHandle {
+        self.pinned_plan_focus.borrow_mut().get_or_insert_with(|| cx.focus_handle()).clone()
+    }
+
+    /// A folded run header's Tab-stop handle, by the run's first entry index.
+    pub fn run_focus(&self, start: usize, cx: &App) -> FocusHandle {
+        self.run_focus.borrow_mut().entry(start).or_insert_with(|| cx.focus_handle()).clone()
+    }
+
+    /// A tool/thought row's Tab-stop handle, by its entry index.
+    pub fn row_focus(&self, ix: usize, cx: &App) -> FocusHandle {
+        self.row_focus.borrow_mut().entry(ix).or_insert_with(|| cx.focus_handle()).clone()
     }
 
     /// Starting or reopening failed: stop looking busy and say why.
@@ -1468,6 +1513,9 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
         .text_size(theme::size_meta())
         .text_color(theme::text_faint())
         .hover(|s| s.text_color(theme::text_secondary()))
+        .track_focus(&session.run_focus(start, cx))
+        .tab_stop(true)
+        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
         .child(StyledText::new(text).with_highlights(highlights))
         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle_run(start))));
     let shown: Vec<usize> = match (open, live) {
@@ -1600,7 +1648,15 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             .flex()
             .flex_col()
             .gap_1()
-            .child(line("thought").child(thought_label(in_run, *started, *took)).child(if *expanded { "⌄" } else { "›" }).on_click(toggle))
+            .child(
+                line("thought")
+                    .track_focus(&session.row_focus(ix, cx))
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                    .child(thought_label(in_run, *started, *took))
+                    .child(if *expanded { "⌄" } else { "›" })
+                    .on_click(toggle),
+            )
             .when(*expanded, |d| {
                 d.child(
                     scroll_y(div().id(id("thought-text")).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE))
@@ -1643,6 +1699,9 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 .gap(px(6.))
                 .child(
                     line("tool")
+                        .track_focus(&session.row_focus(ix, cx))
+                        .tab_stop(true)
+                        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
                         .child(div().flex_none().whitespace_nowrap().child(summary.verb))
                         .children(object)
                         .when(added > 0, |d| d.child(mono(format!("+{added}"), theme::diff_add())))
@@ -1862,7 +1921,8 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         .into_iter()
         .enumerate()
         .map(|(i, CardButton { label, hint, primary, option, stop })| {
-            approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, primary)
+            let focus = session.approval_focus(i, cx);
+            approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, primary, &focus)
                 .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, stop))))
                 .into_any_element()
         })
@@ -2019,9 +2079,11 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<AnyEle
         .into_any_element()
 }
 
-fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool) -> Stateful<Div> {
+fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool, focus: &FocusHandle) -> Stateful<Div> {
     div()
         .id(id)
+        .role(Role::Button)
+        .aria_label(label)
         .flex()
         .items_center()
         .gap(px(6.))
@@ -2029,6 +2091,9 @@ fn approval_button(id: ElementId, label: &str, hint: &str, primary: bool) -> Sta
         .px(px(10.))
         .rounded(px(5.))
         .cursor_pointer()
+        .track_focus(focus)
+        .tab_stop(true)
+        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
         .map(|d| if primary { d.bg(theme::accent()).text_color(gpui::white()) } else { d.bg(theme::bg_raised()).hover(|s| s.bg(theme::row_active())) })
         .child(label.to_string())
         .when(!hint.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).opacity(0.6).child(hint.to_string())))
@@ -2091,6 +2156,9 @@ pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Opt
                     .cursor_pointer()
                     .text_size(theme::size_meta())
                     .text_color(theme::text_muted())
+                    .track_focus(&session.pinned_plan_focus(cx))
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
                     .child(progress(entries))
                     .child(if folded { "›" } else { "⌄" })
                     .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.plan_folded = !s.plan_folded))),

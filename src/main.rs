@@ -243,6 +243,7 @@ fn column_header(id: impl Into<ElementId>) -> Stateful<Div> {
 fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
     div()
         .id(id)
+        .role(Role::Button)
         .h(px(28.))
         .flex_shrink_0()
         .flex()
@@ -538,6 +539,12 @@ pub struct Workspace {
     /// A state dump waiting for the page's part (debug_state.rs).
     #[cfg(debug_assertions)]
     page_debug: Option<futures::channel::oneshot::Sender<serde_json::Value>>,
+    /// Modal dialog buttons' Tab-stop handles, keyed by their static id: dialogs
+    /// (server_dialog.rs) are rebuilt fresh each render, so their handles live here.
+    dialog_focus: std::cell::RefCell<HashMap<&'static str, FocusHandle>>,
+    /// Past (not open) sidebar rows' Tab-stop handles, keyed by session id: unlike
+    /// an open session, a past row has no `Session` to hold its own handle.
+    past_row_focus: std::cell::RefCell<HashMap<SessionId, FocusHandle>>,
 }
 
 impl Workspace {
@@ -685,7 +692,7 @@ impl Workspace {
             settings: Settings::load(),
             settings_open: false,
             resizing: None,
-            composer: composer::Composer::default(),
+            composer: composer::Composer::new(cx),
             chip_popover: None,
             agent_options: load_json("agent-options.json"),
             setup: Setup::needed().then(Setup::default),
@@ -718,6 +725,8 @@ impl Workspace {
             pane_partition_menu: false,
             #[cfg(debug_assertions)]
             page_debug: None,
+            dialog_focus: std::cell::RefCell::new(HashMap::new()),
+            past_row_focus: std::cell::RefCell::new(HashMap::new()),
         };
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
@@ -1955,6 +1964,17 @@ impl Workspace {
     // Rendering
     // -----------------------------------------------------------------------
 
+    /// A dialog button's Tab-stop handle, keyed by its static id and cached across
+    /// renders (dialogs like `server_dialog.rs`'s are otherwise rebuilt from scratch).
+    pub(crate) fn dialog_focus(&self, id: &'static str, cx: &App) -> FocusHandle {
+        self.dialog_focus.borrow_mut().entry(id).or_insert_with(|| cx.focus_handle()).clone()
+    }
+
+    /// A past sidebar row's Tab-stop handle, cached by session id across renders.
+    fn past_row_focus(&self, id: &SessionId, cx: &App) -> FocusHandle {
+        self.past_row_focus.borrow_mut().entry(id.clone()).or_insert_with(|| cx.focus_handle()).clone()
+    }
+
     /// A session's sidebar row: right-click opens its menu, and it stays lit while
     /// the menu is open.
     fn session_row(&self, row: Row, group: SharedString, active: bool, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -2209,7 +2229,8 @@ impl Workspace {
                         let key = s.key;
                         let active = self.active == Some(key) && !self.settings_open;
                         let group: SharedString = format!("session-{key}").into();
-                        let title = self.row_label(&Row::Open(key), s.title.clone());
+                        let title_text = s.title.clone();
+                        let title = self.row_label(&Row::Open(key), title_text.clone());
                         // Status at the row's end: a ring waits for you, the working orbit is working.
                         let mark = self.row_mark(s).map(|mark| match mark {
                             RowMark::NeedsApproval => div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element(),
@@ -2217,6 +2238,10 @@ impl Workspace {
                             RowMark::Archived => glyph(Glyph::Archive, theme::text_section()).into_any_element(),
                         });
                         self.session_row(Row::Open(key), group.clone(), active, cx)
+                            .aria_label(title_text)
+                            .track_focus(&s.focus_handle(cx))
+                            .tab_stop(true)
+                            .focus_visible(|st| st.border_2().border_color(theme::focus_ring()))
                             .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
                             .child(title)
                             .children(mark)
@@ -2242,12 +2267,18 @@ impl Workspace {
                     .enumerate()
                     .map(|(i, info)| {
                         let row = Row::Past(info.session_id.clone(), folder.clone());
-                        let title = self.row_label(&row, self.row_title(&row).unwrap_or_default());
+                        let title_text = self.row_title(&row).unwrap_or_default();
+                        let title = self.row_label(&row, title_text.clone());
                         let group: SharedString = format!("past-{:?}-{}-{i}", folder.host, folder.path.display()).into();
                         let open = (*info).clone();
                         let place = folder.clone();
                         let archived = is_archived(info);
+                        let focus = self.past_row_focus(&info.session_id, cx);
                         self.session_row(row.clone(), group.clone(), false, cx)
+                            .aria_label(title_text)
+                            .track_focus(&focus)
+                            .tab_stop(true)
+                            .focus_visible(|d| d.border_2().border_color(theme::focus_ring()))
                             .when(archived, |d| d.text_color(theme::text_section()))
                             .child(title)
                             .when(archived, |d| d.child(glyph(Glyph::Archive, theme::text_section())))
@@ -2263,6 +2294,7 @@ impl Workspace {
                     let label = if expanded { "Show fewer".to_string() } else { format!("Show {} more", all.len() - PAST_SHOWN) };
                     let folder = folder.clone();
                     sidebar_row(ElementId::Name(format!("more-{:?}-{}", folder.host, folder.path.display()).into()), false)
+                        .aria_label(label.clone())
                         .text_color(theme::text_faint())
                         .child(label)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -2297,6 +2329,7 @@ impl Workspace {
             .child(column_header("sidebar-header").mx(px(-6.)).justify_end().px(px(10.)).child(sidebar_toggle(cx)))
             .child(
                 sidebar_row("new-session".into(), false)
+                    .aria_label("New session")
                     .text_color(theme::text_new())
                     .child(div().text_color(theme::text_faint()).child("+"))
                     .child(div().flex_1().child("New session"))
@@ -2313,6 +2346,7 @@ impl Workspace {
                 let Some(label) = self.restart_row() else { return d };
                 d.child(
                     sidebar_row("restart".into(), false)
+                        .aria_label(label)
                         .text_color(theme::accent_text())
                         .child(label)
                         .on_click(cx.listener(|this, _, _, cx| this.ensure_runtime(&HostId::ThisMac, cx))),

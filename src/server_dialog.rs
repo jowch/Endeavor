@@ -438,13 +438,13 @@ impl Workspace {
                 } else {
                     format!("Remove {title}? Endeavor forgets it; anything running there keeps running.")
                 }))
-                .child(button("cancel-remove", "Cancel", false).on_click(cx.listener(|this, _, _, cx| {
+                .child(button("cancel-remove", "Cancel", false, &self.dialog_focus("cancel-remove", cx)).on_click(cx.listener(|this, _, _, cx| {
                     if let Some(dialog) = &mut this.server_dialog {
                         dialog.confirm_remove = false;
                         cx.notify();
                     }
                 })))
-                .child(button("confirm-remove", "Remove", false).text_color(theme::danger()).on_click(cx.listener(|this, _, window, cx| this.remove_server(window, cx))))
+                .child(button("confirm-remove", "Remove", false, &self.dialog_focus("confirm-remove", cx)).text_color(theme::danger()).on_click(cx.listener(|this, _, window, cx| this.remove_server(window, cx))))
         } else {
             div()
                 .flex()
@@ -466,8 +466,8 @@ impl Workspace {
                     )
                 })
                 .child(div().flex_1())
-                .child(button("cancel-server", "Cancel", false).on_click(cx.listener(|this, _, _, cx| this.close_server_dialog(cx))))
-                .child(button("save-server", if editing { "Save" } else { "Add" }, true).on_click(cx.listener(|this, _, window, cx| this.save_server(window, cx))))
+                .child(button("cancel-server", "Cancel", false, &self.dialog_focus("cancel-server", cx)).on_click(cx.listener(|this, _, _, cx| this.close_server_dialog(cx))))
+                .child(button("save-server", if editing { "Save" } else { "Add" }, true, &self.dialog_focus("save-server", cx)).on_click(cx.listener(|this, _, window, cx| this.save_server(window, cx))))
         };
         let card = div()
             .id("server-dialog")
@@ -507,7 +507,7 @@ impl Workspace {
                             .child(row(
                                 "SSH host",
                                 div().flex().gap(px(8.)).child(div().w(px(200.)).child(host_field)).child(
-                                    button("test-connection", if testing { "Stop test" } else { "Test connection" }, false)
+                                    button("test-connection", if testing { "Stop test" } else { "Test connection" }, false, &self.dialog_focus("test-connection", cx))
                                         .w(px(124.))
                                         .justify_center()
                                         .on_click(cx.listener(|this, _, _, cx| this.test_server(cx))),
@@ -592,13 +592,13 @@ impl Workspace {
                     .flex()
                     .justify_end()
                     .gap(px(8.))
-                    .child(button("login-node-anyway", "Start anyway", false).on_click(cx.listener(|this, _, window, cx| {
+                    .child(button("login-node-anyway", "Start anyway", false, &self.dialog_focus("login-node-anyway", cx)).on_click(cx.listener(|this, _, window, cx| {
                         if let Some(id) = this.login_node_warning.take() {
                             this.login_node_ok.insert(id);
                         }
                         this.start_session(window, cx);
                     })))
-                    .child(button("login-node-cluster", "Add as cluster", true).on_click(cx.listener(|this, _, window, cx| {
+                    .child(button("login-node-cluster", "Add as cluster", true, &self.dialog_focus("login-node-cluster", cx)).on_click(cx.listener(|this, _, window, cx| {
                         let Some(id) = this.login_node_warning.take() else { return };
                         let Some(server) = this.hosts.server(&id).cloned() else { return };
                         let template = Server { id: String::new(), name: format!("{} (cluster)", server.name), cluster: Some(Cluster::default()), ..server };
@@ -646,8 +646,8 @@ impl Workspace {
                     .flex()
                     .justify_end()
                     .gap(px(8.))
-                    .child(button("askpass-no", no, false).on_click(cx.listener(|this, _, window, cx| this.answer_ask(false, window, cx))))
-                    .child(button("askpass-yes", yes, true).on_click(cx.listener(|this, _, window, cx| this.answer_ask(true, window, cx)))),
+                    .child(button("askpass-no", no, false, &self.dialog_focus("askpass-no", cx)).on_click(cx.listener(|this, _, window, cx| this.answer_ask(false, window, cx))))
+                    .child(button("askpass-yes", yes, true, &self.dialog_focus("askpass-yes", cx)).on_click(cx.listener(|this, _, window, cx| this.answer_ask(true, window, cx)))),
             );
         Some(modal_backdrop("askpass-backdrop").child(card).into_any_element())
     }
@@ -743,7 +743,7 @@ fn field_frame(mono: bool) -> Div {
         .when(mono, |d| d.font_family(theme::MONO))
 }
 
-fn button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div> {
+fn button(id: &'static str, label: &'static str, primary: bool, focus: &FocusHandle) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
@@ -754,6 +754,9 @@ fn button(id: &'static str, label: &'static str, primary: bool) -> Stateful<Div>
         .items_center()
         .rounded(px(6.))
         .cursor_pointer()
+        .track_focus(focus)
+        .tab_stop(true)
+        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
         .when(primary, |d| d.bg(theme::accent()).text_color(theme::text_primary()))
         .when(!primary, |d| d.border_1().border_color(theme::composer_edge()).hover(|s| s.bg(theme::bg_raised())))
         .child(label)
