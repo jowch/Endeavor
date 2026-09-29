@@ -251,7 +251,7 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
             .hover(|s| s.bg(theme::bg_raised()))
             .track_focus(&session.row_focus(ix, cx))
             .tab_stop(true)
-            .focus_visible(|s| s.opacity(1.).border_2().border_color(theme::focus_ring()))
+            .focus_visible(|s| s.opacity(1.).shadow(theme::ring(theme::bg_page())))
             .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
             .child(crate::new_session::glyph(if copied { crate::new_session::Glyph::Check } else { crate::new_session::Glyph::Copy }, theme::text_faint()))
             .on_click(cx.listener(move |this, _, _, cx| {

@@ -80,6 +80,7 @@ use sidebar::{FilterMenu, Row};
 use settings::Settings;
 use splash::{Progress, Setup};
 use wire::backend::Backend;
+use crate::theme::FocusRing as _;
 
 /// Notebook id from a notebook page's URL. Only the id is used: the URL also
 /// carries the notebook server's secret, which must never reach the agent.
@@ -155,7 +156,7 @@ fn sidebar_toggle(this: &Workspace, cx: &mut Context<Workspace>) -> impl IntoEle
         .border_color(gpui::transparent_black())
         .track_focus(&this.dialog_focus("sidebar-toggle", cx))
         .tab_stop(true)
-        .focus_visible(|s| s.border_color(theme::focus_ring()))
+        .focus_ring_on(if this.settings.layout.sidebar_open { theme::bg_sidebar() } else { theme::bg_page() })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(&ToggleSidebar, window, cx)))
         .child(

@@ -16,6 +16,7 @@ use crate::session::Session;
 use crate::signin::{Look, button};
 use crate::splash::{Setup, Step};
 use crate::theme;
+use crate::theme::FocusRing as _;
 
 /// How long a server that can't be reached waits between tries.
 pub const RETRY_EVERY: Duration = Duration::from_secs(15);
@@ -260,7 +261,7 @@ impl Workspace {
                         .border_color(gpui::transparent_black())
                         .track_focus(&self.dialog_focus("cant-reach-settings", cx))
                         .tab_stop(true)
-                        .focus_visible(|s| s.border_color(theme::focus_ring()))
+                        .focus_ring_on(theme::bg_card())
                         .self_start()
                         .cursor_pointer()
                         .text_size(theme::size_body())

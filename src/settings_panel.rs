@@ -1255,26 +1255,14 @@ impl Workspace {
 // Drawing
 // ---------------------------------------------------------------------------
 
-fn nav_bg() -> Rgba {
-    rgb(0x1A1A1D)
-}
+use theme::{icon_grey, lit_bg, mark_bg, nav_bg};
+use crate::theme::FocusRing as _;
 
-fn icon_grey() -> Rgba {
-    rgb(0x999999)
-}
-
-/// A searched word in a result, as the boards mark it.
-fn mark_bg() -> Rgba {
-    rgba(0xCC3F0047)
-}
-
-/// The row a result opened: a quiet tint, so the row still reads.
-fn lit_bg() -> Rgba {
-    rgba(0xCC3F001A)
-}
-
-fn ring(d: Stateful<Div>) -> Stateful<Div> {
-    d.tab_stop(true).focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+/// Keyboard focus: rows and the section list keep an outline inside, since
+/// they fill their column; every other control gets the ring outside it.
+fn ring(d: Stateful<Div>, inside: bool) -> Stateful<Div> {
+    let d = d.tab_stop(true);
+    if inside { d.focus_visible(|s| s.border_2().border_color(theme::focus_ring())) } else { d.focus_ring_on(theme::panel_bg()) }
 }
 
 impl Workspace {
@@ -1287,7 +1275,7 @@ impl Workspace {
     fn focusable(&self, id: SharedString, role: Role, aria: SharedString, cx: &App) -> Stateful<Div> {
         let d = div().id(ElementId::Name(id.clone())).role(role).aria_label(aria);
         match self.control_focus(&id, cx) {
-            Some(focus) => ring(d.track_focus(&focus)),
+            Some(focus) => ring(d.track_focus(&focus), role == Role::Tab || id.starts_with("row-")),
             None => d,
         }
     }

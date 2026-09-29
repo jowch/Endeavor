@@ -25,6 +25,7 @@ use crate::session::{Session, Stopped};
 use crate::splash::{Progress, Step};
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme};
+use crate::theme::FocusRing as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
@@ -1218,7 +1219,7 @@ impl Workspace {
                         .border_color(gpui::transparent_black())
                         .track_focus(&self.dialog_focus("cant-reach-host", cx))
                         .tab_stop(true)
-                        .focus_visible(|s| s.border_color(theme::focus_ring()))
+                        .focus_ring()
                         .cursor_pointer()
                         .text_color(theme::text_primary())
                         .hover(|s| s.underline())

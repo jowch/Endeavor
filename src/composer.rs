@@ -21,6 +21,7 @@ use crate::hosts::{HostId, Place};
 use crate::new_session::{Glyph, glyph};
 use crate::session::{self, Entry, ModeChoice, Session};
 use crate::{Workspace, context_ring, theme, tool_button};
+use crate::theme::FocusRing as _;
 
 actions!(composer, [AddFiles, ListUp, ListDown, ListPick, PickMode1, PickMode2, PickMode3, PickMode4]);
 
@@ -720,7 +721,7 @@ impl Workspace {
                         .border_color(gpui::transparent_black())
                         .track_focus(&self.composer.chip_remove_focus(i, cx))
                         .tab_stop(true)
-                        .focus_visible(|s| s.border_color(theme::focus_ring()))
+                        .focus_ring_on(theme::bg_tag())
                         .child("×")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if i < this.composer.attachments.len() {
@@ -814,7 +815,7 @@ impl Workspace {
                 .border_color(gpui::transparent_black())
                 .track_focus(&focus)
                 .tab_stop(true)
-                .focus_visible(|s| s.border_color(theme::focus_ring()))
+                .focus_ring_on(theme::composer_bg())
                 .child(div().size(px(8.)).rounded(px(1.5)).bg(theme::text_secondary()))
                 .on_click(cx.listener(|this, _, window, cx| this.interrupt(&crate::Interrupt, window, cx)))
                 .into_any_element();
@@ -830,8 +831,8 @@ impl Workspace {
             .border_color(gpui::transparent_black())
             .track_focus(&focus)
             .tab_stop(true)
-            .focus_visible(|s| s.border_color(theme::focus_ring()))
-            .child(glyph(Glyph::ArrowUp, theme::text_primary()))
+            .focus_ring_on(theme::composer_bg())
+            .child(glyph(Glyph::ArrowUp, gpui::white().into()))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if in_chat {
                     this.submit(false, window, cx);
@@ -998,7 +999,7 @@ impl Workspace {
                     .border_color(gpui::transparent_black())
                     .track_focus(&self.composer.focus_plus)
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_color(theme::focus_ring()))
+                    .focus_ring()
                     .child(glyph(Glyph::Plus, theme::text_secondary()))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Plus, window, cx))),
             )
@@ -1012,7 +1013,7 @@ impl Workspace {
                     .border_color(gpui::transparent_black())
                     .track_focus(&self.composer.focus_point)
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_color(theme::focus_ring()))
+                    .focus_ring()
                     .child(glyph(Glyph::Pointer, if self.annotating { theme::accent_text() } else { theme::text_muted() }))
                     .when(!narrow, |d| d.child("Point"))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
@@ -1038,7 +1039,7 @@ impl Workspace {
                     .border_color(gpui::transparent_black())
                     .track_focus(&self.composer.focus_mode)
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_color(theme::focus_ring()))
+                    .focus_ring()
                     .child(name)
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Mode, window, cx)))
             }))
@@ -1060,7 +1061,7 @@ impl Workspace {
                                 .border_color(gpui::transparent_black())
                                 .track_focus(focus)
                                 .tab_stop(true)
-                                .focus_visible(|s| s.border_color(theme::focus_ring()))
+                                .focus_ring()
                                 .child(div().min_w_0().truncate().child(label))
                                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(Menu::Config(id), window, cx))),
                         )

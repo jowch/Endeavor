@@ -23,6 +23,7 @@ use crate::resources::Target;
 use crate::session::folder_name;
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme, when};
+use crate::theme::FocusRing as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NotebookChoice {
@@ -704,14 +705,14 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(6.))
-                        .px(px(8.))
+                        .px(px(9.))
                         .rounded(px(6.))
-                        .bg(if open { theme::bg_raised() } else { theme::bg_tag() })
+                        .bg(if open { theme::bg_raised() } else { theme::chip_bg() })
                         .text_size(theme::size_meta())
                         .text_color(if waiting { theme::text_faint() } else { theme::text_secondary() })
-                        .border_2()
-                        .border_color(gpui::transparent_black())
-                        .focus_visible(|s| s.border_color(theme::focus_ring()))
+                        .border_1()
+                        .border_color(theme::chip_edge())
+                        .focus_ring()
                         .child(glyph(icon, theme::text_muted()))
                         .child(div().when(mono, |d| d.font_family(theme::MONO)).child(label))
                         .when(!waiting, |d| {

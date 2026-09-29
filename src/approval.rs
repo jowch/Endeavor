@@ -14,6 +14,7 @@ use crate::runs;
 use crate::session::{Entry, Session, defined_name, folder_name, option_of_kind, plan_option};
 use crate::theme;
 use crate::transcript::markdown_style;
+use crate::theme::FocusRing as _;
 
 /// The pending approval card, as it reads.
 pub(crate) struct ApprovalView {
@@ -217,7 +218,7 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
                 .hover(|s| s.text_color(theme::text_secondary()))
                 .track_focus(&session.plan_card_focus(cx))
                 .tab_stop(true)
-                .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                .focus_ring_on(theme::bg_urgent())
                 .child(label)
                 .child(if plan.open { "⌄" } else { "›" })
                 .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.plan_open = !s.plan_open)))
@@ -478,12 +479,15 @@ fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus
         .border_color(gpui::transparent_black())
         .track_focus(focus)
         .tab_stop(true)
-        .focus_visible(|s| s.border_color(theme::focus_ring()))
         .map(|d| match weight {
-            Weight::Primary => d.bg(theme::accent()).text_color(gpui::white()).font_weight(FontWeight::SEMIBOLD),
-            // Its outline is the reserved focus border, so focus only recolours it.
-            Weight::Outlined => d.border_color(theme::composer_edge()).text_color(theme::text_row_active()).hover(|s| s.bg(theme::bg_raised())),
-            Weight::Quiet => d.text_color(theme::text_secondary()).hover(|s| s.bg(theme::bg_raised())),
+            Weight::Primary => d.bg(theme::accent()).text_color(gpui::white()).font_weight(FontWeight::SEMIBOLD).focus_ring_on(theme::bg_urgent()),
+            // Its outline is the reserved 2 px border, so focus only recolours it.
+            Weight::Outlined => d
+                .border_color(theme::control_edge())
+                .text_color(theme::text_row_active())
+                .hover(|s| s.bg(theme::bg_raised()))
+                .focus_visible(|s| s.border_color(theme::focus_ring())),
+            Weight::Quiet => d.text_color(theme::text_secondary()).hover(|s| s.bg(theme::bg_raised())).focus_ring_on(theme::bg_urgent()),
         })
         .child(label.to_string())
         .when(!hint.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).font_weight(FontWeight::NORMAL).opacity(0.6).child(hint.to_string())))
@@ -552,7 +556,7 @@ pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Opt
                     .border_color(gpui::transparent_black())
                     .track_focus(&session.pinned_plan_focus(cx))
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_color(theme::focus_ring()))
+                    .focus_ring()
                     .child(progress(entries))
                     .child(if folded { "›" } else { "⌄" })
                     .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.plan_folded = !s.plan_folded))),

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::Workspace;
 use crate::new_session::{Glyph, glyph, glyph_at};
 use crate::theme;
+use crate::theme::FocusRing as _;
 
 /// The two kinds of Claude account the CLI signs in with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -565,7 +566,7 @@ impl Workspace {
                                     .border_color(gpui::transparent_black())
                                     .track_focus(&self.dialog_focus("sign-in-settings", cx))
                                     .tab_stop(true)
-                                    .focus_visible(|s| s.border_color(theme::focus_ring()))
+                                    .focus_ring()
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_settings_at(crate::settings_panel::Page::Section(crate::settings_panel::Section::Assistants), window, cx)
                                     })),

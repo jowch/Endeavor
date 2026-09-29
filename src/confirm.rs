@@ -119,14 +119,14 @@ impl Workspace {
                             .items_center()
                             .gap(px(6.))
                             .child(
-                                button("confirm-cancel", "Cancel", false, &confirm.focus_cancel)
+                                button("confirm-cancel", "Cancel", false, &confirm.focus_cancel, theme::popover_bg())
                                     .aria_label("Cancel")
                                     .on_click(cx.listener(|this, _, window, cx| this.close_confirm(window, cx))),
                             )
                             .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child("esc")),
                     )
                     .child(
-                        button("confirm-action", confirm.action_label, true, &confirm.focus_action)
+                        button("confirm-action", confirm.action_label, true, &confirm.focus_action, theme::popover_bg())
                             .aria_label(confirm.action_label)
                             .on_click(cx.listener(|this, _, window, cx| this.confirm_act(window, cx))),
                     ),

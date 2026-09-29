@@ -12,6 +12,7 @@ use crate::menu::MenuTarget;
 use crate::new_session::{self, Glyph, NotebookChoice, glyph, menu_row};
 use crate::session::{Session, folder_name};
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
+use crate::theme::FocusRing as _;
 
 /// A 28px sidebar row (sessions, "New session").
 fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
@@ -901,7 +902,7 @@ impl Workspace {
                             .border_color(gpui::transparent_black())
                             .track_focus(&self.dialog_focus("settings-gear", cx))
                             .tab_stop(true)
-                            .focus_visible(|s| s.border_color(theme::focus_ring()))
+                            .focus_ring_on(theme::bg_sidebar())
                             .text_color(if self.settings_panel.is_some() { theme::text_primary() } else { theme::text_faint() })
                             .when(self.settings_panel.is_some(), |d| d.bg(theme::row_active()))
                             .hover(|s| s.text_color(theme::text_primary()))
