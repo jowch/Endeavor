@@ -45,12 +45,15 @@ pub fn text_secondary() -> Rgba { rgb(0xBDBDBD) }
 pub fn text_row_active() -> Rgba { rgb(0xD4D4D4) }
 /// "New session" in the sidebar.
 pub fn text_new() -> Rgba { rgb(0xA3A3A3) }
-/// Sidebar rows.
+/// Sidebar rows outside the session list (the status line, "Show N more"…).
 pub fn text_muted() -> Rgba { rgb(0x8C8C8C) }
+/// Sidebar session rows (open and past): a dark-contrast raise over
+/// `text_muted`, so folder headings (`text_section`) read as the lower level.
+pub fn text_row() -> Rgba { rgb(0xBDBDBD) }
 /// Tool lines, timestamps.
-pub fn text_faint() -> Rgba { rgb(0x7A7A7A) }
+pub fn text_faint() -> Rgba { rgb(0x858585) }
 /// Section heads.
-pub fn text_section() -> Rgba { rgb(0x5E5E5E) }
+pub fn text_section() -> Rgba { rgb(0x888888) }
 
 /// Filled primary (white text), unrun stripe, busy dot.
 pub fn accent() -> Rgba { rgb(0xCC3F00) }

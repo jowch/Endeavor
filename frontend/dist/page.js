@@ -1509,7 +1509,7 @@
     --cm-color-string: #A3C48C;
     --cm-color-function: #9AB6E6;
     --cm-color-builtin: #9AB6E6;
-    --cm-color-comment: #5E5E5E;
+    --cm-color-comment: #858585;
     --cm-color-line-numbers: #555555;
     /* Live docs */
     --helpbox-bg-color: #1C1C1F;
@@ -1529,7 +1529,7 @@
     --frontmatter-input-border-color: #3A3A40;
     /* A cell's run time: faint text, no chip */
     --pluto-runarea-bg-color: transparent;
-    --pluto-runarea-span-color: #5E5E5E;
+    --pluto-runarea-span-color: #858585;
   }
   .pluto-modal { border: 1px solid #2A2A2E; border-radius: 8px !important; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5) !important; }
   .pluto-modal-dark h1 { color: #ECECEC; font-weight: 600; }
