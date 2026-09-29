@@ -15,10 +15,11 @@ use futures::channel::oneshot;
 use gpui::*;
 use serde_json::{Value, json};
 
+use crate::approval::{self, Tone};
 use crate::connection::HostPane;
 use crate::new_session::{EXAMPLES, NotebookChoice};
 use crate::notebook_pane::PaneShows;
-use crate::session::{self, Entry, Session, Tone};
+use crate::session::{self, Entry, Session};
 use crate::signin::{Account, Stage};
 use crate::{Row, Workspace, runs};
 
@@ -254,10 +255,10 @@ impl Workspace {
             "transcript": self.transcript(s),
             "activity": session::activity(s, self.offline_since).map(|a| [Some(a.verb), a.object, a.took].into_iter().flatten().collect::<Vec<_>>().join(" ")),
             "pinned_plan": s.pinned_plan().and_then(|ix| match &s.entries[ix] {
-                Entry::Plan(entries) => Some(json!({ "progress": session::progress(entries), "folded": s.plan_folded, "items": plan_items(entries) })),
+                Entry::Plan(entries) => Some(json!({ "progress": approval::progress(entries), "folded": s.plan_folded, "items": plan_items(entries) })),
                 _ => None,
             }),
-            "approval": session::approval_view(s).map(|card| json!({
+            "approval": approval::approval_view(s).map(|card| json!({
                 "kind": if card.plan.is_some() { "plan" } else { "approval" },
                 "title": card.heading,
                 "code": card.code,
@@ -308,7 +309,7 @@ impl Workspace {
                 })),
                 Entry::Agent { text, at } => Some(json!({ "kind": "reply", "text": text, "actions": message_actions(true, *at, s.copied == Some(ix)) })),
                 Entry::Note(text) => Some(json!({ "kind": "note", "text": text.to_string() })),
-                Entry::Plan(entries) => Some(json!({ "kind": "plan", "progress": session::progress(entries), "items": plan_items(entries) })),
+                Entry::Plan(entries) => Some(json!({ "kind": "plan", "progress": approval::progress(entries), "items": plan_items(entries) })),
                 Entry::Tool { .. } | Entry::Thought { .. } => Some(row(s, ix, false)),
                 Entry::Permission { .. } | Entry::RunState(_) => None,
             });

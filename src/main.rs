@@ -14,6 +14,7 @@ mod webkeys;
 mod about;
 mod agent;
 mod annotate;
+mod approval;
 mod attach;
 mod celldiff;
 mod composer;
@@ -3277,11 +3278,11 @@ impl Workspace {
                     .flex_col()
                     .gap_2()
                     .children(self.render_commands(session, cx))
-                    .children(session::render_pinned_plan(session, cx))
+                    .children(approval::render_pinned_plan(session, cx))
                     .children(self.render_offline_line(Some(session), cx))
                     .children(self.render_sign_in_card(cx))
-                    .children(session::render_approval(session, cx))
-                    .child(session::render_queue(self, session, cx))
+                    .children(approval::render_approval(session, cx))
+                    .child(approval::render_queue(self, session, cx))
                     .child(self.render_composer(Some(session), notebook_open, window, cx)),
             )
     }
