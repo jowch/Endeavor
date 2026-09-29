@@ -1103,11 +1103,9 @@ impl Workspace {
                                 })),
                         ),
                 )
-            })
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.chip_popover = None;
-                cx.notify();
-            }));
+            });
+        // Closed by the shared click-outside backdrop (main.rs); occlude()
+        // keeps a click on the popover itself from reaching it.
         div().absolute().top(relative(1.)).right_0().mt(px(4.)).child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(2)).into_any_element()
     }
 

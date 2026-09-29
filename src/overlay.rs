@@ -74,9 +74,13 @@ pub enum Hole {
 struct Holes {
     rects: Vec<(Hole, CGRect)>,
     view: usize,
+    /// A menu or popover is open somewhere (not necessarily over the web
+    /// view): a mouse-down anywhere on the web view, not only in a hole,
+    /// goes to GPUI too, so its own click-outside handling can close it.
+    dismiss: bool,
 }
 
-static HOLES: Mutex<Holes> = Mutex::new(Holes { rects: Vec::new(), view: 0 });
+static HOLES: Mutex<Holes> = Mutex::new(Holes { rects: Vec::new(), view: 0, dismiss: false });
 
 type SendEvent = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
 static GPUI_SEND_EVENT: OnceLock<SendEvent> = OnceLock::new();
@@ -90,22 +94,29 @@ const LEFT_DRAGGED: usize = 6;
 
 /// Clicks in the hole go straight to GPUI's view. The web view claims them
 /// otherwise, even when it declines to hit-test there (WebKit's gesture
-/// recognizers take mouse-downs over the whole view).
+/// recognizers take mouse-downs over the whole view). While `dismiss` holds,
+/// a mouse-down anywhere on the web view goes to GPUI the same way, so a menu
+/// or popover open elsewhere in the window hears it and closes, the way a
+/// native menu closes for a click anywhere outside it.
 unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
     unsafe {
-        let (rects, view) = {
+        let (rects, view, dismiss) = {
             let holes = HOLES.lock().unwrap();
-            (holes.rects.iter().map(|(_, rect)| *rect).collect::<Vec<_>>(), holes.view)
+            (holes.rects.iter().map(|(_, rect)| *rect).collect::<Vec<_>>(), holes.view, holes.dismiss)
         };
         let kind: usize = msg_send![event, type];
-        if !rects.is_empty() && [LEFT_DOWN, LEFT_UP, RIGHT_DOWN, RIGHT_UP, LEFT_DRAGGED].contains(&kind) {
+        let is_click = [LEFT_DOWN, LEFT_UP, RIGHT_DOWN, RIGHT_UP, LEFT_DRAGGED].contains(&kind);
+        if view != 0 && is_click && (!rects.is_empty() || dismiss) {
             let view = view as *mut AnyObject;
             let in_window: CGPoint = msg_send![event, locationInWindow];
             let local: CGPoint = msg_send![view, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
             let flipped: Bool = msg_send![view, isFlipped];
             let bounds: CGRect = msg_send![view, bounds];
             let y = if flipped.as_bool() { local.y } else { bounds.size.height - local.y };
-            if rects.iter().any(|rect| rect.contains(local.x, y)) {
+            let in_hole = rects.iter().any(|rect| rect.contains(local.x, y));
+            let in_view = local.x >= 0. && local.x < bounds.size.width && y >= 0. && y < bounds.size.height;
+            let dismiss_click = dismiss && matches!(kind, LEFT_DOWN | RIGHT_DOWN) && in_view;
+            if in_hole || dismiss_click {
                 let gpui: *mut AnyObject = msg_send![view, superview];
                 match kind {
                     LEFT_DOWN => msg_send![gpui, mouseDown: event],
@@ -185,6 +196,21 @@ unsafe fn mask_around(bounds: CGRect, holes: &[CGRect], flipped: bool) -> *mut A
 
 fn cg_rect(b: Bounds<Pixels>) -> CGRect {
     CGRect::new(f64::from(b.origin.x), f64::from(b.origin.y), f64::from(b.size.width), f64::from(b.size.height))
+}
+
+/// A menu or popover open anywhere in the window, so a mouse-down on the web
+/// view should reach GPUI even outside any hole: the shared click-outside
+/// mechanism every menu and popover uses (`Workspace::dismissible_open`).
+pub fn set_dismiss_on_click(webview: &wry::WebView, active: bool) {
+    use wry::WebViewExtMacOS;
+    let view = webview.webview();
+    let view = &*view as *const _ as *mut AnyObject as usize;
+    {
+        let mut holes = HOLES.lock().unwrap();
+        holes.view = view;
+        holes.dismiss = active;
+    }
+    install_send_event();
 }
 
 /// Cut `owner`'s hole in the web view at `hole` (relative to the web view's

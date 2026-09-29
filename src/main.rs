@@ -1071,6 +1071,29 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A menu or popover open that a click outside it, even on the web view,
+    /// or Esc should close: the session row / notebook ⋮ and Share menus, the
+    /// composer's Mode/Plus/Config menu, a sent chip's popover, the sidebar's
+    /// Active/All filter, and a new-session chip's popover.
+    fn dismissible_open(&self) -> bool {
+        self.menu.is_some()
+            || self.composer.menu.is_some()
+            || self.chip_popover.is_some()
+            || self.filter_menu
+            || (self.draft.popover.is_some() && self.active.is_none())
+    }
+
+    /// Close whatever `dismissible_open` found, as a click outside it does.
+    fn close_dismissible(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menu(window, cx);
+        self.close_composer_menus(cx);
+        self.filter_menu = false;
+        if self.draft.popover.is_some() {
+            self.close_popover(window, cx);
+        }
+        cx.notify();
+    }
+
     fn pick(&mut self, pick: MenuPick, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menu(window, cx);
         match pick {
@@ -2653,6 +2676,7 @@ impl Render for Workspace {
                 overlay::set_hole(webview, hole, None);
             }
         }
+        overlay::set_dismiss_on_click(webview, self.dismissible_open());
         if let Some(setup) = &self.setup {
             let below = match self.render_sign_in_panel(cx) {
                 _ if self.offline_since.is_some() => splash::Below::Card(self.render_offline_setup(setup, cx)),
@@ -2746,44 +2770,22 @@ impl Render for Workspace {
                     .children(active.and_then(|ix| self.render_pane_warning(&self.sessions[ix], cx)))
                     .child(div().flex_1().min_h_0().child(notebook)),
             )
-            // A click outside a chip's menu only closes it.
-            .when(self.draft.popover.is_some() && active.is_none(), |d| {
-                d.child(
-                    div()
-                        .id("chip-menu-backdrop")
-                        .absolute()
-                        .inset_0()
-                        .occlude()
-                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_popover(window, cx))),
-                )
-            })
-            .when(self.filter_menu, |d| {
-                d.child(
-                    div()
-                        .id("filter-menu-backdrop")
-                        .absolute()
-                        .inset_0()
-                        .occlude()
-                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                            this.filter_menu = false;
-                            cx.notify();
-                        })),
-                )
-            })
             // Deferred so they paint, and take clicks, above everything else.
             .children(self.render_server_dialog(window, cx).map(|d| deferred(d).with_priority(3)))
             .children(self.render_askpass(cx).map(|d| deferred(d).with_priority(5)))
             .children(self.render_login_node_warning(cx).map(|d| deferred(d).with_priority(4)))
-            // A click outside the menu only closes it, as with a native menu.
-            .when(self.menu.is_some(), |d| {
+            // A click outside a menu or popover closes it, like a native menu;
+            // set_dismiss_on_click makes the web view forward its own clicks
+            // here too, while one is open (overlay.rs).
+            .when(self.dismissible_open(), |d| {
                 d.child(
                     div()
-                        .id("menu-backdrop")
+                        .id("dismiss-backdrop")
                         .absolute()
                         .inset_0()
                         .occlude()
-                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_menu(window, cx)))
-                        .on_mouse_down(MouseButton::Right, cx.listener(|this, _, window, cx| this.close_menu(window, cx))),
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx)))
+                        .on_mouse_down(MouseButton::Right, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx))),
                 )
             })
             .into_any_element()
