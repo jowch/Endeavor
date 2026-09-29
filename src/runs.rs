@@ -219,13 +219,13 @@ mod tests {
     #[test]
     fn runs_are_the_calls_between_messages() {
         let entries = vec![
-            Entry::User { text: "go".into(), expanded: false, attachments: Vec::new(), delivery: Default::default() },
+            Entry::User { text: "go".into(), expanded: false, attachments: Vec::new(), delivery: Default::default(), sent: None },
             thought(),
-            Entry::Agent("Looking.".into()),
+            Entry::Agent { text: "Looking.".into(), at: None },
             tool("a"),
             thought(),
             tool("b"),
-            Entry::Agent("Done.".into()),
+            Entry::Agent { text: "Done.".into(), at: None },
             tool("c"),
             Entry::Note("Allowed: execute_cell".into()),
             tool("d"),

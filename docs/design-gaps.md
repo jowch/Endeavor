@@ -96,5 +96,5 @@ Direction chosen (2026-09-27; canvas row "Notebook pane"): our look is "Pluto pl
 
 - [ ] Session menu (title ⌄)
 - [ ] End-of-turn changed-cells card
-- [ ] Copy / pin / time under each message
+- [x] Copy / pin / time under each message. Built without pin: under each of Claude's replies and the user's messages, a row that shows while the message is hovered (or its button has keyboard focus): a Copy button (a tick for a moment once copied; the message as written, markdown included) and how long ago it was sent ("just now", "5 min ago"; the clock time on hover). Replayed history has no times, so a reopened session's older messages show Copy only. Pin is left out: the spec draws the button but not what pinning does or where pinned messages go
 - [ ] Translucent headers with blur

@@ -6,8 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::MaybeUndefined;
@@ -35,9 +34,11 @@ use crate::runs;
 use crate::outbox::{Copying, Delivery, Dispatch, Outbox, Queued, Shown};
 
 pub enum Entry {
-    /// The user's words and, above them, their chips.
-    User { text: SharedString, expanded: bool, attachments: Vec<Attachment>, delivery: Delivery },
-    Agent(String),
+    /// The user's words and, above them, their chips. `sent`: when, not known
+    /// for replayed history.
+    User { text: SharedString, expanded: bool, attachments: Vec<Attachment>, delivery: Delivery, sent: Option<SystemTime> },
+    /// A reply, and when it started (not known for replayed history).
+    Agent { text: String, at: Option<SystemTime> },
     Tool {
         id: ToolCallId,
         title: String,
@@ -237,6 +238,8 @@ pub struct Session {
     pub unanswered: Option<usize>,
     /// The pinned plan (above the composer) is folded.
     pub plan_folded: bool,
+    /// The message just copied from its Copy button, which shows a tick for a moment.
+    pub copied: Option<usize>,
     /// The plan card shows the whole plan, not just its steps.
     pub plan_open: bool,
     /// Runs of tool calls the user opened, by their first call.
@@ -275,7 +278,8 @@ pub struct Session {
     plan_card_focus: RefCell<Option<FocusHandle>>,
     /// A folded run's header toggle, by the run's first entry index.
     run_focus: RefCell<HashMap<usize, FocusHandle>>,
-    /// A tool/thought row's toggle, by its entry index.
+    /// An entry's own control (a tool or thought row's toggle, a message's
+    /// Copy), by its entry index.
     row_focus: RefCell<HashMap<usize, FocusHandle>>,
 }
 
@@ -368,6 +372,7 @@ impl Session {
             heard: None,
             unanswered: None,
             plan_folded: false,
+            copied: None,
             plan_open: false,
             open_runs: HashSet::new(),
             replaying: false,
@@ -418,7 +423,7 @@ impl Session {
         self.run_focus.borrow_mut().entry(start).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// A tool/thought row's Tab-stop handle, by its entry index.
+    /// An entry's own control's Tab-stop handle, by its entry index.
     pub fn row_focus(&self, ix: usize, cx: &App) -> FocusHandle {
         self.row_focus.borrow_mut().entry(ix).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
@@ -722,7 +727,7 @@ impl Session {
         let again = shown.is_none() && matches!(turn, Turn::Prompt(_));
         effects.push(Effect::Send(turn));
         if let Some(Shown { text, attachments, delivery }) = shown {
-            self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery });
+            self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery, sent: Some(SystemTime::now()) });
             self.turn_entry = Some(self.entries.len() - 1);
             self.busy_since.get_or_insert_with(Instant::now);
             // Sending jumps back to the bottom even if the user had scrolled up.
@@ -790,7 +795,7 @@ impl Session {
             }
             SessionEvent::Steered => {
                 if let Some(Shown { text, attachments, delivery }) = self.outbox.steered() {
-                    self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery });
+                    self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery, sent: Some(SystemTime::now()) });
                 }
             }
             SessionEvent::Unsent => {
@@ -850,14 +855,14 @@ impl Session {
     /// waits to go again.
     pub fn api_failed(&mut self, error: &str) -> Vec<Effect> {
         let last = self.entries.len().saturating_sub(1);
-        if let Some(Entry::Agent(text)) = self.entries.last_mut()
+        if let Some(Entry::Agent { text, .. }) = self.entries.last_mut()
             && let Some(before) = text.trim_end().strip_suffix(error)
         {
             let before = before.trim_end().to_owned();
             self.mark(last);
             if before.is_empty() {
                 self.entries.pop();
-            } else if let Some(Entry::Agent(text)) = self.entries.last_mut() {
+            } else if let Some(Entry::Agent { text, .. }) = self.entries.last_mut() {
                 *text = before;
             }
         }
@@ -921,15 +926,18 @@ impl Session {
                         }
                         attachments.extend(attachment);
                     }
-                    _ => self.push(Entry::User { text: text.unwrap_or_default().into(), expanded: false, attachments: attachment.into_iter().collect(), delivery: Delivery::Turn }),
+                    _ => self.push(Entry::User { text: text.unwrap_or_default().into(), expanded: false, attachments: attachment.into_iter().collect(), delivery: Delivery::Turn, sent: None }),
                 }
                 self.mark(self.entries.len() - 1);
             }
             SessionUpdate::AgentMessageChunk(chunk) => {
                 if let ContentBlock::Text(t) = chunk.content {
                     match self.entries.last_mut() {
-                        Some(Entry::Agent(text)) => text.push_str(&t.text),
-                        _ => self.push(Entry::Agent(t.text)),
+                        Some(Entry::Agent { text, .. }) => text.push_str(&t.text),
+                        _ => {
+                            let at = (!self.replaying).then(SystemTime::now);
+                            self.push(Entry::Agent { text: t.text, at })
+                        }
                     }
                     self.mark(self.entries.len() - 1);
                 }
@@ -1229,8 +1237,10 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
                     Some(_) => None,
                     None => render_entry(this, session, ix, entry, window, cx),
                 };
+                // A message's own row of actions (Copy, its time) makes most of the gap below it.
+                let message = matches!(entry, Entry::User { .. } | Entry::Agent { .. });
                 match element {
-                    Some(element) => div().px_4().pb_4().child(element).into_any_element(),
+                    Some(element) => div().px_4().when(!message, |d| d.pb_4()).when(message, |d| d.pb(px(2.))).child(element).into_any_element(),
                     None => div().into_any_element(),
                 }
             })
@@ -1385,12 +1395,13 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
     let muted = theme::text_muted();
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     Some(match entry {
-        Entry::User { text, expanded, attachments, delivery } => {
+        Entry::User { text, expanded, attachments, delivery, sent } => {
             let chips = this.render_sent_chips(key, ix, attachments, cx);
-            let column = div().flex().flex_col().items_end().gap(px(4.)).children(chips);
+            let column = div().group(MESSAGE).flex().flex_col().items_end().gap(px(4.)).children(chips);
             let delivered = delivery_note(*delivery).map(|note| div().text_size(theme::size_meta()).text_color(muted).child(note));
+            let actions = message_actions(session, ix, text.to_string(), *sent, cx);
             if text.is_empty() {
-                return Some(column.children(delivered).into_any_element());
+                return Some(column.children(delivered).child(actions).into_any_element());
             }
             let bubble = div()
                 .max_w(px(USER_BUBBLE_WIDTH))
@@ -1404,7 +1415,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered());
             let line_height = theme::line_body();
             if bubble_lines(text, window) <= FOLD_AFTER {
-                return Some(column.child(bubble.child(text.clone())).children(delivered).children(unanswered).into_any_element());
+                return Some(column.child(bubble.child(text.clone())).children(delivered).children(unanswered).child(actions).into_any_element());
             }
             let fade = div()
                 .absolute()
@@ -1431,9 +1442,17 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 )
                 .children(delivered)
                 .children(unanswered)
+                .child(actions)
                 .into_any_element()
         }
-        Entry::Agent(text) => div().group(REPLY).child(markdown(id("agent"), text.clone())).into_any_element(),
+        Entry::Agent { text, at } => div()
+            .group(MESSAGE)
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(markdown(id("agent"), text.clone()))
+            .child(message_actions(session, ix, text.clone(), *at, cx))
+            .into_any_element(),
         Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
         Entry::RunState(warnings) if warnings.is_empty() => return None,
         Entry::RunState(warnings) => div()
@@ -1466,8 +1485,59 @@ pub(crate) fn delivery_note(delivery: Delivery) -> Option<&'static str> {
     }
 }
 
-/// An agent reply, for its code blocks' copy buttons to show on hover.
-const REPLY: &str = "agent-reply";
+/// A message, for its actions (and a reply's code blocks' Copy) to show on hover.
+const MESSAGE: &str = "message";
+
+/// Under a message, shown while it's hovered: Copy, and how long ago it was
+/// sent ("just now", "5 min ago"; the clock time on hover). Replayed history
+/// has no times.
+fn message_actions(session: &Session, ix: usize, text: String, at: Option<SystemTime>, cx: &mut Context<Workspace>) -> AnyElement {
+    let key = session.key;
+    let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
+    let copied = session.copied == Some(ix);
+    let label = if copied { "Copied" } else { "Copy message" };
+    let copy = (!text.is_empty()).then(|| {
+        div()
+            .id(id("copy-message"))
+            .role(Role::Button)
+            .aria_label(label)
+            .size(px(20.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .cursor_pointer()
+            .opacity(if copied { 1. } else { 0. })
+            .group_hover(MESSAGE, |s| s.opacity(1.))
+            .hover(|s| s.bg(theme::bg_raised()))
+            .track_focus(&session.row_focus(ix, cx))
+            .tab_stop(true)
+            .focus_visible(|s| s.opacity(1.).border_2().border_color(theme::focus_ring()))
+            .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+            .child(crate::new_session::glyph(if copied { crate::new_session::Glyph::Check } else { crate::new_session::Glyph::Copy }, theme::text_faint()))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                this.with_session(key, cx, |s| s.copied = Some(ix));
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(Duration::from_millis(1500)).await;
+                    let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.copied = s.copied.filter(|c| *c != ix)));
+                })
+                .detach();
+            }))
+    });
+    let time = at.map(|at| {
+        let clock = crate::when::clock(at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());
+        div()
+            .id(id("message-time"))
+            .opacity(0.)
+            .group_hover(MESSAGE, |s| s.opacity(1.))
+            .text_size(theme::size_meta())
+            .text_color(theme::text_faint())
+            .tooltip(move |window, cx| Tooltip::new(clock.clone()).build(window, cx))
+            .child(crate::when::ago(at))
+    });
+    div().flex().items_center().gap(px(4.)).h(px(20.)).children(copy).children(time).into_any_element()
+}
 
 /// An agent reply's markdown, with a copy button on each code block.
 fn markdown(id: ElementId, text: String) -> TextView {
@@ -1491,7 +1561,7 @@ fn markdown(id: ElementId, text: String) -> TextView {
             .whitespace_nowrap()
             .bg(theme::bg_card())
             .opacity(0.)
-            .group_hover(REPLY, |s| s.opacity(1.))
+            .group_hover(MESSAGE, |s| s.opacity(1.))
             .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
             .child("Copy")
             .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(code.clone())))
@@ -2850,7 +2920,7 @@ mod tests {
         s.apply(SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("Yes — it runs."))))));
         assert!(matches!(&s.entries[..], [
             Entry::Note(note),
-            Entry::Agent(reply),
+            Entry::Agent { text: reply, .. },
         ] if note.as_ref() == "Auto mode unavailable: The selected model does not support Auto mode; using Accept edits instead." && reply == "Yes — it runs."));
     }
 
@@ -3014,7 +3084,7 @@ mod tests {
         s.apply(reply("Here it is.\n\n"));
         s.apply(reply(ERROR));
         s.apply(SessionEvent::ApiFailed(ERROR.into()));
-        assert!(matches!(&s.entries[1..], [Entry::Agent(said), Entry::Note(note)]
+        assert!(matches!(&s.entries[1..], [Entry::Agent { text: said, .. }, Entry::Note(note)]
             if said == "Here it is." && note.as_ref() == format!("⚠ Turn failed: {ERROR}")));
     }
 
@@ -3047,6 +3117,30 @@ mod tests {
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.apply(chunk("live echo"));
         assert_eq!(s.entries.len(), 1, "after loading, user chunks are ignored");
+    }
+
+    #[test]
+    fn live_messages_know_when_they_were_sent_and_replayed_ones_do_not() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+        let reply = |t: &str| SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(t)))));
+        let times = |s: &Session| -> Vec<bool> {
+            s.entries
+                .iter()
+                .map(|e| match e {
+                    Entry::User { sent, .. } => sent.is_some(),
+                    Entry::Agent { at, .. } => at.is_some(),
+                    _ => panic!("only messages"),
+                })
+                .collect()
+        };
+        let mut old = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
+        old.apply(SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("hi"))))));
+        old.apply(reply("Hello."));
+        assert_eq!(times(&old), [false, false]);
+        old.started(Started::new(SessionId::new("abc"), None, None));
+        old.submit(text("plot it"), false);
+        old.apply(reply("Plotted."));
+        assert_eq!(times(&old), [false, false, true, true]);
     }
 
     /// The blocks of a sent prompt as a reopened session replays them: the

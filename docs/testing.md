@@ -76,8 +76,9 @@ To wait for something, poll the dump. For example, loop until
 - `session`, for the active session. The title, and `transcript`: the entries
   in order, as drawn. The entry kinds are `user` (with chips, the "Not
   answered yet" line, and `delivery`, the line under a message sent with ⌘⏎
-  while Claude worked), `reply`, `note` (such as "Turn failed"), `plan`,
-  `thought`, `tool` and `run`. A run of tool calls is one `run` entry with its
+  while Claude worked), `reply` (both with `actions`: the hover row's `copy`
+  label, "Copied" just after a copy, and `time`, null for replayed history),
+  `note` (such as "Claude stopped: …"), `plan`, `thought`, `tool` and `run`. A run of tool calls is one `run` entry with its
   summary line and its rows. A `tool` row has its text ("Edited `fit`"), its
   +/− counts, how it was answered, its state (`…`, `failed` or `denied`) and
   its cell diffs. Also `activity` (the working line), `pinned_plan`, and

@@ -259,14 +259,15 @@ impl Workspace {
                 continue;
             }
             out.extend(match &s.entries[ix] {
-                Entry::User { text, attachments, delivery, .. } => Some(json!({
+                Entry::User { text, attachments, delivery, sent, .. } => Some(json!({
                     "kind": "user",
                     "text": text.to_string(),
+                    "actions": message_actions(!text.is_empty(), *sent, s.copied == Some(ix)),
                     "delivery": session::delivery_note(*delivery),
                     "chips": attachments.iter().map(chip_label).collect::<Vec<_>>(),
                     "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text()),
                 })),
-                Entry::Agent(text) => Some(json!({ "kind": "reply", "text": text })),
+                Entry::Agent { text, at } => Some(json!({ "kind": "reply", "text": text, "actions": message_actions(true, *at, s.copied == Some(ix)) })),
                 Entry::Note(text) => Some(json!({ "kind": "note", "text": text.to_string() })),
                 Entry::Plan(entries) => Some(json!({ "kind": "plan", "progress": session::progress(entries), "items": plan_items(entries) })),
                 Entry::Tool { .. } | Entry::Thought { .. } => Some(row(s, ix, false)),
@@ -427,6 +428,11 @@ fn row(s: &Session, ix: usize, in_run: bool) -> Value {
         }
         _ => Value::Null,
     }
+}
+
+/// The row under a message, shown on hover: its Copy button, and the time as it reads.
+fn message_actions(copy: bool, at: Option<std::time::SystemTime>, copied: bool) -> Value {
+    json!({ "copy": copy.then_some(if copied { "Copied" } else { "Copy message" }), "time": at.map(crate::when::ago) })
 }
 
 fn plan_items(entries: &[agent_client_protocol::schema::v1::PlanEntry]) -> Vec<Value> {
