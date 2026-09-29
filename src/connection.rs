@@ -648,6 +648,9 @@ impl Workspace {
                     if let Some(setup) = &mut self.setup {
                         setup.fail(e);
                     }
+                    if let Some(listener) = self.listeners.get(&host) {
+                        listener.restart_failed();
+                    }
                 }
             }
             // Heard already, from the runtime or the helper's end.
@@ -1002,6 +1005,9 @@ impl Workspace {
             None
         } else {
             connection.status = Status::Died(String::new());
+            if let Some(listener) = self.listeners.get(host) {
+                listener.disconnected();
+            }
             connection.forget_runtime()
         };
         connection.stop_when_connected = false;
@@ -1101,6 +1107,9 @@ impl Workspace {
     /// Leave a host (its server was removed): its runtime keeps running.
     pub fn disconnect_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(mut connection) = self.connections.remove(host) else { return };
+        if let Some(listener) = self.listeners.get(host) {
+            listener.disconnected();
+        }
         let gone = connection.forget_runtime();
         self.close_page(gone, cx);
         if let Some(channel) = connection.channel.take() {

@@ -105,9 +105,30 @@ impl Listener {
         }
     }
 
+    /// `why` replaces an already-away runtime's reason, once more is known (a
+    /// restart's outcome, say). No-op if it came back up, or was never away:
+    /// callers only reach for this once `away` (or `restarting`) already ran.
+    fn still_away(&self, why: String) {
+        let mut upstream = self.upstream.lock().unwrap();
+        if let Upstream::Away { mcp, token, .. } = &*upstream {
+            *upstream = Upstream::Away { mcp: *mcp, token: token.clone(), why };
+        }
+    }
+
     /// This Mac's Julia is restarting (Settings → Restart Julia).
     pub fn restarting(&self) {
         self.away(format!("Endeavor is restarting Julia on {}. Try again in a moment.", self.name), None);
+    }
+
+    /// The restart `restarting` announced didn't work out: Julia didn't come back.
+    pub fn restart_failed(&self) {
+        self.still_away(format!("Julia on {} couldn't start. Use Restart Julia to try again.", self.name));
+    }
+
+    /// The user stopped or disconnected `self`'s host on purpose: nothing
+    /// will reconnect it by itself, unlike a drop (`forget`).
+    pub fn disconnected(&self) {
+        self.away(format!("Endeavor isn't connected to {}. Reconnect it to use its notebook again.", self.name), None);
     }
 
     /// The bridge URL the agent's MCP config carries; the same for the whole
@@ -753,6 +774,36 @@ mod tests {
         listener.restarting();
         let response = post(&listener, "secret", r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notebooks"}}"#);
         assert!(response.contains(r#""text":"Endeavor is restarting Julia on This Mac. Try again in a moment.""#), "{response}");
+    }
+
+    #[test]
+    fn a_restart_that_fails_says_so_instead_of_restarting_forever() {
+        let listener = super::Listener::start("This Mac").unwrap();
+        listener.attach(wire::relay::Mux::new(std::io::sink()), wire::McpTransport::Http, "secret".into());
+        // Before restarting() ran, there's nothing to correct: still up, a no-op.
+        listener.restart_failed();
+        assert!(matches!(&*listener.upstream.lock().unwrap(), super::Upstream::Up { .. }));
+        listener.restarting();
+        listener.restart_failed();
+        let response = post(&listener, "secret", r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notebooks"}}"#);
+        assert!(response.contains(r#""text":"Julia on This Mac couldn't start. Use Restart Julia to try again.""#), "{response}");
+    }
+
+    #[test]
+    fn stopping_on_purpose_says_so_not_that_it_reconnects_by_itself() {
+        let listener = super::Listener::start("lab-server").unwrap();
+        let mux = wire::relay::Mux::new(std::io::sink());
+        listener.attach(mux.clone(), wire::McpTransport::Http, "secret".into());
+        listener.disconnected();
+        let response = post(&listener, "secret", r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notebooks"}}"#);
+        assert!(
+            response.contains(r#""text":"Endeavor isn't connected to lab-server. Reconnect it to use its notebook again.""#),
+            "{response}"
+        );
+        // The drop that follows a deliberate stop doesn't overwrite that with "reconnecting by itself".
+        listener.forget(&mux);
+        let after = post(&listener, "secret", r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notebooks"}}"#);
+        assert_eq!(after, response);
     }
 }
 
