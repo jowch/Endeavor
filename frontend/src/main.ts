@@ -5,6 +5,7 @@ import { initActions } from "./actions";
 import { initAnnotate } from "./annotate";
 import { send } from "./bridge";
 import { initCells } from "./cells";
+import { initDebug } from "./debug";
 import { initDiffs } from "./diff";
 import { initDrawer } from "./drawer";
 import { initPrompt } from "./prompt";
@@ -31,6 +32,7 @@ function init() {
   initSafe();
   initState();
   initReadonly();
+  initDebug();
   watchRedraws();
   // Ask for the current state: this page may have loaded after it last changed.
   send({ type: "ready" });

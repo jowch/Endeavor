@@ -10,6 +10,7 @@ See [docs/roadmap.md](docs/roadmap.md) for status and
 [docs/pluto-agent-design-doc.md](docs/pluto-agent-design-doc.md) for the design.
 
 - Run from source: `cargo run`
+- Check changes from a script: [docs/testing.md](docs/testing.md)
 - Connect to Linux servers from a source build: `scripts/build-helpers.sh` first
   (builds their runtime helper into `target/helpers`)
 - Build the app: `scripts/bundle.sh` → `target/release/Endeavor.app` (ad-hoc signed)

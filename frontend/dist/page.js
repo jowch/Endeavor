@@ -538,6 +538,26 @@
     onRedraw(apply);
   }
 
+  // src/debug.ts
+  function initDebug() {
+    on("debug", () => {
+      const annotating = document.body.classList.contains("annotating");
+      const drawer2 = document.documentElement.dataset.endeavorDrawer;
+      send({
+        type: "debug",
+        point: annotating,
+        picked: [...document.querySelectorAll("pluto-cell.annotate-picked")].map((c) => c.id),
+        box: !!document.querySelector("#annotate-box.shown"),
+        point_status: annotating ? document.querySelector("#annotate-bar .status")?.textContent ?? "" : "",
+        comment: document.querySelector("#annotate-bar textarea")?.value ?? "",
+        drawer: drawer2 === "docs" || drawer2 === "status" ? drawer2 : null,
+        callout: !!document.querySelector("#endeavor-safe.shown"),
+        // Recorded by the debug build's own script, which wraps `alert`.
+        alerts: window.__endeavorAlerts ?? null
+      });
+    });
+  }
+
   // src/diff.ts
   var css6 = `
   .cm-line.endeavor-add { position: relative; z-index: 0; }
@@ -1577,6 +1597,7 @@ footer form#feedback { display: none !important; }
     initSafe();
     initState();
     initReadonly();
+    initDebug();
     watchRedraws();
     send({ type: "ready" });
   }

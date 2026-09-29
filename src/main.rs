@@ -18,6 +18,8 @@ mod attach;
 mod celldiff;
 mod composer;
 mod connection;
+#[cfg(debug_assertions)]
+mod debug_state;
 mod details;
 mod gate;
 mod host_list;
@@ -254,6 +256,16 @@ fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
 
 /// Past sessions listed per folder before "Show more".
 const PAST_SHOWN: usize = 8;
+
+/// The status at an open session's sidebar row end.
+#[derive(Clone, Copy, PartialEq)]
+enum RowMark {
+    /// A ring: it waits for your answer.
+    NeedsApproval,
+    /// The orbit: Claude is working.
+    Working,
+    Archived,
+}
 
 /// A session in the sidebar: an open one, or a past one listed under its folder.
 #[derive(Clone, PartialEq)]
@@ -519,6 +531,9 @@ pub struct Workspace {
     /// The session whose job resources are open from the Julia-not-running page's gear.
     pane_resources: Option<u64>,
     pane_partition_menu: bool,
+    /// A state dump waiting for the page's part (debug_state.rs).
+    #[cfg(debug_assertions)]
+    page_debug: Option<futures::channel::oneshot::Sender<serde_json::Value>>,
 }
 
 impl Workspace {
@@ -696,12 +711,16 @@ impl Workspace {
             notebook_rename: None,
             pane_resources: None,
             pane_partition_menu: false,
+            #[cfg(debug_assertions)]
+            page_debug: None,
         };
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
         this.scan_notebooks(cx);
         this.watch_network(cx);
+        #[cfg(debug_assertions)]
+        this.watch_state_requests(cx);
         this
     }
 
@@ -1714,6 +1733,8 @@ impl Workspace {
             }
             Some(annotate::Message::Region(region)) => self.send_region(region, cx),
             Some(annotate::Message::Code { cell, code }) => self.on_cell_code(cell, code, cx),
+            #[cfg(debug_assertions)]
+            Some(annotate::Message::Debug(page)) => return self.on_page_debug(page),
             None => return,
         }
         cx.notify();
@@ -2083,15 +2104,51 @@ impl Workspace {
         }
     }
 
-    fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // Folders: recent ones, then any other folder with an open session.
+    /// The sidebar's folders: recent ones, then any other folder with an open session.
+    fn sidebar_folders(&self) -> Vec<&Place> {
         let mut folders: Vec<&Place> = self.recent.iter().collect();
         for s in &self.sessions {
             if !folders.contains(&&s.place) {
                 folders.push(&s.place);
             }
         }
-        let groups: Vec<_> = folders
+        folders
+    }
+
+    /// A folder's past sessions the sidebar lists, newest first: ours, not
+    /// already open, and not archived unless archived ones show.
+    fn past_rows(&self, folder: &Place) -> Vec<&SessionInfo> {
+        let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
+        let shown = |info: &SessionInfo| self.ours.contains_key(&info.session_id.to_string()) && (self.settings.show_archived || !self.archived.contains(&info.session_id.to_string()));
+        self.past.get(folder).into_iter().flatten().filter(|info| !is_open(info) && shown(info)).collect()
+    }
+
+    /// The sidebar's row above the status line while This Mac's Julia is down.
+    fn restart_row(&self) -> Option<&'static str> {
+        match self.status(&HostId::ThisMac) {
+            Some(connection::Status::Replaced) => Some("↻ Reconnect to Julia"),
+            Some(connection::Status::Died(_) | connection::Status::Failed(_)) => Some("↻ Restart Julia"),
+            _ => None,
+        }
+    }
+
+    /// The status at an open session's row end.
+    fn row_mark(&self, s: &Session) -> Option<RowMark> {
+        let archived = s.id.as_ref().is_some_and(|id| self.archived.contains(&id.to_string()));
+        if s.needs_approval() {
+            Some(RowMark::NeedsApproval)
+        } else if s.outbox.busy {
+            Some(RowMark::Working)
+        } else if archived {
+            Some(RowMark::Archived)
+        } else {
+            None
+        }
+    }
+
+    fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let groups: Vec<_> = self
+            .sidebar_folders()
             .into_iter()
             .map(|folder| {
                 let open: Vec<_> = self
@@ -2103,17 +2160,12 @@ impl Workspace {
                         let active = self.active == Some(key) && !self.settings_open;
                         let group: SharedString = format!("session-{key}").into();
                         let title = self.row_label(&Row::Open(key), s.title.clone());
-                        let archived = s.id.as_ref().is_some_and(|id| self.archived.contains(&id.to_string()));
                         // Status at the row's end: a ring waits for you, the working orbit is working.
-                        let mark = if s.needs_approval() {
-                            Some(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element())
-                        } else if s.outbox.busy {
-                            Some(session::orbit(ElementId::NamedInteger("row-orbit".into(), key), 12., cx))
-                        } else if archived {
-                            Some(glyph(Glyph::Archive, theme::text_section()).into_any_element())
-                        } else {
-                            None
-                        };
+                        let mark = self.row_mark(s).map(|mark| match mark {
+                            RowMark::NeedsApproval => div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element(),
+                            RowMark::Working => session::orbit(ElementId::NamedInteger("row-orbit".into(), key), 12., cx),
+                            RowMark::Archived => glyph(Glyph::Archive, theme::text_section()).into_any_element(),
+                        });
                         self.session_row(Row::Open(key), group.clone(), active, cx)
                             .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
                             .child(title)
@@ -2129,11 +2181,9 @@ impl Workspace {
                             }))
                     })
                     .collect();
-                // Past sessions not already open, newest first; the newest few unless expanded.
-                let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
+                // The newest few unless expanded.
                 let is_archived = |info: &SessionInfo| self.archived.contains(&info.session_id.to_string());
-                let shown = |info: &SessionInfo| self.ours.contains_key(&info.session_id.to_string()) && (self.settings.show_archived || !is_archived(info));
-                let all: Vec<_> = self.past.get(folder).into_iter().flatten().filter(|info| !is_open(info) && shown(info)).collect();
+                let all = self.past_rows(folder);
                 let expanded = self.expanded.contains(folder);
                 let limit = if expanded { all.len() } else { PAST_SHOWN };
                 let past: Vec<_> = all
@@ -2210,11 +2260,7 @@ impl Workspace {
             )
             .child(div().id("sessions").flex_1().overflow_y_scroll().flex().flex_col().children(groups))
             .map(|d| {
-                let label = match self.status(&HostId::ThisMac) {
-                    Some(connection::Status::Replaced) => "↻ Reconnect to Julia",
-                    Some(connection::Status::Died(_) | connection::Status::Failed(_)) => "↻ Restart Julia",
-                    _ => return d,
-                };
+                let Some(label) = self.restart_row() else { return d };
                 d.child(
                     sidebar_row("restart".into(), false)
                         .text_color(theme::accent_text())

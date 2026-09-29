@@ -76,12 +76,23 @@ pub struct Browser {
     pub listing: Option<Result<Vec<Entry>, String>>,
 }
 
+/// A chip above the new-session composer.
+pub(crate) struct DraftChip {
+    pub chip: Chip,
+    pub id: &'static str,
+    pub icon: Glyph,
+    pub label: String,
+    pub mono: bool,
+    /// Greyed out and inert while its server connects.
+    pub waiting: bool,
+}
+
 /// A session to pick up where you left off.
-struct Resume {
-    title: String,
-    folder: String,
-    notebook: Option<String>,
-    when: String,
+pub struct Resume {
+    pub title: String,
+    pub folder: String,
+    pub notebook: Option<String>,
+    pub when: String,
     open: ResumeTarget,
 }
 
@@ -93,14 +104,14 @@ enum ResumeTarget {
 const RESUME_SHOWN: usize = 3;
 
 /// A first prompt to try, for someone with nothing to pick up.
-struct Example {
+pub struct Example {
     icon: Glyph,
-    prompt: &'static str,
+    pub prompt: &'static str,
     /// It asks for the user's own data ("Uses your file"), else it needs none.
-    uses_file: bool,
+    pub uses_file: bool,
 }
 
-const EXAMPLES: [Example; 4] = [
+pub const EXAMPLES: [Example; 4] = [
     Example { icon: Glyph::Dice, prompt: "Simulate 1,000 coin flips and plot how often heads comes up", uses_file: false },
     Example { icon: Glyph::Table, prompt: "Load a CSV file I'll attach and show me what's in it", uses_file: true },
     Example { icon: Glyph::Curve, prompt: "Fit an exponential decay to measurements I'll attach, and plot the fit", uses_file: true },
@@ -291,7 +302,7 @@ impl Workspace {
         }
     }
 
-    fn draft_tilde(&self, path: &Path) -> String {
+    pub fn draft_tilde(&self, path: &Path) -> String {
         match self.draft_home() {
             Some(home) => tilde_of(path, &home),
             None => path.display().to_string(),
@@ -456,7 +467,7 @@ impl Workspace {
 
     /// Sessions to pick up: open ones first (newest first), then Endeavor's past
     /// sessions by last activity.
-    fn resumable(&self) -> Vec<Resume> {
+    pub fn resumable(&self) -> Vec<Resume> {
         let recorded = |id: &agent_client_protocol::schema::v1::SessionId| self.session_notebooks.get(&id.to_string()).map(|place| folder_name(&place.path));
         let open = self.sessions.iter().rev().map(|s| Resume {
             title: s.title.clone(),
@@ -592,17 +603,21 @@ impl Workspace {
             .children(rows)
     }
 
+    /// The connection notice's text ("Julia on hoffman2 stopped. …"), and why it stopped.
+    pub fn connection_notice_text(&self) -> Option<(String, String)> {
+        let name = self.hosts.name(&self.draft.host);
+        match self.status(&self.draft.host)? {
+            Status::Died(reason) if !reason.is_empty() => Some((format!("Julia on {name} stopped. {reason}"), reason.clone())),
+            _ => None,
+        }
+    }
+
     /// Julia on the draft host stopping, in plain words, with Start Julia (and
     /// what else might help: `fixes`), beside the composer. A failed or
     /// taken-over connection shows in the notebook pane instead, with Reconnect.
     fn connection_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let host = self.draft.host.clone();
-        let name = self.hosts.name(&host);
-        let reason = match self.status(&host)? {
-            Status::Died(reason) if !reason.is_empty() => reason.clone(),
-            _ => return None,
-        };
-        let text = format!("Julia on {name} stopped. {reason}");
+        let (text, reason) = self.connection_notice_text()?;
         let fixes = self.fixes(&host, &reason);
         let repair = fixes.contains(&crate::connection::Fix::Repair);
         Some(
@@ -637,7 +652,9 @@ impl Workspace {
         )
     }
 
-    fn render_chips(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// The chips above the composer: where, a cluster job's resources, the
+    /// folder and the notebook. While a server connects, only Where can be opened.
+    pub(crate) fn draft_chips(&self) -> Vec<DraftChip> {
         let connecting = self.draft.host != HostId::ThisMac && self.draft.folder.is_none();
         let notebook_label = match &self.draft.notebook {
             NotebookChoice::New => "New notebook".to_string(),
@@ -655,12 +672,16 @@ impl Workspace {
             (None, Some(Status::Failed(_) | Status::Replaced)) => "Not connected".into(),
             (None, _) => format!("Connecting to {where_label}…"),
         };
-        let chips = std::iter::once((Chip::Where, "where", where_icon, where_label, false))
+        std::iter::once((Chip::Where, "where", where_icon, where_label, false))
             .chain(resources)
-            .chain([(Chip::Folder, "folder", Glyph::Folder, folder_label, false), (Chip::Notebook, "notebook", Glyph::File, notebook_label, mono)]);
-        let chips = div().flex().flex_wrap().gap(px(6.)).children(chips.map(|(chip, id, icon, label, mono)| {
+            .chain([(Chip::Folder, "folder", Glyph::Folder, folder_label, false), (Chip::Notebook, "notebook", Glyph::File, notebook_label, mono)])
+            .map(|(chip, id, icon, label, mono)| DraftChip { chip, id, icon, label, mono, waiting: connecting && !matches!(chip, Chip::Where | Chip::Resources) })
+            .collect()
+    }
+
+    fn render_chips(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let chips = div().flex().flex_wrap().gap(px(6.)).children(self.draft_chips().into_iter().map(|DraftChip { chip, id, icon, label, mono, waiting }| {
             let open = self.draft.popover == Some(chip) || (chip == Chip::Folder && self.draft.popover == Some(Chip::Browse));
-            let waiting = connecting && !matches!(chip, Chip::Where | Chip::Resources);
             div()
                 .relative()
                 .child(
@@ -1094,11 +1115,17 @@ impl Workspace {
     }
 
     /// The notebook pane before the session starts (the web view is hidden).
+    /// The draft's folder, while its host can be reached: the pane shows what
+    /// the session will open. None: the pane shows the host's state instead.
+    pub fn draft_pane_folder(&self) -> Option<&PathBuf> {
+        let host = &self.draft.host;
+        let unreachable = matches!(self.status(host), Some(Status::Failed(_) | Status::Replaced)) || self.connection(host).is_some_and(|c| c.lost.is_some());
+        self.draft.folder.as_ref().filter(|_| !unreachable)
+    }
+
     pub fn render_draft_pane(&self, cx: &mut Context<Self>) -> AnyElement {
-        let host = self.draft.host.clone();
-        let unreachable = matches!(self.status(&host), Some(Status::Failed(_) | Status::Replaced)) || self.connection(&host).is_some_and(|c| c.lost.is_some());
-        let Some(folder) = self.draft.folder.as_ref().filter(|_| !unreachable) else {
-            return self.host_pane(&host, false, cx).unwrap_or_else(|| turtle_pane().into_any_element());
+        let Some(folder) = self.draft_pane_folder() else {
+            return self.host_pane(&self.draft.host.clone(), false, cx).unwrap_or_else(|| turtle_pane().into_any_element());
         };
         match (&self.draft.notebook, &self.draft.preview) {
             (NotebookChoice::New, _) => {

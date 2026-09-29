@@ -23,7 +23,10 @@ fn page_nonce() -> &'static str {
 
 /// The page script with this launch's secret filled in.
 pub fn script() -> String {
-    SCRIPT.replace("__ENDEAVOR_NONCE__", &format!("\"{}\"", page_nonce()))
+    let script = SCRIPT.replace("__ENDEAVOR_NONCE__", &format!("\"{}\"", page_nonce()));
+    #[cfg(debug_assertions)]
+    let script = format!("{}\n{script}", crate::debug_state::RECORD_ALERTS);
+    script
 }
 
 /// Upper bounds on page-supplied data. The page also runs notebook output JS,
@@ -62,6 +65,9 @@ pub enum Message {
     FixPackage { notebook: String, name: String, log: String },
     /// Restart notebook, in the same box.
     Restart { notebook: String },
+    /// The page's part of a state dump (debug_state.rs), as it sent it.
+    #[cfg(debug_assertions)]
+    Debug(serde_json::Value),
 }
 
 /// What the page reads from Pluto's state for the notebook header.
@@ -189,6 +195,12 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
                 connected: v.get("connected").and_then(|b| b.as_bool()).unwrap_or(true),
                 drawer: text("drawer").filter(|d| d == "docs" || d == "status"),
             }))
+        }
+        #[cfg(debug_assertions)]
+        "debug" => {
+            let mut page = v.clone();
+            page.as_object_mut()?.retain(|key, _| key != "type" && key != "nonce");
+            Some(Message::Debug(page))
         }
         "run_notebook" => Some(Message::RunNotebook { notebook: uuid("notebook")? }),
         "restart" => Some(Message::Restart { notebook: uuid("notebook")? }),

@@ -744,12 +744,16 @@ impl Workspace {
             .line_height(px(17.))
             .text_color(theme::text_muted())
             .child(glyph(Glyph::Clock, theme::text_muted()))
-            .child(if self.account.signed_out() {
-                "Not answered yet. It sends again once you sign in."
-            } else {
-                "Not answered yet. It sends again when you're back."
-            })
+            .child(self.unanswered_text())
             .into_any_element()
+    }
+
+    pub fn unanswered_text(&self) -> &'static str {
+        if self.account.signed_out() {
+            "Not answered yet. It sends again once you sign in."
+        } else {
+            "Not answered yet. It sends again when you're back."
+        }
     }
 
     /// Claude can't answer now: messages wait.

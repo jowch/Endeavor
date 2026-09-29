@@ -15,10 +15,11 @@ use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::annotate::PageState;
+use crate::connection::HostPane;
 use crate::hosts::{HostId, Place};
 use crate::new_session::{self, Glyph, glyph};
 use crate::resources::Target;
-use crate::session::{Effect, Session, folder_name};
+use crate::session::{Effect, Session, Stopped, folder_name};
 use crate::settings::NotebookTheme;
 use crate::overlay;
 use crate::{MenuTarget, Workspace, platform, pluto, theme};
@@ -177,6 +178,73 @@ impl NotebookAction {
     pub fn for_share() -> Vec<NotebookAction> {
         use NotebookAction::*;
         vec![ExportFile, ExportHtml, ExportPdf, Present, Record, Frontmatter]
+    }
+}
+
+/// What the notebook pane shows for a session: a page drawn natively, or the
+/// notebook's own page in the web view.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PaneShows {
+    /// Its host isn't ready.
+    Host(HostPane),
+    /// "Can't find" its file.
+    Missing,
+    /// "No notebook in this session yet".
+    NoNotebook,
+    Stopped(Stopped),
+    /// "Opening <file>…".
+    Opening,
+    Page,
+}
+
+/// A stopped notebook's page: why it stopped, and what Start does if the file changed.
+fn stopped_text(stopped: Stopped) -> (String, Option<&'static str>) {
+    if stopped.safe_preview {
+        return ("The file is saved. It was in safe preview, so Start opens it that way again.".to_string(), None);
+    }
+    let why = match stopped.idle_hours {
+        Some(hours) => format!("It stopped after {hours} hours without use. The file is saved; Start runs it again from the top."),
+        None => "The file is saved; Start runs it again from the top.".to_string(),
+    };
+    (why, Some("If the file changed on disk meanwhile, it opens in safe preview instead."))
+}
+
+/// The notebook header's parts that say what state the notebook is in.
+pub struct HeaderInfo {
+    /// Where it runs: "Local", a server's name, or a cluster's with its job.
+    pub host: String,
+    pub tags: Vec<HeaderTag>,
+    /// Work under way, e.g. "Installing packages · 2 of 5".
+    pub busy: Option<String>,
+}
+
+/// A tag after the host in the notebook header.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HeaderTag {
+    ReadOnly,
+    NotFound,
+    Stopped,
+    SafePreview,
+    NotSaved,
+    PackageFailed,
+    RestartNeeded,
+    RestartRecommended,
+    JuliaExited,
+}
+
+impl HeaderTag {
+    pub fn label(self) -> &'static str {
+        match self {
+            HeaderTag::ReadOnly => "Read-only",
+            HeaderTag::NotFound => "Not found",
+            HeaderTag::Stopped => "Stopped",
+            HeaderTag::SafePreview => "Safe preview",
+            HeaderTag::NotSaved => "Not saved",
+            HeaderTag::PackageFailed => "Package failed",
+            HeaderTag::RestartNeeded => "Restart needed",
+            HeaderTag::RestartRecommended => "Restart recommended",
+            HeaderTag::JuliaExited => "Julia exited",
+        }
     }
 }
 
@@ -346,6 +414,47 @@ impl Workspace {
         (self.page.notebook == id).then_some(&self.page)
     }
 
+    /// The notebook header's host, tags and work under way for a session's
+    /// notebook. `shown`: its notebook is on screen.
+    pub fn header_info(&self, session: &Session, shown: bool) -> HeaderInfo {
+        let endeavor = self.settings.notebook_theme == NotebookTheme::Endeavor;
+        let page = self.page_for(session).filter(|_| shown);
+        let host = self.host_label(&session.place.host);
+        let read_only = self.read_only(session);
+        let reconnecting = page.is_some_and(|p| !p.connected) && !read_only;
+        let mut tags = Vec::new();
+        if read_only {
+            tags.push(HeaderTag::ReadOnly);
+        }
+        if session.missing {
+            tags.push(HeaderTag::NotFound);
+        } else if session.stopped.is_some() {
+            tags.push(HeaderTag::Stopped);
+        }
+        let page = page.filter(|_| endeavor);
+        if let Some(p) = page {
+            if p.safe {
+                tags.push(HeaderTag::SafePreview);
+            }
+            if p.save_failed {
+                tags.push(HeaderTag::NotSaved);
+            }
+            if p.package_failed.is_some() {
+                tags.push(HeaderTag::PackageFailed);
+            } else if let Some(restart) = &p.restart {
+                tags.push(if restart == "required" { HeaderTag::RestartNeeded } else { HeaderTag::RestartRecommended });
+            } else if p.dead {
+                tags.push(HeaderTag::JuliaExited);
+            }
+        }
+        HeaderInfo {
+            host: if reconnecting { format!("{host} · reconnecting") } else { host },
+            tags,
+            // What's under way, while the drawer's Status tab isn't showing it.
+            busy: page.filter(|p| p.drawer.as_deref() != Some("status")).and_then(|p| p.busy.clone()),
+        }
+    }
+
     /// The notebook pane's header for session `ix`. `shown`: its notebook is on screen (Point works).
     pub fn notebook_header(&self, ix: usize, shown: bool, cx: &mut Context<Self>) -> AnyElement {
         let session = &self.sessions[ix];
@@ -364,15 +473,13 @@ impl Workspace {
         }
         let endeavor = self.settings.notebook_theme == NotebookTheme::Endeavor;
         let page = self.page_for(session).filter(|_| shown);
-        let host = self.host_label(&session.place.host);
-        let read_only = self.read_only(session);
-        let reconnecting = page.is_some_and(|p| !p.connected) && !read_only;
+        let header = self.header_info(session, shown);
         let host_icon = match &session.place.host {
             HostId::ThisMac => Glyph::Laptop,
             HostId::Server(_) if self.is_cluster(&session.place.host) => Glyph::Cluster,
             HostId::Server(_) => Glyph::Server,
         };
-        let host_chip = chip(Some(host_icon), if reconnecting { format!("{host} · reconnecting") } else { host }, theme::text_tag());
+        let host_chip = chip(Some(host_icon), header.host, theme::text_tag());
 
         let name = match &self.notebook_rename {
             Some((renaming, input)) if *renaming == key => div()
@@ -412,48 +519,31 @@ impl Workspace {
                 .into_any_element(),
         };
 
-        let mut chips: Vec<AnyElement> = Vec::new();
-        if read_only {
-            chips.push(chip(Some(Glyph::Lock), "Read-only", theme::text_tag()).into_any_element());
-        }
-        if session.missing {
-            chips.push(chip(Some(Glyph::Warning), "Not found", theme::danger()).into_any_element());
-        } else if session.stopped.is_some() {
-            chips.push(chip(None, "Stopped", theme::text_faint()).into_any_element());
-        }
-        if let Some(p) = page.filter(|_| endeavor) {
-            if p.safe {
-                chips.push(chip(Some(Glyph::Shield), "Safe preview", theme::accent_text()).into_any_element());
+        let chips = header.tags.into_iter().map(|tag| {
+            let label = tag.label();
+            match tag {
+                HeaderTag::ReadOnly => chip(Some(Glyph::Lock), label, theme::text_tag()).into_any_element(),
+                HeaderTag::NotFound | HeaderTag::NotSaved => chip(Some(Glyph::Warning), label, theme::danger()).into_any_element(),
+                HeaderTag::Stopped => chip(None, label, theme::text_faint()).into_any_element(),
+                HeaderTag::SafePreview => chip(Some(Glyph::Shield), label, theme::accent_text()).into_any_element(),
+                HeaderTag::PackageFailed => chip(Some(Glyph::Warning), label, theme::danger())
+                    .id("package-failed")
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("status"), cx)))
+                    .into_any_element(),
+                HeaderTag::RestartNeeded | HeaderTag::RestartRecommended => chip(Some(Glyph::Restart), label, theme::accent_text())
+                    .id("restart-needed")
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| this.restart_notebook(key, cx)))
+                    .into_any_element(),
+                HeaderTag::JuliaExited => chip(None, label, theme::danger()).into_any_element(),
             }
-            if p.save_failed {
-                chips.push(chip(Some(Glyph::Warning), "Not saved", theme::danger()).into_any_element());
-            }
-            if p.package_failed.is_some() {
-                chips.push(
-                    chip(Some(Glyph::Warning), "Package failed", theme::danger())
-                        .id("package-failed")
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("status"), cx)))
-                        .into_any_element(),
-                );
-            } else if p.restart.is_some() {
-                let why = if p.restart.as_deref() == Some("required") { "Restart needed" } else { "Restart recommended" };
-                chips.push(
-                    chip(Some(Glyph::Restart), why, theme::accent_text())
-                        .id("restart-needed")
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, _, cx| this.restart_notebook(key, cx)))
-                        .into_any_element(),
-                );
-            } else if p.dead {
-                chips.push(chip(None, "Julia exited", theme::danger()).into_any_element());
-            }
-        }
+        });
+        let chips: Vec<AnyElement> = chips.collect();
 
-        // What's under way, while the drawer's Status tab isn't showing it.
-        let busy = page.filter(|p| endeavor && p.drawer.as_deref() != Some("status")).and_then(|p| p.busy.clone()).map(|text| {
+        let busy = header.busy.map(|text| {
             div()
                 .id("header-busy")
                 .flex_shrink_0()
@@ -900,16 +990,15 @@ impl Workspace {
     /// None shows the web view. Our pages, not Pluto's welcome or "Can't find a
     /// file here": what happened, and at most two things to do.
     pub fn notebook_page(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if let Some(pane) = self.host_pane(&session.place.host, true, cx) {
-            return Some(pane);
-        }
         let key = session.key;
         let mono = |text: String| div().font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_primary()).child(text);
-        if session.missing {
-            let path = session.notebook_path.clone().unwrap_or_default();
-            let file = folder_name(Path::new(&path));
-            let local = session.place.host == HostId::ThisMac;
-            return Some(
+        let path = session.notebook_path.clone().unwrap_or_default();
+        let file = folder_name(Path::new(&path));
+        Some(match self.pane_shows(session, cx) {
+            PaneShows::Host(_) => return self.host_pane(&session.place.host, true, cx),
+            PaneShows::Page => return None,
+            PaneShows::Missing => {
+                let local = session.place.host == HostId::ThisMac;
                 div()
                     .size_full()
                     .flex()
@@ -929,54 +1018,50 @@ impl Workspace {
                             .when(local, |d| d.child(page_button("locate-file", Glyph::Search, "Locate file…", false).on_click(cx.listener(move |this, _, _, cx| this.locate_file(key, cx)))))
                             .child(page_button("new-notebook-here", Glyph::File, "New notebook in this session", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx)))),
                     )
-                    .into_any_element(),
-            );
-        }
-        let Some(path) = session.notebook_path.as_deref() else {
-            if session.notebook.is_some() {
-                return None;
+                    .into_any_element()
             }
-            return Some(
-                new_session::turtle_pane()
-                    .child(page_title("No notebook in this session yet"))
-                    .child(page_text("Claude makes one when there is code to run. You can also start one yourself."))
-                    .child(
-                        div()
-                            .mt(px(6.))
-                            .flex()
-                            .gap(px(12.))
-                            .child(page_button("new-notebook", Glyph::File, "New notebook", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx))))
-                            .child(page_button("open-in-new-session", Glyph::Cells, "Open a notebook in a new session…", false).on_click(cx.listener(move |this, _, _, cx| this.open_in_new_session(key, cx)))),
-                    )
-                    .into_any_element(),
-            );
-        };
-        let file = folder_name(Path::new(path));
-        if let Some(stopped) = session.stopped {
-            let why = match stopped.idle_hours {
-                Some(hours) => format!("It stopped after {hours} hours without use. The file is saved; Start runs it again from the top."),
-                None => "The file is saved; Start runs it again from the top.".to_string(),
-            };
-            let (why, then) = if stopped.safe_preview {
-                ("The file is saved. It was in safe preview, so Start opens it that way again.".to_string(), None)
-            } else {
-                (why, Some("If the file changed on disk meanwhile, it opens in safe preview instead."))
-            };
-            return Some(
+            PaneShows::NoNotebook => new_session::turtle_pane()
+                .child(page_title("No notebook in this session yet"))
+                .child(page_text("Claude makes one when there is code to run. You can also start one yourself."))
+                .child(
+                    div()
+                        .mt(px(6.))
+                        .flex()
+                        .gap(px(12.))
+                        .child(page_button("new-notebook", Glyph::File, "New notebook", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx))))
+                        .child(page_button("open-in-new-session", Glyph::Cells, "Open a notebook in a new session…", false).on_click(cx.listener(move |this, _, _, cx| this.open_in_new_session(key, cx)))),
+                )
+                .into_any_element(),
+            PaneShows::Stopped(stopped) => {
+                let (why, then) = stopped_text(stopped);
                 new_session::turtle_pane()
                     .child(page_title(div().flex().gap(px(6.)).child(mono(file)).child("is stopped")))
                     .child(page_text(why))
                     .children(then.map(|t| page_text(t).text_size(theme::size_meta())))
                     .child(div().mt(px(6.)).child(page_button("start-notebook", Glyph::Play, "Start", true).on_click(cx.listener(move |this, _, _, cx| this.start_notebook(key, cx)))))
-                    .into_any_element(),
-            );
+                    .into_any_element()
+            }
+            PaneShows::Opening => new_session::turtle_pane().child(div().flex().items_baseline().text_color(theme::text_muted()).child("Opening ").child(new_session::file_name(file)).child("…")).into_any_element(),
+        })
+    }
+
+    /// What the notebook pane shows for a session.
+    pub fn pane_shows(&self, session: &Session, cx: &App) -> PaneShows {
+        if let Some(host) = self.host_pane_state(&session.place.host, cx) {
+            return PaneShows::Host(host);
+        }
+        if session.missing {
+            return PaneShows::Missing;
+        }
+        if session.notebook_path.is_none() {
+            return if session.notebook.is_some() { PaneShows::Page } else { PaneShows::NoNotebook };
+        }
+        if let Some(stopped) = session.stopped {
+            return PaneShows::Stopped(stopped);
         }
         // A page taken down with its runtime (`close_page`) stays covered until the reopened one loads.
         let blank = self.webview.read(cx).raw().url().is_ok_and(|url| url == "about:blank");
-        if session.notebook.is_some() && !blank {
-            return None;
-        }
-        Some(new_session::turtle_pane().child(div().flex().items_baseline().text_color(theme::text_muted()).child("Opening ").child(new_session::file_name(file)).child("…")).into_any_element())
+        if session.notebook.is_some() && !blank { PaneShows::Page } else { PaneShows::Opening }
     }
 
     /// Julia isn't running on the session's host: Start, and on a cluster the

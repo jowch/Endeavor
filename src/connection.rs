@@ -902,13 +902,17 @@ impl Workspace {
         cx.background_executor().spawn(async move { pluto::set_idle_limit(&bridge, hours) }).detach();
     }
 
+    /// When the running cluster job on `host` ends (Unix seconds), and whether that's soon.
+    pub fn job_end(&self, host: &HostId) -> Option<(u64, bool)> {
+        let connection = self.connections.get(host).filter(|c| c.status == Status::Ready)?;
+        let at = connection.runtime.as_ref()?.job.as_ref()?.ends_at?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        Some((at, at.saturating_sub(now) <= job_warning_window().as_secs()))
+    }
+
     /// "Job ends 18:40", for the notebook header of a session on a cluster.
     pub fn job_ends(&self, host: &HostId) -> Option<AnyElement> {
-        let connection = self.connections.get(host).filter(|c| c.status == Status::Ready)?;
-        let job = connection.runtime.as_ref()?.job.as_ref()?;
-        let at = job.ends_at?;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let soon = at.saturating_sub(now) <= job_warning_window().as_secs();
+        let (at, soon) = self.job_end(host)?;
         Some(
             div()
                 .flex_shrink_0()
@@ -1115,31 +1119,31 @@ impl Workspace {
         }
     }
 
+    /// What the notebook pane shows while `host` isn't ready; None once it is,
+    /// and while a dropped server's page stays up, read-only, as it reconnects.
+    pub fn host_pane_state(&self, host: &HostId, cx: &App) -> Option<HostPane> {
+        let connection = self.connections.get(host);
+        if let Some(lost) = connection.and_then(|c| c.lost.as_ref()) {
+            let shown = self.webview.read(cx).raw().url().unwrap_or_default();
+            return (!lost.page.as_deref().is_some_and(|page| shown.starts_with(page))).then_some(HostPane::Lost);
+        }
+        Some(match connection.map_or(Status::Connecting, |c| c.status.clone()) {
+            Status::Ready => return None,
+            Status::Connecting | Status::Browsing | Status::Starting => HostPane::Starting,
+            Status::Died(_) if connection.is_some_and(|c| c.stopping) => HostPane::Stopping,
+            Status::Died(reason) => HostPane::NotRunning(reason),
+            Status::Replaced => HostPane::Replaced,
+            Status::Failed(reason) => HostPane::NotConnected(reason),
+        })
+    }
+
     /// The notebook pane while `host` isn't ready: its state, and what to do
     /// about it. `start`: Reconnect also starts Julia, as a session needs; the
     /// new-session screen only browses the host's files.
     pub fn host_pane(&self, host: &HostId, start: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let state = self.host_pane_state(host, cx)?;
         let connection = self.connections.get(host);
         let name = self.hosts.name(host);
-        if let Some(lost) = connection.and_then(|c| c.lost.as_ref()) {
-            // Its notebook's page stays up, read-only, while it reconnects.
-            let shown = self.webview.read(cx).raw().url().unwrap_or_default();
-            if lost.page.as_deref().is_some_and(|page| shown.starts_with(page)) {
-                return None;
-            }
-            let offline = self.offline_since().is_some();
-            let pane = crate::new_session::turtle_pane();
-            // A session's pane has "Can't reach" above it already.
-            let pane = if start {
-                let text = if offline { format!("Endeavor reconnects to {name} when you're back online.") } else { format!("Endeavor reconnects to {name} by itself.") };
-                pane.child(div().text_color(theme::text_muted()).child(text))
-            } else {
-                let text = if offline { "Endeavor reconnects when you're back online." } else { "Endeavor reconnects by itself." };
-                pane.child(div().text_color(theme::text_primary()).child(format!("Can't reach {name}"))).child(div().text_color(theme::text_muted()).child(text))
-            };
-            return Some(pane.into_any_element());
-        }
-        let status = connection.map_or(Status::Connecting, |c| c.status.clone());
         let action = |id: &'static str, label: &'static str, host: HostId, start_julia: bool| {
             div()
                 .id(id)
@@ -1161,11 +1165,22 @@ impl Workspace {
         };
         let message = |text: String| div().max_w(px(420.)).text_center().text_size(theme::size_meta()).text_color(theme::text_muted()).child(text);
         let resting = crate::new_session::turtle_pane();
-        let pane = match status {
-            Status::Ready => return None,
-            Status::Connecting | Status::Browsing | Status::Starting => {
+        let pane = match state {
+            HostPane::Lost => {
+                let offline = self.offline_since().is_some();
+                // A session's pane has "Can't reach" above it already.
+                if start {
+                    let text = if offline { format!("Endeavor reconnects to {name} when you're back online.") } else { format!("Endeavor reconnects to {name} by itself.") };
+                    resting.child(div().text_color(theme::text_muted()).child(text))
+                } else {
+                    let text = if offline { "Endeavor reconnects when you're back online." } else { "Endeavor reconnects by itself." };
+                    resting.child(div().text_color(theme::text_primary()).child(format!("Can't reach {name}"))).child(div().text_color(theme::text_muted()).child(text))
+                }
+            }
+            HostPane::Starting => {
                 let steps = connection.map_or_else(|| Steps::new(format!("Connecting to {name}")), |c| c.steps.clone());
-                let cancel = (status == Status::Starting && self.is_cluster(host) && connection.is_some_and(|c| !c.cancelling)).then(|| {
+                let starting = connection.is_some_and(|c| c.status == Status::Starting);
+                let cancel = (starting && self.is_cluster(host) && connection.is_some_and(|c| !c.cancelling)).then(|| {
                     let host = host.clone();
                     div()
                         .id("cancel-start")
@@ -1181,12 +1196,12 @@ impl Workspace {
                 });
                 return Some(starting_pane(&steps).children(cancel).into_any_element());
             }
-            Status::Died(_) if connection.is_some_and(|c| c.stopping) => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping Julia on {name}…"))),
-            Status::Died(reason) => return Some(self.julia_stopped_page(host, &reason, cx)),
-            Status::Replaced => resting
+            HostPane::Stopping => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping Julia on {name}…"))),
+            HostPane::NotRunning(reason) => return Some(self.julia_stopped_page(host, &reason, cx)),
+            HostPane::Replaced => resting
                 .child(div().text_color(theme::text_muted()).child(format!("Another connection took over Julia on {name}.")))
                 .child(action("host-reconnect", "Reconnect", host.clone(), false)),
-            Status::Failed(reason) => {
+            HostPane::NotConnected(reason) => {
                 let fixes = self.fixes(host, &reason);
                 let repair = fixes.contains(&Fix::Repair);
                 resting
@@ -1204,6 +1219,22 @@ impl Workspace {
         };
         Some(pane.into_any_element())
     }
+}
+
+/// The notebook pane of a host that isn't ready.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HostPane {
+    /// A server's connection dropped by itself: "Can't reach", reconnecting.
+    Lost,
+    /// Connecting, or Julia starting: the step log.
+    Starting,
+    Stopping,
+    /// "Julia isn't running", and why.
+    NotRunning(String),
+    /// Another connection took the runtime over.
+    Replaced,
+    /// "Not connected", and why.
+    NotConnected(String),
 }
 
 /// Send how the connect went, then, if it got through, wait for the helper's

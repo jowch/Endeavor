@@ -36,7 +36,20 @@ export type ToApp =
   | { type: "run_notebook"; notebook: string }
   // The Status failure box: Fix with Claude (with the package's log), Restart notebook.
   | { type: "fix_package"; notebook: string; name: string; log: string }
-  | { type: "restart"; notebook: string };
+  | { type: "restart"; notebook: string }
+  // Answering `debug`: Point and its picked cells, the drawer's tab, the
+  // safe-preview callout, and the `alert`s shown (null outside debug builds).
+  | {
+      type: "debug";
+      point: boolean;
+      picked: string[];
+      box: boolean;
+      point_status: string;
+      comment: string;
+      drawer: "docs" | "status" | null;
+      callout: boolean;
+      alerts: string[] | null;
+    };
 
 /** One cell's state, from the runtime's events (see runtime Events.jl). */
 export type CellState = {
@@ -69,7 +82,9 @@ export type ToPage =
   // its server is out of reach, so the page can be read but not changed.
   | { type: "context"; host: string; asking: boolean; readonly: boolean }
   // Share and ⋮ items that act in the page, with Pluto's own functions.
-  | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" };
+  | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" }
+  // A debug build's state dump asks what the page shows.
+  | { type: "debug" };
 
 declare global {
   interface Window {

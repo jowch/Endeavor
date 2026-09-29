@@ -180,14 +180,18 @@ impl Workspace {
     }
 
     /// One grey line above the composer while offline.
-    pub fn render_offline_line(&self, session: Option<&Session>, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub fn offline_line(&self, session: Option<&Session>) -> Option<&'static str> {
         self.offline_since?;
         let on_server = session.is_some_and(|s| s.place.host != HostId::ThisMac);
-        let text = if on_server {
+        Some(if on_server {
             "You're offline. Claude will continue when you're back."
         } else {
             "You're offline. The notebook still works. Claude will continue when you're back."
-        };
+        })
+    }
+
+    pub fn render_offline_line(&self, session: Option<&Session>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text = self.offline_line(session)?;
         Some(
             div()
                 .flex()
@@ -202,6 +206,15 @@ impl Workspace {
                 .child(self.try_now_button("try-now-chat", 24., cx))
                 .into_any_element(),
         )
+    }
+
+    /// The pane warning's words: its line, or its title and line.
+    pub fn pane_warning(&self, session: &Session) -> (String, Option<&'static str>) {
+        if self.offline_since.is_some() {
+            ("Looks like you're offline. Endeavor will reconnect when you're back online.".into(), None)
+        } else {
+            (format!("Can't reach {}", self.hosts.name(&session.place.host)), Some("If it needs your university's VPN, check that it's on."))
+        }
     }
 
     /// The one warning at the top of a server's notebook pane while it's out of reach.
@@ -228,33 +241,36 @@ impl Workspace {
             .line_height(px(17.))
             .text_color(theme::text_secondary())
             .child(glyph_at(Glyph::WifiOff, theme::text_muted(), 13. / 12.));
-        let body = if self.offline_since.is_some() {
-            div().flex_1().min_w_0().child("Looks like you're offline. Endeavor will reconnect when you're back online.")
-        } else {
-            div()
+        let body = match self.pane_warning(session) {
+            (text, None) => div().flex_1().min_w_0().child(text),
+            (title, Some(text)) => div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .flex_col()
                 .gap(px(1.))
-                .child(div().text_size(theme::size_body()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(format!("Can't reach {}", self.hosts.name(&session.place.host))))
-                .child(div().text_color(theme::text_new()).child("If it needs your university's VPN, check that it's on."))
+                .child(div().text_size(theme::size_body()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(title))
+                .child(div().text_color(theme::text_new()).child(text)),
         };
         Some(frame.child(body).child(self.try_now_button("try-now-pane", 24., cx)).into_any_element())
     }
 
     /// The queue's heading while its messages wait for Claude to be reachable.
-    pub fn render_queue_heading(&self, session: &Session) -> Option<AnyElement> {
+    pub fn queue_heading(&self, session: &Session) -> Option<String> {
         if !self.holds(session) || session.outbox.items.is_empty() {
             return None;
         }
-        let when = if self.offline_since.is_some() {
+        Some(if self.offline_since.is_some() {
             "These send in order when you're back.".to_owned()
         } else if self.account.signed_out() {
             "These send in order once you sign in.".to_owned()
         } else {
             format!("These send in order once {} is back.", self.hosts.name(&session.place.host))
-        };
+        })
+    }
+
+    pub fn render_queue_heading(&self, session: &Session) -> Option<AnyElement> {
+        let when = self.queue_heading(session)?;
         Some(
             div()
                 .flex()

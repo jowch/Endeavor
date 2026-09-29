@@ -1113,29 +1113,9 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
 /// `offline_since`: the network went away then; a turn that has heard nothing
 /// since is waiting for it.
 pub fn render_activity(session: &Session, offline_since: Option<Instant>, cx: &App) -> Option<impl IntoElement + use<>> {
-    let since = session.busy_since?;
-    // The approval card above the composer says it all.
-    if session.needs_approval() {
-        return None;
-    }
-    let waiting = offline_since.filter(|offline| session.heard.is_none_or(|heard| heard <= *offline));
-    if let Some(offline) = waiting {
-        let secs = offline.max(since).elapsed().as_secs();
-        return Some(
-            div()
-                .px_3()
-                .pb_2()
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .text_size(theme::size_meta())
-                .text_color(theme::text_muted())
-                .child(div().mr(px(4.)).child(orbit_with(ElementId::NamedInteger("orbit".into(), session.key), ORBIT, theme::text_muted(), cx)))
-                .child(format!("Waiting for the connection · {}:{:02}", secs / 60, secs % 60))
-                .into_any_element(),
-        );
-    }
-    let (verb, object) = session.activity();
+    let activity = activity(session, offline_since)?;
+    let id = ElementId::NamedInteger("orbit".into(), session.key);
+    let mark = if activity.waiting { orbit_with(id, ORBIT, theme::text_muted(), cx) } else { orbit(id, ORBIT, cx) };
     Some(
         div()
             .px_3()
@@ -1145,12 +1125,38 @@ pub fn render_activity(session: &Session, offline_since: Option<Instant>, cx: &A
             .gap(px(4.))
             .text_size(theme::size_meta())
             .text_color(theme::text_muted())
-            .child(div().mr(px(4.)).child(orbit(ElementId::NamedInteger("orbit".into(), session.key), ORBIT, cx)))
-            .child(verb)
-            .children(object.map(|o| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_secondary()).child(o)))
-            .child(format!("· {}", elapsed(since.elapsed().as_secs())))
+            .child(div().mr(px(4.)).child(mark))
+            .child(activity.verb)
+            .children(activity.object.map(|o| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_secondary()).child(o)))
+            .children(activity.took)
             .into_any_element(),
     )
+}
+
+/// The working line's words.
+pub(crate) struct Activity {
+    /// Waiting for the network, not working.
+    pub waiting: bool,
+    pub verb: String,
+    /// A cell or file name.
+    pub object: Option<String>,
+    /// "· 12s".
+    pub took: Option<String>,
+}
+
+pub(crate) fn activity(session: &Session, offline_since: Option<Instant>) -> Option<Activity> {
+    let since = session.busy_since?;
+    // The approval card above the composer says it all.
+    if session.needs_approval() {
+        return None;
+    }
+    let waiting = offline_since.filter(|offline| session.heard.is_none_or(|heard| heard <= *offline));
+    if let Some(offline) = waiting {
+        let secs = offline.max(since).elapsed().as_secs();
+        return Some(Activity { waiting: true, verb: format!("Waiting for the connection · {}:{:02}", secs / 60, secs % 60), object: None, took: None });
+    }
+    let (verb, object) = session.activity();
+    Some(Activity { waiting: false, verb, object, took: Some(format!("· {}", elapsed(since.elapsed().as_secs()))) })
 }
 
 /// "12s", "1m 05s".
@@ -1378,38 +1384,12 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
         return render_row(session, only, true, window, cx);
     }
     let calls: Vec<usize> = rows.iter().copied().filter(|&i| matches!(session.entries[i], Entry::Tool { .. })).collect();
-    let mut first = None;
-    let mut failed = 0;
-    let mut denied = 0;
-    let mut summed = Vec::new();
-    for &i in &calls {
-        let Entry::Tool { id, title, kind, status, input, output, approval, .. } = &session.entries[i] else { continue };
-        first.get_or_insert(id);
-        if *approval == Some(Approval::Denied) {
-            denied += 1;
-            continue;
-        }
-        failed += runs::failed(*status, title, output.as_ref()) as usize;
-        summed.push((title.as_str(), *kind, input.as_ref().unwrap_or(&serde_json::Value::Null)));
-    }
-    let summary = runs::summary(summed);
-    let open = first.is_some_and(|id| session.open_runs.contains(id));
+    let open = run_open(session, &run);
     let live = session.busy_since.is_some() && run.end == session.entries.len();
     let start = run.start;
     // One run of text, so a long summary wraps with the failures and the chevron in line.
-    let mut text = summary;
-    let mut highlights = Vec::new();
-    for (n, what) in [(failed, "failed"), (denied, "denied")] {
-        if n == 0 {
-            continue;
-        }
-        if !text.is_empty() {
-            text.push_str(", ");
-        }
-        let counted = format!("{n} {what}");
-        highlights.push((text.len()..text.len() + counted.len(), HighlightStyle { color: Some(theme::danger().into()), ..Default::default() }));
-        text.push_str(&counted);
-    }
+    let (mut text, counts) = run_summary(session, run.clone());
+    let highlights: Vec<_> = counts.into_iter().map(|range| (range, HighlightStyle { color: Some(theme::danger().into()), ..Default::default() })).collect();
     text.push_str(if open { " ⌄" } else { " ›" });
     let header = div()
         .id(ElementId::NamedInteger("run".into(), key << 32 | start as u64))
@@ -1434,6 +1414,97 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
         }))
     });
     div().flex().flex_col().gap(px(6.)).child(header).children(list).into_any_element()
+}
+
+/// A tool call's folded row: its line, its edits' ± counts, and its state at the end.
+pub(crate) struct ToolRow {
+    pub line: ToolLine,
+    /// A file edit's diff (a notebook call's edits are its `diffs`).
+    pub file_diff: Option<celldiff::CellDiff>,
+    pub added: usize,
+    pub removed: usize,
+    pub failed: bool,
+    pub state: Option<RowState>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum RowState {
+    Running,
+    Denied,
+    Failed,
+}
+
+impl RowState {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            RowState::Running => "…",
+            RowState::Denied => "denied",
+            RowState::Failed => "failed",
+        }
+    }
+}
+
+pub(crate) fn tool_row(session: &Session, entry: &Entry) -> Option<ToolRow> {
+    let Entry::Tool { title, kind, path, status, input, output, diffs, approval, .. } = entry else { return None };
+    let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
+    let pluto = celldiff::notebook_tool(title).is_some();
+    let file_diff = if pluto { None } else { file_diff(*kind, title, path.as_deref(), args) };
+    let (added, removed) = diffs.iter().chain(&file_diff).flat_map(|d| &d.lines).fold((0, 0), |(a, r), (change, _)| match change {
+        celldiff::Change::Added => (a + 1, r),
+        celldiff::Change::Removed => (a, r + 1),
+        celldiff::Change::Same => (a, r),
+    });
+    let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
+    let running = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
+    let line = if pluto { pluto_line(title, diffs, args, output.as_ref(), running, &name) } else { running_line(tool_line(title, *kind, path.as_deref(), args), title, *kind, args, running) };
+    let failed = runs::failed(*status, title, output.as_ref());
+    let state = if *approval == Some(Approval::Denied) {
+        Some(RowState::Denied)
+    } else if failed {
+        Some(RowState::Failed)
+    } else if running {
+        Some(RowState::Running)
+    } else {
+        None
+    };
+    Some(ToolRow { line, file_diff, added, removed, failed, state })
+}
+
+/// A run of tool calls' folded header: what the calls did, then how many
+/// failed or were denied ("Added 2 cells, ran 1 cell, 1 failed"), and the
+/// ranges of the counts to show in red.
+pub(crate) fn run_summary(session: &Session, run: std::ops::Range<usize>) -> (String, Vec<std::ops::Range<usize>>) {
+    let mut failed = 0;
+    let mut denied = 0;
+    let mut summed = Vec::new();
+    for entry in &session.entries[run] {
+        let Entry::Tool { title, kind, status, input, output, approval, .. } = entry else { continue };
+        if *approval == Some(Approval::Denied) {
+            denied += 1;
+            continue;
+        }
+        failed += runs::failed(*status, title, output.as_ref()) as usize;
+        summed.push((title.as_str(), *kind, input.as_ref().unwrap_or(&serde_json::Value::Null)));
+    }
+    let mut text = runs::summary(summed);
+    let mut counts = Vec::new();
+    for (n, what) in [(failed, "failed"), (denied, "denied")] {
+        if n == 0 {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str(", ");
+        }
+        let counted = format!("{n} {what}");
+        counts.push(text.len()..text.len() + counted.len());
+        text.push_str(&counted);
+    }
+    (text, counts)
+}
+
+/// Whether a run of tool calls is open, by its first call.
+pub(crate) fn run_open(session: &Session, run: &std::ops::Range<usize>) -> bool {
+    session.entries[run.clone()].iter().find_map(|e| if let Entry::Tool { id, .. } = e { Some(id) } else { None }).is_some_and(|id| session.open_runs.contains(id))
 }
 
 /// One call's line (grey verb, what it acted on, ± counts, `›`), opening in
@@ -1471,30 +1542,16 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 )
             })
             .into_any_element(),
-        Entry::Tool { title, kind, path, status, input, output, diffs, expanded, approval, .. } => {
+        Entry::Tool { title, kind, path, input, output, diffs, expanded, approval, .. } => {
             let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
-            let pluto = celldiff::notebook_tool(title).is_some();
-            let file_diff = if pluto { None } else { file_diff(*kind, title, path.as_deref(), args) };
+            let Some(ToolRow { line: summary, file_diff, added, removed, failed, state }) = tool_row(session, entry) else { return div().into_any_element() };
             let all_diffs: Vec<&celldiff::CellDiff> = diffs.iter().chain(&file_diff).collect();
-            let (added, removed) = all_diffs.iter().flat_map(|d| &d.lines).fold((0, 0), |(a, r), (change, _)| match change {
-                celldiff::Change::Added => (a + 1, r),
-                celldiff::Change::Removed => (a, r + 1),
-                celldiff::Change::Same => (a, r),
-            });
             let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
-            let running = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
-            let summary = if pluto { pluto_line(title, diffs, args, output.as_ref(), running, &name) } else { running_line(tool_line(title, *kind, path.as_deref(), args), title, *kind, args, running) };
             let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
-            let failed = runs::failed(*status, title, output.as_ref());
-            let state = if *approval == Some(Approval::Denied) {
-                Some(div().flex_none().text_color(theme::danger()).child("denied"))
-            } else if failed {
-                Some(div().flex_none().text_color(theme::danger()).child("failed"))
-            } else if matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress) {
-                Some(div().flex_none().child("…"))
-            } else {
-                None
-            };
+            let state = state.map(|state| match state {
+                RowState::Running => div().flex_none().child(state.label()),
+                RowState::Denied | RowState::Failed => div().flex_none().text_color(theme::danger()).child(state.label()),
+            });
             let object = summary.object.map(|text| {
                 let d = div().id(id("tool-object")).min_w_0().truncate().text_color(theme::text_secondary()).child(text);
                 let d = if summary.mono { d.font_family(theme::MONO).text_size(theme::size_meta_small()) } else { d };
@@ -1534,7 +1591,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
 /// A stretch of thinking's line: "Thought for 8s" once it's over, "Thinking"
 /// while it goes on and inside a folded run of calls, "Thought" when replayed
 /// history doesn't say how long.
-fn thought_label(in_run: bool, started: Option<Instant>, took: Option<Duration>) -> String {
+pub(crate) fn thought_label(in_run: bool, started: Option<Instant>, took: Option<Duration>) -> String {
     match (in_run, started, took) {
         (true, _, _) | (false, Some(_), None) => "Thinking".into(),
         (false, _, Some(took)) => format!("Thought for {}", elapsed(took.as_secs().max(1))),
@@ -1595,21 +1652,48 @@ fn scroll_y(panel: Stateful<Div>, window: &mut Window, cx: &mut App) -> Stateful
     })
 }
 
+/// The pending approval card, as it reads.
+pub(crate) struct ApprovalView {
+    pub heading: String,
+    /// Code it would run, cut to its first lines.
+    pub code: Option<String>,
+    pub lines: Vec<(String, Tone)>,
+    /// Plan mode's end: the plan to approve (markdown), in place of code and lines.
+    pub plan: Option<String>,
+    pub buttons: Vec<CardButton>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Tone {
+    Muted,
+    Secondary,
+    /// A cell's name.
+    Name,
+}
+
+pub(crate) struct CardButton {
+    pub label: String,
+    /// The key that presses it.
+    pub hint: &'static str,
+    pub primary: bool,
+    option: PermissionOption,
+    /// Approve this session's runs from now on.
+    stop: bool,
+}
+
 /// The pending approval, pinned above the composer: the only heavy element
 /// (accent edge, soft ring, filled primary). Runs get "Run N cells?", the cells,
 /// and how many dependents re-run; other prompts get the agent's own options.
-pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
     let ix = session.pending_permission()?;
     let Entry::Permission { title, code, options, runs_code, tool, input, preview, plan, .. } = &session.entries[ix] else { return None };
-    let key = session.key;
     if let Some(plan) = plan {
-        return Some(render_plan_card(key, ix, plan, options, cx));
+        return Some(ApprovalView { heading: "Ready to start?".into(), code: None, lines: vec![], plan: Some(plan.clone()), buttons: plan_buttons(options) });
     }
-    let mono = |text: String| div().font_family(theme::MONO).text_size(theme::size_code()).child(text);
     let tool = tool.as_deref().unwrap_or("");
 
-    let (heading, body): (String, Vec<AnyElement>) = if !*runs_code {
-        let muted = |text: &str| div().text_color(theme::text_muted()).child(text.to_owned()).into_any_element();
+    let (heading, lines): (String, Vec<(String, Tone)>) = if !*runs_code {
+        let muted = |text: &str| (text.to_owned(), Tone::Muted);
         if let Some(what) = runs::asked(title, input) {
             (format!("Let Claude {what}?"), vec![])
         } else if input["command"].is_string() {
@@ -1624,35 +1708,35 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         let host = session.server.clone().unwrap_or_else(|| "the server".into());
         let folder = session.place.path.display().to_string();
         let cwd = input["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or(&folder);
-        (format!("Run a command on {host}?"), vec![div().text_color(theme::text_muted()).child(format!("In {cwd}")).into_any_element()])
+        (format!("Run a command on {host}?"), vec![(format!("In {cwd}"), Tone::Muted)])
     } else if tool == "allow_execution" {
         let file = session.notebook_path.as_deref().map(|p| folder_name(Path::new(p)));
         let host = session.server.clone().unwrap_or_else(|| "This Mac".into());
-        let mut body = Vec::new();
+        let mut lines = Vec::new();
         if let Some(line) = notebook_summary(file.as_deref(), preview.as_ref()) {
-            body.push(div().text_color(theme::text_secondary()).child(line).into_any_element());
+            lines.push((line, Tone::Secondary));
         }
-        body.push(div().text_color(theme::text_muted()).child(format!("Nothing runs yet. Running it lets its code read and change files on {host}.")).into_any_element());
-        ("Let this notebook run?".into(), body)
+        lines.push((format!("Nothing runs yet. Running it lets its code read and change files on {host}."), Tone::Muted));
+        ("Let this notebook run?".into(), lines)
     } else if tool == "add_cell" {
         ("Add a cell and run it?".into(), vec![])
     } else if let Some(p) = preview {
         let (heading, names) = run_heading(tool, p, input);
-        let mut body: Vec<AnyElement> = Vec::new();
+        let mut lines = Vec::new();
         if p.count > 1 && !p.all {
             const SHOWN: usize = 5;
-            body.extend(names.iter().take(SHOWN).map(|n| mono(n.clone()).text_color(theme::text_secondary()).into_any_element()));
+            lines.extend(names.iter().take(SHOWN).map(|n| (n.clone(), Tone::Name)));
             if names.len() > SHOWN {
-                body.push(div().text_color(theme::text_muted()).child(format!("and {} more", names.len() - SHOWN)).into_any_element());
+                lines.push((format!("and {} more", names.len() - SHOWN), Tone::Muted));
             }
         }
         if p.dependents > 0 {
             let them = if p.count == 1 { "it" } else { "them" };
             let n = p.dependents;
             let cells = if n == 1 { "cell" } else { "cells" };
-            body.push(div().text_color(theme::text_muted()).child(format!("Also re-runs {n} {cells} that depend on {them}.")).into_any_element());
+            lines.push((format!("Also re-runs {n} {cells} that depend on {them}."), Tone::Muted));
         }
-        (heading, body)
+        (heading, lines)
     } else {
         ("Run code?".into(), vec![])
     };
@@ -1662,6 +1746,14 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         .or_else(|| input["code"].as_str().map(str::to_owned))
         .or_else(|| input["command"].as_str().map(str::to_owned))
         .or_else(|| preview.as_ref().and_then(|p| p.cells.first()).map(|c| c.code.clone())).filter(|_| preview.as_ref().is_none_or(|p| p.count <= 1 && !p.all));
+    let code = code.map(|code| {
+        const LINES: usize = 8;
+        let mut shown: Vec<&str> = code.lines().take(LINES).collect();
+        if code.lines().count() > LINES {
+            shown.push("…");
+        }
+        shown.join("\n")
+    });
 
     let mut buttons: Vec<(String, &'static str, PermissionOption, bool)> = Vec::new();
     if tool == "allow_execution" {
@@ -1686,27 +1778,44 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         buttons = option_buttons(options);
     }
     let primary = buttons.iter().rposition(|(_, _, o, _)| matches!(o.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways));
-    let code = code.map(|code| {
-        const LINES: usize = 8;
-        let mut shown: Vec<&str> = code.lines().take(LINES).collect();
-        if code.lines().count() > LINES {
-            shown.push("…");
-        }
-        mono(shown.join("\n")).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).into_any_element()
-    });
-    // Wrap: the agent's own option labels can be long.
-    let buttons = buttons
+    let buttons = buttons.into_iter().enumerate().map(|(i, (label, hint, option, stop))| CardButton { label, hint, primary: Some(i) == primary, option, stop }).collect();
+    Some(ApprovalView { heading, code, lines, plan: None, buttons })
+}
+
+pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+    let ix = session.pending_permission()?;
+    let view = approval_view(session)?;
+    let key = session.key;
+    let buttons = view
+        .buttons
         .into_iter()
         .enumerate()
-        .map(|(i, (label, hint, option, stop))| {
-            approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, Some(i) == primary)
+        .map(|(i, CardButton { label, hint, primary, option, stop })| {
+            approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, primary)
                 .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, stop))))
                 .into_any_element()
         })
         .collect();
+    if let Some(plan) = view.plan {
+        let heading = div().text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(view.heading);
+        let body = div()
+            .id(ElementId::NamedInteger("plan".into(), key))
+            .max_h(px(260.))
+            .overflow_y_scroll()
+            .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan).style(markdown_style()));
+        return Some(approval_card(heading.into_any_element(), vec![body.into_any_element()], buttons));
+    }
+    let mono = |text: String| div().font_family(theme::MONO).text_size(theme::size_code()).child(text);
+    let code = view.code.map(|code| mono(code).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).into_any_element());
+    let lines = view.lines.into_iter().map(|(text, tone)| match tone {
+        Tone::Muted => div().text_color(theme::text_muted()).child(text).into_any_element(),
+        Tone::Secondary => div().text_color(theme::text_secondary()).child(text).into_any_element(),
+        Tone::Name => mono(text).text_color(theme::text_secondary()).into_any_element(),
+    });
+    // Wrap: the agent's own option labels can be long.
     Some(approval_card(
-        inline_code(&heading).text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).into_any_element(),
-        code.into_iter().chain(body).collect(),
+        inline_code(&view.heading).text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).into_any_element(),
+        code.into_iter().chain(lines).collect(),
         buttons,
     ))
 }
@@ -1733,36 +1842,18 @@ fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, Pe
         .collect()
 }
 
-/// Plan mode's end: the plan, then Keep planning · Start in Auto · **Start**.
-fn render_plan_card(key: u64, ix: usize, plan: &str, options: &[PermissionOption], cx: &mut Context<Workspace>) -> AnyElement {
+/// Plan mode's end: Keep planning · Start in Auto · **Start**.
+fn plan_buttons(options: &[PermissionOption]) -> Vec<CardButton> {
     // (label, key, option, runs without asking, primary)
-    let buttons: Vec<(&str, &str, Option<&PermissionOption>, bool, bool)> = vec![
+    let buttons: Vec<(&str, &'static str, Option<&PermissionOption>, bool, bool)> = vec![
         ("Keep planning", "esc", option_of_kind(options, PermissionOptionKind::RejectOnce), false, false),
         ("Start in Auto", "⌘⏎", plan_option(options), true, false),
         ("Start", "⏎", plan_option(options), false, true),
     ];
-    approval_card(
-        div().text_size(theme::size_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child("Ready to start?").into_any_element(),
-        vec![
-            div()
-                .id(ElementId::NamedInteger("plan".into(), key))
-                .max_h(px(260.))
-                .overflow_y_scroll()
-                .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), plan.to_string()).style(markdown_style()))
-                .into_any_element(),
-        ],
-        buttons
-            .into_iter()
-            .filter_map(|(label, hint, option, auto, primary)| {
-                let option = option?.clone();
-                Some(
-                    approval_button(ElementId::NamedInteger(label.into(), key), label, hint, primary)
-                        .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, auto))))
-                        .into_any_element(),
-                )
-            })
-            .collect(),
-    )
+    buttons
+        .into_iter()
+        .filter_map(|(label, hint, option, stop, primary)| Some(CardButton { label: label.into(), hint, primary, option: option?.clone(), stop }))
+        .collect()
 }
 
 /// A run card's heading and the names of the cells it lists. A cell is named by
@@ -1886,7 +1977,7 @@ fn inline_code(text: &str) -> Div {
 }
 
 /// "Progress · 1 of 3": steps done of all.
-fn progress(entries: &[PlanEntry]) -> String {
+pub(crate) fn progress(entries: &[PlanEntry]) -> String {
     let done = entries.iter().filter(|e| e.status == PlanEntryStatus::Completed).count();
     format!("Progress · {done} of {}", entries.len())
 }
@@ -2098,11 +2189,11 @@ pub(crate) fn defined_name(code: &str) -> Option<String> {
 }
 
 /// A tool call's collapsed line.
-struct ToolLine {
-    verb: String,
+pub(crate) struct ToolLine {
+    pub verb: String,
     /// What it acted on: a file name, pattern or command line (mono), or the
     /// agent's own description of a command (not mono). One line.
-    object: Option<String>,
+    pub object: Option<String>,
     mono: bool,
     /// The full path, shown on hover.
     full: Option<String>,

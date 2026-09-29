@@ -477,6 +477,18 @@ impl Workspace {
         Some((picked.unwrap_or(current), options))
     }
 
+    /// The toolbar's mode ("Ask to run", "Plan"…).
+    pub fn mode_label(&self, session: Option<&Session>) -> Option<String> {
+        let (choices, current) = self.mode_list();
+        current.and_then(|i| choices.get(i)).map(|c| c.name.clone()).or_else(|| session.and_then(Session::mode_name))
+    }
+
+    /// The toolbar's pick for a config option ("model", "effort").
+    pub fn config_label(&self, session: Option<&Session>, id: &str) -> Option<String> {
+        let (current, options) = self.config_for(session, id)?;
+        options.iter().find(|o| o.value == current).map(|o| o.name.clone())
+    }
+
     /// ⌘U and "+" → "Add files or photos": the native picker, several at once.
     pub fn add_files(&mut self, _: &AddFiles, window: &mut Window, cx: &mut Context<Self>) {
         self.composer.menu = None;
@@ -903,8 +915,7 @@ impl Workspace {
 
     fn render_toolbar(&self, session: Option<&Session>, notebook_open: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let narrow = self.settings.layout.chat_width < 400.;
-        let (choices, current) = self.mode_list();
-        let mode = current.and_then(|i| choices.get(i)).map(|c| c.name.clone()).or_else(|| session.and_then(Session::mode_name));
+        let mode = self.mode_label(session);
         let usage = session.and_then(|s| s.usage).filter(|(_, size)| *size > 0);
         let open = |menu: Menu| self.composer.menu == Some(menu);
         div()
@@ -952,8 +963,7 @@ impl Workspace {
             .children(
                 ["model", "effort"]
                     .map(|id| {
-                        let (current, options) = self.config_for(session, id)?;
-                        let label = options.iter().find(|o| o.value == current).map(|o| o.name.clone())?;
+                        let label = self.config_label(session, id)?;
                         Some(
                             tool_button(id)
                                 .min_w_0()

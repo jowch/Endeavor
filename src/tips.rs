@@ -117,11 +117,15 @@ impl Workspace {
         }
     }
 
+    pub fn file_tip_shows(&self) -> bool {
+        self.file_tip && !self.settings.file_tip_seen
+    }
+
     /// "Two ways to add your file", laid over the chips above the composer
     /// with its pointer at the box. The caller's element is `relative`, with
     /// the chips at its top and 16px side padding.
     pub fn render_file_tip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.file_tip || self.settings.file_tip_seen {
+        if !self.file_tip_shows() {
             return None;
         }
         let line = |before: &'static str, k: &'static str, after: &'static str| {
