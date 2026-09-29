@@ -743,7 +743,7 @@ fn field_frame(mono: bool) -> Div {
         .when(mono, |d| d.font_family(theme::MONO))
 }
 
-fn button(id: &'static str, label: &'static str, primary: bool, focus: &FocusHandle) -> Stateful<Div> {
+pub(crate) fn button(id: &'static str, label: &'static str, primary: bool, focus: &FocusHandle) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
@@ -754,11 +754,15 @@ fn button(id: &'static str, label: &'static str, primary: bool, focus: &FocusHan
         .items_center()
         .rounded(px(6.))
         .cursor_pointer()
+        // A 2px border is always reserved, transparent unless focused, so the
+        // focus ring's arrival doesn't shift the label.
+        .border_2()
+        .border_color(gpui::transparent_black())
         .track_focus(focus)
         .tab_stop(true)
-        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+        .focus_visible(|s| s.border_color(theme::focus_ring()))
         .when(primary, |d| d.bg(theme::accent()).text_color(theme::text_primary()))
-        .when(!primary, |d| d.border_1().border_color(theme::composer_edge()).hover(|s| s.bg(theme::bg_raised())))
+        .when(!primary, |d| d.border_color(theme::composer_edge()).hover(|s| s.bg(theme::bg_raised())))
         .child(label)
 }
 

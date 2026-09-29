@@ -716,9 +716,11 @@ impl Workspace {
                         .text_color(theme::text_faint())
                         .hover(|s| s.text_color(theme::text_primary()))
                         .aria_label("Remove attachment")
+                        .border_2()
+                        .border_color(gpui::transparent_black())
                         .track_focus(&self.composer.chip_remove_focus(i, cx))
                         .tab_stop(true)
-                        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                        .focus_visible(|s| s.border_color(theme::focus_ring()))
                         .child("×")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if i < this.composer.attachments.len() {
@@ -732,7 +734,7 @@ impl Workspace {
         let chips: Vec<_> = chips.collect();
         let send = self.send_button(empty, busy, session.is_some(), cx);
         let weak = cx.entity().downgrade();
-        let text_box = Textarea::new(&self.input).appearance(false).text_size(theme::size_body()).on_paste(move |item, window, cx| {
+        let text_box = Textarea::new(&self.input).appearance(false).text_size(theme::size_body()).aria_label("Message").on_paste(move |item, window, cx| {
             weak.update(cx, |this, cx| this.paste_into_composer(item, window, cx)).unwrap_or(false)
         });
         let token_marks = self.token_marks(cx);
@@ -806,9 +808,11 @@ impl Workspace {
                 .cursor_pointer()
                 .bg(theme::bg_raised())
                 .hover(|s| s.bg(theme::composer_edge()))
+                .border_2()
+                .border_color(gpui::transparent_black())
                 .track_focus(&focus)
                 .tab_stop(true)
-                .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                .focus_visible(|s| s.border_color(theme::focus_ring()))
                 .child(div().size(px(8.)).rounded(px(1.5)).bg(theme::text_secondary()))
                 .on_click(cx.listener(|this, _, window, cx| this.interrupt(&crate::Interrupt, window, cx)))
                 .into_any_element();
@@ -820,9 +824,11 @@ impl Workspace {
             .aria_label("Send")
             .cursor_pointer()
             .bg(theme::accent())
+            .border_2()
+            .border_color(gpui::transparent_black())
             .track_focus(&focus)
             .tab_stop(true)
-            .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+            .focus_visible(|s| s.border_color(theme::focus_ring()))
             .child(glyph(Glyph::ArrowUp, theme::text_primary()))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if in_chat {
@@ -986,9 +992,11 @@ impl Workspace {
                     .role(Role::Button)
                     .aria_label("Add")
                     .when(open(Menu::Plus), |d| d.bg(theme::row_active()))
+                    .border_2()
+                    .border_color(gpui::transparent_black())
                     .track_focus(&self.composer.focus_plus)
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(glyph(Glyph::Plus, theme::text_secondary()))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Plus, window, cx))),
             )
@@ -998,9 +1006,11 @@ impl Workspace {
                     .aria_label("Point")
                     .gap(px(4.))
                     .when(self.annotating, |d| d.text_color(theme::accent_text()))
+                    .border_2()
+                    .border_color(gpui::transparent_black())
                     .track_focus(&self.composer.focus_point)
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(glyph(Glyph::Pointer, if self.annotating { theme::accent_text() } else { theme::text_muted() }))
                     .when(!narrow, |d| d.child("Point"))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
@@ -1018,11 +1028,15 @@ impl Workspace {
             })
             .children(mode.map(|name| {
                 tool_button("mode")
+                    .role(Role::Button)
+                    .aria_label(format!("Mode: {name}"))
                     .when(open(Menu::Mode), |d| d.bg(theme::row_active()))
                     .when(name == "Plan", |d| d.text_color(theme::accent_text()))
+                    .border_2()
+                    .border_color(gpui::transparent_black())
                     .track_focus(&self.composer.focus_mode)
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(name)
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Mode, window, cx)))
             }))
@@ -1032,14 +1046,19 @@ impl Workspace {
                     .map(|id| {
                         let label = self.config_label(session, id)?;
                         let focus = if id == "model" { &self.composer.focus_model } else { &self.composer.focus_effort };
+                        let name = if id == "model" { "Model" } else { "Effort" };
                         Some(
                             tool_button(id)
+                                .role(Role::Button)
+                                .aria_label(format!("{name}: {label}"))
                                 .min_w_0()
                                 .text_color(theme::text_secondary())
                                 .when(open(Menu::Config(id)), |d| d.bg(theme::row_active()))
+                                .border_2()
+                                .border_color(gpui::transparent_black())
                                 .track_focus(focus)
                                 .tab_stop(true)
-                                .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                                .focus_visible(|s| s.border_color(theme::focus_ring()))
                                 .child(div().min_w_0().truncate().child(label))
                                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(Menu::Config(id), window, cx))),
                         )

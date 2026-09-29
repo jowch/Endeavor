@@ -569,9 +569,11 @@ impl Workspace {
                                     .role(Role::Link)
                                     .aria_label("Open Settings at Assistants")
                                     .line_height(px(17.))
+                                    .border_2()
+                                    .border_color(gpui::transparent_black())
                                     .track_focus(&self.dialog_focus("sign-in-settings", cx))
                                     .tab_stop(true)
-                                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                                    .focus_visible(|s| s.border_color(theme::focus_ring()))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_settings_at(crate::settings_panel::Page::Section(crate::settings_panel::Section::Assistants), window, cx)
                                     })),

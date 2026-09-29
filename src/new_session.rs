@@ -499,8 +499,14 @@ impl Workspace {
         let resume = self.resumable();
         let rows = resume.into_iter().enumerate().map(|(i, r)| {
             let meta = std::iter::once(r.folder).chain(r.notebook).collect::<Vec<_>>().join(" · ");
+            let focus_key = match &r.open {
+                ResumeTarget::Open(key) => format!("resume-open-{key}"),
+                ResumeTarget::Past(info, _) => format!("resume-past-{}", info.session_id),
+            };
             div()
                 .id(("resume", i))
+                .role(Role::Button)
+                .aria_label(r.title.clone())
                 .flex()
                 .items_center()
                 .gap(px(10.))
@@ -510,6 +516,11 @@ impl Workspace {
                 .rounded(px(4.))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::row_active()))
+                .border_2()
+                .border_color(gpui::transparent_black())
+                .track_focus(&self.dialog_focus(focus_key, cx))
+                .tab_stop(true)
+                .focus_visible(|s| s.border_color(theme::focus_ring()))
                 .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(theme::text_row_active()).child(r.title))
                 .child(div().flex_shrink_0().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(meta))
                 .child(div().flex_1())
@@ -698,11 +709,16 @@ impl Workspace {
                         .bg(if open { theme::bg_raised() } else { theme::bg_tag() })
                         .text_size(theme::size_meta())
                         .text_color(if waiting { theme::text_faint() } else { theme::text_secondary() })
+                        .border_2()
+                        .border_color(gpui::transparent_black())
+                        .focus_visible(|s| s.border_color(theme::focus_ring()))
                         .child(glyph(icon, theme::text_muted()))
                         .child(div().when(mono, |d| d.font_family(theme::MONO)).child(label))
                         .when(!waiting, |d| {
                             d.cursor_pointer()
                                 .hover(|s| s.bg(theme::bg_raised()))
+                                .track_focus(&self.dialog_focus(id, cx))
+                                .tab_stop(true)
                                 .child(glyph(Glyph::Chevron, theme::text_faint()))
                                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_popover(chip, window, cx)))
                         }),

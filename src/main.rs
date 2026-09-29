@@ -133,7 +133,7 @@ enum Divider {
 
 /// The ⌘B button: a small drawn sidebar glyph. It sits in a header, so it stops
 /// the mouse-down that would otherwise start a window move.
-fn sidebar_toggle(cx: &mut Context<Workspace>) -> impl IntoElement {
+fn sidebar_toggle(this: &Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
     div()
         .id("sidebar-toggle")
         .role(Role::Button)
@@ -142,6 +142,11 @@ fn sidebar_toggle(cx: &mut Context<Workspace>) -> impl IntoElement {
         .rounded(px(4.))
         .cursor_pointer()
         .hover(|s| s.bg(theme::row_active()))
+        .border_2()
+        .border_color(gpui::transparent_black())
+        .track_focus(&this.dialog_focus("sidebar-toggle", cx))
+        .tab_stop(true)
+        .focus_visible(|s| s.border_color(theme::focus_ring()))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(&ToggleSidebar, window, cx)))
         .child(
@@ -529,9 +534,10 @@ pub struct Workspace {
     /// A state dump waiting for the page's part (debug_state.rs).
     #[cfg(debug_assertions)]
     page_debug: Option<futures::channel::oneshot::Sender<serde_json::Value>>,
-    /// Modal dialog buttons' Tab-stop handles, keyed by their static id: dialogs
-    /// (server_dialog.rs) are rebuilt fresh each render, so their handles live here.
-    dialog_focus: std::cell::RefCell<HashMap<&'static str, FocusHandle>>,
+    /// Tab-stop handles for controls that are rebuilt fresh each render (dialog
+    /// buttons in server_dialog.rs, new-session chips, the sidebar's static
+    /// rows, resume rows…), keyed by an id unique to the control.
+    dialog_focus: std::cell::RefCell<HashMap<String, FocusHandle>>,
     /// Past (not open) sidebar rows' Tab-stop handles, keyed by session id: unlike
     /// an open session, a past row has no `Session` to hold its own handle.
     past_row_focus: std::cell::RefCell<HashMap<SessionId, FocusHandle>>,
@@ -1973,10 +1979,10 @@ impl Workspace {
     // Rendering
     // -----------------------------------------------------------------------
 
-    /// A dialog button's Tab-stop handle, keyed by its static id and cached across
-    /// renders (dialogs like `server_dialog.rs`'s are otherwise rebuilt from scratch).
-    pub(crate) fn dialog_focus(&self, id: &'static str, cx: &App) -> FocusHandle {
-        self.dialog_focus.borrow_mut().entry(id).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
+    /// A rebuilt-every-render control's Tab-stop handle, keyed by an id unique
+    /// to it and cached across renders.
+    pub(crate) fn dialog_focus(&self, id: impl Into<String>, cx: &App) -> FocusHandle {
+        self.dialog_focus.borrow_mut().entry(id.into()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// A past sidebar row's Tab-stop handle, cached by session id across renders.
@@ -2249,9 +2255,11 @@ impl Workspace {
                         });
                         self.session_row(Row::Open(key), group.clone(), active, cx)
                             .aria_label(title_text)
+                            .border_2()
+                            .border_color(gpui::transparent_black())
                             .track_focus(&s.focus_handle(cx))
                             .tab_stop(true)
-                            .focus_visible(|st| st.border_2().border_color(theme::focus_ring()))
+                            .focus_visible(|st| st.border_color(theme::focus_ring()))
                             .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
                             .child(title)
                             .children(mark)
@@ -2286,9 +2294,11 @@ impl Workspace {
                         let focus = self.past_row_focus(&info.session_id, cx);
                         self.session_row(row.clone(), group.clone(), false, cx)
                             .aria_label(title_text)
+                            .border_2()
+                            .border_color(gpui::transparent_black())
                             .track_focus(&focus)
                             .tab_stop(true)
-                            .focus_visible(|d| d.border_2().border_color(theme::focus_ring()))
+                            .focus_visible(|d| d.border_color(theme::focus_ring()))
                             .when(archived, |d| d.text_color(theme::text_section()))
                             .child(title)
                             .when(archived, |d| d.child(glyph(Glyph::Archive, theme::text_section())))
@@ -2335,12 +2345,21 @@ impl Workspace {
             .px(px(6.))
             .pb(px(10.))
             .bg(theme::bg_sidebar())
+            // A tab group of its own, so Tab reaches every sidebar control
+            // before the main column's, whatever order they paint in.
+            .tab_group()
+            .tab_index(0)
             // The traffic lights sit in this header (see TitlebarOptions in main()).
-            .child(column_header("sidebar-header").mx(px(-6.)).justify_end().px(px(10.)).child(sidebar_toggle(cx)))
+            .child(column_header("sidebar-header").mx(px(-6.)).justify_end().px(px(10.)).child(sidebar_toggle(self, cx)))
             .child(
                 sidebar_row("new-session".into(), false)
                     .aria_label("New session")
                     .text_color(theme::text_new())
+                    .border_2()
+                    .border_color(gpui::transparent_black())
+                    .track_focus(&self.dialog_focus("new-session-row", cx))
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(div().text_color(theme::text_faint()).child("+"))
                     .child(div().flex_1().child("New session"))
                     .child(self.render_filter_button(cx))
@@ -2401,6 +2420,11 @@ impl Workspace {
                             .cursor_pointer()
                             .text_size(px(16.))
                             .relative()
+                            .border_2()
+                            .border_color(gpui::transparent_black())
+                            .track_focus(&self.dialog_focus("settings-gear", cx))
+                            .tab_stop(true)
+                            .focus_visible(|s| s.border_color(theme::focus_ring()))
                             .text_color(if self.settings_panel.is_some() { theme::text_primary() } else { theme::text_faint() })
                             .when(self.settings_panel.is_some(), |d| d.bg(theme::row_active()))
                             .hover(|s| s.text_color(theme::text_primary()))
@@ -2630,7 +2654,7 @@ impl Render for Workspace {
             None => ("New session".into(), None),
         };
         let chat_header = column_header("chat-header")
-            .when(!self.settings.layout.sidebar_open, |d| d.pl(px(TRAFFIC_LIGHTS)).child(sidebar_toggle(cx)))
+            .when(!self.settings.layout.sidebar_open, |d| d.pl(px(TRAFFIC_LIGHTS)).child(sidebar_toggle(self, cx)))
             .child(div().overflow_hidden().whitespace_nowrap().child(title))
             .children(folder.map(|f| {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family(theme::MONO).text_size(theme::size_meta_small()).child(f)
@@ -2678,6 +2702,11 @@ impl Render for Workspace {
                     .h_full()
                     .flex()
                     .flex_col()
+                    // Its own tab group, right after the sidebar's, so Tab
+                    // reaches the composer after the sidebar and not before it
+                    // (paint order alone doesn't put them in this order).
+                    .tab_group()
+                    .tab_index(1)
                     .child(chat_header)
                     .child(chat),
             )
@@ -2689,6 +2718,8 @@ impl Render for Workspace {
                     .h_full()
                     .flex()
                     .flex_col()
+                    .tab_group()
+                    .tab_index(2)
                     .child(notebook_header)
                     .children(active.and_then(|ix| self.render_pane_warning(&self.sessions[ix], cx)))
                     .child(div().flex_1().min_h_0().child(notebook)),

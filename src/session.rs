@@ -1636,17 +1636,22 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
     let start = run.start;
     // One run of text, so a long summary wraps with the failures and the chevron in line.
     let (mut text, counts) = run_summary(session, run.clone());
+    let aria_label = format!("{text}, {}", if open { "expanded" } else { "collapsed" });
     let highlights: Vec<_> = counts.into_iter().map(|range| (range, HighlightStyle { color: Some(theme::danger().into()), ..Default::default() })).collect();
     text.push_str(if open { " ⌄" } else { " ›" });
     let header = div()
         .id(ElementId::NamedInteger("run".into(), key << 32 | start as u64))
+        .role(Role::Button)
+        .aria_label(aria_label)
         .cursor_pointer()
         .text_size(theme::size_meta())
         .text_color(theme::text_faint())
         .hover(|s| s.text_color(theme::text_secondary()))
+        .border_2()
+        .border_color(gpui::transparent_black())
         .track_focus(&session.run_focus(start, cx))
         .tab_stop(true)
-        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+        .focus_visible(|s| s.border_color(theme::focus_ring()))
         .child(StyledText::new(text).with_highlights(highlights))
         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle_run(start))));
     let shown: Vec<usize> = match (open, live) {
@@ -1781,9 +1786,13 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             .gap_1()
             .child(
                 line("thought")
+                    .role(Role::Button)
+                    .aria_label(format!("{}, {}", thought_label(in_run, *started, *took), if *expanded { "expanded" } else { "collapsed" }))
+                    .border_2()
+                    .border_color(gpui::transparent_black())
                     .track_focus(&session.row_focus(ix, cx))
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(thought_label(in_run, *started, *took))
                     .child(if *expanded { "⌄" } else { "›" })
                     .on_click(toggle),
@@ -1803,6 +1812,12 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
         Entry::Tool { title, kind, path, input, output, diffs, expanded, approval, .. } => {
             let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
             let Some(ToolRow { line: summary, file_diff, added, removed, failed, state }) = tool_row(session, entry) else { return div().into_any_element() };
+            let aria_label = format!(
+                "{}{}, {}",
+                summary.verb,
+                summary.object.as_deref().map(|o| format!(" {o}")).unwrap_or_default(),
+                if *expanded { "expanded" } else { "collapsed" }
+            );
             let all_diffs: Vec<&celldiff::CellDiff> = diffs.iter().chain(&file_diff).collect();
             let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
             let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
@@ -1830,9 +1845,13 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 .gap(px(6.))
                 .child(
                     line("tool")
+                        .role(Role::Button)
+                        .aria_label(aria_label)
+                        .border_2()
+                        .border_color(gpui::transparent_black())
                         .track_focus(&session.row_focus(ix, cx))
                         .tab_stop(true)
-                        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                        .focus_visible(|s| s.border_color(theme::focus_ring()))
                         .child(div().flex_none().whitespace_nowrap().child(summary.verb))
                         .children(object)
                         .when(added > 0, |d| d.child(mono(format!("+{added}"), theme::diff_add())))
@@ -2378,12 +2397,15 @@ fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus
         .rounded(px(5.))
         .cursor_pointer()
         .text_size(theme::size_meta())
+        .border_2()
+        .border_color(gpui::transparent_black())
         .track_focus(focus)
         .tab_stop(true)
-        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+        .focus_visible(|s| s.border_color(theme::focus_ring()))
         .map(|d| match weight {
             Weight::Primary => d.bg(theme::accent()).text_color(gpui::white()).font_weight(FontWeight::SEMIBOLD),
-            Weight::Outlined => d.border_1().border_color(theme::composer_edge()).text_color(theme::text_row_active()).hover(|s| s.bg(theme::bg_raised())),
+            // Its outline is the reserved focus border, so focus only recolours it.
+            Weight::Outlined => d.border_color(theme::composer_edge()).text_color(theme::text_row_active()).hover(|s| s.bg(theme::bg_raised())),
             Weight::Quiet => d.text_color(theme::text_secondary()).hover(|s| s.bg(theme::bg_raised())),
         })
         .child(label.to_string())
@@ -2442,14 +2464,18 @@ pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Opt
             .child(
                 div()
                     .id("pinned-plan")
+                    .role(Role::Button)
+                    .aria_label(format!("Plan, {}", if folded { "collapsed" } else { "expanded" }))
                     .flex()
                     .justify_between()
                     .cursor_pointer()
                     .text_size(theme::size_meta())
                     .text_color(theme::text_muted())
+                    .border_2()
+                    .border_color(gpui::transparent_black())
                     .track_focus(&session.pinned_plan_focus(cx))
                     .tab_stop(true)
-                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(progress(entries))
                     .child(if folded { "›" } else { "⌄" })
                     .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.plan_folded = !s.plan_folded))),
