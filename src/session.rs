@@ -146,6 +146,24 @@ pub struct ModeChoice {
     pub description: String,
 }
 
+impl ModeChoice {
+    pub fn mode(&self) -> Mode {
+        Mode { agent: self.mode.clone(), run_without_asking: self.run_without_asking }
+    }
+}
+
+/// A session's mode: the agent's mode, and whether the run gate lets runs through
+/// without asking. The label, the agent's mode, the runtime policy and the gate
+/// all follow from it, and it is saved per session so a reopened one starts in it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Mode {
+    pub agent: String,
+    pub run_without_asking: bool,
+}
+
+/// Where Manual sits in `app_modes()`.
+pub const MANUAL: usize = 0;
+
 /// The app's modes (docs/ui-spec.md, Composer), in the menu's order, plus the
 /// agent's own Manual mode that sessions start in.
 pub fn app_modes() -> Vec<ModeChoice> {
@@ -237,8 +255,10 @@ pub struct Session {
     policy_sent: &'static str,
     /// On a cluster: what its job asks for (from the resources chip).
     pub resources: Option<wire::slurm::Resources>,
-    /// The mode picked on the new-session screen, set once the agent is up.
-    pub initial_mode: Option<ModeChoice>,
+    /// The mode to put the agent in once it is up: the new-session screen's pick,
+    /// or the mode a reopened session was last in. The agent itself starts every
+    /// session, new or reopened, in its settings' default mode.
+    pub start_mode: Option<Mode>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -340,7 +360,7 @@ impl Session {
             commands: Vec::new(),
             policy_sent: "ask",
             resources: None,
-            initial_mode: None,
+            start_mode: None,
         }
     }
 
@@ -431,12 +451,27 @@ impl Session {
         self.mode_choices().iter().position(|c| c.mode == current && (c.mode != "auto" || c.run_without_asking == self.run_without_asking))
     }
 
+    /// The session's mode, once the agent is up.
+    pub fn mode(&self) -> Option<Mode> {
+        let modes = self.modes.as_ref()?;
+        Some(Mode { agent: modes.current_mode_id.to_string(), run_without_asking: self.run_without_asking })
+    }
+
     /// Switch to a mode from the menu, showing it at once.
     pub fn choose_mode(&mut self, choice: &ModeChoice) -> Vec<Effect> {
+        self.set_mode(&choice.mode())
+    }
+
+    /// Switch to a mode the agent offers, showing it at once; the agent confirms
+    /// with a mode update.
+    fn set_mode(&mut self, target: &Mode) -> Vec<Effect> {
         let Some(modes) = self.modes.as_mut() else { return Vec::new() };
-        self.run_without_asking = choice.run_without_asking;
+        if !modes.available_modes.iter().any(|m| m.id.to_string() == target.agent) {
+            return Vec::new();
+        }
+        self.run_without_asking = target.run_without_asking;
         let mut effects = Vec::new();
-        let mode = SessionModeId::from(choice.mode.clone());
+        let mode = SessionModeId::from(target.agent.clone());
         if mode != modes.current_mode_id {
             modes.current_mode_id = mode.clone();
             effects.push(Effect::SetMode(mode));
@@ -555,8 +590,8 @@ impl Session {
         self.config = started.config;
         self.replaying = false;
         let mut effects: Vec<Effect> = self.replayed_path.take().map(Effect::ReopenNotebook).into_iter().collect();
-        if let Some(choice) = self.initial_mode.take().filter(|c| self.mode_choices().contains(c)) {
-            effects.extend(self.choose_mode(&choice));
+        if let Some(mode) = self.start_mode.take() {
+            effects.extend(self.set_mode(&mode));
         }
         self.sync_policy(&mut effects);
         let next = self.outbox.turn_ended();
@@ -715,6 +750,7 @@ impl Session {
                 self.heard = Some(Instant::now());
                 self.apply_update(update, &mut effects);
             }
+            SessionEvent::Config(options) => self.config = options,
         }
         effects
     }
@@ -2291,7 +2327,7 @@ fn file_diff(kind: ToolKind, title: &str, path: Option<&Path>, input: &serde_jso
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
-    use super::{Effect, Entry, Session, SessionEvent, Started, Turn};
+    use super::{Effect, Entry, Mode, Session, SessionEvent, Started, Turn, app_modes};
     use crate::attach::Attachment;
     use crate::hosts::Place;
     use crate::outbox::Queued;
@@ -2512,6 +2548,54 @@ mod tests {
         let mut plain = Session::new(2, Place::local("/tmp/project"), None);
         assert!(plain.cycle_mode().is_empty() && plain.mode_name().is_none());
         assert!(plain.mode_choices().is_empty());
+    }
+
+    #[test]
+    fn a_session_starts_in_its_start_mode_and_keeps_it() {
+        use agent_client_protocol::schema::v1::{ConfigOptionUpdate, SessionConfigOption, SessionConfigSelectOption};
+        let agent_modes = |current: &str| {
+            SessionModeState::new(current.to_string(), vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")])
+        };
+        let mode_option = |current: &str| {
+            let options: Vec<SessionConfigSelectOption> = ["default", "plan", "auto"].into_iter().map(|m| SessionConfigSelectOption::new(m, m)).collect();
+            SessionConfigOption::select("mode", "Mode", current.to_string(), options)
+        };
+        let start = |current: &str, pick: usize| {
+            let mut s = Session::new(1, Place::local("/tmp/project"), None);
+            s.start_mode = Some(app_modes()[pick].mode());
+            let effects = s.started(Started::new(SessionId::new("s1"), Some(agent_modes(current)), None));
+            (s, effects)
+        };
+
+        // Auto picked on the new-session screen: the agent is asked, and runs stop asking.
+        let (mut s, effects) = start("default", 2);
+        assert!(matches!(effects.as_slice(), [Effect::SetMode(m)] if m.to_string() == "auto"));
+        assert_eq!((s.mode_name().as_deref(), s.policy()), (Some("Auto"), "ask"));
+        assert_eq!(s.mode(), Some(Mode { agent: "auto".into(), run_without_asking: true }));
+
+        // A config change's reply, sent before the switch, comes back after the
+        // agent confirmed it: the mode stays.
+        s.apply(SessionEvent::Update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(vec![mode_option("auto")]))));
+        s.apply(SessionEvent::Config(vec![mode_option("default")]));
+        assert_eq!(s.mode_name().as_deref(), Some("Auto"));
+        // The agent's own switch (a plan approved, a fallback) still counts.
+        s.apply(SessionEvent::Update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(vec![mode_option("plan")]))));
+        assert_eq!((s.mode_name().as_deref(), s.policy()), (Some("Plan"), "plan"));
+
+        // Manual is applied too, when the agent starts in another mode.
+        let (s, effects) = start("auto", 0);
+        assert!(matches!(effects.as_slice(), [Effect::SetMode(m)] if m.to_string() == "default"));
+        assert_eq!(s.mode_name().as_deref(), Some("Manual"));
+
+        // A reopened session in Plan: the agent is asked and the runtime told.
+        let (s, effects) = start("default", 3);
+        assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan")] if m.to_string() == "plan"));
+        assert_eq!(s.mode_name().as_deref(), Some("Plan"));
+
+        // Already in the mode: nothing to ask.
+        let (s, effects) = start("auto", 1);
+        assert!(effects.is_empty());
+        assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
     }
 
     #[test]

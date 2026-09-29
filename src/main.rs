@@ -516,6 +516,8 @@ pub struct Workspace {
     /// Each cluster session's resources, by session id (persisted), for the
     /// job that runs it after a reopen.
     session_resources: HashMap<String, wire::slurm::Resources>,
+    /// Each session's mode, by session id (persisted), to start it in again after a reopen.
+    session_modes: HashMap<String, session::Mode>,
     /// Starting a session on a server that looks like a cluster's login node
     /// waits on this question (the server's id).
     login_node_warning: Option<String>,
@@ -703,6 +705,7 @@ impl Workspace {
             server_dialog: None,
             asks: VecDeque::new(),
             session_resources: load_json("resources.json"),
+            session_modes: load_json("modes.json"),
             login_node_warning: None,
             login_node_ok: HashSet::new(),
             questions_tx,
@@ -736,6 +739,7 @@ impl Workspace {
     pub fn with_session(&mut self, key: u64, cx: &mut Context<Self>, f: impl FnOnce(&mut Session)) {
         if let Some(session) = self.session_mut(key) {
             f(session);
+            self.save_mode(key);
             cx.notify();
         }
     }
@@ -803,9 +807,12 @@ impl Workspace {
             let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: host.agent_cwd(&folder) });
         }
         let mut session = Session::new(key, place, server.clone());
-        session.run_without_asking = self.settings.run_without_asking;
         session.resources = self.draft.resources.clone().filter(|_| self.is_cluster(&host));
-        session.initial_mode = (self.draft.mode != 0).then(|| session::app_modes().into_iter().nth(self.draft.mode)).flatten();
+        session.start_mode = session::app_modes().get(self.draft.mode).map(|choice| session::Mode {
+            // Settings' "Run notebook code without asking" is Manual's "Always this session".
+            run_without_asking: choice.run_without_asking || (self.draft.mode == session::MANUAL && self.settings.run_without_asking),
+            ..choice.mode()
+        });
         let job = session.resources.as_ref().zip(self.draft_cluster()).map(|(resources, cluster)| cluster.job(resources));
         if let (Some(job), Some(connection)) = (job, self.connections.get_mut(&host)) {
             connection.job_request = Some(job);
@@ -905,6 +912,7 @@ impl Workspace {
         self.next_key += 1;
         let named = self.titles.get(&info.session_id.to_string()).cloned();
         let resources = self.session_resources.get(&info.session_id.to_string()).cloned();
+        let mode = self.session_modes.get(&info.session_id.to_string()).cloned();
         let (title, untitled) = self.past_title(&info);
         let notebook = self.session_notebooks.get(&info.session_id.to_string()).map(|p| p.path.display().to_string());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
@@ -914,7 +922,9 @@ impl Workspace {
         }
         session.named = named.is_some();
         session.untitled = untitled;
+        // A session from before modes were saved keeps the agent's own mode.
         session.run_without_asking = self.settings.run_without_asking;
+        session.start_mode = mode;
         session.resources = resources;
         if self.holds(&session) {
             session.hold();
@@ -970,6 +980,9 @@ impl Workspace {
         save_json("sessions.json", &self.ours);
         if self.titles.remove(&id.to_string()).is_some() {
             save_json("titles.json", &self.titles);
+        }
+        if self.session_modes.remove(&id.to_string()).is_some() {
+            save_json("modes.json", &self.session_modes);
         }
         if self.archived.remove(&id.to_string()) {
             save_json("archived.json", &self.archived);
@@ -1319,7 +1332,17 @@ impl Workspace {
                 }
             }
         }
+        self.save_mode(key);
         cx.notify();
+    }
+
+    /// Save a session's mode when it changed, for its reopening.
+    fn save_mode(&mut self, key: u64) {
+        let Some((id, mode)) = self.session_mut(key).and_then(|s| Some((s.id.as_ref()?.to_string(), s.mode()?))) else { return };
+        if self.session_modes.get(&id) != Some(&mode) {
+            self.session_modes.insert(id, mode);
+            save_json("modes.json", &self.session_modes);
+        }
     }
 
     /// Which notebook the user is looking at, so "the notebook" is unambiguous.
@@ -2398,7 +2421,7 @@ impl Workspace {
                 cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking)),
             ))
             .child(note(
-                "New sessions start as if you'd chosen \"Always this session\". Applies to new and reopened sessions.".into(),
+                "New sessions in Manual start as if you'd chosen \"Always this session\". A reopened session keeps the mode it was in.".into(),
             ))
             .child(heading("Where notebooks run"))
             .child(self.render_hosts(cx))

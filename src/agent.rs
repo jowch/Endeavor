@@ -13,7 +13,7 @@ use agent_client_protocol::schema::v1::{
     McpServerHttp, McpServerSse, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionConfigOption, SessionId, SessionInfo,
     SessionModeId, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    ConfigOptionUpdate, SessionConfigValueId, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SessionConfigValueId, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
     StopReason,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, ErrorCode, Responder, UntypedMessage};
@@ -241,6 +241,11 @@ pub enum Command {
 
 pub enum SessionEvent {
     Update(SessionUpdate),
+    /// The agent's reply to a config change: its options as they were then. Its
+    /// mode can be older than a mode update already applied (a reply can reach
+    /// the app after a notification the agent sent later), so only updates
+    /// change the mode.
+    Config(Vec<SessionConfigOption>),
     /// Answer by calling `respond` on the responder; the agent waits until then.
     Permission(RequestPermissionRequest, Responder<RequestPermissionResponse>),
     TurnEnded(StopReason),
@@ -415,7 +420,7 @@ async fn run(
                     }
                     Either::Left(Some(Done::Config(session, result))) => {
                         match result {
-                            Ok(reply) => emit(&session, SessionEvent::Update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(reply.config_options)))),
+                            Ok(reply) => emit(&session, SessionEvent::Config(reply.config_options)),
                             Err(e) => emit(&session, SessionEvent::TurnFailed(format!("Couldn't change the setting: {e}"))),
                         }
                         continue;
