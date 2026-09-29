@@ -139,6 +139,9 @@ Everything here is a known `ponytail:` shortcut that's fine for one developer.
 - **Multiple sessions / tabs**, and showing modes and usage.
 - **Freeform annotation strokes** (arrows between cells), once there's a way
   for the agent to make sense of them (e.g. a screenshot alongside).
+- **Windows.** About 6–8 weeks for one person; most of it is replacing Unix
+  process control and the ssh code. See [windows.md](windows.md), and
+  [linux.md](linux.md) for the Linux port's remaining work.
 - **Upstream to mthelm85/PlutoMCP.jl.** The fork carries several general
   improvements (`new_notebook`, run state, `view_cell_output`, earlier fixes);
   offer the ones that aren't Endeavor-specific.

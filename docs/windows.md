@@ -19,8 +19,13 @@ A Windows *server* is out of scope.
 ## What should carry over
 
 - **GPUI** has a Windows backend: `gpui-pre-platform` 0.3.6 depends on
-  `gpui-pre-windows` on Windows. Its source wasn't in the local registry, so
-  its maturity is unchecked (IME, the folder picker, HiDPI).
+  `gpui-pre-windows` 0.3.6, a snapshot of Zed's `gpui_windows` (about 12,800
+  lines). It draws with DirectX through DirectComposition, and it handles IME
+  input and the native file and folder picker. Only two functions are left
+  unimplemented, both macOS ideas that Endeavor doesn't call
+  (`hide_other_apps`, `unhide_other_apps`). Zed's Windows support is new, so
+  this backend has had much less use than the macOS one. Expect bugs that
+  Zed hasn't met yet, particularly around child windows such as the web view.
 - **The web view.** lb-wry 0.53.3 embeds WebView2 as a child window of the
   app's window (`build_as_child` takes a Win32 handle). gpui-wry's
   `focus_parent` gives keyboard focus back to that window, so the worst Linux
@@ -215,7 +220,8 @@ Windows CI runner.
    Pluto workers never leak, and handling pid reuse.
 3. **Menus over the notebook.** The `SetWindowRgn` hole may not work with how
    GPUI draws. Hiding the web view is the fallback.
-4. **GPUI's Windows backend maturity** is unchecked.
+4. **GPUI's Windows backend is new.** It looks complete, but it has had
+   little use, and Zed doesn't embed a child window the way Endeavor does.
 5. **Claude Code's shell requirements** on Windows.
 
 ## Suggested order
