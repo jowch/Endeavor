@@ -25,7 +25,8 @@ pub fn run_at(entries: &[Entry], ix: usize) -> Option<Range<usize>> {
     entries[start..end].iter().any(|e| matches!(e, Entry::Tool { .. })).then_some(start..end)
 }
 
-/// A call failed: the agent says so, or a notebook tool refused it.
+/// A call failed: the agent says so, or a notebook tool refused it. A denied
+/// call isn't a failure (see `denied`).
 ///
 /// A refusal's JSON is `mcp.rs::tool_error`'s shape: `{"error": kind,
 /// "message": ...}`, and nothing else. A successful reply can also carry an
@@ -33,12 +34,28 @@ pub fn run_at(entries: &[Entry], ix: usize) -> Option<Range<usize>> {
 /// alongside `cell_id`, `applied` and the rest), so only the two-key shape
 /// means the tool itself failed.
 pub fn failed(status: ToolCallStatus, title: &str, output: Option<&Value>) -> bool {
-    status == ToolCallStatus::Failed
-        || (celldiff::notebook_tool(title).is_some() && output.and_then(celldiff::tool_json).as_ref().is_some_and(is_refusal))
+    !denied(output)
+        && (status == ToolCallStatus::Failed
+            || (celldiff::notebook_tool(title).is_some() && output.and_then(celldiff::tool_json).as_ref().is_some_and(is_refusal)))
 }
 
 fn is_refusal(reply: &Value) -> bool {
     reply.as_object().is_some_and(|o| o.len() == 2 && o.contains_key("error") && o.contains_key("message"))
+}
+
+/// Claude Code's own text for a denied call.
+const DENIED_TEXT: &str = "User refused permission to run tool";
+
+/// A live denial is known right away, from the approval card's answer
+/// (`session::Approval::Denied`). A reopened session has no such answer to
+/// replay, only the call's raw result, which for a denial is `DENIED_TEXT`
+/// and nothing else — as a plain string, or (a notebook tool's MCP shape) the
+/// first content block's text.
+pub fn denied(output: Option<&Value>) -> bool {
+    fn text(v: &Value) -> Option<&str> {
+        v.as_str().or_else(|| v.get(0).and_then(|c| c["text"].as_str()))
+    }
+    output.and_then(text) == Some(DENIED_TEXT)
 }
 
 /// One kind of work, worded as "`verb` `one`" for a single one and
@@ -337,5 +354,23 @@ mod tests {
               \"cell_id\":\"c1\",\"code\":\"2\",\"output\":\"\",\"errored\":true,\"running\":false,\"queued\":false,\
               \"code_folded\":false,\"stale\":false,\"error\":{\"msg\":\"stale from before the edit\"}}"}]);
         assert!(!super::failed(ToolCallStatus::Completed, "mcp__notebook__edit_cell", Some(&edit)), "an applied edit isn't failed by a stale error");
+    }
+
+    #[test]
+    fn a_denied_call_is_told_apart_from_a_failed_one() {
+        // The exact shape captured from a reopened session: a plain string,
+        // for a built-in tool the agent denied.
+        let denied = json!("User refused permission to run tool");
+        assert!(super::denied(Some(&denied)));
+        assert!(!super::failed(ToolCallStatus::Failed, "Bash", Some(&denied)), "a denial isn't shown as a failure");
+
+        // The same text, in a notebook tool's MCP content shape.
+        let denied_mcp = json!([{"type": "text", "text": "User refused permission to run tool"}]);
+        assert!(super::denied(Some(&denied_mcp)));
+        assert!(!super::failed(ToolCallStatus::Failed, "mcp__notebook__execute_cell", Some(&denied_mcp)));
+
+        // A real failure still counts as one.
+        assert!(!super::denied(Some(&json!("some other error"))));
+        assert!(!super::denied(None));
     }
 }

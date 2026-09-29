@@ -288,6 +288,14 @@ pub fn is_app_text(text: &str) -> bool {
     text.starts_with("[Endeavor]") || text.starts_with("notebook://") || text.starts_with("pluto://") || text.starts_with("attachment:") || text.trim_start().starts_with("<context ref=")
 }
 
+/// Claude Code's own markers for a turn it stopped mid-flight, written back as
+/// a synthetic user message so the next turn has a well-formed conversation.
+/// Not the user's words (`@anthropic-ai/claude-agent-sdk`'s own history-suppression
+/// list carries the same two strings).
+pub fn is_stopped_marker(text: &str) -> bool {
+    text == "[Request interrupted by user]" || text == "[Request interrupted by user for tool use]"
+}
+
 /// An attached text file as a replayed session gives it back: the agent
 /// echoes it as `<context ref="attachment:name">…</context>`.
 pub fn replayed_text_file(text: &str) -> Option<Attachment> {
@@ -888,6 +896,14 @@ mod tests {
         assert!(is_app_text("pluto://notebook/x/cell/y"), "a link from before notebook:// links");
         assert!(is_app_text("\n<context ref=\"attachment:notes.txt\">\nx\n</context>"));
         assert!(!is_app_text("why do these bunch up?"));
+    }
+
+    #[test]
+    fn a_stopped_turns_markers_are_recognised() {
+        assert!(is_stopped_marker("[Request interrupted by user]"));
+        assert!(is_stopped_marker("[Request interrupted by user for tool use]"));
+        assert!(!is_stopped_marker("[Request interrupted by user] and then some"), "the exact marker only, not a prefix match");
+        assert!(!is_stopped_marker("why do these bunch up?"));
     }
 
     #[test]

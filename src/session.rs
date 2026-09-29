@@ -899,6 +899,9 @@ impl Session {
                     ContentBlock::Text(t) => match attach::replayed_text_file(&t.text).or_else(|| attach::replayed_notebook(&t.text)).or_else(|| attach::replayed_saved_file(&t.text)) {
                         Some(attachment) => (None, Some(attachment)),
                         None if attach::is_app_text(&t.text) => return,
+                        // Claude Code's own marker for a turn it stopped mid-flight: not
+                        // the user's words, so replay shows the same note a live stop does.
+                        None if attach::is_stopped_marker(&t.text) => return self.note("You stopped Claude"),
                         None => (Some(t.text), None),
                     },
                     ContentBlock::Image(image) => {
@@ -1713,7 +1716,9 @@ pub(crate) fn tool_row(session: &Session, entry: &Entry) -> Option<ToolRow> {
     let running = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
     let line = if pluto { pluto_line(title, diffs, args, output.as_ref(), running, &name) } else { running_line(tool_line(title, *kind, path.as_deref(), args), title, *kind, args, running) };
     let failed = runs::failed(*status, title, output.as_ref());
-    let state = if *approval == Some(Approval::Denied) {
+    // A live denial is known from the approval card's answer; a replayed one
+    // only from the call's raw result, which carries no such answer.
+    let state = if *approval == Some(Approval::Denied) || runs::denied(output.as_ref()) {
         Some(RowState::Denied)
     } else if failed {
         Some(RowState::Failed)
@@ -1734,7 +1739,7 @@ pub(crate) fn run_summary(session: &Session, run: std::ops::Range<usize>) -> (St
     let mut summed = Vec::new();
     for entry in &session.entries[run] {
         let Entry::Tool { title, kind, status, input, output, approval, .. } = entry else { continue };
-        if *approval == Some(Approval::Denied) {
+        if *approval == Some(Approval::Denied) || runs::denied(output.as_ref()) {
             denied += 1;
             continue;
         }
@@ -2747,7 +2752,7 @@ fn file_diff(kind: ToolKind, title: &str, path: Option<&Path>, input: &serde_jso
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
-    use super::{Effect, Entry, Mode, Session, SessionEvent, Started, Turn, app_modes};
+    use super::{Effect, Entry, Mode, RowState, Session, SessionEvent, Started, Turn, app_modes, run_summary, tool_row};
     use crate::attach::Attachment;
     use crate::hosts::Place;
     use crate::outbox::Queued;
@@ -2808,6 +2813,31 @@ mod tests {
         // A prompt whose call isn't in the transcript is still recorded, as a note.
         s.approve(&"gone".to_string().into(), Approval::Denied, "mcp__notebook__edit_cell", &serde_json::Value::Null);
         assert!(matches!(s.entries.last(), Some(Entry::Note(text)) if text.as_ref() == "Denied: edit a cell"));
+    }
+
+    #[test]
+    fn a_replayed_denial_is_told_apart_from_a_failure() {
+        use agent_client_protocol::schema::v1::{ToolCallId, ToolCallStatus, ToolKind};
+        // The exact shape a reopened session replays: `status` failed and the
+        // call's raw output is Claude Code's denial text, with no approval
+        // answer to check (that's only ever known live).
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.entries.push(Entry::Tool {
+            id: ToolCallId::new("t1"),
+            title: "Bash".into(),
+            kind: ToolKind::Execute,
+            path: None,
+            status: ToolCallStatus::Failed,
+            input: None,
+            output: Some(serde_json::json!("User refused permission to run tool")),
+            diffs: Vec::new(),
+            expanded: false,
+            approval: None,
+        });
+        let row = tool_row(&s, &s.entries[0]).expect("a tool row");
+        assert_eq!(row.state, Some(RowState::Denied));
+        assert!(!row.failed, "a denial isn't a failure");
+        assert_eq!(run_summary(&s, 0..1).0, "1 denied");
     }
 
     #[test]
@@ -3110,6 +3140,15 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_turn_notes_that_the_user_stopped_it() {
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("go"), false);
+        s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(note)) if note.as_ref() == "You stopped Claude"));
+    }
+
+    #[test]
     fn a_new_session_queues_until_started_then_sends_the_first_message() {
         let mut s = Session::new(1, Place::local("/tmp/project"), None);
         assert!(s.submit(text("plot sin"), true).is_empty(), "nothing sent before the session exists");
@@ -3214,6 +3253,26 @@ mod tests {
         old.submit(text("plot it"), false);
         old.apply(reply("Plotted."));
         assert_eq!(times(&old), [false, false, true, true]);
+    }
+
+    #[test]
+    fn a_reopened_session_shows_a_stopped_turn_as_a_note_not_the_users_words() {
+        use agent_client_protocol::schema::v1::{ContentChunk, SessionUpdate, TextContent};
+        use agent_client_protocol::schema::v1::ContentBlock;
+        let chunk = |s: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
+        // The exact shape Claude Code replays for a stop mid-tool-call: the
+        // real prompt, then its own synthetic marker as a separate user turn.
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
+        s.apply(chunk("run the slow thing"));
+        s.apply(chunk("[Request interrupted by user for tool use]"));
+        let [Entry::User { text, .. }, Entry::Note(note)] = s.entries.as_slice() else { panic!("a user entry, then a note") };
+        assert_eq!(text.as_ref(), "run the slow thing");
+        assert_eq!(note.as_ref(), "You stopped Claude");
+
+        // A stop outside a tool call carries the shorter marker.
+        let mut s2 = Session::loading(2, SessionId::new("def"), Place::local("/tmp"), None, "Old chat".into());
+        s2.apply(chunk("[Request interrupted by user]"));
+        assert!(matches!(s2.entries.as_slice(), [Entry::Note(note)] if note.as_ref() == "You stopped Claude"));
     }
 
     /// The blocks of a sent prompt as a reopened session replays them: the
