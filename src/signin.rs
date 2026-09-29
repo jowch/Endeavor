@@ -558,7 +558,27 @@ impl Workspace {
                         .child(unavailable("Codex", "by OpenAI"))
                         .child(unavailable("Gemini", "by Google")),
                 )
-                .child(meta("You can change this later in Settings.", theme::text_muted())),
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .child(meta("You can change this later in", theme::text_muted()))
+                        .child(
+                            div().flex().child(
+                                link("sign-in-settings", "Settings")
+                                    .role(Role::Link)
+                                    .aria_label("Open Settings at Assistants")
+                                    .line_height(px(17.))
+                                    .track_focus(&self.dialog_focus("sign-in-settings", cx))
+                                    .tab_stop(true)
+                                    .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_settings_at(crate::settings_panel::Page::Section(crate::settings_panel::Section::Assistants), window, cx)
+                                    })),
+                            )
+                            .child(meta(".", theme::text_muted())),
+                        ),
+                ),
             Stage::Account => panel.children(self.account_choice(cx)),
             Stage::Expired => return None,
             Stage::Waiting(login) => panel

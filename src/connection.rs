@@ -1208,7 +1208,21 @@ impl Workspace {
                     resting.child(div().text_color(theme::text_muted()).child(text))
                 } else {
                     let text = if offline { "Endeavor reconnects when you're back online." } else { "Endeavor reconnects by itself." };
-                    resting.child(div().text_color(theme::text_primary()).child(format!("Can't reach {name}"))).child(div().text_color(theme::text_muted()).child(text))
+                    let host = host.clone();
+                    // Opens Settings at the server, where Try now and its connection settings are.
+                    let title = div()
+                        .id("cant-reach-host")
+                        .role(Role::Link)
+                        .aria_label(format!("Can't reach {name}: open Where notebooks run"))
+                        .track_focus(&self.dialog_focus("cant-reach-host", cx))
+                        .tab_stop(true)
+                        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                        .cursor_pointer()
+                        .text_color(theme::text_primary())
+                        .hover(|s| s.underline())
+                        .child(format!("Can't reach {name}"))
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_settings_at_host(&host, window, cx)));
+                    resting.child(title).child(div().text_color(theme::text_muted()).child(text))
                 }
             }
             HostPane::Starting => {

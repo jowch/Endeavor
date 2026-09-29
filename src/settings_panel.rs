@@ -1042,6 +1042,14 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Open Settings at a host's row in Where notebooks run, lit ("Can't reach lab-server").
+    pub fn open_settings_at_host(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_at(Page::Section(Section::Hosts), window, cx);
+        if let Some(panel) = &mut self.settings_panel {
+            panel.highlight = Some(host_key(host));
+        }
+    }
+
     /// Open Settings where it was last left (⌘, and the sidebar's gear).
     pub fn open_settings_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let page = self.settings_page;

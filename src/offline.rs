@@ -241,6 +241,7 @@ impl Workspace {
             .line_height(px(17.))
             .text_color(theme::text_secondary())
             .child(glyph_at(Glyph::WifiOff, theme::text_muted(), 13. / 12.));
+        let host = session.place.host.clone();
         let body = match self.pane_warning(session) {
             (text, None) => div().flex_1().min_w_0().child(text),
             (title, Some(text)) => div()
@@ -249,7 +250,24 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap(px(1.))
-                .child(div().text_size(theme::size_body()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(title))
+                .child(
+                    // Opens Settings at the server, where Try now and its connection settings are.
+                    div()
+                        .id("cant-reach-settings")
+                        .role(Role::Link)
+                        .aria_label(format!("{title}: open Where notebooks run"))
+                        .track_focus(&self.dialog_focus("cant-reach-settings", cx))
+                        .tab_stop(true)
+                        .focus_visible(|s| s.border_2().border_color(theme::focus_ring()))
+                        .self_start()
+                        .cursor_pointer()
+                        .text_size(theme::size_body())
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme::text_primary())
+                        .hover(|s| s.underline())
+                        .child(title)
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_settings_at_host(&host, window, cx))),
+                )
                 .child(div().text_color(theme::text_new()).child(text)),
         };
         Some(frame.child(body).child(self.try_now_button("try-now-pane", 24., cx)).into_any_element())

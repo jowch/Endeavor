@@ -1898,6 +1898,12 @@ impl Workspace {
             Ok((version, false)) => about::Adapter::Installing(version),
             _ => about::Adapter::Current,
         };
+        // Debug builds: while the file `ENDEAVOR_TEST_ADAPTER_UPDATE` names exists,
+        // an adapter update shows as available (About, Settings, the gear's dot).
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ENDEAVOR_TEST_ADAPTER_UPDATE").is_some_and(|f| Path::new(&f).exists()) {
+            return about::Updates { app: None, adapter: about::Adapter::Available("0.4".into()) };
+        }
         about::Updates { app: None, adapter }
     }
 
@@ -2220,6 +2226,7 @@ impl Workspace {
     }
 
     fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let update = settings_panel::update_available(&self.updates());
         let groups: Vec<_> = self
             .sidebar_folders()
             .into_iter()
@@ -2398,7 +2405,17 @@ impl Workspace {
                             .when(self.settings_panel.is_some(), |d| d.bg(theme::row_active()))
                             .hover(|s| s.text_color(theme::text_primary()))
                             .child("⚙")
-                            .on_click(cx.listener(|this, _, window, cx| this.open_settings(&OpenSettings, window, cx))),
+                            .when(update, |d| {
+                                d.aria_label("Settings, an update is available")
+                                    .child(div().absolute().top(px(5.)).right(px(5.)).size(px(6.)).rounded_full().bg(theme::accent()))
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if update {
+                                    this.open_settings_at(settings_panel::Page::Section(settings_panel::Section::About), window, cx);
+                                } else {
+                                    this.open_settings(&OpenSettings, window, cx);
+                                }
+                            })),
                     ),
             )
     }
