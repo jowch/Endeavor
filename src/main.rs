@@ -1940,12 +1940,13 @@ impl Workspace {
         self.send_to_page(&serde_json::json!({ "type": "cells", "cells": cells }), cx);
     }
 
-    /// After a session goes idle, say if it left edited cells unrun or still running.
+    /// After a session goes idle, say if it left edited cells unrun or still
+    /// running. Each `/events` update then cuts the note back to what's still true.
     fn check_run_state(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| &s.place.host) else { return };
         // ponytail: warns about every open notebook on the host, not only the ones this session touched.
         let warnings = self.connection(host).map(|c| pluto::run_warnings(&c.notebooks)).unwrap_or_default();
-        self.with_session(key, cx, |s| warnings.into_iter().for_each(|w| s.note(format!("⚠ {w}"))));
+        self.with_session(key, cx, |s| s.note_run_state(warnings));
     }
 
     // -----------------------------------------------------------------------

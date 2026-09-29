@@ -815,6 +815,13 @@ impl Workspace {
             .flatten()
             .filter_map(|nb| Some((nb["notebook_id"].as_str()?.to_owned(), nb["path"].as_str()?.to_owned())))
             .collect();
+        let mut refreshed = false;
+        for session in self.sessions.iter_mut().filter(|s| s.place.host == *host) {
+            refreshed |= session.refresh_run_state(&list);
+        }
+        if refreshed {
+            cx.notify();
+        }
         connection.notebooks = list;
         for (notebook, cell, name) in pluto::user_edits(&connection.cells, &event["cells"]) {
             for session in self.sessions.iter_mut().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())) {

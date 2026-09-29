@@ -252,6 +252,11 @@ impl Workspace {
                 ix = run.end;
                 continue;
             }
+            if let Entry::RunState(warnings) = &s.entries[ix] {
+                out.extend(warnings.iter().map(|w| json!({ "kind": "note", "text": format!("⚠ {w}") })));
+                ix += 1;
+                continue;
+            }
             out.extend(match &s.entries[ix] {
                 Entry::User { text, attachments, .. } => Some(json!({
                     "kind": "user",
@@ -263,7 +268,7 @@ impl Workspace {
                 Entry::Note(text) => Some(json!({ "kind": "note", "text": text.to_string() })),
                 Entry::Plan(entries) => Some(json!({ "kind": "plan", "progress": session::progress(entries), "items": plan_items(entries) })),
                 Entry::Tool { .. } | Entry::Thought { .. } => Some(row(s, ix, false)),
-                Entry::Permission { .. } => None,
+                Entry::Permission { .. } | Entry::RunState(_) => None,
             });
             ix += 1;
         }

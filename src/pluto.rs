@@ -228,36 +228,73 @@ fn rpc(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
     serde_json::from_str(payload).map_err(|e| format!("bad JSON-RPC reply: {e}"))
 }
 
-/// Warnings for notebooks left with edited-but-unrun or still-running cells,
-/// from `list_notebooks` (which reports run state without counting as a read).
-pub fn run_warnings(notebooks: &Value) -> Vec<String> {
+/// A notebook left with cells edited but not run, or still running.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunWarning {
+    pub path: String,
+    pub kind: RunWarningKind,
+    pub cells: Vec<String>,
+    /// Edited cells can't run until the user lets the notebook run.
+    pub safe_preview: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RunWarningKind {
+    Unrun,
+    Running,
+}
+
+impl std::fmt::Display for RunWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let name = Path::new(&self.path).file_name().and_then(|n| n.to_str()).unwrap_or("notebook");
+        let cells = match self.cells.len() {
+            1 => "1 cell".to_string(),
+            n => format!("{n} cells"),
+        };
+        match self.kind {
+            RunWarningKind::Unrun if self.safe_preview => {
+                write!(f, "{name}: {cells} edited but not run. The notebook is in safe preview; Run notebook at its top runs it.")
+            }
+            RunWarningKind::Unrun => write!(f, "{name}: {cells} edited but never run."),
+            RunWarningKind::Running => write!(f, "{name}: {cells} still running."),
+        }
+    }
+}
+
+/// Notebooks left with edited-but-unrun or still-running cells, from
+/// `list_notebooks` (which reports run state without counting as a read).
+pub fn run_warnings(notebooks: &Value) -> Vec<RunWarning> {
     let mut warnings = Vec::new();
     for nb in notebooks.as_array().into_iter().flatten() {
-        let ids = |key: &str| -> Vec<&str> {
-            nb[key].as_array().into_iter().flatten().filter_map(Value::as_str).collect()
+        let ids = |key: &str| -> Vec<String> {
+            nb[key].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()
         };
         let running = ids("running");
         // Cells queued for a run are also pending until they finish; count them once.
-        let unrun = ids("pending_run").into_iter().filter(|id| !running.contains(id)).count();
-        let name = nb["path"]
-            .as_str()
-            .and_then(|p| Path::new(p).file_name()?.to_str())
-            .unwrap_or("notebook");
-        let cells = |n: usize| if n == 1 { "1 cell".to_string() } else { format!("{n} cells") };
-
-        if unrun > 0 && nb["execution_allowed"] == false {
-            warnings.push(format!(
-                "{name}: {} edited but not run. The notebook is in safe preview; Run notebook at its top runs it.",
-                cells(unrun)
-            ));
-        } else if unrun > 0 {
-            warnings.push(format!("{name}: {} edited but never run.", cells(unrun)));
-        }
-        if !running.is_empty() {
-            warnings.push(format!("{name}: {} still running.", cells(running.len())));
+        let unrun: Vec<String> = ids("pending_run").into_iter().filter(|id| !running.contains(id)).collect();
+        let path = nb["path"].as_str().unwrap_or_default().to_owned();
+        let safe_preview = nb["execution_allowed"] == false;
+        for (kind, cells) in [(RunWarningKind::Unrun, unrun), (RunWarningKind::Running, running)] {
+            if !cells.is_empty() {
+                warnings.push(RunWarning { path: path.clone(), kind, cells, safe_preview });
+            }
         }
     }
     warnings
+}
+
+/// What is still true of `said` in `notebooks`: each warning keeps only the
+/// cells that are still unrun or still running, and goes once none are. It
+/// never gains cells, so an old note doesn't take on a later turn's work.
+pub fn still_true(said: &[RunWarning], notebooks: &Value) -> Vec<RunWarning> {
+    let now = run_warnings(notebooks);
+    said.iter()
+        .filter_map(|w| {
+            let current = now.iter().find(|c| c.path == w.path && c.kind == w.kind)?;
+            let cells: Vec<String> = w.cells.iter().filter(|id| current.cells.contains(id)).cloned().collect();
+            (!cells.is_empty()).then(|| RunWarning { cells, safe_preview: current.safe_preview, ..w.clone() })
+        })
+        .collect()
 }
 
 /// A cell the user changed between two events: (notebook id, cell id, name).
@@ -283,8 +320,12 @@ pub fn user_edits(old: &Value, new: &Value) -> Vec<UserEdit> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_warnings, user_edits};
+    use super::{RunWarning, run_warnings, still_true, user_edits};
     use serde_json::json;
+
+    fn texts(warnings: &[RunWarning]) -> Vec<String> {
+        warnings.iter().map(ToString::to_string).collect()
+    }
 
     #[test]
     fn warns_about_unrun_and_running_cells() {
@@ -293,11 +334,34 @@ mod tests {
             { "path": "/n/preview.jl", "pending_run": ["a", "b"], "running": [], "execution_allowed": false },
             { "path": "/n/busy.jl", "pending_run": ["c", "d"], "running": ["c"], "execution_allowed": true },
         ]);
-        let w = run_warnings(&list);
-        assert_eq!(w.len(), 3, "{w:?}");
-        assert!(w[0].starts_with("preview.jl: 2 cells edited but not run") && w[0].contains("safe preview"));
-        assert_eq!(w[1], "busy.jl: 1 cell edited but never run.");
-        assert_eq!(w[2], "busy.jl: 1 cell still running.");
+        assert_eq!(
+            texts(&run_warnings(&list)),
+            [
+                "preview.jl: 2 cells edited but not run. The notebook is in safe preview; Run notebook at its top runs it.",
+                "busy.jl: 1 cell edited but never run.",
+                "busy.jl: 1 cell still running.",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_warning_keeps_only_what_is_still_true() {
+        let said = run_warnings(&json!([
+            { "path": "/n/busy.jl", "pending_run": ["a", "b", "c"], "running": ["a", "b"], "execution_allowed": true },
+        ]));
+        assert_eq!(texts(&said), ["busy.jl: 1 cell edited but never run.", "busy.jl: 2 cells still running."]);
+
+        let one_done = json!([{ "path": "/n/busy.jl", "pending_run": ["b", "c"], "running": ["b"], "execution_allowed": true }]);
+        assert_eq!(texts(&still_true(&said, &one_done)), ["busy.jl: 1 cell edited but never run.", "busy.jl: 1 cell still running."]);
+
+        let all_done = json!([{ "path": "/n/busy.jl", "pending_run": [], "running": [], "execution_allowed": true }]);
+        assert!(still_true(&said, &all_done).is_empty());
+
+        let later_work = json!([{ "path": "/n/busy.jl", "pending_run": ["d"], "running": ["b", "d"], "execution_allowed": true }]);
+        assert_eq!(texts(&still_true(&said, &later_work)), ["busy.jl: 1 cell still running."], "a later run of other cells isn't added");
+
+        let closed = json!([]);
+        assert!(still_true(&said, &closed).is_empty());
     }
 
     #[test]

@@ -77,6 +77,9 @@ pub enum Entry {
         plan: Option<String>,
     },
     Note(SharedString),
+    /// What a turn left unrun or still running, cut back as the runtime reports
+    /// progress: it shows only what is still true, and nothing once all is.
+    RunState(Vec<pluto::RunWarning>),
 }
 
 /// The answer to a call's prompt, shown on its row.
@@ -543,6 +546,29 @@ impl Session {
 
     pub fn note(&mut self, text: impl Into<SharedString>) {
         self.push(Entry::Note(text.into()));
+    }
+
+    pub fn note_run_state(&mut self, warnings: Vec<pluto::RunWarning>) {
+        if !warnings.is_empty() {
+            self.push(Entry::RunState(warnings));
+        }
+    }
+
+    /// Cut each run-state note back to what `notebooks` (`list_notebooks`
+    /// shape) says is still true; whether any changed.
+    pub fn refresh_run_state(&mut self, notebooks: &serde_json::Value) -> bool {
+        let mut changed = Vec::new();
+        for (ix, entry) in self.entries.iter_mut().enumerate() {
+            if let Entry::RunState(said) = entry {
+                let now = pluto::still_true(said, notebooks);
+                if now != *said {
+                    *said = now;
+                    changed.push(ix);
+                }
+            }
+        }
+        changed.iter().for_each(|ix| self.mark(*ix));
+        !changed.is_empty()
     }
 
     fn push(&mut self, entry: Entry) {
@@ -1337,6 +1363,15 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
         }
         Entry::Agent(text) => div().group(REPLY).child(markdown(id("agent"), text.clone())).into_any_element(),
         Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
+        Entry::RunState(warnings) if warnings.is_empty() => return None,
+        Entry::RunState(warnings) => div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .text_size(theme::size_meta())
+            .text_color(muted)
+            .children(warnings.iter().map(|w| format!("⚠ {w}")))
+            .into_any_element(),
         Entry::Tool { .. } | Entry::Thought { .. } => render_row(session, ix, false, window, cx),
         Entry::Plan(entries) => div()
             .flex()
@@ -2970,5 +3005,29 @@ more" }"#);
         s.submit(text("hi"), false);
         let effects = s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(matches!(effects.as_slice(), [Effect::CheckRunState]));
+    }
+
+    #[test]
+    fn the_run_state_note_follows_the_runtime() {
+        use crate::pluto;
+        use serde_json::json;
+        let list = |running: serde_json::Value| json!([{ "path": "/n/slow.jl", "pending_run": running.clone(), "running": running, "execution_allowed": true }]);
+        let shown = |s: &Session| -> Vec<String> {
+            s.entries.iter().flat_map(|e| match e {
+                Entry::RunState(warnings) => warnings.iter().map(ToString::to_string).collect(),
+                _ => Vec::new(),
+            }).collect()
+        };
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.note_run_state(pluto::run_warnings(&list(json!(["a", "b"]))));
+        assert_eq!(shown(&s), ["slow.jl: 2 cells still running."]);
+
+        assert!(!s.refresh_run_state(&list(json!(["a", "b"]))), "nothing new");
+        assert!(s.refresh_run_state(&list(json!(["b"]))));
+        assert_eq!(shown(&s), ["slow.jl: 1 cell still running."]);
+        assert!(s.refresh_run_state(&list(json!([]))));
+        assert!(shown(&s).is_empty());
+        assert!(!s.refresh_run_state(&list(json!(["a"]))), "a later run doesn't bring it back");
+        assert!(shown(&s).is_empty());
     }
 }
