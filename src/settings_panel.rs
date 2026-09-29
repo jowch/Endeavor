@@ -1680,7 +1680,7 @@ impl Workspace {
                         .text_size(theme::size_meta())
                         .child(div().flex_1().text_color(theme::text_secondary()).child(text.clone()))
                         .child(div().text_color(theme::text_muted()).child(step.clone()))
-                        .child(div().ml(px(8.)).child(crate::session::orbit("repair-orbit".into(), 12., cx))),
+                        .child(div().ml(px(8.)).child(crate::orbit::orbit("repair-orbit".into(), 12., cx))),
                 )
                 .child(div().h(px(2.)).rounded_full().bg(theme::border()).child(div().h_full().rounded_full().bg(theme::accent()).w(relative(*fraction))))
                 .into_any_element(),

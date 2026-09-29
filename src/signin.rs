@@ -576,7 +576,7 @@ impl Workspace {
             Stage::Account => panel.children(self.account_choice(cx)),
             Stage::Expired => return None,
             Stage::Waiting(login) => panel
-                .child(title(div().flex().items_center().gap(px(8.)).child(crate::session::orbit("sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser")))
+                .child(title(div().flex().items_center().gap(px(8.)).child(crate::orbit::orbit("sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser")))
                 .child(body(format!("We opened {} in your browser. Sign in there, then come back. This screen moves on by itself.", login.method.site())))
                 .child(
                     div()
@@ -799,7 +799,7 @@ impl Workspace {
                         )
                 }
                 Stage::Waiting(login) => card(false)
-                    .child(heading().child(crate::session::orbit("sign-in-card-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
+                    .child(heading().child(crate::orbit::orbit("sign-in-card-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
                     .child(lines(vec![format!("We opened {}. Sign in there; this card goes away by itself and your message sends.", login.method.site())]))
                     .child(
                         row()

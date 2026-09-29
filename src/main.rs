@@ -31,6 +31,7 @@ mod new_session;
 mod network;
 mod notebook_pane;
 mod offline;
+mod orbit;
 mod outbox;
 #[cfg(target_os = "macos")]
 mod overlay;

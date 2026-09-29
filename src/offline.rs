@@ -362,7 +362,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(crate::session::orbit("setup-offline-orbit".into(), 14., cx))
+                    .child(crate::orbit::orbit("setup-offline-orbit".into(), 14., cx))
                     .child(div().flex_1().text_size(theme::size_meta()).text_color(theme::text_muted()).child("Waiting for a connection"))
                     .child(self.try_now_button("try-now-setup", 26., cx)),
             )
