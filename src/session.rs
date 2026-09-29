@@ -2120,14 +2120,14 @@ pub fn render_queue(this: &Workspace, session: &Session, cx: &mut Context<Worksp
             .when(q.in_flight(), |d| d.child("sending now…"))
             .when(q.is_copying(), |d| d.child(div().flex_shrink_0().child("copying files…")))
             .when(!q.in_flight(), |d| {
-                d.child(div().id(id("edit")).cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✎").on_click(cx.listener(move |this, _, window, cx| {
+                d.child(div().id(id("edit")).role(Role::Button).aria_label("Edit").cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✎").on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(q) = this.session_mut(key).and_then(|s| s.outbox.take(i)) {
                         this.restore_composer(q.text, q.attachments, window, cx);
                     }
                 })))
             })
             .when(!q.in_flight(), |d| {
-                d.child(div().id(id("drop")).cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✕").on_click(cx.listener(move |this, _, _, cx| {
+                d.child(div().id(id("drop")).role(Role::Button).aria_label("Remove").cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✕").on_click(cx.listener(move |this, _, _, cx| {
                     this.with_session(key, cx, |s| {
                         s.outbox.take(i);
                     })

@@ -51,6 +51,10 @@ pub fn text_section() -> Rgba { rgb(0x5E5E5E) }
 pub fn accent() -> Rgba { rgb(0xCC3F00) }
 /// Orange text and icons on dark.
 pub fn accent_text() -> Rgba { rgb(0xE08A5E) }
+/// The keyboard focus ring, shown only while a control is focused by Tab or
+/// arrow keys, not by a mouse click. Named apart from `accent_text` (same
+/// value today) so the two can move independently.
+pub fn focus_ring() -> Rgba { rgb(0xE08A5E) }
 
 pub fn diff_add() -> Rgba { rgb(0x6CC784) }
 pub fn diff_del() -> Rgba { rgb(0xE07A7A) }

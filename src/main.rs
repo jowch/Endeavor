@@ -150,6 +150,8 @@ enum Divider {
 fn sidebar_toggle(cx: &mut Context<Workspace>) -> impl IntoElement {
     div()
         .id("sidebar-toggle")
+        .role(Role::Button)
+        .aria_label("Toggle sidebar")
         .p(px(4.))
         .rounded(px(4.))
         .cursor_pointer()
@@ -2345,6 +2347,8 @@ impl Workspace {
                     .child(
                         div()
                             .id("settings")
+                            .role(Role::Button)
+                            .aria_label("Settings")
                             .size(px(28.))
                             .flex_shrink_0()
                             .flex()
@@ -2579,7 +2583,7 @@ impl Workspace {
         div()
             .id("notebook-more")
             .role(Role::Button)
-            .aria_label("Notebook")
+            .aria_label("More")
             .relative()
             .flex_shrink_0()
             .size(px(24.))
@@ -2822,6 +2826,9 @@ fn main() {
         colors.muted = Some(theme::hex(theme::bg_card()));
         colors.table_head = Some(theme::hex(theme::bg_card()));
         colors.table_head_foreground = Some(theme::hex(theme::text_muted()));
+        // The library's own focus ring (Input, Textarea, and anything else built
+        // from it), so a tabbed-to text box matches our own focus_visible() rings.
+        colors.ring = Some(theme::hex(theme::focus_ring()));
         ui.dark_theme = std::rc::Rc::new(ThemeConfig {
             font_family: Some(theme::SANS.into()),
             mono_font_family: Some(theme::MONO.into()),

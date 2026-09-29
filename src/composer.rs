@@ -665,6 +665,8 @@ impl Workspace {
                 .child(
                     div()
                         .id(ElementId::NamedInteger("chip-remove".into(), i as u64))
+                        .role(Role::Button)
+                        .aria_label("Remove attachment")
                         .ml(px(1.))
                         .px(px(2.))
                         .cursor_pointer()
@@ -935,6 +937,8 @@ impl Workspace {
             )
             .child(if notebook_open {
                 tool_button("point")
+                    .role(Role::Button)
+                    .aria_label("Point")
                     .gap(px(4.))
                     .when(self.annotating, |d| d.text_color(theme::accent_text()))
                     .child(glyph(Glyph::Pointer, if self.annotating { theme::accent_text() } else { theme::text_muted() }))

@@ -579,7 +579,7 @@ impl Workspace {
         let tools = (endeavor && shown).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             [
-                header_button("header-share", Glyph::Share, None, open(MenuTarget::Share(key)))
+                header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)))
                     .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
@@ -587,10 +587,10 @@ impl Workspace {
                     }))
                     .children(share_menu.map(|menu| self.render_menu(menu, cx)))
                     .into_any_element(),
-                tip(header_button("header-docs", Glyph::Book, None, drawer.as_deref() == Some("docs")), "Live docs")
+                tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs")), "Live docs")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
                     .into_any_element(),
-                tip(header_button("header-status", Glyph::Pulse, None, drawer.as_deref() == Some("status")), "Status")
+                tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status")), "Status")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
                     .into_any_element(),
             ]

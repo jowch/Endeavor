@@ -83,6 +83,7 @@ fn key(text: &'static str) -> Div {
 fn got_it(id: &'static str) -> Stateful<Div> {
     div()
         .id(id)
+        .role(Role::Button)
         .flex_shrink_0()
         .h(px(24.))
         .flex()
