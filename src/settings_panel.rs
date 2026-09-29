@@ -1321,10 +1321,10 @@ impl Workspace {
             .flex()
             .overflow_hidden()
             .rounded(px(14.))
-            .bg(theme::bg_card())
+            .bg(theme::panel_bg())
             .border_1()
-            .border_color(theme::composer_edge())
-            .shadow(vec![BoxShadow { color: hsla(0., 0., 0., 0.6), offset: point(px(0.), px(30.)), blur_radius: px(80.), spread_radius: px(0.), inset: false }])
+            .border_color(theme::popover_edge())
+            .shadow(theme::dialog_shadow(30., 80.))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1765,10 +1765,7 @@ impl Workspace {
                                 .occlude()
                                 .w(px(132.))
                                 .p(px(4.))
-                                .rounded(px(8.))
-                                .border_1()
-                                .border_color(theme::composer_edge())
-                                .bg(theme::bg_raised())
+                                .map(theme::popover)
                                 .flex()
                                 .flex_col()
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

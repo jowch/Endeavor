@@ -1117,7 +1117,7 @@ impl Workspace {
     fn render_filter_menu(&self, menu: &FilterMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let filters = self.settings.sidebar_filters.clone();
         let where_label = sidebar_filter::where_label(&filters.where_hosts, |h| self.hosts.name(h));
-        let separator = || div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge());
+        let separator = || div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge());
         let row = |i: usize, label: &'static str, value: String, target: FilterRow, cx: &mut Context<Self>| {
             let selected = menu.submenu.is_none() && menu.selected == Some(i);
             div()
@@ -1131,8 +1131,8 @@ impl Workspace {
                 .px(px(8.))
                 .rounded(px(5.))
                 .cursor_pointer()
-                .when(selected, |d| d.bg(theme::composer_edge()))
-                .hover(|s| s.bg(theme::composer_edge()))
+                .when(selected, |d| d.bg(theme::menu_hover()))
+                .hover(|s| s.bg(theme::menu_hover()))
                 .child(div().flex_1().child(label))
                 .child(div().text_color(theme::text_faint()).child(value))
                 .child(div().text_color(theme::text_faint()).child("›"))
@@ -1165,10 +1165,7 @@ impl Workspace {
             .p(px(4.))
             .flex()
             .flex_col()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme::composer_edge())
-            .bg(theme::bg_raised())
+            .map(theme::popover)
             .font_family(theme::SANS)
             .text_size(theme::size_body())
             .text_color(theme::text_primary())
@@ -1209,7 +1206,7 @@ impl Workspace {
                         .items_center()
                         .rounded(px(5.))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme::composer_edge()))
+                        .hover(|s| s.bg(theme::menu_hover()))
                         .child("Clear filters")
                         .on_click(cx.listener(|this, _, window, cx| this.clear_filters(window, cx))),
                 )
@@ -1272,10 +1269,7 @@ impl Workspace {
             .p(px(4.))
             .flex()
             .flex_col()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme::composer_edge())
-            .bg(theme::bg_raised())
+            .map(theme::popover)
             .font_family(theme::SANS)
             .text_size(theme::size_body())
             .text_color(theme::text_primary())

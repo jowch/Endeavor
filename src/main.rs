@@ -1228,10 +1228,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .p(px(4.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(theme::composer_edge())
-                .bg(theme::bg_raised())
+                .map(theme::popover)
                 .children(matches.into_iter().enumerate().map(|(i, command)| {
                     let name = command.name.clone();
                     div()

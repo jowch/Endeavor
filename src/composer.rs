@@ -263,16 +263,13 @@ fn popup() -> Div {
         .p(px(4.))
         .flex()
         .flex_col()
-        .rounded(px(8.))
-        .border_1()
-        .border_color(theme::composer_edge())
-        .bg(theme::bg_raised())
+        .map(theme::popover)
         .text_size(theme::size_body())
         .text_color(theme::text_primary())
 }
 
 fn popup_row(id: ElementId, selected: bool) -> Stateful<Div> {
-    inert_row(id).cursor_pointer().when(selected, |d| d.bg(theme::composer_edge())).hover(|s| s.bg(theme::composer_edge()))
+    inert_row(id).cursor_pointer().when(selected, |d| d.bg(theme::menu_hover())).hover(|s| s.bg(theme::menu_hover()))
 }
 
 /// A menu row that can't be picked (greyed by the caller).

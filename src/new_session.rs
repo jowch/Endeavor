@@ -751,10 +751,7 @@ impl Workspace {
             .p(px(if chip == Chip::Resources { 12. } else { 4. }))
             .flex()
             .flex_col()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme::composer_edge())
-            .bg(theme::bg_raised())
+            .map(theme::popover)
             .font_family(theme::SANS)
             .text_size(theme::size_body())
             .text_color(theme::text_primary())
@@ -921,7 +918,7 @@ impl Workspace {
             .children(self.resource_rows(Target::Draft, r, &cluster.partitions, self.draft.partition_menu, true, cx))
             .children(extra)
             .child(div().pt(px(6.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(note))
-            .child(div().h(px(1.)).my(px(8.)).bg(theme::composer_edge()))
+            .child(div().h(px(1.)).my(px(8.)).bg(theme::popover_edge()))
             .child(salloc)
     }
 
@@ -969,7 +966,7 @@ impl Workspace {
             .child(section_label("Recent"))
             .when(rows.is_empty(), |d| d.child(div().px(px(8.)).py(px(4.)).pl(px(28.)).text_color(theme::text_faint()).child("No matching folders")))
             .children(rows)
-            .child(div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge()))
+            .child(div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge()))
             .child(
                 menu_row("browse", false, false)
                     .child(glyph(Glyph::Folder, theme::text_muted()))
@@ -995,7 +992,7 @@ impl Workspace {
                 .rounded(px(3.))
                 .cursor_pointer()
                 .text_color(theme::text_secondary())
-                .hover(|s| s.bg(theme::composer_edge()))
+                .hover(|s| s.bg(theme::menu_hover()))
                 .child(name)
                 .on_click(cx.listener(move |this, _, _, cx| this.browse_to(at.clone(), cx)))
                 .into_any_element();
@@ -1046,7 +1043,7 @@ impl Workspace {
             .child(div().flex().flex_wrap().items_center().px(px(6.)).py(px(4.)).font_family(theme::MONO).text_size(theme::size_meta_small()).children(crumbs))
             .children(up)
             .child(div().id("browse-rows").max_h(px(300.)).overflow_y_scroll().flex().flex_col().children(rows))
-            .child(div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge()))
+            .child(div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge()))
             .child(
                 div().flex().justify_end().p(px(4.)).child(
                     div()
@@ -1292,8 +1289,8 @@ pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool) 
         .px(px(8.))
         .rounded(px(5.))
         .cursor_pointer()
-        .when(selected, |d| d.bg(theme::composer_edge()))
-        .hover(|s| s.bg(theme::composer_edge()))
+        .when(selected, |d| d.bg(theme::menu_hover()))
+        .hover(|s| s.bg(theme::menu_hover()))
         .child(div().w(px(10.)).flex_shrink_0().text_size(theme::size_meta()).text_color(theme::accent_text()).child(if checked { "✓" } else { "" }))
 }
 

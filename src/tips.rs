@@ -2,6 +2,7 @@
 //! and Point's tip under the notebook header's Point button. Each goes for good
 //! after Got it or the first use of what it explains (the settings remember).
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::new_session::{Glyph, glyph_at};
@@ -11,24 +12,15 @@ const ARROW: f32 = 7.;
 
 const POINT_TIP: &str = "Point lets you click a cell, or drag over part of a plot, and ask Claude about just that.";
 
-/// The tip's card: raised, outlined, with a soft shadow.
+/// The tip's card: a popover, with a pointer.
 fn card() -> Div {
     div()
         .relative()
         .flex()
         .items_center()
         .gap(px(10.))
+        .map(theme::popover)
         .rounded(px(10.))
-        .border_1()
-        .border_color(theme::composer_edge())
-        .bg(theme::bg_raised())
-        .shadow(vec![BoxShadow {
-            color: hsla(0., 0., 0., 0.45),
-            offset: point(px(0.), px(12.)),
-            blur_radius: px(32.),
-            spread_radius: px(0.),
-            inset: false,
-        }])
         .text_size(theme::size_meta())
         .line_height(px(17.))
         .text_color(theme::text_row_active())
@@ -48,14 +40,14 @@ fn arrow(down: bool) -> impl IntoElement {
             fill.line_to(point(r, base));
             fill.close();
             if let Ok(path) = fill.build() {
-                window.paint_path(path, theme::bg_raised());
+                window.paint_path(path, theme::popover_bg());
             }
             let mut edge = PathBuilder::stroke(px(1.));
             edge.move_to(point(l, base));
             edge.line_to(point(mid, tip));
             edge.line_to(point(r, base));
             if let Ok(path) = edge.build() {
-                window.paint_path(path, theme::composer_edge());
+                window.paint_path(path, theme::popover_edge());
             }
         },
     )

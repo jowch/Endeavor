@@ -420,10 +420,7 @@ impl Workspace {
                         .p(px(4.))
                         .flex()
                         .flex_col()
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(theme::composer_edge())
-                        .bg(theme::bg_raised())
+                        .map(theme::popover)
                         .children(rows),
                 )
                 .with_priority(2),
@@ -477,8 +474,9 @@ impl Workspace {
             .flex_col()
             .rounded(px(10.))
             .border_1()
-            .border_color(theme::composer_edge())
-            .bg(theme::bg_card())
+            .border_color(theme::popover_edge())
+            .bg(theme::dialog_bg())
+            .shadow(theme::dialog_shadow(20., 50.))
             .text_size(theme::size_body())
             .child(
                 div()
@@ -572,8 +570,9 @@ impl Workspace {
             .gap(px(12.))
             .rounded(px(10.))
             .border_1()
-            .border_color(theme::composer_edge())
-            .bg(theme::bg_card())
+            .border_color(theme::popover_edge())
+            .bg(theme::dialog_bg())
+            .shadow(theme::dialog_shadow(20., 50.))
             .child(
                 div()
                     .flex()
@@ -625,8 +624,9 @@ impl Workspace {
             .gap(px(12.))
             .rounded(px(10.))
             .border_1()
-            .border_color(theme::composer_edge())
-            .bg(theme::bg_card())
+            .border_color(theme::popover_edge())
+            .bg(theme::dialog_bg())
+            .shadow(theme::dialog_shadow(20., 50.))
             .child(
                 div()
                     .flex()
@@ -723,7 +723,7 @@ fn modal_backdrop(id: &'static str) -> Stateful<Div> {
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgba(0x0000_0099))
+        .bg(theme::scrim())
         .text_color(theme::text_primary())
 }
 

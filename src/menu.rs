@@ -125,7 +125,7 @@ impl Workspace {
         let items = picks.into_iter().enumerate().flat_map(|(i, pick)| {
             let danger = pick.danger();
             let new_group = i > 0 && groups[i - 1] != groups[i];
-            let separator = new_group.then(|| div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge()).into_any_element());
+            let separator = new_group.then(|| div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge()).into_any_element());
             let action = match &pick {
                 MenuPick::Notebook(_, action) => Some(*action),
                 MenuPick::Row(..) => None,
@@ -159,7 +159,7 @@ impl Workspace {
                 .rounded(px(5.))
                 .cursor_pointer()
                 .when(danger, |d| d.text_color(theme::danger()))
-                .when(menu.selected == Some(i), |d| d.bg(theme::composer_edge()))
+                .when(menu.selected == Some(i), |d| d.bg(theme::menu_hover()))
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
                     if let Some(menu) = this.menu.as_mut().filter(|menu| menu.selected != Some(i)) {
                         menu.selected = Some(i);
@@ -194,7 +194,7 @@ impl Workspace {
                         .pb(px(6.))
                         .mb(px(4.))
                         .border_b_1()
-                        .border_color(theme::composer_edge())
+                        .border_color(theme::popover_edge())
                         .child(div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_secondary()).child(new_session::tilde(Path::new(&path))))
                         .child(div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(self.host_label(&s.place.host)))
                         .into_any_element(),
@@ -209,7 +209,7 @@ impl Workspace {
                 .pt(px(6.))
                 .pb(px(2.))
                 .border_t_1()
-                .border_color(theme::composer_edge())
+                .border_color(theme::popover_edge())
                 .text_size(theme::size_meta_small())
                 .text_color(theme::text_faint())
                 .child("Exports and recordings use Pluto's standard look.")
@@ -229,10 +229,7 @@ impl Workspace {
             .p(px(4.))
             .flex()
             .flex_col()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme::composer_edge())
-            .bg(theme::bg_raised())
+            .map(theme::popover)
             .font_family(theme::SANS)
             .text_size(theme::size_body())
             .text_color(theme::text_primary())
