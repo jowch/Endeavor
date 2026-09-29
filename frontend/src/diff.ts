@@ -19,16 +19,16 @@ const css = `
   .cm-line.endeavor-add::before {
     content: ""; position: absolute; z-index: -1; pointer-events: none;
     top: 0; bottom: 0; right: 0; left: calc(-1 * var(--indented, 0px));
-    background: rgba(108, 199, 132, 0.12);
+    background: var(--e-diff-add-tint);
   }
   .cm-line.endeavor-add::after {
     content: "+"; position: absolute; top: 0; pointer-events: none;
-    left: calc(-1 * var(--indented, 0px) - 13px); color: #6CC784; text-indent: 0;
+    left: calc(-1 * var(--indented, 0px) - 13px); color: var(--e-diff-add); text-indent: 0;
   }
-  .endeavor-add-ch { background: rgba(108, 199, 132, 0.28); border-radius: 2px; }
-  .endeavor-del { position: relative; background: rgba(224, 122, 122, 0.12); color: #E07A7A; white-space: pre; }
+  .endeavor-add-ch { background: var(--e-diff-add-ch); border-radius: 2px; }
+  .endeavor-del { position: relative; background: var(--e-diff-del-tint); color: var(--e-diff-del); white-space: pre; }
   .endeavor-del::before { content: "−"; position: absolute; left: -13px; }
-  .endeavor-del-ch { background: rgba(224, 122, 122, 0.28); border-radius: 2px; }
+  .endeavor-del-ch { background: var(--e-diff-del-ch); border-radius: 2px; }
 `;
 
 export type Hunk = {

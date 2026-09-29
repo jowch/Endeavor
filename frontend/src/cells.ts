@@ -13,10 +13,10 @@ const css = `
   pluto-cell[data-endeavor="unrun"]::before, pluto-cell.code_differs::before {
     content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
     border-radius: 2px; pointer-events: none;
-    background: repeating-linear-gradient(-45deg, #CC3F00 0 3px, rgba(204, 63, 0, 0.3) 3px 6px);
+    background: repeating-linear-gradient(-45deg, var(--e-accent) 0 3px, var(--e-stripe-tint) 3px 6px);
   }
   pluto-cell[data-endeavor="unrun"][data-author="user"]::before, pluto-cell.code_differs::before {
-    background: repeating-linear-gradient(-45deg, #9A9A9A 0 3px, rgba(154, 154, 154, 0.25) 3px 6px);
+    background: repeating-linear-gradient(-45deg, var(--e-you-stripe) 0 3px, var(--e-you-stripe-tint) 3px 6px);
   }
   pluto-cell[data-endeavor="unrun"] > pluto-output { opacity: 0.4; }
   /* Code the agent changed stays in view until it runs, even in a folded cell. */

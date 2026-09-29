@@ -14,33 +14,37 @@ const css = `
   body.annotating pluto-cell { cursor: crosshair; }
   /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
      pill, dashed hover and solid picked outlines, dashed box for a drawn region. */
-  body.annotating pluto-cell:hover { outline: 1.5px dashed #FF7A40; outline-offset: 4px; }
-  body.annotating pluto-cell.annotate-picked { outline: 1.5px solid #CC3F00; outline-offset: 4px; }
+  body.annotating pluto-cell:hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 4px; }
+  body.annotating pluto-cell.annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 4px; }
   body.annotating.annotate-drawing pluto-cell:hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { cursor: crosshair !important; user-select: none; }
   #annotate-frame { position: fixed; inset: 0; pointer-events: none; z-index: 9999;
-    background: rgba(0, 0, 0, 0.25); box-shadow: inset 0 0 0 1px #CC3F00; display: none; }
+    background: var(--e-dim); box-shadow: inset 0 0 0 1px var(--e-accent); display: none; }
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
-    border: 1.5px dashed #CC3F00; border-radius: 2px; }
+    border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
-    display: none; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px;
-    background: rgba(28, 28, 30, 0.85); color: #ccc; font: 12px system-ui; white-space: nowrap; }
-  #annotate-hint .done { color: #fff; cursor: pointer; }
+    display: none; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; border: 1px solid transparent;
+    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; white-space: nowrap; }
+  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
     z-index: 10000; display: none; flex-direction: row; align-items: flex-end; gap: 8px;
-    width: min(640px, 90vw); padding: 6px; border-radius: 10px;
-    background: rgba(28, 28, 30, 0.72); color: #ddd; font: 13px system-ui;
+    width: min(640px, 90vw); padding: 6px; border-radius: 10px; border: 1px solid transparent;
+    background: var(--e-bar-bg); color: var(--e-text-primary); font: 13px system-ui;
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); }
+    box-shadow: 0 8px 30px var(--e-bar-shadow); }
   body.annotating #annotate-bar, body.annotating #annotate-frame, body.annotating #annotate-hint { display: flex; }
+  @media (prefers-color-scheme: light) {
+    #annotate-hint, #annotate-bar { border-color: var(--e-popover-edge); }
+    #annotate-hint { box-shadow: 0 12px 32px var(--e-shadow-popover); }
+  }
   #annotate-bar textarea { flex: 1; resize: none; height: 28px; max-height: 120px; padding: 5px 8px; border-radius: 6px;
-    border: 1px solid #555; background: rgba(0, 0, 0, 0.35); color: #eee; font: 13px/18px system-ui; box-sizing: border-box; }
-  #annotate-bar .status { flex: none; align-self: center; color: #aaa; font-size: 12px; white-space: nowrap; }
+    border: 1px solid var(--e-field-edge); background: var(--e-field-bg); color: var(--e-text-primary); font: 13px/18px system-ui; box-sizing: border-box; }
+  #annotate-bar .status { flex: none; align-self: center; color: var(--e-text-secondary); font-size: 12px; white-space: nowrap; }
   #annotate-bar button { height: 28px; padding: 0 10px; border-radius: 6px; border: 0; cursor: pointer;
-    background: #3a3a3c; color: #eee; font: 13px system-ui; }
-  #annotate-bar button.primary { background: #CC3F00; color: #fff; }
+    background: var(--e-annotate-btn-bg); color: var(--e-text-primary); font: 13px system-ui; }
+  #annotate-bar button.primary { background: var(--e-accent); color: #fff; }
   #annotate-bar button:disabled { opacity: 0.4; cursor: default; }
   /* While the app takes the box's picture, the notebook shows as it is. */
   body.annotating.annotate-shooting #annotate-frame, body.annotating.annotate-shooting #annotate-box,

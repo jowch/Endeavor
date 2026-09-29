@@ -15,30 +15,30 @@ const css = `
      while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
     position: absolute; left: 14px; z-index: 20;
-    height: 18px; padding: 0 7px; border-radius: 9px; border: 1px solid #333;
-    background: #1C1C1E; color: #9A9A9A; font: 11px system-ui, sans-serif; cursor: pointer;
+    height: 18px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--e-pill-edge);
+    background: var(--e-pill-bg); color: var(--e-text-tag); font: 11px system-ui, sans-serif; cursor: pointer;
     opacity: 0; transition: opacity 0.1s;
   }
   pluto-cell > .endeavor-add-agent.before { top: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); }
   pluto-cell > .endeavor-add-agent.after { bottom: calc(-0.5 * var(--pluto-cell-spacing, 17px) - 9px); }
   pluto-cell:hover > .endeavor-add-agent { opacity: 0.35; }
   pluto-cell > button.add_cell:hover + .endeavor-add-agent, pluto-cell > .endeavor-add-agent:hover { opacity: 1; }
-  pluto-cell > .endeavor-add-agent:hover { color: #FF9A6B; border-color: #CC3F00; }
+  pluto-cell > .endeavor-add-agent:hover { color: var(--e-prompt-hover); border-color: var(--e-accent); }
   #endeavor-prompt {
     position: absolute; z-index: 1000; display: flex; flex-direction: column; gap: 6px;
-    padding: 8px 10px; border-radius: 8px; border: 1px solid #CC3F00; background: #1C1C1E;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4); font: 13px system-ui, sans-serif; color: #E6E6E6;
+    padding: 8px 10px; border-radius: 8px; border: 1px solid var(--e-accent); background: var(--e-dialog-bg);
+    box-shadow: 0 6px 24px var(--e-shadow-popover); font: 13px system-ui, sans-serif; color: var(--e-text-primary);
   }
   #endeavor-prompt textarea {
     resize: none; border: none; outline: none; background: transparent; color: inherit;
     font: inherit; min-height: 20px;
   }
-  #endeavor-prompt .hint { color: #7A7A7A; font-size: 11px; }
-  #endeavor-prompt .quote { color: #9A9A9A; font: 12px ui-monospace, monospace; white-space: pre-wrap;
-    border-left: 2px solid #CC3F00; padding-left: 8px; max-height: 5.5em; overflow: hidden; }
+  #endeavor-prompt .hint { color: var(--e-text-dim); font-size: 11px; }
+  #endeavor-prompt .quote { color: var(--e-text-tag); font: 12px ui-monospace, monospace; white-space: pre-wrap;
+    border-left: 2px solid var(--e-accent); padding-left: 8px; max-height: 5.5em; overflow: hidden; }
   #endeavor-ask-selection {
     position: absolute; z-index: 1000; height: 22px; padding: 0 9px; border-radius: 11px;
-    border: 1px solid #CC3F00; background: #1C1C1E; color: #FF9A6B; font: 12px system-ui, sans-serif; cursor: pointer;
+    border: 1px solid var(--e-accent); background: var(--e-pill-bg); color: var(--e-prompt-hover); font: 12px system-ui, sans-serif; cursor: pointer;
   }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }

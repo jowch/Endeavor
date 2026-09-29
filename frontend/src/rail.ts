@@ -8,8 +8,8 @@ import { onRedraw } from "./redraw";
 const css = `
   #endeavor-rail { position: fixed; right: 4px; top: 10px; bottom: 10px; width: 3px; z-index: 50; pointer-events: none; }
   #endeavor-rail a { position: absolute; left: 0; right: 0; min-height: 4px; border-radius: 2px;
-    background: #CC3F00; pointer-events: auto; cursor: pointer; }
-  #endeavor-rail a.user { background: #9A9A9A; }
+    background: var(--e-accent); pointer-events: auto; cursor: pointer; }
+  #endeavor-rail a.user { background: var(--e-you-stripe); }
 `;
 
 let rail: HTMLElement;

@@ -5,7 +5,7 @@
 import { on, send } from "./bridge";
 
 const css = `
-  pluto-cell.endeavor-flash { outline: 2px solid #CC3F00; outline-offset: 4px; border-radius: 4px;
+  pluto-cell.endeavor-flash { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px;
     transition: outline-color 0.3s; }
   pluto-cell.endeavor-flash.fading { outline-color: transparent; }
 `;

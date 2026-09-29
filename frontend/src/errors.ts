@@ -12,8 +12,8 @@ const AGENT = "Claude";
 const css = `
   .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
   .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
-    background: transparent; color: #E08A5E; border: 1px solid #CC3F00; }
-  .endeavor-ask button.explain { color: #BDBDBD; border-color: #3A3A40; }
+    background: transparent; color: var(--e-accent-text); border: 1px solid var(--e-accent); }
+  .endeavor-ask button.explain { color: var(--e-text-secondary); border-color: var(--e-control-edge); }
 `;
 
 function decorate() {

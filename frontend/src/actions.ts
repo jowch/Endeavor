@@ -8,24 +8,24 @@ import { on } from "./bridge";
 
 const css = `
   #endeavor-sheet { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
-    background: rgba(0, 0, 0, 0.45); font: 13px/1.5 system-ui, -apple-system, sans-serif; color: #D4D4D4; }
+    background: var(--e-backdrop); font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--e-text-code); }
   #endeavor-sheet .card { width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 16px 18px;
-    border-radius: 10px; border: 1px solid #2A2A2E; background: #1C1C1F; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); }
-  #endeavor-sheet h2 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: #ECECEC; }
+    border-radius: 10px; border: 1px solid var(--e-dialog-edge); background: var(--e-dialog-bg); box-shadow: 0 16px 48px var(--e-dialog-shadow); }
+  #endeavor-sheet h2 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--e-text-primary); }
   #endeavor-sheet .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; }
-  #endeavor-sheet .keys kbd { all: unset; font: 12.5px system-ui, -apple-system, sans-serif; color: #ECECEC; white-space: nowrap; }
-  #endeavor-sheet .keys .head { grid-column: 1 / -1; margin-top: 8px; color: #7A7A7A; font-size: 11.5px; }
-  #endeavor-sheet p { margin: 10px 0 0; color: #8C8C8C; font-size: 12px; }
+  #endeavor-sheet .keys kbd { all: unset; font: 12.5px system-ui, -apple-system, sans-serif; color: var(--e-text-primary); white-space: nowrap; }
+  #endeavor-sheet .keys .head { grid-column: 1 / -1; margin-top: 8px; color: var(--e-text-dim); font-size: 11.5px; }
+  #endeavor-sheet p { margin: 10px 0 0; color: var(--e-text-muted); font-size: 12px; }
   #endeavor-sheet textarea { width: 100%; box-sizing: border-box; min-height: 90px; padding: 8px; border-radius: 6px;
-    border: 1px solid #3A3A40; background: #151517; color: #ECECEC; font: inherit; resize: vertical; }
+    border: 1px solid var(--e-control-edge); background: var(--e-bg-page); color: var(--e-text-primary); font: inherit; resize: vertical; }
   #endeavor-sheet input.email { width: 100%; box-sizing: border-box; margin-top: 8px; padding: 6px 8px; border-radius: 6px;
-    border: 1px solid #3A3A40; background: #151517; color: #ECECEC; font: inherit; }
-  #endeavor-sheet p.said { white-space: pre-wrap; color: #B4B4B4; }
+    border: 1px solid var(--e-control-edge); background: var(--e-bg-page); color: var(--e-text-primary); font: inherit; }
+  #endeavor-sheet p.said { white-space: pre-wrap; color: var(--e-text-secondary); }
   #endeavor-sheet button:disabled { opacity: 0.5; cursor: default; }
   #endeavor-sheet .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-  #endeavor-sheet button { padding: 4px 12px; border-radius: 5px; border: 1px solid #3A3A40; background: #26262A; color: #ECECEC;
+  #endeavor-sheet button { padding: 4px 12px; border-radius: 5px; border: 1px solid var(--e-control-edge); background: var(--e-bg-raised); color: var(--e-text-primary);
     font: 12.5px system-ui, sans-serif; cursor: pointer; }
-  #endeavor-sheet button.primary { background: #CC3F00; border-color: #CC3F00; color: #fff; }
+  #endeavor-sheet button.primary { background: var(--e-accent); border-color: var(--e-accent); color: #fff; }
 `;
 
 const mac = /Mac/.test(navigator.platform);
