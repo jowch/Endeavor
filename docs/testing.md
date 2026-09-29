@@ -135,7 +135,53 @@ views use (`pane_shows`, `header_info`, `approval_view`, `tool_row`,
 `draft_chips` and the others). A change to what a view shows goes in that
 helper, so the dump follows it.
 
-### Other debug switches
+## Runtime tests against real Julia
+
+`crates/endeavor-remote/tests/e2e_julia.rs` starts the helper and the core
+with the real Julia adapter, the way the app starts This Mac's runtime. The
+test then talks to the runtime the way Claude Code and the app do. It sends MCP
+over `POST /mcp` with the `X-Endeavor-Session` and `X-Endeavor-Host` headers,
+makes the app's `/call`s, and sends the helper's file requests. Plain
+`cargo test` skips it. To run it:
+
+```sh
+cargo test -p endeavor-remote --test e2e_julia -- --ignored --nocapture
+```
+
+It takes about 40 s and prints how long each step took. Julia starts once, and
+the test goes through these steps in order:
+
+1. The MCP handshake. The server session gets the host tools and the This Mac
+   session doesn't.
+2. `new_notebook`, then add a cell, edit it, run it, and read its output (`42`).
+3. `list_notebooks` marks `this_session` right for two sessions. A second
+   notebook for the same session is refused, and so is a change to the other
+   session's notebook.
+4. The run policy. `endeavor/run_preview` says what an asked run would run,
+   including a dependent cell. Plan mode refuses edits and runs but allows
+   reads.
+5. Uploads through the helper's `Place` and `Write`. The same file is reused.
+   A different file with the same name becomes `decay (2).csv`.
+6. Restart, as the app's Restart Julia does it. The test stops and starts the
+   runtime, then reopens each notebook. The unchanged notebook runs again. The
+   notebook whose file changed opens in safe preview.
+7. A notebook in safe preview doesn't run code until `allow_execution`.
+8. Idle stop with a limit of about two seconds, seen on the app's `/events`
+   stream. `ENDEAVOR_IDLE_CHECK_SECS` makes the core check every second
+   instead of every five minutes.
+
+The test looks for Julia in this order. The first one found is used.
+
+1. `ENDEAVOR_E2E_JULIA`.
+2. The app's own Julia, at `~/Library/Application Support/endeavor/julia-*`.
+3. `julia` on the login shell's PATH.
+
+If none is found, the test prints `SKIPPED` and passes. With the app's Julia,
+the app's depot supplies the packages. The test puts its own depot in front of
+it, under `target/tmp/e2e-julia`, so Julia writes there and not into the app's
+folder.
+
+## Other debug switches
 
 - `ENDEAVOR_FORCE_OFFLINE`: a file path. The app is offline while the file
   exists.
