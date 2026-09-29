@@ -36,6 +36,7 @@ pub enum NotebookAction {
     Shortcuts,
     NewSession,
     Feedback,
+    Start,
     Restart,
     Stop,
     ExportFile,
@@ -58,6 +59,7 @@ impl NotebookAction {
             NotebookAction::Shortcuts => "Keyboard shortcuts",
             NotebookAction::NewSession => "Open in a new session…",
             NotebookAction::Feedback => "Send feedback to Pluto's developers…",
+            NotebookAction::Start => "Start notebook",
             NotebookAction::Restart => "Restart notebook",
             NotebookAction::Stop => "Stop notebook",
             NotebookAction::ExportFile => "Notebook file…",
@@ -81,6 +83,7 @@ impl NotebookAction {
             NotebookAction::Shortcuts => ("f1", "F1"),
             NotebookAction::NewSession => ("n", "N"),
             NotebookAction::Feedback => ("b", ""),
+            NotebookAction::Start => ("s", "S"),
             NotebookAction::Restart => ("t", ""),
             NotebookAction::Stop => ("s", "S"),
             NotebookAction::ExportFile => ("j", ""),
@@ -101,6 +104,7 @@ impl NotebookAction {
             NotebookAction::Shortcuts => Glyph::Keyboard,
             NotebookAction::NewSession => Glyph::Cells,
             NotebookAction::Feedback => Glyph::Bubble,
+            NotebookAction::Start => Glyph::Play,
             NotebookAction::Restart => Glyph::Restart,
             NotebookAction::Stop => Glyph::Stop,
             NotebookAction::ExportFile => Glyph::File,
@@ -131,7 +135,7 @@ impl NotebookAction {
             NotebookAction::LookEndeavor | NotebookAction::LookClassic => 1,
             NotebookAction::Shortcuts => 2,
             NotebookAction::NewSession | NotebookAction::Feedback => 3,
-            NotebookAction::Restart | NotebookAction::Stop => 4,
+            NotebookAction::Start | NotebookAction::Restart | NotebookAction::Stop => 4,
             NotebookAction::ExportFile | NotebookAction::ExportHtml | NotebookAction::ExportPdf => 5,
             NotebookAction::Present | NotebookAction::Record | NotebookAction::Frontmatter => 6,
         }
@@ -152,8 +156,9 @@ impl NotebookAction {
 
     /// The ⋮ menu. Finder and the folder picker only reach This Mac's files;
     /// Restart and Stop need a running notebook, and Restart isn't offered in
-    /// safe preview, where Run notebook is the way to start it.
-    pub fn for_notebook(open: bool, safe: bool, local: bool) -> Vec<NotebookAction> {
+    /// safe preview, where Run notebook is the way to start it. A stopped
+    /// notebook offers Start, the pane's own Start button's only other way in.
+    pub fn for_notebook(open: bool, stopped: bool, safe: bool, local: bool) -> Vec<NotebookAction> {
         use NotebookAction::*;
         let mut items = vec![CopyPath];
         if local {
@@ -166,6 +171,9 @@ impl NotebookAction {
             }
         }
         items.extend([LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback]);
+        if stopped {
+            items.push(Start);
+        }
         if open && !safe {
             items.push(Restart);
         }
@@ -731,6 +739,7 @@ impl Workspace {
                 let folder = session.place.clone();
                 self.new_session_on(folder, PathBuf::from(path), cx);
             }
+            NotebookAction::Start => self.start_notebook(key, cx),
             NotebookAction::Restart => self.restart_notebook(key, cx),
             NotebookAction::Stop => self.stop_notebook(key, path, cx),
             NotebookAction::ExportFile => self.export(key, "notebookfile", "jl", cx),
@@ -1183,16 +1192,21 @@ mod tests {
     #[test]
     fn the_notebook_menu_offers_what_applies() {
         assert_eq!(
-            NotebookAction::for_notebook(true, false, true),
+            NotebookAction::for_notebook(true, false, false, true),
             [CopyPath, Reveal, Rename, MoveTo, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback, Restart, Stop]
         );
-        assert_eq!(NotebookAction::for_notebook(true, true, true).contains(&Restart), false, "safe preview: Run notebook, not Restart");
-        assert_eq!(NotebookAction::for_notebook(true, false, false), [CopyPath, Rename, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback, Restart, Stop]);
-        assert_eq!(NotebookAction::for_notebook(false, false, true), [CopyPath, Reveal, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback]);
-        assert!(Stop.danger() && !Restart.danger());
+        assert_eq!(NotebookAction::for_notebook(true, false, true, true).contains(&Restart), false, "safe preview: Run notebook, not Restart");
+        assert_eq!(NotebookAction::for_notebook(true, false, false, false), [CopyPath, Rename, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback, Restart, Stop]);
+        assert_eq!(NotebookAction::for_notebook(false, false, false, true), [CopyPath, Reveal, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback]);
+        assert_eq!(
+            NotebookAction::for_notebook(false, true, false, true),
+            [CopyPath, Reveal, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback, Start],
+            "a stopped notebook offers Start instead of Restart and Stop"
+        );
+        assert!(Stop.danger() && !Restart.danger() && !Start.danger());
         let share = NotebookAction::for_share();
         assert_eq!(share.iter().map(|a| a.label()).collect::<Vec<_>>(), ["Notebook file…", "Static HTML…", "PDF…", "Present", "Record…", "Frontmatter…"]);
-        for menu in [NotebookAction::for_notebook(true, false, true), share] {
+        for menu in [NotebookAction::for_notebook(true, false, false, true), NotebookAction::for_notebook(false, true, false, true), share] {
             let mut keys: Vec<_> = menu.iter().map(|a| a.shortcut().0).collect();
             keys.sort();
             keys.dedup();

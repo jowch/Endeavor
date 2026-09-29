@@ -1044,9 +1044,10 @@ impl Workspace {
             MenuTarget::Notebook(key) => {
                 let session = self.sessions.iter().find(|s| s.key == *key);
                 let open = session.is_some_and(|s| s.notebook.is_some() && s.stopped.is_none() && !s.missing);
+                let stopped = session.is_some_and(|s| s.stopped.is_some() && !s.missing);
                 let safe = session.and_then(|s| s.notebook.as_deref()).is_some_and(|id| self.page.notebook == id && self.page.safe);
                 let local = session.is_some_and(|s| s.place.host == HostId::ThisMac);
-                NotebookAction::for_notebook(open, safe, local).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
+                NotebookAction::for_notebook(open, stopped, safe, local).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
             }
             MenuTarget::Share(key) => NotebookAction::for_share().into_iter().map(|action| MenuPick::Notebook(*key, action)).collect(),
         }
