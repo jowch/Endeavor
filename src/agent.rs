@@ -98,6 +98,16 @@ pub(crate) fn claude_cli(args: &[&str]) -> Result<std::process::Command, String>
     Ok(command)
 }
 
+/// Debug builds only: while the file `ENDEAVOR_TEST_NO_STEERING` names exists,
+/// Cmd+Enter takes the path for an agent that can't steer (stop, then send).
+fn test_no_steering() -> bool {
+    #[cfg(debug_assertions)]
+    if let Some(file) = std::env::var_os("ENDEAVOR_TEST_NO_STEERING") {
+        return Path::new(&file).exists();
+    }
+    false
+}
+
 /// Debug builds only: while the file `ENDEAVOR_FAKE_AUTH_ERROR` names exists,
 /// turns fail as an expired sign-in makes them fail, without reaching Claude.
 fn fake_auth_error() -> bool {
@@ -283,6 +293,9 @@ pub enum SessionEvent {
     Steered,
     /// A `SendNow` couldn't join the running turn; it goes back to the queue.
     Unsent,
+    /// The agent can't take a `SendNow` mid-turn, so the running turn is being
+    /// stopped; the message goes as soon as it ends.
+    Stopping,
 }
 
 /// A session is up: its id, and the modes and config options the agent offers.
@@ -515,7 +528,7 @@ async fn run(
                     }
                     // The UI never sends Prompt mid-turn; hand it back rather than drop it.
                     Command::Turn(session, Turn::Prompt(_)) => emit(&session, SessionEvent::Unsent),
-                    Command::Turn(session, Turn::SendNow(prompt)) if steering => {
+                    Command::Turn(session, Turn::SendNow(prompt)) if steering && !test_no_steering() => {
                         // promptRequired: if the turn already ended, the adapter hands the
                         // message back instead of starting a turn we don't track.
                         let params = serde_json::json!({
@@ -536,7 +549,7 @@ async fn run(
                     // No steering: stop the turn; the message leads the queue after it ends.
                     Command::Turn(session, Turn::SendNow(_)) => {
                         connection.send_notification(CancelNotification::new(session.clone()))?;
-                        emit(&session, SessionEvent::Unsent);
+                        emit(&session, SessionEvent::Stopping);
                     }
                     Command::Turn(session, Turn::Cancel) => {
                         if running.contains(&session) {

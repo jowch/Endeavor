@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn runs_are_the_calls_between_messages() {
         let entries = vec![
-            Entry::User { text: "go".into(), expanded: false, attachments: Vec::new() },
+            Entry::User { text: "go".into(), expanded: false, attachments: Vec::new(), delivery: Default::default() },
             thought(),
             Entry::Agent("Looking.".into()),
             tool("a"),

@@ -27,6 +27,21 @@ pub struct Queued {
     copying: Option<Copying>,
     /// Sent with Cmd+Enter while its files were being copied: steer once they are.
     steer: bool,
+    /// How it reaches Claude, for its bubble.
+    delivery: Delivery,
+}
+
+/// How a sent message reached Claude, as its bubble says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Delivery {
+    /// It started a turn of its own.
+    #[default]
+    Turn,
+    /// Cmd+Enter put it into the running turn.
+    Joined,
+    /// Cmd+Enter, but the agent can't take a message mid-turn: the running
+    /// turn was stopped, and this one started the next.
+    AfterStop,
 }
 
 /// Names a message whose files are being copied, for `Outbox::copied`.
@@ -35,7 +50,7 @@ pub struct Copying(u64);
 
 impl Queued {
     pub fn new(text: String, attachments: Vec<Attachment>, blocks: Vec<ContentBlock>) -> Self {
-        Self { text, attachments, blocks, in_flight: false, copying: None, steer: false }
+        Self { text, attachments, blocks, in_flight: false, copying: None, steer: false, delivery: Delivery::Turn }
     }
 
     /// A message that can't go until its files are copied.
@@ -54,8 +69,13 @@ impl Queued {
     }
 }
 
-/// A message as the transcript shows it: the user's words and their chips.
-pub type Shown = (String, Vec<Attachment>);
+/// A message as the transcript shows it: the user's words, their chips, and
+/// how it reached Claude.
+pub struct Shown {
+    pub text: String,
+    pub attachments: Vec<Attachment>,
+    pub delivery: Delivery,
+}
 
 /// What to hand the agent, and the message to add to the transcript (None while
 /// a SendNow's outcome is still unknown, and for a message sent again).
@@ -163,7 +183,22 @@ impl Outbox {
 
     /// The SendNow joined the running turn: returns it for the transcript.
     pub fn steered(&mut self) -> Option<Shown> {
-        self.front_in_flight().then(|| self.items.pop_front().map(|q| (q.text, q.attachments))).flatten()
+        let q = self.front_in_flight().then(|| self.items.pop_front()).flatten()?;
+        Some(Shown { text: q.text, attachments: q.attachments, delivery: Delivery::Joined })
+    }
+
+    /// The SendNow couldn't join, so the running turn is being stopped for it:
+    /// it leads the queue, and goes as soon as the turn ends.
+    pub fn stopping_for(&mut self) -> Option<Dispatch> {
+        if let Some(front) = self.items.front_mut().filter(|q| q.in_flight) {
+            front.delivery = Delivery::AfterStop;
+        }
+        self.unsent()
+    }
+
+    /// The running turn is being stopped to send the next message.
+    pub fn stopping(&self) -> bool {
+        self.items.front().is_some_and(|q| q.delivery == Delivery::AfterStop)
     }
 
     /// The SendNow couldn't join the turn: it leads the queue instead.
@@ -208,7 +243,7 @@ impl Outbox {
     fn start(&mut self, q: Queued) -> Dispatch {
         self.busy = true;
         self.current = Some(q.blocks.clone());
-        Dispatch { turn: Turn::Prompt(q.blocks), shown: Some((q.text, q.attachments)) }
+        Dispatch { turn: Turn::Prompt(q.blocks), shown: Some(Shown { text: q.text, attachments: q.attachments, delivery: q.delivery }) }
     }
 }
 
@@ -222,7 +257,7 @@ mod tests {
 
     fn prompt_label(d: Option<Dispatch>) -> Option<String> {
         match d? {
-            Dispatch { turn: Turn::Prompt(_), shown } => shown.map(|(text, _)| text),
+            Dispatch { turn: Turn::Prompt(_), shown } => shown.map(|s| s.text),
             _ => panic!("expected a Prompt"),
         }
     }
@@ -246,7 +281,7 @@ mod tests {
         o.submit(msg("queued"), false);
         let d = o.submit(msg("urgent"), true).unwrap();
         assert!(matches!(d.turn, Turn::SendNow(_)) && d.shown.is_none());
-        assert_eq!(o.steered().map(|(text, _)| text).as_deref(), Some("urgent"));
+        assert_eq!(o.steered().map(|s| s.text).as_deref(), Some("urgent"));
         assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("queued"));
     }
 
@@ -261,6 +296,25 @@ mod tests {
         assert_eq!(prompt_label(o.unsent()).as_deref(), Some("urgent"));
         assert!(o.steered().is_none());
         assert_eq!(prompt_label(o.turn_ended()).as_deref(), Some("queued"));
+    }
+
+    #[test]
+    fn a_send_now_says_whether_it_joined_or_stopped_the_turn() {
+        let mut o = Outbox::default();
+        o.submit(msg("a"), false);
+        o.submit(msg("joins"), true);
+        let joined = o.steered().unwrap();
+        assert_eq!((joined.text.as_str(), joined.delivery), ("joins", Delivery::Joined));
+
+        o.submit(msg("stops"), true);
+        assert!(o.stopping_for().is_none());
+        assert!(o.stopping());
+        let next = o.turn_ended().unwrap().shown.unwrap();
+        assert_eq!((next.text.as_str(), next.delivery), ("stops", Delivery::AfterStop));
+        assert!(!o.stopping());
+
+        o.submit(msg("queued"), false);
+        assert_eq!(o.turn_ended().unwrap().shown.unwrap().delivery, Delivery::Turn);
     }
 
     #[test]
@@ -338,7 +392,7 @@ mod tests {
         assert!(o.submit(big, true).is_none());
         let d = o.copied(ticket, done()).unwrap();
         assert!(matches!(d.turn, Turn::SendNow(_)));
-        assert_eq!(o.steered().map(|(text, _)| text).as_deref(), Some("big file"));
+        assert_eq!(o.steered().map(|s| s.text).as_deref(), Some("big file"));
     }
 
     #[test]

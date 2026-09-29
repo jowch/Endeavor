@@ -259,9 +259,10 @@ impl Workspace {
                 continue;
             }
             out.extend(match &s.entries[ix] {
-                Entry::User { text, attachments, .. } => Some(json!({
+                Entry::User { text, attachments, delivery, .. } => Some(json!({
                     "kind": "user",
                     "text": text.to_string(),
+                    "delivery": session::delivery_note(*delivery),
                     "chips": attachments.iter().map(chip_label).collect::<Vec<_>>(),
                     "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text()),
                 })),

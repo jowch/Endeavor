@@ -74,8 +74,9 @@ To wait for something, poll the dump. For example, loop until
   notebook) with their labels, the mode, the notice and connection notice, and
   either `resume` (Pick up where you left off) or `examples`.
 - `session`, for the active session. The title, and `transcript`: the entries
-  in order, as drawn. The entry kinds are `user` (with chips and the "Not
-  answered yet" line), `reply`, `note` (such as "Turn failed"), `plan`,
+  in order, as drawn. The entry kinds are `user` (with chips, the "Not
+  answered yet" line, and `delivery`, the line under a message sent with ⌘⏎
+  while Claude worked), `reply`, `note` (such as "Turn failed"), `plan`,
   `thought`, `tool` and `run`. A run of tool calls is one `run` entry with its
   summary line and its rows. A `tool` row has its text ("Edited `fit`"), its
   +/− counts, how it was answered, its state (`…`, `failed` or `denied`) and
@@ -234,3 +235,6 @@ folder.
 - `ENDEAVOR_CLAUDE_CLI`: a program that stands in for `claude` in `claude
   auth status`, `login` and `logout`, so sign-in, the account on Settings'
   Claude page and Sign out can be tested without touching the real sign-in.
+- `ENDEAVOR_TEST_NO_STEERING`: a file path. While the file exists, ⌘⏎ during
+  a turn takes the path for an agent that can't steer: the turn stops, and the
+  message goes next, marked "Stopped Claude's work to send this".

@@ -32,11 +32,11 @@ use crate::gate;
 use crate::hosts::Place;
 use crate::pluto;
 use crate::runs;
-use crate::outbox::{Copying, Dispatch, Outbox, Queued};
+use crate::outbox::{Copying, Delivery, Dispatch, Outbox, Queued, Shown};
 
 pub enum Entry {
     /// The user's words and, above them, their chips.
-    User { text: SharedString, expanded: bool, attachments: Vec<Attachment> },
+    User { text: SharedString, expanded: bool, attachments: Vec<Attachment>, delivery: Delivery },
     Agent(String),
     Tool {
         id: ToolCallId,
@@ -710,8 +710,8 @@ impl Session {
         let Some(Dispatch { turn, shown }) = dispatch else { return };
         let again = shown.is_none() && matches!(turn, Turn::Prompt(_));
         effects.push(Effect::Send(turn));
-        if let Some((text, attachments)) = shown {
-            self.push(Entry::User { text: text.into(), expanded: false, attachments });
+        if let Some(Shown { text, attachments, delivery }) = shown {
+            self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery });
             self.turn_entry = Some(self.entries.len() - 1);
             self.busy_since.get_or_insert_with(Instant::now);
             // Sending jumps back to the bottom even if the user had scrolled up.
@@ -760,7 +760,8 @@ impl Session {
         let mut effects = Vec::new();
         match event {
             SessionEvent::TurnEnded(reason) => {
-                if reason != StopReason::EndTurn {
+                // Stopped to send the next message: its bubble says so.
+                if reason != StopReason::EndTurn && !(reason == StopReason::Cancelled && self.outbox.stopping()) {
                     self.note(format!("Turn ended: {reason:?}"));
                 }
                 self.turn_ended(&mut effects);
@@ -777,12 +778,16 @@ impl Session {
                 self.turn_ended(&mut effects);
             }
             SessionEvent::Steered => {
-                if let Some((text, attachments)) = self.outbox.steered() {
-                    self.push(Entry::User { text: format!("{text}\n↳ sent into the running turn").into(), expanded: false, attachments });
+                if let Some(Shown { text, attachments, delivery }) = self.outbox.steered() {
+                    self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery });
                 }
             }
             SessionEvent::Unsent => {
                 let next = self.outbox.unsent();
+                self.dispatch(next, &mut effects);
+            }
+            SessionEvent::Stopping => {
+                let next = self.outbox.stopping_for();
                 self.dispatch(next, &mut effects);
             }
             SessionEvent::Permission(request, responder) => {
@@ -902,7 +907,7 @@ impl Session {
                         }
                         attachments.extend(attachment);
                     }
-                    _ => self.push(Entry::User { text: text.unwrap_or_default().into(), expanded: false, attachments: attachment.into_iter().collect() }),
+                    _ => self.push(Entry::User { text: text.unwrap_or_default().into(), expanded: false, attachments: attachment.into_iter().collect(), delivery: Delivery::Turn }),
                 }
                 self.mark(self.entries.len() - 1);
             }
@@ -1054,7 +1059,7 @@ impl Session {
     /// call in the folded runs' words, else thinking or working. The second part
     /// (a cell or file name) is code-like.
     pub(crate) fn activity(&self) -> (String, Option<String>) {
-        let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap_or(0);
+        let turn_start = self.turn_start();
         let running = self.entries[turn_start..].iter().rev().find_map(|e| match e {
             Entry::Tool { title, kind, path, status: ToolCallStatus::Pending | ToolCallStatus::InProgress, input, .. } => {
                 Some((title, *kind, path, input))
@@ -1081,9 +1086,15 @@ impl Session {
         }
     }
 
+    /// Where the current turn starts: its user message. A message that joined
+    /// the turn is part of it.
+    fn turn_start(&self) -> usize {
+        self.entries.iter().rposition(|e| matches!(e, Entry::User { delivery, .. } if *delivery != Delivery::Joined)).unwrap_or(0)
+    }
+
     /// This turn's plan entry: the agent updates it in place.
     fn turn_plan(&self) -> Option<usize> {
-        let turn_start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).unwrap_or(0);
+        let turn_start = self.turn_start();
         self.entries[turn_start..].iter().position(|e| matches!(e, Entry::Plan(_))).map(|offset| turn_start + offset)
     }
 
@@ -1360,11 +1371,12 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
     let muted = theme::text_muted();
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     Some(match entry {
-        Entry::User { text, expanded, attachments } => {
+        Entry::User { text, expanded, attachments, delivery } => {
             let chips = this.render_sent_chips(key, ix, attachments, cx);
             let column = div().flex().flex_col().items_end().gap(px(4.)).children(chips);
+            let delivered = delivery_note(*delivery).map(|note| div().text_size(theme::size_meta()).text_color(muted).child(note));
             if text.is_empty() {
-                return Some(column.into_any_element());
+                return Some(column.children(delivered).into_any_element());
             }
             let bubble = div()
                 .max_w(px(USER_BUBBLE_WIDTH))
@@ -1378,7 +1390,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered());
             let line_height = theme::line_body();
             if bubble_lines(text, window) <= FOLD_AFTER {
-                return Some(column.child(bubble.child(text.clone())).children(unanswered).into_any_element());
+                return Some(column.child(bubble.child(text.clone())).children(delivered).children(unanswered).into_any_element());
             }
             let fade = div()
                 .absolute()
@@ -1403,6 +1415,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                         .child(if *expanded { "Show less" } else { "Show more" })
                         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle(ix)))),
                 )
+                .children(delivered)
                 .children(unanswered)
                 .into_any_element()
         }
@@ -1428,6 +1441,15 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
         // Pending: shown as the approval card above the composer (render_approval).
         Entry::Permission { .. } => return None,
     })
+}
+
+/// The line under a message sent with Cmd+Enter while Claude worked.
+pub(crate) fn delivery_note(delivery: Delivery) -> Option<&'static str> {
+    match delivery {
+        Delivery::Turn => None,
+        Delivery::Joined => Some("Claude got this while working"),
+        Delivery::AfterStop => Some("Stopped Claude's work to send this"),
+    }
 }
 
 /// An agent reply, for its code blocks' copy buttons to show on hover.
@@ -3028,6 +3050,34 @@ more" }"#);
         assert_eq!(super::thought_label(false, Some(std::time::Instant::now()), None), "Thinking");
         assert_eq!(super::thought_label(true, None, Some(Duration::from_secs(8))), "Thinking", "inside a folded run");
         assert_eq!(super::thought_label(false, None, None), "Thought", "replayed");
+    }
+
+    #[test]
+    fn a_message_sent_now_says_it_joined_or_stopped_the_work() {
+        use agent_client_protocol::schema::v1::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
+        let delivery = |s: &Session| match s.entries.last() {
+            Some(Entry::User { delivery, .. }) => super::delivery_note(*delivery),
+            _ => panic!("a user message last"),
+        };
+        let notes = |s: &Session| s.entries.iter().filter(|e| matches!(e, Entry::Note(_))).count();
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("fit the data"), false);
+        let plan = || SessionUpdate::Plan(Plan::new(vec![PlanEntry::new("fit", PlanEntryPriority::Medium, PlanEntryStatus::InProgress)]));
+        s.apply(SessionEvent::Update(plan()));
+
+        assert!(matches!(s.submit(text("use log scale"), true).as_slice(), [Effect::Send(Turn::SendNow(_))]));
+        s.apply(SessionEvent::Steered);
+        assert_eq!(delivery(&s), Some("Claude got this while working"));
+        s.apply(SessionEvent::Update(plan()));
+        assert_eq!(s.entries.iter().filter(|e| matches!(e, Entry::Plan(_))).count(), 1, "the joined message is part of the same turn");
+
+        s.submit(text("stop, plot it instead"), true);
+        assert!(s.apply(SessionEvent::Stopping).is_empty(), "waits for the stopped turn to end");
+        let effects = s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
+        assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
+        assert_eq!(delivery(&s), Some("Stopped Claude's work to send this"));
+        assert_eq!(notes(&s), 0, "no separate note for the stop");
     }
 
     #[test]
