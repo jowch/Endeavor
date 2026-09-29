@@ -545,6 +545,12 @@ pub struct Workspace {
     /// Past (not open) sidebar rows' Tab-stop handles, keyed by session id: unlike
     /// an open session, a past row has no `Session` to hold its own handle.
     past_row_focus: std::cell::RefCell<HashMap<SessionId, FocusHandle>>,
+    /// Has the keyboard when no control does: at launch, and after the focused
+    /// control leaves the screen. Keys dispatch from the focused element; with
+    /// none they start outside Root, whose Tab and ⇧⇥ bindings then never match.
+    /// It's tracked on an empty child because a tracked element takes focus when
+    /// clicked, which would pull the keyboard out of the composer.
+    keyboard_home: FocusHandle,
 }
 
 impl Workspace {
@@ -727,7 +733,10 @@ impl Workspace {
             page_debug: None,
             dialog_focus: std::cell::RefCell::new(HashMap::new()),
             past_row_focus: std::cell::RefCell::new(HashMap::new()),
+            keyboard_home: cx.focus_handle(),
         };
+        window.focus(&this.keyboard_home, cx);
+        cx.on_focus_lost(window, |this, window, cx| window.focus(&this.keyboard_home, cx)).detach();
         settings::set_webview_appearance(this.webview.read(cx).raw(), this.settings.appearance);
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
@@ -2723,7 +2732,14 @@ impl Render for Workspace {
                 None => splash::Below::Progress,
             };
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
-            return div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(splash::render(setup, below, retry, cx)).into_any_element();
+            return div()
+                .size_full()
+                .bg(theme::bg_page())
+                .text_color(theme::text_primary())
+                .text_size(theme::size_body())
+                .child(div().track_focus(&self.keyboard_home))
+                .child(splash::render(setup, below, retry, cx))
+                .into_any_element();
         }
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
         let placeholder = match active {
@@ -2785,6 +2801,7 @@ impl Render for Workspace {
             .text_color(theme::text_primary())
             .text_size(theme::size_body())
             .line_height(theme::line_body())
+            .child(div().track_focus(&self.keyboard_home))
             .when(self.settings.layout.sidebar_open, |d| d.child(self.render_session_bar(cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
             .child(
                 div()
@@ -2876,8 +2893,10 @@ fn main() {
             KeyBinding::new("escape", Interrupt, None),
             KeyBinding::new("secondary-shift-k", ToggleAnnotation, None),
             // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).
-            KeyBinding::new("shift-tab", CycleMode, Some("Input")),
-            KeyBinding::new("shift-tab", CycleMode, None),
+            // Only in the composer's box: everywhere else ⇧⇥ moves focus back.
+            KeyBinding::new("shift-tab", CycleMode, Some("Composer > Input")),
+            KeyBinding::new("shift-tab", CycleMode, Some("ModeMenu > Input")),
+            KeyBinding::new("shift-tab", CycleMode, Some("MentionList > Input")),
             KeyBinding::new("secondary-b", ToggleSidebar, Some("Input")),
             KeyBinding::new("secondary-b", ToggleSidebar, None),
             KeyBinding::new("secondary-,", OpenSettings, None),
