@@ -131,6 +131,7 @@ pub mod overlay {
         Tip,
         Tooltip,
         Settings,
+        Confirm,
     }
 
     /// Menus over the notebook: on Linux the web view's X11 window still covers them.

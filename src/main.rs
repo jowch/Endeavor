@@ -17,6 +17,7 @@ mod annotate;
 mod attach;
 mod celldiff;
 mod composer;
+mod confirm;
 mod connection;
 #[cfg(debug_assertions)]
 mod debug_state;
@@ -547,6 +548,9 @@ pub struct Workspace {
     /// It's tracked on an empty child because a tracked element takes focus when
     /// clicked, which would pull the keyboard out of the composer.
     keyboard_home: FocusHandle,
+    /// The open confirm dialog (Stop a host, Cancel a job, Repair Julia, Sign
+    /// out, Delete session), if any.
+    confirm: Option<confirm::Confirm>,
 }
 
 impl Workspace {
@@ -732,6 +736,7 @@ impl Workspace {
             dialog_focus: std::cell::RefCell::new(HashMap::new()),
             past_row_focus: std::cell::RefCell::new(HashMap::new()),
             keyboard_home: cx.focus_handle(),
+            confirm: None,
         };
         window.focus(&this.keyboard_home, cx);
         cx.on_focus_lost(window, |this, window, cx| window.focus(&this.keyboard_home, cx)).detach();
@@ -1082,7 +1087,8 @@ impl Workspace {
     /// composer's Mode/Plus/Config menu, a sent chip's popover, the sidebar's
     /// Active/All filter, and a new-session chip's popover.
     fn dismissible_open(&self) -> bool {
-        self.menu.is_some()
+        self.confirm.is_some()
+            || self.menu.is_some()
             || self.composer.menu.is_some()
             || self.chip_popover.is_some()
             || self.filter_menu
@@ -1091,7 +1097,12 @@ impl Workspace {
     }
 
     /// Close whatever `dismissible_open` found, as a click outside it does.
-    fn close_dismissible(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn close_dismissible(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The confirm dialog is the topmost thing that can be open, even over
+        // Settings (Stop, Repair and Sign out all open it from a Settings page).
+        if self.confirm.is_some() {
+            return self.close_confirm(window, cx);
+        }
         // Settings closes on a click outside it only when nothing inside it was open.
         if let Some(panel) = &mut self.settings_panel {
             if panel.idle_menu {
@@ -1138,21 +1149,14 @@ impl Workspace {
             }
             RowAction::Delete => {
                 let Some(title) = self.row_title(&row) else { return };
-                let answer = window.prompt(
-                    PromptLevel::Warning,
-                    &format!("Delete “{title}”?"),
-                    Some("This permanently deletes the conversation, including its Claude Code history. Notebooks and other files it made stay on disk."),
-                    // Cancel first: NSAlert gives the first button Return, and a cancel
-                    // button trades it for Escape, so no key deletes by accident.
-                    &[PromptButton::cancel("Cancel"), PromptButton::new("Delete")],
+                self.open_confirm(
+                    format!("Delete “{title}”?"),
+                    "This permanently deletes the conversation, including its Claude Code history. Notebooks and other files it made stay on disk.",
+                    "Delete",
+                    window,
                     cx,
+                    move |this, _, cx| this.delete_session(row.clone(), cx),
                 );
-                cx.spawn(async move |this, cx| {
-                    if answer.await == Ok(1) {
-                        let _ = this.update(cx, |this, cx| this.delete_session(row, cx));
-                    }
-                })
-                .detach();
             }
         }
     }
@@ -1620,6 +1624,10 @@ impl Workspace {
     }
 
     fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm.is_some() {
+            self.close_confirm(window, cx);
+            return;
+        }
         if self.settings_escape(window, cx) {
             return;
         }
@@ -2597,16 +2605,18 @@ impl Render for Workspace {
         if self.webview.read(cx).visible() != show_webview {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
-        overlay::set_dimmed(self.webview.read(cx).raw(), self.settings_panel.is_some());
+        overlay::set_dimmed(self.webview.read(cx).raw(), self.settings_panel.is_some() || self.confirm.is_some());
         let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
         let point_tip = self.point_tip_shows(show_webview && active.is_some_and(|ix| self.sessions[ix].notebook_path.is_some()));
         let webview = self.webview.read(cx).raw();
         let settings_over_notebook = self.settings_panel.is_some() && show_webview;
+        let confirm_over_notebook = self.confirm.is_some() && show_webview;
         for (hole, open) in [
             (overlay::Hole::Menu, menu_over_notebook),
             (overlay::Hole::Tip, point_tip),
             (overlay::Hole::Tooltip, notebook_pane::tooltip_over_notebook()),
             (overlay::Hole::Settings, settings_over_notebook),
+            (overlay::Hole::Confirm, confirm_over_notebook),
         ] {
             if !open {
                 overlay::set_hole(webview, hole, None);
@@ -2621,6 +2631,7 @@ impl Render for Workspace {
             };
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
             let settings = self.render_settings_panel(window, cx).map(|d| deferred(d).with_priority(2));
+            let confirm = self.render_confirm(cx).map(|d| deferred(d).with_priority(10));
             return div()
                 .size_full()
                 .bg(theme::bg_page())
@@ -2631,6 +2642,7 @@ impl Render for Workspace {
                 .child(div().track_focus(&self.keyboard_home))
                 .child(splash::render(setup, below, retry, cx))
                 .children(settings)
+                .children(confirm)
                 .into_any_element();
         }
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
@@ -2729,6 +2741,8 @@ impl Render for Workspace {
             .children(self.render_server_dialog(window, cx).map(|d| deferred(d).with_priority(3)))
             .children(self.render_askpass(cx).map(|d| deferred(d).with_priority(5)))
             .children(self.render_login_node_warning(cx).map(|d| deferred(d).with_priority(4)))
+            // Topmost: it can open from within Settings (Stop, Repair, Sign out).
+            .children(self.render_confirm(cx).map(|d| deferred(d).with_priority(10)))
             // A click outside a menu or popover closes it, like a native menu;
             // set_dismiss_on_click makes the web view forward its own clicks
             // here too, while one is open (overlay.rs).

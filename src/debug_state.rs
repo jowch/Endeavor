@@ -101,6 +101,7 @@ impl Workspace {
             },
             "composer": self.composer_state(active, cx),
             "settings": self.settings_debug(cx),
+            "confirm": self.confirm.as_ref().map(crate::confirm::Confirm::debug_state),
             "page": page,
         })
     }

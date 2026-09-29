@@ -34,6 +34,8 @@ pub fn sidebar_edge() -> Rgba { rgb(0x1C1C1F) }
 pub fn composer_edge() -> Rgba { rgb(0x3A3A40) }
 /// Column dividers.
 pub fn divider() -> Rgba { rgb(0x1F1F22) }
+/// The dimmed backdrop behind a panel or dialog (Settings, the confirm dialog).
+pub fn scrim() -> Rgba { rgba(0x08080A9E) }
 
 /// Chat body.
 pub fn text_primary() -> Rgba { rgb(0xECECEC) }

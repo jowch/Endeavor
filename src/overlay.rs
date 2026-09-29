@@ -69,6 +69,8 @@ pub enum Hole {
     Tooltip,
     /// The Settings panel.
     Settings,
+    /// The confirm dialog.
+    Confirm,
 }
 
 /// The open holes, in the web view's coordinates from its top-left corner, and

@@ -121,6 +121,10 @@ To wait for something, poll the dump. For example, loop until
   idle-stop list with `open`), and `highlighted` for the row a search result
   or a link opened. While searching, the rows are the results, each with its
   `crumb` ("Notebooks › Languages").
+- `confirm`, the open confirm dialog (Stop a host, Cancel a job, Repair
+  Julia, Sign out, Delete session), or null. `title` and `text` are its
+  words, and `buttons` has `label` and `primary` for each (Cancel, then
+  the action).
 - `page`. What the notebook page reports: Point on or off, the picked cells
   and the drawn box, Point's status line and comment, the drawer's tab, whether
   the safe-preview callout shows, and `alerts`, every `window.alert` the page

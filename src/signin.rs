@@ -494,31 +494,23 @@ impl Workspace {
 
     /// Settings' Sign out: asks first, then signs Claude Code out on this computer.
     pub fn sign_out_of_claude(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Sign out of Claude?",
-            Some("Claude stops answering in every session until you sign in again."),
-            &[PromptButton::cancel("Cancel"), PromptButton::new("Sign out")],
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            if answer.await != Ok(1) {
-                return;
-            }
-            let done = cx.background_executor().spawn(async { log_out() }).await;
-            let _ = this.update(cx, |this, cx| {
-                match done {
-                    Ok(()) => {
-                        this.account = Account::SignedOut(Stage::Account);
-                        this.sync_holds(cx);
+        self.open_confirm("Sign out of Claude?", "Claude stops answering in every session until you sign in again.", "Sign out", window, cx, |_, _, cx| {
+            cx.spawn(async move |this, cx| {
+                let done = cx.background_executor().spawn(async { log_out() }).await;
+                let _ = this.update(cx, |this, cx| {
+                    match done {
+                        Ok(()) => {
+                            this.account = Account::SignedOut(Stage::Account);
+                            this.sync_holds(cx);
+                        }
+                        Err(e) => this.status = format!("Couldn't sign out: {e}").into(),
                     }
-                    Err(e) => this.status = format!("Couldn't sign out: {e}").into(),
-                }
-                this.refresh_profile(cx);
-                cx.notify();
-            });
-        })
-        .detach();
+                    this.refresh_profile(cx);
+                    cx.notify();
+                });
+            })
+            .detach();
+        });
     }
 
     /// The expired card's Enter: sign in the way it was done last.

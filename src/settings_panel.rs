@@ -1164,13 +1164,7 @@ impl Workspace {
             HostState::Queued { starting: false, .. } => (format!("Cancel the job on {name}?"), "It's still waiting in the queue, so nothing is lost.".to_owned(), "Cancel job"),
             _ => (format!("Stop Julia on {name}?"), closes(&self.open_notebook_files(&host)), "Stop"),
         };
-        let answer = window.prompt(PromptLevel::Warning, &title, Some(&detail), &[PromptButton::cancel("Cancel"), PromptButton::new(yes)], cx);
-        cx.spawn(async move |this, cx| {
-            if answer.await == Ok(1) {
-                let _ = this.update(cx, |this, cx| this.stop_host(&host, cx));
-            }
-        })
-        .detach();
+        self.open_confirm(title, detail, yes, window, cx, move |this, _, cx| this.stop_host(&host, cx));
     }
 
     fn confirm_repair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1180,13 +1174,7 @@ impl Workspace {
             n => format!("Your {n} open notebooks close while Julia is cleared and starts again. This takes a few minutes."),
         };
         let detail = format!("{detail}\n\nYour notebooks, packages and settings stay.");
-        let answer = window.prompt(PromptLevel::Warning, "Repair Julia on this Mac?", Some(&detail), &[PromptButton::cancel("Cancel"), PromptButton::new("Repair")], cx);
-        cx.spawn(async move |this, cx| {
-            if answer.await == Ok(1) {
-                let _ = this.update(cx, |this, cx| this.repair_local(cx));
-            }
-        })
-        .detach();
+        self.open_confirm("Repair Julia on this Mac?", detail, "Repair", window, cx, |this, _, cx| this.repair_local(cx));
     }
 
     pub fn settings_act(&mut self, act: Act, window: &mut Window, cx: &mut Context<Self>) {
@@ -1266,10 +1254,6 @@ impl Workspace {
 // ---------------------------------------------------------------------------
 // Drawing
 // ---------------------------------------------------------------------------
-
-fn scrim() -> Rgba {
-    rgba(0x08080A9E)
-}
 
 fn nav_bg() -> Rgba {
     rgb(0x1A1A1D)
@@ -1382,7 +1366,7 @@ impl Workspace {
                 .id("settings-backdrop")
                 .absolute()
                 .inset_0()
-                .bg(scrim())
+                .bg(theme::scrim())
                 .flex()
                 .items_center()
                 .justify_center()
