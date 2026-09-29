@@ -499,7 +499,7 @@ fn test_listener() -> Result<Arc<Listener>, String> {
     if let Some(listener) = LISTENER.get() {
         return Ok(listener.clone());
     }
-    let listener = Listener::start()?;
+    let listener = Listener::start("the server")?;
     Ok(LISTENER.get_or_init(|| listener).clone())
 }
 
@@ -839,7 +839,7 @@ mod tests {
         assert!(channel.files(files::Request::Preview { path: "~/nope.jl".into() }).is_err());
 
         // Started on request, reachable through a listener like the app's.
-        let listener = Listener::start().unwrap();
+        let listener = Listener::start("test").unwrap();
         let runtime = start(&channel, &listener, None, &on, |_| {}).expect("start");
         assert!(runtime.reattached);
         assert_eq!((runtime.bridge.token.as_str(), runtime.node.clone()), (token, hostname()));

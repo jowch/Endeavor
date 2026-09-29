@@ -283,7 +283,7 @@ impl Workspace {
         if let Some(listener) = self.listeners.get(host) {
             return Ok(listener.clone());
         }
-        let listener = Listener::start()?;
+        let listener = Listener::start(&self.hosts.name(host))?;
         self.listeners.insert(host.clone(), listener.clone());
         Ok(listener)
     }
@@ -400,6 +400,9 @@ impl Workspace {
         let gone = connection.forget_runtime();
         connection.status = Status::Starting;
         connection.steps = Steps::new("Stopping Julia");
+        if let Some(listener) = self.listeners.get(&host) {
+            listener.restarting();
+        }
         self.close_page(gone, cx);
         self.status = "Restarting Julia…".into();
         let stop = cx.background_executor().spawn(async move {
