@@ -51,10 +51,14 @@ impl CellCodes {
         self.0.get(cell_id).map(String::as_str)
     }
 
-    /// Learn cells' current code from a completed read.
+    /// Learn cells' current code from a completed read, or from `add_cell`'s
+    /// reply: it's the only one whose diff (built from its input, since the
+    /// input has no cell id yet) doesn't already become the next baseline, so
+    /// an edit right after it would otherwise diff against nothing and show
+    /// the whole cell as added.
     pub fn observe(&mut self, tool: &str, output: &Value) {
         match tool {
-            "read_cell" => {
+            "read_cell" | "add_cell" => {
                 if let (Some(id), Some(code)) = (output["cell_id"].as_str(), output["code"].as_str()) {
                     self.0.insert(id.to_owned(), code.to_owned());
                 }
@@ -177,6 +181,18 @@ mod tests {
         // The edit becomes the new baseline.
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 3" }));
         assert_eq!(d[0].lines[0], (Removed, "x = 2".into()));
+    }
+
+    #[test]
+    fn an_edit_to_a_cell_add_cell_made_diffs_against_its_added_code() {
+        let mut codes = CellCodes::default();
+        // add_cell's own diff is built from its input, before the new cell has an
+        // id; its reply, once the id comes back, is what a later edit diffs against.
+        let d = codes.diff("add_cell", &json!({ "code": "x = 1" }));
+        assert_eq!(d[0].lines, vec![(Added, "x = 1".into())], "add_cell's own diff still shows the whole cell as added");
+        codes.observe("add_cell", &json!({ "cell_id": C1, "code": "x = 1" }));
+        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }));
+        assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())], "not the whole cell again");
     }
 
     #[test]
