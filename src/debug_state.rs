@@ -20,7 +20,7 @@ use crate::new_session::{EXAMPLES, NotebookChoice};
 use crate::notebook_pane::PaneShows;
 use crate::session::{self, Entry, Session, Tone};
 use crate::signin::{Account, Stage};
-use crate::{PAST_SHOWN, Row, RowMark, Workspace, runs};
+use crate::{Row, Workspace, runs};
 
 /// Wraps the page's `alert` to record what it showed, then shows it as before.
 pub const RECORD_ALERTS: &str = r#"(() => {
@@ -92,7 +92,7 @@ impl Workspace {
             "window": self.window_state(),
             "offline": self.offline_since.map(|since| json!({ "for_secs": since.elapsed().as_secs(), "trying": self.probing })),
             "sign_in": self.sign_in_state(),
-            "sidebar": self.sidebar_state(),
+            "sidebar": self.sidebar_state(cx),
             "new_session": (self.active.is_none()).then(|| self.new_session_state()),
             "session": active.map(|s| self.session_state(s)),
             "notebook": match active {
@@ -149,42 +149,58 @@ impl Workspace {
         json!({ "account": "signed_out", "stage": stage, "card": card })
     }
 
-    fn sidebar_state(&self) -> Value {
+    /// A sidebar row's dump: its title, whether it's open or past and
+    /// active, its mark (`needs_approval`, `archived`, or none), and whether
+    /// it failed. Reads the same helpers the sidebar's own rendering does
+    /// (`row_title`, `row_mark`, `row_session_id`), so the dump follows it.
+    fn row_debug(&self, row: &Row) -> Value {
+        let title = self.row_title(row).unwrap_or_default();
+        let open = matches!(row, Row::Open(_));
+        let active = matches!(row, Row::Open(key) if self.active == Some(*key));
+        let failed = matches!(row, Row::Open(key) if self.sessions.iter().any(|s| s.key == *key && s.failed.is_some()));
+        let needs_approval = matches!(row, Row::Open(key) if self.sessions.iter().any(|s| s.key == *key && self.row_mark(s)));
+        let archived = self.row_session_id(row).is_some_and(|id| self.archived.contains(&id.to_string()));
+        let mark = if needs_approval { Some("needs_approval") } else if archived { Some("archived") } else { None };
+        json!({ "title": title, "open": open, "active": active, "mark": mark, "failed": failed })
+    }
+
+    fn sidebar_state(&self, cx: &App) -> Value {
+        let query = self.sidebar_search.as_ref().map(|s| s.read(cx).value().to_string()).unwrap_or_default();
+        let searching = !query.trim().is_empty();
+        let filters = &self.settings.sidebar_filters;
+        let show_empty = filters.show_empty_folders;
+        let group_by_none = filters.group_by == crate::sidebar_filter::GroupBy::None;
         let folders: Vec<Value> = self
             .sidebar_folders()
             .into_iter()
-            .map(|folder| {
-                let open = self.sessions.iter().filter(|s| &s.place == folder).map(|s| {
-                    json!({
-                        "title": s.title,
-                        "open": true,
-                        "active": self.active == Some(s.key),
-                        "mark": self.row_mark(s).map(|m| match m {
-                            RowMark::NeedsApproval => "needs_approval",
-                            RowMark::Working => "working",
-                            RowMark::Archived => "archived",
-                        }),
-                        "failed": s.failed.is_some(),
-                    })
-                });
-                let all = self.past_rows(folder);
-                let limit = if self.expanded.contains(folder) { all.len() } else { PAST_SHOWN };
-                let past = all.iter().take(limit).map(|info| {
-                    let archived = self.archived.contains(&info.session_id.to_string());
-                    json!({
-                        "title": self.row_title(&Row::Past(info.session_id.clone(), folder.clone())).unwrap_or_default(),
-                        "open": false,
-                        "active": false,
-                        "mark": archived.then_some("archived"),
-                        "failed": false,
-                    })
-                });
-                let more = (all.len() > PAST_SHOWN).then(|| if self.expanded.contains(folder) { "Show fewer".to_string() } else { format!("Show {} more", all.len() - PAST_SHOWN) });
-                json!({ "heading": self.folder_heading(folder), "rows": open.chain(past).collect::<Vec<_>>(), "more": more })
+            .filter_map(|folder| {
+                let collapsed = !group_by_none && !searching && self.settings.collapsed_folders.contains(&folder);
+                let (rows, more, total) = self.folder_rows(&folder, &query, collapsed);
+                if total == 0 && (searching || !show_empty) {
+                    return None;
+                }
+                let needs_approval = self.sessions.iter().any(|s| s.place == folder && s.needs_approval());
+                Some(json!({
+                    "heading": self.folder_heading(&folder),
+                    "collapsed": collapsed,
+                    "needs_approval": collapsed.then_some(needs_approval),
+                    "rows": rows.iter().map(|row| self.row_debug(row)).collect::<Vec<_>>(),
+                    "more": more.map(|(label, _)| label),
+                }))
             })
             .collect();
         json!({
             "open": self.settings.layout.sidebar_open,
+            "search": searching.then(|| query.clone()),
+            "filters": {
+                "status": filters.status.label(),
+                "where": crate::sidebar_filter::where_label(&filters.where_hosts, |h| self.hosts.name(h)),
+                "group_by": filters.group_by.label(),
+                "sort_by": filters.sort_by.label(),
+                "show_empty_folders": filters.show_empty_folders,
+                "changed": !filters.is_default(),
+            },
+            "collapsed_folders": self.settings.collapsed_folders.iter().map(|f| self.folder_heading(f)).collect::<Vec<_>>(),
             "folders": folders,
             "restart": self.restart_row(),
             "status": self.status_line().1.to_string(),

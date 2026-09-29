@@ -1,8 +1,12 @@
 //! The user's choices from the Settings screen, kept in Application Support.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+use crate::hosts::Place;
+use crate::sidebar_filter::SidebarFilters;
 
 const FILE: &str = "settings.json";
 
@@ -24,8 +28,13 @@ pub struct Settings {
     /// The agent config values last picked (e.g. "model", "effort"), applied to
     /// each session as it starts: the adapter only sets them per session.
     pub agent_config: std::collections::BTreeMap<String, String>,
-    /// The sidebar lists archived sessions too ("All, including archived").
-    pub show_archived: bool,
+    /// The sidebar's Status / Where / Group by / Sort by / Show empty folders
+    /// filter menu (src/sidebar_filter.rs). Replaces the old `show_archived`
+    /// bool; `Settings::load` migrates a saved `show_archived: true` to
+    /// `StatusFilter::All`.
+    pub sidebar_filters: SidebarFilters,
+    /// Folders whose sidebar heading is collapsed (its name reads "name ›").
+    pub collapsed_folders: HashSet<Place>,
     /// The notebook's zoom (⌘= / ⌘− / ⌘0); 0 means unset (1.0).
     pub zoom: f64,
     /// Open notebooks with no turns, edits or running cells for this long stop.
@@ -119,7 +128,14 @@ impl NotebookTheme {
 impl Settings {
     pub fn load() -> Self {
         let text = crate::install::app_dir().ok().and_then(|d| std::fs::read_to_string(d.join(FILE)).ok());
-        text.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+        let mut settings: Settings = text.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();
+        // `show_archived: true` ("All, including archived") is now `StatusFilter::All`;
+        // `false` needs no migration, since `StatusFilter::Active` is still the default.
+        let showed_archived = text.as_deref().and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok()).and_then(|v| v.get("show_archived").and_then(serde_json::Value::as_bool));
+        if showed_archived == Some(true) {
+            settings.sidebar_filters.status = crate::sidebar_filter::StatusFilter::All;
+        }
+        settings
     }
 
     pub fn save(&self) {

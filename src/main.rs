@@ -43,6 +43,7 @@ mod runtime;
 mod server_dialog;
 mod session;
 mod settings;
+mod sidebar_filter;
 mod settings_panel;
 mod signin;
 #[cfg(target_os = "macos")]
@@ -252,15 +253,6 @@ fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
 /// Past sessions listed per folder before "Show more".
 const PAST_SHOWN: usize = 8;
 
-/// The status at an open session's sidebar row end.
-#[derive(Clone, Copy, PartialEq)]
-enum RowMark {
-    /// A ring: it waits for your answer.
-    NeedsApproval,
-    /// The orbit: Claude is working.
-    Working,
-    Archived,
-}
 
 /// A session in the sidebar: an open one, or a past one listed under its folder.
 #[derive(Clone, PartialEq)]
@@ -382,6 +374,54 @@ struct PopupMenu {
     restore: Option<FocusHandle>,
 }
 
+/// A row of the sidebar's filter menu that opens a submenu.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum FilterRow {
+    Status,
+    Where,
+    GroupBy,
+    SortBy,
+}
+
+impl FilterRow {
+    const ALL: [FilterRow; 4] = [FilterRow::Status, FilterRow::Where, FilterRow::GroupBy, FilterRow::SortBy];
+
+    fn label(self) -> &'static str {
+        match self {
+            FilterRow::Status => "Status",
+            FilterRow::Where => "Where",
+            FilterRow::GroupBy => "Group by",
+            FilterRow::SortBy => "Sort by",
+        }
+    }
+}
+
+/// The sidebar's filter menu (the sliders button), and its open submenu if any.
+struct FilterMenu {
+    /// The row whose submenu is open, if any; the main menu otherwise.
+    submenu: Option<FilterRow>,
+    /// The item selected by the arrow keys, in whichever level is open.
+    selected: Option<usize>,
+    focus: FocusHandle,
+    /// Focus to give back when the menu closes.
+    restore: Option<FocusHandle>,
+}
+
+/// Something the filter menu's main rows or a submenu's rows pick, shared by
+/// click and keyboard handling (arrow keys, Enter/Space), like `MenuPick`.
+#[derive(Clone, PartialEq)]
+enum FilterPick {
+    /// A main-menu row that opens a submenu.
+    Open(FilterRow),
+    Status(sidebar_filter::StatusFilter),
+    WhereAll,
+    WhereHost(HostId),
+    GroupBy(sidebar_filter::GroupBy),
+    SortBy(sidebar_filter::SortBy),
+    ToggleEmptyFolders,
+    Clear,
+}
+
 /// The ⋮ button at a row's end: shown while the pointer is over the row
 /// (`group`), and always on the active row or while its menu is open.
 fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> Stateful<Div> {
@@ -403,6 +443,33 @@ fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> St
         .group_hover(group, |s| s.text_color(theme::text_muted()))
         .hover(|s| s.text_color(theme::text_primary()))
         .child("⋮")
+}
+
+/// The 20px slot a folder heading's + and a row's end mark (the approval
+/// ring, the archived glyph) share, so their icons sit on one vertical line.
+fn end_slot(id: impl Into<ElementId>) -> Stateful<Div> {
+    div().id(id).flex_shrink_0().size(px(20.)).mr(px(-6.)).flex().items_center().justify_center().rounded(px(4.))
+}
+
+/// `text` with the first case-insensitive match of `query` picked out in
+/// `theme::accent_text()`, for the sidebar search's highlighting. With no
+/// match (or an empty query), the plain, truncating text.
+fn highlighted_span(text: &str, query: &str) -> AnyElement {
+    let q = query.trim();
+    let start = (!q.is_empty()).then(|| text.to_lowercase().find(&q.to_lowercase())).flatten();
+    let Some(start) = start else {
+        return div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(text.to_string()).into_any_element();
+    };
+    let end = start + q.len();
+    div()
+        .flex()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .child(text[..start].to_string())
+        .child(div().flex_shrink_0().text_color(theme::accent_text()).child(text[start..end].to_string()))
+        .child(div().min_w_0().overflow_hidden().text_ellipsis().child(text[end..].to_string()))
+        .into_any_element()
 }
 
 /// Recently used working folders on every host, most recent first, kept across
@@ -449,8 +516,10 @@ pub struct Workspace {
     titles: HashMap<String, String>,
     /// Ids of archived sessions (persisted): hidden from the sidebar's Active view.
     archived: HashSet<String>,
-    /// The sidebar's Active / All filter menu is open.
-    filter_menu: bool,
+    /// The sidebar's filter menu (Status, Where, Group by, Sort by…), while open.
+    filter_menu: Option<FilterMenu>,
+    /// The sidebar's inline search field, in place of the "Sessions" heading, while open.
+    sidebar_search: Option<Entity<InputState>>,
     /// Each session's notebook file, by session id (persisted), for reopening it
     /// with the session: one the app opened isn't in the agent's history.
     session_notebooks: HashMap<String, Place>,
@@ -548,6 +617,10 @@ pub struct Workspace {
     /// It's tracked on an empty child because a tracked element takes focus when
     /// clicked, which would pull the keyboard out of the composer.
     keyboard_home: FocusHandle,
+    /// Tracked on the sidebar's outer element, so ⌘F can tell whether it
+    /// should open the sidebar search (focus is in the sidebar) or, when
+    /// Settings is open instead, its own search.
+    sidebar_focus: FocusHandle,
     /// The open confirm dialog (Stop a host, Cancel a job, Repair Julia, Sign
     /// out, Delete session), if any.
     confirm: Option<confirm::Confirm>,
@@ -690,7 +763,8 @@ impl Workspace {
             ours: load_ours(),
             titles: load_json("titles.json"),
             archived: load_json("archived.json"),
-            filter_menu: false,
+            filter_menu: None,
+            sidebar_search: None,
             session_notebooks: load_json("notebooks.json"),
             renaming: None,
             menu: None,
@@ -736,6 +810,7 @@ impl Workspace {
             dialog_focus: std::cell::RefCell::new(HashMap::new()),
             past_row_focus: std::cell::RefCell::new(HashMap::new()),
             keyboard_home: cx.focus_handle(),
+            sidebar_focus: cx.focus_handle(),
             confirm: None,
         };
         window.focus(&this.keyboard_home, cx);
@@ -1033,9 +1108,135 @@ impl Workspace {
         cx.notify();
     }
 
-    fn set_show_archived(&mut self, show: bool, cx: &mut Context<Self>) {
-        self.filter_menu = false;
-        self.update_settings(cx, |s| s.show_archived = show);
+    /// Open the sidebar's filter menu (the sliders button).
+    fn open_filter_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let restore = window.focused(cx);
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        self.filter_menu = Some(FilterMenu { submenu: None, selected: None, focus, restore });
+        cx.notify();
+    }
+
+    fn close_filter_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(restore) = self.filter_menu.take().and_then(|m| m.restore) {
+            window.focus(&restore, cx);
+        }
+        cx.notify();
+    }
+
+    fn set_status_filter(&mut self, status: sidebar_filter::StatusFilter, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| s.sidebar_filters.status = status);
+        self.close_filter_menu(window, cx);
+    }
+
+    /// Where checkboxes: several can be ticked, so the menu stays open.
+    fn toggle_where_host(&mut self, host: HostId, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| {
+            if !s.sidebar_filters.where_hosts.remove(&host) {
+                s.sidebar_filters.where_hosts.insert(host);
+            }
+        });
+    }
+
+    fn set_where_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| s.sidebar_filters.where_hosts.clear());
+        self.close_filter_menu(window, cx);
+    }
+
+    fn set_group_by(&mut self, group_by: sidebar_filter::GroupBy, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| s.sidebar_filters.group_by = group_by);
+        self.close_filter_menu(window, cx);
+    }
+
+    fn set_sort_by(&mut self, sort_by: sidebar_filter::SortBy, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| s.sidebar_filters.sort_by = sort_by);
+        self.close_filter_menu(window, cx);
+    }
+
+    fn toggle_show_empty_folders(&mut self, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| s.sidebar_filters.show_empty_folders = !s.sidebar_filters.show_empty_folders);
+    }
+
+    fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| s.sidebar_filters = sidebar_filter::SidebarFilters::default());
+        self.close_filter_menu(window, cx);
+    }
+
+    /// A folder's sidebar heading collapses or expands.
+    fn toggle_folder_collapsed(&mut self, folder: Place, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| {
+            if !s.collapsed_folders.remove(&folder) {
+                s.collapsed_folders.insert(folder);
+            }
+        });
+    }
+
+    /// Open the sidebar's inline search field, in place of the "Sessions" heading.
+    fn open_sidebar_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_search.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search sessions"));
+        cx.subscribe_in(&input, window, |_, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        input.update(cx, |s, cx| s.focus(window, cx));
+        self.sidebar_search = Some(input);
+        cx.notify();
+    }
+
+    fn close_sidebar_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_search.take().is_some() {
+            window.focus(&self.keyboard_home, cx);
+            cx.notify();
+        }
+    }
+
+    fn toggle_sidebar_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_search.is_some() {
+            self.close_sidebar_search(window, cx);
+        } else {
+            self.open_sidebar_search(window, cx);
+        }
+    }
+
+    /// A row's notebook file name, for the search's second field (matches on
+    /// the notebook a session started with or later opened, whether it's
+    /// open now or a past session).
+    fn row_notebook_name(&self, row: &Row) -> Option<String> {
+        let id = self.row_session_id(row)?;
+        self.session_notebooks.get(&id.to_string()).and_then(|p| p.path.file_name()).map(|n| n.to_string_lossy().into_owned())
+    }
+
+    /// A past session's full info, looked up again for its row's click
+    /// handler (`folder_rows` keeps only the id and place, to stay light).
+    fn past_info(&self, id: &SessionId, folder: &Place) -> Option<SessionInfo> {
+        self.past.get(folder)?.iter().find(|info| info.session_id == *id).cloned()
+    }
+
+    /// Whether the sidebar has any session at all, open or past, before any
+    /// filter or search: it hides the "Sessions" heading when there's none.
+    fn any_sessions_at_all(&self) -> bool {
+        !self.sessions.is_empty() || self.past.values().any(|v| !v.is_empty())
+    }
+
+    /// The +'s "New session in <folder>": opens the new-session screen with
+    /// that folder, and its host, already chosen.
+    fn start_session_in(&mut self, folder: Place, window: &mut Window, cx: &mut Context<Self>) {
+        self.active = None;
+        if folder.host != self.draft.host {
+            self.set_draft_host(folder.host.clone(), window, cx);
+        }
+        if self.draft.folder.as_ref() != Some(&folder.path) {
+            self.draft.folder = Some(folder.path);
+            self.draft.notebooks.clear();
+            self.choose_notebook(NotebookChoice::New, cx);
+            self.scan_notebooks(cx);
+        }
+        cx.notify();
     }
 
     /// A row's name as the sidebar shows it.
@@ -1091,7 +1292,7 @@ impl Workspace {
             || self.menu.is_some()
             || self.composer.menu.is_some()
             || self.chip_popover.is_some()
-            || self.filter_menu
+            || self.filter_menu.is_some()
             || (self.draft.popover.is_some() && self.active.is_none())
             || self.settings_panel.is_some()
     }
@@ -1113,7 +1314,7 @@ impl Workspace {
         }
         self.close_menu(window, cx);
         self.close_composer_menus(cx);
-        self.filter_menu = false;
+        self.close_filter_menu(window, cx);
         if self.draft.popover.is_some() {
             self.close_popover(window, cx);
         }
@@ -1510,8 +1711,15 @@ impl Workspace {
         self.open_settings_last(window, cx);
     }
 
+    /// ⌘F: Settings' own search while it's open; else the sidebar search,
+    /// while the sidebar has focus.
     fn find_setting(&mut self, _: &FindSetting, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_settings_search(window, cx);
+        if self.settings_panel.is_some() {
+            return self.focus_settings_search(window, cx);
+        }
+        if self.sidebar_focus.contains_focused(window, cx) {
+            self.open_sidebar_search(window, cx);
+        }
     }
 
     /// "/" at the start of the box lists the agent's commands matching what follows;
@@ -1634,9 +1842,12 @@ impl Workspace {
         if self.close_composer_menus(cx) {
             return;
         }
-        if self.filter_menu {
-            self.filter_menu = false;
-            return cx.notify();
+        // The filter menu closes itself (a submenu first) through its own
+        // `on_action`, like the row ⋮ menu; only the sidebar search needs a
+        // fallback here, the way the folder popover's search box does.
+        if self.sidebar_search.is_some() {
+            self.close_sidebar_search(window, cx);
+            return;
         }
         if self.draft.popover.is_some() {
             return self.close_popover(window, cx);
@@ -2003,6 +2214,9 @@ impl Workspace {
     fn session_row(&self, row: Row, group: SharedString, active: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let menu_open = self.menu.as_ref().is_some_and(|menu| menu.target == MenuTarget::Row(row.clone()));
         sidebar_row(ElementId::Name(group.clone()), active)
+            // The dark-contrast raise (theme.rs): sidebar session rows read
+            // lighter than folder headings (`text_section`), which keep `text_muted`.
+            .when(!active, |d| d.text_color(theme::text_row()))
             .group(group)
             .when(menu_open, |d| d.bg(theme::row_active()))
             .on_mouse_down(
@@ -2011,12 +2225,26 @@ impl Workspace {
             )
     }
 
-    /// A row's title, or its name box while it's being renamed.
-    fn row_label(&self, row: &Row, title: String) -> Div {
-        match &self.renaming {
-            Some((renaming, input)) if renaming == row => div().flex_1().child(Input::new(input).xsmall().text_size(theme::size_body())),
-            _ => div().flex_1().overflow_hidden().whitespace_nowrap().child(title),
+    /// A row's title, or its name box while it's being renamed. While
+    /// searching, the title is highlighted, and a match on the row's
+    /// notebook name shows as a faint mono second line, highlighted there.
+    fn row_lines(&self, row: &Row, title: &str, query: &str) -> Div {
+        if let Some((renaming, input)) = &self.renaming
+            && renaming == row
+        {
+            return div().flex_1().child(Input::new(input).xsmall().text_size(theme::size_body()));
         }
+        if query.trim().is_empty() {
+            return div().flex_1().overflow_hidden().whitespace_nowrap().child(title.to_string());
+        }
+        let notebook = self.row_notebook_name(row).filter(|n| sidebar_filter::row_matches_search(query, "", Some(n)));
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(highlighted_span(title, query))
+            .children(notebook.map(|n| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(highlighted_span(&n, query))))
     }
 
     /// A row's ⋮ button, and its menu while open.
@@ -2197,22 +2425,29 @@ impl Workspace {
         }
     }
 
-    /// The sidebar's folders: recent ones, then any other folder with an open session.
-    fn sidebar_folders(&self) -> Vec<&Place> {
-        let mut folders: Vec<&Place> = self.recent.iter().collect();
+    /// The sidebar's folders: recent ones, then any other folder with an open
+    /// session, filtered by Where and ordered for Group by ("Folder" and
+    /// "None" keep this order; "Where it runs" clusters folders on one host).
+    fn sidebar_folders(&self) -> Vec<Place> {
+        let mut folders: Vec<Place> = self.recent.clone();
         for s in &self.sessions {
-            if !folders.contains(&&s.place) {
-                folders.push(&s.place);
+            if !folders.contains(&s.place) {
+                folders.push(s.place.clone());
             }
         }
-        folders
+        let hosts = &self.settings.sidebar_filters.where_hosts;
+        folders.retain(|f| sidebar_filter::where_matches(hosts, &f.host));
+        sidebar_filter::order_folders(folders, self.settings.sidebar_filters.group_by)
     }
 
     /// A folder's past sessions the sidebar lists, newest first: ours, not
-    /// already open, and not archived unless archived ones show.
+    /// already open, and matching the Status filter.
     fn past_rows(&self, folder: &Place) -> Vec<&SessionInfo> {
         let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
-        let shown = |info: &SessionInfo| self.ours.contains_key(&info.session_id.to_string()) && (self.settings.show_archived || !self.archived.contains(&info.session_id.to_string()));
+        let status = self.settings.sidebar_filters.status;
+        let shown = |info: &SessionInfo| {
+            self.ours.contains_key(&info.session_id.to_string()) && sidebar_filter::status_matches(status, self.archived.contains(&info.session_id.to_string()))
+        };
         self.past.get(folder).into_iter().flatten().filter(|info| !is_open(info) && shown(info)).collect()
     }
 
@@ -2225,122 +2460,224 @@ impl Workspace {
         }
     }
 
-    /// The status at an open session's row end.
-    fn row_mark(&self, s: &Session) -> Option<RowMark> {
-        let archived = s.id.as_ref().is_some_and(|id| self.archived.contains(&id.to_string()));
-        if s.needs_approval() {
-            Some(RowMark::NeedsApproval)
-        } else if s.outbox.busy {
-            Some(RowMark::Working)
-        } else if archived {
-            Some(RowMark::Archived)
-        } else {
-            None
+    /// Whether an open session's row shows the "waits for you" ring. The
+    /// orbiting "working" indicator no longer shows on sidebar rows at all
+    /// (it still shows elsewhere, e.g. the composer and the offline card);
+    /// an open session is never archived (archiving closes it), so this is
+    /// false under Status = Archived.
+    fn row_mark(&self, s: &Session) -> bool {
+        sidebar_filter::status_matches(self.settings.sidebar_filters.status, false) && s.needs_approval()
+    }
+
+    /// A folder's rows to show (Status- and search-filtered, sorted by Sort
+    /// by, past sessions cut to `PAST_SHOWN` unless expanded or searching),
+    /// its "Show N more"/"Show fewer" label, and its total row count before
+    /// the `PAST_SHOWN` cut (0 means genuinely empty, for Show empty folders).
+    fn folder_rows(&self, folder: &Place, query: &str, collapsed: bool) -> (Vec<Row>, Option<(String, bool)>, usize) {
+        let searching = !query.trim().is_empty();
+        let with_titles = |rows: Vec<(Row, String)>| -> Vec<(Row, String)> { rows };
+        let mut open: Vec<(Row, String)> = with_titles(
+            self.sessions
+                .iter()
+                .filter(|s| &s.place == folder)
+                .map(|s| (Row::Open(s.key), s.title.clone()))
+                .collect(),
+        );
+        let mut past: Vec<(Row, String)> =
+            self.past_rows(folder).iter().map(|info| (Row::Past(info.session_id.clone(), folder.clone()), self.past_title(info).0)).collect();
+        if searching {
+            let matches = |row: &Row, title: &str| sidebar_filter::row_matches_search(query, title, self.row_notebook_name(row).as_deref());
+            open.retain(|(row, title)| matches(row, title));
+            past.retain(|(row, title)| matches(row, title));
         }
+        let sort = self.settings.sidebar_filters.sort_by;
+        sidebar_filter::sort_titles(&mut open, sort, |(_, t)| t.as_str());
+        sidebar_filter::sort_titles(&mut past, sort, |(_, t)| t.as_str());
+        let total = open.len() + past.len();
+        if collapsed && !searching {
+            return (Vec::new(), None, total);
+        }
+        let expanded = searching || self.expanded.contains(folder);
+        let more = (!searching && past.len() > PAST_SHOWN).then(|| {
+            if expanded { ("Show fewer".to_string(), true) } else { (format!("Show {} more", past.len() - PAST_SHOWN), false) }
+        });
+        if !expanded {
+            past.truncate(PAST_SHOWN);
+        }
+        let rows = open.into_iter().chain(past).map(|(row, _)| row).collect();
+        (rows, more, total)
+    }
+
+    /// One sidebar row (open or past), with its title/notebook lines, end
+    /// mark, focus handle and click behavior.
+    fn render_sidebar_row(&self, row: Row, query: &str, cx: &mut Context<Self>) -> AnyElement {
+        match row.clone() {
+            Row::Open(key) => {
+                let Some(s) = self.sessions.iter().find(|s| s.key == key) else { return div().into_any_element() };
+                let active = self.active == Some(key);
+                let group: SharedString = format!("session-{key}").into();
+                let title_text = s.title.clone();
+                let title = self.row_lines(&row, &title_text, query);
+                let mark = self.row_mark(s).then(|| end_slot("row-mark").child(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent())));
+                self.session_row(row.clone(), group.clone(), active, cx)
+                    .aria_label(title_text)
+                    .border_2()
+                    .border_color(gpui::transparent_black())
+                    .track_focus(&s.focus_handle(cx))
+                    .tab_stop(true)
+                    .focus_visible(|st| st.border_color(theme::focus_ring()))
+                    .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
+                    .child(title)
+                    .children(mark)
+                    .child(self.row_more(row.clone(), group, active, cx))
+                    // Double-click renames.
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if e.click_count() >= 2 {
+                            this.start_rename(Row::Open(key), window, cx);
+                        } else {
+                            this.activate(key, cx);
+                        }
+                    }))
+                    .into_any_element()
+            }
+            Row::Past(id, place) => {
+                let title_text = self.row_title(&row).unwrap_or_default();
+                let title = self.row_lines(&row, &title_text, query);
+                let group: SharedString = format!("past-{:?}-{}-{id}", place.host, place.path.display()).into();
+                let archived = self.archived.contains(&id.to_string());
+                let focus = self.past_row_focus(&id, cx);
+                let mark = archived.then(|| end_slot("row-mark").child(glyph(Glyph::Archive, theme::text_section())));
+                self.session_row(row.clone(), group.clone(), false, cx)
+                    .aria_label(title_text)
+                    .border_2()
+                    .border_color(gpui::transparent_black())
+                    .track_focus(&focus)
+                    .tab_stop(true)
+                    .focus_visible(|d| d.border_color(theme::focus_ring()))
+                    .when(archived, |d| d.text_color(theme::text_section()))
+                    .child(title)
+                    .children(mark)
+                    .child(self.row_more(row.clone(), group, false, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.renaming.as_ref().is_some_and(|(renaming, _)| *renaming == row) && let Some(info) = this.past_info(&id, &place) {
+                            this.open_past(info, place.clone(), cx);
+                        }
+                    }))
+                    .into_any_element()
+            }
+        }
+    }
+
+    /// A folder's heading: its name (with a collapse chevron via "name ›"
+    /// when collapsed) on the left, and a "New session in <folder>" + always
+    /// visible on the right, sharing the row end marks' vertical line. A
+    /// collapsed folder with a session waiting for approval shows the ring
+    /// after the "›". Clicking the name collapses or expands; clicking + starts
+    /// a session there. Each is its own Tab stop with the sidebar's focus ring.
+    fn render_folder_heading(&self, folder: &Place, collapsed: bool, needs_approval: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let name = self.folder_heading(folder);
+        let key = format!("{:?}-{}", folder.host, folder.path.display());
+        let label = if collapsed { format!("{name} ›") } else { name.clone() };
+        let toggle_folder = folder.clone();
+        let heading = div()
+            .id(ElementId::Name(format!("folder-toggle-{key}").into()))
+            .role(Role::Button)
+            .aria_label(name.clone())
+            .aria_expanded(!collapsed)
+            .flex_1()
+            .min_w_0()
+            .h(px(24.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .rounded(px(4.))
+            .cursor_pointer()
+            .text_size(theme::size_meta_small())
+            .text_color(theme::text_section())
+            .border_2()
+            .border_color(gpui::transparent_black())
+            .track_focus(&self.dialog_focus(format!("folder-toggle-{key}"), cx))
+            .tab_stop(true)
+            .focus_visible(|s| s.border_color(theme::focus_ring()))
+            .hover(|s| s.bg(theme::row_active()))
+            .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(label))
+            .when(collapsed && needs_approval, |d| {
+                d.child(div().size(px(6.)).flex_shrink_0().rounded_full().border_1().border_color(theme::accent()))
+            })
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder_collapsed(toggle_folder.clone(), cx)));
+        let plus_folder = folder.clone();
+        let plus_label: SharedString = format!("New session in {name}").into();
+        let tooltip_label = plus_label.clone();
+        let plus = div()
+            .id(ElementId::Name(format!("folder-plus-{key}").into()))
+            .role(Role::Button)
+            .aria_label(plus_label)
+            .flex_shrink_0()
+            .border_2()
+            .border_color(gpui::transparent_black())
+            .track_focus(&self.dialog_focus(format!("folder-plus-{key}"), cx))
+            .tab_stop(true)
+            .focus_visible(|s| s.border_color(theme::focus_ring()))
+            .child(
+                end_slot(ElementId::Name(format!("folder-plus-target-{key}").into()))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::row_active()))
+                    .child(glyph(Glyph::Plus, theme::text_secondary())),
+            )
+            .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip_label.clone()).build(window, cx))
+            .on_click(cx.listener(move |this, _, window, cx| this.start_session_in(plus_folder.clone(), window, cx)));
+        div().mt(px(18.)).flex().items_center().child(heading).child(plus)
     }
 
     fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let update = settings_panel::update_available(&self.updates());
-        let groups: Vec<_> = self
+        let query = self.sidebar_search.as_ref().map(|s| s.read(cx).value().to_string()).unwrap_or_default();
+        let searching = !query.trim().is_empty();
+        let show_empty = self.settings.sidebar_filters.show_empty_folders;
+        let group_by_none = self.settings.sidebar_filters.group_by == sidebar_filter::GroupBy::None;
+        let mut any_matched = false;
+        let groups: Vec<AnyElement> = self
             .sidebar_folders()
             .into_iter()
-            .map(|folder| {
-                let open: Vec<_> = self
-                    .sessions
-                    .iter()
-                    .filter(|s| &s.place == folder)
-                    .map(|s| {
-                        let key = s.key;
-                        let active = self.active == Some(key);
-                        let group: SharedString = format!("session-{key}").into();
-                        let title_text = s.title.clone();
-                        let title = self.row_label(&Row::Open(key), title_text.clone());
-                        // Status at the row's end: a ring waits for you, the working orbit is working.
-                        let mark = self.row_mark(s).map(|mark| match mark {
-                            RowMark::NeedsApproval => div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element(),
-                            RowMark::Working => session::orbit(ElementId::NamedInteger("row-orbit".into(), key), 12., cx),
-                            RowMark::Archived => glyph(Glyph::Archive, theme::text_section()).into_any_element(),
-                        });
-                        self.session_row(Row::Open(key), group.clone(), active, cx)
-                            .aria_label(title_text)
-                            .border_2()
-                            .border_color(gpui::transparent_black())
-                            .track_focus(&s.focus_handle(cx))
-                            .tab_stop(true)
-                            .focus_visible(|st| st.border_color(theme::focus_ring()))
-                            .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
-                            .child(title)
-                            .children(mark)
-                            .child(self.row_more(Row::Open(key), group, active, cx))
-                            // Double-click renames.
-                            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                                if e.click_count() >= 2 {
-                                    this.start_rename(Row::Open(key), window, cx);
-                                } else {
-                                    this.activate(key, cx);
-                                }
-                            }))
-                    })
-                    .collect();
-                // The newest few unless expanded.
-                let is_archived = |info: &SessionInfo| self.archived.contains(&info.session_id.to_string());
-                let all = self.past_rows(folder);
-                let expanded = self.expanded.contains(folder);
-                let limit = if expanded { all.len() } else { PAST_SHOWN };
-                let past: Vec<_> = all
-                    .iter()
-                    .take(limit)
-                    .enumerate()
-                    .map(|(i, info)| {
-                        let row = Row::Past(info.session_id.clone(), folder.clone());
-                        let title_text = self.row_title(&row).unwrap_or_default();
-                        let title = self.row_label(&row, title_text.clone());
-                        let group: SharedString = format!("past-{:?}-{}-{i}", folder.host, folder.path.display()).into();
-                        let open = (*info).clone();
-                        let place = folder.clone();
-                        let archived = is_archived(info);
-                        let focus = self.past_row_focus(&info.session_id, cx);
-                        self.session_row(row.clone(), group.clone(), false, cx)
-                            .aria_label(title_text)
-                            .border_2()
-                            .border_color(gpui::transparent_black())
-                            .track_focus(&focus)
-                            .tab_stop(true)
-                            .focus_visible(|d| d.border_color(theme::focus_ring()))
-                            .when(archived, |d| d.text_color(theme::text_section()))
-                            .child(title)
-                            .when(archived, |d| d.child(glyph(Glyph::Archive, theme::text_section())))
-                            .child(self.row_more(row.clone(), group, false, cx))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.renaming.as_ref().is_some_and(|(renaming, _)| *renaming == row) {
-                                    this.open_past(open.clone(), place.clone(), cx);
-                                }
-                            }))
-                    })
-                    .collect();
-                let more = (all.len() > PAST_SHOWN).then(|| {
-                    let label = if expanded { "Show fewer".to_string() } else { format!("Show {} more", all.len() - PAST_SHOWN) };
+            .filter_map(|folder| {
+                // Group by "None" keeps its own folder headings today (see
+                // the design report): only Folder/Where's clustering differs.
+                let collapsed = !group_by_none && !searching && self.settings.collapsed_folders.contains(&folder);
+                let (rows, more, total) = self.folder_rows(&folder, &query, collapsed);
+                if total == 0 && (searching || !show_empty) {
+                    return None;
+                }
+                any_matched = true;
+                let needs_approval = self.sessions.iter().any(|s| s.place == folder && s.needs_approval());
+                let body: Vec<AnyElement> = rows.into_iter().map(|row| self.render_sidebar_row(row, &query, cx)).collect();
+                let more_row = more.map(|(label, fewer)| {
                     let folder = folder.clone();
                     sidebar_row(ElementId::Name(format!("more-{:?}-{}", folder.host, folder.path.display()).into()), false)
                         .aria_label(label.clone())
                         .text_color(theme::text_faint())
                         .child(label)
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.expanded.remove(&folder) {
+                            if fewer {
+                                this.expanded.remove(&folder);
+                            } else {
                                 this.expanded.insert(folder.clone());
                             }
                             cx.notify();
                         }))
                 });
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(div().mt(px(18.)).px(px(10.)).pb_1().text_size(theme::size_meta_small()).text_color(theme::text_section()).child(self.folder_heading(folder)))
-                    .children(open)
-                    .children(past)
-                    .children(more)
+                Some(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(self.render_folder_heading(&folder, collapsed, needs_approval, cx))
+                        .children(body)
+                        .children(more_row)
+                        .into_any_element(),
+                )
             })
             .collect();
+        let no_matches = searching && !any_matched;
 
         div()
             .w(px(self.settings.layout.sidebar_width))
@@ -2357,6 +2694,7 @@ impl Workspace {
             // before the main column's, whatever order they paint in.
             .tab_group()
             .tab_index(0)
+            .track_focus(&self.sidebar_focus)
             // The traffic lights sit in this header (see TitlebarOptions in main()).
             .child(column_header("sidebar-header").mx(px(-6.)).justify_end().px(px(10.)).child(sidebar_toggle(self, cx)))
             .child(
@@ -2370,14 +2708,41 @@ impl Workspace {
                     .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(div().text_color(theme::text_faint()).child("+"))
                     .child(div().flex_1().child("New session"))
-                    .child(self.render_filter_button(cx))
+                    .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child("⌘N"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.active = None;
                         this.scan_notebooks(cx);
                         cx.notify();
                     })),
             )
-            .child(div().id("sessions").flex_1().overflow_y_scroll().flex().flex_col().children(groups))
+            .when(self.any_sessions_at_all(), |d| {
+                d.child(match &self.sidebar_search {
+                    Some(input) => self.render_sidebar_search(input, cx).into_any_element(),
+                    None => self.render_sessions_heading(cx).into_any_element(),
+                })
+            })
+            .child(
+                div()
+                    .id("sessions")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .map(|d| {
+                        if no_matches {
+                            d.child(
+                                div()
+                                    .px(px(10.))
+                                    .pt(px(8.))
+                                    .text_size(theme::size_meta())
+                                    .text_color(theme::text_faint())
+                                    .child(format!("No sessions match “{}”.", query.trim())),
+                            )
+                        } else {
+                            d.children(groups)
+                        }
+                    }),
+            )
             .map(|d| {
                 let Some(label) = self.restart_row() else { return d };
                 d.child(
@@ -2452,44 +2817,173 @@ impl Workspace {
             )
     }
 
-    /// The funnel at the end of the "New session" row, and its Active / All menu.
-    fn render_filter_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let all = self.settings.show_archived;
-        let color = if all { theme::accent_text() } else { theme::text_faint() };
-        let item = |id: &'static str, checked: bool, label: &'static str, show: bool| {
-            menu_row(id, checked, false)
-                .role(Role::MenuItemRadio)
-                .aria_label(label)
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.set_show_archived(show, cx);
-                }))
+    /// The "Sessions" heading row: a search button and the filter button on the right.
+    fn render_sessions_heading(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .h(px(28.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .px(px(10.))
+            .text_size(theme::size_meta_small())
+            .text_color(theme::text_section())
+            .child(div().flex_1().child("Sessions"))
+            .child(
+                div()
+                    .id("sidebar-search-button")
+                    .role(Role::Button)
+                    .aria_label("Search sessions")
+                    .flex_shrink_0()
+                    .size(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::bg_raised()))
+                    .child(glyph(Glyph::Search, theme::text_secondary()))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar_search(window, cx))),
+            )
+            .child(self.render_filter_menu_button(cx))
+    }
+
+    /// The inline search field that replaces the "Sessions" heading while open.
+    fn render_sidebar_search(&self, input: &Entity<InputState>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let empty = input.read(cx).value().trim().is_empty();
+        let input = input.clone();
+        div()
+            .h(px(28.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(10.))
+            .child(glyph(Glyph::Search, theme::text_secondary()))
+            .child(div().flex_1().min_w_0().child(Input::new(&input).appearance(false).text_size(theme::size_body())))
+            .child(div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("esc"))
+            .child(
+                div()
+                    .id("sidebar-search-close")
+                    .role(Role::Button)
+                    .aria_label(if empty { "Close search" } else { "Clear search" })
+                    .flex_shrink_0()
+                    .size(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::row_active()))
+                    .child(glyph(Glyph::Close, theme::text_faint()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if empty {
+                            this.close_sidebar_search(window, cx);
+                        } else {
+                            input.update(cx, |s, cx| s.set_value("", window, cx));
+                            cx.notify();
+                        }
+                    })),
+            )
+    }
+
+    /// Everything a filter-menu row or submenu item picks, for the row it's
+    /// at (`None` for the main menu): the main menu's rows in order, then
+    /// (only when open) that row's submenu's own rows, mirroring `menu_picks`.
+    fn filter_picks(&self, submenu: Option<FilterRow>) -> Vec<FilterPick> {
+        match submenu {
+            None => {
+                let mut picks: Vec<FilterPick> = FilterRow::ALL.into_iter().map(FilterPick::Open).collect();
+                picks.push(FilterPick::ToggleEmptyFolders);
+                if !self.settings.sidebar_filters.is_default() {
+                    picks.push(FilterPick::Clear);
+                }
+                picks
+            }
+            Some(FilterRow::Status) => sidebar_filter::StatusFilter::ALL.into_iter().map(FilterPick::Status).collect(),
+            Some(FilterRow::Where) => {
+                let mut picks = vec![FilterPick::WhereAll, FilterPick::WhereHost(HostId::ThisMac)];
+                picks.extend(self.hosts.servers.iter().map(|s| FilterPick::WhereHost(HostId::Server(s.id.clone()))));
+                picks
+            }
+            Some(FilterRow::GroupBy) => sidebar_filter::GroupBy::ALL.into_iter().map(FilterPick::GroupBy).collect(),
+            Some(FilterRow::SortBy) => sidebar_filter::SortBy::ALL.into_iter().map(FilterPick::SortBy).collect(),
+        }
+    }
+
+    fn apply_filter_pick(&mut self, pick: FilterPick, window: &mut Window, cx: &mut Context<Self>) {
+        match pick {
+            FilterPick::Open(row) => {
+                if let Some(menu) = self.filter_menu.as_mut() {
+                    menu.submenu = Some(row);
+                    menu.selected = None;
+                }
+                cx.notify();
+            }
+            FilterPick::Status(status) => self.set_status_filter(status, window, cx),
+            FilterPick::WhereAll => self.set_where_all(window, cx),
+            // Several hosts can be ticked, so this doesn't close the menu.
+            FilterPick::WhereHost(host) => self.toggle_where_host(host, cx),
+            FilterPick::GroupBy(g) => self.set_group_by(g, window, cx),
+            FilterPick::SortBy(s) => self.set_sort_by(s, window, cx),
+            FilterPick::ToggleEmptyFolders => self.toggle_show_empty_folders(cx),
+            FilterPick::Clear => self.clear_filters(window, cx),
+        }
+    }
+
+    /// Up/Down move the selection in whichever level is open; Enter/Space
+    /// activates it; Left backs out of a submenu; Right opens one. Esc is
+    /// handled by the menu body's own `on_action`, like the row ⋮ menu's.
+    fn filter_menu_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(submenu) = self.filter_menu.as_ref().map(|m| m.submenu) else { return };
+        let picks = self.filter_picks(submenu);
+        let n = picks.len();
+        if n == 0 {
+            return;
+        }
+        let key = e.keystroke.key.as_str();
+        let activated = match key {
+            "down" => {
+                if let Some(menu) = self.filter_menu.as_mut() {
+                    menu.selected = Some(menu.selected.map_or(0, |i| (i + 1) % n));
+                }
+                None
+            }
+            "up" => {
+                if let Some(menu) = self.filter_menu.as_mut() {
+                    menu.selected = Some(menu.selected.map_or(n - 1, |i| (i + n - 1) % n));
+                }
+                None
+            }
+            "left" if submenu.is_some() => {
+                if let Some(menu) = self.filter_menu.as_mut() {
+                    menu.submenu = None;
+                    menu.selected = None;
+                }
+                None
+            }
+            "right" | "enter" | "space" => self.filter_menu.as_ref().and_then(|m| m.selected).and_then(|i| picks.get(i).cloned()),
+            _ => return,
         };
-        let menu = self.filter_menu.then(|| {
-            let body = div()
-                .id("filter-menu")
-                .role(Role::Menu)
-                .occlude()
-                .w(px(210.))
-                .p(px(4.))
-                .flex()
-                .flex_col()
-                .rounded(px(8.))
-                .border_1()
-                .border_color(theme::composer_edge())
-                .bg(theme::bg_raised())
-                .font_family(theme::SANS)
-                .text_size(theme::size_body())
-                .text_color(theme::text_primary())
-                .child(item("filter-active", !all, "Active", false))
-                .child(item("filter-all", all, "All, including archived", true));
-            div().absolute().top(px(26.)).right_0().child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(1))
-        });
+        if let Some(pick) = activated {
+            if key == "right" && !matches!(pick, FilterPick::Open(_)) {
+                return;
+            }
+            return self.apply_filter_pick(pick, window, cx);
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// The sliders button, and the filter menu (Status, Where, Group by, Sort
+    /// by, Show empty folders, Clear filters) while open.
+    fn render_filter_menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let changed = !self.settings.sidebar_filters.is_default();
+        let color = if changed { theme::accent_text() } else { theme::text_secondary() };
+        let menu = self.filter_menu.as_ref().map(|menu| self.render_filter_menu(menu, cx));
         div()
             .id("sidebar-filter")
             .role(Role::Button)
-            .aria_label("Show sessions")
+            .aria_label("Filter sessions")
             .relative()
             .flex_shrink_0()
             .size(px(24.))
@@ -2498,15 +2992,189 @@ impl Workspace {
             .items_center()
             .justify_center()
             .rounded(px(4.))
-            .when(self.filter_menu, |d| d.bg(theme::bg_raised()))
+            .when(self.filter_menu.is_some(), |d| d.bg(theme::bg_raised()))
             .hover(|s| s.bg(theme::bg_raised()))
-            .child(glyph(Glyph::Funnel, color.into()))
+            .child(glyph(Glyph::Sliders, color))
             .children(menu)
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                if this.filter_menu.is_some() {
+                    this.close_filter_menu(window, cx);
+                } else {
+                    this.open_filter_menu(window, cx);
+                }
+            }))
+    }
+
+    /// The filter menu's main panel: each row shows its current value and ›
+    /// and opens a submenu, then Show empty folders (a toggle) and, only when
+    /// something differs from the defaults, Clear filters.
+    fn render_filter_menu(&self, menu: &FilterMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let filters = self.settings.sidebar_filters.clone();
+        let where_label = sidebar_filter::where_label(&filters.where_hosts, |h| self.hosts.name(h));
+        let separator = || div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::composer_edge());
+        let row = |i: usize, label: &'static str, value: String, target: FilterRow, cx: &mut Context<Self>| {
+            let selected = menu.submenu.is_none() && menu.selected == Some(i);
+            div()
+                .id(ElementId::NamedInteger("filter-row".into(), i as u64))
+                .role(Role::MenuItem)
+                .aria_label(format!("{label}: {value}"))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .h(px(28.))
+                .px(px(8.))
+                .rounded(px(5.))
+                .cursor_pointer()
+                .when(selected, |d| d.bg(theme::composer_edge()))
+                .hover(|s| s.bg(theme::composer_edge()))
+                .child(div().flex_1().child(label))
+                .child(div().text_color(theme::text_faint()).child(value))
+                .child(div().text_color(theme::text_faint()).child("›"))
+                .on_click(cx.listener(move |this, _, window, cx| this.apply_filter_pick(FilterPick::Open(target), window, cx)))
+        };
+        let empty_toggle = div()
+            .id("filter-empty-folders")
+            .role(Role::Switch)
+            .aria_label("Show empty folders")
+            .aria_toggled(if filters.show_empty_folders { accesskit::Toggled::True } else { accesskit::Toggled::False })
+            .relative()
+            .w(px(30.))
+            .h(px(18.))
+            .flex_shrink_0()
+            .rounded(px(9.))
+            .cursor_pointer()
+            .bg(if filters.show_empty_folders { theme::accent() } else { theme::composer_edge() })
+            .child(div().absolute().top(px(2.)).left(px(if filters.show_empty_folders { 14. } else { 2. })).size(px(14.)).rounded_full().bg(gpui::white()))
             .on_click(cx.listener(|this, _, _, cx| {
                 cx.stop_propagation();
-                this.filter_menu = !this.filter_menu;
-                cx.notify();
+                this.toggle_show_empty_folders(cx);
+            }));
+        let body = div()
+            .id("filter-menu")
+            .role(Role::Menu)
+            .track_focus(&menu.focus)
+            .occlude()
+            .relative()
+            .w(px(220.))
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme::composer_edge())
+            .bg(theme::bg_raised())
+            .font_family(theme::SANS)
+            .text_size(theme::size_body())
+            .text_color(theme::text_primary())
+            .on_action(cx.listener(|this, _: &Interrupt, window, cx| {
+                if let Some(menu) = this.filter_menu.as_mut()
+                    && menu.submenu.take().is_some()
+                {
+                    menu.selected = None;
+                    return cx.notify();
+                }
+                this.close_filter_menu(window, cx);
             }))
+            .on_key_down(cx.listener(Self::filter_menu_key))
+            .child(row(0, "Status", filters.status.label().to_string(), FilterRow::Status, cx))
+            .child(row(1, "Where", where_label, FilterRow::Where, cx))
+            .child(separator())
+            .child(row(2, "Group by", filters.group_by.label().to_string(), FilterRow::GroupBy, cx))
+            .child(row(3, "Sort by", filters.sort_by.label().to_string(), FilterRow::SortBy, cx))
+            .child(separator())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(28.))
+                    .px(px(8.))
+                    .child(div().flex_1().child("Show empty folders"))
+                    .child(empty_toggle),
+            )
+            .when(!filters.is_default(), |d| {
+                d.child(separator()).child(
+                    div()
+                        .id("filter-clear")
+                        .role(Role::MenuItem)
+                        .aria_label("Clear filters")
+                        .h(px(28.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(5.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::composer_edge()))
+                        .child("Clear filters")
+                        .on_click(cx.listener(|this, _, window, cx| this.clear_filters(window, cx))),
+                )
+            })
+            .children(menu.submenu.map(|submenu| self.render_filter_submenu(submenu, menu, cx)));
+        div().absolute().top(px(26.)).right_0().child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(1))
+    }
+
+    /// A filter row's flyout submenu: Status and Sort by are single-choice
+    /// (✓ radio), Where is several-choice (✓ checkbox, stays open).
+    fn render_filter_submenu(&self, submenu: FilterRow, menu: &FilterMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let picks = self.filter_picks(Some(submenu));
+        let filters = &self.settings.sidebar_filters;
+        let checked = |pick: &FilterPick| match pick {
+            FilterPick::Status(s) => *s == filters.status,
+            FilterPick::WhereAll => filters.where_hosts.is_empty(),
+            FilterPick::WhereHost(h) => filters.where_hosts.contains(h),
+            FilterPick::GroupBy(g) => *g == filters.group_by,
+            FilterPick::SortBy(s) => *s == filters.sort_by,
+            _ => false,
+        };
+        let label = |pick: &FilterPick| -> String {
+            match pick {
+                FilterPick::Status(s) => s.label().to_string(),
+                FilterPick::WhereAll => "All places".to_string(),
+                FilterPick::WhereHost(h) => self.hosts.name(h),
+                FilterPick::GroupBy(g) => g.label().to_string(),
+                FilterPick::SortBy(s) => s.label().to_string(),
+                _ => String::new(),
+            }
+        };
+        let items = picks.into_iter().enumerate().map(|(i, pick)| {
+            let selected = menu.selected == Some(i);
+            let is_checked = checked(&pick);
+            let text = label(&pick);
+            menu_row(ElementId::NamedInteger("filter-submenu-item".into(), i as u64), is_checked, selected)
+                .role(if submenu == FilterRow::Where { Role::MenuItemCheckBox } else { Role::MenuItemRadio })
+                .aria_label(text.clone())
+                .child(text)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.apply_filter_pick(pick.clone(), window, cx);
+                }))
+        });
+        let top = match submenu {
+            FilterRow::Status => 4.,
+            FilterRow::Where => 32.,
+            FilterRow::GroupBy => 69.,
+            FilterRow::SortBy => 97.,
+        };
+        div()
+            .id("filter-submenu")
+            .role(Role::Menu)
+            .aria_label(submenu.label())
+            .occlude()
+            .absolute()
+            .top(px(top))
+            .left(px(224.))
+            .w(px(180.))
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme::composer_edge())
+            .bg(theme::bg_raised())
+            .font_family(theme::SANS)
+            .text_size(theme::size_body())
+            .text_color(theme::text_primary())
+            .children(items)
     }
 
     /// The notebook's ⋮ button in its header, and its menu while open.

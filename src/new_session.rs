@@ -1346,7 +1346,8 @@ pub(crate) enum Glyph {
     File,
     Chevron,
     Search,
-    Funnel,
+    /// Filters: two vertical tracks, each with a knob at its current value.
+    Sliders,
     Archive,
     Server,
     Plus,
@@ -1471,7 +1472,12 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&circle);
                     polyline(&[(7.6, 7.6), (11., 11.)]);
                 }
-                Glyph::Funnel => polyline(&[(1.5, 2.), (10.5, 2.), (7., 6.5), (7., 10.5), (5., 9.5), (5., 6.5), (1.5, 2.)]),
+                Glyph::Sliders => {
+                    polyline(&[(5.5, 1.5), (5.5, 10.5)]);
+                    polyline(&[(4.2, 5.5), (6.8, 5.5)]);
+                    polyline(&[(10.5, 1.5), (10.5, 10.5)]);
+                    polyline(&[(9.2, 10.), (11.5, 10.)]);
+                }
                 Glyph::Archive => {
                     polyline(&[(1., 2.), (11., 2.), (11., 4.5), (1., 4.5), (1., 2.)]);
                     polyline(&[(2., 4.5), (2., 10.5), (10., 10.5), (10., 4.5)]);
