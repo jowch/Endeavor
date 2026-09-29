@@ -6,9 +6,12 @@
 // depth. MAX_DEPTH defaults to 14 (deep enough for a dialog or a menu; the
 // notebook's web view can nest much deeper, so pass a smaller depth there).
 //
-// ax-tree.swift PID focused: print just the one element that currently has
-// keyboard focus (kAXFocusedUIElementAttribute) -- the fast way to check
-// where Tab/Shift-Tab landed, without diffing a whole tree dump.
+// ax-tree.swift PID focused: print just the element that currently has
+// keyboard focus -- the fast way to check where Tab/Shift-Tab landed, without
+// diffing a whole tree dump. The app's kAXFocusedUIElementAttribute names only
+// the window here, so this prints the elements whose AXFocused is true. The
+// first query of a run turns the app's accessibility tree on and shows only
+// the window; query again.
 //
 // Needs Accessibility permission for whatever process runs this (Terminal,
 // Ghostty, or the like) -- the same permission target/ui-tools needs.
@@ -74,12 +77,24 @@ if !AXIsProcessTrusted() {
 
 let app = AXUIElementCreateApplication(pid)
 
-if args.count >= 3, args[2] == "focused" {
-    guard let focused = attr(app, kAXFocusedUIElementAttribute as String) else {
-        print("(nothing focused)")
-        exit(0)
+func focusedElements(_ el: AXUIElement, depth: Int, out: inout [AXUIElement]) {
+    if (attr(el, kAXFocusedAttribute as String) as? Bool) == true,
+       str(attr(el, kAXRoleAttribute as String)) != (kAXWindowRole as String) {
+        out.append(el)
     }
-    print(describe(focused as! AXUIElement))
+    guard depth < 40, let children = attr(el, kAXChildrenAttribute as String) as? [AXUIElement] else { return }
+    for c in children { focusedElements(c, depth: depth + 1, out: &out) }
+}
+
+if args.count >= 3, args[2] == "focused" {
+    var found: [AXUIElement] = []
+    if let window = attr(app, kAXFocusedWindowAttribute as String) {
+        focusedElements(window as! AXUIElement, depth: 0, out: &found)
+    }
+    if found.isEmpty {
+        print("(nothing focused)")
+    }
+    for el in found { print(describe(el)) }
     exit(0)
 }
 
