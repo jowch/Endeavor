@@ -2233,26 +2233,36 @@ impl Workspace {
             )
     }
 
-    /// A row's title, or its name box while it's being renamed. While
-    /// searching, the title is highlighted, and a match on the row's
-    /// notebook name shows as a faint mono second line, highlighted there.
-    fn row_lines(&self, row: &Row, title: &str, query: &str) -> Div {
+    /// A row's title, or its name box while it's being renamed. Its second
+    /// line is `folder_line` when given (Group by: None, so each flattened
+    /// row still names its folder); otherwise, while searching, a match on
+    /// the row's notebook name, highlighted there. The title itself is
+    /// highlighted while searching either way.
+    fn row_lines(&self, row: &Row, title: &str, query: &str, folder_line: Option<&str>) -> Div {
         if let Some((renaming, input)) = &self.renaming
             && renaming == row
         {
             return div().flex_1().child(Input::new(input).xsmall().text_size(theme::size_body()));
         }
-        if query.trim().is_empty() {
+        let searching = !query.trim().is_empty();
+        let second: Option<AnyElement> = match folder_line {
+            Some(f) => Some(div().overflow_hidden().whitespace_nowrap().text_ellipsis().child(f.to_string()).into_any_element()),
+            None => searching
+                .then(|| self.row_notebook_name(row).filter(|n| sidebar_filter::row_matches_search(query, "", Some(n))))
+                .flatten()
+                .map(|n| highlighted_span(&n, query)),
+        };
+        if !searching && second.is_none() {
             return div().flex_1().overflow_hidden().whitespace_nowrap().child(title.to_string());
         }
-        let notebook = self.row_notebook_name(row).filter(|n| sidebar_filter::row_matches_search(query, "", Some(n)));
+        let title_el = if searching { highlighted_span(title, query) } else { div().overflow_hidden().whitespace_nowrap().child(title.to_string()).into_any_element() };
         div()
             .flex_1()
             .min_w_0()
             .flex()
             .flex_col()
-            .child(highlighted_span(title, query))
-            .children(notebook.map(|n| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(highlighted_span(&n, query))))
+            .child(title_el)
+            .children(second.map(|el| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(el)))
     }
 
     /// A row's ⋮ button, and its menu while open.
@@ -2476,10 +2486,13 @@ impl Workspace {
     }
 
     /// A folder's rows to show (Status- and search-filtered, sorted by Sort
-    /// by, past sessions cut to `PAST_SHOWN` unless expanded or searching),
-    /// its "Show N more"/"Show fewer" label, and its total row count before
-    /// the `PAST_SHOWN` cut (0 means genuinely empty, for Show empty folders).
-    fn folder_rows(&self, folder: &Place, query: &str, collapsed: bool) -> (Vec<Row>, Option<(String, bool)>, usize) {
+    /// by, past sessions cut to `PAST_SHOWN` unless expanded, searching or
+    /// `flat`), its "Show N more"/"Show fewer" label (never, when `flat`:
+    /// Group by None has no folder heading for it to expand), and its total
+    /// row count before the `PAST_SHOWN` cut (0 means genuinely empty, for
+    /// Show empty folders). `flat` is Group by None's flattened list, which
+    /// has no collapsed folders either.
+    fn folder_rows(&self, folder: &Place, query: &str, collapsed: bool, flat: bool) -> (Vec<Row>, Option<(String, bool)>, usize) {
         let searching = !query.trim().is_empty();
         let mut open: Vec<(Row, String)> =
             self.sessions.iter().filter(|s| &s.place == folder).map(|s| (Row::Open(s.key), s.title.clone())).collect();
@@ -2497,8 +2510,8 @@ impl Workspace {
         if collapsed && !searching {
             return (Vec::new(), None, total);
         }
-        let expanded = searching || self.expanded.contains(folder);
-        let more = (!searching && past.len() > PAST_SHOWN).then(|| {
+        let expanded = searching || flat || self.expanded.contains(folder);
+        let more = (!searching && !flat && past.len() > PAST_SHOWN).then(|| {
             if expanded { ("Show fewer".to_string(), true) } else { (format!("Show {} more", past.len() - PAST_SHOWN), false) }
         });
         if !expanded {
@@ -2510,14 +2523,15 @@ impl Workspace {
 
     /// One sidebar row (open or past), with its title/notebook lines, end
     /// mark, focus handle and click behavior.
-    fn render_sidebar_row(&self, row: Row, query: &str, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar_row(&self, row: Row, query: &str, flat: bool, cx: &mut Context<Self>) -> AnyElement {
         match row.clone() {
             Row::Open(key) => {
                 let Some(s) = self.sessions.iter().find(|s| s.key == key) else { return div().into_any_element() };
                 let active = self.active == Some(key);
                 let group: SharedString = format!("session-{key}").into();
                 let title_text = s.title.clone();
-                let title = self.row_lines(&row, &title_text, query);
+                let folder_line = flat.then(|| self.folder_heading(&s.place));
+                let title = self.row_lines(&row, &title_text, query, folder_line.as_deref());
                 let mark = self.row_mark(s).then(|| end_slot("row-mark").child(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent())));
                 self.session_row(row.clone(), group.clone(), active, cx)
                     .aria_label(title_text)
@@ -2542,7 +2556,8 @@ impl Workspace {
             }
             Row::Past(id, place) => {
                 let title_text = self.row_title(&row).unwrap_or_default();
-                let title = self.row_lines(&row, &title_text, query);
+                let folder_line = flat.then(|| self.folder_heading(&place));
+                let title = self.row_lines(&row, &title_text, query, folder_line.as_deref());
                 let group: SharedString = format!("past-{:?}-{}-{id}", place.host, place.path.display()).into();
                 let archived = self.archived.contains(&id.to_string());
                 let focus = self.past_row_focus(&id, cx);
@@ -2637,46 +2652,60 @@ impl Workspace {
         let show_empty = self.settings.sidebar_filters.show_empty_folders;
         let group_by_none = self.settings.sidebar_filters.group_by == sidebar_filter::GroupBy::None;
         let mut any_matched = false;
-        let groups: Vec<AnyElement> = self
-            .sidebar_folders()
-            .into_iter()
-            .filter_map(|folder| {
-                // Group by "None" keeps its own folder headings today (see
-                // the design report): only Folder/Where's clustering differs.
-                let collapsed = !group_by_none && !searching && self.settings.collapsed_folders.contains(&folder);
-                let (rows, more, total) = self.folder_rows(&folder, &query, collapsed);
-                if total == 0 && (searching || !show_empty) {
-                    return None;
-                }
-                any_matched = true;
-                let needs_approval = self.sessions.iter().any(|s| s.place == folder && s.needs_approval());
-                let body: Vec<AnyElement> = rows.into_iter().map(|row| self.render_sidebar_row(row, &query, cx)).collect();
-                let more_row = more.map(|(label, fewer)| {
-                    let folder = folder.clone();
-                    sidebar_row(ElementId::Name(format!("more-{:?}-{}", folder.host, folder.path.display()).into()), false)
-                        .aria_label(label.clone())
-                        .text_color(theme::text_faint())
-                        .child(label)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if fewer {
-                                this.expanded.remove(&folder);
-                            } else {
-                                this.expanded.insert(folder.clone());
-                            }
-                            cx.notify();
-                        }))
-                });
-                Some(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(self.render_folder_heading(&folder, collapsed, needs_approval, cx))
-                        .children(body)
-                        .children(more_row)
-                        .into_any_element(),
-                )
-            })
-            .collect();
+        // Group by None: one flat list, no folder headings (so no + either --
+        // "New session" covers it), sorted by Sort by across every folder.
+        let groups: Vec<AnyElement> = if group_by_none {
+            let mut rows: Vec<(Row, String)> = self
+                .sidebar_folders()
+                .into_iter()
+                .flat_map(|folder| self.folder_rows(&folder, &query, false, true).0)
+                .map(|row| {
+                    let title = self.row_title(&row).unwrap_or_default();
+                    (row, title)
+                })
+                .collect();
+            sidebar_filter::sort_titles(&mut rows, self.settings.sidebar_filters.sort_by, |(_, t)| t.as_str());
+            any_matched = !rows.is_empty();
+            rows.into_iter().map(|(row, _)| self.render_sidebar_row(row, &query, true, cx)).collect()
+        } else {
+            self.sidebar_folders()
+                .into_iter()
+                .filter_map(|folder| {
+                    let collapsed = !searching && self.settings.collapsed_folders.contains(&folder);
+                    let (rows, more, total) = self.folder_rows(&folder, &query, collapsed, false);
+                    if total == 0 && (searching || !show_empty) {
+                        return None;
+                    }
+                    any_matched = true;
+                    let needs_approval = self.sessions.iter().any(|s| s.place == folder && s.needs_approval());
+                    let body: Vec<AnyElement> = rows.into_iter().map(|row| self.render_sidebar_row(row, &query, false, cx)).collect();
+                    let more_row = more.map(|(label, fewer)| {
+                        let folder = folder.clone();
+                        sidebar_row(ElementId::Name(format!("more-{:?}-{}", folder.host, folder.path.display()).into()), false)
+                            .aria_label(label.clone())
+                            .text_color(theme::text_faint())
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if fewer {
+                                    this.expanded.remove(&folder);
+                                } else {
+                                    this.expanded.insert(folder.clone());
+                                }
+                                cx.notify();
+                            }))
+                    });
+                    Some(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(self.render_folder_heading(&folder, collapsed, needs_approval, cx))
+                            .children(body)
+                            .children(more_row)
+                            .into_any_element(),
+                    )
+                })
+                .collect()
+        };
         let no_matches = searching && !any_matched;
 
         div()

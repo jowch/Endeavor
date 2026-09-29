@@ -170,25 +170,47 @@ impl Workspace {
         let filters = &self.settings.sidebar_filters;
         let show_empty = filters.show_empty_folders;
         let group_by_none = filters.group_by == crate::sidebar_filter::GroupBy::None;
-        let folders: Vec<Value> = self
-            .sidebar_folders()
-            .into_iter()
-            .filter_map(|folder| {
-                let collapsed = !group_by_none && !searching && self.settings.collapsed_folders.contains(&folder);
-                let (rows, more, total) = self.folder_rows(&folder, &query, collapsed);
-                if total == 0 && (searching || !show_empty) {
-                    return None;
-                }
-                let needs_approval = self.sessions.iter().any(|s| s.place == folder && s.needs_approval());
-                Some(json!({
-                    "heading": self.folder_heading(&folder),
-                    "collapsed": collapsed,
-                    "needs_approval": collapsed.then_some(needs_approval),
-                    "rows": rows.iter().map(|row| self.row_debug(row)).collect::<Vec<_>>(),
-                    "more": more.map(|(label, _)| label),
-                }))
-            })
-            .collect();
+        // Group by None: one heading-less entry with every row, flattened and
+        // sorted the same way `render_session_bar` builds it, so the dump
+        // can't drift from what's on screen.
+        let folders: Vec<Value> = if group_by_none {
+            let mut rows: Vec<(Row, String)> = self
+                .sidebar_folders()
+                .into_iter()
+                .flat_map(|folder| self.folder_rows(&folder, &query, false, true).0)
+                .map(|row| {
+                    let title = self.row_title(&row).unwrap_or_default();
+                    (row, title)
+                })
+                .collect();
+            crate::sidebar_filter::sort_titles(&mut rows, filters.sort_by, |(_, t)| t.as_str());
+            vec![json!({
+                "heading": null,
+                "collapsed": false,
+                "needs_approval": null,
+                "rows": rows.iter().map(|(row, _)| self.row_debug(row)).collect::<Vec<_>>(),
+                "more": null,
+            })]
+        } else {
+            self.sidebar_folders()
+                .into_iter()
+                .filter_map(|folder| {
+                    let collapsed = !searching && self.settings.collapsed_folders.contains(&folder);
+                    let (rows, more, total) = self.folder_rows(&folder, &query, collapsed, false);
+                    if total == 0 && (searching || !show_empty) {
+                        return None;
+                    }
+                    let needs_approval = self.sessions.iter().any(|s| s.place == folder && s.needs_approval());
+                    Some(json!({
+                        "heading": self.folder_heading(&folder),
+                        "collapsed": collapsed,
+                        "needs_approval": collapsed.then_some(needs_approval),
+                        "rows": rows.iter().map(|row| self.row_debug(row)).collect::<Vec<_>>(),
+                        "more": more.map(|(label, _)| label),
+                    }))
+                })
+                .collect()
+        };
         json!({
             "open": self.settings.layout.sidebar_open,
             "search": searching.then(|| query.clone()),
