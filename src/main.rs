@@ -2116,7 +2116,7 @@ fn main() {
 
 /// Resolve Settings → Appearance to light or dark and apply it everywhere
 /// native: the windows' own chrome, every token in `theme`, and the component
-/// library's mode. Returns whether it's light; the caller sets the notebook's.
+/// library's theme. Returns whether it's light; the caller sets the notebook's.
 fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
     use settings::Appearance;
     cx.set_window_appearance(match appearance {
@@ -2131,26 +2131,35 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
     };
     theme::set_light(light);
     // Theme::change applies these before building the component defaults from them.
-    if !light {
-        let ui = Theme::global_mut(cx);
-        let mut colors = ui.dark_theme.colors.clone();
-        // What agent replies' markdown is drawn with: hairlines, link colour,
-        // code block and table header backgrounds.
-        colors.border = Some(theme::hex(theme::border()));
-        colors.link = Some(theme::hex(theme::accent_text()));
-        colors.muted = Some(theme::hex(theme::bg_card()));
-        colors.table_head = Some(theme::hex(theme::bg_card()));
-        colors.table_head_foreground = Some(theme::hex(theme::text_muted()));
-        // The library's own focus ring (Input, Textarea, and anything else built
-        // from it), so a tabbed-to text box matches our own focus rings.
-        colors.ring = Some(theme::hex(theme::focus_ring()));
-        ui.dark_theme = std::rc::Rc::new(ThemeConfig {
-            font_family: Some(theme::SANS.into()),
-            mono_font_family: Some(theme::MONO.into()),
-            mono_font_size: Some(f32::from(theme::size_code())),
-            colors,
-            ..(*ui.dark_theme).clone()
-        });
+    let ui = Theme::global_mut(cx);
+    let base = if light { &ui.light_theme } else { &ui.dark_theme };
+    let mut colors = base.colors.clone();
+    // What agent replies' markdown is drawn with: hairlines, link colour,
+    // code block and table header backgrounds.
+    colors.border = Some(theme::hex(theme::border()));
+    colors.link = Some(theme::hex(theme::accent_text()));
+    colors.muted = Some(theme::hex(theme::bg_card()));
+    colors.table_head = Some(theme::hex(theme::bg_card()));
+    colors.table_head_foreground = Some(theme::hex(theme::text_muted()));
+    // The library's own focus ring (Input, Textarea, and anything else built
+    // from it), so a tabbed-to text box matches our own focus rings.
+    colors.ring = Some(theme::hex(theme::focus_ring()));
+    if light {
+        colors.foreground = Some(theme::hex(theme::text_primary()));
+        colors.popover = Some(theme::hex(theme::popover_bg()));
+        colors.popover_foreground = Some(theme::hex(theme::text_primary()));
+    }
+    let config = std::rc::Rc::new(ThemeConfig {
+        font_family: Some(theme::SANS.into()),
+        mono_font_family: Some(theme::MONO.into()),
+        mono_font_size: Some(f32::from(theme::size_code())),
+        colors,
+        ..(**base).clone()
+    });
+    if light {
+        ui.light_theme = config;
+    } else {
+        ui.dark_theme = config;
     }
     Theme::change(if light { ThemeMode::Light } else { ThemeMode::Dark }, None, cx);
     cx.refresh_windows();
