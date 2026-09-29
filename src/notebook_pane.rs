@@ -22,7 +22,8 @@ use crate::resources::Target;
 use crate::session::{Effect, Session, Stopped, folder_name};
 use crate::settings::NotebookTheme;
 use crate::overlay;
-use crate::{MenuTarget, Workspace, platform, pluto, theme};
+use crate::menu::MenuTarget;
+use crate::{Workspace, platform, pluto, theme};
 
 /// An item in the notebook's ⋮ menu or its Share menu.
 #[derive(Clone, Copy, Debug, PartialEq)]

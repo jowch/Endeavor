@@ -8,9 +8,10 @@ use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::hosts::{HostId, Place};
+use crate::menu::MenuTarget;
 use crate::new_session::{self, Glyph, NotebookChoice, glyph, menu_row};
 use crate::session::{Session, folder_name};
-use crate::{Interrupt, MenuTarget, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
+use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
 
 /// A 28px sidebar row (sessions, "New session").
 fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
@@ -1278,5 +1279,20 @@ impl Workspace {
             .text_size(theme::size_body())
             .text_color(theme::text_primary())
             .children(items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Row, RowAction};
+
+    #[test]
+    fn row_menu_items() {
+        let labels = |row: &Row, archived, local| RowAction::for_row(row, archived, local).into_iter().map(RowAction::label).collect::<Vec<_>>();
+        let past = Row::Past("s1".to_string().into(), crate::hosts::Place::local("/tmp"));
+        assert_eq!(labels(&Row::Open(1), Some(false), true), ["Rename", "Reveal folder in Finder", "Archive", "Close", "Delete…"]);
+        assert_eq!(labels(&Row::Open(1), None, true), ["Rename", "Reveal folder in Finder", "Close", "Delete…"]);
+        assert_eq!(labels(&past, Some(true), true), ["Rename", "Reveal folder in Finder", "Unarchive", "Delete…"]);
+        assert_eq!(labels(&Row::Open(1), Some(false), false), ["Rename", "Archive", "Close", "Delete…"]);
     }
 }
