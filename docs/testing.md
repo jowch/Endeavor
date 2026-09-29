@@ -59,9 +59,10 @@ To wait for something, poll the dump. For example, loop until
 
 ### What it holds
 
-- `window`. The screen: `new_session`, `session`, `settings`, `sign_in` or
-  `splash`. Also the setup step, an open dialog (`server_dialog`, `ssh_prompt`,
-  `login_node_warning`), and whether a menu is open.
+- `window`. The screen: `new_session`, `session`, `sign_in` or `splash`.
+  Also the setup step, an open dialog (`server_dialog`, `ssh_prompt`,
+  `login_node_warning`), whether Settings is open (`settings_open`), and
+  whether a menu is open.
 - `offline`. Null when online. Otherwise, how long the app has been offline.
 - `sign_in`. `account` is `unknown`, `signed_in` or `signed_out`. When signed
   out, `stage` says where sign-in is, and `card` says whether its card shows
@@ -104,6 +105,18 @@ To wait for something, poll the dump. For example, loop until
   the box (slash commands, offline, queue heading, notices). `queue` lists the
   waiting messages, each with its label (`sending now…`, `copying files…`).
   `tips` says whether the file tip and the Point tip show.
+- `settings`, while Settings is open. The `section` and `page` (a
+  sub-page is `claude` or `julia`), the `search` text, and the `list` on the
+  left (each section's name, whether it's current, its dot, and while
+  searching its count of results). Then the page as drawn: `title`, `back`,
+  `subtitle`, and `groups`, each with its `heading`, `foot` and `items`. A
+  row has its `title`, `state` (its status line, such as "Running · 2
+  notebooks open") and `tone` (`attention` is orange, `danger` red), `desc`,
+  `extra` (a hint, the chosen Julia's path and version, or Repair's
+  progress), its `controls` (buttons with `enabled`, toggles with `on`, the
+  idle-stop list with `open`), and `highlighted` for the row a search result
+  or a link opened. While searching, the rows are the results, each with its
+  `crumb` ("Notebooks › Languages").
 - `page`. What the notebook page reports: Point on or off, the picked cells
   and the drawn box, Point's status line and comment, the drawer's tab, whether
   the safe-preview callout shows, and `alerts`, every `window.alert` the page
@@ -209,4 +222,15 @@ folder.
 - `ENDEAVOR_TEST_UNREACHABLE`: a file path. While the file exists, the
   `local-test` server can't be reached. To show "Can't reach", connect a
   session to a server whose SSH host is `local-test`, create the file, and end
-  that server's `endeavor-remote connect` process.
+  that server's `endeavor-remote connect` process. Opening Settings connects
+  every server too, so the same works from Where notebooks run without a
+  session.
+- `ENDEAVOR_TEST_PICK_JULIA`: a file path. While the file exists, Settings'
+  Choose… for another Julia takes the path written in it instead of opening
+  the file picker, through the same code as a real pick.
+- `ENDEAVOR_TEST_ADAPTER_UPDATE`: a file path. While the file exists, an
+  update to the Claude Code adapter shows as available (About, Settings'
+  About and the dot on the sidebar's gear). Don't press its Update.
+- `ENDEAVOR_CLAUDE_CLI`: a program that stands in for `claude` in `claude
+  auth status`, `login` and `logout`, so sign-in, the account on Settings'
+  Claude page and Sign out can be tested without touching the real sign-in.
