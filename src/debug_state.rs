@@ -254,7 +254,7 @@ impl Workspace {
                 continue;
             }
             if let Entry::RunState(warnings) = &s.entries[ix] {
-                out.extend(warnings.iter().map(|w| json!({ "kind": "note", "text": format!("⚠ {w}") })));
+                out.extend(warnings.iter().map(|w| json!({ "kind": "note", "text": session::run_state_line(w) })));
                 ix += 1;
                 continue;
             }

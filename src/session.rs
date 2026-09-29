@@ -689,7 +689,7 @@ impl Session {
     /// Send or queue a message. Before the session exists everything queues.
     pub fn submit(&mut self, mut message: Queued, now: bool) -> Vec<Effect> {
         if self.failed.is_some() {
-            self.note("This session isn't open, so nothing was sent.");
+            self.note("This session isn't open, so nothing was sent");
             return Vec::new();
         }
         if let Some(context) = self.start_context.take() {
@@ -777,8 +777,8 @@ impl Session {
         match event {
             SessionEvent::TurnEnded(reason) => {
                 // Stopped to send the next message: its bubble says so.
-                if reason != StopReason::EndTurn && !(reason == StopReason::Cancelled && self.outbox.stopping()) {
-                    self.note(format!("Turn ended: {reason:?}"));
+                if let Some(note) = turn_ended_note(reason).filter(|_| !(reason == StopReason::Cancelled && self.outbox.stopping())) {
+                    self.note(note);
                 }
                 self.turn_ended(&mut effects);
             }
@@ -1185,14 +1185,39 @@ impl Session {
                 }
                 self.mark(ix);
             }
-            None => {
-                let what = runs::asked(title, input).unwrap_or_else(|| title.to_string());
-                let mut label = approval.label().to_string();
-                label[..1].make_ascii_uppercase();
-                self.note(format!("{label}: {what}"));
-            }
+            None => self.note(answer_note(approval, &runs::asked(title, input).unwrap_or_else(|| cut_line(title, 60)))),
         }
     }
+}
+
+/// The note for a turn that ended before Claude finished, in plain words.
+/// Notes read as labels: one clause, no full stop.
+pub(crate) fn turn_ended_note(reason: StopReason) -> Option<&'static str> {
+    Some(match reason {
+        StopReason::EndTurn => return None,
+        StopReason::Cancelled => "You stopped Claude",
+        StopReason::MaxTokens => "Claude stopped: the reply got too long",
+        StopReason::MaxTurnRequests => "Claude stopped: it took too many steps in one go",
+        StopReason::Refusal => "Claude declined to continue",
+        _ => "Claude stopped",
+    })
+}
+
+/// The note for an answer to a prompt whose call isn't in the transcript:
+/// "Allowed: edit a cell", "Denied: run 2 cells".
+pub(crate) fn answer_note(approval: Approval, what: &str) -> String {
+    let answer = match approval {
+        Approval::Allowed => "Allowed",
+        Approval::AllowedFromNowOn => "Allowed from now on",
+        Approval::WithoutAsking => "Allowed without asking",
+        Approval::Denied => "Denied",
+    };
+    format!("{answer}: {what}")
+}
+
+/// A run-state warning as the transcript shows it.
+pub(crate) fn run_state_line(warning: &pluto::RunWarning) -> String {
+    format!("⚠ {warning}")
 }
 
 /// The current value of a select config option, by id.
@@ -1458,10 +1483,10 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
         Entry::RunState(warnings) => div()
             .flex()
             .flex_col()
-            .gap_4()
+            .gap_1()
             .text_size(theme::size_meta())
             .text_color(muted)
-            .children(warnings.iter().map(|w| format!("⚠ {w}")))
+            .children(warnings.iter().map(run_state_line))
             .into_any_element(),
         Entry::Tool { .. } | Entry::Thought { .. } => render_row(session, ix, false, window, cx),
         Entry::Plan(entries) => div()
@@ -2796,6 +2821,28 @@ mod tests {
     }
 
     #[test]
+    fn transcript_notes_say_what_happened_in_plain_words() {
+        use super::{Approval, answer_note, turn_ended_note};
+        assert_eq!(turn_ended_note(StopReason::EndTurn), None);
+        assert_eq!(turn_ended_note(StopReason::Cancelled), Some("You stopped Claude"));
+        assert_eq!(turn_ended_note(StopReason::MaxTokens), Some("Claude stopped: the reply got too long"));
+        assert_eq!(turn_ended_note(StopReason::MaxTurnRequests), Some("Claude stopped: it took too many steps in one go"));
+        assert_eq!(turn_ended_note(StopReason::Refusal), Some("Claude declined to continue"));
+        assert_eq!(answer_note(Approval::Allowed, "edit a cell"), "Allowed: edit a cell");
+        assert_eq!(answer_note(Approval::AllowedFromNowOn, "run 2 cells"), "Allowed from now on: run 2 cells");
+        assert_eq!(answer_note(Approval::WithoutAsking, "run a cell"), "Allowed without asking: run a cell");
+        assert_eq!(answer_note(Approval::Denied, "delete a cell"), "Denied: delete a cell");
+
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("go"), false);
+        s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(note)) if note.as_ref() == "You stopped Claude"));
+        s.approve(&"gone".to_string().into(), Approval::WithoutAsking, "mcp__notebook__submit_changes", &serde_json::json!({ "cell_ids": ["a", "b"] }));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(note)) if note.as_ref() == "Allowed without asking: run 2 cells"));
+    }
+
+    #[test]
     fn run_cards_ask_one_way_with_or_without_a_preview() {
         use crate::pluto::RunPreview;
         use serde_json::json;
@@ -3445,11 +3492,11 @@ more" }"#);
         };
         let mut s = Session::new(1, Place::local("/tmp"), None);
         s.note_run_state(pluto::run_warnings(&list(json!(["a", "b"]))));
-        assert_eq!(shown(&s), ["slow.jl: 2 cells still running."]);
+        assert_eq!(shown(&s), ["2 cells in slow.jl are still running"]);
 
         assert!(!s.refresh_run_state(&list(json!(["a", "b"]))), "nothing new");
         assert!(s.refresh_run_state(&list(json!(["b"]))));
-        assert_eq!(shown(&s), ["slow.jl: 1 cell still running."]);
+        assert_eq!(shown(&s), ["1 cell in slow.jl is still running"]);
         assert!(s.refresh_run_state(&list(json!([]))));
         assert!(shown(&s).is_empty());
         assert!(!s.refresh_run_state(&list(json!(["a"]))), "a later run doesn't bring it back");

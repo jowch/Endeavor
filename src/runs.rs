@@ -227,7 +227,7 @@ mod tests {
             tool("b"),
             Entry::Agent { text: "Done.".into(), at: None },
             tool("c"),
-            Entry::Note("Allowed: execute_cell".into()),
+            Entry::Note("Allowed: run a cell".into()),
             tool("d"),
         ];
         assert_eq!(run_at(&entries, 0), None, "a message is not in a run");

@@ -247,16 +247,18 @@ pub enum RunWarningKind {
 impl std::fmt::Display for RunWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let name = Path::new(&self.path).file_name().and_then(|n| n.to_str()).unwrap_or("notebook");
-        let cells = match self.cells.len() {
-            1 => "1 cell".to_string(),
-            n => format!("{n} cells"),
+        let (cells, one) = match self.cells.len() {
+            1 => ("1 cell".to_string(), true),
+            n => (format!("{n} cells"), false),
         };
+        let (was, has, is) = if one { ("was", "hasn't", "is") } else { ("were", "haven't", "are") };
         match self.kind {
             RunWarningKind::Unrun if self.safe_preview => {
-                write!(f, "{name}: {cells} edited but not run. The notebook is in safe preview; Run notebook at its top runs it.")
+                let they = if one { "it runs" } else { "they run" };
+                write!(f, "{cells} in {name} {was} changed but {has} run. The notebook is in safe preview, so {they} once you press Run notebook at its top.")
             }
-            RunWarningKind::Unrun => write!(f, "{name}: {cells} edited but never run."),
-            RunWarningKind::Running => write!(f, "{name}: {cells} still running."),
+            RunWarningKind::Unrun => write!(f, "{cells} in {name} {was} changed but {has} run"),
+            RunWarningKind::Running => write!(f, "{cells} in {name} {is} still running"),
         }
     }
 }
@@ -337,9 +339,9 @@ mod tests {
         assert_eq!(
             texts(&run_warnings(&list)),
             [
-                "preview.jl: 2 cells edited but not run. The notebook is in safe preview; Run notebook at its top runs it.",
-                "busy.jl: 1 cell edited but never run.",
-                "busy.jl: 1 cell still running.",
+                "2 cells in preview.jl were changed but haven't run. The notebook is in safe preview, so they run once you press Run notebook at its top.",
+                "1 cell in busy.jl was changed but hasn't run",
+                "1 cell in busy.jl is still running",
             ]
         );
     }
@@ -349,16 +351,16 @@ mod tests {
         let said = run_warnings(&json!([
             { "path": "/n/busy.jl", "pending_run": ["a", "b", "c"], "running": ["a", "b"], "execution_allowed": true },
         ]));
-        assert_eq!(texts(&said), ["busy.jl: 1 cell edited but never run.", "busy.jl: 2 cells still running."]);
+        assert_eq!(texts(&said), ["1 cell in busy.jl was changed but hasn't run", "2 cells in busy.jl are still running"]);
 
         let one_done = json!([{ "path": "/n/busy.jl", "pending_run": ["b", "c"], "running": ["b"], "execution_allowed": true }]);
-        assert_eq!(texts(&still_true(&said, &one_done)), ["busy.jl: 1 cell edited but never run.", "busy.jl: 1 cell still running."]);
+        assert_eq!(texts(&still_true(&said, &one_done)), ["1 cell in busy.jl was changed but hasn't run", "1 cell in busy.jl is still running"]);
 
         let all_done = json!([{ "path": "/n/busy.jl", "pending_run": [], "running": [], "execution_allowed": true }]);
         assert!(still_true(&said, &all_done).is_empty());
 
         let later_work = json!([{ "path": "/n/busy.jl", "pending_run": ["d"], "running": ["b", "d"], "execution_allowed": true }]);
-        assert_eq!(texts(&still_true(&said, &later_work)), ["busy.jl: 1 cell still running."], "a later run of other cells isn't added");
+        assert_eq!(texts(&still_true(&said, &later_work)), ["1 cell in busy.jl is still running"], "a later run of other cells isn't added");
 
         let closed = json!([]);
         assert!(still_true(&said, &closed).is_empty());
