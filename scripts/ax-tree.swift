@@ -6,6 +6,10 @@
 // depth. MAX_DEPTH defaults to 14 (deep enough for a dialog or a menu; the
 // notebook's web view can nest much deeper, so pass a smaller depth there).
 //
+// ax-tree.swift PID focused: print just the one element that currently has
+// keyboard focus (kAXFocusedUIElementAttribute) -- the fast way to check
+// where Tab/Shift-Tab landed, without diffing a whole tree dump.
+//
 // Needs Accessibility permission for whatever process runs this (Terminal,
 // Ghostty, or the like) -- the same permission target/ui-tools needs.
 //
@@ -59,10 +63,9 @@ func walk(_ el: AXUIElement, depth: Int, maxDepth: Int, out: inout String) {
 
 let args = CommandLine.arguments
 guard args.count >= 2, let pid = pid_t(args[1]) else {
-    FileHandle.standardError.write("usage: ax-tree.swift PID [MAX_DEPTH]\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: ax-tree.swift PID [MAX_DEPTH | focused]\n".data(using: .utf8)!)
     exit(1)
 }
-let maxDepth = args.count >= 3 ? (Int(args[2]) ?? 14) : 14
 
 if !AXIsProcessTrusted() {
     FileHandle.standardError.write("Accessibility permission not granted to this process. Grant it in System Settings > Privacy & Security > Accessibility.\n".data(using: .utf8)!)
@@ -70,6 +73,17 @@ if !AXIsProcessTrusted() {
 }
 
 let app = AXUIElementCreateApplication(pid)
+
+if args.count >= 3, args[2] == "focused" {
+    guard let focused = attr(app, kAXFocusedUIElementAttribute as String) else {
+        print("(nothing focused)")
+        exit(0)
+    }
+    print(describe(focused as! AXUIElement))
+    exit(0)
+}
+
+let maxDepth = args.count >= 3 ? (Int(args[2]) ?? 14) : 14
 var out = ""
 walk(app, depth: 0, maxDepth: maxDepth, out: &out)
 print(out, terminator: "")

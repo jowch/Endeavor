@@ -385,31 +385,31 @@ impl Session {
 
     /// The sidebar row's Tab-stop handle, created on first use.
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.focus.borrow_mut().get_or_insert_with(|| cx.focus_handle()).clone()
+        self.focus.borrow_mut().get_or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// The approval card's Tab-stop handle for button `i`, growing the pool if needed.
     pub fn approval_focus(&self, i: usize, cx: &App) -> FocusHandle {
         let mut pool = self.approval_focus.borrow_mut();
         while pool.len() <= i {
-            pool.push(cx.focus_handle());
+            pool.push(cx.focus_handle().tab_stop(true));
         }
         pool[i].clone()
     }
 
     /// The pinned plan's fold toggle's Tab-stop handle, created on first use.
     pub fn pinned_plan_focus(&self, cx: &App) -> FocusHandle {
-        self.pinned_plan_focus.borrow_mut().get_or_insert_with(|| cx.focus_handle()).clone()
+        self.pinned_plan_focus.borrow_mut().get_or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// A folded run header's Tab-stop handle, by the run's first entry index.
     pub fn run_focus(&self, start: usize, cx: &App) -> FocusHandle {
-        self.run_focus.borrow_mut().entry(start).or_insert_with(|| cx.focus_handle()).clone()
+        self.run_focus.borrow_mut().entry(start).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// A tool/thought row's Tab-stop handle, by its entry index.
     pub fn row_focus(&self, ix: usize, cx: &App) -> FocusHandle {
-        self.row_focus.borrow_mut().entry(ix).or_insert_with(|| cx.focus_handle()).clone()
+        self.row_focus.borrow_mut().entry(ix).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// Starting or reopening failed: stop looking busy and say why.

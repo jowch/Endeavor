@@ -1967,12 +1967,12 @@ impl Workspace {
     /// A dialog button's Tab-stop handle, keyed by its static id and cached across
     /// renders (dialogs like `server_dialog.rs`'s are otherwise rebuilt from scratch).
     pub(crate) fn dialog_focus(&self, id: &'static str, cx: &App) -> FocusHandle {
-        self.dialog_focus.borrow_mut().entry(id).or_insert_with(|| cx.focus_handle()).clone()
+        self.dialog_focus.borrow_mut().entry(id).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// A past sidebar row's Tab-stop handle, cached by session id across renders.
     fn past_row_focus(&self, id: &SessionId, cx: &App) -> FocusHandle {
-        self.past_row_focus.borrow_mut().entry(id.clone()).or_insert_with(|| cx.focus_handle()).clone()
+        self.past_row_focus.borrow_mut().entry(id.clone()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// A session's sidebar row: right-click opens its menu, and it stays lit while

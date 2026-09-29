@@ -110,12 +110,12 @@ impl Composer {
             hovered: None,
             hovered_sent: None,
             rows: std::cell::Cell::new((0, 0)),
-            focus_plus: cx.focus_handle(),
-            focus_point: cx.focus_handle(),
-            focus_mode: cx.focus_handle(),
-            focus_model: cx.focus_handle(),
-            focus_effort: cx.focus_handle(),
-            focus_send: cx.focus_handle(),
+            focus_plus: cx.focus_handle().tab_stop(true),
+            focus_point: cx.focus_handle().tab_stop(true),
+            focus_mode: cx.focus_handle().tab_stop(true),
+            focus_model: cx.focus_handle().tab_stop(true),
+            focus_effort: cx.focus_handle().tab_stop(true),
+            focus_send: cx.focus_handle().tab_stop(true),
             focus_chip_remove: std::cell::RefCell::new(Vec::new()),
         }
     }
@@ -124,7 +124,7 @@ impl Composer {
     fn chip_remove_focus(&self, i: usize, cx: &App) -> FocusHandle {
         let mut pool = self.focus_chip_remove.borrow_mut();
         while pool.len() <= i {
-            pool.push(cx.focus_handle());
+            pool.push(cx.focus_handle().tab_stop(true));
         }
         pool[i].clone()
     }
