@@ -264,7 +264,7 @@ pub struct Session {
     pub start_mode: Option<Mode>,
     /// The sidebar row's Tab-stop handle. Lazily created (no `App` is available
     /// in `Session::new`'s many test call sites) and cached, so it stays stable.
-    focus: RefCell<Option<FocusHandle>>,
+    pub focus: RefCell<Option<FocusHandle>>,
     /// The open approval card's button handles, resized to match its button count.
     approval_focus: RefCell<Vec<FocusHandle>>,
     /// The pinned plan's fold toggle's Tab-stop handle.

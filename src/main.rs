@@ -936,6 +936,8 @@ impl Workspace {
         let (title, untitled) = self.past_title(&info);
         let notebook = self.session_notebooks.get(&info.session_id.to_string()).map(|p| p.path.display().to_string());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
+        // The row keeps its handle as it turns from past to open, so keyboard focus stays on it.
+        let row_focus = self.past_row_focus.get_mut().remove(&info.session_id);
         let mut session = Session::loading(key, info.session_id, place, server, title);
         if let Some(path) = &notebook {
             session.open_on_start(path.clone());
@@ -949,6 +951,7 @@ impl Workspace {
         if self.holds(&session) {
             session.hold();
         }
+        *session.focus.get_mut() = row_focus;
         self.sessions.push(session);
         if let Some(path) = notebook {
             self.bind_notebook(key, path, cx);
