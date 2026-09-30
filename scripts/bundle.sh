@@ -8,6 +8,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 cargo build --release
+# Linux servers' helpers: kept, downloaded or built (scripts/helpers.sh).
+scripts/helpers.sh || echo "note: no helpers for Linux servers; this build can't connect to them" >&2
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app=target/release/Endeavor.app
@@ -16,11 +18,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/endeavor target/release/endeavor-remote "$app/Contents/MacOS/"
 cp -R runtime plugin adapter "$app/Contents/Resources/"
 cp assets/icon/Endeavor.icns "$app/Contents/Resources/"
-# Helpers for Linux servers, if built (scripts/build-helpers.sh).
+# Helpers for Linux servers (scripts/helpers.sh, above).
 if [ -d target/helpers ]; then
   cp -R target/helpers "$app/Contents/Resources/"
-else
-  echo "note: no target/helpers; this build can't connect to Linux servers (see scripts/build-helpers.sh)" >&2
 fi
 
 cat > "$app/Contents/Info.plist" <<EOF
