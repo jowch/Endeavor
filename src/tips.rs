@@ -158,9 +158,9 @@ impl Workspace {
     }
 
     /// Whether Point's tip shows, given that the notebook is on screen. Not
-    /// while a menu is open: the menu would cover it.
+    /// while a menu or the find bar is open: either would cover it.
     pub fn point_tip_shows(&self, notebook_shown: bool) -> bool {
-        notebook_shown && !self.settings.point_tip_seen && self.menu.is_none()
+        notebook_shown && !self.settings.point_tip_seen && self.menu.is_none() && self.find.is_none()
     }
 
     /// Point's tip, hanging from the notebook header's Point button over the

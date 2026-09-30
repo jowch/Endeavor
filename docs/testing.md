@@ -107,6 +107,9 @@ To wait for something, poll the dump. For example, loop until
   - `missing`: its file isn't there.
   - `no_notebook`: the turtle's "No notebook in this session yet".
 
+  `find` is the find bar (⌘F in the notebook), null while it's closed: its
+  `text`, `found` (null before a search has an answer) and `result`, the
+  words after the box ("Not found").
   `header` has the file, the host chip, the tags ("Safe preview",
   "Read-only", "Restart needed"…), the work under way, and when a cluster job
   ends. `warning` is the "Can't reach" box above the pane. On the new-session

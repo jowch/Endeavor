@@ -370,6 +370,12 @@ impl Workspace {
                 let (secs, reloaded, button) = self.opening.state(std::time::Instant::now()).unwrap_or_default();
                 json!({ "secs": secs, "reloaded": reloaded, "reload_button": button })
             }),
+            "find": self.find.as_ref().map(|f| json!({
+                "text": f.input.read(cx).value().to_string(),
+                "result": crate::find_bar::result_text(f.found),
+                "found": f.found,
+                "shown": shown == PaneShows::Page,
+            })),
         })
     }
 

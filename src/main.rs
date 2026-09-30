@@ -23,6 +23,7 @@ mod connection;
 #[cfg(debug_assertions)]
 mod debug_state;
 mod details;
+mod find_bar;
 mod gate;
 mod host_list;
 mod hosts;
@@ -104,6 +105,8 @@ actions!(
         NewSession,
         OpenSettings,
         FindSetting,
+        FindNext,
+        FindPrevious,
         Quit,
         ZoomIn,
         ZoomOut,
@@ -427,6 +430,8 @@ pub struct Workspace {
     /// The open confirm dialog (Stop a host, Cancel a job, Repair Julia, Sign
     /// out, Delete session), if any.
     confirm: Option<confirm::Confirm>,
+    /// Find in the notebook, while its bar is open.
+    find: Option<find_bar::FindBar>,
     /// Watches for the pane saying "Opening" for a notebook that's open (notebook_pane.rs).
     opening: notebook_pane::OpeningWatch,
     /// ENDEAVOR_TEST_STUCK_OPENING's file was there at the last check.
@@ -637,6 +642,7 @@ impl Workspace {
             keyboard_home: cx.focus_handle(),
             sidebar_focus: cx.focus_handle(),
             confirm: None,
+            find: None,
             opening: notebook_pane::OpeningWatch::default(),
             #[cfg(debug_assertions)]
             test_blanked: false,
@@ -1057,6 +1063,9 @@ impl Workspace {
     /// Show a session; the notebook pane follows it to the notebook it last viewed
     /// (without one, the pane draws a stand-in over the hidden web view).
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
+        if self.active != Some(key) && self.find.take().is_some() {
+            webcontent::clear_find(self.webview.read(cx).raw());
+        }
         self.active = Some(key);
         self.follow_folder(cx);
         if let Some((host, notebook)) = self.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
@@ -1262,15 +1271,31 @@ impl Workspace {
         self.open_settings_last(window, cx);
     }
 
-    /// ⌘F: Settings' own search while it's open; else the sidebar search,
-    /// while the sidebar has focus.
+    /// ⌘F: Settings' own search while it's open; else find in the notebook,
+    /// while it has the keyboard (a click in the page gives it the keyboard)
+    /// or its find bar is open; else the sidebar search, while the sidebar has
+    /// focus. The notebook comes before the sidebar: while the web view has the
+    /// keyboard, GPUI's focus stays wherever it was last.
     fn find_setting(&mut self, _: &FindSetting, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_panel.is_some() {
             return self.focus_settings_search(window, cx);
         }
+        let webview = self.webview.read(cx);
+        if webview.visible() && (self.find.is_some() || webcontent::has_keyboard(webview.raw())) {
+            return self.open_find(window, cx);
+        }
         if self.sidebar_focus.contains_focused(window, cx) {
             self.open_sidebar_search(window, cx);
         }
+    }
+
+    /// ⌘G and ⇧⌘G: the next and previous match, while the find bar is open.
+    fn find_next(&mut self, _: &FindNext, _: &mut Window, cx: &mut Context<Self>) {
+        self.find_in_page(false, cx);
+    }
+
+    fn find_previous(&mut self, _: &FindPrevious, _: &mut Window, cx: &mut Context<Self>) {
+        self.find_in_page(true, cx);
     }
 
     /// "/" at the start of the box lists the agent's commands matching what follows;
@@ -1393,6 +1418,9 @@ impl Workspace {
         }
         if self.settings_escape(window, cx) {
             return;
+        }
+        if self.find.as_ref().is_some_and(|f| f.input.read(cx).focus_handle(cx).is_focused(window)) {
+            return self.close_find(cx);
         }
         if self.close_composer_menus(cx) {
             return;
@@ -1962,6 +1990,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::new_session))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::find_setting))
+            .on_action(cx.listener(Self::find_next))
+            .on_action(cx.listener(Self::find_previous))
             .on_action(cx.listener(Self::add_files))
             .on_mouse_move(cx.listener(Self::drag_divider))
             .on_mouse_up(
@@ -2008,6 +2038,7 @@ impl Render for Workspace {
                     .tab_group()
                     .tab_index(2)
                     .child(notebook_header)
+                    .children(self.render_find_bar(window, cx).filter(|_| show_webview))
                     .children(active.and_then(|ix| self.render_pane_warning(&self.sessions[ix], cx)))
                     .child(div().flex_1().min_h_0().child(notebook)),
             )
@@ -2072,6 +2103,8 @@ fn main() {
             KeyBinding::new("secondary-n", NewSession, None),
             KeyBinding::new("secondary-,", OpenSettings, None),
             KeyBinding::new("secondary-f", FindSetting, None),
+            KeyBinding::new("secondary-g", FindNext, None),
+            KeyBinding::new("secondary-shift-g", FindPrevious, None),
             KeyBinding::new("secondary-q", Quit, None),
             KeyBinding::new("secondary-m", Minimize, None),
             KeyBinding::new("secondary-=", ZoomIn, None),
@@ -2122,6 +2155,12 @@ fn main() {
                     MenuItem::os_action("Copy", Copy, OsAction::Copy),
                     MenuItem::os_action("Paste", Paste, OsAction::Paste),
                     MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+                    // Menu items, so their keys reach the app while the notebook has the
+                    // keyboard: the web view offers keys to the menu first (webkeys.rs).
+                    MenuItem::separator(),
+                    MenuItem::action("Find…", FindSetting),
+                    MenuItem::action("Find Next", FindNext),
+                    MenuItem::action("Find Previous", FindPrevious),
                 ],
             ),
             menu(

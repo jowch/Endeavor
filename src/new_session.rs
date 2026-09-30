@@ -1343,6 +1343,8 @@ pub(crate) enum Glyph {
     Folder,
     File,
     Chevron,
+    /// A chevron pointing up (find's previous match).
+    ChevronUp,
     Search,
     /// Filters: two vertical tracks, each with a knob at its current value.
     Sliders,
@@ -1462,6 +1464,7 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&[(4.5, 8.5), (7.5, 8.5)]);
                 }
                 Glyph::Chevron => polyline(&[(3.5, 5.), (6., 7.5), (8.5, 5.)]),
+                Glyph::ChevronUp => polyline(&[(3.5, 7.), (6., 4.5), (8.5, 7.)]),
                 Glyph::Search => {
                     let circle: Vec<(f32, f32)> = (0..=24).map(|i| {
                         let a = std::f32::consts::TAU * i as f32 / 24.;

@@ -45,6 +45,13 @@ The remaining work is ranked at the end of this page.
 - **Notebook.** Pluto loads in the WebKitGTK web view at the right place and
   size, and follows the pane when the sidebar opens or the window resizes. Run
   notebook runs cells. Typing, arrow keys and Shift+Enter work in cells.
+- **Find in the notebook.** Ctrl+F with the notebook's keyboard opens the find
+  bar, which searches with WebKitGTK's find controller: it marks every match
+  and the current one, Enter and Ctrl+G go to the next, Shift+Enter and
+  Ctrl+Shift+G to the previous, "Not found" shows when nothing matches, and
+  Esc closes it and gives the notebook the keyboard back
+  (`src/linux/webcontent.rs`). The bar shows no count, as on macOS, though
+  WebKitGTK's `found-text` has one.
 - **A crashed notebook page.** When WebKitGTK's web process ends
   (`web-process-terminated`), the app logs it and loads the notebook again.
   Tested by killing the instance's `WebKitWebProcess`.
