@@ -52,7 +52,7 @@ pub fn bg_sunken() -> Rgba { pick(0x18181A, 0xF8F8FA) }
 pub fn bg_urgent() -> Rgba { pick(0x1F1712, 0xFCF1EB) }
 /// Tags (the chat header's folder, inline code).
 pub fn bg_tag() -> Rgba { pick(0x222225, 0xECECEF) }
-pub fn text_tag() -> Rgba { pick(0x9A9A9A, 0x5C5C64) }
+pub fn text_tag() -> Rgba { pick(0x9A9997, 0x5C5C64) }
 /// Card outlines; decorative.
 pub fn border() -> Rgba { pick(0x2A2A2E, 0xE1E1E6) }
 /// The sidebar's right edge.
@@ -102,22 +102,22 @@ pub fn about_footer() -> Rgba { pick(0x18181B, 0xF8F8FA) }
 pub fn approval_ring() -> Rgba { pick_a(0xCC3F001A, 0xCC3F001F) }
 
 /// Chat body.
-pub fn text_primary() -> Rgba { pick(0xECECEC, 0x1B1B1F) }
+pub fn text_primary() -> Rgba { pick(0xF0EFEC, 0x1B1B1F) }
 /// Cell names, model/effort.
-pub fn text_secondary() -> Rgba { pick(0xBDBDBD, 0x45454C) }
+pub fn text_secondary() -> Rgba { pick(0xBDBCBA, 0x45454C) }
 /// The active sidebar row's text.
-pub fn text_row_active() -> Rgba { pick(0xD4D4D4, 0x202025) }
+pub fn text_row_active() -> Rgba { pick(0xD4D3D0, 0x202025) }
 /// "New session" in the sidebar.
-pub fn text_new() -> Rgba { pick(0xA3A3A3, 0x505058) }
+pub fn text_new() -> Rgba { pick(0xA3A2A0, 0x505058) }
 /// Sidebar rows outside the session list (the status line, "Show N more"…).
-pub fn text_muted() -> Rgba { pick(0x8C8C8C, 0x5C5C64) }
+pub fn text_muted() -> Rgba { pick(0x8C8B8A, 0x5C5C64) }
 /// Sidebar session rows (open and past): a dark-contrast raise over
 /// `text_muted`, so folder headings (`text_section`) read as the lower level.
-pub fn text_row() -> Rgba { pick(0xBDBDBD, 0x5C5C64) }
+pub fn text_row() -> Rgba { pick(0xBDBCBA, 0x5C5C64) }
 /// Tool lines, timestamps.
-pub fn text_faint() -> Rgba { pick(0x858585, 0x66666E) }
+pub fn text_faint() -> Rgba { pick(0x858483, 0x66666E) }
 /// Section heads.
-pub fn text_section() -> Rgba { pick(0x888888, 0x6B6B73) }
+pub fn text_section() -> Rgba { pick(0x888786, 0x6B6B73) }
 
 /// Filled primary (white text), unrun stripe, busy dot.
 pub fn accent() -> Rgba { rgb(0xCC3F00) }

@@ -2276,10 +2276,10 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
     // The library's own focus ring (Input, Textarea, and anything else built
     // from it), so a tabbed-to text box matches our own focus rings.
     colors.ring = Some(theme::hex(theme::focus_ring()));
+    colors.foreground = Some(theme::hex(theme::text_primary()));
+    colors.popover_foreground = Some(theme::hex(theme::text_primary()));
     if light {
-        colors.foreground = Some(theme::hex(theme::text_primary()));
         colors.popover = Some(theme::hex(theme::popover_bg()));
-        colors.popover_foreground = Some(theme::hex(theme::text_primary()));
     }
     let config = std::rc::Rc::new(ThemeConfig {
         font_family: Some(theme::SANS.into()),

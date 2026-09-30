@@ -1510,15 +1510,15 @@
   --e-bg-raised: #26262A;
   --e-bg-sunken: #18181A;
   --e-bg-tag: #222225;
-  --e-text-tag: #9A9A9A;
+  --e-text-tag: #9A9997;
   --e-border: #2A2A2E;
   --e-control-edge: #3A3A40;
   --e-divider: #1F1F22;
-  --e-text-primary: #ECECEC;
-  --e-text-secondary: #BDBDBD;
-  --e-text-muted: #8C8C8C;
-  --e-text-faint: #858585;
-  --e-text-section: #888888;
+  --e-text-primary: #F0EFEC;
+  --e-text-secondary: #BDBCBA;
+  --e-text-muted: #8C8B8A;
+  --e-text-faint: #858483;
+  --e-text-section: #888786;
   --e-accent: #CC3F00;
   --e-accent-text: #E08A5E;
   --e-focus-ring: #E08A5E;
@@ -1537,7 +1537,7 @@
 
   /* Colours used by one or a few modules that don't match one of the tokens
      above closely enough to reuse it without shifting the dark look. */
-  --e-text-dim: #7A7A7A;
+  --e-text-dim: #7A7978;
   --e-text-waiting: #5E5E5E;
   --e-text-code: #D4D4D4;
   --e-dot-waiting: #4A4A4E;
@@ -1634,8 +1634,8 @@
     --dark-normal-cell-color: rgba(100, 100, 100, 0.3);
     --code-differs-cell-color: #9A9A9A;
     --selected-cell-color: rgba(143, 170, 216, 0.45);
-    --pluto-output-color: #BDBDBD;
-    --pluto-output-h-color: #E0E0E0;
+    --pluto-output-color: #BDBCBA;
+    --pluto-output-h-color: #E0DFDC;
     --pluto-output-bg-color: #151517;
     --pluto-runarea-bg-color: #1C1C1F;
     --pluto-logs-bg-color: #1C1C1F;
@@ -1657,7 +1657,7 @@
     --helpbox-bg-color: #1C1C1F;
     --helpbox-header-bg-color: #26262A;
     --helpbox-header-tab-bg-color: #26262A;
-    --helpbox-header-color: #ECECEC;
+    --helpbox-header-color: #F0EFEC;
     --helpbox-text-color: #D4D4D4;
     --helpbox-search-bg-color: #151517;
     --helpbox-search-border-color: #3A3A40;
@@ -1671,10 +1671,10 @@
     --frontmatter-input-border-color: #3A3A40;
     /* A cell's run time: faint text, no chip */
     --pluto-runarea-bg-color: transparent;
-    --pluto-runarea-span-color: #858585;
+    --pluto-runarea-span-color: #858483;
   }
   .pluto-modal { border: 1px solid #2A2A2E; border-radius: 8px !important; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5) !important; }
-  .pluto-modal-dark h1 { color: #ECECEC; font-weight: 600; }
+  .pluto-modal-dark h1 { color: #F0EFEC; font-weight: 600; }
   body.presentation nav#slide_controls { gap: 4px; padding: 4px; margin: 12px; border-radius: 8px;
     background: #1C1C1F; border: 1px solid #2A2A2E; }
   nav#slide_controls > button { border-radius: 5px; opacity: 0.8; }
