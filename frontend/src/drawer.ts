@@ -17,7 +17,12 @@ const HEADER = 36;
 const css = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
-  html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-h); }
+  /* Separate from --endeavor-drawer-h (the drawer's own height, which also
+     sizes Pluto's Live docs panel): while dragging the grip, only the
+     drawer's height changes every frame; the body's padding -- and so the
+     whole notebook's layout -- only catches up once the drag ends (see
+     setHeight's settle parameter below). */
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
     font: 12.5px/1.45 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
@@ -116,9 +121,14 @@ function height(): number {
   return Math.round(window.innerHeight * 0.42);
 }
 
-function setHeight(h: number) {
+/** `settle`: also move the body's padding (and so relayout the notebook) to
+ * match. False while dragging: only the drawer's own height (and Live docs')
+ * moves every frame; the caller settles the padding once, when the drag ends. */
+function setHeight(h: number, settle = true) {
   const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
-  document.documentElement.style.setProperty("--endeavor-drawer-h", `${clamped}px`);
+  const root = document.documentElement.style;
+  root.setProperty("--endeavor-drawer-h", `${clamped}px`);
+  if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
   return clamped;
 }
 
@@ -276,11 +286,28 @@ export function initDrawer(): void {
   const grip = drawer.querySelector<HTMLElement>(".grip")!;
   grip.onpointerdown = (e) => {
     grip.setPointerCapture(e.pointerId);
-    const move = (m: PointerEvent) => setHeight(window.innerHeight - m.clientY);
+    // Coalesce to one setHeight per frame: a fast drag fires many pointermove
+    // events between paints, and setHeight(..., false) already skips the
+    // body's padding, so this only avoids redundant custom-property writes.
+    let pending: number | null = null;
+    let frame = 0;
+    const move = (m: PointerEvent) => {
+      pending = window.innerHeight - m.clientY;
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (pending !== null) setHeight(pending, false);
+      });
+    };
     const up = () => {
       grip.removeEventListener("pointermove", move);
+      if (frame) cancelAnimationFrame(frame);
+      // Settle now: the body's padding (and the notebook's layout) catches
+      // up to the drawer's final height in this one relayout, not one per
+      // pointermove during the drag.
+      const h = setHeight(pending ?? drawer.offsetHeight);
       try {
-        localStorage.setItem("endeavor-drawer-h", String(drawer.offsetHeight));
+        localStorage.setItem("endeavor-drawer-h", String(h));
       } catch {}
     };
     grip.addEventListener("pointermove", move);

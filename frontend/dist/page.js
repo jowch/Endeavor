@@ -942,7 +942,12 @@
   var css7 = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
-  html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-h); }
+  /* Separate from --endeavor-drawer-h (the drawer's own height, which also
+     sizes Pluto's Live docs panel): while dragging the grip, only the
+     drawer's height changes every frame; the body's padding -- and so the
+     whole notebook's layout -- only catches up once the drag ends (see
+     setHeight's settle parameter below). */
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
     font: 12.5px/1.45 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
@@ -1034,9 +1039,11 @@
     }
     return Math.round(window.innerHeight * 0.42);
   }
-  function setHeight(h) {
+  function setHeight(h, settle = true) {
     const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
-    document.documentElement.style.setProperty("--endeavor-drawer-h", `${clamped}px`);
+    const root = document.documentElement.style;
+    root.setProperty("--endeavor-drawer-h", `${clamped}px`);
+    if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
     return clamped;
   }
   var echoing = false;
@@ -1154,11 +1161,22 @@
     const grip = drawer.querySelector(".grip");
     grip.onpointerdown = (e) => {
       grip.setPointerCapture(e.pointerId);
-      const move = (m) => setHeight(window.innerHeight - m.clientY);
+      let pending = null;
+      let frame2 = 0;
+      const move = (m) => {
+        pending = window.innerHeight - m.clientY;
+        if (frame2) return;
+        frame2 = requestAnimationFrame(() => {
+          frame2 = 0;
+          if (pending !== null) setHeight(pending, false);
+        });
+      };
       const up = () => {
         grip.removeEventListener("pointermove", move);
+        if (frame2) cancelAnimationFrame(frame2);
+        const h = setHeight(pending ?? drawer.offsetHeight);
         try {
-          localStorage.setItem("endeavor-drawer-h", String(drawer.offsetHeight));
+          localStorage.setItem("endeavor-drawer-h", String(h));
         } catch {
         }
       };
