@@ -445,6 +445,11 @@ impl Session {
         state
     }
 
+    /// Where the reply at entry `ix` was last drawn, if it has been.
+    pub fn reply_bounds(&self, ix: usize, cx: &App) -> Option<Bounds<Pixels>> {
+        self.replies.borrow().get(&ix).map(|(state, _)| state.read(cx).bounds())
+    }
+
     /// The first reply with text selected in it: its entry, and the text.
     pub fn selected_reply(&self, cx: &App) -> Option<(usize, String)> {
         let replies = self.replies.borrow();

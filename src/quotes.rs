@@ -15,7 +15,8 @@ use crate::session::Entry;
 use crate::{ReplyToSelection, Workspace, theme};
 
 /// Text selected in one of Claude's replies, and where the pointer let go of
-/// it (window coordinates), which Reply's pill and prompt open under.
+/// it, from the reply's top left, so the pill and prompt open under that spot
+/// and move with the reply as the transcript scrolls.
 #[derive(Clone)]
 pub struct Selected {
     key: u64,
@@ -28,8 +29,8 @@ pub struct Selected {
 pub enum Reply {
     Pill(Selected),
     Prompt { selected: Selected, input: Entity<InputState>, menu: bool },
-    /// "Added to your message", shown briefly where the prompt was.
-    Added { at: Point<Pixels>, count: usize },
+    /// "Added · N quotes in the message", shown briefly where the prompt was.
+    Added { selected: Selected, count: usize },
 }
 
 /// How far under the pointer the pill and the prompt open: past the rest of
@@ -42,7 +43,7 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Keys the prompt names for its two ways out.
+/// A row of the prompt's menu: what it does, and its key.
 fn menu_row(id: &'static str, label: &'static str, key: &'static str, icon: Glyph) -> Stateful<Div> {
     div()
         .id(id)
@@ -70,7 +71,10 @@ impl Workspace {
         let Some(session) = self.active_session() else { return };
         let key = session.key;
         let found = session.selected_reply(cx).filter(|(entry, _)| matches!(session.entries.get(*entry), Some(Entry::Agent { .. })));
-        let pill = found.map(|(entry, text)| Reply::Pill(Selected { key, entry, text, at }));
+        let pill = found.map(|(entry, text)| {
+            let origin = session.reply_bounds(entry, cx).map_or(Point::default(), |b| b.origin);
+            Reply::Pill(Selected { key, entry, text, at: at - origin })
+        });
         if pill.is_some() || matches!(self.reply, Some(Reply::Pill(_))) {
             self.reply = pill;
             cx.notify();
@@ -104,12 +108,12 @@ impl Workspace {
             Some(Entry::Agent { at: Some(at), .. }) => Some(crate::when::clock(at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())),
             _ => None,
         });
-        let quote = Quote { from: Quoted::Reply { text: selected.text, at }, comment };
+        let quote = Quote { from: Quoted::Reply { text: selected.text.clone(), at }, comment };
         self.use_quotes(vec![quote], add, cx);
         gpui_base::TextSelection::clear(window, cx);
         if add {
             let count = self.composer.attachments.iter().filter(|a| matches!(a, Attachment::Quote(_))).count();
-            self.reply = Some(Reply::Added { at: selected.at, count });
+            self.reply = Some(Reply::Added { selected, count });
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 let _ = this.update(cx, |this, cx| {
@@ -152,13 +156,23 @@ impl Workspace {
     /// selection was.
     pub fn render_reply(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let reply = self.reply.as_ref()?;
-        let place = |at: Point<Pixels>, element: AnyElement| {
-            deferred(anchored().position(point(at.x - px(28.), at.y + px(BELOW_POINTER))).snap_to_window_with_margin(px(8.)).child(element)).with_priority(2).into_any_element()
+        let (Reply::Pill(selected) | Reply::Prompt { selected, .. } | Reply::Added { selected, .. }) = reply;
+        // The notebook's web view covers anything drawn over its pane, so
+        // these stay inside the reply's column.
+        let column = self.sessions.iter().find(|s| s.key == selected.key).and_then(|s| s.reply_bounds(selected.entry, cx));
+        let prompt_width = column.map_or(px(PROMPT_WIDTH), |c| c.size.width.min(px(PROMPT_WIDTH)));
+        let place = |width: Pixels, element: AnyElement| {
+            let at = selected.at + column.map_or(Point::default(), |c| c.origin);
+            let mut x = at.x - px(28.);
+            if let Some(c) = column {
+                x = x.min(c.right() - width).max(c.left());
+            }
+            deferred(anchored().position(point(x, at.y + px(BELOW_POINTER))).snap_to_window_with_margin(px(8.)).child(element)).with_priority(2).into_any_element()
         };
         let frame = || div().occlude().map(theme::popover).rounded(px(8.)).font_family(theme::SANS).text_size(theme::chat_meta());
         Some(match reply {
-            Reply::Pill(selected) => place(
-                selected.at,
+            Reply::Pill(_) => place(
+                px(110.),
                 frame()
                     .id("reply-pill")
                     .role(Role::Button)
@@ -190,7 +204,7 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, window, cx| this.reply_to_selection(&ReplyToSelection, window, cx)))
                     .into_any_element(),
             ),
-            Reply::Prompt { selected, input, menu } => {
+            Reply::Prompt { input, menu, .. } => {
                 let focused = input.read(cx).focus_handle(cx).is_focused(window);
                 // Inside the prompt's frame, so a click on it isn't a click outside.
                 let menu = menu.then(|| {
@@ -229,12 +243,12 @@ impl Workspace {
                         }
                     }));
                 place(
-                    selected.at,
+                    prompt_width,
                     frame()
                         .id("reply-prompt")
                         .role(Role::Dialog)
                         .aria_label("Reply")
-                        .w(px(PROMPT_WIDTH))
+                        .w(prompt_width)
                         .p(px(8.))
                         .rounded(px(10.))
                         .flex()
@@ -276,8 +290,8 @@ impl Workspace {
                         .into_any_element(),
                 )
             }
-            Reply::Added { at, count } => place(
-                *at,
+            Reply::Added { count, .. } => place(
+                px(260.),
                 frame()
                     .h(px(30.))
                     .px(px(10.))
@@ -314,8 +328,7 @@ fn excerpt(quote: &Quote, max_lines: usize) -> Option<Div> {
     let text = quote.excerpt()?;
     let ruled = div().border_l_2().border_color(theme::composer_edge()).pl(px(8.)).min_w_0().overflow_hidden().text_color(theme::text_secondary());
     let Some(first) = quote.first_line() else {
-        let line_height = px(19.);
-        return Some(ruled.text_size(px(13.)).line_height(line_height).max_h(line_height * max_lines as f32).child(text.trim().to_string()));
+        return Some(ruled.text_size(px(13.)).line_height(px(19.)).line_clamp(max_lines).text_ellipsis().child(text.trim().to_string()));
     };
     let mut lines: Vec<(String, String)> = text.lines().enumerate().take(max_lines).map(|(i, l)| ((first + i).to_string(), l.replace('\t', "    "))).collect();
     if text.lines().count() > max_lines {
