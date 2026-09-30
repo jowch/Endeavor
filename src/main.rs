@@ -221,7 +221,8 @@ fn tool_button(id: &'static str) -> Stateful<Div> {
         .cursor_pointer()
         .hover(|s| s.bg(theme::row_active()))
 }
-/// Room the traffic lights take at the start of a header.
+/// Room the traffic lights take at the start of a header. On Linux the window
+/// manager's title bar has the window's buttons.
 const TRAFFIC_LIGHTS: f32 = 84.;
 
 /// A 44px column header: the window's drag area (the title bar is transparent),
@@ -1885,7 +1886,7 @@ impl Render for Workspace {
             None => ("New session".into(), None),
         };
         let chat_header = column_header("chat-header")
-            .when(!self.settings.layout.sidebar_open, |d| d.pl(px(TRAFFIC_LIGHTS)).child(sidebar_toggle(self, cx)))
+            .when(!self.settings.layout.sidebar_open, |d| d.when(cfg!(target_os = "macos"), |d| d.pl(px(TRAFFIC_LIGHTS))).child(sidebar_toggle(self, cx)))
             .child(div().overflow_hidden().whitespace_nowrap().child(title))
             .children(folder.map(|f| {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family(theme::MONO).text_size(theme::size_meta_small()).child(f)
