@@ -139,6 +139,34 @@ const NOTEBOOK_MIN: f32 = 360.;
 /// The window can't shrink below every column at its minimum, plus the two dividers.
 const WINDOW_MIN: Size<Pixels> = Size { width: px(SIDEBAR_RANGE.0 + CHAT_MIN + NOTEBOOK_MIN + 2.), height: px(600.) };
 
+/// The chat column's content (the transcript and the whole composer area,
+/// including its cards and the chips row) sits in one centred column like
+/// Claude desktop's: at most this wide.
+const CHAT_CONTENT_MAX: f32 = 760.;
+/// The column's side margin once the chat pane is wide enough to show it in
+/// full (`CHAT_CONTENT_MAX` plus two of these).
+const CHAT_MARGIN_MAX: f32 = 50.;
+/// The chat pane's width at and above which the column sits at its max width
+/// with `CHAT_MARGIN_MAX` on each side.
+const CHAT_MARGIN_BREAK: f32 = CHAT_CONTENT_MAX + 2. * CHAT_MARGIN_MAX;
+
+/// The chat column's side margin for a pane this wide. At `CHAT_MARGIN_BREAK`
+/// (860 px) and above, the column centres at `CHAT_CONTENT_MAX` with
+/// `CHAT_MARGIN_MAX` (50 px) on each side. Below that, the margin holds at
+/// 50 px -- the column fills the pane, less the margins -- until the pane
+/// gets close to its minimum (`CHAT_MIN`, 320 px), where a flat 50 px would
+/// leave only 220 px for the content. There the margin shrinks in proportion
+/// to the pane's width (the same 50:860 ratio as the wide case), down to a
+/// floor of 16 px -- today's `px_4` padding -- so the column never loses more
+/// width to its margins than it did before this column existed.
+fn chat_margin(chat_width: f32) -> f32 {
+    if chat_width >= CHAT_MARGIN_BREAK {
+        (chat_width - CHAT_CONTENT_MAX) / 2.
+    } else {
+        (chat_width * CHAT_MARGIN_MAX / CHAT_MARGIN_BREAK).clamp(16., CHAT_MARGIN_MAX)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Divider {
     Sidebar,
@@ -1731,6 +1759,7 @@ impl Workspace {
     /// `notebook_open`: its notebook shows in the pane (Point needs it).
     fn render_chat(&self, session: &Session, notebook_open: bool, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let key = session.key;
+        let margin = px(chat_margin(self.settings.layout.chat_width));
         let scroll_top = session.list.logical_scroll_top();
         let at_top = scroll_top.item_ix == 0 && scroll_top.offset_in_item <= px(0.);
         let at_end = session.list.is_scrolled_to_end().unwrap_or(true);
@@ -1790,14 +1819,14 @@ impl Workspace {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(transcript::render_transcript(session, cx))
+                    .child(transcript::render_transcript(session, margin, cx))
                     .children(top_fade)
                     .children(bottom_fade),
             )
-            .children(transcript::render_activity(session, self.offline_since, cx))
+            .children(transcript::render_activity(session, self.offline_since, margin, cx))
             .child(
                 div()
-                    .px_4()
+                    .px(margin)
                     .pb(px(11.))
                     .flex()
                     .flex_col()

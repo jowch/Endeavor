@@ -23,7 +23,9 @@ pub(crate) fn run_state_line(warning: &pluto::RunWarning) -> String {
     format!("⚠ {warning}")
 }
 
-pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
+/// `margin`: the chat column's side margin (main.rs's `chat_margin`), so the
+/// transcript lines up with the composer area in one centred column.
+pub fn render_transcript(session: &Session, margin: Pixels, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     session.sync_list();
     // Every reply starts parsing now, so it has its height before it is first measured.
     for (ix, entry) in session.entries.iter().enumerate() {
@@ -49,7 +51,7 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
                 // A message's own row of actions (Copy, its time) makes most of the gap below it.
                 let message = matches!(entry, Entry::User { .. } | Entry::Agent { .. });
                 match element {
-                    Some(element) => div().px_4().when(!message, |d| d.pb_4()).when(message, |d| d.pb(px(2.))).child(element).into_any_element(),
+                    Some(element) => div().px(margin).when(!message, |d| d.pb_4()).when(message, |d| d.pb(px(2.))).child(element).into_any_element(),
                     None => div().into_any_element(),
                 }
             })
@@ -62,14 +64,14 @@ pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl
 /// The working line: an orbit, then what the agent is doing and for how long
 /// ("Adding `residuals` · 12s"), or nothing while it waits on the user.
 /// `offline_since`: the network went away then; a turn that has heard nothing
-/// since is waiting for it.
-pub fn render_activity(session: &Session, offline_since: Option<Instant>, cx: &App) -> Option<impl IntoElement + use<>> {
+/// since is waiting for it. `margin`: the chat column's side margin.
+pub fn render_activity(session: &Session, offline_since: Option<Instant>, margin: Pixels, cx: &App) -> Option<impl IntoElement + use<>> {
     let activity = activity(session, offline_since)?;
     let id = ElementId::NamedInteger("orbit".into(), session.key);
     let mark = if activity.waiting { crate::orbit::orbit_with(id, ORBIT, theme::text_muted(), cx) } else { crate::orbit::orbit(id, ORBIT, cx) };
     Some(
         div()
-            .px_3()
+            .px(margin)
             .pb_2()
             .flex()
             .items_center()
