@@ -647,7 +647,7 @@
     window.addEventListener(
       "keydown",
       (e) => {
-        if (e.key.toLowerCase() === "k" && e.metaKey && e.shiftKey) {
+        if (e.key.toLowerCase() === "e" && e.metaKey && e.shiftKey) {
           e.preventDefault();
           return set(!active());
         }
@@ -1450,7 +1450,7 @@
   #endeavor-prompt .hint { color: var(--e-text-dim); font-size: 11px; }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
-  pluto-input .cm-placeholder::after { content: "Type code, or \u2318K to ask ${AGENT}"; font-size: 13px; }
+  pluto-input .cm-placeholder::after { content: "Type code, or \u2318E to ask ${AGENT}"; font-size: 13px; }
 `;
   var open = null;
   function close(refocus) {
@@ -1514,7 +1514,7 @@
     window.addEventListener(
       "keydown",
       (e) => {
-        if (!(e.metaKey && e.key.toLowerCase() === "k") || e.shiftKey) return;
+        if (!(e.metaKey && e.key.toLowerCase() === "e") || e.shiftKey) return;
         const cell = document.activeElement?.closest("pluto-cell");
         if (!cell) return;
         e.preventDefault();

@@ -654,7 +654,7 @@ impl Workspace {
         let open = |target: MenuTarget| self.menu.as_ref().is_some_and(|m| m.target == target);
         let point_tip = self.point_tip_shows(shown);
         let tip = |d: Stateful<Div>, text: &'static str| d.tooltip(tooltip(text, &self.webview));
-        let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating), concat!("Pick cells or draw a box to ask Claude about  ", crate::platform::shortcut!(shift "K")))
+        let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating), concat!("Pick cells or draw a box to ask Claude about  ", crate::platform::shortcut!(shift "E")))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());

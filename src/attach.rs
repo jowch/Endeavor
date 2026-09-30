@@ -36,7 +36,7 @@ impl Cell {
     }
 }
 
-/// What ⌘K or the agent button between cells asked for, besides the user's words.
+/// What ⌘E or the agent button between cells asked for, besides the user's words.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CellAsk {
     About,
@@ -48,7 +48,7 @@ pub enum CellAsk {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Attachment {
-    /// The cell ⌘K asked about (and Point's cells, in sessions from before quotes).
+    /// The cell ⌘E asked about (and Point's cells, in sessions from before quotes).
     Cells { notebook: String, cells: Vec<Cell>, ask: CellAsk },
     /// A cell's error, from Fix with Claude or Explain.
     Error { notebook: String, cell: Cell, text: String },

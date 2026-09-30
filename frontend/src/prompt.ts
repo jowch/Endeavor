@@ -1,5 +1,5 @@
 // Asking the agent from inside the notebook (docs/ui-spec.md, "Between cells" and
-// "Empty cell"): ⌘K in a cell opens a prompt about that cell (an empty cell: what
+// "Empty cell"): ⌘E in a cell opens a prompt about that cell (an empty cell: what
 // to write in it); the agent button beside Pluto's "+" asks for a new cell there.
 // Enter sends, Esc returns to the editor. The prompt floats over the page, so
 // Pluto's cell list is never touched.
@@ -36,7 +36,7 @@ const css = `
   #endeavor-prompt .hint { color: var(--e-text-dim); font-size: 11px; }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
-  pluto-input .cm-placeholder::after { content: "Type code, or ⌘K to ask ${AGENT}"; font-size: 13px; }
+  pluto-input .cm-placeholder::after { content: "Type code, or ⌘E to ask ${AGENT}"; font-size: 13px; }
 `;
 
 type Where = "cell" | "before" | "after";
@@ -99,7 +99,7 @@ export function openPrompt(cell: HTMLElement, where: Where) {
   document.body.append(box);
   place(box, cell, where);
   open = { box, cell, where };
-  // After the key event that opened it: focusing during ⌘K's keydown doesn't stick.
+  // After the key event that opened it: focusing during ⌘E's keydown doesn't stick.
   requestAnimationFrame(() => text.focus());
 }
 
@@ -112,7 +112,7 @@ export function initPrompt(): void {
   window.addEventListener(
     "keydown",
     (e) => {
-      if (!(e.metaKey && e.key.toLowerCase() === "k") || e.shiftKey) return;
+      if (!(e.metaKey && e.key.toLowerCase() === "e") || e.shiftKey) return;
       const cell = (document.activeElement as Element | null)?.closest<HTMLElement>("pluto-cell");
       if (!cell) return;
       e.preventDefault();

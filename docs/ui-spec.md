@@ -85,7 +85,7 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 
 - One line, 38px, `bg.card`, 1px `border`, 8px radius, 10px side padding. Placeholder "Type / for commands"; a faint ↵ glyph instead of a send button (Enter sends). While running: placeholder "Queue a message, or ⌘⏎ to steer" and the glyph becomes a small stop button (Esc).
 - **Quote cards** stack above the box, in the order added, under "N quotes go out with this message · Clear": each has its source ("Claude's reply · 14:02", "rates · lines 3–5", "plot_fit · figure"), the excerpt (one line, or up to three numbered code lines) or a thumbnail, the comment, "show in notebook" for a notebook quote, and ×. From four cards on, each takes one line (source and comment). A message can go with cards and no text. In the composer ⌘⏎ still means send now / steer.
-- Toolbar **below** the box, 24px buttons, 12px text, centre level with the sidebar settings gear: `+` (attach / @ cell) · point (⌘⇧K, orange when active) · mode — then model · effort · context ring.
+- Toolbar **below** the box, 24px buttons, 12px text, centre level with the sidebar settings gear: `+` (attach / @ cell) · point (⌘⇧E, orange when active) · mode — then model · effort · context ring.
 - **Modes** (⇧⇥ cycles), mirroring Claude Code:
   | Mode | Notebook edits | Runs / deletes |
   |---|---|---|
@@ -102,9 +102,9 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
   - Changed lines: **unified diff in the CodeMirror gutter** — line number + ± sign, line tint, changed-character highlight, removed lines shown above additions (bundle decorations).
   - A 3px overview rail on the notebook's right edge marks changed/unrun cells, including off-screen; click jumps.
 - **Between cells**: Pluto's "+" unchanged; an agent button beside it on hover ("Ask <agent> to write a cell here").
-- **Empty cell**: hint "Type code, or ⌘K to ask <agent>"; ⌘K turns it into a prompt; Esc returns to typing.
+- **Empty cell**: hint "Type code, or ⌘E to ask <agent>"; ⌘E turns it into a prompt; Esc returns to typing.
 - **Errors**: Pluto's error card gains **Fix with <agent>** (outlined, not filled) and **Explain**, replacing Pluto's "Fix with AI".
-- **Pointing overlay** (⌘⇧K; board QPoint): over the notebook only — 25% dim, solid 1px `accent` inset edge (no glow), plain-text hint pill "Click to pick · drag over code lines · drag elsewhere for a box · Done". Hover picks the smallest thing under the pointer, outlined dashed with a small tag: a figure or output ("Figure", "Text"), a code block ("Code"), a Markdown paragraph ("Text"); the cell's edge picks the whole cell. A drag that starts on code picks whole lines; a drag anywhere else, or any ⌥-drag, draws a dashed box. Shift adds to the pick; each pick is its own quote. Line numbers show in code while Point is on; picked lines are tinted with orange numbers.
+- **Pointing overlay** (⌘⇧E; board QPoint): over the notebook only — 25% dim, solid 1px `accent` inset edge (no glow), plain-text hint pill "Click to pick · drag over code lines · drag elsewhere for a box · Done". Hover picks the smallest thing under the pointer, outlined dashed with a small tag: a figure or output ("Figure", "Text"), a code block ("Code"), a Markdown paragraph ("Text"); the cell's edge picks the whole cell. A drag that starts on code picks whole lines; a drag anywhere else, or any ⌥-drag, draws a dashed box. Shift adds to the pick; each pick is its own quote. Line numbers show in code while Point is on; picked lines are tinted with orange numbers.
 - **Point's comment bar**: the status line ("Lines 4–7 of plot_fit", "Figure in plot_fit", "Box over 2 cells", "3 picks") and "↩ send · ⌘↩ add to message" above the same field and menu as Reply's prompt. It opens 8px under the pick (for lines, the last picked line), left edge on the pick's; with no room below, 8px above; with no room either way, pinned to the pane's bottom. It follows scroll and waits at the pane's edge once the pick scrolls out. Width: the pick's, at least 360px, at most the pane minus 32px. ↩ sends the picks with the comment on the last; ⌘↩ adds them to the composer as cards. Point stays on either way.
 
 ## Build map
@@ -114,7 +114,7 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 | Native GPUI | theme module, sidebar, headers, chat entries, cards, composer + toolbar, pane resizing, keyboard shortcuts |
 | Pluto theme CSS | variable overrides, hidden chrome, `data-endeavor` state styles, header padding |
 | Adapter JS (per notebook type, ~50 lines) | `cellAt(x,y)`, `cellRect(id)`, `scrollTo(id)`, `focusedCell()`, `mark(id, state)` |
-| Injected bundle (notebook-agnostic where possible) | gutter diffs (CodeMirror decorations), pointing overlay, ⌘K cell prompt, "+"/agent button, overview rail, user-edit reporting |
+| Injected bundle (notebook-agnostic where possible) | gutter diffs (CodeMirror decorations), pointing overlay, ⌘E cell prompt, "+"/agent button, overview rail, user-edit reporting |
 | Rust↔JS channel | today: two JS→Rust message types (`src/annotate.js`), `evaluate_script` fire-and-forget (`src/main.rs:676`). Needs a general two-way message channel. |
 
 ## Data wiring
@@ -134,7 +134,7 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 
 ## Shortcuts
 
-Enter send · ⌘⏎ steer running turn · ⌘J reply to the selection (in its prompt and Point's bar, ⏎ send, ⌘⏎ add to message) · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧K pointing · ⌘K ask about focused/empty cell · ⌘N new session.
+Enter send · ⌘⏎ steer running turn · ⌘J reply to the selection (in its prompt and Point's bar, ⏎ send, ⌘⏎ add to message) · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧E pointing · ⌘E ask about focused/empty cell · ⌘N new session.
 
 ## Open decisions
 
@@ -145,7 +145,7 @@ Enter send · ⌘⏎ steer running turn · ⌘J reply to the selection (in its p
 
 1. Theme module + native restyle (sidebar, headers, chat, composer, cards, resizing).
 2. Pluto theme CSS + adapter + `data-endeavor` states + overview rail.
-3. Bundle: gutter diffs, pointing overlay restyle, ⌘K cell prompt, "+"/agent button, user-edit reporting.
+3. Bundle: gutter diffs, pointing overlay restyle, ⌘E cell prompt, "+"/agent button, user-edit reporting.
 4. ACP wiring: modes, models/effort, usage ring, slash commands, plan pinning.
 
 Verify each phase by running the app (`cargo run`) and comparing against the matching board.

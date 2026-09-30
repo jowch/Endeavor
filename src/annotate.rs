@@ -142,7 +142,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             let attachment = Attachment::Error { notebook, cell, text: capped(v.get("error"), MAX_COMMENT) };
             Some(Message::Ask(Ask { text: text.into(), attachment, now: false }))
         }
-        // ⌘K on a cell, or the agent button between cells.
+        // ⌘E on a cell, or the agent button between cells.
         "prompt" => {
             let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
             let text = capped(v.get("text"), MAX_COMMENT);

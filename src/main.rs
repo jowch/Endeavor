@@ -1682,7 +1682,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Cmd+Shift+K from the panel (the page handles it when the notebook has focus).
+    /// Cmd+Shift+E from the panel (the page handles it when the notebook has focus).
     fn toggle_annotation(&mut self, _: &ToggleAnnotation, _: &mut Window, cx: &mut Context<Self>) {
         let enable = !self.annotating;
         if enable {
@@ -2139,7 +2139,7 @@ fn main() {
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
-            KeyBinding::new("secondary-shift-k", ToggleAnnotation, None),
+            KeyBinding::new("secondary-shift-e", ToggleAnnotation, None),
             KeyBinding::new("secondary-j", ReplyToSelection, Some("Input")),
             KeyBinding::new("secondary-j", ReplyToSelection, None),
             // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).

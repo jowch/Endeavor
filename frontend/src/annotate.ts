@@ -6,7 +6,7 @@
 // selected cells are picked on entry. The comment bar opens by the pick
 // (place.ts) and works like Reply's prompt (quote.ts): ↩ sends the picks and
 // the comment now, ⌘↩ adds them to the chat's message, and Point stays on for
-// the next pick. Only ⌘⇧K toggles Point (⌘K alone asks about a cell).
+// the next pick. Only ⌘⇧E toggles Point (⌘E alone asks about a cell).
 
 import { byUser, on, send } from "./bridge";
 import { barPlace } from "./place";
@@ -379,7 +379,7 @@ export function initAnnotate(): void {
   window.addEventListener(
     "keydown",
     (e) => {
-      if (e.key.toLowerCase() === "k" && e.metaKey && e.shiftKey) {
+      if (e.key.toLowerCase() === "e" && e.metaKey && e.shiftKey) {
         e.preventDefault();
         return set(!active());
       }

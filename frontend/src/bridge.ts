@@ -16,7 +16,7 @@ export type ToApp =
   | { type: "shoot"; id: number; rect: { x: number; y: number; width: number; height: number } }
   // Fix with Claude / Explain on a cell's error.
   | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; code: string; error: string }
-  // ⌘K on a cell / the agent button between cells: about this cell, fill this
+  // ⌘E on a cell / the agent button between cells: about this cell, fill this
   // empty cell, or add a new cell after it. `now` (⌘⏎) joins a running turn.
   | { type: "prompt"; notebook: string | null; cell: string; code: string; where: "about" | "fill" | "before" | "after"; text: string; now: boolean }
   // A cell's code now, answering the app's `code` (null: no such cell here).

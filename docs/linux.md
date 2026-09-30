@@ -228,10 +228,10 @@ changes.
      `share/icons/hicolor/{256x256,512x512}/apps/endeavor.png`).
    - The Linux runtime dependencies above need to be declared.
 2. **The notebook page's shortcuts (S).** The page script checks `metaKey`
-   for ⌘K (ask Claude about a cell), ⌘⏎ in its prompt and comment boxes, and
-   ⌘⇧K (leave Point). On Linux Ctrl+K in a cell does nothing. The page needs
+   for ⌘E (ask Claude about a cell), ⌘J (Reply to a selection), ⌘⏎ in its prompt and comment boxes, and
+   ⌘⇧E (leave Point). On Linux Ctrl+E in a cell does nothing. The page needs
    Ctrl on Linux, checked against Pluto's own Ctrl shortcuts, and its hints
-   (the cell placeholder "⌘K to ask", the comment box's title) need the same
+   (the cell placeholder "⌘E to ask", the comment box's title) need the same
    `mac` switch the shortcuts list in `frontend/src/actions.ts` already has.
 3. **The menu bar's items (S).** GPUI shows no menu bar on Linux, so the
    About window, Help ▸ Endeavor Help, Report an Issue and Window ▸ Zoom have
