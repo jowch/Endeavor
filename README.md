@@ -11,8 +11,10 @@ See [docs/roadmap.md](docs/roadmap.md) for status and
 
 - Run from source: `cargo run`
 - Check changes from a script: [docs/testing.md](docs/testing.md)
-- Connect to Linux servers from a source build: `scripts/build-helpers.sh` first
-  (builds their runtime helper into `target/helpers`)
+- Connect to Linux servers from a source build: put their runtime helper in
+  `target/helpers` first, either with `scripts/fetch-helpers.sh` (downloads what
+  the Helpers workflow built on GitHub for your commit; needs `gh`) or
+  `scripts/build-helpers.sh` (builds it yourself)
 - Build the app: `scripts/bundle.sh` → `target/release/Endeavor.app` (ad-hoc signed)
 - App icon and logo: `python3 assets/icon/build.py` regenerates them from the artwork in that script.
 - Page script (the code injected into the notebook page): `frontend/`, TypeScript.
