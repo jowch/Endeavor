@@ -45,3 +45,5 @@ gtk = "0.18"
 # GDK's Xlib display, for X input focus and the web view's shape (src/linux/).
 gdkx11 = "0.18"
 x11 = { version = "2.21", features = ["xlib"] }
+# The same WebKitGTK wry's web view uses: its web process ending, and its find (src/linux/webcontent.rs).
+webkit2gtk = { version = "=2.0.1", features = ["v2_38"] }

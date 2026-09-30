@@ -52,6 +52,8 @@ mod settings_panel;
 mod signin;
 #[cfg(target_os = "macos")]
 mod snapshot;
+#[cfg(target_os = "macos")]
+mod webcontent;
 mod splash;
 mod theme;
 mod tips;
@@ -61,7 +63,7 @@ mod when;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-use linux::overlay;
+use linux::{overlay, webcontent};
 #[cfg(not(target_os = "macos"))]
 use platform::{dialogs, snapshot};
 
@@ -430,6 +432,7 @@ pub struct Workspace {
 impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (page_tx, mut page_rx) = futures::channel::mpsc::unbounded::<String>();
+        let (ended_tx, mut ended_rx) = futures::channel::mpsc::unbounded::<()>();
         let webview = cx.new(|cx| {
             let handle = platform::webview_parent(window);
             let webview = wry::WebViewBuilder::new()
@@ -465,8 +468,18 @@ impl Workspace {
             #[cfg(target_os = "linux")]
             linux::attach(&webview, window, cx);
             dialogs::show_page_dialogs(&webview);
+            webcontent::on_process_ended(&webview, move || drop(ended_tx.unbounded_send(())));
             WebView::new(webview, window, cx)
         });
+
+        cx.spawn(async move |this, cx| {
+            while ended_rx.next().await.is_some() {
+                if this.update(cx, |this, cx| this.on_web_content_ended(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         cx.spawn(async move |this, cx| {
             while let Some(body) = page_rx.next().await {
@@ -1124,7 +1137,7 @@ impl Workspace {
         if !self.webview.read(cx).visible() {
             return None;
         }
-        let url = self.webview.read(cx).raw().url().unwrap_or_default();
+        let url = crate::webcontent::url(self.webview.read(cx).raw());
         let id = viewed_notebook_id(&url)?.to_owned();
         let mut edits = Vec::new();
         if let Some(session) = self.active.and_then(|key| self.session_mut(key)) {
@@ -1700,7 +1713,7 @@ impl Workspace {
 
     /// Mark the shown notebook's cells in the page (unrun, author).
     pub fn push_cells(&self, cx: &mut Context<Self>) {
-        let url = self.webview.read(cx).raw().url().unwrap_or_default();
+        let url = crate::webcontent::url(self.webview.read(cx).raw());
         let Some(id) = viewed_notebook_id(&url) else { return };
         let cells = self.connections.values().find_map(|c| c.cells.get(id).cloned()).unwrap_or_else(|| serde_json::json!([]));
         self.send_to_page(&serde_json::json!({ "type": "cells", "cells": cells }), cx);

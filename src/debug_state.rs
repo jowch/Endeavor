@@ -343,7 +343,7 @@ impl Workspace {
         };
         let page = (shown == PaneShows::Page).then(|| {
             let p = &self.page;
-            let url = self.webview.read(cx).raw().url().unwrap_or_default();
+            let url = crate::webcontent::url(self.webview.read(cx).raw());
             let reported = s.notebook.as_deref().is_some_and(|id| p.notebook == id);
             json!({
                 "notebook": s.notebook,

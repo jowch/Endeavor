@@ -5,6 +5,7 @@
 
 pub mod gtk_loop;
 pub mod overlay;
+pub mod webcontent;
 pub mod webkeys;
 
 use gpui::{App, IntoElement, MouseDownEvent, Styled, Window, canvas};

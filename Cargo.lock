@@ -1829,6 +1829,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "webkit2gtk",
  "wire",
  "x11",
 ]

@@ -1069,9 +1069,23 @@ impl Workspace {
         if let Some(stopped) = session.stopped {
             return PaneShows::Stopped(stopped);
         }
-        // A page taken down with its runtime (`close_page`) stays covered until the reopened one loads.
-        let blank = self.webview.read(cx).raw().url().is_ok_and(|url| url == "about:blank");
+        // A page taken down with its runtime (`close_page`), or whose web content process
+        // ended (no address), stays covered until the reopened one loads.
+        let blank = matches!(crate::webcontent::url(self.webview.read(cx).raw()).as_str(), "about:blank" | "");
         if session.notebook.is_some() && !blank { PaneShows::Page } else { PaneShows::Opening }
+    }
+
+    /// WebKit's web content process for the page ended (it crashed, or the
+    /// system ended it), leaving the web view blank: load the page again.
+    pub fn on_web_content_ended(&mut self, cx: &mut Context<Self>) {
+        let showing = |s: &&Session| matches!(self.pane_shows(s, cx), PaneShows::Page | PaneShows::Opening);
+        let Some((key, id, host)) = self.active_session().filter(showing).and_then(|s| Some((s.key, s.notebook.clone()?, s.place.host.clone()))) else {
+            eprintln!("The notebook's web content process ended; no notebook page was showing");
+            return;
+        };
+        eprintln!("The notebook's web content process ended; loading notebook {id} of session {key} again");
+        self.load_notebook(&host, &id, cx);
+        cx.notify();
     }
 
     /// Julia isn't running on the session's host: Start, and on a cluster the

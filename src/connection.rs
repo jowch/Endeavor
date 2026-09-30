@@ -268,7 +268,7 @@ impl Workspace {
 
     /// Take down the page if it's from `origin` (a runtime that went away).
     fn blank_page(&mut self, origin: &str, cx: &mut Context<Self>) {
-        let shown = self.webview.read(cx).raw().url().unwrap_or_default();
+        let shown = crate::webcontent::url(self.webview.read(cx).raw());
         if !origin.is_empty() && shown.starts_with(origin) {
             self.webview.update(cx, |w, _| w.load_url("about:blank"));
         }
@@ -277,7 +277,7 @@ impl Workspace {
     /// The web view shows a page of `host`'s runtime.
     fn shows_page_of(&self, host: &HostId, cx: &App) -> bool {
         let Some((origin, _)) = self.connections.get(host).and_then(|c| c.runtime.as_ref()).and_then(|r| r.pluto_url.split_once('?')) else { return false };
-        self.webview.read(cx).raw().url().is_ok_and(|shown| shown.starts_with(origin))
+        crate::webcontent::url(self.webview.read(cx).raw()).starts_with(origin)
     }
 
     fn listener(&mut self, host: &HostId) -> Result<Arc<Listener>, String> {
@@ -1159,7 +1159,7 @@ impl Workspace {
     pub fn host_pane_state(&self, host: &HostId, cx: &App) -> Option<HostPane> {
         let connection = self.connections.get(host);
         if let Some(lost) = connection.and_then(|c| c.lost.as_ref()) {
-            let shown = self.webview.read(cx).raw().url().unwrap_or_default();
+            let shown = crate::webcontent::url(self.webview.read(cx).raw());
             return (!lost.page.as_deref().is_some_and(|page| shown.starts_with(page))).then_some(HostPane::Lost);
         }
         Some(match connection.map_or(Status::Connecting, |c| c.status.clone()) {

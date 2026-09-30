@@ -45,6 +45,9 @@ The remaining work is ranked at the end of this page.
 - **Notebook.** Pluto loads in the WebKitGTK web view at the right place and
   size, and follows the pane when the sidebar opens or the window resizes. Run
   notebook runs cells. Typing, arrow keys and Shift+Enter work in cells.
+- **A crashed notebook page.** When WebKitGTK's web process ends
+  (`web-process-terminated`), the app logs it and loads the notebook again.
+  Tested by killing the instance's `WebKitWebProcess`.
 - **Settings.** Every section opens and draws. Settings' search works. Show in
   Files opens the log folder with `xdg-open`.
 - **Light and dark.** Dark and Light switch the whole window, notebook
