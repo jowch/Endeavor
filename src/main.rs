@@ -60,8 +60,10 @@ mod turtle;
 mod when;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+use linux::overlay;
 #[cfg(not(target_os = "macos"))]
-use platform::{dialogs, overlay, snapshot};
+use platform::{dialogs, snapshot};
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};

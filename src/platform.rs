@@ -2,7 +2,7 @@
 //! showing a file, reading system settings, and hosting the notebook's web view.
 //! On Linux the web view is WebKitGTK in an X11 child window, so GTK has to be
 //! started and its events pumped. `src/linux/` has the Linux versions of the
-//! macOS-only fixes; `overlay` has none yet and is a no-op there.
+//! macOS-only fixes.
 
 use std::path::Path;
 
@@ -128,26 +128,6 @@ pub fn webview_parent(window: &gpui::Window) -> XlibParent {
         RawWindowHandle::Xcb(xcb) => RawWindowHandle::Xlib(XlibWindowHandle::new(xcb.window.get() as _)),
         other => other,
     })
-}
-
-#[cfg(not(target_os = "macos"))]
-pub mod overlay {
-    use gpui::{Bounds, Pixels};
-
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    pub enum Hole {
-        Menu,
-        Tip,
-        Tooltip,
-        Settings,
-        Confirm,
-    }
-
-    /// Menus over the notebook: on Linux the web view's X11 window still covers them.
-    pub fn set_hole(_: &wry::WebView, _: Hole, _: Option<Bounds<Pixels>>) {}
-    pub fn close_hole_at(_: Hole, _: Bounds<Pixels>) {}
-    pub fn set_dismiss_on_click(_: &wry::WebView, _: bool) {}
-    pub fn set_dimmed(_: &wry::WebView, _: bool) {}
 }
 
 /// Put `message` above the file picker that is opening (GPUI's picker takes

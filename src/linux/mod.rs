@@ -3,6 +3,7 @@
 //! region on screen, so the app moves focus and cuts holes itself, where
 //! macOS does it with AppKit (`webkeys.rs`, `overlay.rs`).
 
+pub mod overlay;
 pub mod webkeys;
 
 use gpui::{App, IntoElement, MouseDownEvent, Styled, Window, canvas};
@@ -10,7 +11,7 @@ use gtk::glib::Propagation;
 use gtk::prelude::*;
 
 /// GDK's own Xlib connection, so our requests queue behind GDK's.
-fn xdisplay() -> Option<*mut x11::xlib::Display> {
+pub(super) fn xdisplay() -> Option<*mut x11::xlib::Display> {
     use gtk::glib::Cast;
     use gtk::glib::translate::ToGlibPtr;
     let display = gtk::gdk::Display::default()?.downcast::<gdkx11::X11Display>().ok()?;
@@ -28,7 +29,7 @@ fn gpui_xid(window: &Window) -> Option<u64> {
     }
 }
 
-fn xid_of(window: &gtk::gdk::Window) -> Option<u64> {
+pub(super) fn xid_of(window: &gtk::gdk::Window) -> Option<u64> {
     use gtk::glib::Cast;
     Some(window.clone().downcast::<gdkx11::X11Window>().ok()?.xid())
 }
