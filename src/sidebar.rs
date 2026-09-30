@@ -173,6 +173,13 @@ fn end_slot(id: impl Into<ElementId>) -> Stateful<Div> {
     div().id(id).flex_shrink_0().size(px(20.)).mr(px(-6.)).flex().items_center().justify_center().rounded(px(4.))
 }
 
+/// A row's end mark: `end_slot`, pulled further right by the row's own
+/// `px(10.)` (`sidebar_row`) that the folder heading's + doesn't have to
+/// cross, so it lands on the same centre line as the +.
+fn row_end_mark(id: impl Into<ElementId>) -> Stateful<Div> {
+    end_slot(id).mr(px(-16.))
+}
+
 /// `text` with the first case-insensitive match of `query` picked out in
 /// `theme::accent_text()`, for the sidebar search's highlighting. With no
 /// match (or an empty query), the plain, truncating text.
@@ -612,7 +619,7 @@ impl Workspace {
                 let title_text = s.title.clone();
                 let folder_line = flat.then(|| self.folder_heading(&s.place));
                 let title = self.row_lines(&row, &title_text, query, folder_line.as_deref());
-                let mark = self.row_mark(s).then(|| end_slot("row-mark").child(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent())));
+                let mark = self.row_mark(s).then(|| row_end_mark("row-mark").child(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent())));
                 self.session_row(row.clone(), group.clone(), active, cx)
                     .aria_label(title_text)
                     .border_2()
@@ -641,7 +648,7 @@ impl Workspace {
                 let group: SharedString = format!("past-{:?}-{}-{id}", place.host, place.path.display()).into();
                 let archived = self.archived.contains(&id.to_string());
                 let focus = self.past_row_focus(&id, cx);
-                let mark = archived.then(|| end_slot("row-mark").child(glyph(Glyph::Archive, theme::text_section())));
+                let mark = archived.then(|| row_end_mark("row-mark").child(glyph(Glyph::Archive, theme::text_section())));
                 self.session_row(row.clone(), group.clone(), false, cx)
                     .aria_label(title_text)
                     .border_2()
