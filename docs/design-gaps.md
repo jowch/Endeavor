@@ -87,6 +87,7 @@ Direction chosen (2026-09-27; canvas row "Notebook pane"): our look is "Pluto pl
 - [ ] Fix with Claude / Explain at the bottom of error cards — improvised
 - [ ] Pointing mode's comment bar under the picked cell — improvised. Built: the hint pill "Click a cell or drag a box · Done" and the drawn box (dashed; its cells are picked and the bar sits under it). The box goes as a picture of that part of the notebook, taken by WebKit's own snapshot of the web view (macOS; on Linux it goes as its cells for now)
 - [ ] Folded cell shown open until it runs — improvised
+- [ ] Changed-line diffs in the Endeavor look don't wrap long lines (the CodeMirror gutter diff: removed lines above additions, line tints) — missing
 
 ## Accessibility
 
