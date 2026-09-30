@@ -56,7 +56,7 @@ impl Section {
         match self {
             Section::Assistants => "The AI that writes and runs code in your notebooks.",
             Section::Notebooks => "What happens to your notebooks, and the languages they run.",
-            Section::Hosts => "On this Mac, or on a server or cluster you connect to over SSH.",
+            Section::Hosts => concat!("On ", crate::platform::this_computer!(lower), ", or on a server or cluster you connect to over SSH."),
             Section::Appearance => "How Endeavor and your notebooks look.",
             Section::Troubleshooting => "For when something doesn't work. Try these in order.",
             Section::About => "Version, updates and credits.",
@@ -485,7 +485,7 @@ impl Workspace {
                 back: Some(Page::Section(Section::Notebooks)),
                 title: "Julia".into(),
                 aside: Some("Pluto notebooks".into()),
-                subtitle: Some("Runs your Pluto notebooks on this Mac.".into()),
+                subtitle: Some(concat!("Runs your Pluto notebooks on ", crate::platform::this_computer!(lower), ".").into()),
                 groups: self.julia_groups(),
             },
         }
@@ -686,7 +686,7 @@ impl Workspace {
         // Search finds the choice by its other half, "Another Julia on this Mac".
         ours.search = None;
         ours.controls.push(Control::Note(format!("{} · recommended", runtime::JULIA_VERSION).into()));
-        let mut theirs = row("julia-another", "Another Julia on this Mac");
+        let mut theirs = row("julia-another", concat!("Another Julia on ", crate::platform::this_computer!(lower)));
         theirs.lead = Lead::Radio { checked: !own, act: Some(Act::ChooseJulia) };
         theirs.summary = Some("Use a Julia you installed yourself.".into());
         let broken = self.julia_broken();
@@ -726,7 +726,7 @@ impl Workspace {
     }
 
     fn hosts_groups(&self) -> Vec<Group> {
-        let this_mac = Item::Row(self.host_row(HostId::ThisMac, "This Mac".into(), None));
+        let this_mac = Item::Row(self.host_row(HostId::ThisMac, crate::platform::this_computer!().into(), None));
         let rows = |clusters: bool| -> Vec<Item> {
             self.hosts
                 .servers
@@ -740,7 +740,7 @@ impl Workspace {
         let mut clusters = rows(true);
         clusters.push(Item::Add { key: "add-cluster".into(), label: "Add cluster…", act: Act::AddCluster });
         vec![
-            group(Some("This Mac"), vec![this_mac]),
+            group(Some(crate::platform::this_computer!()), vec![this_mac]),
             group(Some("Servers"), servers),
             group(Some("Clusters"), clusters).foot("The gear sets a host's connection, which programs to use, and for a cluster its account and default resources."),
         ]
@@ -781,10 +781,14 @@ impl Workspace {
                 vec![Item::Pictures(vec![
                     pic("look-dark", Thumb::Dark, "Dark", None, s.appearance == Appearance::Dark, Act::Appearance(Appearance::Dark)),
                     pic("look-light", Thumb::Light, "Light", None, s.appearance == Appearance::Light, Act::Appearance(Appearance::Light)),
-                    pic("look-system", Thumb::Match, "Match macOS", None, s.appearance == Appearance::System, Act::Appearance(Appearance::System)),
+                    pic("look-system", Thumb::Match, crate::platform::MATCH_SYSTEM, None, s.appearance == Appearance::System, Act::Appearance(Appearance::System)),
                 ])],
             )
-            .foot("The whole window changes, notebook included. Match macOS follows your Mac's setting."),
+            .foot(if cfg!(target_os = "macos") {
+                "The whole window changes, notebook included. Match macOS follows your Mac's setting."
+            } else {
+                "The whole window changes, notebook included. Match system follows your desktop's dark style setting."
+            }),
             group(
                 Some("Pluto notebook look"),
                 vec![Item::Pictures(vec![
@@ -818,13 +822,13 @@ impl Workspace {
             if repair.is_some() {
                 "Not available while Julia is being repaired."
             } else if ready {
-                "Stops your Julia notebooks on this Mac and starts them again. Their files are already saved."
+                concat!("Stops your Julia notebooks on ", crate::platform::this_computer!(lower), " and starts them again. Their files are already saved.")
             } else {
-                "Julia isn't running on this Mac now. It starts when you open a session."
+                concat!("Julia isn't running on ", crate::platform::this_computer!(lower), " now. It starts when you open a session.")
             }
             .into(),
         );
-        restart.summary = Some("Stops your Julia notebooks on this Mac and starts them again.".into());
+        restart.summary = Some(concat!("Stops your Julia notebooks on ", crate::platform::this_computer!(lower), " and starts them again.").into());
         restart.controls.push(Control::Button { label: "Restart", look: Look::Secondary, icon: Some(Glyph::Restart), act: (ready && repair.is_none()).then_some(Act::RestartJulia), aria: "Restart Julia".into() });
         let mut fix = row("repair-julia", "Repair Julia");
         fix.summary = Some("If Julia notebooks won't start or keep failing.".into());
@@ -842,12 +846,12 @@ impl Workspace {
         }
         let mut logs = row("log-files", "Log files");
         logs.desc = Some("What Endeavor did this time and the time before. Attach them when you report a problem.".into());
-        logs.controls.push(Control::Button { label: "Show in Finder", look: Look::Secondary, icon: Some(Glyph::Finder), act: Some(Act::ShowLogs), aria: "Show log files in Finder".into() });
+        logs.controls.push(Control::Button { label: crate::platform::SHOW_LOGS.0, look: Look::Secondary, icon: Some(Glyph::Finder), act: Some(Act::ShowLogs), aria: crate::platform::SHOW_LOGS.1.into() });
         let mut report = row("report", "Report a problem");
         report.desc = Some("Opens a new issue on GitHub, where you can describe what happened.".into());
         report.controls.push(Control::Link { label: "Report", external: true, act: Act::Report });
         vec![
-            group(Some("Julia on this Mac"), vec![Item::Row(restart), Item::Row(fix)]).foot("R and Python get their own group here when they arrive."),
+            group(Some(concat!("Julia on ", crate::platform::this_computer!(lower))), vec![Item::Row(restart), Item::Row(fix)]).foot("R and Python get their own group here when they arrive."),
             group(Some("Report a problem"), vec![Item::Row(logs), Item::Row(report)]),
         ]
     }
@@ -1174,7 +1178,7 @@ impl Workspace {
             n => format!("Your {n} open notebooks close while Julia is cleared and starts again. This takes a few minutes."),
         };
         let detail = format!("{detail}\n\nYour notebooks, packages and settings stay.");
-        self.open_confirm("Repair Julia on this Mac?", detail, "Repair", window, cx, |this, _, cx| this.repair_local(cx));
+        self.open_confirm(concat!("Repair Julia on ", crate::platform::this_computer!(lower), "?"), detail, "Repair", window, cx, |this, _, cx| this.repair_local(cx));
     }
 
     pub fn settings_act(&mut self, act: Act, window: &mut Window, cx: &mut Context<Self>) {

@@ -113,7 +113,7 @@ impl Transport {
     fn host(&self) -> &str {
         match self {
             Transport::Ssh { host, .. } => host,
-            Transport::Shell { .. } => "this Mac (local test)",
+            Transport::Shell { .. } => concat!(crate::platform::this_computer!(lower), " (local test)"),
         }
     }
 }

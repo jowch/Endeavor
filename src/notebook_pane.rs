@@ -52,7 +52,7 @@ impl NotebookAction {
     pub fn label(self) -> &'static str {
         match self {
             NotebookAction::CopyPath => "Copy path",
-            NotebookAction::Reveal => "Reveal in Finder",
+            NotebookAction::Reveal => crate::platform::REVEAL,
             NotebookAction::Rename => "Rename…",
             NotebookAction::MoveTo => "Move to…",
             NotebookAction::LookEndeavor => "Endeavor",
@@ -632,7 +632,7 @@ impl Workspace {
     pub fn sync_page_context(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.active_session() else { return };
         let host = match &session.place.host {
-            HostId::ThisMac => "This Mac".to_string(),
+            HostId::ThisMac => crate::platform::this_computer!().to_string(),
             host => self.hosts.name(host),
         };
         let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session) });
@@ -1135,7 +1135,7 @@ impl Workspace {
         let fixes = self.fixes(host, reason);
         let repair = fixes.contains(&crate::connection::Fix::Repair);
         new_session::turtle_pane()
-            .child(page_title(format!("Julia isn't running on {}", if *host == HostId::ThisMac { "This Mac".to_string() } else { name.clone() })))
+            .child(page_title(format!("Julia isn't running on {}", if *host == HostId::ThisMac { crate::platform::this_computer!().to_string() } else { name.clone() })))
             .child(page_text(text))
             .when(!reason.is_empty(), |d| d.child(page_text(reason.to_string()).text_size(theme::size_meta())))
             .child(

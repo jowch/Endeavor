@@ -676,7 +676,7 @@ impl Workspace {
         let (where_icon, where_label) = match &self.draft.host {
             HostId::Server(_) if self.draft_cluster().is_some() => (Glyph::Cluster, self.hosts.name(&self.draft.host)),
             HostId::Server(_) => (Glyph::Server, self.hosts.name(&self.draft.host)),
-            HostId::ThisMac => (Glyph::Laptop, "This Mac".to_string()),
+            HostId::ThisMac => (Glyph::Laptop, crate::platform::this_computer!().to_string()),
         };
         let resources = self.draft.resources.as_ref().filter(|_| self.draft_cluster().is_some()).map(|r| (Chip::Resources, "resources", Glyph::Chip, r.summary(), false));
         let folder_label = match (&self.draft.folder, self.status(&self.draft.host)) {
@@ -786,7 +786,7 @@ impl Workspace {
 
     fn where_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let this_mac_running = self.host_state(&HostId::ThisMac).running();
-        let this_mac = host_row("where-this-mac", self.draft.host == HostId::ThisMac, Glyph::Laptop, "This Mac".into(), this_mac_running, None, "host-gear-this-mac", cx)
+        let this_mac = host_row("where-this-mac", self.draft.host == HostId::ThisMac, Glyph::Laptop, crate::platform::this_computer!().into(), this_mac_running, None, "host-gear-this-mac", cx)
             .on_click(cx.listener(|this, _, window, cx| this.set_draft_host(HostId::ThisMac, window, cx)));
         let this_mac = this_mac.child(gear_button("gear-this-mac", "host-gear-this-mac").on_click(cx.listener(|this, _, window, cx| {
             cx.stop_propagation();

@@ -154,7 +154,7 @@ impl Hosts {
     /// A host's name as the app shows it.
     pub fn name(&self, host: &HostId) -> String {
         match host {
-            HostId::ThisMac => "This Mac".into(),
+            HostId::ThisMac => crate::platform::this_computer!().into(),
             HostId::Server(id) => self.server(id).map_or_else(|| "a removed server".into(), |s| s.name.clone()),
         }
     }

@@ -1055,7 +1055,7 @@ impl Workspace {
                     connection.found = Some(Ok(RuntimeState::NotRunning));
                 }
                 if host == HostId::ThisMac {
-                    this.status = "Julia on This Mac is stopped.".into();
+                    this.status = concat!("Julia on ", crate::platform::this_computer!(), " is stopped.").into();
                 }
                 cx.notify();
             });

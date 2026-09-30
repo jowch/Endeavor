@@ -6,6 +6,40 @@
 
 use std::path::Path;
 
+/// The computer the app runs on, as the app names it: "This Mac" on macOS,
+/// "This computer" on Linux. `this_computer!(lower)` is the same inside a
+/// sentence ("on this Mac"). A macro, so `concat!` can put it in fixed text.
+#[cfg(target_os = "macos")]
+macro_rules! this_computer {
+    () => {
+        "This Mac"
+    };
+    (lower) => {
+        "this Mac"
+    };
+}
+
+#[cfg(not(target_os = "macos"))]
+macro_rules! this_computer {
+    () => {
+        "This computer"
+    };
+    (lower) => {
+        "this computer"
+    };
+}
+
+pub(crate) use this_computer;
+
+/// The menu item that runs `reveal` on a notebook, and on a session's folder.
+pub const REVEAL: &str = if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Show in Files" };
+pub const REVEAL_FOLDER: &str = if cfg!(target_os = "macos") { "Reveal folder in Finder" } else { "Show folder in Files" };
+/// The button that shows the log files' folder, and its accessible name.
+pub const SHOW_LOGS: (&str, &str) = if cfg!(target_os = "macos") { ("Show in Finder", "Show log files in Finder") } else { ("Show in Files", "Show log files in Files") };
+
+/// Settings' Appearance choice that follows the system's light or dark setting.
+pub const MATCH_SYSTEM: &str = if cfg!(target_os = "macos") { "Match macOS" } else { "Match system" };
+
 /// Show `path` in Finder, selected; on Linux, open its folder in the file manager.
 pub fn reveal(path: &Path) {
     #[cfg(target_os = "macos")]

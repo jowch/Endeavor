@@ -82,7 +82,7 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
             (format!("Let Claude {what}?"), vec![])
         } else if input["command"].is_string() {
             // Claude Code's own shell: its title is the whole command, shown below instead.
-            ("Run a command on This Mac?".into(), input["description"].as_str().map(muted).into_iter().collect())
+            (concat!("Run a command on ", crate::platform::this_computer!(), "?").into(), input["description"].as_str().map(muted).into_iter().collect())
         } else {
             let short = cut_line(title, 60);
             let full = (short != title.trim()).then(|| muted(title));
@@ -95,7 +95,7 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
         (format!("Run a command on {host}?"), vec![(format!("In {cwd}"), Tone::Muted)])
     } else if tool == "allow_execution" {
         let file = session.notebook_path.as_deref().map(|p| folder_name(Path::new(p)));
-        let host = session.server.clone().unwrap_or_else(|| "This Mac".into());
+        let host = session.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());
         let mut lines = Vec::new();
         if let Some(line) = notebook_summary(file.as_deref(), preview.as_ref()) {
             lines.push((line, Tone::Secondary));

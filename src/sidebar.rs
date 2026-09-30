@@ -59,7 +59,7 @@ impl RowAction {
     pub(crate) fn label(self) -> &'static str {
         match self {
             RowAction::Rename => "Rename",
-            RowAction::Reveal => "Reveal folder in Finder",
+            RowAction::Reveal => crate::platform::REVEAL_FOLDER,
             RowAction::Archive => "Archive",
             RowAction::Unarchive => "Unarchive",
             RowAction::Close => "Close",
@@ -1318,9 +1318,9 @@ mod tests {
     fn row_menu_items() {
         let labels = |row: &Row, archived, local| RowAction::for_row(row, archived, local).into_iter().map(RowAction::label).collect::<Vec<_>>();
         let past = Row::Past("s1".to_string().into(), crate::hosts::Place::local("/tmp"));
-        assert_eq!(labels(&Row::Open(1), Some(false), true), ["Rename", "Reveal folder in Finder", "Archive", "Close", "Delete…"]);
-        assert_eq!(labels(&Row::Open(1), None, true), ["Rename", "Reveal folder in Finder", "Close", "Delete…"]);
-        assert_eq!(labels(&past, Some(true), true), ["Rename", "Reveal folder in Finder", "Unarchive", "Delete…"]);
+        assert_eq!(labels(&Row::Open(1), Some(false), true), ["Rename", crate::platform::REVEAL_FOLDER, "Archive", "Close", "Delete…"]);
+        assert_eq!(labels(&Row::Open(1), None, true), ["Rename", crate::platform::REVEAL_FOLDER, "Close", "Delete…"]);
+        assert_eq!(labels(&past, Some(true), true), ["Rename", crate::platform::REVEAL_FOLDER, "Unarchive", "Delete…"]);
         assert_eq!(labels(&Row::Open(1), Some(false), false), ["Rename", "Archive", "Close", "Delete…"]);
     }
 }

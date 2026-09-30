@@ -695,7 +695,7 @@ impl Workspace {
             context.push(format!(
                 "[Endeavor] This session works on the server {server} (ssh host {ssh}), in the folder {}. Julia, Pluto, \
                  the notebook and the files are all on that server; your own file and shell tools are off because \
-                 they'd see the user's Mac instead. Use the notebook tools list_folder, read_file and run_shell (the user \
+                 they'd see the user's computer instead. Use the notebook tools list_folder, read_file and run_shell (the user \
                  approves each command), with the server's paths.",
                 folder.display()
             ));
