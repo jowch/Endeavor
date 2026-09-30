@@ -879,7 +879,7 @@ impl Workspace {
                         popup_row("plus-files".into(), false)
                             .child(glyph(Glyph::File, theme::text_muted()))
                             .child(div().flex_1().child("Add files or photos"))
-                            .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child("⌘U"))
+                            .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(crate::platform::shortcut!("U")))
                             .on_click(cx.listener(|this, _, window, cx| this.add_files(&AddFiles, window, cx))),
                     )
                     .child(

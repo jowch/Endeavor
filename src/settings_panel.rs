@@ -1399,7 +1399,7 @@ impl Workspace {
                     .on_click(cx.listener(move |_, _, window, cx| search.update(cx, |s, cx| s.set_value("", window, cx))))
                     .into_any_element()
             } else {
-                div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("⌘F").into_any_element()
+                div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(crate::platform::shortcut!("F")).into_any_element()
             });
         let list = |yours: bool, cx: &mut Context<Self>| {
             let rows: Vec<_> = Section::ALL

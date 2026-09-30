@@ -1868,7 +1868,7 @@ impl Render for Workspace {
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
         let placeholder = match active {
             None => "What do you want to work on?",
-            Some(_) if working => "Queue a message, or ⌘⏎ to steer",
+            Some(_) if working => concat!("Queue a message, or ", crate::platform::shortcut!("⏎"), " to steer"),
             Some(_) if self.offline_since.is_some() => "Write a message. It sends when you're back online.",
             Some(_) => "Type / for commands",
         };

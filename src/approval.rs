@@ -152,7 +152,7 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
             buttons.push(("Deny".into(), "esc", deny.clone(), false));
         }
         if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
-            buttons.push(("Always this session".into(), "⌘⏎", allow.clone(), true));
+            buttons.push(("Always this session".into(), crate::platform::shortcut!("⏎"), allow.clone(), true));
             buttons.push((run_word.into(), "⏎", allow.clone(), false));
         }
     }
@@ -330,7 +330,7 @@ fn plan_buttons(options: &[PermissionOption]) -> Vec<CardButton> {
     // (label, key, option, runs without asking, weight)
     let buttons: Vec<(&str, &'static str, Option<&PermissionOption>, bool, Weight)> = vec![
         ("Keep planning", "esc", option_of_kind(options, PermissionOptionKind::RejectOnce), false, Weight::Quiet),
-        ("Start in Auto", "⌘⏎", plan_option(options), true, Weight::Outlined),
+        ("Start in Auto", crate::platform::shortcut!("⏎"), plan_option(options), true, Weight::Outlined),
         ("Start", "⏎", plan_option(options), false, Weight::Primary),
     ];
     buttons

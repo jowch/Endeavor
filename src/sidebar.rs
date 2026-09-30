@@ -826,7 +826,7 @@ impl Workspace {
                     .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(div().text_color(theme::text_faint()).child("+"))
                     .child(div().flex_1().child("New session"))
-                    .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child("⌘N"))
+                    .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(crate::platform::shortcut!("N")))
                     .on_click(cx.listener(|this, _, window, cx| this.new_session(&NewSession, window, cx))),
             )
             .when(self.any_sessions_at_all(), |d| {

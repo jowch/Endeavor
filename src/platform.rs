@@ -31,6 +31,30 @@ macro_rules! this_computer {
 
 pub(crate) use this_computer;
 
+/// A `secondary-` shortcut as the app shows it: "⌘N" on macOS, "Ctrl+N" on
+/// Linux. `shortcut!(shift "K")` adds Shift.
+#[cfg(target_os = "macos")]
+macro_rules! shortcut {
+    ($key:literal) => {
+        concat!("⌘", $key)
+    };
+    (shift $key:literal) => {
+        concat!("⌘⇧", $key)
+    };
+}
+
+#[cfg(not(target_os = "macos"))]
+macro_rules! shortcut {
+    ($key:literal) => {
+        concat!("Ctrl+", $key)
+    };
+    (shift $key:literal) => {
+        concat!("Ctrl+Shift+", $key)
+    };
+}
+
+pub(crate) use shortcut;
+
 /// The menu item that runs `reveal` on a notebook, and on a session's folder.
 pub const REVEAL: &str = if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Show in Files" };
 pub const REVEAL_FOLDER: &str = if cfg!(target_os = "macos") { "Reveal folder in Finder" } else { "Show folder in Files" };
