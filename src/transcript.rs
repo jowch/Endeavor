@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 use agent_client_protocol::schema::v1::{ToolCallStatus, ToolKind};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::text::{TextView, TextViewStyle};
+use gpui_component::text::{TextView, TextViewState, TextViewStyle};
 use gpui_component::tooltip::Tooltip;
 
 use crate::Workspace;
@@ -25,6 +25,12 @@ pub(crate) fn run_state_line(warning: &pluto::RunWarning) -> String {
 
 pub fn render_transcript(session: &Session, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     session.sync_list();
+    // Every reply starts parsing now, so it has its height before it is first measured.
+    for (ix, entry) in session.entries.iter().enumerate() {
+        if let Entry::Agent { text, .. } = entry {
+            session.reply_text(ix, text, cx);
+        }
+    }
     let key = session.key;
     let workspace = cx.entity().downgrade();
     list(session.list.clone(), move |ix, window, cx| {
@@ -189,7 +195,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .flex()
             .flex_col()
             .gap(px(2.))
-            .child(markdown(id("agent"), text.clone()))
+            .child(markdown(&session.reply_text(ix, text, cx)))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
         Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
@@ -279,8 +285,8 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
 }
 
 /// An agent reply's markdown, with a copy button on each code block.
-fn markdown(id: ElementId, text: String) -> TextView {
-    TextView::markdown(id, text).style(markdown_style()).code_block_actions(|block, _, _| {
+fn markdown(state: &Entity<TextViewState>) -> TextView {
+    TextView::new(state).style(markdown_style()).code_block_actions(|block, _, _| {
         let code = block.code().to_string();
         div()
             .id("copy")

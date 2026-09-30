@@ -17,6 +17,7 @@ use agent_client_protocol::schema::v1::{
     SessionModeId, SessionModeState, SessionUpdate, StopReason, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use gpui::*;
+use gpui_component::text::TextViewState;
 
 use crate::attach::{self, Attachment};
 use crate::agent::{SessionEvent, Started, Turn};
@@ -275,6 +276,8 @@ pub struct Session {
     /// An entry's own control (a tool or thought row's toggle, a message's
     /// Copy), by its entry index.
     row_focus: RefCell<HashMap<usize, FocusHandle>>,
+    /// Each reply's parsed markdown, by its entry index (see `reply_text`).
+    replies: RefCell<HashMap<usize, (Entity<TextViewState>, Subscription)>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -385,6 +388,7 @@ impl Session {
             plan_card_focus: RefCell::new(None),
             run_focus: RefCell::new(HashMap::new()),
             row_focus: RefCell::new(HashMap::new()),
+            replies: RefCell::new(HashMap::new()),
         }
     }
 
@@ -422,6 +426,25 @@ impl Session {
         self.row_focus.borrow_mut().entry(ix).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
+    /// The parsed markdown of the reply at entry `ix`, kept for as long as the
+    /// session. A `TextView`'s own state lasts only while it is drawn, and a
+    /// reply over 4 KB parses in the background, so a reply drawn from new
+    /// state is measured empty and then grows by its whole height, moving the
+    /// transcript under the reader. When a parse lands, the reply's list item
+    /// is measured again, even while it is off screen.
+    pub fn reply_text(&self, ix: usize, text: &str, cx: &mut App) -> Entity<TextViewState> {
+        let existing = self.replies.borrow().get(&ix).map(|(state, _)| state.clone());
+        let state = existing.unwrap_or_else(|| {
+            let state = cx.new(|cx| TextViewState::markdown(text, cx));
+            let list = self.list.clone();
+            let remeasure = cx.observe(&state, move |_, _| list.remeasure_items(ix..ix + 1));
+            self.replies.borrow_mut().insert(ix, (state.clone(), remeasure));
+            state
+        });
+        state.update(cx, |state, cx| state.set_text(text, cx));
+        state
+    }
+
     /// Starting or reopening failed: stop looking busy and say why.
     pub fn fail(&mut self, error: &str) {
         let (message, cli_live) = failure_message(error);
@@ -435,6 +458,7 @@ impl Session {
     pub fn reopen_as_copy(&mut self) -> Option<SessionId> {
         self.failed.take()?;
         self.entries.clear();
+        self.replies.get_mut().clear();
         self.open_runs.clear();
         self.mark(0);
         self.outbox = Outbox::waiting();
