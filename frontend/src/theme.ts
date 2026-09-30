@@ -268,9 +268,13 @@ pluto-editor > main { padding-top: 16px; }
    notebook rather than beside it. 731px keeps the same reading width Pluto
    centred at; 48px on the left clears our striped edit-gutter bar
    (cells.ts, 8px + 4px past the cell's own left edge) with room to spare.
+   Pluto's own rule sizes main at width: 100%, so the 48px margin has to come
+   out of that width too (a plain margin-left would push it 48px past the
+   pane's right edge instead); the 16px on the right is a small gap, the same
+   floor as the chat column's own narrow-width margin (main.rs, CHAT_MIN).
    The overview rail (rail.ts) is fixed to the right of the viewport, not the
    notebook, so it isn't affected either way. */
-pluto-editor main { margin-left: 48px !important; margin-right: auto !important; max-width: 731px !important; }
+pluto-editor main { margin-left: 48px !important; margin-right: auto !important; width: calc(100% - 48px - 16px) !important; max-width: 731px !important; }
 pluto-runarea > span { font-size: 10px; }
 /* The web view draws over native views, so the notebook header can't blur
    what's under it (docs/design-gaps.md, "Translucent headers with blur").
