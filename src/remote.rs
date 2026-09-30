@@ -202,7 +202,7 @@ fn runtime_files() -> Result<Vec<(String, Vec<u8>, bool)>, String> {
     Ok(files)
 }
 
-/// Folders holding helpers built for other platforms (scripts/build-helpers.sh):
+/// Folders holding helpers for other platforms (scripts/helpers.sh):
 /// inside Endeavor.app, or target/helpers in the source tree.
 fn helper_dirs() -> Vec<PathBuf> {
     let resources = crate::install::resources();
@@ -241,7 +241,7 @@ fn helper_for(os: &str, arch: &str) -> Result<PathBuf, String> {
 /// This Mac's platform as `helper_for` names a server's.
 const HERE: (&str, &str) = (if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS }, std::env::consts::ARCH);
 
-const BUILD_HELPERS: &str = "scripts/build-helpers.sh";
+const HELPERS_SCRIPT: &str = "scripts/helpers.sh";
 const NO_HELPER: &str = " has no runtime helper for ";
 const DOWNLOAD_AGAIN: &str = "Download Endeavor again";
 
@@ -255,11 +255,11 @@ fn missing_helper(os: &str, arch: &str, bundled: bool) -> String {
         return format!("Endeavor can't run on {os} {arch} servers.");
     }
     let platform = if mac { format!("macOS {}", if arch == "aarch64" { "arm64" } else { arch }) } else { format!("{os} {arch}") };
-    let build = if linux { BUILD_HELPERS } else { "cargo build" };
+    let fix = if linux { format!("Get it with {HELPERS_SCRIPT}") } else { "Build it with cargo build".into() };
     if bundled {
         format!("This copy of Endeavor{NO_HELPER}{platform} servers. {DOWNLOAD_AGAIN} to get one.")
     } else {
-        format!("This build of Endeavor{NO_HELPER}{platform} servers. Build it with {build} in Endeavor's source folder, then connect again.")
+        format!("This build of Endeavor{NO_HELPER}{platform} servers. {fix} in Endeavor's source folder, then connect again.")
     }
 }
 
@@ -278,8 +278,8 @@ impl HelperFix {
             None
         } else if reason.contains(DOWNLOAD_AGAIN) {
             Some(HelperFix::Download)
-        } else if reason.contains(BUILD_HELPERS) {
-            Some(HelperFix::Build(BUILD_HELPERS))
+        } else if reason.contains(HELPERS_SCRIPT) {
+            Some(HelperFix::Build(HELPERS_SCRIPT))
         } else {
             Some(HelperFix::Build("cargo build"))
         }
@@ -912,8 +912,8 @@ mod tests {
     #[test]
     fn a_missing_helper_says_how_to_get_one() {
         let linux = missing_helper("Linux", "x86_64", false);
-        assert_eq!(linux, "This build of Endeavor has no runtime helper for Linux x86_64 servers. Build it with scripts/build-helpers.sh in Endeavor's source folder, then connect again.");
-        assert_eq!(HelperFix::of(&linux), Some(HelperFix::Build("scripts/build-helpers.sh")));
+        assert_eq!(linux, "This build of Endeavor has no runtime helper for Linux x86_64 servers. Get it with scripts/helpers.sh in Endeavor's source folder, then connect again.");
+        assert_eq!(HelperFix::of(&linux), Some(HelperFix::Build("scripts/helpers.sh")));
         let app = missing_helper("Linux", "aarch64", true);
         assert_eq!(app, "This copy of Endeavor has no runtime helper for Linux aarch64 servers. Download Endeavor again to get one.");
         assert_eq!(HelperFix::of(&app), Some(HelperFix::Download));
