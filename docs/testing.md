@@ -18,7 +18,7 @@ waiting, what the notebook pane shows) comes from the state dump.
   2. The transcript has a run summary and a cell diff: a `run` entry, and a
      `tool` row with `diffs`.
   3. Turn Point on, pick a cell, and send a comment. `.page.picked` has the
-     cell, the user entry's `chips` name it, and the reply is about that cell.
+     cell, the user entry's `quotes` name it, and the reply is about that cell.
   4. A session on a server makes one edit: a `tool` row whose `added` is more
      than 0, with `.notebook.header.host` naming the server.
 
@@ -76,7 +76,8 @@ To wait for something, poll the dump. For example, loop until
 - `session`, for the active session. The title, and `transcript`: the entries
   in order, as drawn. The entry kinds are `user` (with chips, the "Not
   answered yet" line, and `delivery`, the line under a message sent with ⌘⏎
-  while Claude worked), `reply` (both with `actions`: the hover row's `copy`
+  while Claude worked, and `quotes`: each quote's `source`, `excerpt`,
+  whether it has a `picture`, and its `comment`), `reply` (both with `actions`: the hover row's `copy`
   label, "Copied" just after a copy, and `time`, null for replayed history),
   `note` (such as "Claude stopped: …"), `plan`, `thought`, `tool` and `run`. A run of tool calls is one `run` entry with its
   summary line and its rows. A `tool` row has its text ("Edited `fit`"), its
@@ -115,8 +116,11 @@ To wait for something, poll the dump. For example, loop until
   ends. `warning` is the "Can't reach" box above the pane. On the new-session
   screen, `shows` is `new_notebook`, `safe_preview`, `loading`, `host` or
   `empty`.
-- `composer`. The text, chips, placeholder, mode, model and effort, and Point
-  (whether it can be used and whether it's on). `above` lists the lines above
+- `composer`. The text, chips, `quotes` (the cards above the box, as in a
+  user entry), placeholder, mode, model and effort, and Point (whether it can
+  be used and whether it's on). `reply` is Reply on a selection in the chat:
+  `shows` is `pill`, `prompt` (with the `quote`, the `text` typed and whether
+  the `menu` is open) or `added`; null when none shows. `above` lists the lines above
   the box (slash commands, offline, queue heading, notices). `queue` lists the
   waiting messages, each with its label (`sending now…`, `copying files…`).
   `tips` says whether the file tip and the Point tip show.
@@ -136,8 +140,10 @@ To wait for something, poll the dump. For example, loop until
   Julia, Sign out, Delete session), or null. `title` and `text` are its
   words, and `buttons` has `label` and `primary` for each (Cancel, then
   the action).
-- `page`. What the notebook page reports: Point on or off, the picked cells
-  and the drawn box, Point's status line and comment, the drawer's tab, whether
+- `page`. What the notebook page reports: Point on or off, the picked cells,
+  `picks` (each pick's source, "rates · lines 2–3"), whether a box is drawn,
+  Point's status line and comment, `reply` (`pill` or `prompt` when Reply on a
+  selection in the notebook shows), the drawer's tab, whether
   the safe-preview callout shows, and `alerts`, every `window.alert` the page
   showed. In debug builds the page's `alert` is wrapped to record its text,
   and it still shows. Null when the page isn't on screen. While an alert is

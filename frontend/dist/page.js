@@ -162,6 +162,29 @@
     );
   }
 
+  // src/place.ts
+  function pillPlace(lines, viewportHeight) {
+    const PILL = 30;
+    const last2 = lines[lines.length - 1];
+    const below = last2.bottom + 6;
+    const top = below + PILL <= viewportHeight ? below : lines[0].top - 6 - PILL;
+    return { left: Math.max(last2.right - 28, 4), top };
+  }
+  function barPlace(pick2, width, height2, barHeight) {
+    const GAP = 8;
+    const EDGE = 16;
+    const barWidth = Math.max(Math.min(Math.max(pick2.right - pick2.left, 360), width - 32), 0);
+    const left = Math.min(Math.max(pick2.left, EDGE), width - EDGE - barWidth);
+    const fitsBelow = pick2.bottom + GAP + barHeight <= height2 - GAP;
+    const fitsAbove = pick2.top - GAP - barHeight >= GAP;
+    const lowest = height2 - EDGE - barHeight;
+    let top;
+    if (pick2.bottom < 0 || fitsBelow) top = pick2.bottom + GAP;
+    else if (pick2.top > height2 || fitsAbove) top = pick2.top - GAP - barHeight;
+    else top = lowest;
+    return { left: Math.max(left, EDGE), top: Math.min(Math.max(top, GAP), lowest), width: barWidth };
+  }
+
   // src/quote.ts
   var SHOOTING = "endeavor-shooting";
   var waiting = /* @__PURE__ */ new Map();
@@ -242,14 +265,18 @@
       text.style.height = "21px";
       text.style.height = `${Math.min(text.scrollHeight, 120)}px`;
     });
-    text.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        showMenu(false);
-        done(e.metaKey, e);
-      }
-    });
+    text.addEventListener(
+      "keydown",
+      (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          showMenu(false);
+          done(e.metaKey, e);
+        }
+      },
+      true
+    );
     options.onmousedown = (e) => e.preventDefault();
     options.onclick = () => showMenu(menu.hidden);
     for (const item of menu.querySelectorAll("[role=menuitem]")) {
@@ -305,13 +332,22 @@
 
   // src/annotate.ts
   var css4 = `
-  body.annotating pluto-cell { cursor: crosshair; }
+  body.annotating pluto-cell, body.annotating pluto-cell * { cursor: crosshair !important; }
   /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
      pill, dashed hover and solid picked outlines, dashed box for a drawn region. */
-  body.annotating pluto-cell:hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 4px; }
-  body.annotating pluto-cell.annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 4px; }
-  body.annotating.annotate-drawing pluto-cell:hover { outline: none; }
-  body.annotating.annotate-drawing, body.annotating.annotate-drawing * { cursor: crosshair !important; user-select: none; }
+  body.annotating .annotate-hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 3px; }
+  body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
+  body.annotating.annotate-drawing .annotate-hover { outline: none; }
+  body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
+  body.annotating pluto-input .cm-content { counter-reset: endeavor-line; padding-left: 2.6em !important; }
+  body.annotating pluto-input .cm-line { counter-increment: endeavor-line; position: relative; }
+  body.annotating pluto-input .cm-line::before { content: counter(endeavor-line); position: absolute; left: -2.6em; width: 2em;
+    text-align: right; color: var(--e-text-faint); font-size: 0.85em; }
+  body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
+  body.annotating pluto-input .cm-line.annotate-line::before { color: var(--e-accent-text); }
+  #annotate-tag { position: absolute; z-index: 9999; display: none; pointer-events: none; padding: 0 6px; border-radius: 4px;
+    background: var(--e-accent); color: #fff; font: 11px/18px system-ui; }
+  body.annotating #annotate-tag.shown { display: block; }
   #annotate-frame { position: fixed; inset: 0; pointer-events: none; z-index: 9999;
     background: var(--e-dim); box-shadow: inset 0 0 0 1px var(--e-accent); display: none; }
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
@@ -323,32 +359,87 @@
   #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
-    z-index: 10000; display: none; flex-direction: row; align-items: flex-end; gap: 8px;
-    width: min(640px, 90vw); padding: 6px; border-radius: 10px; border: 1px solid transparent;
+    z-index: 10000; display: none; flex-direction: column; gap: 6px; box-sizing: border-box;
+    width: min(640px, calc(100vw - 32px)); padding: 8px; border-radius: 10px; border: 1px solid transparent;
     background: var(--e-bar-bg); color: var(--e-text-primary); font: 13px system-ui;
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     box-shadow: 0 8px 30px var(--e-bar-shadow); }
+  #annotate-bar.placed { transform: none; bottom: auto; }
   body.annotating #annotate-bar, body.annotating #annotate-frame, body.annotating #annotate-hint { display: flex; }
   @media (prefers-color-scheme: light) {
     #annotate-hint, #annotate-bar { border-color: var(--e-popover-edge); }
     #annotate-hint { box-shadow: 0 12px 32px var(--e-shadow-popover); }
   }
-  #annotate-bar textarea { flex: 1; resize: none; height: 28px; max-height: 120px; padding: 5px 8px; border-radius: 6px;
-    border: 1px solid var(--e-field-edge); background: var(--e-field-bg); color: var(--e-text-primary); font: 13px/18px system-ui; box-sizing: border-box; }
-  #annotate-bar .status { flex: none; align-self: center; color: var(--e-text-secondary); font-size: 12px; white-space: nowrap; }
-  #annotate-bar button { height: 28px; padding: 0 10px; border-radius: 6px; border: 0; cursor: pointer;
-    background: var(--e-annotate-btn-bg); color: var(--e-text-primary); font: 13px system-ui; }
-  #annotate-bar button.primary { background: var(--e-accent); color: #fff; }
-  #annotate-bar button:disabled { opacity: 0.4; cursor: default; }
-  /* While the app takes the box's picture, the notebook shows as it is. */
-  body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box,
+  #annotate-bar .head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  #annotate-bar .status { flex: 1; min-width: 0; color: var(--e-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #annotate-bar .keys { flex: none; color: var(--e-text-faint); }
+  /* While the app takes a picture, the notebook shows as it is. */
+  body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box, body.annotating.${SHOOTING} #annotate-tag,
   body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
-  body.annotating.${SHOOTING} pluto-cell, body.annotating.${SHOOTING} pluto-cell:hover { outline: none; }
+  body.annotating.${SHOOTING} .annotate-picked, body.annotating.${SHOOTING} .annotate-hover { outline: none; }
+  body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
 `;
   var DRAG = 4;
+  var FIGURE = "img, svg, canvas, video";
+  var PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
+  function targetAt(el) {
+    const cell = el?.closest("pluto-cell");
+    if (!el || !cell) return null;
+    const input = el.closest("pluto-input");
+    if (input) return { part: "code", cell, el: input };
+    const output = el.closest("pluto-output");
+    if (!output) return { part: "cell", cell, el: cell };
+    let figure = el.closest(FIGURE);
+    while (figure?.parentElement?.closest(FIGURE) && output.contains(figure.parentElement.closest(FIGURE))) figure = figure.parentElement.closest(FIGURE);
+    if (figure && output.contains(figure)) return { part: "figure", cell, el: figure };
+    const paragraph = el.closest(PARAGRAPH);
+    if (paragraph && output.contains(paragraph)) return { part: "output", cell, el: paragraph };
+    return { part: output.querySelector(FIGURE) ? "figure" : "output", cell, el: output };
+  }
+  var pageBox = (r) => ({
+    left: r.left + window.scrollX,
+    top: r.top + window.scrollY,
+    right: r.right + window.scrollX,
+    bottom: r.bottom + window.scrollY
+  });
+  var cmLines = (cell) => [...cell.querySelectorAll("pluto-input .cm-line")];
+  function pickStatus(picks) {
+    if (picks.length > 1) return `${picks.length} picks`;
+    const pick2 = picks[0];
+    if (!pick2) return "Click something to pick it";
+    if (pick2.part === "box") return `Box over ${pick2.cells.length} cell${pick2.cells.length === 1 ? "" : "s"}`;
+    const name = cellName(pick2.code);
+    switch (pick2.part) {
+      case "cell":
+        return `Cell ${name}`;
+      case "lines":
+        return pick2.lines[0] === pick2.lines[1] ? `Line ${pick2.lines[0]} of ${name}` : `Lines ${pick2.lines[0]}\u2013${pick2.lines[1]} of ${name}`;
+      case "output":
+        return `Output of ${name}`;
+      case "figure":
+        return `Figure in ${name}`;
+    }
+  }
+  function samePick(a, b) {
+    if (a.box || b.box) return a === b;
+    if (a.pick.part === "lines" && b.pick.part === "lines") return a.pick.cell === b.pick.cell && a.pick.lines.join() === b.pick.lines.join();
+    return !!a.el && a.el === b.el;
+  }
+  var state = null;
+  function pointState() {
+    const picks = state?.picks ?? [];
+    const cells = picks.flatMap((p) => p.pick.part === "box" ? p.pick.cells : [p.pick.cell]);
+    return {
+      picked: [...new Set(cells)],
+      picks: picks.map((p) => pickSource(p.pick)),
+      box: picks.some((p) => p.box),
+      status: state?.status() ?? "",
+      comment: state?.comment() ?? ""
+    };
+  }
   function initAnnotate() {
-    const picked = /* @__PURE__ */ new Set();
-    let region = null;
+    const picks = [];
+    let hover = null;
     const active = () => document.body.classList.contains("annotating");
     const cells = () => [...document.querySelectorAll("pluto-cell")];
     const style2 = document.createElement("style");
@@ -357,130 +448,176 @@
     frame2.id = "annotate-frame";
     const box = document.createElement("div");
     box.id = "annotate-box";
+    const tag = document.createElement("div");
+    tag.id = "annotate-tag";
     const hint = document.createElement("div");
     hint.id = "annotate-hint";
-    hint.innerHTML = `<span>Click a cell or drag a box</span><span>\xB7</span><span class="done" role="button">Done</span>`;
+    hint.innerHTML = `<span>Click to pick \xB7 drag over code lines \xB7 drag elsewhere for a box</span><span>\xB7</span><span class="done" role="button">Done</span>`;
     const bar = document.createElement("div");
     bar.id = "annotate-bar";
-    bar.innerHTML = `<span class="status"></span><textarea rows="1" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Comment for Claude\u2026" title="\u21A9 send \xB7 \u2318\u21A9 send now \xB7 \u21E7\u21A9 newline \xB7 Esc or \u2318\u21E7K exit"></textarea><button class="primary send">Send</button>`;
-    document.head.append(style2);
-    document.body.append(frame2, box, hint, bar);
+    bar.innerHTML = `<div class="head"><span class="status"></span><span class="keys">\u21A9 send \xB7 \u2318\u21A9 add to message</span></div>`;
     const status = bar.querySelector(".status");
-    const text = bar.querySelector("textarea");
-    const sendButton = bar.querySelector(".send");
-    const fit = () => {
-      text.style.height = "28px";
-      text.style.height = `${Math.min(text.scrollHeight + 2, 120)}px`;
-    };
-    text.addEventListener("input", fit);
-    const pageBox = (r) => ({
-      left: r.left + window.scrollX,
-      top: r.top + window.scrollY,
-      right: r.right + window.scrollX,
-      bottom: r.bottom + window.scrollY
-    });
-    const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-    function place3() {
-      const last2 = cells().filter((c) => picked.has(c.id)).at(-1);
-      const under = region ?? (last2 ? pageBox(last2.getBoundingClientRect()) : null);
-      if (!under) {
-        bar.removeAttribute("style");
-        return;
-      }
-      const width = Math.min(Math.max(under.right - under.left, 320), 640);
-      Object.assign(bar.style, {
-        position: "absolute",
-        transform: "none",
-        bottom: "auto",
-        left: `${under.left}px`,
-        top: `${under.bottom + 10}px`,
-        width: `${width}px`
-      });
-    }
+    const field = quoteField("Comment for Claude\u2026", "Send", (add, e) => byUser(e) && sendComment(add));
+    const text = field.text;
+    bar.append(field.root);
+    document.head.append(style2);
+    document.body.append(frame2, box, tag, hint, bar);
+    state = { picks, status: () => active() ? status.textContent ?? "" : "", comment: () => text.value };
     function drawBox(b) {
       box.classList.toggle("shown", !!b);
       if (!b) return;
-      Object.assign(box.style, {
-        left: `${b.left}px`,
-        top: `${b.top}px`,
-        width: `${b.right - b.left}px`,
-        height: `${b.bottom - b.top}px`
-      });
+      Object.assign(box.style, { left: `${b.left}px`, top: `${b.top}px`, width: `${b.right - b.left}px`, height: `${b.bottom - b.top}px` });
+    }
+    function lastRect() {
+      const last2 = picks.at(-1);
+      if (!last2) return null;
+      if (last2.box) {
+        const b = last2.box;
+        return { left: b.left - window.scrollX, top: b.top - window.scrollY, right: b.right - window.scrollX, bottom: b.bottom - window.scrollY };
+      }
+      const shown = last2.lines?.length ? last2.lines : last2.el ? [last2.el] : [];
+      if (!shown.length) return null;
+      const [first, end] = [shown[0].getBoundingClientRect(), shown[shown.length - 1].getBoundingClientRect()];
+      return { left: first.left, top: first.top, right: Math.max(first.right, end.right), bottom: end.bottom };
+    }
+    function place3() {
+      const rect = lastRect();
+      bar.classList.toggle("placed", !!rect);
+      if (!rect) {
+        bar.removeAttribute("style");
+        return;
+      }
+      const at = barPlace(rect, window.innerWidth, window.innerHeight, bar.offsetHeight);
+      Object.assign(bar.style, { left: `${at.left}px`, top: `${at.top}px`, width: `${at.width}px` });
+    }
+    function showHover(target) {
+      hover?.el.classList.remove("annotate-hover");
+      hover = target;
+      tag.classList.toggle("shown", !!target);
+      if (!target) return;
+      target.el.classList.add("annotate-hover");
+      tag.textContent = { cell: "Whole cell", code: "Code", output: "Text", figure: "Figure" }[target.part];
+      const r = target.el.getBoundingClientRect();
+      Object.assign(tag.style, { left: `${r.left + window.scrollX}px`, top: `${r.top + window.scrollY - 22}px` });
     }
     function refresh2() {
+      for (const el of document.querySelectorAll(".annotate-picked")) el.classList.remove("annotate-picked");
+      for (const el of document.querySelectorAll(".annotate-line")) el.classList.remove("annotate-line");
+      for (const p of picks) {
+        p.el?.classList.add("annotate-picked");
+        for (const line of p.lines ?? []) line.classList.add("annotate-line");
+      }
+      drawBox([...picks].reverse().find((p) => p.box)?.box ?? null);
+      status.textContent = pickStatus(picks.map((p) => p.pick));
       place3();
-      drawBox(region);
-      const n = picked.size;
-      const cellsText = `${n} cell${n === 1 ? "" : "s"}`;
-      status.textContent = region ? `Box over ${cellsText}` : n ? `${cellsText} selected` : "Click cells to select them";
-      sendButton.disabled = !region && n === 0;
-      for (const c of cells()) c.classList.toggle("annotate-picked", picked.has(c.id));
+    }
+    function choose(next, add) {
+      const at = picks.findIndex((p) => samePick(p, next));
+      if (add) at >= 0 ? picks.splice(at, 1) : picks.push(next);
+      else picks.splice(0, picks.length, ...at >= 0 && picks.length === 1 ? [] : [next]);
+      refresh2();
+      text.focus();
+    }
+    function targetPick(target) {
+      const { cell, el } = target;
+      const code = cellCode(cell);
+      switch (target.part) {
+        case "cell":
+          return { pick: { part: "cell", cell: cell.id, code }, el };
+        case "code": {
+          const lines = code.split("\n").length;
+          return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el };
+        }
+        case "output":
+          return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() }, el };
+        case "figure":
+          return { pick: { part: "figure", cell: cell.id, code }, el };
+      }
+    }
+    function linesPick(cell, from, to) {
+      const [first, last2] = [Math.min(from, to), Math.max(from, to)];
+      const code = cellCode(cell);
+      const text2 = code.split("\n").slice(first - 1, last2).join("\n");
+      return { pick: { part: "lines", cell: cell.id, code, lines: [first, last2], text: text2 }, lines: cmLines(cell).slice(first - 1, last2) };
     }
     function set(enable) {
       if (enable === active()) return;
       document.body.classList.toggle("annotating", enable);
       document.body.classList.remove("annotate-drawing");
-      picked.clear();
-      region = null;
+      picks.length = 0;
       drag = null;
+      showHover(null);
       if (enable) {
-        for (const c of document.querySelectorAll("pluto-cell.selected")) picked.add(c.id);
+        for (const c of document.querySelectorAll("pluto-cell.selected")) picks.push(targetPick({ part: "cell", cell: c, el: c }));
         text.focus();
       }
       refresh2();
       send({ type: "mode", on: enable });
     }
-    function sendComment(add) {
-      if (!picked.size && !region) return;
-      const ids = cells().map((c) => c.id).filter((id) => picked.has(id));
+    async function sendComment(add) {
+      if (!picks.length) return;
+      const sending = picks.splice(0, picks.length);
       const comment = text.value.trim();
-      if (region) {
-        const box2 = region;
-        void shoot(box2).then((shot) => sendQuote([{ part: "box", cells: ids, shot }], comment, add));
-      } else {
-        sendQuote(ids.map((id) => ({ part: "cell", cell: id, code: cellCode(document.getElementById(id)) })), comment, add);
-      }
       text.value = "";
-      fit();
-      picked.clear();
-      region = null;
       refresh2();
+      const out = [];
+      for (const p of sending) {
+        if (p.pick.part === "box" || p.pick.part === "figure") {
+          const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
+          out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
+        } else out.push(p.pick);
+      }
+      sendQuote(out, comment, add);
     }
     let drag = null;
-    let justDrew = false;
+    let justDragged = false;
     const dragBox = (e) => {
       const [x, y] = [e.clientX + window.scrollX, e.clientY + window.scrollY];
       return { left: Math.min(drag.x, x), top: Math.min(drag.y, y), right: Math.max(drag.x, x), bottom: Math.max(drag.y, y) };
     };
+    const lineAt = (el, cell) => {
+      const line = el?.closest(".cm-line");
+      return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
+    };
+    const ours = (target) => bar.contains(target) || hint.contains(target);
     const swallow = (e) => {
       const target = e.target;
-      if (!active() || bar.contains(target) || hint.contains(target)) return;
+      if (!active() || ours(target)) return;
       if (e.type !== "pointerdown") e.preventDefault();
       e.stopPropagation();
-      if (e.type === "mousedown" && e.button === 0) {
-        const m = e;
-        drag = { x: m.clientX + window.scrollX, y: m.clientY + window.scrollY, drawing: false };
+      const m = e;
+      if (e.type === "mousedown" && m.button === 0) {
+        const cell = target.closest("pluto-cell");
+        const line = cell && !m.altKey ? lineAt(target, cell) : 0;
+        drag = { x: m.clientX + window.scrollX, y: m.clientY + window.scrollY, moved: false, add: m.shiftKey, lines: line ? { cell, from: line, to: line } : void 0 };
       }
       if (e.type !== "click") return;
-      if (justDrew) {
-        justDrew = false;
+      if (justDragged) {
+        justDragged = false;
         return;
       }
-      const cell = target.closest("pluto-cell");
-      if (!cell) return;
-      region = null;
-      picked.has(cell.id) ? picked.delete(cell.id) : picked.add(cell.id);
-      refresh2();
+      const found = targetAt(target);
+      if (found) choose(targetPick(found), m.shiftKey);
     };
     for (const type of ["pointerdown", "mousedown", "click"]) document.addEventListener(type, swallow, true);
     document.addEventListener(
       "mousemove",
       (e) => {
-        if (!drag || !active()) return;
-        if (!drag.drawing && Math.hypot(e.clientX + window.scrollX - drag.x, e.clientY + window.scrollY - drag.y) < DRAG) return;
-        drag.drawing = true;
-        document.body.classList.add("annotate-drawing");
+        if (!active()) return;
+        if (!drag) return showHover(ours(e.target) ? null : targetAt(e.target));
+        if (!drag.moved && Math.hypot(e.clientX + window.scrollX - drag.x, e.clientY + window.scrollY - drag.y) < DRAG) return;
+        drag.moved = true;
         e.preventDefault();
+        showHover(null);
+        if (drag.lines) {
+          const line = lineAt(e.target, drag.lines.cell);
+          if (line) drag.lines.to = line;
+          const shown = linesPick(drag.lines.cell, drag.lines.from, drag.lines.to);
+          for (const el of document.querySelectorAll(".annotate-line")) el.classList.remove("annotate-line");
+          for (const el of shown.lines ?? []) el.classList.add("annotate-line");
+          return;
+        }
+        document.body.classList.add("annotate-drawing");
         drawBox(dragBox(e));
       },
       true
@@ -489,20 +626,24 @@
       "mouseup",
       (e) => {
         if (!drag) return;
-        const drawn = drag.drawing ? dragBox(e) : null;
+        const done = drag;
+        const drawn = done.moved && !done.lines ? dragBox(e) : null;
         drag = null;
         document.body.classList.remove("annotate-drawing");
-        if (!drawn || !active()) return;
-        justDrew = true;
-        setTimeout(() => justDrew = false, 0);
-        region = drawn;
-        picked.clear();
-        for (const c of cells()) if (overlaps(drawn, pageBox(c.getBoundingClientRect()))) picked.add(c.id);
-        refresh2();
-        text.focus();
+        if (!done.moved || !active()) return;
+        justDragged = true;
+        setTimeout(() => justDragged = false, 0);
+        if (done.lines) return choose(linesPick(done.lines.cell, done.lines.from, done.lines.to), done.add);
+        const under = cells().filter((c) => {
+          const r = pageBox(c.getBoundingClientRect());
+          return drawn.left < r.right && r.left < drawn.right && drawn.top < r.bottom && r.top < drawn.bottom;
+        });
+        choose({ pick: { part: "box", cells: under.map((c) => c.id) }, box: drawn }, done.add);
       },
       true
     );
+    window.addEventListener("scroll", () => active() && place3(), true);
+    window.addEventListener("resize", () => active() && place3());
     window.addEventListener(
       "keydown",
       (e) => {
@@ -515,16 +656,9 @@
           e.stopPropagation();
           return set(false);
         }
-        if (!active() || !bar.contains(e.target)) return;
-        e.stopPropagation();
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          if (byUser(e)) sendComment(e.metaKey);
-        }
       },
       true
     );
-    sendButton.onclick = (e) => byUser(e) && sendComment(false);
     hint.querySelector(".done").onclick = () => set(false);
     on("annotate", (msg) => set(msg.on));
   }
@@ -606,9 +740,9 @@
   var states = /* @__PURE__ */ new Map();
   function apply() {
     for (const cell of document.querySelectorAll("pluto-cell")) {
-      const state = states.get(cell.id);
-      setAttr(cell, "data-endeavor", state?.unrun ? "unrun" : null);
-      setAttr(cell, "data-author", state?.author ?? null);
+      const state2 = states.get(cell.id);
+      setAttr(cell, "data-endeavor", state2?.unrun ? "unrun" : null);
+      setAttr(cell, "data-author", state2?.author ?? null);
     }
   }
   function setAttr(el, name, value) {
@@ -635,13 +769,15 @@
     on("debug", () => {
       const annotating = document.body.classList.contains("annotating");
       const drawer2 = document.documentElement.dataset.endeavorDrawer;
+      const point = pointState();
       send({
         type: "debug",
         point: annotating,
-        picked: [...document.querySelectorAll("pluto-cell.annotate-picked")].map((c) => c.id),
-        box: !!document.querySelector("#annotate-box.shown"),
-        point_status: annotating ? document.querySelector("#annotate-bar .status")?.textContent ?? "" : "",
-        comment: document.querySelector("#annotate-bar textarea")?.value ?? "",
+        picked: point.picked,
+        picks: point.picks,
+        box: point.box,
+        point_status: point.status,
+        comment: point.comment,
         drawer: drawer2 === "docs" || drawer2 === "status" ? drawer2 : null,
         callout: !!document.querySelector("#endeavor-safe.shown"),
         reply: document.querySelector("#endeavor-reply") ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
@@ -904,22 +1040,22 @@
     const packages = direct.map((name) => {
       const version = installed2[name];
       const detail = version === "stdlib" ? "standard library" : version ?? "";
-      let state;
-      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state = "failed";
-      else if (busy.has(name) && pkgPhase === "busy") state = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
-      else if (version != null) state = "ready";
-      else if (pkgPhase === "done") state = Object.keys(installed2).length ? "failed" : "ready";
-      else state = "waiting";
-      const notFound = state === "failed" && version == null && pkgPhase === "done";
-      return { name, state, detail: state === "ready" ? detail : notFound ? "not found" : "" };
+      let state2;
+      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state2 = "failed";
+      else if (busy.has(name) && pkgPhase === "busy") state2 = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
+      else if (version != null) state2 = "ready";
+      else if (pkgPhase === "done") state2 = Object.keys(installed2).length ? "failed" : "ready";
+      else state2 = "waiting";
+      const notFound = state2 === "failed" && version == null && pkgPhase === "done";
+      return { name, state: state2, detail: state2 === "ready" ? detail : notFound ? "not found" : "" };
     });
     const deps = log.added.filter((n) => !direct.includes(n));
     const depsRow = deps.length ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length } : null;
     const cells = nb.cell_order.map((id) => {
       const r = nb.cell_results[id] ?? {};
-      const state = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
-      const time = (state === "done" || state === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
-      return { id, name: cellName2(nb, id), state, time };
+      const state2 = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
+      const time = (state2 === "done" || state2 === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
+      return { id, name: cellName2(nb, id), state: state2, time };
     });
     const failedPkg = packages.find((p) => p.state === "failed");
     const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
@@ -1153,7 +1289,7 @@
     openDrawer(next);
     if (next === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), 50);
   }
-  var markFor = (state) => state === "done" || state === "ready" ? `<span class="mark">\u2713</span>` : state === "failed" ? `<span class="mark failed">\u2715</span>` : state === "waiting" ? `<span class="mark waiting"></span>` : `<span class="mark busy"></span>`;
+  var markFor = (state2) => state2 === "done" || state2 === "ready" ? `<span class="mark">\u2713</span>` : state2 === "failed" ? `<span class="mark failed">\u2715</span>` : state2 === "waiting" ? `<span class="mark waiting"></span>` : `<span class="mark busy"></span>`;
   function group(name, busy, summary, right, rows) {
     const open2 = folded.get(name) ?? busy;
     return `<details class="group" data-group="${name}"${open2 ? " open" : ""}><summary>${summary}<span class="right">${right}</span></summary>${rows}</details>`;
@@ -1412,15 +1548,6 @@
     });
   }
 
-  // src/place.ts
-  function pillPlace(lines, viewportHeight) {
-    const PILL = 30;
-    const last2 = lines[lines.length - 1];
-    const below = last2.bottom + 6;
-    const top = below + PILL <= viewportHeight ? below : lines[0].top - 6 - PILL;
-    return { left: Math.max(last2.right - 28, 4), top };
-  }
-
   // src/reply.ts
   var css10 = `
   #endeavor-reply-pill { position: absolute; z-index: 1000; display: inline-flex; align-items: center; height: 30px; box-sizing: border-box;
@@ -1514,12 +1641,16 @@
         setTimeout(() => box.classList.add("fading"), 1700);
         setTimeout(() => prompt === box && close2(), 2e3);
       });
-      field.text.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          close2();
-        }
-      });
+      field.text.addEventListener(
+        "keydown",
+        (e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            close2();
+          }
+        },
+        true
+      );
       box.append(quote, source, field.root);
       document.body.append(box);
       const place3 = pillAt(found);
@@ -1743,9 +1874,6 @@
   --e-hint-text: #ccc;
   --e-bar-bg: rgba(28, 28, 30, 0.72);
   --e-bar-shadow: rgba(0, 0, 0, 0.4);
-  --e-field-bg: rgba(0, 0, 0, 0.35);
-  --e-field-edge: #555555;
-  --e-annotate-btn-bg: #3a3a3c;
   --e-pill-bg: #1C1C1E;
   --e-pill-edge: #333333;
   --e-prompt-hover: #FF9A6B;
@@ -1801,9 +1929,6 @@
     --e-hint-text: #45454C;
     --e-bar-bg: rgba(255, 255, 255, 0.94);
     --e-bar-shadow: rgba(20, 20, 30, 0.14);
-    --e-field-bg: rgba(20, 20, 30, 0.06);
-    --e-field-edge: #8A8A92;
-    --e-annotate-btn-bg: #EAEAED;
     --e-pill-bg: #F4F4F6;
     --e-pill-edge: #D2D2D8;
     --e-prompt-hover: #B23600;

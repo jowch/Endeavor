@@ -114,12 +114,17 @@ export function initReply(): void {
       setTimeout(() => box.classList.add("fading"), 1700);
       setTimeout(() => prompt === box && close(), 2000);
     });
-    field.text.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        close();
-      }
-    });
+    // Capture, like the field's own keys, which stop the event there.
+    field.text.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          close();
+        }
+      },
+      true,
+    );
     box.append(quote, source, field.root);
     document.body.append(box);
     const place = pillAt(found);

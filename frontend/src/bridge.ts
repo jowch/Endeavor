@@ -39,12 +39,14 @@ export type ToApp =
   // The Status failure box: Fix with Claude (with the package's log), Restart notebook.
   | { type: "fix_package"; notebook: string; name: string; log: string }
   | { type: "restart"; notebook: string }
-  // Answering `debug`: Point and its picked cells, the drawer's tab, the
+  // Answering `debug`: Point, its picks and their cells, the drawer's tab, the
   // safe-preview callout, and the `alert`s shown (null outside debug builds).
   | {
       type: "debug";
       point: boolean;
       picked: string[];
+      // Each pick's source, as the app will name it ("rates · lines 2–3").
+      picks: string[];
       box: boolean;
       point_status: string;
       comment: string;

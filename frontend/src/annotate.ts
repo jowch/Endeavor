@@ -1,24 +1,35 @@
-// Annotation mode (design doc §4.2), "Point" in the app. In annotation mode,
-// clicks pick cells instead of editing them, and a drag draws a box over part
-// of the notebook; Pluto's own selection is picked up on entry. A comment on
-// the picked cells or the box is sent to the agent (keyed by cell UUID; a box
-// also goes as a picture the app takes) with the chat box's keys: Enter sends
-// (queued if the agent is busy), Cmd+Enter sends now, Shift+Enter is a
-// newline. Only Cmd+Shift+K toggles the mode (Cmd+K alone asks about a cell):
-// Esc is reserved for stopping the agent, so a stray Esc never does two things.
+// Point (design doc §4.2, "annotation mode" in the code). While it's on, the
+// pointer picks the smallest thing under it instead of editing: a figure or
+// an output, a code block, a Markdown paragraph, or the whole cell from its
+// edge. A drag that starts on code picks whole lines, a drag anywhere else
+// (or any ⌥-drag) draws a box, and Shift adds to the pick. Pluto's own
+// selected cells are picked on entry. The comment bar opens by the pick
+// (place.ts) and works like Reply's prompt (quote.ts): ↩ sends the picks and
+// the comment now, ⌘↩ adds them to the chat's message, and Point stays on for
+// the next pick. Only ⌘⇧K toggles Point (⌘K alone asks about a cell).
 
 import { byUser, on, send } from "./bridge";
-import { type Box, SHOOTING, sendQuote, shoot } from "./quote";
+import { barPlace } from "./place";
+import { type Box, type Pick, SHOOTING, cellName, pickSource, quoteField, sendQuote, shoot } from "./quote";
 import { cellCode } from "./reveal";
 
 const css = `
-  body.annotating pluto-cell { cursor: crosshair; }
+  body.annotating pluto-cell, body.annotating pluto-cell * { cursor: crosshair !important; }
   /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
      pill, dashed hover and solid picked outlines, dashed box for a drawn region. */
-  body.annotating pluto-cell:hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 4px; }
-  body.annotating pluto-cell.annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 4px; }
-  body.annotating.annotate-drawing pluto-cell:hover { outline: none; }
-  body.annotating.annotate-drawing, body.annotating.annotate-drawing * { cursor: crosshair !important; user-select: none; }
+  body.annotating .annotate-hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 3px; }
+  body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
+  body.annotating.annotate-drawing .annotate-hover { outline: none; }
+  body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
+  body.annotating pluto-input .cm-content { counter-reset: endeavor-line; padding-left: 2.6em !important; }
+  body.annotating pluto-input .cm-line { counter-increment: endeavor-line; position: relative; }
+  body.annotating pluto-input .cm-line::before { content: counter(endeavor-line); position: absolute; left: -2.6em; width: 2em;
+    text-align: right; color: var(--e-text-faint); font-size: 0.85em; }
+  body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
+  body.annotating pluto-input .cm-line.annotate-line::before { color: var(--e-accent-text); }
+  #annotate-tag { position: absolute; z-index: 9999; display: none; pointer-events: none; padding: 0 6px; border-radius: 4px;
+    background: var(--e-accent); color: #fff; font: 11px/18px system-ui; }
+  body.annotating #annotate-tag.shown { display: block; }
   #annotate-frame { position: fixed; inset: 0; pointer-events: none; z-index: 9999;
     background: var(--e-dim); box-shadow: inset 0 0 0 1px var(--e-accent); display: none; }
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
@@ -30,35 +41,112 @@ const css = `
   #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
-    z-index: 10000; display: none; flex-direction: row; align-items: flex-end; gap: 8px;
-    width: min(640px, 90vw); padding: 6px; border-radius: 10px; border: 1px solid transparent;
+    z-index: 10000; display: none; flex-direction: column; gap: 6px; box-sizing: border-box;
+    width: min(640px, calc(100vw - 32px)); padding: 8px; border-radius: 10px; border: 1px solid transparent;
     background: var(--e-bar-bg); color: var(--e-text-primary); font: 13px system-ui;
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     box-shadow: 0 8px 30px var(--e-bar-shadow); }
+  #annotate-bar.placed { transform: none; bottom: auto; }
   body.annotating #annotate-bar, body.annotating #annotate-frame, body.annotating #annotate-hint { display: flex; }
   @media (prefers-color-scheme: light) {
     #annotate-hint, #annotate-bar { border-color: var(--e-popover-edge); }
     #annotate-hint { box-shadow: 0 12px 32px var(--e-shadow-popover); }
   }
-  #annotate-bar textarea { flex: 1; resize: none; height: 28px; max-height: 120px; padding: 5px 8px; border-radius: 6px;
-    border: 1px solid var(--e-field-edge); background: var(--e-field-bg); color: var(--e-text-primary); font: 13px/18px system-ui; box-sizing: border-box; }
-  #annotate-bar .status { flex: none; align-self: center; color: var(--e-text-secondary); font-size: 12px; white-space: nowrap; }
-  #annotate-bar button { height: 28px; padding: 0 10px; border-radius: 6px; border: 0; cursor: pointer;
-    background: var(--e-annotate-btn-bg); color: var(--e-text-primary); font: 13px system-ui; }
-  #annotate-bar button.primary { background: var(--e-accent); color: #fff; }
-  #annotate-bar button:disabled { opacity: 0.4; cursor: default; }
-  /* While the app takes the box's picture, the notebook shows as it is. */
-  body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box,
+  #annotate-bar .head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  #annotate-bar .status { flex: 1; min-width: 0; color: var(--e-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #annotate-bar .keys { flex: none; color: var(--e-text-faint); }
+  /* While the app takes a picture, the notebook shows as it is. */
+  body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box, body.annotating.${SHOOTING} #annotate-tag,
   body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
-  body.annotating.${SHOOTING} pluto-cell, body.annotating.${SHOOTING} pluto-cell:hover { outline: none; }
+  body.annotating.${SHOOTING} .annotate-picked, body.annotating.${SHOOTING} .annotate-hover { outline: none; }
+  body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
 `;
 
 /** A drag shorter than this (in CSS pixels) is a click. */
 const DRAG = 4;
 
+/** What the pointer is over: which part of which cell, and the element that shows it. */
+export type Target = { part: "cell" | "code" | "output" | "figure"; cell: HTMLElement; el: HTMLElement };
+
+const FIGURE = "img, svg, canvas, video";
+const PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
+
+/** The smallest thing Point can pick under `el`: a figure, a Markdown
+ * paragraph or an output; the code block; else (the cell's edge) the cell. */
+export function targetAt(el: Element | null): Target | null {
+  const cell = el?.closest<HTMLElement>("pluto-cell");
+  if (!el || !cell) return null;
+  const input = el.closest<HTMLElement>("pluto-input");
+  if (input) return { part: "code", cell, el: input };
+  const output = el.closest<HTMLElement>("pluto-output");
+  if (!output) return { part: "cell", cell, el: cell };
+  // The outermost figure element, not a shape inside an SVG.
+  let figure = el.closest<HTMLElement>(FIGURE);
+  while (figure?.parentElement?.closest(FIGURE) && output.contains(figure.parentElement.closest(FIGURE))) figure = figure.parentElement.closest<HTMLElement>(FIGURE);
+  if (figure && output.contains(figure)) return { part: "figure", cell, el: figure };
+  const paragraph = el.closest<HTMLElement>(PARAGRAPH);
+  if (paragraph && output.contains(paragraph)) return { part: "output", cell, el: paragraph };
+  return { part: output.querySelector(FIGURE) ? "figure" : "output", cell, el: output };
+}
+
+/** A picked thing: the quote it becomes, and what shows it (to outline it
+ * and place the bar by it). A figure or box takes its picture on sending. */
+type Picked = { pick: Pick; el?: HTMLElement; lines?: HTMLElement[]; box?: Box };
+
+const pageBox = (r: DOMRect): Box => ({
+  left: r.left + window.scrollX,
+  top: r.top + window.scrollY,
+  right: r.right + window.scrollX,
+  bottom: r.bottom + window.scrollY,
+});
+
+/** A cell's code lines as the page shows them. */
+const cmLines = (cell: Element) => [...cell.querySelectorAll<HTMLElement>("pluto-input .cm-line")];
+
+/** What the bar says is picked: "Figure in plot_fit", "Lines 4–7 of plot_fit", "3 picks". */
+export function pickStatus(picks: Pick[]): string {
+  if (picks.length > 1) return `${picks.length} picks`;
+  const pick = picks[0];
+  if (!pick) return "Click something to pick it";
+  if (pick.part === "box") return `Box over ${pick.cells.length} cell${pick.cells.length === 1 ? "" : "s"}`;
+  const name = cellName(pick.code);
+  switch (pick.part) {
+    case "cell":
+      return `Cell ${name}`;
+    case "lines":
+      return pick.lines[0] === pick.lines[1] ? `Line ${pick.lines[0]} of ${name}` : `Lines ${pick.lines[0]}–${pick.lines[1]} of ${name}`;
+    case "output":
+      return `Output of ${name}`;
+    case "figure":
+      return `Figure in ${name}`;
+  }
+}
+
+/** The same picks: the same element, the same lines of one cell, or boxes. */
+function samePick(a: Picked, b: Picked): boolean {
+  if (a.box || b.box) return a === b;
+  if (a.pick.part === "lines" && b.pick.part === "lines") return a.pick.cell === b.pick.cell && a.pick.lines.join() === b.pick.lines.join();
+  return !!a.el && a.el === b.el;
+}
+
+let state: { picks: Picked[]; status: () => string; comment: () => string } | null = null;
+
+/** Point's state for the state dump (debug.ts). */
+export function pointState(): { picked: string[]; picks: string[]; box: boolean; status: string; comment: string } {
+  const picks = state?.picks ?? [];
+  const cells = picks.flatMap((p) => (p.pick.part === "box" ? p.pick.cells : [p.pick.cell]));
+  return {
+    picked: [...new Set(cells)],
+    picks: picks.map((p) => pickSource(p.pick)),
+    box: picks.some((p) => p.box),
+    status: state?.status() ?? "",
+    comment: state?.comment() ?? "",
+  };
+}
+
 export function initAnnotate(): void {
-  const picked = new Set<string>();
-  let region: Box | null = null;
+  const picks: Picked[] = [];
+  let hover: Target | null = null;
   const active = () => document.body.classList.contains("annotating");
   const cells = () => [...document.querySelectorAll<HTMLElement>("pluto-cell")];
 
@@ -68,148 +156,198 @@ export function initAnnotate(): void {
   frame.id = "annotate-frame";
   const box = document.createElement("div");
   box.id = "annotate-box";
+  const tag = document.createElement("div");
+  tag.id = "annotate-tag";
   const hint = document.createElement("div");
   hint.id = "annotate-hint";
-  hint.innerHTML = `<span>Click a cell or drag a box</span><span>·</span><span class="done" role="button">Done</span>`;
+  hint.innerHTML = `<span>Click to pick · drag over code lines · drag elsewhere for a box</span><span>·</span><span class="done" role="button">Done</span>`;
   const bar = document.createElement("div");
   bar.id = "annotate-bar";
-  bar.innerHTML = `<span class="status"></span><textarea rows="1" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Comment for Claude…" title="↩ send · ⌘↩ send now · ⇧↩ newline · Esc or ⌘⇧K exit"></textarea><button class="primary send">Send</button>`;
-  document.head.append(style);
-  document.body.append(frame, box, hint, bar);
-
+  bar.innerHTML = `<div class="head"><span class="status"></span><span class="keys">↩ send · ⌘↩ add to message</span></div>`;
   const status = bar.querySelector<HTMLElement>(".status")!;
-  const text = bar.querySelector<HTMLTextAreaElement>("textarea")!;
-  const sendButton = bar.querySelector<HTMLButtonElement>(".send")!;
-  // One line until the comment needs more, so the bar covers as little of the notebook as it can.
-  const fit = () => {
-    text.style.height = "28px";
-    text.style.height = `${Math.min(text.scrollHeight + 2, 120)}px`;
-  };
-  text.addEventListener("input", fit);
-
-  const pageBox = (r: DOMRect): Box => ({
-    left: r.left + window.scrollX,
-    top: r.top + window.scrollY,
-    right: r.right + window.scrollX,
-    bottom: r.bottom + window.scrollY,
-  });
-  const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-
-  // The bar floats under what's picked (the box, or the last cell in notebook
-  // order), next to what it's about; otherwise it waits at the bottom of the window.
-  function place() {
-    const last = cells().filter((c) => picked.has(c.id)).at(-1);
-    const under = region ?? (last ? pageBox(last.getBoundingClientRect()) : null);
-    if (!under) {
-      bar.removeAttribute("style");
-      return;
-    }
-    const width = Math.min(Math.max(under.right - under.left, 320), 640);
-    Object.assign(bar.style, {
-      position: "absolute",
-      transform: "none",
-      bottom: "auto",
-      left: `${under.left}px`,
-      top: `${under.bottom + 10}px`,
-      width: `${width}px`,
-    });
-  }
+  const field = quoteField("Comment for Claude…", "Send", (add, e) => byUser(e) && sendComment(add));
+  const text = field.text;
+  bar.append(field.root);
+  document.head.append(style);
+  document.body.append(frame, box, tag, hint, bar);
+  state = { picks, status: () => (active() ? status.textContent ?? "" : ""), comment: () => text.value };
 
   function drawBox(b: Box | null) {
     box.classList.toggle("shown", !!b);
     if (!b) return;
-    Object.assign(box.style, {
-      left: `${b.left}px`,
-      top: `${b.top}px`,
-      width: `${b.right - b.left}px`,
-      height: `${b.bottom - b.top}px`,
-    });
+    Object.assign(box.style, { left: `${b.left}px`, top: `${b.top}px`, width: `${b.right - b.left}px`, height: `${b.bottom - b.top}px` });
+  }
+
+  /** Where the last pick is in the viewport: a box, the picked lines, or its element. */
+  function lastRect(): { left: number; top: number; right: number; bottom: number } | null {
+    const last = picks.at(-1);
+    if (!last) return null;
+    if (last.box) {
+      const b = last.box;
+      return { left: b.left - window.scrollX, top: b.top - window.scrollY, right: b.right - window.scrollX, bottom: b.bottom - window.scrollY };
+    }
+    const shown = last.lines?.length ? last.lines : last.el ? [last.el] : [];
+    if (!shown.length) return null;
+    const [first, end] = [shown[0].getBoundingClientRect(), shown[shown.length - 1].getBoundingClientRect()];
+    return { left: first.left, top: first.top, right: Math.max(first.right, end.right), bottom: end.bottom };
+  }
+
+  // The bar opens by the pick (place.ts) and follows it as the notebook scrolls.
+  function place() {
+    const rect = lastRect();
+    bar.classList.toggle("placed", !!rect);
+    if (!rect) {
+      bar.removeAttribute("style");
+      return;
+    }
+    const at = barPlace(rect, window.innerWidth, window.innerHeight, bar.offsetHeight);
+    Object.assign(bar.style, { left: `${at.left}px`, top: `${at.top}px`, width: `${at.width}px` });
+  }
+
+  function showHover(target: Target | null) {
+    hover?.el.classList.remove("annotate-hover");
+    hover = target;
+    tag.classList.toggle("shown", !!target);
+    if (!target) return;
+    target.el.classList.add("annotate-hover");
+    tag.textContent = { cell: "Whole cell", code: "Code", output: "Text", figure: "Figure" }[target.part];
+    const r = target.el.getBoundingClientRect();
+    Object.assign(tag.style, { left: `${r.left + window.scrollX}px`, top: `${r.top + window.scrollY - 22}px` });
   }
 
   function refresh() {
+    for (const el of document.querySelectorAll(".annotate-picked")) el.classList.remove("annotate-picked");
+    for (const el of document.querySelectorAll(".annotate-line")) el.classList.remove("annotate-line");
+    for (const p of picks) {
+      p.el?.classList.add("annotate-picked");
+      for (const line of p.lines ?? []) line.classList.add("annotate-line");
+    }
+    drawBox([...picks].reverse().find((p) => p.box)?.box ?? null);
+    status.textContent = pickStatus(picks.map((p) => p.pick));
     place();
-    drawBox(region);
-    const n = picked.size;
-    const cellsText = `${n} cell${n === 1 ? "" : "s"}`;
-    status.textContent = region ? `Box over ${cellsText}` : n ? `${cellsText} selected` : "Click cells to select them";
-    sendButton.disabled = !region && n === 0;
-    for (const c of cells()) c.classList.toggle("annotate-picked", picked.has(c.id));
+  }
+
+  /** Pick `next`: with Shift, add it (or take it back out); else it's the only pick. */
+  function choose(next: Picked, add: boolean) {
+    const at = picks.findIndex((p) => samePick(p, next));
+    if (add) at >= 0 ? picks.splice(at, 1) : picks.push(next);
+    else picks.splice(0, picks.length, ...(at >= 0 && picks.length === 1 ? [] : [next]));
+    refresh();
+    text.focus();
+  }
+
+  function targetPick(target: Target): Picked {
+    const { cell, el } = target;
+    const code = cellCode(cell);
+    switch (target.part) {
+      case "cell":
+        return { pick: { part: "cell", cell: cell.id, code }, el };
+      case "code": {
+        const lines = code.split("\n").length;
+        return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el };
+      }
+      case "output":
+        return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() }, el };
+      case "figure":
+        return { pick: { part: "figure", cell: cell.id, code }, el };
+    }
+  }
+
+  function linesPick(cell: HTMLElement, from: number, to: number): Picked {
+    const [first, last] = [Math.min(from, to), Math.max(from, to)];
+    const code = cellCode(cell);
+    const text = code.split("\n").slice(first - 1, last).join("\n");
+    return { pick: { part: "lines", cell: cell.id, code, lines: [first, last], text }, lines: cmLines(cell).slice(first - 1, last) };
   }
 
   function set(enable: boolean) {
     if (enable === active()) return;
     document.body.classList.toggle("annotating", enable);
     document.body.classList.remove("annotate-drawing");
-    picked.clear();
-    region = null;
+    picks.length = 0;
     drag = null;
+    showHover(null);
     if (enable) {
-      for (const c of document.querySelectorAll<HTMLElement>("pluto-cell.selected")) picked.add(c.id);
+      for (const c of document.querySelectorAll<HTMLElement>("pluto-cell.selected")) picks.push(targetPick({ part: "cell", cell: c, el: c }));
       text.focus();
     }
     refresh();
     send({ type: "mode", on: enable });
   }
 
-  // Stays in annotation mode afterwards, ready for the next comment.
-  function sendComment(add: boolean) {
-    if (!picked.size && !region) return;
-    const ids = cells().map((c) => c.id).filter((id) => picked.has(id)); // notebook order
+  // Stays in Point afterwards, ready for the next pick. Pictures are taken
+  // one at a time, each brought into view.
+  async function sendComment(add: boolean) {
+    if (!picks.length) return;
+    const sending = picks.splice(0, picks.length);
     const comment = text.value.trim();
-    if (region) {
-      const box = region;
-      void shoot(box).then((shot) => sendQuote([{ part: "box", cells: ids, shot }], comment, add));
-    } else {
-      sendQuote(ids.map((id) => ({ part: "cell", cell: id, code: cellCode(document.getElementById(id)) })), comment, add);
-    }
     text.value = "";
-    fit();
-    picked.clear();
-    region = null;
     refresh();
+    const out: Pick[] = [];
+    for (const p of sending) {
+      if (p.pick.part === "box" || p.pick.part === "figure") {
+        const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
+        out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
+      } else out.push(p.pick);
+    }
+    sendQuote(out, comment, add);
   }
 
-  // A press starts a drag; it becomes a box once it moves DRAG pixels.
-  let drag: { x: number; y: number; drawing: boolean } | null = null;
-  let justDrew = false;
+  // A press starts a drag: over lines when it starts on code (and ⌥ isn't
+  // held), else a box, once it moves DRAG pixels.
+  let drag: { x: number; y: number; moved: boolean; lines?: { cell: HTMLElement; from: number; to: number }; add: boolean } | null = null;
+  let justDragged = false;
   const dragBox = (e: MouseEvent): Box => {
     const [x, y] = [e.clientX + window.scrollX, e.clientY + window.scrollY];
     return { left: Math.min(drag!.x, x), top: Math.min(drag!.y, y), right: Math.max(drag!.x, x), bottom: Math.max(drag!.y, y) };
   };
+  const lineAt = (el: Element | null, cell: HTMLElement) => {
+    const line = el?.closest<HTMLElement>(".cm-line");
+    return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
+  };
+  const ours = (target: Element) => bar.contains(target) || hint.contains(target);
 
-  // Capture phase so Pluto/CodeMirror never see clicks meant for picking.
+  // Capture phase so Pluto/CodeMirror never see presses meant for picking.
   const swallow = (e: Event) => {
     const target = e.target as Element;
-    if (!active() || bar.contains(target) || hint.contains(target)) return;
-    // Cancelling pointerdown would also cancel the mousedown/mousemove/mouseup
-    // that drawing a box listens for.
+    if (!active() || ours(target)) return;
+    // Cancelling pointerdown would also cancel the mousedown/mousemove/mouseup drags listen for.
     if (e.type !== "pointerdown") e.preventDefault();
     e.stopPropagation();
-    if (e.type === "mousedown" && (e as MouseEvent).button === 0) {
-      const m = e as MouseEvent;
-      drag = { x: m.clientX + window.scrollX, y: m.clientY + window.scrollY, drawing: false };
+    const m = e as MouseEvent;
+    if (e.type === "mousedown" && m.button === 0) {
+      const cell = target.closest<HTMLElement>("pluto-cell");
+      const line = cell && !m.altKey ? lineAt(target, cell) : 0;
+      drag = { x: m.clientX + window.scrollX, y: m.clientY + window.scrollY, moved: false, add: m.shiftKey, lines: line ? { cell: cell!, from: line, to: line } : undefined };
     }
     if (e.type !== "click") return;
-    if (justDrew) {
-      justDrew = false;
+    if (justDragged) {
+      justDragged = false;
       return;
     }
-    const cell = target.closest<HTMLElement>("pluto-cell");
-    if (!cell) return;
-    region = null;
-    picked.has(cell.id) ? picked.delete(cell.id) : picked.add(cell.id);
-    refresh();
+    const found = targetAt(target);
+    if (found) choose(targetPick(found), m.shiftKey);
   };
   for (const type of ["pointerdown", "mousedown", "click"]) document.addEventListener(type, swallow, true);
 
   document.addEventListener(
     "mousemove",
     (e) => {
-      if (!drag || !active()) return;
-      if (!drag.drawing && Math.hypot(e.clientX + window.scrollX - drag.x, e.clientY + window.scrollY - drag.y) < DRAG) return;
-      drag.drawing = true;
-      document.body.classList.add("annotate-drawing");
+      if (!active()) return;
+      if (!drag) return showHover(ours(e.target as Element) ? null : targetAt(e.target as Element));
+      if (!drag.moved && Math.hypot(e.clientX + window.scrollX - drag.x, e.clientY + window.scrollY - drag.y) < DRAG) return;
+      drag.moved = true;
       e.preventDefault();
+      showHover(null);
+      if (drag.lines) {
+        const line = lineAt(e.target as Element, drag.lines.cell);
+        if (line) drag.lines.to = line;
+        const shown = linesPick(drag.lines.cell, drag.lines.from, drag.lines.to);
+        for (const el of document.querySelectorAll(".annotate-line")) el.classList.remove("annotate-line");
+        for (const el of shown.lines ?? []) el.classList.add("annotate-line");
+        return;
+      }
+      document.body.classList.add("annotate-drawing");
       drawBox(dragBox(e));
     },
     true,
@@ -218,20 +356,24 @@ export function initAnnotate(): void {
     "mouseup",
     (e) => {
       if (!drag) return;
-      const drawn = drag.drawing ? dragBox(e) : null;
+      const done = drag;
+      const drawn = done.moved && !done.lines ? dragBox(e) : null;
       drag = null;
       document.body.classList.remove("annotate-drawing");
-      if (!drawn || !active()) return;
-      justDrew = true;
-      setTimeout(() => (justDrew = false), 0);
-      region = drawn;
-      picked.clear();
-      for (const c of cells()) if (overlaps(drawn, pageBox(c.getBoundingClientRect()))) picked.add(c.id);
-      refresh();
-      text.focus();
+      if (!done.moved || !active()) return;
+      justDragged = true;
+      setTimeout(() => (justDragged = false), 0);
+      if (done.lines) return choose(linesPick(done.lines.cell, done.lines.from, done.lines.to), done.add);
+      const under = cells().filter((c) => {
+        const r = pageBox(c.getBoundingClientRect());
+        return drawn!.left < r.right && r.left < drawn!.right && drawn!.top < r.bottom && r.top < drawn!.bottom;
+      });
+      choose({ pick: { part: "box", cells: under.map((c) => c.id) }, box: drawn! }, done.add);
     },
     true,
   );
+  window.addEventListener("scroll", () => active() && place(), true);
+  window.addEventListener("resize", () => active() && place());
 
   // Window capture runs before Pluto's own shortcuts (e.g. Shift+Enter runs a cell).
   window.addEventListener(
@@ -246,17 +388,9 @@ export function initAnnotate(): void {
         e.stopPropagation();
         return set(false);
       }
-      if (!active() || !bar.contains(e.target as Node)) return;
-      // Typing a comment must never trigger notebook shortcuts; defaults (newline) still apply.
-      e.stopPropagation();
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        if (byUser(e)) sendComment(e.metaKey);
-      }
     },
     true,
   );
-  sendButton.onclick = (e) => byUser(e) && sendComment(false);
   hint.querySelector<HTMLElement>(".done")!.onclick = () => set(false);
 
   on("annotate", (msg) => set(msg.on));

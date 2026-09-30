@@ -78,10 +78,13 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 - **Approval card** (above composer): "Run 3 cells?", cell list, "also re-runs N that depend on them"; Deny · Always this session · **Run**. Keys: ⏎ run, ⌘⏎ always, Esc deny.
 - **Plan card** (plan mode): numbered steps; Keep planning · Start in Auto · **Start**.
 - **"You edited `x`"** lines record user actions in the notebook (the agent receives them too).
+- **Reply** (boards: QQuote, QCompose): selecting text in a reply, or in a cell's code, output or rendered Markdown, shows a "Reply ⌘J" pill 6px under the selection's end (above it with no room below); it replaces the notebook's old "✦ Ask Claude" chip. The pill or ⌘J opens a small prompt at the selection: the quote on one faint line with a left rule (in a cell, also the cell and lines, "rates · lines 3–5"), a "Reply to Claude" field, and a button at its end whose menu has **Send reply ↩** and **Add to message ⌘↩**. ↩ sends the quote and the reply now as their own message (queued while Claude works); ⌘↩ adds them to the composer as a card and says "Added" briefly; Esc closes the prompt.
+- **Sent quotes** show in the message's bubble before its words: a quote of a reply as a blockquote, a notebook quote as a chip (a click shows the cell) and its lines or thumbnail; each followed by its comment, with a hairline between quotes. Claude gets a reply quote as `>` lines ending `> — Claude's reply, 14:02`, then the comment; a notebook quote as `<quote cell="rates" lines="3-5" uri="notebook://pluto/…">…</quote>` (or `part="output"`, `part="figure"` with the PNG as the next block, `part="box"`), then the comment.
 
 ## Composer
 
 - One line, 38px, `bg.card`, 1px `border`, 8px radius, 10px side padding. Placeholder "Type / for commands"; a faint ↵ glyph instead of a send button (Enter sends). While running: placeholder "Queue a message, or ⌘⏎ to steer" and the glyph becomes a small stop button (Esc).
+- **Quote cards** stack above the box, in the order added, under "N quotes go out with this message · Clear": each has its source ("Claude's reply · 14:02", "rates · lines 3–5", "plot_fit · figure"), the excerpt (one line, or up to three numbered code lines) or a thumbnail, the comment, "show in notebook" for a notebook quote, and ×. From four cards on, each takes one line (source and comment). A message can go with cards and no text. In the composer ⌘⏎ still means send now / steer.
 - Toolbar **below** the box, 24px buttons, 12px text, centre level with the sidebar settings gear: `+` (attach / @ cell) · point (⌘⇧K, orange when active) · mode — then model · effort · context ring.
 - **Modes** (⇧⇥ cycles), mirroring Claude Code:
   | Mode | Notebook edits | Runs / deletes |
@@ -101,7 +104,8 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 - **Between cells**: Pluto's "+" unchanged; an agent button beside it on hover ("Ask <agent> to write a cell here").
 - **Empty cell**: hint "Type code, or ⌘K to ask <agent>"; ⌘K turns it into a prompt; Esc returns to typing.
 - **Errors**: Pluto's error card gains **Fix with <agent>** (outlined, not filled) and **Explain**, replacing Pluto's "Fix with AI".
-- **Pointing overlay** (⌘⇧K): over the notebook only — 25% dim, solid 1px `accent` inset edge (no glow), plain-text hint pill "Click a cell or drag a box · Done", dashed hover outline, solid selection outline, dashed box for a drawn region, prompt anchored under the selection with a single **Send**. Sends immediately (no tray).
+- **Pointing overlay** (⌘⇧K; board QPoint): over the notebook only — 25% dim, solid 1px `accent` inset edge (no glow), plain-text hint pill "Click to pick · drag over code lines · drag elsewhere for a box · Done". Hover picks the smallest thing under the pointer, outlined dashed with a small tag: a figure or output ("Figure", "Text"), a code block ("Code"), a Markdown paragraph ("Text"); the cell's edge picks the whole cell. A drag that starts on code picks whole lines; a drag anywhere else, or any ⌥-drag, draws a dashed box. Shift adds to the pick; each pick is its own quote. Line numbers show in code while Point is on; picked lines are tinted with orange numbers.
+- **Point's comment bar**: the status line ("Lines 4–7 of plot_fit", "Figure in plot_fit", "Box over 2 cells", "3 picks") and "↩ send · ⌘↩ add to message" above the same field and menu as Reply's prompt. It opens 8px under the pick (for lines, the last picked line), left edge on the pick's; with no room below, 8px above; with no room either way, pinned to the pane's bottom. It follows scroll and waits at the pane's edge once the pick scrolls out. Width: the pick's, at least 360px, at most the pane minus 32px. ↩ sends the picks with the comment on the last; ⌘↩ adds them to the composer as cards. Point stays on either way.
 
 ## Build map
 
@@ -130,7 +134,7 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 
 ## Shortcuts
 
-Enter send · ⌘⏎ steer running turn · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧K pointing · ⌘K ask about focused/empty cell · ⌘N new session.
+Enter send · ⌘⏎ steer running turn · ⌘J reply to the selection (in its prompt and Point's bar, ⏎ send, ⌘⏎ add to message) · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧K pointing · ⌘K ask about focused/empty cell · ⌘N new session.
 
 ## Open decisions
 

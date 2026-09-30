@@ -69,9 +69,6 @@ const tokens = `
   --e-hint-text: #ccc;
   --e-bar-bg: rgba(28, 28, 30, 0.72);
   --e-bar-shadow: rgba(0, 0, 0, 0.4);
-  --e-field-bg: rgba(0, 0, 0, 0.35);
-  --e-field-edge: #555555;
-  --e-annotate-btn-bg: #3a3a3c;
   --e-pill-bg: #1C1C1E;
   --e-pill-edge: #333333;
   --e-prompt-hover: #FF9A6B;
@@ -127,9 +124,6 @@ const tokens = `
     --e-hint-text: #45454C;
     --e-bar-bg: rgba(255, 255, 255, 0.94);
     --e-bar-shadow: rgba(20, 20, 30, 0.14);
-    --e-field-bg: rgba(20, 20, 30, 0.06);
-    --e-field-edge: #8A8A92;
-    --e-annotate-btn-bg: #EAEAED;
     --e-pill-bg: #F4F4F6;
     --e-pill-edge: #D2D2D8;
     --e-prompt-hover: #B23600;

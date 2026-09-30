@@ -119,14 +119,18 @@ export function quoteField(placeholder: string, sendLabel: string, done: (add: b
     text.style.height = "21px";
     text.style.height = `${Math.min(text.scrollHeight, 120)}px`;
   });
-  text.addEventListener("keydown", (e) => {
-    e.stopPropagation();
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      showMenu(false);
-      done(e.metaKey, e);
-    }
-  });
+  text.addEventListener(
+    "keydown",
+    (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        showMenu(false);
+        done(e.metaKey, e);
+      }
+    },
+    true,
+  );
   // Keep the keyboard in the field.
   options.onmousedown = (e) => e.preventDefault();
   options.onclick = () => showMenu(menu.hidden);
