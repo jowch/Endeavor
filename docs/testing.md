@@ -95,7 +95,10 @@ To wait for something, poll the dump. For example, loop until
   - `page`: the notebook's page. `page` then has the notebook id, the
     backend, the look, safe preview, read-only and whether the page is
     connected.
-  - `opening`: "Opening <file>…".
+  - `opening`: "Opening <file>…". `opening` then has `secs`, how long it
+    has said so while Julia has the notebook open (counted again after a
+    reload), `reloaded`, whether the app loaded the page again, and
+    `reload_button`, whether "Reload notebook" shows.
   - `host`: the host isn't ready. `host_pane.kind` is one of `cant_reach`,
     `starting`, `stopping`, `julia_not_running`, `replaced` or
     `not_connected`, with the host and the reason.
@@ -247,6 +250,11 @@ folder.
 - `ENDEAVOR_CLAUDE_CLI`: a program that stands in for `claude` in `claude
   auth status`, `login` and `logout`, so sign-in, the account on Settings'
   Claude page and Sign out can be tested without touching the real sign-in.
+- `ENDEAVOR_TEST_STUCK_OPENING`: a file path. When the file appears, the
+  notebook's page is taken down, as a runtime going away does, and the pane
+  says "Opening". After 5 s the app loads the page again by itself. While the
+  file says `keep`, loading a notebook loads a blank page instead, so the pane
+  stays stuck and shows "Reload notebook". Delete the file before clicking it.
 - `ENDEAVOR_TEST_NO_STEERING`: a file path. While the file exists, ⌘⏎ during
   a turn takes the path for an agent that can't steer: the turn stops, and the
   message goes next, marked "Stopped Claude's work to send this".

@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -204,6 +205,86 @@ pub enum PaneShows {
     /// "Opening <file>…".
     Opening,
     Page,
+}
+
+/// How long the pane may say "Opening" for a notebook its runtime has open
+/// before the app loads the page again. A page starts loading as soon as it's
+/// asked for, so by then it isn't coming.
+pub const OPENING_GRACE: Duration = Duration::from_secs(5);
+
+/// Watches for the pane saying "Opening" for a notebook that's open in its
+/// runtime: it loads the page again once, then offers Reload notebook.
+#[derive(Debug, Default)]
+pub struct OpeningWatch {
+    /// The session whose pane is stuck, and since when (or since the reload).
+    since: Option<(u64, Instant)>,
+    reloaded: bool,
+    /// A reload didn't help: the pane shows Reload notebook.
+    pub stuck: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum OpeningStep {
+    Wait,
+    /// Load the page again.
+    Reload,
+    /// Still stuck after a reload: show Reload notebook.
+    Stuck,
+}
+
+impl OpeningWatch {
+    /// Called every second. `stuck`: the session whose pane shows "Opening"
+    /// while its runtime has its notebook open; None when no pane is.
+    pub fn step(&mut self, stuck: Option<u64>, now: Instant) -> OpeningStep {
+        let Some(key) = stuck else {
+            *self = OpeningWatch::default();
+            return OpeningStep::Wait;
+        };
+        let since = match self.since {
+            Some((k, since)) if k == key => since,
+            _ => {
+                *self = OpeningWatch { since: Some((key, now)), ..OpeningWatch::default() };
+                return OpeningStep::Wait;
+            }
+        };
+        if self.stuck || now.duration_since(since) < OPENING_GRACE {
+            return OpeningStep::Wait;
+        }
+        if self.reloaded {
+            self.stuck = true;
+            return OpeningStep::Stuck;
+        }
+        self.reloaded = true;
+        self.since = Some((key, now));
+        OpeningStep::Reload
+    }
+
+    /// Reload notebook was clicked: it waits again before offering it again.
+    pub fn retry(&mut self, now: Instant) {
+        if let Some((key, _)) = self.since {
+            self.since = Some((key, now));
+        }
+        self.stuck = false;
+    }
+
+    /// For the state dump: how long the pane has said "Opening" (since the
+    /// last reload), whether it was reloaded, and whether the button shows.
+    #[cfg(debug_assertions)]
+    pub fn state(&self, now: Instant) -> Option<(u64, bool, bool)> {
+        let (_, since) = self.since?;
+        Some((now.duration_since(since).as_secs(), self.reloaded, self.stuck))
+    }
+}
+
+/// `ENDEAVOR_TEST_STUCK_OPENING` (debug builds): a file path. When the file
+/// appears, the page is taken down as a runtime going away does, and the pane
+/// says "Opening". While the file says `keep`, loading a notebook loads a
+/// blank page instead, so it stays stuck. Some(true) for `keep`.
+#[cfg(debug_assertions)]
+pub fn test_stuck_opening() -> Option<bool> {
+    let path = std::env::var_os("ENDEAVOR_TEST_STUCK_OPENING")?;
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(text.trim() == "keep")
 }
 
 /// A stopped notebook's page: why it stopped, and what Start does if the file changed.
@@ -1051,7 +1132,17 @@ impl Workspace {
                     .child(div().mt(px(6.)).child(page_button("start-notebook", Glyph::Play, "Start", true).on_click(cx.listener(move |this, _, _, cx| this.start_notebook(key, cx)))))
                     .into_any_element()
             }
-            PaneShows::Opening => new_session::turtle_pane().child(div().flex().items_baseline().text_color(theme::text_muted()).child("Opening ").child(new_session::file_name(file)).child("…")).into_any_element(),
+            PaneShows::Opening => new_session::turtle_pane()
+                .child(div().flex().items_baseline().text_color(theme::text_muted()).child("Opening ").child(new_session::file_name(file)).child("…"))
+                .when(self.opening.stuck, |d| {
+                    d.child(div().mt(px(6.)).child(page_button("reload-notebook", Glyph::Restart, "Reload notebook", false).on_click(cx.listener(move |this, _, _, cx| {
+                        eprintln!("Reload notebook clicked for session {key}");
+                        this.opening.retry(Instant::now());
+                        this.reload_notebook(key, cx);
+                        cx.notify();
+                    }))))
+                })
+                .into_any_element(),
         })
     }
 
@@ -1075,6 +1166,50 @@ impl Workspace {
         if session.notebook.is_some() && !blank { PaneShows::Page } else { PaneShows::Opening }
     }
 
+    /// Every second: if the active session's pane has said "Opening" for a
+    /// while though its runtime has the notebook open, load the page again,
+    /// once; after that, offer Reload notebook.
+    pub fn check_opening(&mut self, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        self.test_blank_page(cx);
+        let stuck = self.active_session().filter(|s| self.pane_shows(s, cx) == PaneShows::Opening && self.runtime_has_open(s)).map(|s| (s.key, s.notebook_path.clone().unwrap_or_default()));
+        let file = stuck.as_ref().map(|(_, path)| folder_name(Path::new(path))).unwrap_or_default();
+        match self.opening.step(stuck.as_ref().map(|(key, _)| *key), Instant::now()) {
+            OpeningStep::Wait => {}
+            OpeningStep::Reload => {
+                eprintln!("The pane said \"Opening {file}\" for {} s while Julia has it open; loading it again", OPENING_GRACE.as_secs());
+                if let Some((key, _)) = stuck {
+                    self.reload_notebook(key, cx);
+                }
+            }
+            OpeningStep::Stuck => {
+                eprintln!("Still \"Opening {file}\" after loading it again; showing Reload notebook");
+                cx.notify();
+            }
+        }
+    }
+
+    /// The session's host's runtime lists its notebook file as open.
+    fn runtime_has_open(&self, session: &Session) -> bool {
+        let Some(path) = session.notebook_path.as_deref() else { return false };
+        let Some(list) = self.connection(&session.place.host).and_then(|c| c.notebooks.as_array()) else { return false };
+        list.iter().any(|nb| nb["path"] == path)
+    }
+
+    /// Load session `key`'s notebook page again, the way opening it does: by
+    /// the id its runtime has for the file now.
+    pub fn reload_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
+        match (session.notebook_path.clone(), session.notebook.clone()) {
+            (Some(path), _) => self.open_for_session(key, path, false, cx),
+            (None, Some(id)) => {
+                let host = session.place.host.clone();
+                self.load_notebook(&host, &id, cx);
+            }
+            (None, None) => {}
+        }
+    }
+
     /// WebKit's web content process for the page ended (it crashed, or the
     /// system ended it), leaving the web view blank: load the page again.
     pub fn on_web_content_ended(&mut self, cx: &mut Context<Self>) {
@@ -1086,6 +1221,18 @@ impl Workspace {
         eprintln!("The notebook's web content process ended; loading notebook {id} of session {key} again");
         self.load_notebook(&host, &id, cx);
         cx.notify();
+    }
+
+    /// ENDEAVOR_TEST_STUCK_OPENING: take the page down once when the file appears.
+    #[cfg(debug_assertions)]
+    fn test_blank_page(&mut self, cx: &mut Context<Self>) {
+        let wanted = test_stuck_opening().is_some();
+        if wanted && !self.test_blanked {
+            eprintln!("ENDEAVOR_TEST_STUCK_OPENING: taking the page down");
+            self.webview.update(cx, |w, _| w.load_url("about:blank"));
+            cx.notify();
+        }
+        self.test_blanked = wanted;
     }
 
     /// Julia isn't running on the session's host: Start, and on a cluster the
@@ -1200,6 +1347,42 @@ fn dirs_downloads() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::NotebookAction::{self, *};
+    use super::{OPENING_GRACE, OpeningStep, OpeningWatch};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_stuck_opening_reloads_once_then_offers_the_button() {
+        let start = Instant::now();
+        let at = |secs: u64| start + Duration::from_secs(secs);
+        let grace = OPENING_GRACE.as_secs();
+        let mut watch = OpeningWatch::default();
+        assert_eq!(watch.step(Some(1), at(0)), OpeningStep::Wait);
+        assert_eq!(watch.step(Some(1), at(grace - 1)), OpeningStep::Wait);
+        assert_eq!(watch.step(Some(1), at(grace)), OpeningStep::Reload);
+        assert_eq!(watch.step(Some(1), at(grace + 1)), OpeningStep::Wait, "the reload gets its own grace");
+        assert_eq!(watch.step(Some(1), at(2 * grace)), OpeningStep::Stuck);
+        assert!(watch.stuck);
+        assert_eq!(watch.step(Some(1), at(2 * grace + 10)), OpeningStep::Wait, "the button stays; no more reloads");
+        watch.retry(at(3 * grace));
+        assert!(!watch.stuck);
+        assert_eq!(watch.step(Some(1), at(4 * grace)), OpeningStep::Stuck, "a click that didn't help shows it again");
+    }
+
+    #[test]
+    fn the_opening_watch_starts_over_when_the_page_comes_or_the_session_changes() {
+        let start = Instant::now();
+        let at = |secs: u64| start + Duration::from_secs(secs);
+        let grace = OPENING_GRACE.as_secs();
+        let mut watch = OpeningWatch::default();
+        watch.step(Some(1), at(0));
+        assert_eq!(watch.step(Some(1), at(grace)), OpeningStep::Reload);
+        assert_eq!(watch.step(None, at(grace + 1)), OpeningStep::Wait, "the page came");
+        assert_eq!(watch.step(Some(1), at(grace + 2)), OpeningStep::Wait);
+        assert_eq!(watch.step(Some(1), at(2 * grace + 2)), OpeningStep::Reload, "stuck again later: a fresh reload");
+        assert_eq!(watch.step(Some(2), at(2 * grace + 3)), OpeningStep::Wait, "another session starts its own wait");
+        assert_eq!(watch.step(Some(2), at(3 * grace + 3)), OpeningStep::Reload);
+        assert_eq!(watch.state(at(3 * grace + 4)), Some((1, true, false)));
+    }
 
     #[test]
     fn the_notebook_menu_offers_what_applies() {

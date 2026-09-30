@@ -789,8 +789,9 @@ impl Workspace {
         let mine = watching.fetch_add(1, Ordering::SeqCst) + 1;
         // A long-lived blocking read: its own thread, not the executor's pool. If the
         // stream drops it reconnects, until this runtime is replaced or dies.
+        let current = watching.clone();
         std::thread::spawn(move || {
-            while watching.load(Ordering::SeqCst) == mine {
+            while current.load(Ordering::SeqCst) == mine {
                 let _ = pluto::watch_notebooks(&bridge, |event| {
                     let _ = tx.unbounded_send(event);
                 });
@@ -800,6 +801,11 @@ impl Workspace {
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             while let Some(event) = rx.next().await {
+                // A runtime that's going still sends its list as it closes: it
+                // must not replace what the next runtime reopens.
+                if watching.load(Ordering::SeqCst) != mine {
+                    break;
+                }
                 if this.update(cx, |this, cx| this.on_notebooks_event(&host, event, cx)).is_err() {
                     break;
                 }
@@ -859,27 +865,44 @@ impl Workspace {
     /// (and the pane) at the reopened copy. Pluto saves on every change, so the
     /// files are current. They open in safe preview, except the ones in
     /// `resume` whose files haven't changed since.
+    ///
+    /// Each session's own notebook reopens too, even if the last runtime's list
+    /// had lost it: a restart during an earlier reopen leaves the list empty,
+    /// and a session left without its notebook shows "Opening" for good.
     fn reopen_notebooks(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get_mut(host) else { return };
-        let Some(bridge) = connection.bridge() else { return };
-        let reattached = connection.runtime.as_ref().is_some_and(|r| r.reattached);
+        let Some(runtime) = connection.runtime.as_ref() else { return };
+        let (bridge, reattached, this_runtime) = (runtime.bridge.clone(), runtime.reattached, runtime.pluto_url.clone());
         let resume = std::mem::take(&mut connection.resume);
         let before = connection.last_notebooks.clone();
-        if before.is_empty() {
+        let mut paths: Vec<String> = before.iter().map(|(_, p)| p.clone()).collect();
+        for session in self.sessions.iter().filter(|s| s.place.host == *host && s.stopped.is_none() && !s.missing) {
+            if let Some(path) = session.notebook_path.as_ref().filter(|p| !paths.contains(p)) {
+                paths.push(path.clone());
+            }
+        }
+        if paths.is_empty() {
             return;
         }
-        let paths: Vec<String> = before.iter().map(|(_, p)| p.clone()).collect();
         let reopen = cx.background_executor().spawn(async move {
-            let listed = pluto::call_tool(&bridge, "list_notebooks", serde_json::json!({})).ok();
-            let open = |path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
+            let list = || pluto::call_tool(&bridge, "list_notebooks", serde_json::json!({})).ok();
+            let find = |listed: &Option<serde_json::Value>, path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
+            let listed = list();
             paths
                 .into_iter()
                 .filter_map(|path| {
-                    let result = match open(&path) {
+                    let result = match find(&listed, &path) {
                         Some(nb) => nb,
                         None => {
                             let run = resume.iter().any(|(p, modified)| *p == path && pluto::file_info(&bridge, &path) == Ok(Some(*modified)));
-                            pluto::call_tool(&bridge, "open_notebook", serde_json::json!({ "path": path, "run_notebook": run })).ok()?
+                            match pluto::call_tool(&bridge, "open_notebook", serde_json::json!({ "path": path, "run_notebook": run })) {
+                                Ok(nb) => nb,
+                                // Opened meanwhile (the session's own open, or Claude's).
+                                Err(e) => find(&list(), &path).or_else(|| {
+                                    eprintln!("Couldn't reopen {path}: {e}");
+                                    None
+                                })?,
+                            }
                         }
                     };
                     let previewed = result["execution_allowed"] == false;
@@ -893,12 +916,24 @@ impl Workspace {
             let previewed = reopened.iter().filter(|(.., previewed)| *previewed).count();
             let reopened: Vec<(String, String)> = reopened.into_iter().map(|(id, path, _)| (id, path)).collect();
             let _ = this.update(cx, |this, cx| {
-                let new_id = |old: &str| {
-                    let path = before.iter().find(|(id, _)| id == old).map(|(_, p)| p)?;
-                    reopened.iter().find(|(_, p)| p == path).map(|(id, _)| id.clone())
-                };
+                // The runtime went (a second restart) while this reopen ran: the next one's reopen does it.
+                if this.connections.get(&host).and_then(|c| c.runtime.as_ref()).is_none_or(|r| r.pluto_url != this_runtime) {
+                    eprintln!("Dropped a reopen of {} notebook(s) on {}: its runtime has gone", reopened.len(), this.hosts.name(&host));
+                    return;
+                }
+                let by_path = |path: &str| reopened.iter().find(|(_, p)| p == path).map(|(id, _)| id.clone());
+                let new_id = |old: &str| by_path(before.iter().find(|(id, _)| id == old).map(|(_, p)| p)?);
+                let mut lost = Vec::new();
                 for session in this.sessions.iter_mut().filter(|s| s.place.host == host) {
-                    session.notebook = session.notebook.as_deref().and_then(new_id);
+                    let own = session.notebook_path.as_deref().filter(|_| session.stopped.is_none() && !session.missing);
+                    session.notebook = own.and_then(by_path).or_else(|| session.notebook.as_deref().and_then(new_id));
+                    if own.is_some() && session.notebook.is_none() {
+                        lost.push(session.key);
+                    }
+                }
+                // A file that's gone shows File not found.
+                for key in lost {
+                    this.check_missing(key, cx);
                 }
                 if let Some((host, id)) = this.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
                     this.load_notebook(&host, &id, cx);

@@ -366,6 +366,10 @@ impl Workspace {
                 [Some(title), line.map(str::to_owned)].into_iter().flatten().collect::<Vec<_>>().join(" ")
             }),
             "page": page,
+            "opening": (shown == PaneShows::Opening).then(|| {
+                let (secs, reloaded, button) = self.opening.state(std::time::Instant::now()).unwrap_or_default();
+                json!({ "secs": secs, "reloaded": reloaded, "reload_button": button })
+            }),
         })
     }
 

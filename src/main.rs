@@ -427,6 +427,11 @@ pub struct Workspace {
     /// The open confirm dialog (Stop a host, Cancel a job, Repair Julia, Sign
     /// out, Delete session), if any.
     confirm: Option<confirm::Confirm>,
+    /// Watches for the pane saying "Opening" for a notebook that's open (notebook_pane.rs).
+    opening: notebook_pane::OpeningWatch,
+    /// ENDEAVOR_TEST_STUCK_OPENING's file was there at the last check.
+    #[cfg(debug_assertions)]
+    test_blanked: bool,
 }
 
 impl Workspace {
@@ -546,7 +551,8 @@ impl Workspace {
         // Tick the "Working · 12s" and "Starting Julia · 0:12" timers once a second.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
-            let Ok(busy) = this.update(cx, |this, _| {
+            let Ok(busy) = this.update(cx, |this, cx| {
+                this.check_opening(cx);
                 this.sessions.iter().any(|s| s.busy_since.is_some())
                     || this.connections.values().any(|c| matches!(c.status, connection::Status::Connecting | connection::Status::Starting))
             }) else {
@@ -631,6 +637,9 @@ impl Workspace {
             keyboard_home: cx.focus_handle(),
             sidebar_focus: cx.focus_handle(),
             confirm: None,
+            opening: notebook_pane::OpeningWatch::default(),
+            #[cfg(debug_assertions)]
+            test_blanked: false,
         };
         window.focus(&this.keyboard_home, cx);
         cx.on_focus_lost(window, |this, window, cx| window.focus(&this.keyboard_home, cx)).detach();
@@ -1527,6 +1536,8 @@ impl Workspace {
         let Some(runtime) = self.connection(host).and_then(|c| c.runtime.as_ref()) else { return };
         // pluto_url carries Pluto's secret; keep it app-side.
         let url = Backend::Pluto.notebook_url(&runtime.pluto_url, id);
+        #[cfg(debug_assertions)]
+        let url = if notebook_pane::test_stuck_opening().is_some_and(|keep| keep) { "about:blank".to_owned() } else { url };
         self.webview.update(cx, |w, _| w.load_url(&url));
     }
 
