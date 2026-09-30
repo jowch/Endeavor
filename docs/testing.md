@@ -86,6 +86,11 @@ To wait for something, poll the dump. For example, loop until
   title, code, lines, `plan` (its title, numbered `steps`, whether it's
   `open`, and the `text` shown when it is) and buttons (each with its label, key and `weight`:
   `quiet` on the left, `outlined`, or `primary`).
+  `scroll` is where the transcript is scrolled: the list's top `item` and
+  the `offset` into it, `px` from the top by the heights the list knows,
+  `following` (it keeps to the end), `at_end`, and `rows`, each item in view
+  as `[entry index, top from the viewport's top, height]`. Between two dumps
+  a row in both should move by exactly the amount scrolled.
 - `notebook`. What the notebook pane shows:
   - `page`: the notebook's page. `page` then has the notebook id, the
     backend, the look, safe preview, read-only and whether the page is

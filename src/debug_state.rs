@@ -254,6 +254,7 @@ impl Workspace {
             "folder": self.folder_heading(&s.place),
             "failed": s.failed.as_ref().map(|f| json!({ "message": f.message, "can_copy": f.can_copy })),
             "transcript": self.transcript(s),
+            "scroll": scroll_state(s),
             "activity": transcript::activity(s, self.offline_since).map(|a| [Some(a.verb), a.object, a.took].into_iter().flatten().collect::<Vec<_>>().join(" ")),
             "pinned_plan": s.pinned_plan().and_then(|ix| match &s.entries[ix] {
                 Entry::Plan(entries) => Some(json!({ "progress": approval::progress(entries), "folded": s.plan_folded, "items": plan_items(entries) })),
@@ -469,6 +470,28 @@ fn row(s: &Session, ix: usize, in_run: bool) -> Value {
         }
         _ => Value::Null,
     }
+}
+
+/// Where the transcript is scrolled: the list's top item and the offset into
+/// it, the offset from the top in pixels (by the heights the list knows), and
+/// each item in view as `[entry index, top from the viewport's top, height]`.
+fn scroll_state(s: &Session) -> Value {
+    let top = s.list.logical_scroll_top();
+    let viewport = s.list.viewport_bounds();
+    let rows: Vec<Value> = (top.item_ix..s.list.item_count())
+        .map_while(|ix| s.list.bounds_for_item(ix).map(|b| (ix, b)))
+        .take_while(|(_, b)| b.top() < viewport.bottom())
+        .filter(|(_, b)| b.size.height > px(0.))
+        .map(|(ix, b)| json!([ix, f32::from(b.top() - viewport.top()).round(), f32::from(b.size.height).round()]))
+        .collect();
+    json!({
+        "item": top.item_ix,
+        "offset": f32::from(top.offset_in_item).round(),
+        "px": f32::from(-s.list.scroll_px_offset_for_scrollbar().y).round(),
+        "following": s.list.is_following_tail(),
+        "at_end": s.list.is_scrolled_to_end(),
+        "rows": rows,
+    })
 }
 
 /// The row under a message, shown on hover: its Copy button, and the time as it reads.
