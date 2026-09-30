@@ -1817,6 +1817,7 @@ dependencies = [
  "endeavor-remote",
  "futures",
  "gdkx11",
+ "gpui-base",
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",

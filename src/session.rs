@@ -445,6 +445,14 @@ impl Session {
         state
     }
 
+    /// The first reply with text selected in it: its entry, and the text.
+    pub fn selected_reply(&self, cx: &App) -> Option<(usize, String)> {
+        let replies = self.replies.borrow();
+        let mut selected: Vec<(usize, String)> = replies.iter().map(|(ix, (state, _))| (*ix, state.read(cx).selected_text())).filter(|(_, text)| !text.trim().is_empty()).collect();
+        selected.sort_by_key(|(ix, _)| *ix);
+        selected.into_iter().next().map(|(ix, text)| (ix, text.trim().to_string()))
+    }
+
     /// Starting or reopening failed: stop looking busy and say why.
     pub fn fail(&mut self, error: &str) {
         let (message, cli_live) = failure_message(error);

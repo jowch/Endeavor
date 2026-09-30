@@ -442,6 +442,7 @@ impl Workspace {
             "placeholder": self.placeholder,
             "chips": self.composer.attachments.iter().map(chip_label).collect::<Vec<_>>(),
             "quotes": quotes(&self.composer.attachments),
+            "reply": self.reply_state(cx),
             "mode": self.mode_label(session),
             "model": self.config_label(session, "model"),
             "effort": self.config_label(session, "effort"),

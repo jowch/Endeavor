@@ -1,14 +1,300 @@
-//! Quotes (attach::Quote) on screen: the cards waiting above the composer, and
-//! the quotes in a sent message.
+//! Quotes (attach::Quote) on screen: Reply on text selected in one of Claude's
+//! replies (a pill by the selection, then a small prompt), the cards waiting
+//! above the composer, and the quotes in a sent message.
 
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::attach::{Attachment, Quote, Quoted};
 use crate::new_session::{Glyph, glyph};
-use crate::{Workspace, theme};
+use crate::session::Entry;
+use crate::{ReplyToSelection, Workspace, theme};
+
+/// Text selected in one of Claude's replies, and where the pointer let go of
+/// it (window coordinates), which Reply's pill and prompt open under.
+#[derive(Clone)]
+pub struct Selected {
+    key: u64,
+    entry: usize,
+    text: String,
+    at: Point<Pixels>,
+}
+
+/// The chat's Reply: the pill offered for a selection, or the prompt it opened.
+pub enum Reply {
+    Pill(Selected),
+    Prompt { selected: Selected, input: Entity<InputState>, menu: bool },
+    /// "Added to your message", shown briefly where the prompt was.
+    Added { at: Point<Pixels>, count: usize },
+}
+
+/// How far under the pointer the pill and the prompt open: past the rest of
+/// the selection's last line.
+const BELOW_POINTER: f32 = 16.;
+const PROMPT_WIDTH: f32 = 380.;
+
+/// A quote's excerpt on one line, as the prompt shows it.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Keys the prompt names for its two ways out.
+fn menu_row(id: &'static str, label: &'static str, key: &'static str, icon: Glyph) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::MenuItem)
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(8.))
+        .rounded(px(6.))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::menu_hover()))
+        .child(glyph(icon, theme::icon_grey()))
+        .child(div().text_color(theme::text_primary()).child(label))
+        .child(div().ml_auto().pl(px(12.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(key))
+}
+
+impl Workspace {
+    /// The pointer let go in the transcript: offer Reply if it left text
+    /// selected in a reply, else take the offer away.
+    pub fn check_reply_selection(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if matches!(self.reply, Some(Reply::Prompt { .. })) {
+            return;
+        }
+        let Some(session) = self.active_session() else { return };
+        let key = session.key;
+        let found = session.selected_reply(cx).filter(|(entry, _)| matches!(session.entries.get(*entry), Some(Entry::Agent { .. })));
+        let pill = found.map(|(entry, text)| Reply::Pill(Selected { key, entry, text, at }));
+        if pill.is_some() || matches!(self.reply, Some(Reply::Pill(_))) {
+            self.reply = pill;
+            cx.notify();
+        }
+    }
+
+    /// ⌘J, or a click on the pill: open the prompt for the offered selection.
+    pub fn reply_to_selection(&mut self, _: &ReplyToSelection, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.reply, Some(Reply::Pill(_))) {
+            self.check_reply_selection(window.mouse_position(), cx);
+        }
+        let Some(Reply::Pill(selected)) = self.reply.take() else { return };
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Reply to Claude"));
+        cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { secondary, .. } = event {
+                this.finish_reply(*secondary, window, cx);
+            }
+        })
+        .detach();
+        input.update(cx, |s, cx| s.focus(window, cx));
+        self.reply = Some(Reply::Prompt { selected, input, menu: false });
+        cx.notify();
+    }
+
+    /// ⏎ sends the quote and the reply now; ⌘⏎ (`add`) adds them to the
+    /// composer's message instead.
+    pub fn finish_reply(&mut self, add: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Reply::Prompt { selected, input, .. }) = self.reply.take() else { return };
+        let comment = input.read(cx).value().trim().to_string();
+        let at = self.sessions.iter().find(|s| s.key == selected.key).and_then(|s| match s.entries.get(selected.entry) {
+            Some(Entry::Agent { at: Some(at), .. }) => Some(crate::when::clock(at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())),
+            _ => None,
+        });
+        let quote = Quote { from: Quoted::Reply { text: selected.text, at }, comment };
+        self.use_quotes(vec![quote], add, cx);
+        gpui_base::TextSelection::clear(window, cx);
+        if add {
+            let count = self.composer.attachments.iter().filter(|a| matches!(a, Attachment::Quote(_))).count();
+            self.reply = Some(Reply::Added { at: selected.at, count });
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+                let _ = this.update(cx, |this, cx| {
+                    if matches!(this.reply, Some(Reply::Added { .. })) {
+                        this.reply = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        self.input.update(cx, |s, cx| s.focus(window, cx));
+        cx.notify();
+    }
+
+    /// Esc, or a click elsewhere: close the prompt (or take the pill away).
+    pub fn close_reply(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = self.reply.take().is_some();
+        if open {
+            cx.notify();
+        }
+        open
+    }
+
+    /// For the state dump: which of Reply's pieces shows (`pill`, `prompt`,
+    /// `added`), the quoted text, what's typed, and whether the menu is open.
+    #[cfg(debug_assertions)]
+    pub fn reply_state(&self, cx: &App) -> serde_json::Value {
+        match &self.reply {
+            None => serde_json::Value::Null,
+            Some(Reply::Pill(s)) => serde_json::json!({ "shows": "pill", "quote": s.text }),
+            Some(Reply::Prompt { selected, input, menu }) => {
+                serde_json::json!({ "shows": "prompt", "quote": selected.text, "text": input.read(cx).value().to_string(), "menu": menu })
+            }
+            Some(Reply::Added { count, .. }) => serde_json::json!({ "shows": "added", "count": count }),
+        }
+    }
+
+    /// The pill, the prompt or the confirmation, over the chat where the
+    /// selection was.
+    pub fn render_reply(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let reply = self.reply.as_ref()?;
+        let place = |at: Point<Pixels>, element: AnyElement| {
+            deferred(anchored().position(point(at.x - px(28.), at.y + px(BELOW_POINTER))).snap_to_window_with_margin(px(8.)).child(element)).with_priority(2).into_any_element()
+        };
+        let frame = || div().occlude().map(theme::popover).rounded(px(8.)).font_family(theme::SANS).text_size(theme::chat_meta());
+        Some(match reply {
+            Reply::Pill(selected) => place(
+                selected.at,
+                frame()
+                    .id("reply-pill")
+                    .role(Role::Button)
+                    .aria_label("Reply")
+                    .h(px(30.))
+                    .p(px(3.))
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .h(px(24.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .px(px(8.))
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::menu_hover()))
+                            .text_color(theme::text_primary())
+                            .child(glyph(Glyph::Bubble, theme::icon_grey()))
+                            .child("Reply")
+                            .child(div().text_size(px(11.)).text_color(theme::text_faint()).child(crate::platform::shortcut!("J"))),
+                    )
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        if matches!(this.reply, Some(Reply::Pill(_))) {
+                            this.close_reply(cx);
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, window, cx| this.reply_to_selection(&ReplyToSelection, window, cx)))
+                    .into_any_element(),
+            ),
+            Reply::Prompt { selected, input, menu } => {
+                let focused = input.read(cx).focus_handle(cx).is_focused(window);
+                // Inside the prompt's frame, so a click on it isn't a click outside.
+                let menu = menu.then(|| {
+                    div()
+                        .self_end()
+                        .w(px(210.))
+                        .p(px(4.))
+                        .flex()
+                        .flex_col()
+                        .map(theme::popover)
+                        .rounded(px(10.))
+                        .child(menu_row("reply-send", "Send reply", "↩", Glyph::ArrowUp).on_click(cx.listener(|this, _, window, cx| this.finish_reply(false, window, cx))))
+                        .child(
+                            menu_row("reply-add", "Add to message", crate::platform::shortcut!("↩"), Glyph::Plus)
+                                .on_click(cx.listener(|this, _, window, cx| this.finish_reply(true, window, cx))),
+                        )
+                });
+                let options = div()
+                    .id("reply-options")
+                    .role(Role::Button)
+                    .aria_label("Send options")
+                    .flex_shrink_0()
+                    .size(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.))
+                    .cursor_pointer()
+                    .bg(theme::bg_raised())
+                    .hover(|s| s.bg(theme::menu_hover()))
+                    .child(glyph(Glyph::ArrowUp, theme::text_primary()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(Reply::Prompt { menu, .. }) = &mut this.reply {
+                            *menu = !*menu;
+                            cx.notify();
+                        }
+                    }));
+                place(
+                    selected.at,
+                    frame()
+                        .id("reply-prompt")
+                        .role(Role::Dialog)
+                        .aria_label("Reply")
+                        .w(px(PROMPT_WIDTH))
+                        .p(px(8.))
+                        .rounded(px(10.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .border_l_2()
+                                .border_color(theme::composer_edge())
+                                .pl(px(8.))
+                                .text_size(px(12.5))
+                                .line_height(px(17.))
+                                .text_color(theme::text_faint())
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(one_line(&selected.text)),
+                        )
+                        .child(
+                            div()
+                                .min_h(px(34.))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .pl(px(9.))
+                                .pr(px(5.))
+                                .py(px(4.))
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(if focused { theme::accent_text() } else { theme::control_edge() })
+                                .bg(theme::bg_page())
+                                .child(div().flex_1().min_w_0().child(Input::new(input).appearance(false).aria_label("Reply to Claude").text_size(theme::chat_body())))
+                                .child(options),
+                        )
+                        .children(menu)
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.close_reply(cx);
+                        }))
+                        .into_any_element(),
+                )
+            }
+            Reply::Added { at, count } => place(
+                *at,
+                frame()
+                    .h(px(30.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_color(theme::text_secondary())
+                    .child(glyph(Glyph::Check, theme::accent_text()))
+                    .child(match count {
+                        1 => "Added · 1 quote in the message".to_string(),
+                        n => format!("Added · {n} quotes in the message"),
+                    })
+                    .into_any_element(),
+            ),
+        })
+    }
+}
 
 /// From this many quotes on, the cards above the composer take one line each.
 const COMPACT_FROM: usize = 4;

@@ -101,6 +101,7 @@ actions!(
     [
         Interrupt,
         ToggleAnnotation,
+        ReplyToSelection,
         CycleMode,
         ToggleSidebar,
         NewSession,
@@ -342,6 +343,8 @@ pub struct Workspace {
     composer: composer::Composer,
     /// A sent chip's popover.
     chip_popover: Option<composer::ChipPopover>,
+    /// Reply on text selected in one of Claude's replies.
+    reply: Option<quotes::Reply>,
     /// The agent's config options (model, effort) as the last session offered
     /// them (persisted), so the new-session screen can offer them too.
     agent_options: Vec<agent_client_protocol::schema::v1::SessionConfigOption>,
@@ -609,6 +612,7 @@ impl Workspace {
             resizing: None,
             composer: composer::Composer::new(cx),
             chip_popover: None,
+            reply: None,
             agent_options: load_json("agent-options.json"),
             setup: Setup::needed().then(Setup::default),
             agent_ready: false,
@@ -1423,6 +1427,9 @@ impl Workspace {
         if self.settings_escape(window, cx) {
             return;
         }
+        if self.close_reply(cx) {
+            return;
+        }
         if self.find.as_ref().is_some_and(|f| f.input.read(cx).focus_handle(cx).is_focused(window)) {
             return self.close_find(cx);
         }
@@ -1905,9 +1912,15 @@ impl Workspace {
                     .min_h_0()
                     .flex()
                     .flex_col()
+                    // After the text view has settled the selection the pointer made.
+                    .capture_any_mouse_up(cx.listener(|_, event: &MouseUpEvent, window, cx| {
+                        let at = event.position;
+                        cx.defer_in(window, move |this, _, cx| this.check_reply_selection(at, cx));
+                    }))
                     .child(transcript::render_transcript(session, margin, cx))
                     .children(top_fade)
-                    .children(bottom_fade),
+                    .children(bottom_fade)
+                    .children(self.render_reply(window, cx)),
             )
             .children(transcript::render_activity(session, self.offline_since, margin, cx))
             .child(
@@ -2019,6 +2032,7 @@ impl Render for Workspace {
             .key_context("Workspace")
             .on_action(cx.listener(Self::interrupt))
             .on_action(cx.listener(Self::toggle_annotation))
+            .on_action(cx.listener(Self::reply_to_selection))
             .on_action(cx.listener(Self::cycle_mode))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::new_session))
@@ -2126,6 +2140,8 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
             KeyBinding::new("secondary-shift-k", ToggleAnnotation, None),
+            KeyBinding::new("secondary-j", ReplyToSelection, Some("Input")),
+            KeyBinding::new("secondary-j", ReplyToSelection, None),
             // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).
             // Only in the composer's box: everywhere else ⇧⇥ moves focus back.
             KeyBinding::new("shift-tab", CycleMode, Some("Composer > Input")),
