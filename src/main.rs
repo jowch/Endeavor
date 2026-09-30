@@ -2021,7 +2021,12 @@ impl Render for Workspace {
             }));
         let notebook_header = column_header("notebook-header").map(|d| match active {
             None => d.child(self.draft_pane_header()),
-            Some(ix) => d.child(self.notebook_header(ix, stand_in.is_none(), cx)),
+            Some(ix) => {
+                let layout = &self.settings.layout;
+                let sidebar = if layout.sidebar_open { layout.sidebar_width + 1. } else { 0. };
+                let width = window.viewport_size().width.as_f32() - sidebar - layout.chat_width - 1.;
+                d.child(self.notebook_header(ix, stand_in.is_none(), width, cx))
+            }
         });
         let notebook = match (active, stand_in) {
             (None, _) => self.render_draft_pane(cx),

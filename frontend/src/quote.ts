@@ -5,6 +5,7 @@
 // overlay, and waits for the app's "shot".
 
 import { on, send } from "./bridge";
+import { modHeld, shortcut } from "./keys";
 
 /** A box in page coordinates (scrolls with the notebook). */
 export type Box = { left: number; top: number; right: number; bottom: number };
@@ -94,7 +95,7 @@ const css = `
   .endeavor-field [role="menuitem"] .key { margin-left: auto; padding-left: 12px; font-size: 12px; color: var(--e-text-faint); }
 `;
 
-/** The comment field Reply's prompt and Point's bar share: ↩ sends, ⌘↩ adds
+/** The comment field Reply's prompt and Point's bar share: ↩ sends, ⌘↩ (Ctrl+↩ off macOS) adds
  * to the message (`done(add)`), ⇧↩ is a newline; the button at its end opens
  * a menu with the same two for people who don't know the keys. Typing here
  * never reaches the notebook's shortcuts. */
@@ -105,7 +106,7 @@ export function quoteField(placeholder: string, sendLabel: string, done: (add: b
     `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>` +
     `<button class="options" aria-label="Send options" aria-haspopup="menu" aria-expanded="false">↑</button>` +
     `<div role="menu" hidden><button role="menuitem" data-add="false"><span></span><span class="key">↩</span></button>` +
-    `<button role="menuitem" data-add="true"><span>Add to message</span><span class="key">⌘↩</span></button></div>`;
+    `<button role="menuitem" data-add="true"><span>Add to message</span><span class="key">${shortcut("↩")}</span></button></div>`;
   const text = root.querySelector("textarea")!;
   const options = root.querySelector<HTMLButtonElement>(".options")!;
   const menu = root.querySelector<HTMLElement>("[role=menu]")!;
@@ -126,7 +127,7 @@ export function quoteField(placeholder: string, sendLabel: string, done: (add: b
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         showMenu(false);
-        done(e.metaKey, e);
+        done(modHeld(e), e);
       }
     },
     true,

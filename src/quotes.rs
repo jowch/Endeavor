@@ -3,7 +3,7 @@
 //! above the composer, and the quotes in a sent message.
 
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -29,8 +29,6 @@ pub struct Selected {
 pub enum Reply {
     Pill(Selected),
     Prompt { selected: Selected, input: Entity<InputState>, menu: bool },
-    /// "Added · N quotes in the message", shown briefly where the prompt was.
-    Added { selected: Selected, count: usize },
 }
 
 /// How far under the pointer the pill and the prompt open: past the rest of
@@ -111,20 +109,6 @@ impl Workspace {
         let quote = Quote { from: Quoted::Reply { text: selected.text.clone(), at }, comment };
         self.use_quotes(vec![quote], add, cx);
         gpui_base::TextSelection::clear(window, cx);
-        if add {
-            let count = self.composer.attachments.iter().filter(|a| matches!(a, Attachment::Quote(_))).count();
-            self.reply = Some(Reply::Added { selected, count });
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(Duration::from_secs(2)).await;
-                let _ = this.update(cx, |this, cx| {
-                    if matches!(this.reply, Some(Reply::Added { .. })) {
-                        this.reply = None;
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
         self.input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
@@ -148,7 +132,6 @@ impl Workspace {
             Some(Reply::Prompt { selected, input, menu }) => {
                 serde_json::json!({ "shows": "prompt", "quote": selected.text, "text": input.read(cx).value().to_string(), "menu": menu })
             }
-            Some(Reply::Added { count, .. }) => serde_json::json!({ "shows": "added", "count": count }),
         }
     }
 
@@ -156,7 +139,7 @@ impl Workspace {
     /// selection was.
     pub fn render_reply(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let reply = self.reply.as_ref()?;
-        let (Reply::Pill(selected) | Reply::Prompt { selected, .. } | Reply::Added { selected, .. }) = reply;
+        let (Reply::Pill(selected) | Reply::Prompt { selected, .. }) = reply;
         // The notebook's web view covers anything drawn over its pane, so
         // these stay inside the reply's column.
         let column = self.sessions.iter().find(|s| s.key == selected.key).and_then(|s| s.reply_bounds(selected.entry, cx));
@@ -290,22 +273,6 @@ impl Workspace {
                         .into_any_element(),
                 )
             }
-            Reply::Added { count, .. } => place(
-                px(260.),
-                frame()
-                    .h(px(30.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_color(theme::text_secondary())
-                    .child(glyph(Glyph::Check, theme::accent_text()))
-                    .child(match count {
-                        1 => "Added · 1 quote in the message".to_string(),
-                        n => format!("Added · {n} quotes in the message"),
-                    })
-                    .into_any_element(),
-            ),
         })
     }
 }

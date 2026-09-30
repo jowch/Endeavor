@@ -7,6 +7,7 @@
 import { byUser, send } from "./bridge";
 import { onRedraw } from "./redraw";
 import { cellCode } from "./reveal";
+import { modHeld, shortcut } from "./keys";
 
 const AGENT = "Claude";
 
@@ -36,7 +37,7 @@ const css = `
   #endeavor-prompt .hint { color: var(--e-text-dim); font-size: 11px; }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
-  pluto-input .cm-placeholder::after { content: "Type code, or ⌘E to ask ${AGENT}"; font-size: 13px; }
+  pluto-input .cm-placeholder::after { content: "Type code, or ${shortcut("E")} to ask ${AGENT}"; font-size: 13px; }
 `;
 
 type Where = "cell" | "before" | "after";
@@ -90,7 +91,7 @@ export function openPrompt(cell: HTMLElement, where: Where) {
         if (!comment || !byUser(e)) return;
         const notebook = new URLSearchParams(location.search).get("id");
         const kind = where !== "cell" ? where : isEmpty(cell) ? "fill" : "about";
-        send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: e.metaKey });
+        send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: modHeld(e) });
         close(true);
       }
     },
@@ -112,7 +113,7 @@ export function initPrompt(): void {
   window.addEventListener(
     "keydown",
     (e) => {
-      if (!(e.metaKey && e.key.toLowerCase() === "e") || e.shiftKey) return;
+      if (!(modHeld(e) && e.key.toLowerCase() === "e") || e.shiftKey) return;
       const cell = (document.activeElement as Element | null)?.closest<HTMLElement>("pluto-cell");
       if (!cell) return;
       e.preventDefault();

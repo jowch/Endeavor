@@ -120,7 +120,7 @@ To wait for something, poll the dump. For example, loop until
   user entry), placeholder, mode, model and effort, and Point (whether it can
   be used and whether it's on). `reply` is Reply on a selection in the chat:
   `shows` is `pill`, `prompt` (with the `quote`, the `text` typed and whether
-  the `menu` is open) or `added`; null when none shows. `above` lists the lines above
+  the `menu` is open); null when none shows. `above` lists the lines above
   the box (slash commands, offline, queue heading, notices). `queue` lists the
   waiting messages, each with its label (`sending now…`, `copying files…`).
   `tips` says whether the file tip and the Point tip show.

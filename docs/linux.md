@@ -11,7 +11,7 @@ adapter, the local Julia runtime starts, and the Pluto notebook shows in the
 web view and runs cells. The keyboard moves between the app and the notebook,
 menus and Settings show over the notebook, light and dark follow the desktop,
 and a session on a server works from a Linux client. The main gaps left are
-packaging, the notebook page's own ⌘ shortcuts, and the macOS menu bar's items.
+packaging and the macOS menu bar's items.
 
 The remaining work is ranked at the end of this page.
 
@@ -227,12 +227,11 @@ changes.
      `assets/icon/endeavor-256.png` and `endeavor-512.png` (for
      `share/icons/hicolor/{256x256,512x512}/apps/endeavor.png`).
    - The Linux runtime dependencies above need to be declared.
-2. **The notebook page's shortcuts (S).** The page script checks `metaKey`
-   for ⌘E (ask Claude about a cell), ⌘J (Reply to a selection), ⌘⏎ in its prompt and comment boxes, and
-   ⌘⇧E (leave Point). On Linux Ctrl+E in a cell does nothing. The page needs
-   Ctrl on Linux, checked against Pluto's own Ctrl shortcuts, and its hints
-   (the cell placeholder "⌘E to ask", the comment box's title) need the same
-   `mac` switch the shortcuts list in `frontend/src/actions.ts` already has.
+2. **The notebook page's shortcuts (done, not yet tried on Linux).** The page
+   script takes Ctrl off macOS for Ctrl+E (ask Claude about a cell), Ctrl+J
+   (Reply to a selection), Ctrl+↩ in its prompt and comment boxes and
+   Ctrl+Shift+E (leave Point), and its hints say Ctrl (`frontend/src/keys.ts`).
+   Pluto has no Ctrl+E or Ctrl+J of its own.
 3. **The menu bar's items (S).** GPUI shows no menu bar on Linux, so the
    About window, Help ▸ Endeavor Help, Report an Issue and Window ▸ Zoom have
    no way in. Settings ▸ About has the version, updates, Help and Licences,

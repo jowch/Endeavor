@@ -87,7 +87,7 @@ Direction chosen (2026-09-27; canvas row "Notebook pane"): our look is "Pluto pl
 - [ ] Fix with Claude / Explain at the bottom of error cards — improvised
 - [ ] Pointing mode's comment bar under the picked cell — improvised. Built: the hint pill "Click a cell or drag a box · Done" and the drawn box (dashed; its cells are picked and the bar sits under it). The box goes as a picture of that part of the notebook, taken by WebKit's own snapshot of the web view (macOS; on Linux it goes as its cells for now)
 - [ ] Folded cell shown open until it runs — improvised
-- [ ] Changed-line diffs in the Endeavor look don't wrap long lines (the CodeMirror gutter diff: removed lines above additions, line tints) — missing
+- [x] Changed-line diffs in the Endeavor look don't wrap long lines (the CodeMirror gutter diff: removed lines above additions, line tints) — missing. Fixed: removed lines wrap like the editor's own lines
 - [ ] Find in the notebook (⌘F) — improvised. Built: with the notebook's keyboard, ⌘F (also Edit ▸ Find…) opens a bar under the notebook header: a search box, previous and next buttons, "Not found" when nothing matches, and × at the right. It searches with WebKit's own find, which highlights and scrolls to each match: typing searches from the top, ⏎ and ⌘G go to the next match, ⇧⏎ and ⇧⌘G to the previous one, and Esc closes the bar, takes the highlight away and gives the notebook the keyboard back. It finds text in code, outputs and markdown, and in cells Pluto hasn't mounted yet (their highlight goes when Pluto swaps in the editor; ⌘G shows it again). No "N of M": WebKit's public find gives no count. Undesigned: its look, and whether it should live in the header row instead
 
 ## Accessibility

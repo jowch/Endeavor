@@ -427,7 +427,11 @@ impl Drop for PaneTooltip {
 }
 
 /// A 24px header button: an icon, maybe a label; lit while its panel or menu is open.
-fn header_button(id: &'static str, icon: Glyph, label: Option<&'static str>, active: bool) -> Stateful<Div> {
+/// `compact`: icon only (the label stays its accessible name), for a narrow pane.
+/// The notebook pane's width from which its header buttons show their labels.
+const HEADER_LABELS_MIN: f32 = 680.;
+
+fn header_button(id: &'static str, icon: Glyph, label: Option<&'static str>, active: bool, compact: bool) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
@@ -447,7 +451,7 @@ fn header_button(id: &'static str, icon: Glyph, label: Option<&'static str>, act
         .hover(|s| s.bg(theme::row_active()).text_color(theme::text_primary()))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(glyph(icon, if active { theme::text_primary() } else { theme::text_muted() }))
-        .children(label)
+        .children(label.filter(|_| !compact))
 }
 
 /// A button on the empty pages: filled orange for the one thing to do, else outlined.
@@ -546,7 +550,9 @@ impl Workspace {
     }
 
     /// The notebook pane's header for session `ix`. `shown`: its notebook is on screen (Point works).
-    pub fn notebook_header(&self, ix: usize, shown: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// `width`: the notebook pane's; below `HEADER_LABELS_MIN` its buttons show icons only.
+    pub fn notebook_header(&self, ix: usize, shown: bool, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        let compact = width < HEADER_LABELS_MIN;
         let session = &self.sessions[ix];
         let key = session.key;
         if session.notebook_path.is_none() {
@@ -654,14 +660,14 @@ impl Workspace {
         let open = |target: MenuTarget| self.menu.as_ref().is_some_and(|m| m.target == target);
         let point_tip = self.point_tip_shows(shown);
         let tip = |d: Stateful<Div>, text: &'static str| d.tooltip(tooltip(text, &self.webview));
-        let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating), concat!("Pick cells or draw a box to ask Claude about  ", crate::platform::shortcut!(shift "E")))
+        let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating, compact), concat!("Pick cells or draw a box to ask Claude about  ", crate::platform::shortcut!(shift "E")))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());
         let tools = (endeavor && shown).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             [
-                header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)))
+                header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
                     .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
@@ -669,10 +675,10 @@ impl Workspace {
                     }))
                     .children(share_menu.map(|menu| self.render_menu(menu, cx)))
                     .into_any_element(),
-                tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs")), "Live docs")
+                tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
                     .into_any_element(),
-                tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status")), "Status")
+                tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
                     .into_any_element(),
             ]

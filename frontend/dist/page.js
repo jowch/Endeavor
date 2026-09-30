@@ -18,6 +18,15 @@
     }
   };
 
+  // src/keys.ts
+  var mac = /Mac/.test(navigator.platform);
+  function modHeld(e) {
+    return mac ? e.metaKey : e.ctrlKey;
+  }
+  function shortcut(key) {
+    return mac ? `\u2318${key}` : `Ctrl+${key}`;
+  }
+
   // src/actions.ts
   var css = `
   #endeavor-sheet { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
@@ -40,7 +49,6 @@
     font: 12.5px system-ui, sans-serif; cursor: pointer; }
   #endeavor-sheet button.primary { background: var(--e-accent); border-color: var(--e-accent); color: #fff; }
 `;
-  var mac = /Mac/.test(navigator.platform);
   var cmd = mac ? "\u2318" : "Ctrl";
   var alt = mac ? "\u2325" : "Alt";
   var shortcuts = [
@@ -251,7 +259,7 @@
   function quoteField(placeholder, sendLabel, done) {
     const root = document.createElement("div");
     root.className = "endeavor-field";
-    root.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><button class="options" aria-label="Send options" aria-haspopup="menu" aria-expanded="false">\u2191</button><div role="menu" hidden><button role="menuitem" data-add="false"><span></span><span class="key">\u21A9</span></button><button role="menuitem" data-add="true"><span>Add to message</span><span class="key">\u2318\u21A9</span></button></div>`;
+    root.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><button class="options" aria-label="Send options" aria-haspopup="menu" aria-expanded="false">\u2191</button><div role="menu" hidden><button role="menuitem" data-add="false"><span></span><span class="key">\u21A9</span></button><button role="menuitem" data-add="true"><span>Add to message</span><span class="key">${shortcut("\u21A9")}</span></button></div>`;
     const text = root.querySelector("textarea");
     const options = root.querySelector(".options");
     const menu = root.querySelector("[role=menu]");
@@ -272,7 +280,7 @@
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
           showMenu(false);
-          done(e.metaKey, e);
+          done(modHeld(e), e);
         }
       },
       true
@@ -455,7 +463,7 @@
     hint.innerHTML = `<span>Click to pick \xB7 drag over code lines \xB7 drag elsewhere for a box</span><span>\xB7</span><span class="done" role="button">Done</span>`;
     const bar = document.createElement("div");
     bar.id = "annotate-bar";
-    bar.innerHTML = `<div class="head"><span class="status"></span><span class="keys">\u21A9 send \xB7 \u2318\u21A9 add to message</span></div>`;
+    bar.innerHTML = `<div class="head"><span class="status"></span><span class="keys">\u21A9 send \xB7 ${shortcut("\u21A9")} add to message</span></div>`;
     const status = bar.querySelector(".status");
     const field = quoteField("Comment for Claude\u2026", "Send", (add, e) => byUser(e) && sendComment(add));
     const text = field.text;
@@ -647,7 +655,7 @@
     window.addEventListener(
       "keydown",
       (e) => {
-        if (e.key.toLowerCase() === "e" && e.metaKey && e.shiftKey) {
+        if (e.key.toLowerCase() === "e" && modHeld(e) && e.shiftKey) {
           e.preventDefault();
           return set(!active());
         }
@@ -800,7 +808,7 @@
     left: calc(-1 * var(--indented, 0px) - 13px); color: var(--e-diff-add); text-indent: 0;
   }
   .endeavor-add-ch { background: var(--e-diff-add-ch); border-radius: 2px; }
-  .endeavor-del { position: relative; background: var(--e-diff-del-tint); color: var(--e-diff-del); white-space: pre; }
+  .endeavor-del { position: relative; background: var(--e-diff-del-tint); color: var(--e-diff-del); white-space: break-spaces; word-break: break-word; overflow-wrap: anywhere; }
   .endeavor-del::before { content: "\u2212"; position: absolute; left: -13px; }
   .endeavor-del-ch { background: var(--e-diff-del-ch); border-radius: 2px; }
 `;
@@ -1450,7 +1458,7 @@
   #endeavor-prompt .hint { color: var(--e-text-dim); font-size: 11px; }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
-  pluto-input .cm-placeholder::after { content: "Type code, or \u2318E to ask ${AGENT}"; font-size: 13px; }
+  pluto-input .cm-placeholder::after { content: "Type code, or ${shortcut("E")} to ask ${AGENT}"; font-size: 13px; }
 `;
   var open = null;
   function close(refocus) {
@@ -1496,7 +1504,7 @@
           if (!comment || !byUser(e)) return;
           const notebook = new URLSearchParams(location.search).get("id");
           const kind = where !== "cell" ? where : isEmpty(cell) ? "fill" : "about";
-          send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: e.metaKey });
+          send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: modHeld(e) });
           close(true);
         }
       },
@@ -1514,7 +1522,7 @@
     window.addEventListener(
       "keydown",
       (e) => {
-        if (!(e.metaKey && e.key.toLowerCase() === "e") || e.shiftKey) return;
+        if (!(modHeld(e) && e.key.toLowerCase() === "e") || e.shiftKey) return;
         const cell = document.activeElement?.closest("pluto-cell");
         if (!cell) return;
         e.preventDefault();
@@ -1563,9 +1571,6 @@
   #endeavor-reply .quote { border-left: 2px solid var(--e-control-edge); padding-left: 8px; font-size: 12.5px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #endeavor-reply .source { font-size: 12px; color: var(--e-text-faint); }
-  #endeavor-reply.added { width: auto; flex-direction: row; align-items: center; padding: 6px 10px; color: var(--e-text-secondary);
-    transition: opacity 0.3s; }
-  #endeavor-reply.added.fading { opacity: 0; }
 `;
   function lineOf(node, content) {
     const view = content.cmTile?.root?.view;
@@ -1634,12 +1639,8 @@
       const field = quoteField("Reply to Claude", "Send reply", (add, e) => {
         if (!byUser(e)) return;
         sendQuote([found.pick], field.text.value.trim(), add);
-        if (!add) return close2();
-        window.getSelection()?.removeAllRanges();
-        box.className = "added";
-        box.replaceChildren("Added to the message");
-        setTimeout(() => box.classList.add("fading"), 1700);
-        setTimeout(() => prompt === box && close2(), 2e3);
+        if (add) window.getSelection()?.removeAllRanges();
+        close2();
       });
       field.text.addEventListener(
         "keydown",
@@ -1669,7 +1670,7 @@
         pill = document.createElement("div");
         pill.id = "endeavor-reply-pill";
         pill.dataset.endeavorUi = "";
-        pill.innerHTML = `<button aria-label="Reply">Reply <span class="key">\u2318J</span></button>`;
+        pill.innerHTML = `<button aria-label="Reply">Reply <span class="key">${shortcut("J")}</span></button>`;
         const place3 = pillAt(found);
         pill.style.left = `${place3.left}px`;
         pill.style.top = `${place3.top}px`;
@@ -1684,7 +1685,7 @@
     window.addEventListener(
       "keydown",
       (e) => {
-        if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === "j") {
+        if (modHeld(e) && !e.shiftKey && e.key.toLowerCase() === "j") {
           const found = selectedInCell();
           if (!found || document.body.classList.contains("annotating")) return;
           e.preventDefault();

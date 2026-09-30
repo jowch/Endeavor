@@ -8,7 +8,7 @@ import { buildSync } from "esbuild";
 const NB = "0f381e2e-b8ca-11f1-b549-49cf0ce82801";
 const CELL = "11111111-1111-1111-1111-111111111111";
 
-async function page() {
+async function page(platform = "MacIntel") {
   const dom = new JSDOM(
     `<body><pluto-cell id="${CELL}"><pluto-output><p>The middle 95% of the rates.</p></pluto-output>` +
       `<pluto-input><div class="cm-content"><div class="cm-line">rates = map(1:1000) do _</div>` +
@@ -16,6 +16,7 @@ async function page() {
     { url: `http://localhost/edit?id=${NB}`, runScripts: "outside-only", pretendToBeVisual: true },
   );
   const { window } = dom;
+  Object.defineProperty(window.navigator, "platform", { value: platform });
   // jsdom lays nothing out: every selection is one line box.
   window.Range.prototype.getClientRects = () => [{ left: 10, top: 20, right: 110, bottom: 38 }];
   const sent = [];
@@ -73,8 +74,18 @@ test("⌘J on output text opens the prompt; ⌘↩ adds the quote to the message
     comment: "why 95?",
     add: true,
   });
-  assert.equal(document.querySelector("#endeavor-reply").textContent, "Added to the message");
+  assert.equal(document.querySelector("#endeavor-reply"), null, "the prompt closes; the card above the composer shows it was added");
   assert.equal(window.getSelection().rangeCount, 0, "the selection clears");
+});
+
+test("off macOS, Ctrl+J opens the prompt and its hints say Ctrl", async () => {
+  const { window, document, select } = await page("Linux x86_64");
+  const text = document.querySelector("pluto-output p").firstChild;
+  await select(text, 4, text, 14);
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "j", metaKey: true }));
+  assert.equal(document.querySelector("#endeavor-reply"), null, "⌘ does nothing off macOS");
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "j", ctrlKey: true }));
+  assert.equal(document.querySelector("#endeavor-reply [data-add=true] .key").textContent, "Ctrl+↩");
 });
 
 test("the prompt's menu sends or adds; Esc closes it", async () => {

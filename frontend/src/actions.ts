@@ -5,6 +5,7 @@
 // footer, so the list and a feedback box are drawn here (both looks).
 
 import { on } from "./bridge";
+import { mac } from "./keys";
 
 const css = `
   #endeavor-sheet { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
@@ -28,7 +29,6 @@ const css = `
   #endeavor-sheet button.primary { background: var(--e-accent); border-color: var(--e-accent); color: #fff; }
 `;
 
-const mac = /Mac/.test(navigator.platform);
 const cmd = mac ? "⌘" : "Ctrl";
 const alt = mac ? "⌥" : "Alt";
 const shortcuts: Array<[string, string] | string> = [

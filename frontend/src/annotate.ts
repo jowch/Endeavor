@@ -12,6 +12,7 @@ import { byUser, on, send } from "./bridge";
 import { barPlace } from "./place";
 import { type Box, type Pick, SHOOTING, cellName, pickSource, quoteField, sendQuote, shoot } from "./quote";
 import { cellCode } from "./reveal";
+import { modHeld, shortcut } from "./keys";
 
 const css = `
   body.annotating pluto-cell, body.annotating pluto-cell * { cursor: crosshair !important; }
@@ -163,7 +164,7 @@ export function initAnnotate(): void {
   hint.innerHTML = `<span>Click to pick · drag over code lines · drag elsewhere for a box</span><span>·</span><span class="done" role="button">Done</span>`;
   const bar = document.createElement("div");
   bar.id = "annotate-bar";
-  bar.innerHTML = `<div class="head"><span class="status"></span><span class="keys">↩ send · ⌘↩ add to message</span></div>`;
+  bar.innerHTML = `<div class="head"><span class="status"></span><span class="keys">↩ send · ${shortcut("↩")} add to message</span></div>`;
   const status = bar.querySelector<HTMLElement>(".status")!;
   const field = quoteField("Comment for Claude…", "Send", (add, e) => byUser(e) && sendComment(add));
   const text = field.text;
@@ -379,7 +380,7 @@ export function initAnnotate(): void {
   window.addEventListener(
     "keydown",
     (e) => {
-      if (e.key.toLowerCase() === "e" && e.metaKey && e.shiftKey) {
+      if (e.key.toLowerCase() === "e" && modHeld(e) && e.shiftKey) {
         e.preventDefault();
         return set(!active());
       }

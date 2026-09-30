@@ -8,6 +8,7 @@ import { byUser } from "./bridge";
 import { pillPlace } from "./place";
 import { type Pick, pickSource, quoteField, sendQuote } from "./quote";
 import { cellCode } from "./reveal";
+import { modHeld, shortcut } from "./keys";
 
 const css = `
   #endeavor-reply-pill { position: absolute; z-index: 1000; display: inline-flex; align-items: center; height: 30px; box-sizing: border-box;
@@ -23,9 +24,6 @@ const css = `
   #endeavor-reply .quote { border-left: 2px solid var(--e-control-edge); padding-left: 8px; font-size: 12.5px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #endeavor-reply .source { font-size: 12px; color: var(--e-text-faint); }
-  #endeavor-reply.added { width: auto; flex-direction: row; align-items: center; padding: 6px 10px; color: var(--e-text-secondary);
-    transition: opacity 0.3s; }
-  #endeavor-reply.added.fading { opacity: 0; }
 `;
 
 /** Text selected in one cell, as a pick, and where it is on the page. */
@@ -107,12 +105,8 @@ export function initReply(): void {
     const field = quoteField("Reply to Claude", "Send reply", (add, e) => {
       if (!byUser(e)) return;
       sendQuote([found.pick], field.text.value.trim(), add);
-      if (!add) return close();
-      window.getSelection()?.removeAllRanges();
-      box.className = "added";
-      box.replaceChildren("Added to the message");
-      setTimeout(() => box.classList.add("fading"), 1700);
-      setTimeout(() => prompt === box && close(), 2000);
+      if (add) window.getSelection()?.removeAllRanges();
+      close();
     });
     // Capture, like the field's own keys, which stop the event there.
     field.text.addEventListener(
@@ -145,7 +139,7 @@ export function initReply(): void {
       pill = document.createElement("div");
       pill.id = "endeavor-reply-pill";
       pill.dataset.endeavorUi = "";
-      pill.innerHTML = `<button aria-label="Reply">Reply <span class="key">⌘J</span></button>`;
+      pill.innerHTML = `<button aria-label="Reply">Reply <span class="key">${shortcut("J")}</span></button>`;
       const place = pillAt(found);
       pill.style.left = `${place.left}px`;
       pill.style.top = `${place.top}px`;
@@ -162,7 +156,7 @@ export function initReply(): void {
   window.addEventListener(
     "keydown",
     (e) => {
-      if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === "j") {
+      if (modHeld(e) && !e.shiftKey && e.key.toLowerCase() === "j") {
         const found = selectedInCell();
         if (!found || document.body.classList.contains("annotating")) return;
         e.preventDefault();

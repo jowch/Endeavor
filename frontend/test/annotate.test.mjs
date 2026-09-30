@@ -18,6 +18,7 @@ async function page() {
     { url: `http://localhost/edit?id=${NB}`, runScripts: "outside-only", pretendToBeVisual: true },
   );
   const { window } = dom;
+  Object.defineProperty(window.navigator, "platform", { value: "MacIntel" });
   const sent = [];
   window.ipc = { postMessage: (body) => sent.push(JSON.parse(body)) };
   window.eval(readFileSync(new URL("../dist/page.js", import.meta.url), "utf8"));

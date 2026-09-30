@@ -26,7 +26,7 @@ const css = `
     left: calc(-1 * var(--indented, 0px) - 13px); color: var(--e-diff-add); text-indent: 0;
   }
   .endeavor-add-ch { background: var(--e-diff-add-ch); border-radius: 2px; }
-  .endeavor-del { position: relative; background: var(--e-diff-del-tint); color: var(--e-diff-del); white-space: pre; }
+  .endeavor-del { position: relative; background: var(--e-diff-del-tint); color: var(--e-diff-del); white-space: break-spaces; word-break: break-word; overflow-wrap: anywhere; }
   .endeavor-del::before { content: "−"; position: absolute; left: -13px; }
   .endeavor-del-ch { background: var(--e-diff-del-ch); border-radius: 2px; }
 `;
