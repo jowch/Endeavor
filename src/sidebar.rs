@@ -829,28 +829,39 @@ impl Workspace {
                 })
             })
             .child(
+                // The fade is a sibling of the scrolling list, not a child of
+                // it: a child would scroll away with the rest of the content
+                // instead of staying put over the top of the list.
                 div()
-                    .id("sessions")
                     .relative()
                     .flex_1()
-                    .overflow_y_scroll()
-                    .track_scroll(&sessions_scroll)
+                    .min_h_0()
                     .flex()
                     .flex_col()
-                    .map(|d| {
-                        if no_matches {
-                            d.child(
-                                div()
-                                    .px(px(10.))
-                                    .pt(px(8.))
-                                    .text_size(theme::size_meta())
-                                    .text_color(theme::text_faint())
-                                    .child(format!("No sessions match “{}”.", query.trim())),
-                            )
-                        } else {
-                            d.children(groups)
-                        }
-                    })
+                    .child(
+                        div()
+                            .id("sessions")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&sessions_scroll)
+                            .flex()
+                            .flex_col()
+                            .map(|d| {
+                                if no_matches {
+                                    d.child(
+                                        div()
+                                            .px(px(10.))
+                                            .pt(px(8.))
+                                            .text_size(theme::size_meta())
+                                            .text_color(theme::text_faint())
+                                            .child(format!("No sessions match “{}”.", query.trim())),
+                                    )
+                                } else {
+                                    d.children(groups)
+                                }
+                            }),
+                    )
                     .when(scrolled_from_top, |d| {
                         d.child(
                             div()
