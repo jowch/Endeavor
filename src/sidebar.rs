@@ -622,8 +622,8 @@ impl Workspace {
                     .focus_visible(|st| st.border_color(theme::focus_ring()))
                     .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
                     .child(title)
-                    .children(mark)
                     .child(self.row_more(row.clone(), group, active, cx))
+                    .children(mark)
                     // Double-click renames.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         if e.click_count() >= 2 {
@@ -651,8 +651,8 @@ impl Workspace {
                     .focus_visible(|d| d.border_color(theme::focus_ring()))
                     .when(archived, |d| d.text_color(theme::text_section()))
                     .child(title)
-                    .children(mark)
                     .child(self.row_more(row.clone(), group, false, cx))
+                    .children(mark)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.renaming.as_ref().is_some_and(|(renaming, _)| *renaming == row) && let Some(info) = this.past_info(&id, &place) {
                             this.open_past(info, place.clone(), cx);
