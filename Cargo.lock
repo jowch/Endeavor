@@ -1816,6 +1816,7 @@ dependencies = [
  "block2 0.6.2",
  "endeavor-remote",
  "futures",
+ "gdkx11",
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",
@@ -1829,6 +1830,7 @@ dependencies = [
  "serde",
  "serde_json",
  "wire",
+ "x11",
 ]
 
 [[package]]

@@ -58,8 +58,10 @@ mod tips;
 mod transcript;
 mod turtle;
 mod when;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(not(target_os = "macos"))]
-use platform::{dialogs, overlay, snapshot, webkeys};
+use platform::{dialogs, overlay, snapshot};
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
@@ -424,8 +426,13 @@ impl Workspace {
                 })
                 .build_as_child(&handle)
                 .expect("child webview");
-            webkeys::fix_key_handling();
-            webkeys::allow_pinch_zoom(&webview);
+            #[cfg(target_os = "macos")]
+            {
+                webkeys::fix_key_handling();
+                webkeys::allow_pinch_zoom(&webview);
+            }
+            #[cfg(target_os = "linux")]
+            linux::attach(&webview, window, cx);
             dialogs::show_page_dialogs(&webview);
             WebView::new(webview, window, cx)
         });
@@ -1916,6 +1923,7 @@ impl Render for Workspace {
             .text_size(theme::size_body())
             .line_height(theme::line_body())
             .child(div().track_focus(&self.keyboard_home))
+            .child(platform::keyboard_follows_clicks())
             .when(self.settings.layout.sidebar_open, |d| d.child(self.render_session_bar(window, cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
             .child(
                 div()

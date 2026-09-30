@@ -1,8 +1,8 @@
 //! What the app does differently on macOS and Linux, outside GPUI and wry:
 //! showing a file, reading system settings, and hosting the notebook's web view.
 //! On Linux the web view is WebKitGTK in an X11 child window, so GTK has to be
-//! started and its events pumped; the macOS-only fixes (`overlay`, `webkeys`)
-//! have no Linux version yet and are no-ops there.
+//! started and its events pumped. `src/linux/` has the Linux versions of the
+//! macOS-only fixes; `overlay` has none yet and is a no-op there.
 
 use std::path::Path;
 
@@ -73,6 +73,15 @@ pub fn bring_all_to_front(_: &mut gpui::App) {
 pub fn bring_all_to_front(cx: &mut gpui::App) {
     cx.activate(true);
 }
+
+/// On macOS AppKit moves the keyboard between GPUI and the web view itself.
+#[cfg(target_os = "macos")]
+pub fn keyboard_follows_clicks() -> impl gpui::IntoElement {
+    gpui::Empty
+}
+
+#[cfg(target_os = "linux")]
+pub use crate::linux::keyboard_follows_clicks;
 
 /// Start GTK and keep its events flowing from GPUI's main loop.
 #[cfg(target_os = "linux")]
@@ -189,12 +198,6 @@ pub mod snapshot {
         let _ = tx.send(None);
         rx
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub mod webkeys {
-    pub fn fix_key_handling() {}
-    pub fn allow_pinch_zoom(_: &wry::WebView) {}
 }
 
 #[cfg(not(target_os = "macos"))]

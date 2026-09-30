@@ -42,3 +42,6 @@ block2 = "0.6"
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["x11"] }
 # The same GTK wry's web view uses: started and pumped by the app (src/platform.rs).
 gtk = "0.18"
+# GDK's Xlib display, for X input focus and the web view's shape (src/linux/).
+gdkx11 = "0.18"
+x11 = { version = "2.21", features = ["xlib"] }
