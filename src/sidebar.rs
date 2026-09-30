@@ -725,8 +725,10 @@ impl Workspace {
         div().mt(px(18.)).flex().items_center().child(heading).child(plus)
     }
 
-    pub(crate) fn render_session_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn render_session_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let update = settings_panel::update_available(&self.updates());
+        let sessions_scroll = window.use_keyed_state("sidebar-sessions-scroll", cx, |_, _| ScrollHandle::new()).read(cx).clone();
+        let scrolled_from_top = sessions_scroll.offset().y < px(0.);
         let query = self.sidebar_search.as_ref().map(|s| s.read(cx).value().to_string()).unwrap_or_default();
         let searching = !query.trim().is_empty();
         let show_empty = self.settings.sidebar_filters.show_empty_folders;
@@ -829,8 +831,10 @@ impl Workspace {
             .child(
                 div()
                     .id("sessions")
+                    .relative()
                     .flex_1()
                     .overflow_y_scroll()
+                    .track_scroll(&sessions_scroll)
                     .flex()
                     .flex_col()
                     .map(|d| {
@@ -846,6 +850,17 @@ impl Workspace {
                         } else {
                             d.children(groups)
                         }
+                    })
+                    .when(scrolled_from_top, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .right_0()
+                                .h(px(20.))
+                                .bg(linear_gradient(180., linear_color_stop(theme::bg_sidebar(), 0.), linear_color_stop(theme::bg_sidebar().opacity(0.), 1.))),
+                        )
                     }),
             )
             .map(|d| {

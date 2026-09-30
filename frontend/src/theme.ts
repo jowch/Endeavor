@@ -265,6 +265,24 @@ pluto-output.rich_output:has(> .safe-preview-output) { display: none !important;
 pluto-editor > main { padding-top: 16px; }
 pluto-editor main { margin-right: max(0px, (100% - 731px) / 2) !important; }
 pluto-runarea > span { font-size: 10px; }
+/* The web view draws over native views, so the notebook header can't blur
+   what's under it (docs/design-gaps.md, "Translucent headers with blur").
+   Instead, the top of the page fades into the page background, so a cell
+   scrolled toward the top softens instead of cutting off hard. Fixed to the
+   viewport, not the scroller, and never over the first cell at rest: the
+   16px top padding above leaves exactly this fade's height clear.
+   pointer-events: none keeps clicks and selection reaching the page under it. */
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 16px;
+  background: linear-gradient(to bottom, var(--main-bg-color), transparent);
+  pointer-events: none;
+  z-index: 50;
+}
 `;
 
 // Pluto classic: Pluto's page, without the file box (the app's header shows the file).

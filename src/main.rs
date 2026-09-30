@@ -1721,6 +1721,27 @@ impl Workspace {
     /// `notebook_open`: its notebook shows in the pane (Point needs it).
     fn render_chat(&self, session: &Session, notebook_open: bool, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let key = session.key;
+        let scroll_top = session.list.logical_scroll_top();
+        let at_top = scroll_top.item_ix == 0 && scroll_top.offset_in_item <= px(0.);
+        let at_end = session.list.is_scrolled_to_end().unwrap_or(true);
+        let top_fade = (!at_top).then(|| {
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(20.))
+                .bg(linear_gradient(180., linear_color_stop(theme::bg_page(), 0.), linear_color_stop(theme::bg_page().opacity(0.), 1.)))
+        });
+        let bottom_fade = (!at_end).then(|| {
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .h(px(24.))
+                .bg(linear_gradient(180., linear_color_stop(theme::bg_page().opacity(0.), 0.), linear_color_stop(theme::bg_page(), 1.)))
+        });
         div()
             .flex_1()
             .flex()
@@ -1752,7 +1773,17 @@ impl Workspace {
                         )
                     })
             }))
-            .child(transcript::render_transcript(session, cx))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(transcript::render_transcript(session, cx))
+                    .children(top_fade)
+                    .children(bottom_fade),
+            )
             .children(transcript::render_activity(session, self.offline_since, cx))
             .child(
                 div()
@@ -1885,7 +1916,7 @@ impl Render for Workspace {
             .text_size(theme::size_body())
             .line_height(theme::line_body())
             .child(div().track_focus(&self.keyboard_home))
-            .when(self.settings.layout.sidebar_open, |d| d.child(self.render_session_bar(cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
+            .when(self.settings.layout.sidebar_open, |d| d.child(self.render_session_bar(window, cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
             .child(
                 div()
                     .w(px(self.settings.layout.chat_width))
