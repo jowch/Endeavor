@@ -50,6 +50,8 @@ export type ToApp =
       comment: string;
       drawer: "docs" | "status" | null;
       callout: boolean;
+      // Reply on a selection: its pill or its prompt, if either shows.
+      reply: "pill" | "prompt" | null;
       alerts: string[] | null;
     };
 

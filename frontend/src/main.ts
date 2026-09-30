@@ -10,6 +10,7 @@ import { initDiffs } from "./diff";
 import { initDrawer } from "./drawer";
 import { initPrompt } from "./prompt";
 import { initQuote } from "./quote";
+import { initReply } from "./reply";
 import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
 import { initRail } from "./rail";
@@ -26,6 +27,7 @@ function init() {
   initCells();
   initDiffs();
   initPrompt();
+  initReply();
   initErrors();
   initRail();
   initReveal();

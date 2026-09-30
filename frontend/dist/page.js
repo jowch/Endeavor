@@ -192,16 +192,84 @@
     document.body.classList.remove(SHOOTING);
     return id;
   }
+  function cellName(code) {
+    const line = code.split("\n").find((l) => l.trim()) ?? "";
+    if (!line.includes("=")) return "cell";
+    const lhs = line.split("=")[0].trim().replace(/^function /, "").replace(/^const /, "");
+    return lhs.match(/^[\p{L}\p{N}_!]+/u)?.[0] ?? "cell";
+  }
+  function pickSource(pick2) {
+    if (pick2.part === "box") return `Box \xB7 ${pick2.cells.length} cell${pick2.cells.length === 1 ? "" : "s"}`;
+    const part = pick2.part === "lines" ? pick2.lines[0] === pick2.lines[1] ? `line ${pick2.lines[0]}` : `lines ${pick2.lines[0]}\u2013${pick2.lines[1]}` : pick2.part;
+    return `${cellName(pick2.code)} \xB7 ${part}`;
+  }
   function sendQuote(picks, comment, add) {
     const notebook = new URLSearchParams(location.search).get("id");
     send({ type: "quote", notebook, picks, comment, add });
   }
+  var css2 = `
+  .endeavor-field { position: relative; display: flex; align-items: flex-end; gap: 6px; min-height: 34px; box-sizing: border-box;
+    padding: 4px 5px 4px 9px; border-radius: 6px; border: 1px solid var(--e-control-edge); background: var(--e-bg-page); }
+  .endeavor-field:focus-within { border-color: var(--e-accent-text); }
+  .endeavor-field textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: transparent; padding: 1px 0;
+    height: 21px; max-height: 120px; color: var(--e-text-primary); font: 14px/21px system-ui, sans-serif; }
+  .endeavor-field .options { flex: none; width: 24px; height: 24px; border: 0; border-radius: 5px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; background: var(--e-bg-raised); color: var(--e-text-primary); font: 13px system-ui; }
+  .endeavor-field .options:hover, .endeavor-field .options[aria-expanded="true"] { background: var(--e-menu-hover); }
+  .endeavor-field [role="menu"] { position: absolute; right: -6px; top: calc(100% + 6px); z-index: 5; width: 210px; box-sizing: border-box;
+    display: flex; flex-direction: column; padding: 4px; border-radius: 10px; border: 1px solid var(--e-popover-edge);
+    background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); font: 13px system-ui, sans-serif; }
+  .endeavor-field [role="menu"][hidden] { display: none; }
+  .endeavor-field [role="menuitem"] { height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--e-text-primary); font: inherit; cursor: pointer; text-align: left; }
+  .endeavor-field [role="menuitem"]:hover { background: var(--e-menu-hover); }
+  .endeavor-field [role="menuitem"] .key { margin-left: auto; padding-left: 12px; font-size: 12px; color: var(--e-text-faint); }
+`;
+  function quoteField(placeholder, sendLabel, done) {
+    const root = document.createElement("div");
+    root.className = "endeavor-field";
+    root.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><button class="options" aria-label="Send options" aria-haspopup="menu" aria-expanded="false">\u2191</button><div role="menu" hidden><button role="menuitem" data-add="false"><span></span><span class="key">\u21A9</span></button><button role="menuitem" data-add="true"><span>Add to message</span><span class="key">\u2318\u21A9</span></button></div>`;
+    const text = root.querySelector("textarea");
+    const options = root.querySelector(".options");
+    const menu = root.querySelector("[role=menu]");
+    text.placeholder = placeholder;
+    menu.querySelector("[data-add=false] span").textContent = sendLabel;
+    const showMenu = (shown) => {
+      menu.hidden = !shown;
+      options.setAttribute("aria-expanded", String(shown));
+    };
+    text.addEventListener("input", () => {
+      text.style.height = "21px";
+      text.style.height = `${Math.min(text.scrollHeight, 120)}px`;
+    });
+    text.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        showMenu(false);
+        done(e.metaKey, e);
+      }
+    });
+    options.onmousedown = (e) => e.preventDefault();
+    options.onclick = () => showMenu(menu.hidden);
+    for (const item of menu.querySelectorAll("[role=menuitem]")) {
+      item.onmousedown = (e) => e.preventDefault();
+      item.onclick = (e) => {
+        showMenu(false);
+        done(item.dataset.add === "true", e);
+      };
+    }
+    return { root, text };
+  }
   function initQuote() {
+    const style2 = document.createElement("style");
+    style2.textContent = css2;
+    document.head.append(style2);
     on("shot", (msg) => waiting.get(msg.id)?.());
   }
 
   // src/reveal.ts
-  var css2 = `
+  var css3 = `
   pluto-cell.endeavor-flash { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px;
     transition: outline-color 0.3s; }
   pluto-cell.endeavor-flash.fading { outline-color: transparent; }
@@ -226,7 +294,7 @@
   }
   function initReveal() {
     const style2 = document.createElement("style");
-    style2.textContent = css2;
+    style2.textContent = css3;
     document.head.append(style2);
     on("reveal", (msg) => reveal(msg.cells));
     on("code", (msg) => {
@@ -236,7 +304,7 @@
   }
 
   // src/annotate.ts
-  var css3 = `
+  var css4 = `
   body.annotating pluto-cell { cursor: crosshair; }
   /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
      pill, dashed hover and solid picked outlines, dashed box for a drawn region. */
@@ -284,7 +352,7 @@
     const active = () => document.body.classList.contains("annotating");
     const cells = () => [...document.querySelectorAll("pluto-cell")];
     const style2 = document.createElement("style");
-    style2.textContent = css3;
+    style2.textContent = css4;
     const frame2 = document.createElement("div");
     frame2.id = "annotate-frame";
     const box = document.createElement("div");
@@ -481,7 +549,7 @@
   }
 
   // src/rail.ts
-  var css4 = `
+  var css5 = `
   #endeavor-rail { position: fixed; right: 4px; top: 10px; bottom: 10px; width: 3px; z-index: 50; pointer-events: none; }
   #endeavor-rail a { position: absolute; left: 0; right: 0; min-height: 4px; border-radius: 2px;
     background: var(--e-accent); pointer-events: auto; cursor: pointer; }
@@ -509,7 +577,7 @@
   }
   function initRail() {
     const style2 = document.createElement("style");
-    style2.textContent = css4;
+    style2.textContent = css5;
     rail = document.createElement("div");
     rail.id = "endeavor-rail";
     rail.dataset.endeavorUi = "";
@@ -521,7 +589,7 @@
   var redrawRail = () => rail && draw();
 
   // src/cells.ts
-  var css5 = `
+  var css6 = `
   pluto-cell { position: relative; }
   pluto-cell[data-endeavor="unrun"]::before, pluto-cell.code_differs::before {
     content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
@@ -552,7 +620,7 @@
   }
   function initCells() {
     const style2 = document.createElement("style");
-    style2.textContent = css5;
+    style2.textContent = css6;
     document.head.append(style2);
     on("cells", (msg) => {
       states = new Map(msg.cells.map((c) => [c.cell_id, c]));
@@ -576,6 +644,7 @@
         comment: document.querySelector("#annotate-bar textarea")?.value ?? "",
         drawer: drawer2 === "docs" || drawer2 === "status" ? drawer2 : null,
         callout: !!document.querySelector("#endeavor-safe.shown"),
+        reply: document.querySelector("#endeavor-reply") ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
         // Recorded by the debug build's own script, which wraps `alert`.
         alerts: window.__endeavorAlerts ?? null
       });
@@ -583,7 +652,7 @@
   }
 
   // src/diff.ts
-  var css6 = `
+  var css7 = `
   .cm-line.endeavor-add { position: relative; z-index: 0; }
   .cm-line.endeavor-add::before {
     content: ""; position: absolute; z-index: -1; pointer-events: none;
@@ -740,7 +809,7 @@
   }
   function initDiffs() {
     const style2 = document.createElement("style");
-    style2.textContent = css6;
+    style2.textContent = css7;
     document.head.append(style2);
     on("cells", (msg) => {
       befores.clear();
@@ -801,7 +870,7 @@
     if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
     return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
   }
-  function cellName(nb, id) {
+  function cellName2(nb, id) {
     const defined = Object.keys(nb.cell_dependencies?.[id]?.downstream_cells_map ?? {});
     if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
     const first = (nb.cell_inputs[id]?.code ?? "").split("\n").find((l) => l.trim()) ?? "";
@@ -850,7 +919,7 @@
       const r = nb.cell_results[id] ?? {};
       const state = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
       const time = (state === "done" || state === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
-      return { id, name: cellName(nb, id), state, time };
+      return { id, name: cellName2(nb, id), state, time };
     });
     const failedPkg = packages.find((p) => p.state === "failed");
     const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
@@ -959,7 +1028,7 @@
 
   // src/drawer.ts
   var HEADER = 36;
-  var css7 = `
+  var css8 = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
   /* Separate from --endeavor-drawer-h (the drawer's own height, which also
@@ -1167,7 +1236,7 @@
   }
   function initDrawer() {
     const style2 = document.createElement("style");
-    style2.textContent = css7;
+    style2.textContent = css8;
     document.head.append(style2);
     setHeight(height());
     drawer = document.createElement("div");
@@ -1219,7 +1288,7 @@
 
   // src/prompt.ts
   var AGENT = "Claude";
-  var css8 = `
+  var css9 = `
   /* Beside Pluto's "+" in the gap above a cell (and below the last one): faint
      while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
@@ -1243,12 +1312,6 @@
     font: inherit; min-height: 20px;
   }
   #endeavor-prompt .hint { color: var(--e-text-dim); font-size: 11px; }
-  #endeavor-prompt .quote { color: var(--e-text-tag); font: 12px ui-monospace, monospace; white-space: pre-wrap;
-    border-left: 2px solid var(--e-accent); padding-left: 8px; max-height: 5.5em; overflow: hidden; }
-  #endeavor-ask-selection {
-    position: absolute; z-index: 1000; height: 22px; padding: 0 9px; border-radius: 11px;
-    border: 1px solid var(--e-accent); background: var(--e-pill-bg); color: var(--e-prompt-hover); font: 12px system-ui, sans-serif; cursor: pointer;
-  }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
   pluto-input .cm-placeholder::after { content: "Type code, or \u2318K to ask ${AGENT}"; font-size: 13px; }
@@ -1261,8 +1324,8 @@
     box.remove();
     if (refocus) cell.querySelector("pluto-input .cm-content")?.focus();
   }
-  function place(box, cell, where, selection) {
-    const rect = selection?.rect ?? cell.getBoundingClientRect();
+  function place(box, cell, where) {
+    const rect = cell.getBoundingClientRect();
     box.style.left = `${rect.left + window.scrollX}px`;
     const top = where === "before" ? rect.top + window.scrollY - 6 - 70 : rect.bottom + window.scrollY + 6;
     box.style.top = `${Math.max(top, 0)}px`;
@@ -1271,18 +1334,13 @@
   function isEmpty(cell) {
     return !(cell.querySelector("pluto-input .cm-content")?.textContent ?? "").trim();
   }
-  function openPrompt(cell, where, selection) {
+  function openPrompt(cell, where) {
     close(false);
     const box = document.createElement("div");
     box.id = "endeavor-prompt";
     box.dataset.endeavorUi = "";
-    const asking = selection ? `Ask ${AGENT} about the selection` : where !== "cell" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
-    box.innerHTML = `<div class="quote" hidden></div><textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">\u21B5 send \xB7 esc cancel</div>`;
-    if (selection) {
-      const quote = box.querySelector(".quote");
-      quote.hidden = false;
-      quote.textContent = selection.quote.length > 160 ? selection.quote.slice(0, 160) + "\u2026" : selection.quote;
-    }
+    const asking = where !== "cell" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
+    box.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">\u21B5 send \xB7 esc cancel</div>`;
     const text = box.querySelector("textarea");
     text.placeholder = asking;
     text.addEventListener("input", () => {
@@ -1302,21 +1360,20 @@
           if (!comment || !byUser(e)) return;
           const notebook = new URLSearchParams(location.search).get("id");
           const kind = where !== "cell" ? where : isEmpty(cell) ? "fill" : "about";
-          if (selection) sendQuote([{ part: "output", cell: cell.id, code: cellCode(cell), text: selection.quote }], comment, e.metaKey);
-          else send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: e.metaKey });
+          send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: e.metaKey });
           close(true);
         }
       },
       true
     );
     document.body.append(box);
-    place(box, cell, where, selection);
-    open = { box, cell, where, selection };
+    place(box, cell, where);
+    open = { box, cell, where };
     requestAnimationFrame(() => text.focus());
   }
   function initPrompt() {
     const style2 = document.createElement("style");
-    style2.textContent = css8;
+    style2.textContent = css9;
     document.head.append(style2);
     window.addEventListener(
       "keydown",
@@ -1333,8 +1390,7 @@
     document.addEventListener("mousedown", (e) => {
       if (open && !open.box.contains(e.target)) close(false);
     });
-    window.addEventListener("resize", () => open && place(open.box, open.cell, open.where, open.selection));
-    initSelectionChip();
+    window.addEventListener("resize", () => open && place(open.box, open.cell, open.where));
     onRedraw(() => {
       const cells = [...document.querySelectorAll("pluto-cell")];
       cells.forEach((cell, i) => {
@@ -1355,6 +1411,41 @@
       for (const stale of document.querySelectorAll("pluto-cell:not(:last-of-type) > .endeavor-add-agent.after")) stale.remove();
     });
   }
+
+  // src/place.ts
+  function pillPlace(lines, viewportHeight) {
+    const PILL = 30;
+    const last2 = lines[lines.length - 1];
+    const below = last2.bottom + 6;
+    const top = below + PILL <= viewportHeight ? below : lines[0].top - 6 - PILL;
+    return { left: Math.max(last2.right - 28, 4), top };
+  }
+
+  // src/reply.ts
+  var css10 = `
+  #endeavor-reply-pill { position: absolute; z-index: 1000; display: inline-flex; align-items: center; height: 30px; box-sizing: border-box;
+    padding: 0 3px; border-radius: 8px; border: 1px solid var(--e-popover-edge); background: var(--e-popover-bg);
+    box-shadow: 0 8px 24px var(--e-shadow-popover); font: 13px/18px system-ui, sans-serif; }
+  #endeavor-reply-pill button { height: 24px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 5px;
+    background: transparent; color: var(--e-text-primary); font: inherit; cursor: pointer; }
+  #endeavor-reply-pill button:hover { background: var(--e-menu-hover); }
+  #endeavor-reply-pill .key { font-size: 11px; color: var(--e-text-faint); }
+  #endeavor-reply { position: absolute; z-index: 1000; width: 380px; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px;
+    padding: 8px; border-radius: 10px; border: 1px solid var(--e-popover-edge); background: var(--e-popover-bg);
+    box-shadow: 0 12px 32px var(--e-shadow-popover); font: 13px system-ui, sans-serif; color: var(--e-text-primary); }
+  #endeavor-reply .quote { border-left: 2px solid var(--e-control-edge); padding-left: 8px; font-size: 12.5px; line-height: 17px;
+    color: var(--e-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #endeavor-reply .source { font-size: 12px; color: var(--e-text-faint); }
+  #endeavor-reply.added { width: auto; flex-direction: row; align-items: center; padding: 6px 10px; color: var(--e-text-secondary);
+    transition: opacity 0.3s; }
+  #endeavor-reply.added.fading { opacity: 0; }
+`;
+  function lineOf(node, content) {
+    const view = content.cmTile?.root?.view;
+    if (view) return view.state.doc.lineAt(view.posAtDOM(node)).number;
+    const line = (node instanceof Element ? node : node.parentElement)?.closest(".cm-line");
+    return [...content.querySelectorAll(".cm-line")].indexOf(line) + 1;
+  }
   function selectedInCell() {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
@@ -1363,39 +1454,116 @@
     const element = node instanceof Element ? node : node.parentElement;
     const cell = element?.closest("pluto-cell");
     if (!cell || element?.closest("[data-endeavor-ui]")) return null;
-    const view = element?.closest(".cm-content")?.cmTile?.root?.view;
-    const main = view?.state.selection.main;
-    const quote = (main && !main.empty ? view.state.sliceDoc(main.from, main.to) : selection.toString()).trim();
-    return quote ? { cell, quote, rect: range.getBoundingClientRect() } : null;
+    const rects = [...range.getClientRects()];
+    if (!rects.length) rects.push(range.getBoundingClientRect());
+    const code = cellCode(cell);
+    const content = element?.closest(".cm-content");
+    if (content) {
+      const view = content.cmTile?.root?.view;
+      const main = view?.state.selection.main;
+      let [first, last2] = [lineOf(range.startContainer, content), lineOf(range.endContainer, content)];
+      if (main && !main.empty) [first, last2] = [view.state.doc.lineAt(main.from).number, view.state.doc.lineAt(Math.max(main.from, main.to - 1)).number];
+      if (first < 1 || last2 < first) return null;
+      const quote2 = main && !main.empty ? view.state.sliceDoc(main.from, main.to) : code.split("\n").slice(first - 1, last2).join("\n");
+      if (!quote2.trim()) return null;
+      return { cell, pick: { part: "lines", cell: cell.id, code, lines: [first, last2], text: quote2 }, quote: quote2, rects };
+    }
+    if (!element?.closest("pluto-output")) return null;
+    const quote = selection.toString().trim();
+    return quote ? { cell, pick: { part: "output", cell: cell.id, code, text: quote }, quote, rects } : null;
   }
-  function initSelectionChip() {
-    let chip = null;
-    const hide = () => {
-      chip?.remove();
-      chip = null;
+  function pillAt(found) {
+    const at = pillPlace(found.rects, window.innerHeight);
+    return { left: at.left + window.scrollX, top: at.top + window.scrollY };
+  }
+  function initReply() {
+    const style2 = document.createElement("style");
+    style2.textContent = css10;
+    document.head.append(style2);
+    let pill = null;
+    let prompt = null;
+    const hidePill = () => {
+      pill?.remove();
+      pill = null;
     };
+    const close2 = () => {
+      prompt?.remove();
+      prompt = null;
+    };
+    function open2(found) {
+      hidePill();
+      close2();
+      const box = document.createElement("div");
+      box.id = "endeavor-reply";
+      box.dataset.endeavorUi = "";
+      box.setAttribute("role", "dialog");
+      box.setAttribute("aria-label", "Reply");
+      const quote = document.createElement("div");
+      quote.className = "quote";
+      quote.textContent = found.quote.split(/\s+/).join(" ").trim();
+      const source = document.createElement("div");
+      source.className = "source";
+      source.textContent = pickSource(found.pick);
+      const field = quoteField("Reply to Claude", "Send reply", (add, e) => {
+        if (!byUser(e)) return;
+        sendQuote([found.pick], field.text.value.trim(), add);
+        if (!add) return close2();
+        window.getSelection()?.removeAllRanges();
+        box.className = "added";
+        box.replaceChildren("Added to the message");
+        setTimeout(() => box.classList.add("fading"), 1700);
+        setTimeout(() => prompt === box && close2(), 2e3);
+      });
+      field.text.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          close2();
+        }
+      });
+      box.append(quote, source, field.root);
+      document.body.append(box);
+      const place3 = pillAt(found);
+      box.style.left = `${Math.min(place3.left - 12, window.scrollX + window.innerWidth - 388)}px`;
+      box.style.top = `${place3.top}px`;
+      prompt = box;
+      requestAnimationFrame(() => field.text.focus());
+    }
     document.addEventListener("mouseup", (e) => {
-      if (chip?.contains(e.target) || document.body.classList.contains("annotating")) return;
+      const target = e.target;
+      if (pill?.contains(target) || prompt?.contains(target) || document.body.classList.contains("annotating")) return;
       setTimeout(() => {
-        hide();
+        hidePill();
         const found = selectedInCell();
         if (!found) return;
-        chip = document.createElement("button");
-        chip.id = "endeavor-ask-selection";
-        chip.dataset.endeavorUi = "";
-        chip.textContent = `\u2726 Ask ${AGENT}`;
-        chip.style.left = `${found.rect.left + window.scrollX}px`;
-        chip.style.top = `${found.rect.bottom + window.scrollY + 6}px`;
-        chip.onmousedown = (event) => event.preventDefault();
-        chip.onclick = (event) => {
-          if (!byUser(event)) return;
-          hide();
-          openPrompt(found.cell, "cell", { rect: found.rect, quote: found.quote });
-        };
-        document.body.append(chip);
+        pill = document.createElement("div");
+        pill.id = "endeavor-reply-pill";
+        pill.dataset.endeavorUi = "";
+        pill.innerHTML = `<button aria-label="Reply">Reply <span class="key">\u2318J</span></button>`;
+        const place3 = pillAt(found);
+        pill.style.left = `${place3.left}px`;
+        pill.style.top = `${place3.top}px`;
+        pill.onmousedown = (event) => event.preventDefault();
+        pill.querySelector("button").onclick = (event) => byUser(event) && open2(found);
+        document.body.append(pill);
       });
     });
-    document.addEventListener("keydown", hide, true);
+    document.addEventListener("mousedown", (e) => {
+      if (prompt && !prompt.contains(e.target)) close2();
+    });
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === "j") {
+          const found = selectedInCell();
+          if (!found || document.body.classList.contains("annotating")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          return open2(found);
+        }
+        if (!prompt?.contains(e.target)) hidePill();
+      },
+      true
+    );
   }
 
   // src/readonly.ts
@@ -1411,12 +1579,12 @@
     window.WebSocket = Held;
   }
   function style() {
-    const css11 = document.createElement("style");
-    css11.textContent = `
+    const css13 = document.createElement("style");
+    css13.textContent = `
     body.${CLASS} pluto-notebook { opacity: 0.85; }
     body.${CLASS} pluto-notebook, body.${CLASS} pluto-notebook * { pointer-events: none !important; }
   `;
-    document.head.append(css11);
+    document.head.append(css13);
   }
   function blockKeys(e) {
     if (!readonly) return;
@@ -1443,7 +1611,7 @@
 
   // src/errors.ts
   var AGENT2 = "Claude";
-  var css9 = `
+  var css11 = `
   .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
   .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
     background: transparent; color: var(--e-accent-text); border: 1px solid var(--e-accent); }
@@ -1469,13 +1637,13 @@
   }
   function initErrors() {
     const style2 = document.createElement("style");
-    style2.textContent = css9;
+    style2.textContent = css11;
     document.head.append(style2);
     onRedraw(decorate2);
   }
 
   // src/safe.ts
-  var css10 = `
+  var css12 = `
   #endeavor-safe { display: none; }
   html[data-endeavor-look="endeavor"] #endeavor-safe.shown { display: flex; }
   #endeavor-safe { gap: 10px; align-items: flex-start; margin: 0 0 20px 0; padding: 12px 14px;
@@ -1513,7 +1681,7 @@
   }
   function initSafe() {
     const style2 = document.createElement("style");
-    style2.textContent = css10;
+    style2.textContent = css12;
     document.head.append(style2);
     callout = document.createElement("div");
     callout.id = "endeavor-safe";
@@ -1843,6 +2011,7 @@ footer form#feedback { display: none !important; }
     initCells();
     initDiffs();
     initPrompt();
+    initReply();
     initErrors();
     initRail();
     initReveal();

@@ -16,6 +16,7 @@ export function initDebug(): void {
       comment: document.querySelector<HTMLTextAreaElement>("#annotate-bar textarea")?.value ?? "",
       drawer: drawer === "docs" || drawer === "status" ? drawer : null,
       callout: !!document.querySelector("#endeavor-safe.shown"),
+      reply: document.querySelector("#endeavor-reply") ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
       // Recorded by the debug build's own script, which wraps `alert`.
       alerts: (window as { __endeavorAlerts?: string[] }).__endeavorAlerts ?? null,
     });

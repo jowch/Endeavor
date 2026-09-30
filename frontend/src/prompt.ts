@@ -6,7 +6,6 @@
 
 import { byUser, send } from "./bridge";
 import { onRedraw } from "./redraw";
-import { sendQuote } from "./quote";
 import { cellCode } from "./reveal";
 
 const AGENT = "Claude";
@@ -35,21 +34,13 @@ const css = `
     font: inherit; min-height: 20px;
   }
   #endeavor-prompt .hint { color: var(--e-text-dim); font-size: 11px; }
-  #endeavor-prompt .quote { color: var(--e-text-tag); font: 12px ui-monospace, monospace; white-space: pre-wrap;
-    border-left: 2px solid var(--e-accent); padding-left: 8px; max-height: 5.5em; overflow: hidden; }
-  #endeavor-ask-selection {
-    position: absolute; z-index: 1000; height: 22px; padding: 0 9px; border-radius: 11px;
-    border: 1px solid var(--e-accent); background: var(--e-pill-bg); color: var(--e-prompt-hover); font: 12px system-ui, sans-serif; cursor: pointer;
-  }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
   pluto-input .cm-placeholder::after { content: "Type code, or ⌘K to ask ${AGENT}"; font-size: 13px; }
 `;
 
 type Where = "cell" | "before" | "after";
-/** Asking about selected text: where it is on the page, and the text. */
-type Selection = { rect: DOMRect; quote: string };
-let open: { box: HTMLElement; cell: HTMLElement; where: Where; selection?: Selection } | null = null;
+let open: { box: HTMLElement; cell: HTMLElement; where: Where } | null = null;
 
 function close(refocus: boolean) {
   if (!open) return;
@@ -59,8 +50,8 @@ function close(refocus: boolean) {
   if (refocus) cell.querySelector<HTMLElement>("pluto-input .cm-content")?.focus();
 }
 
-function place(box: HTMLElement, cell: HTMLElement, where: Where, selection?: Selection) {
-  const rect = selection?.rect ?? cell.getBoundingClientRect();
+function place(box: HTMLElement, cell: HTMLElement, where: Where) {
+  const rect = cell.getBoundingClientRect();
   box.style.left = `${rect.left + window.scrollX}px`;
   // A new cell before this one: the prompt sits in the gap above it.
   const top = where === "before" ? rect.top + window.scrollY - 6 - 70 : rect.bottom + window.scrollY + 6;
@@ -72,20 +63,13 @@ function isEmpty(cell: HTMLElement) {
   return !(cell.querySelector("pluto-input .cm-content")?.textContent ?? "").trim();
 }
 
-export function openPrompt(cell: HTMLElement, where: Where, selection?: Selection) {
+export function openPrompt(cell: HTMLElement, where: Where) {
   close(false);
   const box = document.createElement("div");
   box.id = "endeavor-prompt";
   box.dataset.endeavorUi = "";
-  const asking = selection
-    ? `Ask ${AGENT} about the selection`
-    : where !== "cell" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
-  box.innerHTML = `<div class="quote" hidden></div><textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">↵ send · esc cancel</div>`;
-  if (selection) {
-    const quote = box.querySelector<HTMLElement>(".quote")!;
-    quote.hidden = false;
-    quote.textContent = selection.quote.length > 160 ? selection.quote.slice(0, 160) + "…" : selection.quote;
-  }
+  const asking = where !== "cell" ? `Ask ${AGENT} to write a cell here` : isEmpty(cell) ? `Ask ${AGENT} what to write here` : `Ask ${AGENT} about this cell`;
+  box.innerHTML = `<textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><div class="hint">↵ send · esc cancel</div>`;
   const text = box.querySelector("textarea")!;
   text.placeholder = asking;
   text.addEventListener("input", () => {
@@ -106,16 +90,15 @@ export function openPrompt(cell: HTMLElement, where: Where, selection?: Selectio
         if (!comment || !byUser(e)) return;
         const notebook = new URLSearchParams(location.search).get("id");
         const kind = where !== "cell" ? where : isEmpty(cell) ? "fill" : "about";
-        if (selection) sendQuote([{ part: "output", cell: cell.id, code: cellCode(cell), text: selection.quote }], comment, e.metaKey);
-        else send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: e.metaKey });
+        send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: e.metaKey });
         close(true);
       }
     },
     true,
   );
   document.body.append(box);
-  place(box, cell, where, selection);
-  open = { box, cell, where, selection };
+  place(box, cell, where);
+  open = { box, cell, where };
   // After the key event that opened it: focusing during ⌘K's keydown doesn't stick.
   requestAnimationFrame(() => text.focus());
 }
@@ -141,8 +124,7 @@ export function initPrompt(): void {
   document.addEventListener("mousedown", (e) => {
     if (open && !open.box.contains(e.target as Node)) close(false);
   });
-  window.addEventListener("resize", () => open && place(open.box, open.cell, open.where, open.selection));
-  initSelectionChip();
+  window.addEventListener("resize", () => open && place(open.box, open.cell, open.where));
 
   // The agent button beside Pluto's "+": above each cell, and below the last.
   // Re-added when Pluto redraws.
@@ -166,53 +148,4 @@ export function initPrompt(): void {
     // A cell that stopped being last keeps a stale bottom button.
     for (const stale of document.querySelectorAll("pluto-cell:not(:last-of-type) > .endeavor-add-agent.after")) stale.remove();
   });
-}
-
-/** The selected text inside one cell: code from its editor (exact line breaks),
- * anything else (e.g. output) from the page. */
-function selectedInCell(): { cell: HTMLElement; quote: string; rect: DOMRect } | null {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
-  const range = selection.getRangeAt(0);
-  const node = range.commonAncestorContainer;
-  const element = node instanceof Element ? node : node.parentElement;
-  const cell = element?.closest<HTMLElement>("pluto-cell");
-  if (!cell || element?.closest("[data-endeavor-ui]")) return null;
-  const view = (element?.closest(".cm-content") as any)?.cmTile?.root?.view;
-  const main = view?.state.selection.main;
-  const quote = (main && !main.empty ? view.state.sliceDoc(main.from, main.to) : selection.toString()).trim();
-  return quote ? { cell, quote, rect: range.getBoundingClientRect() } : null;
-}
-
-/** Selecting text in a cell offers "Ask <agent>" just below the selection. */
-function initSelectionChip() {
-  let chip: HTMLButtonElement | null = null;
-  const hide = () => {
-    chip?.remove();
-    chip = null;
-  };
-  document.addEventListener("mouseup", (e) => {
-    if (chip?.contains(e.target as Node) || document.body.classList.contains("annotating")) return;
-    // After the browser has settled the selection.
-    setTimeout(() => {
-      hide();
-      const found = selectedInCell();
-      if (!found) return;
-      chip = document.createElement("button");
-      chip.id = "endeavor-ask-selection";
-      chip.dataset.endeavorUi = "";
-      chip.textContent = `✦ Ask ${AGENT}`;
-      chip.style.left = `${found.rect.left + window.scrollX}px`;
-      chip.style.top = `${found.rect.bottom + window.scrollY + 6}px`;
-      // Keep the selection: pressing the chip would otherwise clear it first.
-      chip.onmousedown = (event) => event.preventDefault();
-      chip.onclick = (event) => {
-        if (!byUser(event)) return;
-        hide();
-        openPrompt(found.cell, "cell", { rect: found.rect, quote: found.quote });
-      };
-      document.body.append(chip);
-    });
-  });
-  document.addEventListener("keydown", hide, true);
 }
