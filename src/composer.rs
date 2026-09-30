@@ -946,11 +946,13 @@ impl Workspace {
                     .into_any_element()
             }
         };
-        let place = match menu {
-            Menu::Config(_) => div().right_0(),
-            _ => div().left(px(-11.)),
+        // Deferred so the menu sits above the click-outside backdrop, which would
+        // otherwise take its clicks and close it.
+        let (place, anchor) = match menu {
+            Menu::Config(_) => (div().right_0(), Anchor::BottomRight),
+            _ => (div().left(px(-11.)), Anchor::BottomLeft),
         };
-        Some(above(place).child(body).into_any_element())
+        Some(place.absolute().top(px(-6.)).child(deferred(anchored().anchor(anchor).child(div().occlude().child(body))).with_priority(1)).into_any_element())
     }
 
     /// The hovered chip's preview, above the box.
@@ -985,6 +987,9 @@ impl Workspace {
             .items_center()
             .gap(px(2.))
             .h(px(24.))
+            // Lines the + up with the text in the box, and the ring with the send button.
+            .pl(px(12.5))
+            .pr(px(8.))
             .text_size(theme::chat_meta())
             .text_color(theme::text_new())
             .child(
@@ -1068,17 +1073,24 @@ impl Workspace {
             )
             .child(match usage {
                 // Shown on hover beside the ring: a tooltip would open under the notebook.
+                // The label covers the labels beside the ring rather than taking room from them.
                 Some((used, size)) => div()
                     .id("context")
                     .group("context")
+                    .relative()
                     .flex()
                     .items_center()
-                    .gap(px(5.))
                     .px(px(5.))
                     .child(
                         div()
-                            .text_color(gpui::transparent_black())
-                            .group_hover("context", |s| s.text_color(theme::text_muted()))
+                            .absolute()
+                            .right(relative(1.))
+                            .pl(px(6.))
+                            .whitespace_nowrap()
+                            .invisible()
+                            .bg(theme::bg_page())
+                            .text_color(theme::text_muted())
+                            .group_hover("context", |s| s.visible())
                             .child(format!("{}% context", used * 100 / size)),
                     )
                     .child(context_ring(used as f32 / size as f32))
