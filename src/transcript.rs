@@ -76,11 +76,11 @@ pub fn render_activity(session: &Session, offline_since: Option<Instant>, margin
             .flex()
             .items_center()
             .gap(px(4.))
-            .text_size(theme::size_meta())
+            .text_size(theme::chat_meta())
             .text_color(theme::text_muted())
             .child(div().mr(px(4.)).child(mark))
             .child(activity.verb)
-            .children(activity.object.map(|o| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_secondary()).child(o)))
+            .children(activity.object.map(|o| div().font_family(theme::MONO).text_size(theme::chat_meta_small()).text_color(theme::text_secondary()).child(o)))
             .children(activity.took)
             .into_any_element(),
     )
@@ -133,7 +133,7 @@ fn bubble_lines(text: &SharedString, window: &Window) -> usize {
     let wrap = px(USER_BUBBLE_WIDTH - 2. * USER_BUBBLE_PAD_X);
     window
         .text_system()
-        .shape_text(text.clone(), theme::size_body(), &[style.to_run(text.len())], Some(wrap), None)
+        .shape_text(text.clone(), theme::chat_body(), &[style.to_run(text.len())], Some(wrap), None)
         .map_or(0, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum())
 }
 
@@ -145,7 +145,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
         Entry::User { text, expanded, attachments, delivery, sent } => {
             let chips = this.render_sent_chips(key, ix, attachments, cx);
             let column = div().group(MESSAGE).flex().flex_col().items_end().gap(px(4.)).children(chips);
-            let delivered = delivery_note(*delivery).map(|note| div().text_size(theme::size_meta()).text_color(muted).child(note));
+            let delivered = delivery_note(*delivery).map(|note| div().text_size(theme::chat_meta()).text_color(muted).child(note));
             let actions = message_actions(session, ix, text.to_string(), *sent, cx);
             if text.is_empty() {
                 return Some(column.children(delivered).child(actions).into_any_element());
@@ -157,10 +157,10 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .rounded(px(8.))
                 .bg(theme::bg_raised())
                 .font_family(theme::SANS)
-                .text_size(theme::size_body())
-                .line_height(theme::line_body());
+                .text_size(theme::chat_body())
+                .line_height(theme::chat_line_body());
             let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered());
-            let line_height = theme::line_body();
+            let line_height = theme::chat_line_body();
             if bubble_lines(text, window) <= FOLD_AFTER {
                 return Some(column.child(bubble.child(text.clone())).children(delivered).children(unanswered).child(actions).into_any_element());
             }
@@ -181,7 +181,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                     div()
                         .id(id("user-fold"))
                         .cursor_pointer()
-                        .text_size(theme::size_meta())
+                        .text_size(theme::chat_meta())
                         .text_color(muted)
                         .hover(|s| s.text_color(theme::text_primary()))
                         .child(if *expanded { "Show less" } else { "Show more" })
@@ -200,13 +200,13 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .child(markdown(&session.reply_text(ix, text, cx)))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
-        Entry::Note(text) => div().text_size(theme::size_meta()).text_color(muted).child(text.clone()).into_any_element(),
+        Entry::Note(text) => div().text_size(theme::chat_meta()).text_color(muted).child(text.clone()).into_any_element(),
         Entry::RunState(warnings) if warnings.is_empty() => return None,
         Entry::RunState(warnings) => div()
             .flex()
             .flex_col()
             .gap_1()
-            .text_size(theme::size_meta())
+            .text_size(theme::chat_meta())
             .text_color(muted)
             .children(warnings.iter().map(run_state_line))
             .into_any_element(),
@@ -215,7 +215,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_size(theme::size_meta()).text_color(muted).child(crate::approval::progress(entries)))
+            .child(div().text_size(theme::chat_meta()).text_color(muted).child(crate::approval::progress(entries)))
             .children(crate::approval::plan_rows(entries))
             .into_any_element(),
         // Pending: shown as the approval card above the composer (render_approval).
@@ -278,7 +278,7 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
             .id(id("message-time"))
             .opacity(0.)
             .group_hover(MESSAGE, |s| s.opacity(1.))
-            .text_size(theme::size_meta())
+            .text_size(theme::chat_meta())
             .text_color(theme::text_faint())
             .tooltip(move |window, cx| Tooltip::new(clock.clone()).build(window, cx))
             .child(crate::when::ago(at))
@@ -297,7 +297,7 @@ fn markdown(state: &Entity<TextViewState>) -> TextView {
             .rounded(px(4.))
             .cursor_pointer()
             .font_family(theme::SANS)
-            .text_size(theme::size_meta_small())
+            .text_size(theme::chat_meta_small())
             .text_color(theme::text_faint())
             // Out of the flow so the library's opaque holder for it stays empty and
             // doesn't hide the code's top-right corner while the button is invisible.
@@ -315,23 +315,23 @@ fn markdown(state: &Entity<TextViewState>) -> TextView {
     })
 }
 
-/// Markdown on the type scale: headings at 15 px (h1, h2) and 13 px (h3 on),
-/// code in JuliaMono 12 on the card colour, tag-coloured inline code, compact
-/// tables with a muted 12 px header row. Borders, links and backgrounds come
-/// from the component theme (set in main).
+/// Markdown on the chat type scale: headings at 16 px (h1, h2) and 14 px (h3
+/// on), code in JuliaMono 13 on the card colour, tag-coloured inline code,
+/// compact tables with a muted 13 px header row. Borders, links and
+/// backgrounds come from the component theme (set in main).
 pub(crate) fn markdown_style() -> TextViewStyle {
     let code_block = StyleRefinement::default()
         .p(px(10.))
         .rounded(px(8.))
         .bg(theme::bg_card())
         .font_family(theme::MONO)
-        .text_size(theme::size_code());
+        .text_size(theme::chat_code());
     let table = StyleRefinement::default().rounded(px(8.));
-    let table_head = StyleRefinement::default().text_size(theme::size_meta()).text_color(theme::text_muted());
+    let table_head = StyleRefinement::default().text_size(theme::chat_meta()).text_color(theme::text_muted());
     let table_cell = StyleRefinement::default().px(px(8.)).py(px(3.));
     TextViewStyle::default()
         .paragraph_gap(rems(0.75))
-        .heading_font_size(|level, _| if level <= 2 { theme::size_subhead() } else { theme::size_body() })
+        .heading_font_size(|level, _| if level <= 2 { theme::chat_subhead() } else { theme::chat_body() })
         .code_block(code_block)
         .table(table)
         .table_head(table_head)
@@ -366,7 +366,7 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
         .role(Role::Button)
         .aria_label(aria_label)
         .cursor_pointer()
-        .text_size(theme::size_meta())
+        .text_size(theme::chat_meta())
         .text_color(theme::text_faint())
         .hover(|s| s.text_color(theme::text_secondary()))
         .border_2()
@@ -499,7 +499,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             .items_center()
             .gap(px(6.))
             .cursor_pointer()
-            .text_size(theme::size_meta())
+            .text_size(theme::chat_meta())
             .text_color(theme::text_faint())
             .hover(|s| s.text_color(theme::text_secondary()))
     };
@@ -527,7 +527,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                         .pl(px(10.))
                         .border_l_1()
                         .border_color(theme::border())
-                        .text_size(theme::size_meta())
+                        .text_size(theme::chat_meta())
                         .text_color(theme::text_muted())
                         .child(text.clone()),
                 )
@@ -544,14 +544,14 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             );
             let all_diffs: Vec<&celldiff::CellDiff> = diffs.iter().chain(&file_diff).collect();
             let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
-            let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
+            let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::chat_meta_small()).text_color(color).child(text);
             let state = state.map(|state| match state {
                 RowState::Running => div().flex_none().child(state.label()),
                 RowState::Denied | RowState::Failed => div().flex_none().text_color(theme::danger()).child(state.label()),
             });
             let object = summary.object.map(|text| {
                 let d = div().id(id("tool-object")).min_w_0().truncate().text_color(theme::text_secondary()).child(text);
-                let d = if summary.mono { d.font_family(theme::MONO).text_size(theme::size_meta_small()) } else { d };
+                let d = if summary.mono { d.font_family(theme::MONO).text_size(theme::chat_meta_small()) } else { d };
                 match summary.full {
                     Some(full) => d.tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx)),
                     None => d,
@@ -610,17 +610,17 @@ fn render_parts(parts: Vec<details::Part>, id: ElementId, window: &mut Window, c
     if parts.is_empty() {
         return None;
     }
-    let mono = |text: String, color: Rgba| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(color).child(text);
+    let mono = |text: String, color: Rgba| div().font_family(theme::MONO).text_size(theme::chat_meta_small()).text_color(color).child(text);
     let parts = parts.into_iter().map(|part| match part {
         Part::Code(code) => mono(code, theme::text_secondary()).px(px(8.)).py(px(5.)).rounded(px(4.)).bg(theme::bg_card()),
         Part::Fields(rows) => div().flex().flex_col().children(rows.into_iter().map(|(label, value)| {
             div()
                 .flex()
                 .gap(px(8.))
-                .child(div().flex_none().min_w(px(44.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(label))
+                .child(div().flex_none().min_w(px(44.)).text_size(theme::chat_meta()).text_color(theme::text_faint()).child(label))
                 .child(mono(value.replace('`', ""), theme::text_secondary()).min_w_0())
         })),
-        Part::Line(text) => div().flex().flex_wrap().text_size(theme::size_meta()).text_color(theme::text_muted()).children(text.split('`').enumerate().map(|(i, piece)| {
+        Part::Line(text) => div().flex().flex_wrap().text_size(theme::chat_meta()).text_color(theme::text_muted()).children(text.split('`').enumerate().map(|(i, piece)| {
             // Flex drops a piece's edge spaces; non-breaking ones survive.
             let piece = piece.replace(' ', "\u{a0}");
             if i % 2 == 1 { mono(piece, theme::text_secondary()) } else { div().child(piece) }
@@ -668,7 +668,7 @@ fn render_diff(diff: &celldiff::CellDiff) -> impl IntoElement + use<> {
         .border_1()
         .border_color(theme::border())
         .font_family(theme::MONO)
-        .text_size(theme::size_code())
+        .text_size(theme::chat_code())
         .child(div().px_2().text_color(theme::text_muted()).child(diff.label.clone()))
         .children(diff.lines.iter().take(MAX_LINES).map(|(change, line)| {
             let (sign, bg) = match change {

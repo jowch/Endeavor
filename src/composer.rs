@@ -169,12 +169,12 @@ pub fn chip(id: ElementId, attachment: &Attachment) -> Stateful<Div> {
         .border_1()
         .border_color(theme::composer_edge())
         .bg(theme::bg_tag())
-        .text_size(theme::size_meta())
+        .text_size(theme::chat_meta())
         .text_color(theme::text_secondary())
         .child(glyph(icon_glyph(attachment.icon()), if error { theme::danger() } else { theme::text_muted() }))
         .when(!label.plain.is_empty(), |d| d.child(div().flex_shrink_0().whitespace_nowrap().child(label.plain)))
         .when(!label.mono.is_empty(), |d| {
-            d.child(div().min_w_0().truncate().font_family(theme::MONO).text_size(theme::size_meta_small()).child(label.mono))
+            d.child(div().min_w_0().truncate().font_family(theme::MONO).text_size(theme::chat_meta_small()).child(label.mono))
         })
 }
 
@@ -209,7 +209,7 @@ fn text_panel(text: &str, lines: usize, color: Rgba) -> Div {
         .rounded(px(6.))
         .bg(theme::bg_page())
         .font_family(theme::MONO)
-        .text_size(theme::size_meta_small())
+        .text_size(theme::chat_meta_small())
         .line_height(px(16.))
         .text_color(color)
         .overflow_hidden()
@@ -231,7 +231,7 @@ fn preview_body(attachment: &Attachment) -> Div {
 }
 
 fn note(text: &'static str) -> Div {
-    div().text_size(theme::size_meta()).text_color(theme::text_secondary()).child(text)
+    div().text_size(theme::chat_meta()).text_color(theme::text_secondary()).child(text)
 }
 
 fn thumbnail(mime: &str, bytes: &[u8]) -> Div {
@@ -264,7 +264,7 @@ fn popup() -> Div {
         .flex()
         .flex_col()
         .map(theme::popover)
-        .text_size(theme::size_body())
+        .text_size(theme::chat_body())
         .text_color(theme::text_primary())
 }
 
@@ -732,7 +732,7 @@ impl Workspace {
         let chips: Vec<_> = chips.collect();
         let send = self.send_button(empty, busy, session.is_some(), cx);
         let weak = cx.entity().downgrade();
-        let text_box = Textarea::new(&self.input).appearance(false).text_size(theme::size_body()).aria_label("Message").on_paste(move |item, window, cx| {
+        let text_box = Textarea::new(&self.input).appearance(false).text_size(theme::chat_body()).line_height(theme::chat_line_body()).aria_label("Message").on_paste(move |item, window, cx| {
             weak.update(cx, |this, cx| this.paste_into_composer(item, window, cx)).unwrap_or(false)
         });
         let token_marks = self.token_marks(cx);
@@ -769,7 +769,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2()
-            .children(self.composer.notice.clone().map(|n| div().text_size(theme::size_meta()).text_color(theme::accent_text()).child(n)))
+            .children(self.composer.notice.clone().map(|n| div().text_size(theme::chat_meta()).text_color(theme::accent_text()).child(n)))
             .child(the_box)
             .child(self.render_toolbar(session, notebook_open, cx))
             .into_any_element()
@@ -857,16 +857,16 @@ impl Workspace {
                 let pick = path.clone();
                 popup_row(ElementId::NamedInteger("mention".into(), i as u64), i == self.composer.selected)
                     .child(glyph(if dir { Glyph::Folder } else { Glyph::File }, theme::text_muted()))
-                    .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(theme::size_code()).child(path))
+                    .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(theme::chat_code()).child(path))
                     .on_click(cx.listener(move |this, _, window, cx| this.pick_mention(pick.clone(), window, cx)))
             });
             let list = popup()
                 .id("mention-list")
                 .left_0()
                 .right_0()
-                .child(div().px(px(8.)).pt(px(2.)).pb(px(4.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("Files in this session's folder"))
+                .child(div().px(px(8.)).pt(px(2.)).pb(px(4.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child("Files in this session's folder"))
                 .children(rows)
-                .children(status.map(|s| div().px(px(8.)).py(px(4.)).text_size(theme::size_meta()).text_color(theme::text_muted()).child(s)));
+                .children(status.map(|s| div().px(px(8.)).py(px(4.)).text_size(theme::chat_meta()).text_color(theme::text_muted()).child(s)));
             return Some(above(div().left_0().right_0()).child(list).into_any_element());
         }
         let menu = self.composer.menu?;
@@ -879,7 +879,7 @@ impl Workspace {
                         popup_row("plus-files".into(), false)
                             .child(glyph(Glyph::File, theme::text_muted()))
                             .child(div().flex_1().child("Add files or photos"))
-                            .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(crate::platform::shortcut!("U")))
+                            .child(div().text_size(theme::chat_meta()).text_color(theme::text_faint()).child(crate::platform::shortcut!("U")))
                             .on_click(cx.listener(|this, _, window, cx| this.add_files(&AddFiles, window, cx))),
                     )
                     .child(
@@ -904,7 +904,7 @@ impl Workspace {
                 let (choices, current) = self.mode_list();
                 popup()
                     .w(px(300.))
-                    .child(div().px(px(8.)).pt(px(2.)).pb(px(2.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("Mode"))
+                    .child(div().px(px(8.)).pt(px(2.)).pb(px(2.)).text_size(theme::chat_meta()).text_color(theme::text_faint()).child("Mode"))
                     .children(choices.into_iter().enumerate().map(|(i, choice)| {
                         popup_row(ElementId::NamedInteger("mode-choice".into(), i as u64), i == self.composer.selected)
                             .items_start()
@@ -915,10 +915,10 @@ impl Workspace {
                                     .flex()
                                     .flex_col()
                                     .child(choice.name)
-                                    .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(choice.description)),
+                                    .child(div().text_size(theme::chat_meta()).text_color(theme::text_muted()).child(choice.description)),
                             )
                             .child(div().w(px(12.)).text_color(theme::accent_text()).child(if current == Some(i) { "✓" } else { "" }))
-                            .children((i < 4).then(|| div().w(px(10.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(format!("{}", i + 1))))
+                            .children((i < 4).then(|| div().w(px(10.)).text_size(theme::chat_meta()).text_color(theme::text_faint()).child(format!("{}", i + 1))))
                             .on_click(cx.listener(move |this, _, _, cx| this.pick_mode(i, cx)))
                     }))
                     .into_any_element()
@@ -939,7 +939,7 @@ impl Workspace {
                                     .flex()
                                     .flex_col()
                                     .child(option.name.clone())
-                                    .children(option.description.clone().map(|d| div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(d))),
+                                    .children(option.description.clone().map(|d| div().text_size(theme::chat_meta()).text_color(theme::text_muted()).child(d))),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| this.pick_config(id, value.clone(), cx)))
                     }))
@@ -968,7 +968,7 @@ impl Workspace {
                     popup()
                         .p(px(8.))
                         .gap(px(6.))
-                        .child(div().flex().items_center().gap(px(6.)).text_size(theme::size_meta()).text_color(theme::text_muted()).child(glyph(icon_glyph(attachment.icon()), theme::text_muted())).child(preview_heading(attachment)))
+                        .child(div().flex().items_center().gap(px(6.)).text_size(theme::chat_meta()).text_color(theme::text_muted()).child(glyph(icon_glyph(attachment.icon()), theme::text_muted())).child(preview_heading(attachment)))
                         .child(preview_body(attachment)),
                 )
                 .into_any_element(),
@@ -985,7 +985,7 @@ impl Workspace {
             .items_center()
             .gap(px(2.))
             .h(px(24.))
-            .text_size(theme::size_meta())
+            .text_size(theme::chat_meta())
             .text_color(theme::text_new())
             .child(
                 tool_button("plus")
@@ -1123,7 +1123,7 @@ impl Workspace {
                 let body = popup()
                     .p(px(8.))
                     .gap(px(6.))
-                    .child(div().flex().items_center().gap(px(6.)).text_size(theme::size_meta()).text_color(theme::text_muted()).child(glyph(icon_glyph(a.icon()), theme::text_muted())).child(preview_heading(a)))
+                    .child(div().flex().items_center().gap(px(6.)).text_size(theme::chat_meta()).text_color(theme::text_muted()).child(glyph(icon_glyph(a.icon()), theme::text_muted())).child(preview_heading(a)))
                     .child(preview_body(a));
                 div().absolute().top(relative(1.)).right_0().mt(px(4.)).child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(2))
             });
@@ -1159,7 +1159,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .text_size(theme::size_meta())
+                    .text_size(theme::chat_meta())
                     .text_color(theme::text_muted())
                     .child(glyph(icon_glyph(attachment.icon()), if attachment.icon() == Icon::Error { theme::danger() } else { theme::text_muted() }))
                     .child(preview_heading(attachment))
@@ -1172,7 +1172,7 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(theme::size_meta())
+                        .text_size(theme::chat_meta())
                         .child(div().flex_1().text_color(theme::text_muted()).child(if changed { "The cell has changed since." } else { "" }))
                         .child(
                             div()

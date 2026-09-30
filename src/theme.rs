@@ -238,6 +238,27 @@ pub fn size_title() -> Pixels { px(21.) }
 /// interface font at the same size.
 pub fn size_code() -> Pixels { px(12.) }
 
+// The chat column (the transcript, the composer and its cards, docs/design-gaps.md's
+// notes on chat text): the same ladder, one step up, so chat's reading text sits a
+// size larger than the rest of the interface (sidebar, Settings, menus, the notebook
+// header), which keeps `size_meta_small` .. `size_code` unchanged.
+
+/// Chat: keyboard hints. One step up from `size_meta_small`.
+pub fn chat_meta_small() -> Pixels { px(12.) }
+/// Chat: tool lines, timestamps, "Edited…"/"Ran…" rows, notes ("You stopped
+/// Claude"), the chips row under the composer. One step up from `size_meta`.
+pub fn chat_meta() -> Pixels { px(13.) }
+/// Chat: message text (user bubbles and replies, including markdown), the
+/// composer's typed text and placeholder, and the approval/plan cards' body
+/// text. One step up from `size_body`.
+pub fn chat_body() -> Pixels { px(14.) }
+pub fn chat_line_body() -> Pixels { px(21.) }
+/// Chat: card titles ("Run 3 cells?"). One step up from `size_subhead`.
+pub fn chat_subhead() -> Pixels { px(16.) }
+/// JuliaMono inside chat text: a size smaller than `chat_body`, as `size_code`
+/// is for `size_body`.
+pub fn chat_code() -> Pixels { px(13.) }
+
 #[cfg(test)]
 mod tests {
     use super::*;

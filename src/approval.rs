@@ -196,12 +196,12 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
             (Some(steps), false) => steps.clone(),
             _ => plan.full.clone(),
         };
-        let title = plan.title.map(|title| div().text_size(theme::size_body()).text_color(theme::text_secondary()).child(title).into_any_element());
+        let title = plan.title.map(|title| div().text_size(theme::chat_body()).text_color(theme::text_secondary()).child(title).into_any_element());
         let text = div()
             .id(ElementId::NamedInteger("plan".into(), key))
             .max_h(px(260.))
             .overflow_y_scroll()
-            .text_size(theme::size_body())
+            .text_size(theme::chat_body())
             .text_color(theme::text_row_active())
             .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), shown).style(plan_style()));
         let toggle = plan.steps.is_some().then(|| {
@@ -228,14 +228,14 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
         return Some(approval_card(card_heading(&view.heading), body, buttons));
     }
     let code = view.code.map(|code| {
-        div().font_family(theme::MONO).text_size(theme::size_code()).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).child(code).into_any_element()
+        div().font_family(theme::MONO).text_size(theme::chat_code()).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).child(code).into_any_element()
     });
     let lines = view.lines.into_iter().map(|(text, tone)| {
         let color = match tone {
             Tone::Muted => theme::text_muted(),
             Tone::Secondary => theme::text_secondary(),
         };
-        inline_code(&text, theme::size_meta_small()).text_color(color).into_any_element()
+        inline_code(&text, theme::chat_meta_small()).text_color(color).into_any_element()
     });
     Some(approval_card(card_heading(&view.heading), code.into_iter().chain(lines).collect(), buttons))
 }
@@ -322,7 +322,7 @@ fn plan_card(markdown: &str) -> PlanCard {
 /// A plan's markdown inside its card: headings at body size, so the steps and
 /// sections read as one plan rather than a document.
 fn plan_style() -> TextViewStyle {
-    markdown_style().heading_font_size(|_, _| theme::size_body())
+    markdown_style().heading_font_size(|_, _| theme::chat_body())
 }
 
 /// Plan mode's end: Keep planning · Start in Auto · **Start**.
@@ -440,7 +440,7 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
         .bg(theme::bg_urgent())
         .shadow(vec![BoxShadow { color: theme::approval_ring().into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(3.), inset: false }])
         .child(div().px(px(10.)).pt(px(10.)).pb(px(6.)).child(heading))
-        .when(!body.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).px(px(10.)).pb(px(10.)).text_size(theme::size_meta()).children(body)))
+        .when(!body.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).px(px(10.)).pb(px(10.)).text_size(theme::chat_meta()).children(body)))
         .child(
             div()
                 .flex()
@@ -457,9 +457,10 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
         .into_any_element()
 }
 
-/// A card's heading: body size, medium, with `backticked` names in mono.
+/// A card's heading: chat subhead size, medium, with `backticked` names in
+/// chat code size mono.
 fn card_heading(text: &str) -> AnyElement {
-    inline_code(text, theme::size_code()).text_size(theme::size_body()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).into_any_element()
+    inline_code(text, theme::chat_code()).text_size(theme::chat_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).into_any_element()
 }
 
 fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus: &FocusHandle) -> Stateful<Div> {
@@ -474,7 +475,7 @@ fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus
         .px(px(if weight == Weight::Primary { 14. } else { 10. }))
         .rounded(px(5.))
         .cursor_pointer()
-        .text_size(theme::size_meta())
+        .text_size(theme::chat_meta())
         .border_2()
         .border_color(gpui::transparent_black())
         .track_focus(focus)
@@ -490,7 +491,7 @@ fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus
             Weight::Quiet => d.text_color(theme::text_secondary()).hover(|s| s.bg(theme::bg_raised())).focus_ring_on(theme::bg_urgent()),
         })
         .child(label.to_string())
-        .when(!hint.is_empty(), |d| d.child(div().text_size(theme::size_meta_small()).font_weight(FontWeight::NORMAL).opacity(0.6).child(hint.to_string())))
+        .when(!hint.is_empty(), |d| d.child(div().text_size(theme::chat_meta_small()).font_weight(FontWeight::NORMAL).opacity(0.6).child(hint.to_string())))
 }
 
 /// Text with `backticked` spans in mono at `mono` size.
@@ -550,7 +551,7 @@ pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Opt
                     .flex()
                     .justify_between()
                     .cursor_pointer()
-                    .text_size(theme::size_meta())
+                    .text_size(theme::chat_meta())
                     .text_color(theme::text_muted())
                     .border_2()
                     .border_color(gpui::transparent_black())

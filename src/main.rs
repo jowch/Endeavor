@@ -1278,7 +1278,7 @@ impl Workspace {
                         .rounded(px(5.))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::row_active()))
-                        .child(div().flex_shrink_0().font_family(theme::MONO).text_size(theme::size_code()).child(format!("/{}", command.name)))
+                        .child(div().flex_shrink_0().font_family(theme::MONO).text_size(theme::chat_code()).child(format!("/{}", command.name)))
                         .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(theme::text_muted()).child(command.description.clone()))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.input.update(cx, |s, cx| s.set_value(format!("/{name} "), window, cx));
