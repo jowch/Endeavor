@@ -1,0 +1,4 @@
+#!/bin/sh
+# After switching branches (not single files): the same as post-merge.
+[ "$3" = 1 ] || exit 0
+exec .githooks/post-merge

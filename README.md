@@ -18,6 +18,9 @@ cargo run
 ```
 
 `cargo run` alone builds only the app, so run `cargo build` after pulling.
+To keep the Linux helpers current by themselves, turn on the repo's git hooks
+once: `git config core.hooksPath .githooks`. After each pull or branch switch
+they fetch the helpers GitHub built for that commit.
 `scripts/helpers.sh` downloads the helper for Linux servers from the Helpers
 workflow's release on GitHub when that source was built there, else builds it
 (`scripts/build-helpers.sh`); it does nothing when it's already up to date.

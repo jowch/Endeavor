@@ -1,0 +1,5 @@
+#!/bin/sh
+# After a pull: fetch the Linux server helpers for the new commit, if GitHub
+# has built them (turn the hooks on with: git config core.hooksPath .githooks).
+scripts/helpers.sh --fetch-only >/dev/null 2>&1 || echo "Endeavor: server helpers not updated; run scripts/helpers.sh" >&2
+exit 0
