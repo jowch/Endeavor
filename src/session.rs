@@ -892,11 +892,13 @@ impl Session {
                 let (text, attachment) = match chunk.content {
                     ContentBlock::Text(t) => match attach::replayed_text_file(&t.text).or_else(|| attach::replayed_notebook(&t.text)).or_else(|| attach::replayed_saved_file(&t.text)) {
                         Some(attachment) => (None, Some(attachment)),
-                        None if attach::is_app_text(&t.text) => return,
-                        // Claude Code's own marker for a turn it stopped mid-flight: not
-                        // the user's words, so replay shows the same note a live stop does.
-                        None if attach::is_stopped_marker(&t.text) => return self.note("You stopped Claude"),
-                        None => (Some(t.text), None),
+                        None => match attach::without_agent_blocks(&t.text) {
+                            text if text.is_empty() || attach::is_app_text(&text) => return,
+                            // Claude Code's own marker for a turn it stopped mid-flight: not
+                            // the user's words, so replay shows the same note a live stop does.
+                            text if attach::is_stopped_marker(&text) => return self.note("You stopped Claude"),
+                            text => (Some(text), None),
+                        },
                     },
                     ContentBlock::Image(image) => {
                         // A region's image follows its block.
@@ -1586,6 +1588,20 @@ mod tests {
         let mut s2 = Session::loading(2, SessionId::new("def"), Place::local("/tmp"), None, "Old chat".into());
         s2.apply(chunk("[Request interrupted by user]"));
         assert!(matches!(s2.entries.as_slice(), [Entry::Note(note)] if note.as_ref() == "You stopped Claude"));
+    }
+
+    #[test]
+    fn a_reopened_session_leaves_out_claude_codes_task_notifications() {
+        use agent_client_protocol::schema::v1::{ContentChunk, SessionUpdate, TextContent};
+        use agent_client_protocol::schema::v1::ContentBlock;
+        let chunk = |s: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
+        let notice = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command \"sleep 5\" completed</summary>\n</task-notification>";
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
+        s.apply(chunk(notice));
+        assert!(s.entries.is_empty());
+        s.apply(chunk(&format!("{notice}\nnow plot it")));
+        let [Entry::User { text, .. }] = s.entries.as_slice() else { panic!("one user entry") };
+        assert_eq!(text.as_ref(), "now plot it");
     }
 
     /// The blocks of a sent prompt as a reopened session replays them: the

@@ -296,6 +296,25 @@ pub fn is_stopped_marker(text: &str) -> bool {
     text == "[Request interrupted by user]" || text == "[Request interrupted by user for tool use]"
 }
 
+/// A replayed user message without the blocks Claude Code adds to it itself:
+/// `<system-reminder>`s, and the `<task-notification>` it queues when a
+/// background task finishes, which rides along with the user's next message.
+pub fn without_agent_blocks(text: &str) -> String {
+    ["system-reminder", "task-notification"].iter().fold(text.to_string(), |text, tag| {
+        let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
+        let mut out = String::new();
+        let mut rest = text.as_str();
+        while let Some(start) = rest.find(&open) {
+            out.push_str(&rest[..start]);
+            rest = rest[start..].find(&close).map_or("", |end| &rest[start + end + close.len()..]);
+        }
+        out.push_str(rest);
+        out
+    })
+    .trim()
+    .to_string()
+}
+
 /// An attached text file as a replayed session gives it back: the agent
 /// echoes it as `<context ref="attachment:name">…</context>`.
 pub fn replayed_text_file(text: &str) -> Option<Attachment> {
