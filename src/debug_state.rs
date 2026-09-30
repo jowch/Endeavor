@@ -307,6 +307,7 @@ impl Workspace {
                     "actions": message_actions(!text.is_empty(), *sent, s.copied == Some(ix)),
                     "delivery": transcript::delivery_note(*delivery),
                     "chips": attachments.iter().map(chip_label).collect::<Vec<_>>(),
+                    "quotes": quotes(attachments),
                     "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text()),
                 })),
                 Entry::Agent { text, at } => Some(json!({ "kind": "reply", "text": text, "actions": message_actions(true, *at, s.copied == Some(ix)) })),
@@ -440,6 +441,7 @@ impl Workspace {
             "text": text,
             "placeholder": self.placeholder,
             "chips": self.composer.attachments.iter().map(chip_label).collect::<Vec<_>>(),
+            "quotes": quotes(&self.composer.attachments),
             "mode": self.mode_label(session),
             "model": self.config_label(session, "model"),
             "effort": self.config_label(session, "effort"),
@@ -511,6 +513,18 @@ fn message_actions(copy: bool, at: Option<std::time::SystemTime>, copied: bool) 
 
 fn plan_items(entries: &[agent_client_protocol::schema::v1::PlanEntry]) -> Vec<Value> {
     entries.iter().map(|e| json!({ "text": e.content, "status": format!("{:?}", e.status).to_lowercase() })).collect()
+}
+
+/// The quotes among a message's attachments: where each is from, what it
+/// quotes (null for a picture), whether it has a picture, and the comment.
+fn quotes(attachments: &[crate::attach::Attachment]) -> Vec<Value> {
+    attachments
+        .iter()
+        .filter_map(|a| match a {
+            crate::attach::Attachment::Quote(q) => Some(json!({ "source": q.source(), "excerpt": q.excerpt(), "picture": q.picture().is_some(), "comment": q.comment })),
+            _ => None,
+        })
+        .collect()
 }
 
 fn chip_label(a: &crate::attach::Attachment) -> String {

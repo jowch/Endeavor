@@ -9,6 +9,7 @@ import { initDebug } from "./debug";
 import { initDiffs } from "./diff";
 import { initDrawer } from "./drawer";
 import { initPrompt } from "./prompt";
+import { initQuote } from "./quote";
 import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
 import { initRail } from "./rail";
@@ -20,6 +21,7 @@ import { watchRedraws } from "./redraw";
 
 function init() {
   initTheme();
+  initQuote();
   initAnnotate();
   initCells();
   initDiffs();

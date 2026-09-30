@@ -6,6 +6,7 @@
 
 import { byUser, send } from "./bridge";
 import { onRedraw } from "./redraw";
+import { sendQuote } from "./quote";
 import { cellCode } from "./reveal";
 
 const AGENT = "Claude";
@@ -105,7 +106,8 @@ export function openPrompt(cell: HTMLElement, where: Where, selection?: Selectio
         if (!comment || !byUser(e)) return;
         const notebook = new URLSearchParams(location.search).get("id");
         const kind = where !== "cell" ? where : isEmpty(cell) ? "fill" : "about";
-        send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: e.metaKey, quote: selection?.quote });
+        if (selection) sendQuote([{ part: "output", cell: cell.id, code: cellCode(cell), text: selection.quote }], comment, e.metaKey);
+        else send({ type: "prompt", notebook, cell: cell.id, code: cellCode(cell), where: kind, text: comment, now: e.metaKey });
         close(true);
       }
     },

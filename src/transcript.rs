@@ -147,8 +147,12 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             let column = div().group(MESSAGE).flex().flex_col().items_end().gap(px(4.)).children(chips);
             let delivered = delivery_note(*delivery).map(|note| div().text_size(theme::chat_meta()).text_color(muted).child(note));
             let actions = message_actions(session, ix, text.to_string(), *sent, cx);
-            if text.is_empty() {
+            let mut quotes = this.render_sent_quotes(key, ix, attachments, cx);
+            if text.is_empty() && quotes.is_empty() {
                 return Some(column.children(delivered).child(actions).into_any_element());
+            }
+            if !quotes.is_empty() && !text.is_empty() {
+                quotes.push(div().h(px(1.)).my(px(2.)).bg(theme::border()).into_any_element());
             }
             let bubble = div()
                 .max_w(px(USER_BUBBLE_WIDTH))
@@ -158,11 +162,16 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .bg(theme::bg_raised())
                 .font_family(theme::SANS)
                 .text_size(theme::chat_body())
-                .line_height(theme::chat_line_body());
+                .line_height(theme::chat_line_body())
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .children(quotes);
             let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered());
             let line_height = theme::chat_line_body();
-            if bubble_lines(text, window) <= FOLD_AFTER {
-                return Some(column.child(bubble.child(text.clone())).children(delivered).children(unanswered).child(actions).into_any_element());
+            if text.is_empty() || bubble_lines(text, window) <= FOLD_AFTER {
+                let bubble = bubble.when(!text.is_empty(), |d| d.child(text.clone()));
+                return Some(column.child(bubble).children(delivered).children(unanswered).child(actions).into_any_element());
             }
             let fade = div()
                 .absolute()

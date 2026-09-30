@@ -8,6 +8,7 @@
 // Esc is reserved for stopping the agent, so a stray Esc never does two things.
 
 import { byUser, on, send } from "./bridge";
+import { type Box, SHOOTING, sendQuote, shoot } from "./quote";
 import { cellCode } from "./reveal";
 
 const css = `
@@ -47,16 +48,13 @@ const css = `
   #annotate-bar button.primary { background: var(--e-accent); color: #fff; }
   #annotate-bar button:disabled { opacity: 0.4; cursor: default; }
   /* While the app takes the box's picture, the notebook shows as it is. */
-  body.annotating.annotate-shooting #annotate-frame, body.annotating.annotate-shooting #annotate-box,
-  body.annotating.annotate-shooting #annotate-hint, body.annotating.annotate-shooting #annotate-bar { display: none; }
-  body.annotating.annotate-shooting pluto-cell, body.annotating.annotate-shooting pluto-cell:hover { outline: none; }
+  body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box,
+  body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
+  body.annotating.${SHOOTING} pluto-cell, body.annotating.${SHOOTING} pluto-cell:hover { outline: none; }
 `;
 
 /** A drag shorter than this (in CSS pixels) is a click. */
 const DRAG = 4;
-
-/** A box in page coordinates (scrolls with the notebook). */
-type Box = { left: number; top: number; right: number; bottom: number };
 
 export function initAnnotate(): void {
   const picked = new Set<string>();
@@ -141,7 +139,7 @@ export function initAnnotate(): void {
   function set(enable: boolean) {
     if (enable === active()) return;
     document.body.classList.toggle("annotating", enable);
-    document.body.classList.remove("annotate-drawing", "annotate-shooting");
+    document.body.classList.remove("annotate-drawing");
     picked.clear();
     region = null;
     drag = null;
@@ -153,38 +151,17 @@ export function initAnnotate(): void {
     send({ type: "mode", on: enable });
   }
 
-  const nextFrame = () => new Promise<void>((done) => requestAnimationFrame(() => done()));
-
-  // A box goes with a picture: bring it into view, hide the overlay, and let
-  // the app take the picture before it shows again ("shot").
-  async function sendRegion(b: Box, ids: string[], codes: string[], notebook: string | null, comment: string, now: boolean) {
-    const top = b.top - window.scrollY;
-    const bottom = b.bottom - window.scrollY;
-    if (top < 0 || bottom > window.innerHeight) window.scrollBy(0, top < 0 || bottom - top > window.innerHeight ? top - 8 : bottom - window.innerHeight + 8);
-    document.body.classList.add("annotate-shooting");
-    await nextFrame();
-    await nextFrame();
-    const x = Math.max(0, b.left - window.scrollX);
-    const y = Math.max(0, b.top - window.scrollY);
-    const rect = {
-      x,
-      y,
-      width: Math.min(window.innerWidth, b.right - window.scrollX) - x,
-      height: Math.min(window.innerHeight, b.bottom - window.scrollY) - y,
-    };
-    send({ type: "region", notebook, cells: ids, codes, comment, now, rect });
-    setTimeout(() => document.body.classList.remove("annotate-shooting"), 3000);
-  }
-
   // Stays in annotation mode afterwards, ready for the next comment.
-  function sendComment(now: boolean) {
+  function sendComment(add: boolean) {
     if (!picked.size && !region) return;
     const ids = cells().map((c) => c.id).filter((id) => picked.has(id)); // notebook order
-    const notebook = new URLSearchParams(location.search).get("id");
-    const codes = ids.map((id) => cellCode(document.getElementById(id)));
     const comment = text.value.trim();
-    if (region) void sendRegion(region, ids, codes, notebook, comment, now);
-    else send({ type: "annotation", notebook, cells: ids, codes, comment, now });
+    if (region) {
+      const box = region;
+      void shoot(box).then((shot) => sendQuote([{ part: "box", cells: ids, shot }], comment, add));
+    } else {
+      sendQuote(ids.map((id) => ({ part: "cell", cell: id, code: cellCode(document.getElementById(id)) })), comment, add);
+    }
     text.value = "";
     fit();
     picked.clear();
@@ -283,5 +260,4 @@ export function initAnnotate(): void {
   hint.querySelector<HTMLElement>(".done")!.onclick = () => set(false);
 
   on("annotate", (msg) => set(msg.on));
-  on("shot", () => document.body.classList.remove("annotate-shooting"));
 }

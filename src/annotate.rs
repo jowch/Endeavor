@@ -1,7 +1,9 @@
-//! Messages from the page script (frontend/, annotation mode and asking about
-//! cells), turned into chat messages with their attachments (design doc §4.2–4.3).
+//! Messages from the page script (frontend/, Point, Reply on a selection and
+//! asking about cells), turned into chat messages with their attachments
+//! (design doc §4.2–4.3).
 
-use crate::attach::{Attachment, Cell, CellAsk};
+use crate::attach::{Attachment, Cell, CellAsk, Part, Quoted};
+use crate::session::defined_name;
 use wire::backend::Backend;
 
 /// The page script (frontend/, built with `npm run build`; the bundle is committed
@@ -53,8 +55,11 @@ pub enum Message {
     Ready,
     Mode(bool),
     Ask(Ask),
-    /// A box drawn with Point, to be sent once the app has its picture.
-    Region(Region),
+    /// Picks with Point, or Reply on a selected text, with the user's comment.
+    Quote(Picks),
+    /// Take a picture of this part of the page's viewport (x, y, width,
+    /// height in CSS pixels) for a quote to come, and say "shot" `id` when done.
+    Shoot { id: u32, rect: [f64; 4] },
     /// A cell's code now (None: the page has no such cell), as the app asked.
     Code { cell: String, code: Option<String> },
     /// The shown notebook's state, for the notebook header.
@@ -91,15 +96,15 @@ pub struct PageState {
     pub drawer: Option<String>,
 }
 
-/// A drawn box: the user's words, the cells it overlaps, and where it is in
-/// the page's viewport (x, y, width, height in CSS pixels).
+/// What the user quoted in the notebook, in the order picked: each quote,
+/// and the picture (`Message::Shoot`'s id) that goes in it, for a figure or a
+/// box. The comment belongs to the last quote.
 #[derive(Debug, PartialEq)]
-pub struct Region {
-    pub text: String,
-    pub notebook: String,
-    pub cells: Vec<Cell>,
-    pub rect: [f64; 4],
-    pub now: bool,
+pub struct Picks {
+    pub quotes: Vec<(Quoted, Option<u32>)>,
+    pub comment: String,
+    /// ⌘↩: add them to the composer's message instead of sending them now.
+    pub add: bool,
 }
 
 pub fn is_uuid(s: &str) -> bool {
@@ -137,7 +142,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             let attachment = Attachment::Error { notebook, cell, text: capped(v.get("error"), MAX_COMMENT) };
             Some(Message::Ask(Ask { text: text.into(), attachment, now: false }))
         }
-        // ⌘K on a cell, the agent button between cells, or the selection chip.
+        // ⌘K on a cell, or the agent button between cells.
         "prompt" => {
             let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
             let text = capped(v.get("text"), MAX_COMMENT);
@@ -149,32 +154,28 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
                 _ => return None,
             };
             let cell = Cell { id, code: capped(v.get("code"), MAX_CODE) };
-            let attachment = match v.get("quote").and_then(|q| q.as_str()) {
-                Some(quote) => Attachment::Selection { notebook, cell, text: quote.chars().take(MAX_COMMENT).collect() },
-                None => Attachment::Cells { notebook, cells: vec![cell], ask },
-            };
-            Some(Message::Ask(Ask { text, attachment, now }))
+            Some(Message::Ask(Ask { text, attachment: Attachment::Cells { notebook, cells: vec![cell], ask }, now }))
         }
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
-        "annotation" => {
+        "quote" => {
             let notebook = uuid("notebook")?;
-            let cells = cells(&v)?;
-            if cells.is_empty() {
+            let picks = v.get("picks")?.as_array()?;
+            if picks.is_empty() || picks.len() > MAX_CELLS {
                 return None;
             }
-            let text = capped(v.get("comment"), MAX_COMMENT);
-            Some(Message::Ask(Ask { text, attachment: Attachment::Cells { notebook, cells, ask: CellAsk::About }, now }))
+            let quotes = picks.iter().map(|pick| pick_quote(pick, &notebook)).collect::<Option<Vec<_>>>()?;
+            let add = v.get("add").and_then(|a| a.as_bool()).unwrap_or(false);
+            Some(Message::Quote(Picks { quotes, comment: capped(v.get("comment"), MAX_COMMENT), add }))
         }
-        "region" => {
-            let notebook = uuid("notebook")?;
+        "shoot" => {
+            let id = u32::try_from(v.get("id")?.as_u64()?).ok()?;
             let rect = v.get("rect")?;
             let n = |key: &str| rect.get(key)?.as_f64().filter(|n| (-MAX_SIDE..MAX_SIDE).contains(n));
             let rect = [n("x")?, n("y")?, n("width")?, n("height")?];
             if rect[2] < 1. || rect[3] < 1. {
                 return None;
             }
-            let text = capped(v.get("comment"), MAX_COMMENT);
-            Some(Message::Region(Region { text, notebook, cells: cells(&v)?, rect, now }))
+            Some(Message::Shoot { id, rect })
         }
         "code" => {
             let cell = uuid("cell")?;
@@ -213,14 +214,42 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
     }
 }
 
-/// Picked cells: `cells` (their ids, notebook order) and `codes` (the same order).
-fn cells(v: &serde_json::Value) -> Option<Vec<Cell>> {
-    let ids: Vec<String> = v.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned)).collect::<Option<_>>()?;
-    if ids.len() > MAX_CELLS {
-        return None;
+/// One pick of a "quote" message: `part` (`cell`, `lines`, `output`, `figure`
+/// or `box`), the cell and its code (a box: `cells`, the ids under it), the
+/// quoted `text` and `lines` ([first, last]) where they apply, and `shot`, the
+/// picture a figure or box takes its image from.
+fn pick_quote(pick: &serde_json::Value, notebook: &str) -> Option<(Quoted, Option<u32>)> {
+    let shot = pick.get("shot").and_then(|s| s.as_u64()).and_then(|s| u32::try_from(s).ok());
+    let notebook = notebook.to_string();
+    let png = || std::sync::Arc::new(Vec::new());
+    let part = pick.get("part")?.as_str()?;
+    if part == "box" {
+        let cells: Vec<String> = pick.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned)).collect::<Option<_>>()?;
+        if cells.len() > MAX_CELLS {
+            return None;
+        }
+        return Some((Quoted::Box { notebook, cells, png: png() }, shot));
     }
-    let codes = v.get("codes").and_then(|c| c.as_array());
-    Some(ids.into_iter().enumerate().map(|(i, id)| Cell { id, code: capped(codes.and_then(|c| c.get(i)), MAX_CODE) }).collect())
+    let cell = pick.get("cell")?.as_str().filter(|s| is_uuid(s))?.to_string();
+    let code = capped(pick.get("code"), MAX_CODE);
+    let text = || capped(pick.get("text"), MAX_CODE);
+    let part = match part {
+        "cell" => Part::Whole(code.clone()),
+        "lines" => {
+            let lines = pick.get("lines")?.as_array()?;
+            let line = |i: usize| lines.get(i)?.as_u64().and_then(|n| usize::try_from(n).ok()).filter(|n| *n >= 1);
+            let (first, last) = (line(0)?, line(1)?);
+            if last < first {
+                return None;
+            }
+            Part::Lines { first, last, text: text() }
+        }
+        "output" => Part::Output(text()),
+        "figure" => Part::Figure(png()),
+        _ => return None,
+    };
+    let name = defined_name(&code).unwrap_or_else(|| "cell".into());
+    Some((Quoted::Cell { notebook, cell, name, part }, shot))
 }
 
 pub fn cell_uri(backend: Backend, notebook: &str, cell: &str) -> String {
@@ -286,35 +315,51 @@ mod tests {
             Some(Message::Ask(Ask { text: "plot it".into(), attachment: Attachment::Cells { notebook: NB.into(), cells: vec![cell("")], ask: CellAsk::After }, now: true }))
         );
         assert_eq!(prompt("anywhere"), None);
-        let quoted = parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","code":"s = sum(xs)","where":"about","text":"why?","now":false,"quote":"sum(xs)"}}"#), "");
+        let picks = format!(
+            r#"{{"type":"quote","notebook":"{NB}","comment":"why so slow?","add":true,"picks":[
+                {{"part":"lines","cell":"{C1}","code":"s = sum(xs)\nt = 2","lines":[1,1],"text":"s = sum(xs)"}},
+                {{"part":"figure","cell":"{C1}","code":"plot(xs)","shot":3}},
+                {{"part":"output","cell":"{C1}","code":"","text":"0.42"}},
+                {{"part":"cell","cell":"{C1}","code":"y = 2"}},
+                {{"part":"box","cells":["{C1}"],"shot":4}}]}}"#
+        );
+        let in_c1 = |name: &str, part| Quoted::Cell { notebook: NB.into(), cell: C1.into(), name: name.into(), part };
+        let png = || std::sync::Arc::new(Vec::new());
         assert_eq!(
-            quoted,
-            Some(Message::Ask(Ask { text: "why?".into(), attachment: Attachment::Selection { notebook: NB.into(), cell: cell("s = sum(xs)"), text: "sum(xs)".into() }, now: false }))
+            parse_with(&picks, ""),
+            Some(Message::Quote(Picks {
+                quotes: vec![
+                    (in_c1("s", Part::Lines { first: 1, last: 1, text: "s = sum(xs)".into() }), None),
+                    (in_c1("cell", Part::Figure(png())), Some(3)),
+                    (in_c1("cell", Part::Output("0.42".into())), None),
+                    (in_c1("y", Part::Whole("y = 2".into())), None),
+                    (Quoted::Box { notebook: NB.into(), cells: vec![C1.into()], png: png() }, Some(4)),
+                ],
+                comment: "why so slow?".into(),
+                add: true,
+            }))
         );
-        let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"codes":["y = 2"],"comment":"why so slow?"}}"#);
-        assert_eq!(
-            parse_with(&body, ""),
-            Some(Message::Ask(Ask { text: "why so slow?".into(), attachment: Attachment::Cells { notebook: NB.into(), cells: vec![cell("y = 2")], ask: CellAsk::About }, now: false }))
-        );
-        let region = format!(
-            r#"{{"type":"region","notebook":"{NB}","cells":["{C1}"],"codes":["scatter(t, y)"],"comment":"what's this bump?","now":false,"rect":{{"x":12.5,"y":80,"width":300,"height":140}}}}"#
-        );
-        assert_eq!(
-            parse_with(&region, ""),
-            Some(Message::Region(Region { text: "what's this bump?".into(), notebook: NB.into(), cells: vec![cell("scatter(t, y)")], rect: [12.5, 80., 300., 140.], now: false }))
-        );
-        let flat = format!(r#"{{"type":"region","notebook":"{NB}","cells":[],"comment":"","rect":{{"x":0,"y":0,"width":0,"height":40}}}}"#);
-        assert_eq!(parse_with(&flat, ""), None, "a box needs an area");
+        let shoot = r#"{"type":"shoot","id":3,"rect":{"x":12.5,"y":80,"width":300,"height":140}}"#;
+        assert_eq!(parse_with(shoot, ""), Some(Message::Shoot { id: 3, rect: [12.5, 80., 300., 140.] }));
+        let flat = r#"{"type":"shoot","id":3,"rect":{"x":0,"y":0,"width":0,"height":40}}"#;
+        assert_eq!(parse_with(flat, ""), None, "a picture needs an area");
         assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":"y = 3"}}"#), ""), Some(Message::Code { cell: C1.into(), code: Some("y = 3".into()) }));
         assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":null}}"#), ""), Some(Message::Code { cell: C1.into(), code: None }));
     }
 
     #[test]
     fn rejects_forged_or_malformed_messages() {
-        let bad_cell = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["../../x"],"comment":""}}"#);
-        let no_cells = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":[],"comment":""}}"#);
-        let bad_nb = format!(r#"{{"type":"annotation","notebook":"nope","cells":["{C1}"],"comment":""}}"#);
-        for body in [bad_cell.as_str(), no_cells.as_str(), bad_nb.as_str(), "not json", r#"{"type":"other"}"#] {
+        let quote = |notebook: &str, picks: &str| format!(r#"{{"type":"quote","notebook":"{notebook}","comment":"","picks":[{picks}]}}"#);
+        let bad_cell = quote(NB, r#"{"part":"cell","cell":"../../x","code":""}"#);
+        let no_cells = quote(NB, "");
+        let bad_nb = quote("nope", &format!(r#"{{"part":"cell","cell":"{C1}","code":""}}"#));
+        let backwards = quote(NB, &format!(r#"{{"part":"lines","cell":"{C1}","code":"","lines":[5,3]}}"#));
+        let line_zero = quote(NB, &format!(r#"{{"part":"lines","cell":"{C1}","code":"","lines":[0,3]}}"#));
+        let bad_part = quote(NB, &format!(r#"{{"part":"reply","cell":"{C1}","code":""}}"#));
+        for body in [&bad_cell, &no_cells, &bad_nb, &backwards, &line_zero, &bad_part] {
+            assert_eq!(parse_with(body, ""), None, "{body}");
+        }
+        for body in ["not json", r#"{"type":"other"}"#] {
             assert_eq!(parse_with(body, ""), None, "{body}");
         }
     }
@@ -350,8 +395,8 @@ mod tests {
     #[test]
     fn caps_comment_length() {
         let long = "x".repeat(MAX_COMMENT + 10);
-        let body = format!(r#"{{"type":"annotation","notebook":"{NB}","cells":["{C1}"],"comment":"{long}"}}"#);
-        let Some(Message::Ask(a)) = parse_with(&body, "") else { panic!() };
-        assert_eq!(a.text.len(), MAX_COMMENT);
+        let body = format!(r#"{{"type":"quote","notebook":"{NB}","picks":[{{"part":"cell","cell":"{C1}","code":""}}],"comment":"{long}"}}"#);
+        let Some(Message::Quote(picks)) = parse_with(&body, "") else { panic!() };
+        assert_eq!(picks.comment.len(), MAX_COMMENT);
     }
 }

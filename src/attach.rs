@@ -48,15 +48,12 @@ pub enum CellAsk {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Attachment {
-    /// Cells picked with Point, or the cell ⌘K asked about.
+    /// The cell ⌘K asked about (and Point's cells, in sessions from before quotes).
     Cells { notebook: String, cells: Vec<Cell>, ask: CellAsk },
-    /// Text selected in a cell (the selection chip's "Ask Claude").
-    Selection { notebook: String, cell: Cell, text: String },
     /// A cell's error, from Fix with Claude or Explain.
     Error { notebook: String, cell: Cell, text: String },
-    /// A box drawn with Point: a PNG of that part of the notebook, and the
-    /// cells it overlaps.
-    Region { notebook: String, cells: Vec<Cell>, png: Arc<Vec<u8>> },
+    /// Part of a reply or of the notebook, and the user's comment on it.
+    Quote(Quote),
     Image { name: String, mime: &'static str, bytes: Arc<Vec<u8>> },
     /// A text file read into the message (a server session's upload).
     Text { name: String, text: String },
@@ -65,6 +62,97 @@ pub enum Attachment {
     Upload { source: PathBuf, size: u64 },
     /// A file copied into the session's folder, at `path` relative to it.
     Saved { path: String },
+}
+
+/// What the user replied to, in one of Claude's replies or in the notebook,
+/// and what they said about it: Reply on a selection, or a pick with Point.
+/// It goes at once as its own message, or waits as a card above the composer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Quote {
+    pub from: Quoted,
+    pub comment: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Quoted {
+    /// Text selected in one of Claude's replies, and the reply's clock time
+    /// ("14:02"; replayed history has none).
+    Reply { text: String, at: Option<String> },
+    /// Part of one cell. `name` is what the cell defines, else "cell".
+    Cell { notebook: String, cell: String, name: String, part: Part },
+    /// A box drawn with Point: its picture, and the ids of the cells under it.
+    Box { notebook: String, cells: Vec<String>, png: Arc<Vec<u8>> },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Part {
+    /// The whole cell, with its code.
+    Whole(String),
+    /// Lines `first..=last` of the cell's code, counted from 1, and the text
+    /// quoted from them.
+    Lines { first: usize, last: usize, text: String },
+    /// Text from the cell's output (rendered Markdown included).
+    Output(String),
+    /// The cell's output as a picture.
+    Figure(Arc<Vec<u8>>),
+}
+
+impl Quote {
+    /// Where it's from: "Claude's reply · 14:02", "rates · lines 3–5",
+    /// "plot_fit · figure", "Box · 2 cells".
+    pub fn source(&self) -> String {
+        match &self.from {
+            Quoted::Reply { at: Some(at), .. } => format!("Claude's reply · {at}"),
+            Quoted::Reply { at: None, .. } => "Claude's reply".into(),
+            Quoted::Cell { name, part, .. } => {
+                let part = match part {
+                    Part::Whole(_) => "cell".to_string(),
+                    Part::Lines { first, last, .. } if first == last => format!("line {first}"),
+                    Part::Lines { first, last, .. } => format!("lines {first}–{last}"),
+                    Part::Output(_) => "output".into(),
+                    Part::Figure(_) => "figure".into(),
+                };
+                format!("{name} · {part}")
+            }
+            Quoted::Box { cells, .. } if cells.len() == 1 => "Box · 1 cell".into(),
+            Quoted::Box { cells, .. } => format!("Box · {} cells", cells.len()),
+        }
+    }
+
+    /// The quoted text; none for a picture.
+    pub fn excerpt(&self) -> Option<&str> {
+        match &self.from {
+            Quoted::Reply { text, .. } => Some(text),
+            Quoted::Cell { part: Part::Whole(text) | Part::Lines { text, .. } | Part::Output(text), .. } => Some(text),
+            Quoted::Cell { part: Part::Figure(_), .. } | Quoted::Box { .. } => None,
+        }
+    }
+
+    /// The number of the quoted code's first line, when it is code.
+    pub fn first_line(&self) -> Option<usize> {
+        match &self.from {
+            Quoted::Cell { part: Part::Lines { first, .. }, .. } => Some(*first),
+            Quoted::Cell { part: Part::Whole(_), .. } => Some(1),
+            _ => None,
+        }
+    }
+
+    /// Its picture: a figure's, or a box's (none if it couldn't be taken).
+    pub fn picture(&self) -> Option<&Arc<Vec<u8>>> {
+        match &self.from {
+            Quoted::Cell { part: Part::Figure(png), .. } | Quoted::Box { png, .. } => Some(png).filter(|p| !p.is_empty()),
+            _ => None,
+        }
+    }
+
+    /// The ids of the cells it points at, for "show in notebook".
+    pub fn cells(&self) -> Vec<String> {
+        match &self.from {
+            Quoted::Reply { .. } => Vec::new(),
+            Quoted::Cell { cell, .. } => vec![cell.clone()],
+            Quoted::Box { cells, .. } => cells.clone(),
+        }
+    }
 }
 
 /// A chip's label: plain words, then a name in mono (either may be empty).
@@ -78,7 +166,8 @@ pub struct Label {
 pub enum Icon {
     Cell,
     Cells,
-    Selection,
+    /// Text quoted from a reply.
+    Quote,
     Error,
     Region,
     Image,
@@ -96,19 +185,14 @@ fn cut(name: &str, max: usize) -> String {
     format!("{head}…")
 }
 
-fn lines(n: usize) -> String {
-    if n == 1 { "1 line".into() } else { format!("{n} lines") }
-}
-
 impl Attachment {
     pub fn label(&self) -> Label {
         let label = |plain: &str, mono: &str| Label { plain: plain.into(), mono: cut(mono, CHIP_NAME) };
         match self {
             Attachment::Cells { cells, .. } if cells.len() == 1 => label("", &cells[0].name()),
             Attachment::Cells { cells, .. } => label(&format!("{} cells", cells.len()), ""),
-            Attachment::Selection { text, .. } => label(&format!("selection · {}", lines(text.lines().count().max(1))), ""),
             Attachment::Error { cell, .. } => label("error in ", &cell.name()),
-            Attachment::Region { .. } => label("region", ""),
+            Attachment::Quote(quote) => label(&quote.source(), ""),
             Attachment::Image { name, .. } | Attachment::Text { name, .. } => label("", name),
             Attachment::Upload { source, .. } => label("", &data_path(&file_name(source))),
             Attachment::Saved { path } => label("", path),
@@ -119,19 +203,21 @@ impl Attachment {
         match self {
             Attachment::Cells { cells, .. } if cells.len() == 1 => Icon::Cell,
             Attachment::Cells { .. } => Icon::Cells,
-            Attachment::Selection { .. } => Icon::Selection,
             Attachment::Error { .. } => Icon::Error,
-            Attachment::Region { .. } => Icon::Region,
+            Attachment::Quote(Quote { from: Quoted::Reply { .. }, .. }) => Icon::Quote,
+            Attachment::Quote(Quote { from: Quoted::Cell { part: Part::Figure(_), .. }, .. }) => Icon::Image,
+            Attachment::Quote(Quote { from: Quoted::Cell { .. }, .. }) => Icon::Cell,
+            Attachment::Quote(Quote { from: Quoted::Box { .. }, .. }) => Icon::Region,
             Attachment::Image { .. } => Icon::Image,
             Attachment::Text { .. } | Attachment::Upload { .. } | Attachment::Saved { .. } => Icon::File,
         }
     }
 
-    /// The notebook cells it points at, for "show in notebook".
+    /// The notebook cells it carries, as they were when attached.
     pub fn cells(&self) -> Vec<&Cell> {
         match self {
-            Attachment::Cells { cells, .. } | Attachment::Region { cells, .. } => cells.iter().collect(),
-            Attachment::Selection { cell, .. } | Attachment::Error { cell, .. } => vec![cell],
+            Attachment::Cells { cells, .. } => cells.iter().collect(),
+            Attachment::Error { cell, .. } => vec![cell],
             _ => Vec::new(),
         }
     }
@@ -144,7 +230,10 @@ impl Attachment {
 /// Each notebook attachment is one text block: a sentence for the agent, then
 /// an `<attached>` block with the cells as sent. The session's history keeps
 /// the blocks as sent, so a reopened session parses them back into chips
-/// (`replayed_notebook`); a region's image is the image block after it.
+/// (`replayed_notebook`).
+///
+/// Each quote is one text block too, the quote then the user's comment on it
+/// (`quote_block`), with a figure's or box's picture as the image block after.
 pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String]) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     let note = |s: String| ContentBlock::Text(TextContent::new(s));
@@ -156,12 +245,20 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
                 .into(),
         ));
     }
+    if attachments.iter().any(|a| matches!(a, Attachment::Quote(Quote { from: Quoted::Cell { .. } | Quoted::Box { .. }, .. }))) {
+        blocks.push(note(QUOTE_NOTE.into()));
+    }
     for attachment in attachments {
         if let Some(block) = notebook_block(attachment) {
             blocks.push(note(block));
         }
         match attachment {
-            Attachment::Region { png, .. } => blocks.push(ContentBlock::Image(ImageContent::new(base64(png), "image/png"))),
+            Attachment::Quote(quote) => {
+                blocks.push(note(quote_block(quote)));
+                if let Some(png) = quote.picture() {
+                    blocks.push(ContentBlock::Image(ImageContent::new(base64(png), "image/png")));
+                }
+            }
             Attachment::Image { mime, bytes, .. } => blocks.push(ContentBlock::Image(ImageContent::new(base64(bytes), *mime))),
             Attachment::Text { name, text } => blocks.push(ContentBlock::Resource(EmbeddedResource::new(
                 EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(text.clone(), format!("attachment:{name}"))),
@@ -169,7 +266,7 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
             Attachment::Saved { path } => blocks.push(note(format!("{SAVED_NOTE}{path}"))),
             // Copied in and turned into `Saved` before sending (`place_uploads`).
             Attachment::Upload { .. } => {}
-            Attachment::Cells { .. } | Attachment::Selection { .. } | Attachment::Error { .. } => {}
+            Attachment::Cells { .. } | Attachment::Error { .. } => {}
         }
     }
     if !mentioned.is_empty() {
@@ -199,14 +296,6 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
 /// </attached>
 /// ```
 fn notebook_block(attachment: &Attachment) -> Option<String> {
-    let region = |n: usize| {
-        let overlaps = match n {
-            0 => "It overlaps no cells.".to_string(),
-            1 => "It overlaps the cell below.".into(),
-            n => format!("It overlaps the {n} cells below."),
-        };
-        format!("The user drew a box over part of the notebook; the image after this shows what was in it. {overlaps}")
-    };
     let (kind, sentence, notebook, cells, extra) = match attachment {
         Attachment::Cells { notebook, cells, ask } => {
             let (kind, sentence) = match (ask, cells.len()) {
@@ -218,12 +307,8 @@ fn notebook_block(attachment: &Attachment) -> Option<String> {
             };
             (kind, sentence, notebook, cells.as_slice(), None)
         }
-        Attachment::Region { notebook, cells, .. } => ("region", region(cells.len()), notebook, cells.as_slice(), None),
-        Attachment::Selection { notebook, cell, text } => {
-            ("selection", "The message is about the text selected in the cell below.".into(), notebook, std::slice::from_ref(cell), Some(text))
-        }
         Attachment::Error { notebook, cell, text } => ("error", "The cell below failed with this error.".into(), notebook, std::slice::from_ref(cell), Some(text)),
-        Attachment::Image { .. } | Attachment::Text { .. } | Attachment::Upload { .. } | Attachment::Saved { .. } => return None,
+        Attachment::Quote(_) | Attachment::Image { .. } | Attachment::Text { .. } | Attachment::Upload { .. } | Attachment::Saved { .. } => return None,
     };
     let mut out = format!("[Endeavor] {sentence}\n<attached kind=\"{kind}\" notebook=\"{notebook}\">\n");
     for cell in cells {
@@ -236,8 +321,9 @@ fn notebook_block(attachment: &Attachment) -> Option<String> {
     Some(out)
 }
 
-/// A notebook attachment back from its text block (see `notebook_block`). A
-/// region comes back without its image, which is the next block.
+/// A notebook attachment back from its text block (see `notebook_block`).
+/// Sessions from before quotes also have "selection" and "region" blocks,
+/// which come back as quotes (a region without its image, the next block).
 pub fn replayed_notebook(text: &str) -> Option<Attachment> {
     let rest = text.trim().strip_prefix("[Endeavor] ")?;
     let (_, rest) = rest.split_once("\n<attached kind=\"")?;
@@ -267,11 +353,133 @@ pub fn replayed_notebook(text: &str) -> Option<Attachment> {
         "fill" => Attachment::Cells { notebook, cells, ask: CellAsk::Fill },
         "before" => Attachment::Cells { notebook, cells, ask: CellAsk::Before },
         "after" => Attachment::Cells { notebook, cells, ask: CellAsk::After },
-        "selection" => Attachment::Selection { notebook, cell: only(cells)?, text: extra? },
         "error" => Attachment::Error { notebook, cell: only(cells)?, text: extra? },
-        "region" => Attachment::Region { notebook, cells, png: Arc::new(Vec::new()) },
+        "selection" => {
+            let cell = only(cells)?;
+            Attachment::Quote(Quote { from: Quoted::Cell { notebook, name: cell.name(), cell: cell.id, part: Part::Output(extra?) }, comment: String::new() })
+        }
+        "region" => Attachment::Quote(Quote {
+            from: Quoted::Box { notebook, cells: cells.into_iter().map(|c| c.id).collect(), png: Arc::new(Vec::new()) },
+            comment: String::new(),
+        }),
         _ => return None,
     })
+}
+
+/// What the agent is told once in a message that quotes the notebook.
+const QUOTE_NOTE: &str = "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> \
+    followed by their comment on it. A quote's uri, notebook://pluto/{notebook_id}/cell/{cell_id}, names its cell \
+    (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was \
+    quoted when it isn't code: `output` (text from the cell's output), `figure` (the cell's output; the image after \
+    the quote shows it) or `box` (a box the user drew over the notebook; the image after the quote shows what was in \
+    it, and `uri` lists the cells under it). Read current code and outputs with the notebook MCP tools.";
+
+/// How a chat quote names where it's from, on its last line.
+const FROM_REPLY: &str = "> — Claude's reply";
+
+/// A quote's text block: the quote, then the user's comment on it. A quote
+/// of a reply is a Markdown blockquote, e.g.
+///
+/// ```text
+/// > refits the model on 1,000 resampled copies of the rows
+/// > — Claude's reply, 14:02
+///
+/// Why 1,000 and not 10,000?
+/// ```
+///
+/// and one of the notebook a `<quote>` element:
+///
+/// ```text
+/// <quote cell="rates" lines="3-5" uri="notebook://pluto/…/cell/…">
+/// rows = rand(1:nrow(data), nrow(data))
+/// </quote>
+/// Is sampling with replacement right here?
+/// ```
+pub fn quote_block(quote: &Quote) -> String {
+    let (quoted, gap) = match &quote.from {
+        Quoted::Reply { text, at } => {
+            let mut out: String = text.lines().map(|l| if l.is_empty() { ">\n".to_string() } else { format!("> {l}\n") }).collect();
+            out += FROM_REPLY;
+            if let Some(at) = at {
+                out += &format!(", {at}");
+            }
+            (out, "\n\n")
+        }
+        Quoted::Cell { notebook, cell, name, part } => {
+            let uri = cell_uri(BACKEND, notebook, cell);
+            let out = match part {
+                Part::Whole(code) => format!("<quote cell=\"{name}\" uri=\"{uri}\">\n{code}\n</quote>"),
+                Part::Lines { first, last, text } => format!("<quote cell=\"{name}\" lines=\"{first}-{last}\" uri=\"{uri}\">\n{text}\n</quote>"),
+                Part::Output(text) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\">\n{text}\n</quote>"),
+                Part::Figure(_) => format!("<quote cell=\"{name}\" part=\"figure\" uri=\"{uri}\"/>"),
+            };
+            (out, "\n")
+        }
+        Quoted::Box { notebook, cells, .. } => {
+            let uris: Vec<String> = cells.iter().map(|c| cell_uri(BACKEND, notebook, c)).collect();
+            (format!("<quote part=\"box\" uri=\"{}\"/>", uris.join(" ")), "\n")
+        }
+    };
+    if quote.comment.is_empty() { quoted } else { format!("{quoted}{gap}{}", quote.comment) }
+}
+
+/// A quote back from its text block (see `quote_block`). A figure or box comes
+/// back without its picture, which is the next block.
+pub fn replayed_quote(block: &str) -> Option<Attachment> {
+    let from_reply = |block: &str| {
+        let (quoted, comment) = block.split_once("\n\n").unwrap_or((block, ""));
+        let (lines, from) = quoted.rsplit_once('\n').unwrap_or(("", quoted));
+        let at = match from.strip_prefix(FROM_REPLY)? {
+            "" => None,
+            rest => Some(rest.strip_prefix(", ")?.to_string()),
+        };
+        let text: Option<Vec<&str>> = lines.lines().map(|l| l.strip_prefix("> ").or(l.strip_prefix('>'))).collect();
+        Some(Quote { from: Quoted::Reply { text: text?.join("\n"), at }, comment: comment.into() })
+    };
+    let from_notebook = |block: &str| {
+        let rest = block.strip_prefix("<quote ")?;
+        let (attrs, closed, rest) = match (rest.find("/>"), rest.find(">\n")) {
+            (Some(end), next) if next.is_none_or(|n| end < n) => (&rest[..end], true, &rest[end + 2..]),
+            (_, Some(end)) => (&rest[..end], false, &rest[end + 2..]),
+            _ => return None,
+        };
+        let attr = |key: &str| attrs.split_once(&format!("{key}=\"")).and_then(|(_, v)| v.split_once('"')).map(|(v, _)| v);
+        let (body, comment) = if closed {
+            (None, rest)
+        } else {
+            const END: &str = "\n</quote>";
+            let at = rest.match_indices(END).map(|(at, _)| at).find(|&at| matches!(rest[at + END.len()..].chars().next(), None | Some('\n')))?;
+            (Some(&rest[..at]), &rest[at + END.len()..])
+        };
+        let comment = match comment {
+            "" => "",
+            c => c.strip_prefix('\n')?,
+        };
+        let notebook_of = |uri: &str| uri.strip_prefix("notebook://")?.split_once('/')?.1.split_once("/cell/").map(|(nb, cell)| (nb.to_string(), cell.to_string()));
+        let from = match (attr("part"), body) {
+            (Some("box"), None) => {
+                let found: Option<Vec<(String, String)>> = attr("uri")?.split_whitespace().map(notebook_of).collect();
+                let found = found?;
+                Quoted::Box { notebook: found.first().map(|(nb, _)| nb.clone()).unwrap_or_default(), cells: found.into_iter().map(|(_, c)| c).collect(), png: Arc::new(Vec::new()) }
+            }
+            (part, body) => {
+                let (notebook, cell) = notebook_of(attr("uri")?)?;
+                let part = match (part, attr("lines"), body) {
+                    (Some("figure"), _, None) => Part::Figure(Arc::new(Vec::new())),
+                    (Some("output"), _, Some(text)) => Part::Output(text.into()),
+                    (None, Some(lines), Some(text)) => {
+                        let (first, last) = lines.split_once('-')?;
+                        Part::Lines { first: first.parse().ok()?, last: last.parse().ok()?, text: text.into() }
+                    }
+                    (None, None, Some(code)) => Part::Whole(code.into()),
+                    _ => return None,
+                };
+                Quoted::Cell { notebook, cell, name: attr("cell")?.into(), part }
+            }
+        };
+        Some(Quote { from, comment: comment.into() })
+    };
+    from_notebook(block).or_else(|| from_reply(block)).map(Attachment::Quote)
 }
 
 /// `body\n</tag>\n…` → (body, …).
@@ -804,8 +1012,6 @@ mod tests {
         let three = Attachment::Cells { notebook: NB.into(), cells: vec![rates.clone(), plot.clone(), rates.clone()], ask: CellAsk::About };
         assert_eq!(three.label(), Label { plain: "3 cells".into(), mono: "".into() });
         assert_eq!(Attachment::Cells { notebook: NB.into(), cells: vec![plot.clone()], ask: CellAsk::About }.label().mono, "cell");
-        let selection = Attachment::Selection { notebook: NB.into(), cell: rates.clone(), text: "a\nb".into() };
-        assert_eq!(selection.label().plain, "selection · 2 lines");
         let error = Attachment::Error { notebook: NB.into(), cell: rates, text: "BoundsError".into() };
         assert_eq!(error.label(), Label { plain: "error in ".into(), mono: "rates".into() });
         assert_eq!(error.icon(), Icon::Error);
@@ -856,20 +1062,109 @@ mod tests {
         let attachments = [
             Attachment::Cells { notebook: NB.into(), cells: vec![cell("c1", "rates = 1"), cell("c2", "")], ask: CellAsk::About },
             Attachment::Cells { notebook: NB.into(), cells: vec![cell("c3", "")], ask: CellAsk::Before },
-            Attachment::Selection { notebook: NB.into(), cell: cell("c1", "s = sum(xs)\n"), text: "sum(xs)".into() },
             // Code that looks like the block's own tags stays code.
             Attachment::Error { notebook: NB.into(), cell: cell("c4", "html\"<cell uri=\\\"x\\\">\" # </error>"), text: "LoadError:\n  in expression".into() },
-            Attachment::Region { notebook: NB.into(), cells: Vec::new(), png: Arc::new(Vec::new()) },
         ];
         for attachment in attachments {
             let block = notebook_block(&attachment).unwrap();
             assert_eq!(replayed_notebook(&block), Some(attachment), "{block}");
         }
+        let selection = format!(
+            "[Endeavor] The message is about the text selected in the cell below.\n<attached kind=\"selection\" notebook=\"{NB}\">\n\
+             <cell uri=\"notebook://pluto/{NB}/cell/c1\">\ns = sum(xs)\n</cell>\n<selection>\nsum(xs)\n</selection>\n</attached>"
+        );
+        let quoted = |from| Some(Attachment::Quote(Quote { from, comment: String::new() }));
+        assert_eq!(
+            replayed_notebook(&selection),
+            quoted(Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: "s".into(), part: Part::Output("sum(xs)".into()) }),
+            "a selection from before quotes"
+        );
+        let region = format!("[Endeavor] The user drew a box.\n<attached kind=\"region\" notebook=\"{NB}\">\n<cell uri=\"notebook://pluto/{NB}/cell/c3\">\nplot()\n</cell>\n</attached>");
+        assert_eq!(
+            replayed_notebook(&region),
+            quoted(Quoted::Box { notebook: NB.into(), cells: vec!["c3".into()], png: Arc::new(Vec::new()) }),
+            "a region from before quotes"
+        );
         let old = format!("[Endeavor] The message is about the cell below.\n<attached kind=\"cells\" notebook=\"{NB}\">\n<cell uri=\"pluto://notebook/{NB}/cell/c1\">\nrates = 1\n</cell>\n</attached>");
         let about = Attachment::Cells { notebook: NB.into(), cells: vec![cell("c1", "rates = 1")], ask: CellAsk::About };
         assert_eq!(replayed_notebook(&old), Some(about), "a session from before notebook:// links");
         assert_eq!(replayed_notebook("[Endeavor] The user is viewing Pluto notebook x."), None);
         assert_eq!(replayed_notebook("<attached kind=\"cells\">"), None, "only the app's own blocks");
+    }
+
+    fn quote(from: Quoted, comment: &str) -> Quote {
+        Quote { from, comment: comment.into() }
+    }
+
+    fn in_rates(part: Part) -> Quoted {
+        Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: "rates".into(), part }
+    }
+
+    #[test]
+    fn quotes_go_as_a_quote_then_the_comment() {
+        let quotes = [
+            quote(Quoted::Reply { text: "refits the model on 1,000 resampled copies".into(), at: Some("14:02".into()) }, "Why 1,000 and not 10,000?"),
+            quote(in_rates(Part::Lines { first: 3, last: 5, text: "rows = rand(1:n, n)\nfit(rows)\nend;".into() }), "Is sampling with replacement right here?"),
+            quote(in_rates(Part::Figure(Arc::new(b"hi!".to_vec()))), "Why does the fit miss these early points?"),
+            quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into(), "c2".into()], png: Arc::new(Vec::new()) }, ""),
+        ];
+        let attachments: Vec<Attachment> = quotes.into_iter().map(Attachment::Quote).collect();
+        let all = texts(&prompt_blocks("Check these before I write this up.", &attachments, &[]));
+        assert!(all[0].starts_with("[Endeavor] The user quoted parts of the notebook"));
+        assert_eq!(
+            all[1..],
+            [
+                "> refits the model on 1,000 resampled copies\n> — Claude's reply, 14:02\n\nWhy 1,000 and not 10,000?".to_string(),
+                format!("<quote cell=\"rates\" lines=\"3-5\" uri=\"notebook://pluto/{NB}/cell/c1\">\nrows = rand(1:n, n)\nfit(rows)\nend;\n</quote>\nIs sampling with replacement right here?"),
+                format!("<quote cell=\"rates\" part=\"figure\" uri=\"notebook://pluto/{NB}/cell/c1\"/>\nWhy does the fit miss these early points?"),
+                "image image/png aGkh".into(),
+                format!("<quote part=\"box\" uri=\"notebook://pluto/{NB}/cell/c1 notebook://pluto/{NB}/cell/c2\"/>"),
+                "Check these before I write this up.".into(),
+            ],
+            "a box without a picture goes without an image"
+        );
+        let chat_only = [Attachment::Quote(quote(Quoted::Reply { text: "x".into(), at: None }, ""))];
+        assert_eq!(texts(&prompt_blocks("", &chat_only, &[])), ["> x\n> — Claude's reply"], "no notebook note, and no words");
+    }
+
+    #[test]
+    fn quote_blocks_parse_back_as_sent() {
+        let quotes = [
+            quote(Quoted::Reply { text: "one\n\ntwo".into(), at: Some("Sat 9:10".into()) }, "and?\n\nmore"),
+            quote(Quoted::Reply { text: "x".into(), at: None }, ""),
+            quote(in_rates(Part::Whole("rates = 1\n</quote> # not the end".into())), "whole"),
+            quote(in_rates(Part::Lines { first: 2, last: 2, text: "fit()".into() }), ""),
+            quote(in_rates(Part::Output("0.42 ± 0.03".into())), "hm"),
+            quote(in_rates(Part::Figure(Arc::new(Vec::new()))), ""),
+            quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into()], png: Arc::new(Vec::new()) }, "is this real?"),
+        ];
+        for q in quotes {
+            let block = quote_block(&q);
+            assert_eq!(replayed_quote(&block), Some(Attachment::Quote(q)), "{block}");
+        }
+        assert_eq!(replayed_quote("> just a blockquote the user typed"), None);
+        assert_eq!(replayed_quote("plain words"), None);
+    }
+
+    #[test]
+    fn quotes_say_where_they_are_from() {
+        let sources: Vec<String> = [
+            Quoted::Reply { text: "x".into(), at: Some("14:02".into()) },
+            Quoted::Reply { text: "x".into(), at: None },
+            in_rates(Part::Lines { first: 3, last: 5, text: String::new() }),
+            in_rates(Part::Lines { first: 4, last: 4, text: String::new() }),
+            in_rates(Part::Whole(String::new())),
+            in_rates(Part::Output(String::new())),
+            in_rates(Part::Figure(Arc::new(Vec::new()))),
+            Quoted::Box { notebook: NB.into(), cells: vec!["a".into(), "b".into()], png: Arc::new(Vec::new()) },
+        ]
+        .into_iter()
+        .map(|from| quote(from, "").source())
+        .collect();
+        assert_eq!(
+            sources,
+            ["Claude's reply · 14:02", "Claude's reply", "rates · lines 3–5", "rates · line 4", "rates · cell", "rates · output", "rates · figure", "Box · 2 cells"]
+        );
     }
 
     #[test]

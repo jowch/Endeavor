@@ -39,6 +39,7 @@ mod outbox;
 mod overlay;
 mod platform;
 mod pluto;
+mod quotes;
 mod remote;
 mod resources;
 mod runs;
@@ -371,6 +372,8 @@ pub struct Workspace {
     /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
     annotating: bool,
+    /// Pictures the page asked for (`Shoot`), by id, until its quote takes them.
+    shots: HashMap<u32, Arc<Vec<u8>>>,
     /// "Two ways to add your file" shows over the composer (a "Uses your file"
     /// example was clicked and the tip isn't done yet).
     file_tip: bool,
@@ -618,6 +621,7 @@ impl Workspace {
             agent_rx: Some(agent_rx),
             status: "".into(),
             annotating: false,
+            shots: HashMap::new(),
             file_tip: false,
             connections: HashMap::new(),
             listeners: HashMap::new(),
@@ -1602,7 +1606,8 @@ impl Workspace {
                 let effects = session.submit(Queued::new(ask.text, attachments, blocks), ask.now);
                 self.apply_effects(key, effects, cx);
             }
-            Some(annotate::Message::Region(region)) => self.send_region(region, cx),
+            Some(annotate::Message::Shoot { id, rect }) => self.shoot(id, rect, cx),
+            Some(annotate::Message::Quote(picks)) => self.take_picks(picks, cx),
             Some(annotate::Message::Code { cell, code }) => self.on_cell_code(cell, code, cx),
             #[cfg(debug_assertions)]
             Some(annotate::Message::Debug(page)) => return self.on_page_debug(page),
@@ -1611,34 +1616,63 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A box drawn with Point: take its picture, then send it with the cells
-    /// under it. The page hides Point's dimming and outlines until told "shot".
-    /// Without a picture it goes as the cells alone.
-    fn send_region(&mut self, region: annotate::Region, cx: &mut Context<Self>) {
+    /// Take a picture of part of the page for a quote to come. The page hides
+    /// Point's dimming and outlines until told "shot".
+    fn shoot(&mut self, id: u32, rect: [f64; 4], cx: &mut Context<Self>) {
+        /// Pictures a page asked for and never used don't pile up.
+        const KEPT: usize = 16;
         let zoom = if self.settings.zoom > 0. { self.settings.zoom } else { 1. };
-        let rect = region.rect.map(|n| n * zoom);
-        let shot = snapshot::png(self.webview.read(cx).raw(), rect);
+        let shot = snapshot::png(self.webview.read(cx).raw(), rect.map(|n| n * zoom));
         cx.spawn(async move |this, cx| {
             let png = shot.await.ok().flatten();
             this.update(cx, |this, cx| {
-                this.send_to_page(&serde_json::json!({ "type": "shot" }), cx);
-                let Some(key) = this.active else { return };
-                let annotate::Region { text, notebook, cells, now, .. } = region;
-                let attachment = match png {
-                    Some(png) => attach::Attachment::Region { notebook, cells, png: Arc::new(png) },
-                    None if cells.is_empty() => return,
-                    None => attach::Attachment::Cells { notebook, cells, ask: attach::CellAsk::About },
-                };
-                let mut blocks: Vec<_> = this.viewing_context(cx).into_iter().collect();
-                let attachments = vec![attachment];
-                blocks.extend(attach::prompt_blocks(&text, &attachments, &[]));
-                let Some(session) = this.session_mut(key) else { return };
-                let effects = session.submit(Queued::new(text, attachments, blocks), now);
-                this.apply_effects(key, effects, cx);
-                cx.notify();
+                if this.shots.len() >= KEPT {
+                    this.shots.clear();
+                }
+                if let Some(png) = png {
+                    this.shots.insert(id, Arc::new(png));
+                }
+                this.send_to_page(&serde_json::json!({ "type": "shot", "id": id }), cx);
             })
         })
         .detach();
+    }
+
+    /// Quotes picked in the page, each with its picture; the comment goes on
+    /// the last. A picture that couldn't be taken leaves the quote without one.
+    fn take_picks(&mut self, picks: annotate::Picks, cx: &mut Context<Self>) {
+        let annotate::Picks { quotes, comment, add } = picks;
+        let last = quotes.len().saturating_sub(1);
+        let quotes = quotes
+            .into_iter()
+            .enumerate()
+            .map(|(i, (mut from, shot))| {
+                if let (attach::Quoted::Cell { part: attach::Part::Figure(png), .. } | attach::Quoted::Box { png, .. }, Some(shot)) = (&mut from, shot)
+                    && let Some(picture) = self.shots.remove(&shot)
+                {
+                    *png = picture;
+                }
+                attach::Quote { from, comment: if i == last { comment.clone() } else { String::new() } }
+            })
+            .collect();
+        self.use_quotes(quotes, add, cx);
+    }
+
+    /// Quotes from Reply or Point: sent now as their own message (queued while
+    /// Claude works), or added to the composer's message as cards.
+    pub fn use_quotes(&mut self, quotes: Vec<attach::Quote>, add: bool, cx: &mut Context<Self>) {
+        let quotes: Vec<_> = quotes.into_iter().map(attach::Attachment::Quote).collect();
+        if add {
+            self.composer.attachments.extend(quotes);
+            return cx.notify();
+        }
+        let Some(key) = self.active else { return };
+        let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
+        blocks.extend(attach::prompt_blocks("", &quotes, &[]));
+        let Some(session) = self.session_mut(key) else { return };
+        let effects = session.submit(Queued::new(String::new(), quotes, blocks), false);
+        self.apply_effects(key, effects, cx);
+        cx.notify();
     }
 
     /// Cmd+Shift+K from the panel (the page handles it when the notebook has focus).

@@ -3,20 +3,22 @@
 // App → page: the app evaluates `window.__endeavor.receive(<json>)`; `on`
 // registers a handler per message type.
 
+import type { Pick } from "./quote";
+
 /** Messages the page sends the app. */
 export type ToApp =
   | { type: "ready" }
   | { type: "mode"; on: boolean }
-  // Cells picked with Point, with each one's code (`codes`, same order).
-  | { type: "annotation"; notebook: string | null; cells: string[]; codes: string[]; comment: string; now: boolean }
-  // A box drawn with Point: the cells under it, and where it is in the viewport
-  // (CSS pixels) for the app to take its picture.
-  | { type: "region"; notebook: string | null; cells: string[]; codes: string[]; comment: string; now: boolean; rect: { x: number; y: number; width: number; height: number } }
+  // What Point picked, or a selection Reply quotes, with the user's comment:
+  // sent now, or (`add`) added to the composer's message.
+  | { type: "quote"; notebook: string | null; picks: Pick[]; comment: string; add: boolean }
+  // Take a picture of this part of the viewport (CSS pixels) for a quote; the app answers "shot".
+  | { type: "shoot"; id: number; rect: { x: number; y: number; width: number; height: number } }
   // Fix with Claude / Explain on a cell's error.
   | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; code: string; error: string }
   // ⌘K on a cell / the agent button between cells: about this cell, fill this
   // empty cell, or add a new cell after it. `now` (⌘⏎) joins a running turn.
-  | { type: "prompt"; notebook: string | null; cell: string; code: string; where: "about" | "fill" | "before" | "after"; text: string; now: boolean; quote?: string }
+  | { type: "prompt"; notebook: string | null; cell: string; code: string; where: "about" | "fill" | "before" | "after"; text: string; now: boolean }
   // A cell's code now, answering the app's `code` (null: no such cell here).
   | { type: "code"; cell: string; code: string | null }
   // The shown notebook's state for the app's header, whenever it changes.
@@ -73,8 +75,8 @@ export type ToPage =
   | { type: "reveal"; cells: string[] }
   // Ask for a cell's code now.
   | { type: "code"; cell: string }
-  // The app took a drawn box's picture: show Point's overlay again.
-  | { type: "shot" }
+  // The app took picture `id` (or couldn't): the page shows its overlay again.
+  | { type: "shot"; id: number }
   // The header's Live docs / Status buttons: open that tab, or shut the drawer (null).
   | { type: "drawer"; tab: "docs" | "status" | null }
   // What the safe-preview callout and Status say: where the notebook runs, and

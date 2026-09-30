@@ -80,9 +80,6 @@ pub struct Composer {
     pub notice: Option<String>,
     /// The chip under the pointer, whose preview shows.
     hovered: Option<usize>,
-    /// The sent region chip under the pointer (session key, entry, chip),
-    /// whose picture shows.
-    hovered_sent: Option<(u64, usize, usize)>,
     /// The box's height in lines as last set: (fewest, most).
     rows: std::cell::Cell<(usize, usize)>,
     /// Toolbar buttons' Tab-stop handles.
@@ -109,7 +106,6 @@ impl Composer {
             files: HashMap::new(),
             notice: None,
             hovered: None,
-            hovered_sent: None,
             rows: std::cell::Cell::new((0, 0)),
             focus_plus: cx.focus_handle().tab_stop(true),
             focus_point: cx.focus_handle().tab_stop(true),
@@ -144,7 +140,7 @@ fn icon_glyph(icon: Icon) -> Glyph {
     match icon {
         Icon::Cell => Glyph::Code,
         Icon::Cells => Glyph::Cells,
-        Icon::Selection => Glyph::Lines,
+        Icon::Quote => Glyph::Lines,
         Icon::Error => Glyph::Warning,
         Icon::Region => Glyph::Region,
         Icon::Image => Glyph::Picture,
@@ -220,9 +216,11 @@ fn text_panel(text: &str, lines: usize, color: Rgba) -> Div {
 fn preview_body(attachment: &Attachment) -> Div {
     match attachment {
         Attachment::Cells { cells, .. } => div().flex().flex_col().gap(px(6.)).children(cells.iter().take(3).map(|c| text_panel(&c.code, 6, theme::text_secondary()))),
-        Attachment::Selection { text, .. } => text_panel(text, 8, theme::text_secondary()),
         Attachment::Error { text, .. } => text_panel(text, 8, theme::danger()),
-        Attachment::Region { png, .. } => thumbnail("image/png", png),
+        Attachment::Quote(quote) => match (quote.picture(), quote.excerpt()) {
+            (Some(png), _) => thumbnail("image/png", png),
+            (None, excerpt) => text_panel(excerpt.unwrap_or_default(), 8, theme::text_secondary()),
+        },
         Attachment::Image { mime, bytes, .. } => thumbnail(mime, bytes),
         Attachment::Text { text, .. } => text_panel(text, 8, theme::text_secondary()),
         Attachment::Upload { .. } => note("A copy goes into this session's folder when you send, so Claude and the notebook can use it."),
@@ -243,12 +241,8 @@ fn preview_heading(attachment: &Attachment) -> String {
     match attachment {
         Attachment::Cells { cells, .. } if cells.len() == 1 => format!("{} · cell", cells[0].name()),
         Attachment::Cells { cells, .. } => format!("{} cells", cells.len()),
-        Attachment::Selection { cell, .. } => format!("Selected in {}", cell.name()),
         Attachment::Error { cell, .. } => format!("Error in {}", cell.name()),
-        Attachment::Region { cells, .. } => match cells.len() {
-            1 => format!("Region over {}", cells[0].name()),
-            n => format!("Region over {n} cells"),
-        },
+        Attachment::Quote(quote) => quote.source(),
         Attachment::Image { name, bytes, .. } => format!("{name} · {}", attach::size_text(bytes.len() as u64)),
         Attachment::Text { name, text } => format!("{name} · {}", attach::size_text(text.len() as u64)),
         Attachment::Upload { source, size } => {
@@ -640,7 +634,7 @@ impl Workspace {
     pub fn click_sent_chip(&mut self, key: u64, entry: usize, chip: usize, cx: &mut Context<Self>) {
         let Some(Entry::User { attachments, .. }) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.entries.get(entry)) else { return };
         let Some(attachment) = attachments.get(chip) else { return };
-        if let Attachment::Cells { cells, .. } | Attachment::Region { cells, .. } = attachment {
+        if let Attachment::Cells { cells, .. } = attachment {
             let ids = cells.iter().map(|c| c.id.clone()).collect();
             self.chip_popover = None;
             return self.reveal_cells(ids, cx);
@@ -693,7 +687,7 @@ impl Workspace {
         } else {
             "Composer"
         };
-        let chips = self.composer.attachments.iter().enumerate().map(|(i, a)| {
+        let chips = self.composer.attachments.iter().enumerate().filter(|(_, a)| !matches!(a, Attachment::Quote(_))).map(|(i, a)| {
             chip(ElementId::NamedInteger("draft-chip".into(), i as u64), a)
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered {
@@ -770,6 +764,7 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .children(self.composer.notice.clone().map(|n| div().text_size(theme::chat_meta()).text_color(theme::accent_text()).child(n)))
+            .children(self.render_quote_cards(cx))
             .child(the_box)
             .child(self.render_toolbar(session, notebook_open, cx))
             .into_any_element()
@@ -1099,46 +1094,27 @@ impl Workspace {
             })
     }
 
-    /// Chips above a sent message, and the popover of the one clicked.
+    /// Chips above a sent message (its quotes are in the bubble), and the
+    /// popover of the one clicked.
     pub fn render_sent_chips(&self, key: u64, entry: usize, attachments: &[Attachment], cx: &mut Context<Self>) -> Option<AnyElement> {
-        if attachments.is_empty() {
+        let popover = self.chip_popover.as_ref().filter(|p| p.key == key && p.entry == entry);
+        let chips: Vec<_> = attachments
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| !matches!(a, Attachment::Quote(_)))
+            .map(|(i, a)| {
+                let open = popover.is_some_and(|p| p.chip == i);
+                chip(ElementId::NamedInteger("sent-chip".into(), (key << 32) | ((entry as u64) << 8) | i as u64), a)
+                    .cursor_pointer()
+                    .when(open, |d| d.bg(theme::bg_raised()))
+                    .hover(|s| s.bg(theme::bg_raised()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.click_sent_chip(key, entry, i, cx)))
+            })
+            .collect();
+        if chips.is_empty() {
             return None;
         }
-        let popover = self.chip_popover.as_ref().filter(|p| p.key == key && p.entry == entry);
-        let chips = attachments.iter().enumerate().map(|(i, a)| {
-            let open = popover.is_some_and(|p| p.chip == i);
-            chip(ElementId::NamedInteger("sent-chip".into(), (key << 32) | ((entry as u64) << 8) | i as u64), a)
-                .cursor_pointer()
-                .when(open, |d| d.bg(theme::bg_raised()))
-                .hover(|s| s.bg(theme::bg_raised()))
-                .when(matches!(a, Attachment::Region { .. }), |d| {
-                    d.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if *hovered {
-                            this.composer.hovered_sent = Some((key, entry, i));
-                        } else if this.composer.hovered_sent == Some((key, entry, i)) {
-                            this.composer.hovered_sent = None;
-                        }
-                        cx.notify();
-                    }))
-                })
-                .on_click(cx.listener(move |this, _, _, cx| this.click_sent_chip(key, entry, i, cx)))
-        });
-        let chips: Vec<_> = chips.collect();
         let popover = popover.and_then(|p| Some((p, attachments.get(p.chip)?))).map(|(p, a)| self.render_chip_popover(p, a, cx));
-        let picture = self
-            .composer
-            .hovered_sent
-            .filter(|&(k, e, _)| (k, e) == (key, entry))
-            .and_then(|(_, _, i)| attachments.get(i))
-            .filter(|_| popover.is_none())
-            .map(|a| {
-                let body = popup()
-                    .p(px(8.))
-                    .gap(px(6.))
-                    .child(div().flex().items_center().gap(px(6.)).text_size(theme::chat_meta()).text_color(theme::text_muted()).child(glyph(icon_glyph(a.icon()), theme::text_muted())).child(preview_heading(a)))
-                    .child(preview_body(a));
-                div().absolute().top(relative(1.)).right_0().mt(px(4.)).child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(2))
-            });
         Some(
             div()
                 .relative()
@@ -1147,7 +1123,6 @@ impl Workspace {
                 .items_end()
                 .child(div().flex().flex_wrap().justify_end().gap(px(4.)).children(chips))
                 .children(popover)
-                .children(picture)
                 .into_any_element(),
         )
     }

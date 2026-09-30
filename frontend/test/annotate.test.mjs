@@ -29,12 +29,11 @@ test("annotation round trip through the bridge", async () => {
   window.document.querySelector("#annotate-bar textarea").value = "why is this slow?";
   window.document.querySelector("#annotate-bar .send").click();
   assert.deepEqual(sent.at(-1), {
-    type: "annotation",
+    type: "quote",
     notebook: "0f381e2e-b8ca-11f1-b549-49cf0ce82801",
-    cells: ["22222222-2222-2222-2222-222222222222"],
-    codes: [""],
+    picks: [{ part: "cell", cell: "22222222-2222-2222-2222-222222222222", code: "" }],
     comment: "why is this slow?",
-    now: false,
+    add: false,
   });
 
   window.__endeavor.receive({ type: "annotate", on: false });
@@ -70,18 +69,18 @@ test("a drawn box sends its cells and where it is, with the overlay hidden for t
 
   window.document.querySelector("#annotate-bar textarea").value = "what's this bump?";
   window.document.querySelector("#annotate-bar .send").click();
-  assert.ok(window.document.body.classList.contains("annotate-shooting"));
+  assert.ok(window.document.body.classList.contains("endeavor-shooting"));
   await new Promise((done) => setTimeout(done, 100));
+  assert.deepEqual(sent.at(-1), { type: "shoot", id: 1, rect: { x: 50, y: 150, width: 200, height: 150 } });
+  window.__endeavor.receive({ type: "shot", id: 1 });
+  await new Promise((done) => setTimeout(done, 0));
+  assert.ok(!window.document.body.classList.contains("endeavor-shooting"));
   assert.deepEqual(sent.at(-1), {
-    type: "region",
+    type: "quote",
     notebook: "0f381e2e-b8ca-11f1-b549-49cf0ce82801",
-    cells: [B],
-    codes: [""],
+    picks: [{ part: "box", cells: [B], shot: 1 }],
     comment: "what's this bump?",
-    now: false,
-    rect: { x: 50, y: 150, width: 200, height: 150 },
+    add: false,
   });
-  window.__endeavor.receive({ type: "shot" });
-  assert.ok(!window.document.body.classList.contains("annotate-shooting"));
   assert.ok(!window.document.querySelector("#annotate-box").classList.contains("shown"));
 });

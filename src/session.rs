@@ -19,7 +19,7 @@ use agent_client_protocol::schema::v1::{
 use gpui::*;
 use gpui_component::text::TextViewState;
 
-use crate::attach::{self, Attachment};
+use crate::attach::{self, Attachment, Part, Quote, Quoted};
 use crate::agent::{SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
 use crate::gate;
@@ -914,7 +914,11 @@ impl Session {
                 // What the app added comes back as chips where it can (images and
                 // text files carry their contents), else not at all.
                 let (text, attachment) = match chunk.content {
-                    ContentBlock::Text(t) => match attach::replayed_text_file(&t.text).or_else(|| attach::replayed_notebook(&t.text)).or_else(|| attach::replayed_saved_file(&t.text)) {
+                    ContentBlock::Text(t) => match attach::replayed_text_file(&t.text)
+                        .or_else(|| attach::replayed_notebook(&t.text))
+                        .or_else(|| attach::replayed_quote(&t.text))
+                        .or_else(|| attach::replayed_saved_file(&t.text))
+                    {
                         Some(attachment) => (None, Some(attachment)),
                         None => match attach::without_agent_blocks(&t.text) {
                             text if text.is_empty() || attach::is_app_text(&text) => return,
@@ -925,9 +929,9 @@ impl Session {
                         },
                     },
                     ContentBlock::Image(image) => {
-                        // A region's image follows its block.
+                        // A figure's or box's picture follows its quote.
                         if let Some(Entry::User { attachments, .. }) = self.entries.last_mut()
-                            && let Some(Attachment::Region { png, .. }) = attachments.last_mut()
+                            && let Some(Attachment::Quote(Quote { from: Quoted::Cell { part: Part::Figure(png), .. } | Quoted::Box { png, .. }, .. })) = attachments.last_mut()
                             && png.is_empty()
                         {
                             if let Some(Attachment::Image { bytes, .. }) = attach::replayed_image(&image.data, &image.mime_type) {
@@ -1652,15 +1656,19 @@ mod tests {
 
     #[test]
     fn a_reopened_session_gets_its_chips_back_as_sent() {
-        use crate::attach::{Cell, CellAsk};
+        use crate::attach::{Cell, CellAsk, Part, Quote, Quoted};
         use std::sync::Arc;
         const NB: &str = "6a1b2c3d-0000-4000-8000-1234567890ab";
         let cell = |id: &str, code: &str| Cell { id: id.into(), code: code.into() };
         let sent = vec![
             Attachment::Cells { notebook: NB.into(), cells: vec![cell("c1", "rates = map(fit, runs)")], ask: CellAsk::About },
             Attachment::Error { notebook: NB.into(), cell: cell("c2", "fit = curve_fit(model, t, y, p0)"), text: "BoundsError: attempt to access 3-element Vector".into() },
-            Attachment::Selection { notebook: NB.into(), cell: cell("c1", "rates = map(fit, runs)"), text: "map(fit, runs)".into() },
-            Attachment::Region { notebook: NB.into(), cells: vec![cell("c3", "scatter(t, y)"), cell("c4", "")], png: Arc::new(vec![0x89, b'P', b'N', b'G', 1, 2, 3]) },
+            Attachment::Quote(Quote { from: Quoted::Reply { text: "bunching\nhere".into(), at: Some("14:02".into()) }, comment: "why?".into() }),
+            Attachment::Quote(Quote {
+                from: Quoted::Cell { notebook: NB.into(), cell: "c3".into(), name: "plot".into(), part: Part::Figure(Arc::new(vec![0x89, b'P', b'N', b'G', 9])) },
+                comment: "these points".into(),
+            }),
+            Attachment::Quote(Quote { from: Quoted::Box { notebook: NB.into(), cells: vec!["c3".into(), "c4".into()], png: Arc::new(vec![0x89, b'P', b'N', b'G', 1, 2, 3]) }, comment: String::new() }),
             Attachment::Image { name: "image.png".into(), mime: "image/png", bytes: Arc::new(b"gel".to_vec()) },
             Attachment::Saved { path: "data/decay (2).csv".into() },
             // The adapter echoes a text file's contents after everything else.
