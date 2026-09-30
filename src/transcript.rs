@@ -123,14 +123,18 @@ const ORBIT: f32 = 14.;
 /// `FOLD_TO` lines, so the transcript shows mostly the agent's replies.
 const FOLD_AFTER: usize = 12;
 const FOLD_TO: usize = 10;
-const USER_BUBBLE_WIDTH: f32 = 300.;
 const USER_BUBBLE_PAD_X: f32 = 12.;
+
+/// A user bubble's widest: most of the chat column, as in Claude's apps.
+fn bubble_width(chat_width: f32) -> f32 {
+    ((chat_width - 2. * crate::chat_margin(chat_width)).min(crate::CHAT_CONTENT_MAX) * 0.85).max(200.)
+}
 
 /// How many lines `text` wraps to inside a user bubble. The bubble sets its
 /// font itself: list items don't see the ancestors' text style here.
-fn bubble_lines(text: &SharedString, window: &Window) -> usize {
+fn bubble_lines(text: &SharedString, width: f32, window: &Window) -> usize {
     let style = TextStyle { font_family: theme::SANS.into(), ..window.text_style() };
-    let wrap = px(USER_BUBBLE_WIDTH - 2. * USER_BUBBLE_PAD_X);
+    let wrap = px(width - 2. * USER_BUBBLE_PAD_X);
     window
         .text_system()
         .shape_text(text.clone(), theme::chat_body(), &[style.to_run(text.len())], Some(wrap), None)
@@ -155,7 +159,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 quotes.push(div().h(px(1.)).my(px(2.)).bg(theme::border()).into_any_element());
             }
             let bubble = div()
-                .max_w(px(USER_BUBBLE_WIDTH))
+                .max_w(px(bubble_width(this.settings.layout.chat_width)))
                 .px(px(USER_BUBBLE_PAD_X))
                 .py_2()
                 .rounded(px(8.))
@@ -169,7 +173,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .children(quotes);
             let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered());
             let line_height = theme::chat_line_body();
-            if text.is_empty() || bubble_lines(text, window) <= FOLD_AFTER {
+            if text.is_empty() || bubble_lines(text, bubble_width(this.settings.layout.chat_width), window) <= FOLD_AFTER {
                 let bubble = bubble.when(!text.is_empty(), |d| d.child(text.clone()));
                 return Some(column.child(bubble).children(delivered).children(unanswered).child(actions).into_any_element());
             }

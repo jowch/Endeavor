@@ -173,7 +173,7 @@
   function barPlace(pick2, width, height2, barHeight) {
     const GAP = 8;
     const EDGE = 16;
-    const barWidth = Math.max(Math.min(Math.max(pick2.right - pick2.left, 360), width - 32), 0);
+    const barWidth = Math.max(Math.min(380, width - 32), 0);
     const left = Math.min(Math.max(pick2.left, EDGE), width - EDGE - barWidth);
     const fitsBelow = pick2.bottom + GAP + barHeight <= height2 - GAP;
     const fitsAbove = pick2.top - GAP - barHeight >= GAP;

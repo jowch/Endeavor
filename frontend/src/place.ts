@@ -17,13 +17,14 @@ export function pillPlace(lines: Rect[], viewportHeight: number): { left: number
 /** Point's comment bar, `barHeight` tall, for a pick at `pick` in a pane
  * `width` × `height`: 8 px under the pick with its left edge on the pick's;
  * with no room below, 8 px above it; with no room either way, pinned to the
- * pane's bottom edge. Its width is the pick's, at least 360 px and at most the
- * pane minus 32 px, and it stays inside the pane, so once the pick scrolls
- * out of view the bar waits at the pane's edge. */
+ * pane's bottom edge. It is 380 px wide (at most the pane minus 32 px), not
+ * the pick's width, so it leaves the cells beside a wide pick in view. It
+ * stays inside the pane, so once the pick scrolls out of view the bar waits
+ * at the pane's edge. */
 export function barPlace(pick: Rect, width: number, height: number, barHeight: number): { left: number; top: number; width: number } {
   const GAP = 8;
   const EDGE = 16;
-  const barWidth = Math.max(Math.min(Math.max(pick.right - pick.left, 360), width - 32), 0);
+  const barWidth = Math.max(Math.min(380, width - 32), 0);
   const left = Math.min(Math.max(pick.left, EDGE), width - EDGE - barWidth);
   const fitsBelow = pick.bottom + GAP + barHeight <= height - GAP;
   const fitsAbove = pick.top - GAP - barHeight >= GAP;

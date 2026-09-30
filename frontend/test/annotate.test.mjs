@@ -132,12 +132,12 @@ const place = await import(`data:text/javascript;base64,${Buffer.from(outputFile
 test("the comment bar opens under the pick, else above it, else pinned to the bottom", () => {
   const [width, height, bar] = [900, 700, 70];
   const pick = (top, bottom, left = 100, right = 700) => ({ left, top, right, bottom });
-  assert.deepEqual(place.barPlace(pick(100, 300), width, height, bar), { left: 100, top: 308, width: 600 });
-  assert.deepEqual(place.barPlace(pick(500, 640), width, height, bar), { left: 100, top: 422, width: 600 }, "no room below: 8 px above");
-  assert.deepEqual(place.barPlace(pick(40, 680), width, height, bar), { left: 100, top: 614, width: 600 }, "no room either way: the pane's bottom");
-  assert.deepEqual(place.barPlace(pick(100, 120, 10, 60), width, height, bar), { left: 16, top: 128, width: 360 }, "at least 360 wide, inside the pane");
-  assert.deepEqual(place.barPlace(pick(100, 120, 0, 2000), width, height, bar).width, 868, "at most the pane minus 32");
+  assert.deepEqual(place.barPlace(pick(100, 300), width, height, bar), { left: 100, top: 308, width: 380 });
+  assert.deepEqual(place.barPlace(pick(500, 640), width, height, bar), { left: 100, top: 422, width: 380 }, "no room below: 8 px above");
+  assert.deepEqual(place.barPlace(pick(40, 680), width, height, bar), { left: 100, top: 614, width: 380 }, "no room either way: the pane's bottom");
+  assert.deepEqual(place.barPlace(pick(100, 120, 10, 60), width, height, bar), { left: 16, top: 128, width: 380 }, "380 wide, inside the pane");
+  assert.deepEqual(place.barPlace(pick(100, 120, 0, 2000), 300, height, bar).width, 268, "at most the pane minus 32");
   assert.deepEqual(place.barPlace(pick(-400, -100), width, height, bar).top, 8, "a pick scrolled up: the bar waits at the top");
   assert.deepEqual(place.barPlace(pick(900, 1200), width, height, bar).top, 614, "a pick scrolled down: the bar waits at the bottom");
-  assert.deepEqual(place.barPlace(pick(100, 120, 700, 800), width, height, bar).left, 524, "kept inside the pane's right edge");
+  assert.deepEqual(place.barPlace(pick(100, 120, 700, 800), width, height, bar).left, 504, "kept inside the pane's right edge");
 });
