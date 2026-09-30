@@ -263,7 +263,14 @@ html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !i
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
 pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
 pluto-editor > main { padding-top: 16px; }
-pluto-editor main { margin-right: max(0px, (100% - 731px) / 2) !important; }
+/* Left-aligned, not centred (Pluto classic stays centred): a floated
+   PlutoUI TableOfContents sits at the right, and centring put it over the
+   notebook rather than beside it. 731px keeps the same reading width Pluto
+   centred at; 48px on the left clears our striped edit-gutter bar
+   (cells.ts, 8px + 4px past the cell's own left edge) with room to spare.
+   The overview rail (rail.ts) is fixed to the right of the viewport, not the
+   notebook, so it isn't affected either way. */
+pluto-editor main { margin-left: 48px !important; margin-right: auto !important; max-width: 731px !important; }
 pluto-runarea > span { font-size: 10px; }
 /* The web view draws over native views, so the notebook header can't blur
    what's under it (docs/design-gaps.md, "Translucent headers with blur").
