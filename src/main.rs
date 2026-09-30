@@ -1925,7 +1925,7 @@ impl Render for Workspace {
             .text_size(theme::size_body())
             .line_height(theme::line_body())
             .child(div().track_focus(&self.keyboard_home))
-            .child(platform::keyboard_follows_clicks())
+            .child(platform::web_view_hooks())
             .when(self.settings.layout.sidebar_open, |d| d.child(self.render_session_bar(window, cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
             .child(
                 div()

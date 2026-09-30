@@ -1,7 +1,7 @@
 //! What the app does differently on macOS and Linux, outside GPUI and wry:
 //! showing a file, reading system settings, and hosting the notebook's web view.
 //! On Linux the web view is WebKitGTK in an X11 child window, so GTK has to be
-//! started and its events pumped. `src/linux/` has the Linux versions of the
+//! started and its events run. `src/linux/` has the Linux versions of the
 //! macOS-only fixes.
 
 use std::path::Path;
@@ -74,14 +74,14 @@ pub fn bring_all_to_front(cx: &mut gpui::App) {
     cx.activate(true);
 }
 
-/// On macOS AppKit moves the keyboard between GPUI and the web view itself.
+/// On macOS AppKit keeps the web view in step with the window by itself.
 #[cfg(target_os = "macos")]
-pub fn keyboard_follows_clicks() -> impl gpui::IntoElement {
+pub fn web_view_hooks() -> impl gpui::IntoElement {
     gpui::Empty
 }
 
 #[cfg(target_os = "linux")]
-pub use crate::linux::keyboard_follows_clicks;
+pub use crate::linux::web_view_hooks;
 
 /// Start GTK and keep its events flowing from GPUI's main loop.
 #[cfg(target_os = "linux")]
@@ -90,15 +90,7 @@ pub fn init(cx: &mut gpui::App) {
         eprintln!("GTK didn't start, so the notebook can't show: {e}");
         return;
     }
-    cx.spawn(async move |cx| {
-        loop {
-            while gtk::events_pending() {
-                gtk::main_iteration_do(false);
-            }
-            cx.background_executor().timer(std::time::Duration::from_millis(8)).await;
-        }
-    })
-    .detach();
+    crate::linux::gtk_loop::start(cx);
 }
 
 /// The window the notebook's web view goes in, as wry wants it.

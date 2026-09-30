@@ -3,6 +3,7 @@
 //! region on screen, so the app moves focus and cuts holes itself, where
 //! macOS does it with AppKit (`webkeys.rs`, `overlay.rs`).
 
+pub mod gtk_loop;
 pub mod overlay;
 pub mod webkeys;
 
@@ -43,14 +44,16 @@ pub fn attach(webview: &wry::WebView, window: &Window, cx: &mut App) {
     webkeys::forward_app_keys(webview, window.window_handle(), gpui, cx);
 }
 
-/// A click GPUI gets was outside the web view (or in a hole cut in it), so the
-/// keyboard goes to GPUI's window. gpui-wry answers the same click by focusing
-/// the web view's container window, so this runs after it: deferred, and on
-/// GDK's connection so the X server sees it second.
-pub fn keyboard_follows_clicks() -> impl IntoElement {
+/// Drawn in the workspace every frame. A click GPUI gets was outside the web
+/// view (or in a hole cut in it), so the keyboard goes to GPUI's window.
+/// gpui-wry answers the same click by focusing the web view's container
+/// window, so this runs after it: deferred, and on GDK's connection so the X
+/// server sees it second. And GTK runs once the frame has moved the web view.
+pub fn web_view_hooks() -> impl IntoElement {
     canvas(
         |_, _, _| (),
         |_, _, window, _| {
+            gtk_loop::wake();
             let Some(xid) = gpui_xid(window) else { return };
             window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx: &mut App| {
                 if phase.capture() {
