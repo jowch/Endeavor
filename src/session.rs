@@ -363,26 +363,64 @@ pub struct Stopped {
     pub modified: Option<f64>,
 }
 
+/// Starting or reopening a session failed: the page in place of its transcript.
 pub struct Failure {
-    pub message: String,
-    /// A reopen that failed can still be continued as a copy (session/fork).
-    pub can_copy: bool,
+    pub kind: OpenFailure,
+    /// The agent's error, under Details.
+    pub raw: String,
+    pub details_open: bool,
 }
 
-/// A readable reason from an agent error, which may wrap stderr in JSON.
-fn failure_message(error: &str) -> (String, bool) {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OpenFailure {
+    /// It's open in Claude Code in a terminal: open a copy here, or close it there and try again.
+    InCli,
+    /// Anything else, with a plain reason when Endeavor can tell.
+    Other(Option<&'static str>),
+}
+
+/// Why a session couldn't open, from the agent's error (which may wrap the
+/// CLI's stderr in JSON).
+pub fn open_failure(error: &str) -> OpenFailure {
     if error.contains("running as a background session") || error.contains("claude attach") {
-        let message = "This session is still open in the Claude Code CLI. Close it there to continue it \
-                       here, or open a copy (it keeps the conversation so far)."
-            .to_string();
-        return (message, true);
+        return OpenFailure::InCli;
     }
-    let detail = error
-        .split_once("\"details\": \"")
-        .and_then(|(_, rest)| rest.split_once('"'))
-        .map(|(detail, _)| detail)
-        .unwrap_or(error);
-    (format!("Couldn't open the session: {}", detail.lines().next().unwrap_or(detail).trim()), false)
+    let lower = error.to_lowercase();
+    let reason = if ["json", "unexpected token", "unexpected end", "parse error"].iter().any(|w| lower.contains(w)) {
+        Some("Its history couldn't be read.")
+    } else if ["enoent", "no such file or directory", "does not exist"].iter().any(|w| lower.contains(w)) {
+        Some("Its folder isn't there any more.")
+    } else if ["connection closed", "channel closed", "broken pipe", "agent connection"].iter().any(|w| lower.contains(w)) {
+        Some("Claude isn't running.")
+    } else if lower.contains("not found") {
+        Some("Claude Code no longer has its history.")
+    } else {
+        None
+    };
+    OpenFailure::Other(reason)
+}
+
+impl Failure {
+    pub fn title(&self, new: bool) -> &'static str {
+        match self.kind {
+            OpenFailure::InCli => "This session is open in Claude Code",
+            OpenFailure::Other(_) if new => "Couldn't start this session",
+            OpenFailure::Other(_) => "Couldn't open this session",
+        }
+    }
+
+    /// The page's words. `notebook_fine`: the session has a notebook, and its file is there.
+    pub fn body(&self, notebook_fine: bool) -> String {
+        match self.kind {
+            OpenFailure::InCli => "It's running in a terminal. Close it there, then Try again. Or open a copy here: it has the \
+                                   conversation so far, and the two go separate ways after that."
+                .into(),
+            OpenFailure::Other(reason) => {
+                let why = reason.unwrap_or("Claude Code couldn't load it.");
+                if notebook_fine { format!("{why} The notebook and its file are fine.") } else { why.to_owned() }
+            }
+        }
+    }
 }
 
 /// A session title from its first message: cut at a word boundary, with "…".
@@ -534,24 +572,49 @@ impl Session {
 
     /// Starting or reopening failed: stop looking busy and say why.
     pub fn fail(&mut self, error: &str) {
-        let (message, cli_live) = failure_message(error);
-        self.failed = Some(Failure { message, can_copy: cli_live || self.replaying });
+        self.failed = Some(Failure { kind: open_failure(error), raw: error.trim().to_owned(), details_open: false });
         self.outbox.busy = false;
         self.busy_since = None;
         self.replaying = false;
+        self.reloading = false;
     }
 
-    /// Retry a failed reopen as a copy: the transcript refills from the copy's replay.
+    /// Open a session that couldn't be reopened (e.g. open in the CLI) as a
+    /// copy: the transcript refills from the copy's replay, and messages sent
+    /// meanwhile go once it's open.
     pub fn reopen_as_copy(&mut self) -> Option<SessionId> {
         self.failed.take()?;
+        self.clear_for_replay();
+        self.title = format!("{} (copy)", self.title);
+        self.id.take()
+    }
+
+    /// Try again on a session that couldn't open: it starts, or loads its
+    /// history, again. Messages sent meanwhile wait for it.
+    pub fn retry_open(&mut self) {
+        if self.failed.take().is_none() {
+            return;
+        }
+        if self.id.is_some() {
+            self.clear_for_replay();
+        }
+        self.outbox.busy = true;
+        self.agent_waiting = true;
+    }
+
+    fn clear_for_replay(&mut self) {
         self.entries.clear();
         self.replies.get_mut().clear();
         self.open_runs.clear();
         self.mark(0);
         self.outbox = Outbox::waiting();
         self.replaying = true;
-        self.title = format!("{} (copy)", self.title);
-        self.id.take()
+    }
+
+    pub fn toggle_failure_details(&mut self) {
+        if let Some(failure) = &mut self.failed {
+            failure.details_open = !failure.details_open;
+        }
     }
 
     /// A past session being reopened: its id is known up front so the replayed
@@ -1992,14 +2055,32 @@ mod tests {
         s.fail(r#"Internal error: { "details": "Claude Code process exited with code 1. stderr: Error: Session abc is running as a background session (abc). Run `claude attach abc` to open it" }"#);
         assert!(!s.outbox.busy);
         let failure = s.failed.as_ref().unwrap();
-        assert!(failure.can_copy && failure.message.contains("Claude Code CLI"));
+        assert_eq!(failure.kind, super::OpenFailure::InCli);
+        assert_eq!(failure.title(false), "This session is open in Claude Code");
         assert_eq!(s.reopen_as_copy(), Some(SessionId::new("abc")));
         assert!(s.failed.is_none() && s.id.is_none() && s.title.ends_with("(copy)"));
+        assert!(s.submit(text("go on"), false).is_empty(), "a message waits for the copy");
 
-        let mut other = Session::new(2, Place::local("/tmp"), None);
+        let mut other = Session::loading(2, SessionId::new("def"), Place::local("/tmp"), None, "Fit".into());
         other.fail(r#"Internal error: { "details": "boom happened
 more" }"#);
-        assert_eq!(other.failed.unwrap().message, "Couldn't open the session: boom happened");
+        let failure = other.failed.as_ref().unwrap();
+        assert_eq!((failure.title(false), failure.body(false).as_str()), ("Couldn't open this session", "Claude Code couldn't load it."));
+        assert!(failure.raw.contains("boom happened"), "the raw error is under Details");
+        other.retry_open();
+        assert!(other.failed.is_none() && other.agent_waiting && other.id.is_some(), "Try again loads it again");
+    }
+
+    #[test]
+    fn a_session_that_wont_open_says_why_in_plain_words() {
+        use super::{OpenFailure, open_failure};
+        assert_eq!(open_failure("Internal error: Unexpected end of JSON input at line 2214"), OpenFailure::Other(Some("Its history couldn't be read.")));
+        assert_eq!(open_failure("ENOENT: no such file or directory, chdir '/Users/sam/gone'"), OpenFailure::Other(Some("Its folder isn't there any more.")));
+        assert_eq!(open_failure("Internal error: Session abc not found"), OpenFailure::Other(Some("Claude Code no longer has its history.")));
+        assert_eq!(open_failure("Error: Session abc is running as a background session (abc). Run `claude attach abc` to open it"), OpenFailure::InCli);
+        let failure = super::Failure { kind: open_failure("Unexpected token } in JSON"), raw: String::new(), details_open: false };
+        assert_eq!(failure.body(true), "Its history couldn't be read. The notebook and its file are fine.");
+        assert_eq!(failure.title(true), "Couldn't start this session");
     }
 
     #[test]

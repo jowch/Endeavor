@@ -983,6 +983,24 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A message for a session that couldn't open: open it first (a copy, for
+    /// one open in Claude Code's CLI), so the message goes once it is.
+    fn open_before_sending(&mut self, key: u64, cx: &mut Context<Self>) {
+        match self.sessions.iter().find(|s| s.key == key).and_then(|s| s.failed.as_ref()).map(|f| f.kind) {
+            Some(session::OpenFailure::InCli) => self.open_copy(key, cx),
+            Some(session::OpenFailure::Other(_)) => self.retry_open(key, cx),
+            None => {}
+        }
+    }
+
+    /// Try again on a session that couldn't open.
+    fn retry_open(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(session) = self.session_mut(key) else { return };
+        session.retry_open();
+        self.request_agent(key, cx);
+        cx.notify();
+    }
+
     /// Continue a session that couldn't be reopened (e.g. live in the CLI) as a copy.
     fn open_copy(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
@@ -1217,6 +1235,7 @@ impl Workspace {
     fn send(&mut self, key: u64, context: Option<ContentBlock>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
         /// Smaller files are sent before progress would be worth reading.
         const SHOW_PROGRESS: u64 = 4_000_000;
+        self.open_before_sending(key, cx);
         let Some(place) = self.session_mut(key).map(|s| s.place.clone()) else { return };
         let Some((text, attachments, mentioned)) = self.take_composer(window, cx) else { return };
         if !attachments.iter().any(|a| matches!(a, attach::Attachment::Upload { .. })) {
@@ -1623,6 +1642,7 @@ impl Workspace {
             }
             Some(annotate::Message::Ask(ask)) => {
                 let Some(key) = self.active else { return };
+                self.open_before_sending(key, cx);
                 let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
                 let attachments = vec![ask.attachment];
                 blocks.extend(attach::prompt_blocks(&ask.text, &attachments, &[]));
@@ -1691,6 +1711,7 @@ impl Workspace {
             return cx.notify();
         }
         let Some(key) = self.active else { return };
+        self.open_before_sending(key, cx);
         let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
         blocks.extend(attach::prompt_blocks("", &quotes, &[]));
         let Some(session) = self.session_mut(key) else { return };
@@ -1867,10 +1888,38 @@ impl Workspace {
             .children(menu.map(|menu| self.render_menu(menu, cx)))
     }
 
+    /// In place of the transcript of a session that couldn't open: why, and the ways on.
+    fn render_open_failure(&self, session: &Session, failure: &session::Failure, cx: &mut Context<Self>) -> AnyElement {
+        let key = session.key;
+        let fine = session.notebook_path.is_some() && !session.missing;
+        let try_again = |look| {
+            failure::action("open-try-again", Some(new_session::Glyph::Restart), "Try again", look).on_click(cx.listener(move |this, _, _, cx| this.retry_open(key, cx)))
+        };
+        let (buttons, details) = match failure.kind {
+            session::OpenFailure::InCli => (
+                vec![
+                    failure::action("open-copy", Some(new_session::Glyph::Copy), "Open a copy", signin::Look::Primary)
+                        .on_click(cx.listener(move |this, _, _, cx| this.open_copy(key, cx)))
+                        .into_any_element(),
+                    try_again(signin::Look::Secondary).into_any_element(),
+                ],
+                None,
+            ),
+            session::OpenFailure::Other(_) => {
+                let entity = cx.entity().downgrade();
+                let details = failure::details("open-details", failure.raw.clone(), failure.details_open, move |_, cx| {
+                    let _ = entity.update(cx, |this, cx| this.with_session(key, cx, Session::toggle_failure_details));
+                });
+                (vec![try_again(signin::Look::Primary).into_any_element()], Some(details))
+            }
+        };
+        let body = vec![div().child(failure.body(fine)).into_any_element()];
+        failure::page(new_session::Glyph::Bubble, failure.title(session.id.is_none()), body, buttons, details).into_any_element()
+    }
+
     /// A session's chat: the transcript, then what waits above the composer, then the composer.
     /// `notebook_open`: its notebook shows in the pane (Point needs it).
     fn render_chat(&self, session: &Session, notebook_open: bool, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let key = session.key;
         let margin = px(chat_margin(self.settings.layout.chat_width));
         let scroll_top = session.list.logical_scroll_top();
         let at_top = scroll_top.item_ix == 0 && scroll_top.offset_in_item <= px(0.);
@@ -1898,49 +1947,26 @@ impl Workspace {
             .flex()
             .flex_col()
             .min_h_0()
-            .children(session.failed.as_ref().map(|failure| {
-                div()
-                    .m_3()
-                    .p_2()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme::danger())
-                    .child(failure.message.clone())
-                    .when(failure.can_copy, |d| {
-                        d.child(
-                            div()
-                                .id("open-copy")
-                                .px_2()
-                                .py_1()
-                                .rounded_sm()
-                                .cursor_pointer()
-                                .bg(theme::accent())
-                                .text_color(gpui::white())
-                                .child("Open a copy")
-                                .on_click(cx.listener(move |this, _, _, cx| this.open_copy(key, cx))),
-                        )
-                    })
-            }))
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    // After the text view has settled the selection the pointer made.
-                    .capture_any_mouse_up(cx.listener(|_, event: &MouseUpEvent, window, cx| {
-                        let at = event.position;
-                        cx.defer_in(window, move |this, _, cx| this.check_reply_selection(at, cx));
-                    }))
-                    .child(transcript::render_transcript(session, margin, cx))
-                    .children(top_fade)
-                    .children(bottom_fade)
-                    .children(self.render_reply(window, cx)),
-            )
+            .map(|d| match &session.failed {
+                Some(failure) => d.child(div().flex_1().min_h_0().child(self.render_open_failure(session, failure, cx))),
+                None => d.child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        // After the text view has settled the selection the pointer made.
+                        .capture_any_mouse_up(cx.listener(|_, event: &MouseUpEvent, window, cx| {
+                            let at = event.position;
+                            cx.defer_in(window, move |this, _, cx| this.check_reply_selection(at, cx));
+                        }))
+                        .child(transcript::render_transcript(session, margin, cx))
+                        .children(top_fade)
+                        .children(bottom_fade)
+                        .children(self.render_reply(window, cx)),
+                ),
+            })
             .children(transcript::render_activity(session, self.offline_since, margin, cx))
             .child(
                 div()
