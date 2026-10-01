@@ -1091,11 +1091,7 @@ impl Session {
                     .then(|| input["plan"].as_str().unwrap_or("").to_owned());
                 let call = request.tool_call.tool_call_id.clone();
                 let asked = Asked { title: &title, kind, input: &input, path: path.as_deref() };
-                let answered = match option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
-                    Some(allow) if plan.is_none() && runs_code && self.run_without_asking => Some((allow, Approval::WithoutAsking)),
-                    Some(allow) if plan.is_none() && !runs_code && self.asks.allowed(&asked) => Some((allow, Approval::ForSession)),
-                    _ => None,
-                };
+                let answered = option_of_kind(&request.options, PermissionOptionKind::AllowOnce).zip(self.answer_on_arrival(&asked, runs_code, plan.is_some()));
                 if let Some((allow, approval)) = answered {
                     let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
                     let _ = responder.respond(RequestPermissionResponse::new(outcome));
@@ -1597,13 +1593,31 @@ impl Session {
     }
 
     /// Answer a permission request with `option`. `Scope::Session` remembers a
-    /// rule for this session (for runs and plans: runs stop asking), and
-    /// answers the prompts already waiting that it covers.
+    /// rule for this session (for runs and plans: runs stop asking). It answers
+    /// only this prompt: those already waiting stay questions of their own, and
+    /// only prompts that arrive later are answered by the rule.
     pub fn answer(&mut self, ix: usize, option: &PermissionOption, scope: Scope) {
-        let Some(Entry::Permission { call, title, responder, input, runs_code, plan, options, kind, path, .. }) = self.entries.get_mut(ix) else { return };
+        let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix) else { return };
         let Some(responder) = responder.take() else { return };
         let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
         let _ = responder.respond(RequestPermissionResponse::new(outcome));
+        self.record_answer(ix, option, scope);
+    }
+
+    /// How a prompt arriving now is answered without a card: in Auto for
+    /// runs, by an "Always this session" rule for the agent's own prompts.
+    fn answer_on_arrival(&self, asked: &Asked, runs_code: bool, plan: bool) -> Option<Approval> {
+        match () {
+            _ if plan => None,
+            _ if runs_code => self.run_without_asking.then_some(Approval::WithoutAsking),
+            _ => self.asks.allowed(asked).then_some(Approval::ForSession),
+        }
+    }
+
+    /// An answer given to prompt `ix`, once its responder has it: its row, the
+    /// batch count, and the rule or mode "Always this session" sets.
+    fn record_answer(&mut self, ix: usize, option: &PermissionOption, scope: Scope) {
+        let Some(Entry::Permission { call, title, input, runs_code, plan, options, kind, path, .. }) = self.entries.get(ix) else { return };
         let allowed = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
         let approval = answer_approval(allowed, plan.is_some(), scope);
         let runs = *runs_code || plan.is_some();
@@ -1617,31 +1631,6 @@ impl Session {
         }
         if let Some(rule) = rule {
             self.asks.rules.push(rule);
-        }
-        if allowed && scope == Scope::Session {
-            self.answer_covered();
-        }
-    }
-
-    /// Prompts already waiting that "Always this session" now covers.
-    fn answer_covered(&mut self) {
-        for ix in self.waiting_prompts() {
-            let Entry::Permission { title, input, runs_code, plan, options, kind, path, .. } = &self.entries[ix] else { continue };
-            let asked = Asked { title, kind: *kind, input, path: path.as_deref() };
-            let approval = match () {
-                _ if plan.is_some() => continue,
-                _ if *runs_code && self.run_without_asking => Approval::WithoutAsking,
-                _ if !*runs_code && self.asks.allowed(&asked) => Approval::ForSession,
-                _ => continue,
-            };
-            let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce).cloned() else { continue };
-            let Some(Entry::Permission { call, title, responder, input, .. }) = self.entries.get_mut(ix) else { continue };
-            let Some(responder) = responder.take() else { continue };
-            let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()))));
-            let (call, title, input) = (call.clone(), title.clone(), input.clone());
-            self.mark(ix);
-            self.asks.answered(call.clone());
-            self.approve(&call, approval, &title, &input);
         }
     }
 
@@ -1751,6 +1740,64 @@ mod tests {
         AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, SessionId, SessionMode, SessionModeState, SessionUpdate,
         StopReason, UsageUpdate,
     };
+
+    #[test]
+    fn always_this_session_answers_only_the_prompt_shown() {
+        use super::{Approval, Scope};
+        use crate::permits::Asked;
+        use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, ToolCall, ToolCallId, ToolKind};
+        let allow = PermissionOption::new("allow-once", "Yes", PermissionOptionKind::AllowOnce);
+        let options = vec![allow.clone(), PermissionOption::new("reject", "No", PermissionOptionKind::RejectOnce)];
+        let edit = |file: &str| serde_json::json!({ "file_path": file, "old_string": "a", "new_string": "b" });
+        let mut s = Session::new(1, Place::local("/p"), None);
+        for (id, file, runs_code, title) in [("t1", "/p/notes.md", false, "Edit"), ("t2", "/p/notes.md", false, "Edit"), ("r1", "", true, "mcp__notebook__execute_cell"), ("r2", "", true, "mcp__notebook__execute_cell")] {
+            s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), title.to_string()))));
+            s.push(Entry::Permission {
+                call: ToolCallId::new(id.to_string()),
+                title: title.into(),
+                code: None,
+                options: options.clone(),
+                responder: None,
+                runs_code,
+                tool: None,
+                input: if runs_code { serde_json::json!({ "cell_id": "a" }) } else { edit(file) },
+                kind: Some(if runs_code { ToolKind::Other } else { ToolKind::Edit }),
+                path: None,
+                preview: None,
+                plan: None,
+            });
+        }
+        let row = |s: &Session, id: &str| {
+            s.entries.iter().find_map(|e| match e {
+                Entry::Tool { id: call, approval, .. } if call.to_string() == id => Some(*approval),
+                _ => None,
+            })
+        };
+        let at = |s: &Session, id: &str| s.entries.iter().position(|e| matches!(e, Entry::Permission { call, .. } if call.to_string() == id)).unwrap();
+
+        // Always this session on the first edit: the second, already waiting, stays unanswered.
+        s.record_answer(at(&s, "t1"), &allow, Scope::Session);
+        assert_eq!(row(&s, "t1"), Some(Some(Approval::ForSession)));
+        assert_eq!(row(&s, "t2"), Some(None), "a prompt already waiting is its own question");
+        assert_eq!(s.asks.answered, 1);
+        // A prompt arriving now for the same file is answered by the rule; another file isn't.
+        let input = edit("/p/notes.md");
+        let same = Asked { title: "Edit", kind: Some(ToolKind::Edit), input: &input, path: None };
+        assert_eq!(s.answer_on_arrival(&same, false, false), Some(Approval::ForSession));
+        let other_input = edit("/p/other.md");
+        let other = Asked { title: "Edit", kind: Some(ToolKind::Edit), input: &other_input, path: None };
+        assert_eq!(s.answer_on_arrival(&other, false, false), None);
+        assert_eq!(s.answer_on_arrival(&same, false, true), None, "a plan always asks");
+
+        // Always on a run card: the session goes to Auto, and the run already waiting still asks.
+        s.record_answer(at(&s, "r1"), &allow, Scope::Session);
+        assert!(s.run_without_asking);
+        assert_eq!(row(&s, "r1"), Some(Some(Approval::ForSession)));
+        assert_eq!(row(&s, "r2"), Some(None));
+        let run_input = serde_json::json!({ "cell_id": "b" });
+        let run = Asked { title: "mcp__notebook__execute_cell", kind: Some(ToolKind::Other), input: &run_input, path: None };
+        assert_eq!(s.answer_on_arrival(&run, true, false), Some(Approval::WithoutAsking));
+    }
 
     #[test]
     fn answers_show_on_their_calls_and_dont_split_runs() {
