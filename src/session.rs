@@ -348,6 +348,8 @@ pub struct Session {
     /// An entry's own control (a tool or thought row's toggle, a message's
     /// Copy), by its entry index.
     row_focus: RefCell<HashMap<usize, FocusHandle>>,
+    /// A changed-cells card's row, by its entry index and row number.
+    changed_cell_focus: RefCell<HashMap<(usize, usize), FocusHandle>>,
     /// Each reply's parsed markdown, by its entry index (see `reply_text`).
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Subscription)>>,
 }
@@ -500,6 +502,7 @@ impl Session {
             plan_card_focus: RefCell::new(None),
             run_focus: RefCell::new(HashMap::new()),
             row_focus: RefCell::new(HashMap::new()),
+            changed_cell_focus: RefCell::new(HashMap::new()),
             replies: RefCell::new(HashMap::new()),
         }
     }
@@ -536,6 +539,11 @@ impl Session {
     /// An entry's own control's Tab-stop handle, by its entry index.
     pub fn row_focus(&self, ix: usize, cx: &App) -> FocusHandle {
         self.row_focus.borrow_mut().entry(ix).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
+    }
+
+    /// A changed-cells card's row's Tab-stop handle, by the card's entry index and row number.
+    pub fn changed_cell_focus(&self, ix: usize, row: usize, cx: &App) -> FocusHandle {
+        self.changed_cell_focus.borrow_mut().entry((ix, row)).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// The parsed markdown of the reply at entry `ix`, kept for as long as the

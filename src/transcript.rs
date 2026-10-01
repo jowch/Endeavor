@@ -227,7 +227,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .children(warnings.iter().map(run_state_line))
             .into_any_element(),
         Entry::Tool { .. } | Entry::Thought { .. } => render_row(session, ix, false, window, cx),
-        Entry::Changes(cells) => render_changes(key, ix, cells, cx),
+        Entry::Changes(cells) => render_changes(session, key, ix, cells, cx),
         Entry::Plan(entries) => div()
             .flex()
             .flex_col()
@@ -455,7 +455,7 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
 /// The end-of-turn card: a row per cell the turn changed (icon, name, a
 /// `new` or `deleted` tag, ± lines), which shows the cell in the notebook. A
 /// deleted cell has nothing to show.
-fn render_changes(key: u64, ix: usize, cells: &[celldiff::ChangedCell], cx: &mut Context<Workspace>) -> AnyElement {
+fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::ChangedCell], cx: &mut Context<Workspace>) -> AnyElement {
     use celldiff::CellChange;
     let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::chat_meta_small()).text_color(color).child(text);
     let tag = |text: &'static str| div().flex_none().px(px(5.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).text_size(theme::size_meta_small()).child(text);
@@ -466,7 +466,9 @@ fn render_changes(key: u64, ix: usize, cells: &[celldiff::ChangedCell], cx: &mut
             CellChange::Edited => "",
             CellChange::Deleted => ", deleted",
         };
-        let label = format!("{}{tag_text}, {} added, {} removed", cell.name, cell.added, cell.removed);
+        // A deleted row has nothing to show, so its label stays descriptive
+        // instead of naming an action it can't do.
+        let label = if deleted { format!("{}{tag_text}, {} added, {} removed", cell.name, cell.added, cell.removed) } else { format!("Show {} in the notebook", cell.name) };
         let id = cell.cell.clone();
         div()
             .id(ElementId::NamedInteger(format!("changed-cell-{n}").into(), key << 32 | ix as u64))
@@ -488,6 +490,11 @@ fn render_changes(key: u64, ix: usize, cells: &[celldiff::ChangedCell], cx: &mut
             .when(cell.removed > 0, |d| d.child(mono(format!("−{}", cell.removed), theme::diff_del())))
             .when(!deleted, |d| {
                 d.role(Role::Button)
+                    .border_2()
+                    .border_color(gpui::transparent_black())
+                    .track_focus(&session.changed_cell_focus(ix, n, cx))
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::row_active()).text_color(theme::text_secondary()))
                     .child(div().flex_none().child("›"))
