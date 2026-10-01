@@ -78,11 +78,12 @@ pub fn last_active(updated: Option<SystemTime>, notebook: Option<&str>, server: 
 }
 
 impl Workspace {
-    /// What `session` waits for before it opens, while it's on its way: None
-    /// once it's open, when it failed, or when something else holds it up that
-    /// has its own place (offline, Julia stopped or failed).
+    /// What `session` waits for: its server, while Endeavor can't reach it;
+    /// otherwise what it waits for before it opens, while it's on its way.
+    /// None once it's open, when it failed, or when something else holds it
+    /// up that has its own place (offline, Julia stopped or failed).
     pub fn session_wait(&self, session: &Session) -> Option<Waiting> {
-        if session.failed.is_some() || !(session.opening() || session.agent_waiting) || self.offline_since.is_some() {
+        if session.failed.is_some() || self.offline_since.is_some() {
             return None;
         }
         let host = &session.place.host;
@@ -92,6 +93,9 @@ impl Workspace {
             && connection.is_some_and(|c| c.lost.is_some())
         {
             return Some(Waiting::Unreachable(server.clone()));
+        }
+        if !(session.opening() || session.agent_waiting) {
+            return None;
         }
         let julia_ready = self.bridge(host).is_some();
         if !self.claude.up() {

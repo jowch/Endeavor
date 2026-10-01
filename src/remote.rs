@@ -738,6 +738,17 @@ mod tests {
         assert_eq!(explain("lab", &[], None, true), "Cancelled.");
     }
 
+    #[test]
+    fn a_server_out_of_reach_reads_as_one_in_plain_words_too() {
+        let unreachable = |line: &str| crate::offline::unreachable(&explain("lab", &[line.to_owned()], None, false));
+        assert!(unreachable("ssh: connect to host lab port 22: Operation timed out"));
+        assert!(unreachable("ssh: connect to host lab port 22: Connection refused"));
+        assert!(unreachable("ssh: connect to host lab port 22: No route to host"));
+        assert!(unreachable("ssh: Could not resolve hostname lab: nodename nor servname provided"));
+        assert!(!unreachable("jc@lab: Permission denied (publickey,password)."));
+        assert!(!unreachable("Host key verification failed."));
+    }
+
     /// A runtime as the helper sees one: a live pid on this node, and a bridge that answers `ping`.
     struct FakeRuntime {
         process: Arc<Mutex<std::process::Child>>,

@@ -91,10 +91,11 @@ pub struct Connection {
     /// Bumped when the runtime starts or goes, so an old runtime's event reader stops.
     watching: Arc<AtomicU64>,
     /// A server's connection dropped by itself (not a Stop, disconnect or
-    /// remove) and hasn't come back: Endeavor tries again, its sessions'
-    /// messages wait, and it shows as "Can't reach". None for a connect that
-    /// never got through (a bad host name, a wrong password): that stays
-    /// "Not connected", with Reconnect.
+    /// remove) and hasn't come back, or a session waiting to open there
+    /// couldn't reach it: Endeavor tries again, its sessions' messages wait,
+    /// and it shows as "Can't reach". None for any other connect that never
+    /// got through (a bad host name while adding it, a wrong password): that
+    /// stays "Not connected", with Reconnect.
     pub lost: Option<Lost>,
     /// Julia exited by itself (not a Stop, a restart or a quit), and hasn't
     /// been started since.
@@ -230,6 +231,20 @@ impl Connection {
     /// Dropped, and between tries to reconnect.
     pub fn waiting_to_reconnect(&self) -> bool {
         self.lost.is_some() && matches!(self.status, Status::Failed(_))
+    }
+
+    /// A connect that didn't get through because the server is out of reach,
+    /// while it was already lost or a session waits to open there: it stays
+    /// lost, to be tried again, and starts Julia once back if this connect was
+    /// to. False, and nothing changes, for any other failure.
+    fn keep_trying(&mut self, error: &str, session_waits: bool) -> bool {
+        if !crate::offline::unreachable(error) || (self.lost.is_none() && !session_waits) {
+            return false;
+        }
+        let was = if self.start_when_connected { Status::Starting } else { Status::Browsing };
+        self.lost.get_or_insert(Lost { page: None, was });
+        self.status = Status::Failed(error.to_owned());
+        true
     }
 
     /// Stop following the runtime that's going; `last_notebooks` stays for the reopen.
@@ -576,6 +591,7 @@ impl Workspace {
         let name = self.hosts.name(&host);
         let cluster = self.is_cluster(&host);
         let shown = !local && matches!(update, Update::Notice(Notice::Lost(_))) && self.shows_page_of(&host, cx);
+        let session_waits = !local && self.sessions.iter().any(|s| s.place.host == host && (s.opening() || s.agent_waiting));
         let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
         match update {
             Update::Event(Event::Connected { .. }) => connection.steps.advance(format!("Connected to {name}"), "Checking Endeavor's helper"),
@@ -630,8 +646,7 @@ impl Workspace {
                     self.start_host(&host, cx);
                 }
             }
-            Update::Connected(Err(e)) if connection.lost.is_some() && crate::offline::unreachable(&e) => {
-                connection.status = Status::Failed(e);
+            Update::Connected(Err(e)) if connection.keep_trying(&e, session_waits) => {
                 self.retry_lost(host.clone(), crate::offline::RETRY_EVERY, cx);
             }
             Update::Connected(Err(e)) => {
@@ -1504,7 +1519,7 @@ fn walker() -> Canvas<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Steps, elapsed, percent};
+    use super::{Connection, Status, Steps, elapsed, percent};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1522,6 +1537,33 @@ mod tests {
         assert_eq!(steps.detail.as_deref(), Some("[ Info: Runtime ready"));
         assert_eq!(steps.done, ["Connected to lab", "Julia 1.12.6"]);
         assert_eq!(percent("Downloading Julia 1.12.6… 42%"), Some("42%"));
+    }
+
+    #[test]
+    fn a_server_out_of_reach_is_tried_again_while_a_session_waits_for_it() {
+        let connecting = |start: bool| {
+            let mut c = Connection::new(1, Status::Connecting, Steps::new("Connecting to lab"));
+            c.start_when_connected = start;
+            c
+        };
+        let timed_out = "ssh: connect to host lab port 22: Operation timed out";
+
+        let mut reopening = connecting(true);
+        assert!(reopening.keep_trying(timed_out, true));
+        assert!(reopening.waiting_to_reconnect());
+        assert!(reopening.lost.as_ref().unwrap().had_julia(), "Julia starts once it's back");
+
+        let mut browsing = connecting(false);
+        assert!(browsing.keep_trying(timed_out, true));
+        assert!(!browsing.lost.as_ref().unwrap().had_julia());
+
+        let mut nobody_waits = connecting(true);
+        assert!(!nobody_waits.keep_trying(timed_out, false));
+        assert!(nobody_waits.lost.is_none() && nobody_waits.status == Status::Connecting);
+
+        let mut refused_sign_in = connecting(true);
+        assert!(!refused_sign_in.keep_trying("lab: Permission denied (publickey).", true));
+        assert!(refused_sign_in.lost.is_none());
     }
 
     #[test]

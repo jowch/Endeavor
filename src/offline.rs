@@ -44,6 +44,11 @@ pub fn unreachable(error: &str) -> bool {
         "broken pipe",
         "host is down",
         "closed unexpectedly",
+        // remote::explain's words for the same.
+        "didn't answer",
+        "couldn't reach",
+        "refused the connection",
+        "couldn't find a server called",
     ]
     .iter()
     .any(|w| error.contains(w))
