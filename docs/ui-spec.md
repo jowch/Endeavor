@@ -64,7 +64,7 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 ## Layout
 
 - Three columns: sidebar · chat · notebook. **All resizable** by dragging dividers; sidebar within min/max and collapsible (⌘B). No full-width toolbar and no "focus" mode — full-width notebook comes from collapsing panes.
-- **Per-column 44px headers**, dividers aligned: sidebar = traffic lights + sidebar toggle; chat = session title ⌄ (session menu) + folder tag; notebook = filename. No horizontal rules — headers are translucent with backdrop blur and a ~20px fade so content scrolls softly under them. When the sidebar is collapsed, traffic lights + toggle move to the start of the chat header.
+- **Per-column 44px headers**, dividers aligned: sidebar = traffic lights + sidebar toggle; chat = session title ⌄ (session menu: the sidebar row's ⋮ items for the open session; its Rename edits the title in place) + folder tag; notebook = filename. No horizontal rules — headers are translucent with backdrop blur and a ~20px fade so content scrolls softly under them. When the sidebar is collapsed, traffic lights + toggle move to the start of the chat header.
 - Webview sits above GPUI, so the notebook header's blur needs the webview to extend under the header (theme CSS adds top padding to Pluto's page).
 - Risk: confirm GPUI can do backdrop blur; fallback is the gradient fade alone.
 
@@ -73,7 +73,7 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 - **Transcript is top-anchored**: messages start at the top and fill down; stick-to-bottom only once it overflows, and only while the user is at the bottom.
 - **User message**: right-aligned bubble, `bg.raised`, 8px radius, max ~300px.
 - **Tool calls**: collapsed by default, one line each — grey verb, light mono cell name, ± counts, `›` to expand (expanded shows the diff).
-- **End of turn**: a card listing cells changed this turn (cell icon, name, `new` tag, ±, `›`); a row click scrolls the notebook to the cell and outlines it. Under the message: copy, pin, relative time.
+- **End of turn**: a card listing cells changed this turn (cell icon, name, `new` tag, ±, `›`); a row click scrolls the notebook to the cell and outlines it. Each cell is one row with its net ± over the turn; a deleted cell gets a `deleted` tag and no `›`; a cell left as it was, or added and deleted again, isn't listed; no card when no cell changed. Under the message: copy, pin, relative time.
 - **Mid-turn**: working indicator (orange asterisk + "Adding `residuals` · 12s"). The agent's plan checklist (✓ done struck through, ◐ current bright, ○ upcoming grey; "Progress · 1 of 3", collapsible) is **pinned above the composer** while the turn runs, then folds back into the transcript.
 - **Approval card** (above composer): "Run 3 cells?", cell list, "also re-runs N that depend on them"; Deny · Always this session · **Run**. Keys: ⏎ run, ⌘⏎ always, Esc deny.
 - **Plan card** (plan mode): numbered steps; Keep planning · Start in Auto · **Start**.
