@@ -738,7 +738,7 @@ impl Workspace {
             .flex_col()
             .gap(px(6.))
             .min_h(px(38.))
-            .pl(px(10.))
+            .pl(px(2.5))
             .pr(px(7.))
             .when(!chips.is_empty(), |d| d.pt(px(7.)))
             .rounded(px(8.))
@@ -983,7 +983,7 @@ impl Workspace {
             .gap(px(2.))
             .h(px(24.))
             // Lines the + up with the text in the box, and the ring with the send button.
-            .pl(px(12.5))
+            .pl(px(4.5))
             .pr(px(8.))
             .text_size(theme::chat_meta())
             .text_color(theme::text_new())
