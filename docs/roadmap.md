@@ -35,9 +35,10 @@ process running Pluto + PlutoMCP.
 - **Sessions.** Session bar | chat | notebook. Launch shows a new-session
   screen (working folder via picker or recent folders, optional first
   message). Sessions run in parallel on one ACP connection, grouped by folder
-  with busy / needs-approval marks; each folder's past Endeavor sessions
-  (tracked in Application Support's `sessions.json`; other Claude Code
-  sessions in the folder are not listed) reopen with their transcript. The
+  with busy / needs-approval marks; each folder's past sessions (recorded in
+  Application Support's `sessions.json` and shown at launch; Claude's listing
+  adds Claude Code sessions started elsewhere in the folder) reopen with their
+  transcript. The
   folder sets the agent's working directory and project settings, and new
   notebooks are created there. The notebook pane follows the active session.
   Pluto's own "new notebook" starts unsaved in Pluto's scratch folder (its

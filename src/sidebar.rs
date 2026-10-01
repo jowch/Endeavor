@@ -1,7 +1,7 @@
 //! The sidebar: the session list, its folders and filter menu, search, and
 //! the status line at the bottom.
 
-use agent_client_protocol::schema::v1::{SessionId, SessionInfo};
+use agent_client_protocol::schema::v1::SessionId;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::Sizable;
@@ -375,16 +375,10 @@ impl Workspace {
         self.session_notebooks.get(&id.to_string()).and_then(|p| p.path.file_name()).map(|n| n.to_string_lossy().into_owned())
     }
 
-    /// A past session's full info, looked up again for its row's click
-    /// handler (`folder_rows` keeps only the id and place, to stay light).
-    fn past_info(&self, id: &SessionId, folder: &Place) -> Option<SessionInfo> {
-        self.past.get(folder)?.iter().find(|info| info.session_id == *id).cloned()
-    }
-
     /// Whether the sidebar has any session at all, open or past, before any
     /// filter or search: it hides the "Sessions" heading when there's none.
     fn any_sessions_at_all(&self) -> bool {
-        !self.sessions.is_empty() || self.past.values().any(|v| !v.is_empty())
+        !self.sessions.is_empty() || self.records.any_placed()
     }
 
     /// The +'s "New session in <folder>": opens the new-session screen with
@@ -407,10 +401,7 @@ impl Workspace {
     pub(crate) fn row_title(&self, row: &Row) -> Option<String> {
         match row {
             Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.title.clone()),
-            Row::Past(id, folder) => {
-                let info = self.past.get(folder)?.iter().find(|info| info.session_id == *id)?;
-                Some(self.past_title(info).0)
-            }
+            Row::Past(id, _) => Some(self.past_title(id).0),
         }
     }
 
@@ -640,15 +631,17 @@ impl Workspace {
         sidebar_filter::order_folders(folders, self.settings.sidebar_filters.group_by)
     }
 
-    /// A folder's past sessions the sidebar lists, newest first: ours, not
+    /// A folder's past sessions the sidebar lists, newest first: recorded, not
     /// already open, and matching the Status filter.
-    fn past_rows(&self, folder: &Place) -> Vec<&SessionInfo> {
-        let is_open = |info: &SessionInfo| self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id));
+    fn past_rows(&self, folder: &Place) -> Vec<SessionId> {
+        let is_open = |id: &str| self.sessions.iter().any(|s| s.id.as_ref().is_some_and(|s| s.to_string() == id));
         let status = self.settings.sidebar_filters.status;
-        let shown = |info: &SessionInfo| {
-            self.ours.contains_key(&info.session_id.to_string()) && sidebar_filter::status_matches(status, self.archived.contains(&info.session_id.to_string()))
-        };
-        self.past.get(folder).into_iter().flatten().filter(|info| !is_open(info) && shown(info)).collect()
+        self.records
+            .in_folder(folder)
+            .into_iter()
+            .filter(|(id, _)| !is_open(id) && sidebar_filter::status_matches(status, self.archived.contains(*id)))
+            .map(|(id, _)| SessionId::new(id.to_owned()))
+            .collect()
     }
 
     /// The sidebar's row above the status line while This Mac's Julia is down.
@@ -679,7 +672,7 @@ impl Workspace {
         let mut open: Vec<(Row, String)> =
             self.sessions.iter().filter(|s| &s.place == folder).map(|s| (Row::Open(s.key), s.title.clone())).collect();
         let mut past: Vec<(Row, String)> =
-            self.past_rows(folder).iter().map(|info| (Row::Past(info.session_id.clone(), folder.clone()), self.past_title(info).0)).collect();
+            self.past_rows(folder).into_iter().map(|id| (Row::Past(id.clone(), folder.clone()), self.past_title(&id).0)).collect();
         if searching {
             let matches = |row: &Row, title: &str| sidebar_filter::row_matches_search(query, title, self.row_notebook_name(row).as_deref());
             open.retain(|(row, title)| matches(row, title));
@@ -756,8 +749,8 @@ impl Workspace {
                     .child(self.row_more(row.clone(), group, false, cx))
                     .children(mark)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.renaming.as_ref().is_some_and(|r| r.row == row) && let Some(info) = this.past_info(&id, &place) {
-                            this.open_past(info, place.clone(), cx);
+                        if !this.renaming.as_ref().is_some_and(|r| r.row == row) {
+                            this.open_past(id.clone(), place.clone(), cx);
                         }
                     }))
                     .into_any_element()

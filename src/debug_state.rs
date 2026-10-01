@@ -100,6 +100,7 @@ impl Workspace {
                     crate::claude_process::State::Restarting => "restarting",
                     crate::claude_process::State::Down => "down",
                 },
+                "connected": self.agent_ready,
                 "error": (!self.claude.up()).then(|| self.claude.error.clone()),
                 "details_open": self.claude_details_open,
             },
@@ -184,7 +185,12 @@ impl Workspace {
         let needs_approval = matches!(row, Row::Open(key) if self.sessions.iter().any(|s| s.key == *key && self.row_mark(s)));
         let archived = self.row_session_id(row).is_some_and(|id| self.archived.contains(&id.to_string()));
         let mark = if needs_approval { Some("needs_approval") } else if archived { Some("archived") } else { None };
-        json!({ "title": title, "open": open, "active": active, "mark": mark, "failed": failed })
+        let source = match row {
+            Row::Open(_) => None,
+            Row::Past(_, place) if self.records.was_listed(place) => Some("listed"),
+            Row::Past(..) => Some("record"),
+        };
+        json!({ "title": title, "open": open, "active": active, "mark": mark, "failed": failed, "source": source })
     }
 
     fn sidebar_state(&self, cx: &App) -> Value {
@@ -284,6 +290,7 @@ impl Workspace {
             })),
             "transcript": self.transcript(s),
             "scroll": scroll_state(s),
+            "wait_line": self.runtime_wait(s),
             "activity": transcript::activity(s, self.offline_since).map(|a| [Some(a.verb), a.object, a.took].into_iter().flatten().collect::<Vec<_>>().join(" ")),
             "pinned_plan": s.pinned_plan().and_then(|ix| match &s.entries[ix] {
                 Entry::Plan(entries) => Some(json!({ "progress": approval::progress(entries), "folded": s.plan_folded, "items": plan_items(entries) })),

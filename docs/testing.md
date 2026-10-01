@@ -70,7 +70,7 @@ To wait for something, poll the dump. For example, loop until
   (it stopped by itself and is starting again) or `down` (it stopped twice in
   a minute); `error` is why it last stopped, with the log's last lines (null
   while up); `details_open` is whether the "Claude isn't running" card's
-  Details are open.
+  Details are open; `connected` is whether Claude has connected since launch.
 - `usage_limit`. Null unless a turn hit the account's usage limit. Then
   `resets_in_secs`, or null when Claude Code's message gave no time.
 - `notice`. A one-off failure's notice (a failed export, rename, move, run,
@@ -82,7 +82,9 @@ To wait for something, poll the dump. For example, loop until
   out, `stage` says where sign-in is, and `card` says whether its card shows
   above the composer.
 - `sidebar`. The folders in order. Each row has its title, `active`, and
-  `mark` (`needs_approval`, `working` or `archived`). Also the "Show N more"
+  `mark` (`needs_approval`, `working` or `archived`). A past row's `source`
+  is `record` (from sessions.json, drawn at launch) until the agent has listed
+  its folder this launch, then `listed`; an open row's is null. Also the "Show N more"
   line, the Restart Julia row, the status line (`status`) and its mark
   (`status_mark`: `offline`, `signed_out`, `spinner` while Claude restarts,
   `red_dot` when something needs the user, or null).
@@ -110,7 +112,7 @@ To wait for something, poll the dump. For example, loop until
   its cell diffs. A `changes` entry is the end-of-turn card: its `cells`,
   each with the `name` shown, the `cell` id, `tag` (`new`, `deleted` or
   null), the net `added` and `removed` line counts over the turn, and
-  `shows` (false for a deleted cell, whose row has no `›`). Also `activity` (the working line), `pinned_plan`, and
+  `shows` (false for a deleted cell, whose row has no `›`). Also `wait_line` ("Starting Julia…" while the session waits to open until its host's Julia is up, else null), `activity` (the working line), `pinned_plan`, and
   `approval`: the card above the composer (`approval` or `plan`) with its
   title, code, lines, `plan` (its title, numbered `steps`, whether it's
   `open`, and the `text` shown when it is) and buttons (each with its label, key and `weight`:

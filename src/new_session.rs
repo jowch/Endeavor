@@ -9,6 +9,8 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use agent_client_protocol::schema::v1::SessionId;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -99,7 +101,7 @@ pub struct Resume {
 
 enum ResumeTarget {
     Open(u64),
-    Past(agent_client_protocol::schema::v1::SessionInfo, Place),
+    Past(SessionId, Place),
 }
 
 const RESUME_SHOWN: usize = 3;
@@ -469,7 +471,7 @@ impl Workspace {
     /// Sessions to pick up: open ones first (newest first), then Endeavor's past
     /// sessions by last activity.
     pub fn resumable(&self) -> Vec<Resume> {
-        let recorded = |id: &agent_client_protocol::schema::v1::SessionId| self.session_notebooks.get(&id.to_string()).map(|place| folder_name(&place.path));
+        let recorded = |id: &SessionId| self.session_notebooks.get(&id.to_string()).map(|place| folder_name(&place.path));
         let open = self.sessions.iter().rev().map(|s| Resume {
             title: s.title.clone(),
             folder: self.folder_heading(&s.place),
@@ -477,22 +479,21 @@ impl Workspace {
             when: "open".into(),
             open: ResumeTarget::Open(s.key),
         });
-        let mut past: Vec<(SystemTime, _, Place)> = self
-            .past
-            .iter()
-            .flat_map(|(place, infos)| infos.iter().map(move |info| (place, info)))
-            .filter(|(_, info)| self.ours.contains_key(&info.session_id.to_string()) && !self.archived.contains(&info.session_id.to_string()))
-            .filter(|(_, info)| !self.sessions.iter().any(|s| s.id.as_ref() == Some(&info.session_id)))
-            .map(|(place, info)| (info.updated_at.as_deref().and_then(when::parse_iso8601).unwrap_or(SystemTime::UNIX_EPOCH), info, place.clone()))
-            .collect();
-        past.sort_by(|a, b| b.0.cmp(&a.0));
-        let past = past.into_iter().map(|(at, info, place)| Resume {
-            title: self.titles.get(&info.session_id.to_string()).cloned().or(info.title.clone()).unwrap_or_else(|| "Earlier session".into()),
-            folder: self.folder_heading(&place),
-            notebook: recorded(&info.session_id),
-            when: if at == SystemTime::UNIX_EPOCH { String::new() } else { when::ago(at) },
-            open: ResumeTarget::Past(info.clone(), place),
-        });
+        let past = self
+            .records
+            .placed()
+            .into_iter()
+            .filter_map(|(id, record)| Some((SessionId::new(id.to_owned()), record.place.clone()?, record.updated)))
+            .filter(|(id, place, _)| {
+                self.recent.contains(place) && !self.archived.contains(&id.to_string()) && !self.sessions.iter().any(|s| s.id.as_ref() == Some(id))
+            })
+            .map(|(id, place, updated)| Resume {
+                title: self.past_title(&id).0,
+                folder: self.folder_heading(&place),
+                notebook: recorded(&id),
+                when: updated.map(|secs| when::ago(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs))).unwrap_or_default(),
+                open: ResumeTarget::Past(id, place),
+            });
         open.chain(past).take(RESUME_SHOWN).collect()
     }
 
@@ -502,7 +503,7 @@ impl Workspace {
             let meta = std::iter::once(r.folder).chain(r.notebook).collect::<Vec<_>>().join(" · ");
             let focus_key = match &r.open {
                 ResumeTarget::Open(key) => format!("resume-open-{key}"),
-                ResumeTarget::Past(info, _) => format!("resume-past-{}", info.session_id),
+                ResumeTarget::Past(id, _) => format!("resume-past-{id}"),
             };
             div()
                 .id(("resume", i))
@@ -528,7 +529,7 @@ impl Workspace {
                 .child(div().flex_shrink_0().text_size(theme::size_meta()).text_color(theme::text_faint()).child(r.when))
                 .on_click(cx.listener(move |this, _, _, cx| match &r.open {
                     ResumeTarget::Open(key) => this.activate(*key, cx),
-                    ResumeTarget::Past(info, place) => this.open_past(info.clone(), place.clone(), cx),
+                    ResumeTarget::Past(id, place) => this.open_past(id.clone(), place.clone(), cx),
                 }))
         });
         let rows: Vec<_> = rows.collect();

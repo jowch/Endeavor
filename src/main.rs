@@ -44,6 +44,7 @@ mod overlay;
 mod platform;
 mod pluto;
 mod quotes;
+mod records;
 mod remote;
 mod resources;
 mod runs;
@@ -291,20 +292,12 @@ fn load_recent() -> Vec<Place> {
     load_json::<Vec<Place>>("recent.json").into_iter().filter(|p| p.host != HostId::ThisMac || p.path.is_dir()).collect()
 }
 
-/// sessions.json: the sessions Endeavor created, with where each works. Before
-/// servers it was a list of ids, all This Mac's (their folder is their cwd).
-fn load_ours() -> HashMap<String, Place> {
-    #[derive(serde::Deserialize)]
-    #[serde(untagged)]
-    enum Saved {
-        Places(HashMap<String, Place>),
-        Ids(Vec<String>),
-    }
-    match load_json::<Option<Saved>>("sessions.json") {
-        Some(Saved::Places(places)) => places,
-        Some(Saved::Ids(ids)) => ids.into_iter().map(|id| (id, Place::local(PathBuf::new()))).collect(),
-        None => HashMap::new(),
-    }
+fn load_records() -> records::Records {
+    records::Records::parse(&app_file("sessions.json").and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default())
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 pub struct Workspace {
@@ -319,12 +312,11 @@ pub struct Workspace {
     draft: Draft,
     /// Working folders on every host, most recent first (persisted).
     recent: Vec<Place>,
-    /// Past sessions per folder, from the agent's history.
-    past: HashMap<Place, Vec<SessionInfo>>,
-    /// Sessions Endeavor created, by id, with their host and folder (persisted).
-    /// Only these are listed: Claude Code's history for a folder also holds CLI
-    /// sessions, which aren't ours. A This Mac entry's folder is its cwd.
-    ours: HashMap<String, Place>,
+    /// Every session's agent, place, title and last activity (persisted): the
+    /// sidebar's past sessions, kept up to date by the agent's listings.
+    records: records::Records,
+    /// This Mac's Julia has been ready since launch.
+    this_mac_was_ready: bool,
     /// Session names the user gave, by session id (persisted).
     titles: HashMap<String, String>,
     /// Ids of archived sessions (persisted): hidden from the sidebar's Active view.
@@ -374,7 +366,8 @@ pub struct Workspace {
     /// Try now is looking at the network.
     probing: bool,
     agent_tx: UnboundedSender<Command>,
-    /// Handed to the agent thread once This Mac's Julia is up (setup's order).
+    /// The agent thread's commands, until it starts: at launch, or on first
+    /// launch once This Mac's Julia is up (setup's order).
     agent_rx: Option<UnboundedReceiver<Command>>,
     /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
@@ -611,8 +604,8 @@ impl Workspace {
             next_key: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_millis() as u64),
             draft,
             recent,
-            past: HashMap::new(),
-            ours: load_ours(),
+            records: load_records(),
+            this_mac_was_ready: false,
             titles: load_json("titles.json"),
             archived: load_json("archived.json"),
             filter_menu: None,
@@ -688,6 +681,12 @@ impl Workspace {
         .detach();
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
+        // Claude starts alongside it, except on first launch, whose setup screen goes step by step.
+        if this.setup.is_none()
+            && let Some(commands) = this.agent_rx.take()
+        {
+            this.start_agent(commands, cx);
+        }
         this.scan_notebooks(cx);
         this.watch_network(cx);
         #[cfg(debug_assertions)]
@@ -756,7 +755,7 @@ impl Workspace {
         self.recent.retain(|p| p != &place);
         self.recent.insert(0, place.clone());
         save_json("recent.json", &self.recent);
-        if !self.past.contains_key(&place) {
+        if !self.records.was_listed(&place) {
             let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: host.agent_cwd(&folder) });
         }
         let mut session = Session::new(key, place, server.clone());
@@ -841,19 +840,11 @@ impl Workspace {
         }
     }
 
-    /// Where a past session works: This Mac's by the folder it ran in, a server's as recorded.
-    fn past_place(&self, info: &SessionInfo) -> Option<Place> {
-        match self.ours.get(&info.session_id.to_string())? {
-            Place { host: HostId::ThisMac, .. } => Some(Place::local(info.cwd.clone())),
-            place => Some(place.clone()),
-        }
-    }
-
-    /// A past session's title: the user's name for it, else the agent's, else
-    /// its notebook's name; true when it only stands in for a title.
-    fn past_title(&self, info: &SessionInfo) -> (String, bool) {
-        let id = info.session_id.to_string();
-        if let Some(title) = self.titles.get(&id).cloned().or_else(|| info.title.as_deref().and_then(session::agent_title).map(str::to_owned)) {
+    /// A past session's title: the user's name for it, else the recorded one,
+    /// else its notebook's name; true when it only stands in for a title.
+    fn past_title(&self, id: &SessionId) -> (String, bool) {
+        let id = id.to_string();
+        if let Some(title) = self.titles.get(&id).cloned().or_else(|| self.records.get(&id)?.title.clone()) {
             return (title, false);
         }
         let notebook = self.session_notebooks.get(&id).and_then(|p| p.path.file_name()).map(|n| n.to_string_lossy().into_owned());
@@ -861,21 +852,21 @@ impl Workspace {
     }
 
     /// Reopen a past session (or switch to it if it's already open).
-    fn open_past(&mut self, info: SessionInfo, place: Place, cx: &mut Context<Self>) {
-        if let Some(key) = self.sessions.iter().find(|s| s.id.as_ref() == Some(&info.session_id)).map(|s| s.key) {
+    fn open_past(&mut self, id: SessionId, place: Place, cx: &mut Context<Self>) {
+        if let Some(key) = self.sessions.iter().find(|s| s.id.as_ref() == Some(&id)).map(|s| s.key) {
             return self.activate(key, cx);
         }
         let key = self.next_key;
         self.next_key += 1;
-        let named = self.titles.get(&info.session_id.to_string()).cloned();
-        let resources = self.session_resources.get(&info.session_id.to_string()).cloned();
-        let mode = self.session_modes.get(&info.session_id.to_string()).cloned();
-        let (title, untitled) = self.past_title(&info);
-        let notebook = self.session_notebooks.get(&info.session_id.to_string()).map(|p| p.path.display().to_string());
+        let named = self.titles.get(&id.to_string()).cloned();
+        let resources = self.session_resources.get(&id.to_string()).cloned();
+        let mode = self.session_modes.get(&id.to_string()).cloned();
+        let (title, untitled) = self.past_title(&id);
+        let notebook = self.session_notebooks.get(&id.to_string()).map(|p| p.path.display().to_string());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
         // The row keeps its handle as it turns from past to open, so keyboard focus stays on it.
-        let row_focus = self.past_row_focus.get_mut().remove(&info.session_id);
-        let mut session = Session::loading(key, info.session_id, place, server, title);
+        let row_focus = self.past_row_focus.get_mut().remove(&id);
+        let mut session = Session::loading(key, id, place, server, title);
         if let Some(path) = &notebook {
             session.open_on_start(path.clone());
         }
@@ -930,14 +921,12 @@ impl Workspace {
         };
         let Some(id) = id else { return };
         let _ = self.agent_tx.unbounded_send(Command::DeleteSession(id.clone()));
-        for past in self.past.values_mut() {
-            past.retain(|info| info.session_id != id);
-        }
         if self.renaming.as_ref().is_some_and(|r| matches!(&r.row, Row::Past(p, _) if *p == id)) {
             self.renaming = None;
         }
-        self.ours.remove(&id.to_string());
-        save_json("sessions.json", &self.ours);
+        if self.records.remove(&id.to_string()) {
+            self.save_records();
+        }
         if self.titles.remove(&id.to_string()).is_some() {
             save_json("titles.json", &self.titles);
         }
@@ -1528,20 +1517,9 @@ impl Workspace {
             }
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
-            AgentEvent::Listed { cwd, sessions } => match HostId::of_agent_cwd(&cwd) {
-                // One listing holds all of a server's folders.
-                Some(host) => {
-                    self.past.retain(|place, _| place.host != host);
-                    for info in sessions {
-                        if let Some(place) = self.past_place(&info).filter(|p| p.host == host) {
-                            self.past.entry(place).or_default().push(info);
-                        }
-                    }
-                }
-                None => {
-                    self.past.insert(Place::local(cwd), sessions);
-                }
-            },
+            AgentEvent::Listed { cwd, sessions: Ok(sessions) } => self.on_listed(records::Agent::Claude, &cwd, sessions),
+            // The sidebar keeps what the record has.
+            AgentEvent::Listed { cwd, sessions: Err(e) } => eprintln!("Couldn't list the sessions in {}: {e}", cwd.display()),
             AgentEvent::Forked { key, id } => {
                 if let Some(session) = self.session_mut(key) {
                     session.id = Some(id);
@@ -1561,8 +1539,8 @@ impl Workspace {
                     Ok(started) => {
                         let id = started.id.clone();
                         let place = session.place.clone();
-                        if self.ours.insert(id.to_string(), place.clone()).as_ref() != Some(&place) {
-                            save_json("sessions.json", &self.ours);
+                        if self.records.started(&id.to_string(), records::Agent::Claude, &place, unix_now()) {
+                            self.save_records();
                         }
                         if let Some(resources) = self.session_mut(key).and_then(|s| s.resources.clone())
                             && self.session_resources.insert(id.to_string(), resources.clone()).as_ref() != Some(&resources)
@@ -1606,11 +1584,40 @@ impl Workspace {
             AgentEvent::Session(id, event) => {
                 let Some(session) = self.sessions.iter_mut().find(|s| s.id.as_ref() == Some(&id)) else { return };
                 let key = session.key;
+                let ended = matches!(event, agent::SessionEvent::TurnEnded(_));
                 let effects = session.apply(event);
+                let title = (!session.untitled && !session.named).then(|| session.title.clone());
+                if self.records.touch(&id.to_string(), title.as_deref(), ended.then(unix_now)) {
+                    self.save_records();
+                }
                 self.apply_effects(key, effects, cx);
             }
         }
         cx.notify();
+    }
+
+    fn save_records(&self) {
+        save_json("sessions.json", self.records.saved());
+    }
+
+    /// An agent's listing of a folder, or of a server's whole agent folder.
+    fn on_listed(&mut self, agent: records::Agent, cwd: &Path, sessions: Vec<SessionInfo>) {
+        let scope = match HostId::of_agent_cwd(cwd) {
+            Some(host) => records::Scope::Host(host),
+            None => records::Scope::Folder(Place::local(cwd)),
+        };
+        let listed = sessions
+            .into_iter()
+            .map(|info| records::Listed {
+                id: info.session_id.to_string(),
+                title: info.title.as_deref().and_then(session::agent_title).map(str::to_owned),
+                updated: info.updated_at.as_deref().and_then(when::parse_iso8601).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()),
+            })
+            .collect();
+        let open: HashSet<String> = self.sessions.iter().filter_map(|s| Some(s.id.as_ref()?.to_string())).collect();
+        if self.records.merge(agent, scope, listed, &open) {
+            self.save_records();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1810,10 +1817,10 @@ impl Workspace {
         // The failed agent thread dropped its command channel; start with a new one.
         let (tx, rx) = futures::channel::mpsc::unbounded();
         self.agent_tx = tx;
-        if self.bridge(&HostId::ThisMac).is_some() {
+        if self.setup.is_none() || self.bridge(&HostId::ThisMac).is_some() {
             self.start_agent(rx, cx);
         } else {
-            // Started once This Mac's Julia is up (`on_ready`).
+            // First launch: started once This Mac's Julia is up (`on_ready`).
             self.agent_rx = Some(rx);
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
@@ -1990,6 +1997,7 @@ impl Workspace {
                     .children(approval::render_pinned_plan(session, cx))
                     .children(self.render_offline_line(Some(session), cx))
                     .children(self.render_usage_line(cx))
+                    .children(self.render_runtime_wait(session, cx))
                     .children(self.render_claude_trouble(cx))
                     .children(self.render_sign_in_card(cx))
                     .children(approval::render_approval(session, cx))

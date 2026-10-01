@@ -79,8 +79,8 @@ impl GroupBy {
 ///
 /// There's no "Date created" here: an open session's first message gives an
 /// honest send time, but a past session (the common case) is only known by
-/// its title and last-activity time (`SessionInfo` carries no creation
-/// time), so a Date-created sort couldn't be honest for most rows. Per the
+/// its title and last-activity time (neither the record nor the agent's
+/// listing has a creation time), so a Date-created sort couldn't be honest for most rows. Per the
 /// design brief ("if there's none, leave Date created out and say so"),
 /// it's left out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,8 +88,8 @@ impl GroupBy {
 pub enum SortBy {
     Name,
     /// Matches today's order: open sessions in their existing order, then
-    /// past sessions as the agent's history already returns them (newest
-    /// first), so this sort is a no-op over that order.
+    /// past sessions newest first, as the record orders them, so this sort
+    /// is a no-op over that order.
     #[default]
     Activity,
 }

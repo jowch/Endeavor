@@ -102,6 +102,17 @@ In order. Each part is also useful to Claude, or harmless to it.
     when it's opened. With more than one agent in use, rows show which agent
     each session belongs to. Worth doing first, even with Claude alone.
 
+    Built for Claude: `sessions.json` keeps each session's agent, place,
+    title and last activity (`src/records.rs`; user names stay in
+    `titles.json`, archiving in `archived.json`), and the sidebar draws from
+    it at launch. `Records::merge` takes one agent's listing of a folder (or
+    of a server's whole agent folder) and touches only that agent's
+    sessions; a failed listing changes nothing. Claude starts at launch
+    alongside Julia, except during first-launch setup. A session opened
+    before its host's Julia is up waits with "Starting Julia…". Still to do
+    with a second agent: starting it when one of its sessions is opened, and
+    showing the agent on rows.
+
 After that, each agent needs its own handling of whatever its answers to the
 questions below turn up, such as Cursor's plan request.
 

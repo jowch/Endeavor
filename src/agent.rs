@@ -344,7 +344,8 @@ impl Started {
 pub enum AgentEvent {
     Ready,
     Started { key: u64, result: Result<Started, String> },
-    Listed { cwd: PathBuf, sessions: Vec<SessionInfo> },
+    /// A failed listing is an error, not an empty folder.
+    Listed { cwd: PathBuf, sessions: Result<Vec<SessionInfo>, String> },
     /// The copy made by `ForkSession` exists; its history replays next.
     Forked { key: u64, id: SessionId },
     Session(SessionId, SessionEvent),
@@ -483,8 +484,7 @@ async fn run(
                         continue;
                     }
                     Either::Left(Some(Done::Listed(cwd, result))) => {
-                        // ponytail: a failed listing just shows no history for that folder.
-                        let sessions = result.unwrap_or_default();
+                        let sessions = result.map_err(|e| e.to_string());
                         let _ = events.unbounded_send(AgentEvent::Listed { cwd, sessions });
                         continue;
                     }
@@ -653,6 +653,7 @@ mod tests {
                         tx.unbounded_send(Command::ListSessions { cwd: cwd.clone() }).unwrap();
                     }
                     AgentEvent::Listed { sessions, .. } => {
+                        let sessions = sessions.expect("listed");
                         let sid = id.clone().unwrap();
                         assert!(sessions.iter().any(|s| s.session_id == sid), "listed: {sessions:?}");
                         tx.unbounded_send(Command::LoadSession { key: 2, id: sid, cwd: cwd.clone(), tools: tools.clone() }).unwrap();
