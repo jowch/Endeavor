@@ -134,6 +134,8 @@ To wait for something, poll the dump. For example, loop until
   - `stopped`: the notebook was stopped. `stopped.idle_hours` is set when it
     stopped for being idle.
   - `crashed`: its own Julia stopped by itself: "Julia stopped unexpectedly".
+    The runtime's notebook list says so (`exited`, with the cells that were
+    running), and so does the page.
     (All of a host's Julia stopping shows as `host`, with `host_pane.kind`
     `julia_crashed`, and the same page.)
 
@@ -264,7 +266,10 @@ the test goes through these steps in order:
    runtime, then reopens each notebook. The unchanged notebook runs again. The
    notebook whose file changed opens in safe preview.
 7. A notebook in safe preview doesn't run code until `allow_execution`.
-8. Idle stop with a limit of about two seconds, seen on the app's `/events`
+8. A notebook's own Julia killed during a run that `execute_cell` waits
+   for. The call fails with `process_exited` and "Julia stopped unexpectedly
+   while running `rates`. …", and `list_notebooks` has `exited` with that cell.
+9. Idle stop with a limit of about two seconds, seen on the app's `/events`
    stream. `ENDEAVOR_IDLE_CHECK_SECS` makes the core check every second
    instead of every five minutes.
 
@@ -317,9 +322,12 @@ folder.
   `node …/claude-agent-acp/dist/index.js` (`pgrep -P <app pid> -f
   claude-agent-acp`). Twice within a minute leaves it stopped. Julia
   stopping: end the runtime's Julia (the child of `endeavor-remote --helper
-  core`) for the host-wide page. A notebook's own Julia (a child of that
-  Julia) ended with `kill -9` isn't noticed by Pluto until something it
-  waits on fails, so the per-notebook page can't be produced that way.
+  core`) for the host-wide page. For one notebook's page, end that
+  notebook's own Julia, a child of the runtime's Julia (`pgrep -P <runtime
+  Julia pid>`; one per running notebook), with `kill -9`, idle or while a
+  cell runs. The pane says "Julia stopped unexpectedly" within a second, and
+  names the cell that was running, if one was. To kill it mid-run, give the
+  notebook a cell that runs a while, such as `slow = (sleep(600); 1)`.
 - `ENDEAVOR_TEST_NO_STEERING`: a file path. While the file exists, ⌘⏎ during
   a turn takes the path for an agent that can't steer: the turn stops, and the
   message goes next, marked "Stopped Claude's work to send this".
