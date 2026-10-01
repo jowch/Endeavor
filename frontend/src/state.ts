@@ -13,6 +13,8 @@ export interface Context {
   host: string;
   /** The agent is asking to run the notebook (the chat's card is up). */
   asking: boolean;
+  /** Julia stopped again while the notebook ran after a restart: the safe-preview callout's words. */
+  crash: { title: string; body: string } | null;
 }
 
 type Listener = (nb: NotebookLike, model: StatusModel) => void;
@@ -21,7 +23,7 @@ const listeners: Listener[] = [];
 let last: NotebookLike | null = null;
 let model: StatusModel | null = null;
 let lastSent = "";
-export const context: Context = { host: "This Mac", asking: false };
+export const context: Context = { host: "This Mac", asking: false, crash: null };
 let drawerOf: () => Drawer = () => null;
 
 export function onNotebook(listener: Listener): void {
@@ -96,6 +98,7 @@ export function initState(): void {
   on("context", (msg) => {
     context.host = msg.host;
     context.asking = msg.asking;
+    context.crash = msg.crash ?? null;
     if (last && model) listeners.forEach((l) => l(last!, model!));
   });
   // A new page for another notebook reports afresh.

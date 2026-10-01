@@ -202,6 +202,8 @@ pub enum PaneShows {
     /// "No notebook in this session yet".
     NoNotebook,
     Stopped(Stopped),
+    /// Its Julia stopped by itself: "Julia stopped unexpectedly", Restart Julia.
+    Crashed,
     /// "Opening <file>…".
     Opening,
     Page,
@@ -319,7 +321,7 @@ pub enum HeaderTag {
     PackageFailed,
     RestartNeeded,
     RestartRecommended,
-    JuliaExited,
+    JuliaStopped,
 }
 
 impl HeaderTag {
@@ -333,7 +335,7 @@ impl HeaderTag {
             HeaderTag::PackageFailed => "Package failed",
             HeaderTag::RestartNeeded => "Restart needed",
             HeaderTag::RestartRecommended => "Restart recommended",
-            HeaderTag::JuliaExited => "Julia exited",
+            HeaderTag::JuliaStopped => "Julia stopped",
         }
     }
 }
@@ -520,10 +522,14 @@ impl Workspace {
         if read_only {
             tags.push(HeaderTag::ReadOnly);
         }
+        let crashed = self.notebook_at(session.key).is_some_and(|at| self.crashes.stopped_at(&at).is_some())
+            || self.connection(&session.place.host).is_some_and(|c| c.crashed && matches!(c.status, crate::connection::Status::Died(_)));
         if session.missing {
             tags.push(HeaderTag::NotFound);
         } else if session.stopped.is_some() {
             tags.push(HeaderTag::Stopped);
+        } else if crashed {
+            tags.push(HeaderTag::JuliaStopped);
         }
         let page = page.filter(|_| endeavor);
         if let Some(p) = page {
@@ -537,8 +543,8 @@ impl Workspace {
                 tags.push(HeaderTag::PackageFailed);
             } else if let Some(restart) = &p.restart {
                 tags.push(if restart == "required" { HeaderTag::RestartNeeded } else { HeaderTag::RestartRecommended });
-            } else if p.dead {
-                tags.push(HeaderTag::JuliaExited);
+            } else if p.dead && !crashed {
+                tags.push(HeaderTag::JuliaStopped);
             }
         }
         HeaderInfo {
@@ -634,7 +640,7 @@ impl Workspace {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| this.restart_notebook(key, cx)))
                     .into_any_element(),
-                HeaderTag::JuliaExited => chip(None, label, theme::danger()).into_any_element(),
+                HeaderTag::JuliaStopped => chip(Some(Glyph::Warning), label, theme::danger()).into_any_element(),
             }
         });
         let chips: Vec<AnyElement> = chips.collect();
@@ -722,7 +728,8 @@ impl Workspace {
             HostId::ThisMac => crate::platform::this_computer!().to_string(),
             host => self.hosts.name(host),
         };
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session) });
+        let crash = self.notebook_at(session.key).and_then(|at| self.crashes.callout(&at)).map(|(title, body)| serde_json::json!({ "title": title, "body": body }));
+        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
@@ -733,14 +740,23 @@ impl Workspace {
     /// The page reported its notebook's state. Leaving safe preview some other
     /// way (Pluto classic's own button) answers a pending "Let this notebook run?".
     pub fn on_page_state(&mut self, state: PageState, cx: &mut Context<Self>) {
-        let left_safe = self.page.notebook == state.notebook && self.page.safe && !state.safe && state.connected;
+        let same = self.page.notebook == state.notebook;
+        let left_safe = same && self.page.safe && !state.safe && state.connected;
+        let was_dead = same && self.page.dead;
         self.page = state;
-        if left_safe && let Some(key) = self.session_showing(&self.page.notebook) {
-            self.with_session(key, cx, |s| {
-                if s.asking_to_run() {
-                    s.answer_pending(agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce, false);
+        if let Some(key) = self.session_showing(&self.page.notebook) {
+            if left_safe {
+                self.with_session(key, cx, |s| {
+                    if s.asking_to_run() {
+                        s.answer_pending(agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce, false);
+                    }
+                });
+                // Let run after a second stop: the callout has said its piece.
+                if let Some(at) = self.notebook_at(key) {
+                    self.crashes.forget_again(&at);
                 }
-            });
+            }
+            self.page_process(key, self.page.dead, was_dead, cx);
         }
         cx.notify();
     }
@@ -1094,6 +1110,7 @@ impl Workspace {
         Some(match self.pane_shows(session, cx) {
             PaneShows::Host(_) => return self.host_pane(&session.place.host, true, cx),
             PaneShows::Page => return None,
+            PaneShows::Crashed => self.render_crash_page(key, cx),
             PaneShows::Missing => {
                 let local = session.place.host == HostId::ThisMac;
                 div()
@@ -1165,6 +1182,9 @@ impl Workspace {
         }
         if let Some(stopped) = session.stopped {
             return PaneShows::Stopped(stopped);
+        }
+        if self.notebook_at(session.key).is_some_and(|at| self.crashes.stopped_at(&at).is_some()) {
+            return PaneShows::Crashed;
         }
         // A page taken down with its runtime (`close_page`), or whose web content process
         // ended (no address), stays covered until the reopened one loads.
@@ -1239,6 +1259,15 @@ impl Workspace {
             cx.notify();
         }
         self.test_blanked = wanted;
+    }
+
+    /// All of the host's Julia stopped by itself: the crash page for the
+    /// session shown, as for a notebook's own Julia.
+    pub fn julia_crashed_page(&self, host: &HostId, reason: &str, cx: &mut Context<Self>) -> AnyElement {
+        match self.active_session().filter(|s| s.place.host == *host && s.notebook_path.is_some()) {
+            Some(session) => self.render_crash_page(session.key, cx),
+            None => self.julia_stopped_page(host, reason, cx),
+        }
     }
 
     /// Julia isn't running on the session's host: Start, and on a cluster the

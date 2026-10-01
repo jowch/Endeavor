@@ -19,6 +19,21 @@ pub fn action(id: impl Into<ElementId>, icon: Option<Glyph>, label: impl Into<Sh
     button_frame(id, look).role(Role::Button).children(icon.map(|g| glyph_at(g, tint, 1.))).child(label.into())
 }
 
+/// Text whose `backticked` names (a cell's) stand out as code. It wraps as
+/// one run of text, which a highlight can't give a font of its own.
+pub fn code_text(text: &str) -> StyledText {
+    let mut plain = String::new();
+    let mut ranges = Vec::new();
+    for (i, part) in text.split('`').enumerate() {
+        if i % 2 == 1 {
+            ranges.push(plain.len()..plain.len() + part.len());
+        }
+        plain.push_str(part);
+    }
+    let style = HighlightStyle { color: Some(theme::text_primary().into()), background_color: Some(theme::bg_tag().into()), ..Default::default() };
+    StyledText::new(plain).with_highlights(ranges.into_iter().map(move |r| (r, style)))
+}
+
 /// "Details ›": the raw error, closed until clicked.
 pub fn details(id: impl Into<ElementId>, text: impl Into<SharedString>, open: bool, toggle: impl Fn(&mut Window, &mut App) + 'static) -> AnyElement {
     let text = text.into();

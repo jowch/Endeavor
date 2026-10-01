@@ -86,7 +86,9 @@ export type ToPage =
   // What the safe-preview callout and Status say: where the notebook runs, and
   // whether the agent is asking to run it (the chat's card is up). `readonly`:
   // its server is out of reach, so the page can be read but not changed.
-  | { type: "context"; host: string; asking: boolean; readonly: boolean }
+  // `crash`: Julia stopped twice under it, so it opened in safe preview; the
+  // callout says so instead (its body names cells in `backticks`).
+  | { type: "context"; host: string; asking: boolean; readonly: boolean; crash?: { title: string; body: string } | null }
   // Share and ⋮ items that act in the page, with Pluto's own functions.
   | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" }
   // A debug build's state dump asks what the page shows.

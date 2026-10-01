@@ -21,6 +21,7 @@ mod claude_process;
 mod composer;
 mod confirm;
 mod connection;
+mod crash;
 #[cfg(debug_assertions)]
 mod debug_state;
 mod details;
@@ -395,6 +396,8 @@ pub struct Workspace {
     claude_details_open: bool,
     /// The account's usage limit was reached: messages wait until it resets.
     usage_limit: Option<offline::UsageLimit>,
+    /// Notebooks whose Julia stopped by itself, and the runs after Restart Julia.
+    crashes: crash::Crashes,
     /// Servers sessions can run on (persisted in hosts.json).
     hosts: hosts::Hosts,
     /// Adding a server, or its settings.
@@ -643,6 +646,7 @@ impl Workspace {
             claude: claude_process::Process::default(),
             claude_details_open: false,
             usage_limit: None,
+            crashes: crash::Crashes::default(),
             hosts: hosts::Hosts::load(),
             server_dialog: None,
             asks: VecDeque::new(),

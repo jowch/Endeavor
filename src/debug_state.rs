@@ -384,6 +384,7 @@ impl Workspace {
             PaneShows::Missing => "missing",
             PaneShows::NoNotebook => "no_notebook",
             PaneShows::Stopped(_) => "stopped",
+            PaneShows::Crashed => "crashed",
             PaneShows::Opening => "opening",
             PaneShows::Page => "page",
         };
@@ -405,6 +406,25 @@ impl Workspace {
             "file": file,
             "host_pane": match &shown { PaneShows::Host(pane) => Some(host_pane(pane, &self.hosts.name(&s.place.host))), _ => None },
             "stopped": match &shown { PaneShows::Stopped(st) => Some(json!({ "idle_hours": st.idle_hours, "safe_preview": st.safe_preview })), _ => None },
+            "crash": self.notebook_at(s.key).and_then(|at| {
+                let crash = self.crashes.get(&at)?;
+                let (state, cell) = match crash {
+                    crate::crash::Crash::Stopped { cell, .. } => ("stopped", cell.clone()),
+                    crate::crash::Crash::Rerunning { cell, .. } => ("rerunning", cell.clone()),
+                    crate::crash::Crash::Again { then, .. } => ("again", then.clone()),
+                };
+                let (kept, running) = crate::crash::page_text(cell.as_deref());
+                Some(json!({
+                    "state": state,
+                    "cell": cell,
+                    "page": (state == "stopped").then(|| json!({
+                        "title": crate::crash::PAGE_TITLE,
+                        "text": running.map_or(kept.clone(), |r| format!("{kept} {r}")),
+                        "buttons": if at.0 == crate::hosts::HostId::ThisMac { vec!["Restart Julia", "Show log"] } else { vec!["Restart Julia"] },
+                    })),
+                    "callout": self.crashes.callout(&at).map(|(title, body)| json!({ "title": title, "body": body })),
+                }))
+            }),
             "path": s.notebook_path,
             "header": header,
             "warning": self.read_only(s).then(|| {
@@ -594,6 +614,7 @@ fn host_pane(pane: &HostPane, host: &str) -> Value {
         HostPane::Starting => ("starting", None),
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => ("julia_not_running", Some(reason)),
+        HostPane::Crashed(reason) => ("julia_crashed", Some(reason)),
         HostPane::Replaced => ("replaced", None),
         HostPane::NotConnected(reason) => ("not_connected", Some(reason)),
     };

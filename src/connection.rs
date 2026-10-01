@@ -76,9 +76,10 @@ pub struct Connection {
     pub last_notebooks: Vec<(String, String)>,
     /// The notebooks the user had let run when they restarted or repaired
     /// Julia, with each file's modification time then: they reopen running if
-    /// the file is unchanged. A crash leaves this empty, so its notebooks
-    /// reopen in safe preview.
-    resume: Vec<(String, f64)>,
+    /// the file is unchanged. After a crash, Restart Julia fills it (with no
+    /// time: Julia's gone, so it can't be read) for the notebooks that were
+    /// running; any other start leaves it empty, so they reopen in safe preview.
+    pub resume: Vec<(String, Option<f64>)>,
     /// Connects and starts that failed in a row, across reconnects.
     pub failures: u32,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
@@ -701,9 +702,10 @@ impl Workspace {
                 }
             }
             Update::Notice(notice) => {
+                // Heard only when Julia went by itself: the app's own stops leave first.
+                let crashed = matches!(notice, Notice::Died(_)).then(|| crate::crash::running_notebooks(&connection.notebooks));
                 let gone = connection.forget_runtime();
                 connection.status = match notice {
-                    // Heard only when Julia went by itself: the app's own stops leave first.
                     Notice::Died(reason) => {
                         connection.crashed = true;
                         Status::Died(reason)
@@ -720,6 +722,9 @@ impl Workspace {
                 self.close_page(gone, cx);
                 if local {
                     self.status = JULIA_NOT_RUNNING.into();
+                }
+                if let Some(running) = crashed {
+                    self.julia_died(&host, running, cx);
                 }
             }
         }
@@ -878,6 +883,7 @@ impl Workspace {
         for path in new_stops {
             self.note_stopped_file(host, path, cx);
         }
+        self.crash_progress(host);
     }
 
     /// Reopen the notebooks that were open in `host`'s last runtime (unless this
@@ -914,7 +920,7 @@ impl Workspace {
                     let result = match find(&listed, &path) {
                         Some(nb) => nb,
                         None => {
-                            let run = resume.iter().any(|(p, modified)| *p == path && pluto::file_info(&bridge, &path) == Ok(Some(*modified)));
+                            let run = resume.iter().any(|(p, modified)| *p == path && modified.is_none_or(|m| pluto::file_info(&bridge, &path) == Ok(Some(m))));
                             match pluto::call_tool(&bridge, "open_notebook", serde_json::json!({ "path": path, "run_notebook": run })) {
                                 Ok(nb) => nb,
                                 // Opened meanwhile (the session's own open, or Claude's).
@@ -1221,6 +1227,7 @@ impl Workspace {
             Status::Ready => return None,
             Status::Connecting | Status::Browsing | Status::Starting => HostPane::Starting,
             Status::Died(_) if connection.is_some_and(|c| c.stopping) => HostPane::Stopping,
+            Status::Died(reason) if connection.is_some_and(|c| c.crashed) => HostPane::Crashed(reason),
             Status::Died(reason) => HostPane::NotRunning(reason),
             Status::Replaced => HostPane::Replaced,
             Status::Failed(reason) => HostPane::NotConnected(reason),
@@ -1304,6 +1311,7 @@ impl Workspace {
             }
             HostPane::Stopping => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping Julia on {name}…"))),
             HostPane::NotRunning(reason) => return Some(self.julia_stopped_page(host, &reason, cx)),
+            HostPane::Crashed(reason) => return Some(self.julia_crashed_page(host, &reason, cx)),
             HostPane::Replaced => resting
                 .child(div().text_color(theme::text_muted()).child(format!("Another connection took over Julia on {name}.")))
                 .child(action("host-reconnect", "Reconnect", host.clone(), false)),
@@ -1337,6 +1345,8 @@ pub enum HostPane {
     Stopping,
     /// "Julia isn't running", and why.
     NotRunning(String),
+    /// Julia stopped by itself: "Julia stopped unexpectedly", and why.
+    Crashed(String),
     /// Another connection took the runtime over.
     Replaced,
     /// "Not connected", and why.
@@ -1355,9 +1365,9 @@ fn report_until_closed(tx: &futures::channel::mpsc::UnboundedSender<Update>, res
 
 /// Of the open notebooks (`list_notebooks` shape), the ones the user has let
 /// run, with each file's modification time now.
-fn running_files(bridge: &Bridge, notebooks: &serde_json::Value) -> Vec<(String, f64)> {
+fn running_files(bridge: &Bridge, notebooks: &serde_json::Value) -> Vec<(String, Option<f64>)> {
     let allowed = notebooks.as_array().into_iter().flatten().filter(|nb| nb["execution_allowed"] == true);
-    allowed.filter_map(|nb| nb["path"].as_str()).filter_map(|path| Some((path.to_owned(), pluto::file_info(bridge, path).ok()??))).collect()
+    allowed.filter_map(|nb| nb["path"].as_str()).filter_map(|path| Some((path.to_owned(), Some(pluto::file_info(bridge, path).ok()??)))).collect()
 }
 
 /// A new `Connection::id`.
