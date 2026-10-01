@@ -679,7 +679,7 @@ impl Workspace {
             window.defer(cx, move |_, cx| input.update(cx, |s, cx| s.set_auto_grow(rows.0, rows.1, cx)));
         }
         let empty = self.composer_empty(cx);
-        let busy = session.is_some_and(|s| s.outbox.busy && s.id.is_some());
+        let busy = self.claude.up() && session.is_some_and(|s| s.outbox.busy && s.id.is_some());
         let list_context = if self.composer.typing.is_some() {
             "MentionList"
         } else if self.composer.menu == Some(Menu::Mode) {
