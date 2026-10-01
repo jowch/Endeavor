@@ -10,6 +10,7 @@ test("debug answers with Point's picks and the alerts shown", async () => {
   const dom = new JSDOM(`<body><pluto-cell id="11111111-1111-1111-1111-111111111111"></pluto-cell><pluto-cell id="${C}"></pluto-cell></body>`, {
     url: "http://localhost/edit?id=0f381e2e-b8ca-11f1-b549-49cf0ce82801",
     runScripts: "outside-only",
+    pretendToBeVisual: true,
   });
   const { window } = dom;
   const sent = [];

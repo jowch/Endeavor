@@ -340,16 +340,17 @@
 
   // src/annotate.ts
   var css4 = `
-  body.annotating pluto-cell, body.annotating pluto-cell * { cursor: crosshair !important; }
+  /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
+  body.annotating pluto-cell:hover, body.annotating pluto-cell :hover { cursor: crosshair !important; }
   /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
      pill, dashed hover and solid picked outlines, dashed box for a drawn region. */
   body.annotating .annotate-hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 3px; }
   body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
   body.annotating.annotate-drawing .annotate-hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
-  body.annotating pluto-input .cm-content { counter-reset: endeavor-line; padding-left: 2.6em !important; }
-  body.annotating pluto-input .cm-line { counter-increment: endeavor-line; position: relative; }
-  body.annotating pluto-input .cm-line::before { content: counter(endeavor-line); position: absolute; left: -2.6em; width: 2em;
+  body.annotate-numbers pluto-input .cm-content { counter-reset: endeavor-line; padding-left: 2.6em !important; }
+  body.annotate-numbers pluto-input .cm-line { counter-increment: endeavor-line; position: relative; }
+  body.annotate-numbers pluto-input .cm-line::before { content: counter(endeavor-line); position: absolute; left: -2.6em; width: 2em;
     text-align: right; color: var(--e-text-faint); font-size: 0.85em; }
   body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
   body.annotating pluto-input .cm-line.annotate-line::before { color: var(--e-accent-text); }
@@ -561,6 +562,7 @@
       }
       refresh2();
       send({ type: "mode", on: enable });
+      requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
     }
     async function sendComment(add) {
       if (!picks.length) return;

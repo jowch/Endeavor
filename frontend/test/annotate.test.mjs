@@ -121,9 +121,14 @@ test("a drag that starts on code picks lines; ⌥ or anywhere else draws a box",
 test("line numbers show while Point is on, and Esc turns it off", async () => {
   const { window, $ } = await page();
   const css = [...window.document.querySelectorAll("style")].map((s) => s.textContent).join("");
-  assert.match(css, /body\.annotating pluto-input \.cm-line::before \{ content: counter\(endeavor-line\)/);
+  assert.match(css, /body\.annotate-numbers pluto-input \.cm-line::before \{ content: counter\(endeavor-line\)/);
+  const afterFrame = () => new Promise((done) => window.requestAnimationFrame(() => setTimeout(() => setTimeout(done))));
+  await afterFrame();
+  assert.ok(window.document.body.classList.contains("annotate-numbers"));
   window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
   assert.ok(!window.document.body.classList.contains("annotating"));
+  await afterFrame();
+  assert.ok(!window.document.body.classList.contains("annotate-numbers"));
   assert.equal($("#annotate-hint").textContent, "Click to pick · drag over code lines · drag elsewhere for a box·Done");
 });
 
