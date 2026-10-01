@@ -89,6 +89,18 @@ In order. Each part is also useful to Claude, or harmless to it.
    message on the "[Endeavor]" and `<attached …>` / `<quote …>` markers.
 9. **An agent choice on the new-session screen**, and each agent's sign-in on
    the sign-in screen.
+10. **A sidebar that doesn't wait for any agent.** Today the sidebar's past
+    sessions come from Claude's `session/list`, and Claude only starts once
+    This Mac's Julia is ready, so the list waits for both. Instead, Endeavor
+    keeps its own record of each session (its agent, place, title and last
+    activity; `sessions.json` already has the place) and draws the sidebar
+    from it at launch. Each agent's listing then updates the record: new
+    titles, sessions started outside Endeavor, ones deleted elsewhere. An
+    agent that can't list sessions adds none. The default agent starts at
+    launch, alongside Julia, and others start when one of their sessions is
+    opened or started. A session needs its agent and its host's Julia only
+    when it's opened. With more than one agent in use, rows show which agent
+    each session belongs to. Worth doing first, even with Claude alone.
 
 After that, each agent needs its own handling of whatever its answers to the
 questions below turn up, such as Cursor's plan request.
@@ -150,6 +162,26 @@ Follow the Cursor spike's method:
   files or processes the agent leaves behind.
 - **Write the findings** in a note per agent, like
   [cursor-agent.md](cursor-agent.md).
+
+## Later: continue a session with another agent
+
+ACP can't move a session between agents: each agent keeps its own history,
+and `session/load` and forking only work within one agent. Endeavor can
+hand a session over instead, as "Continue with…" in the session menu:
+
+1. Start a session with the new agent in the same folder and notebook.
+2. Send it the conversation so far ahead of the next message: the messages,
+   replies, which cells changed and ran, and quotes. Summarise older turns
+   when the whole history won't fit.
+3. Show both halves as one thread, divided by a line such as "Continued with
+   Cursor · 14:02", and remember that the two sessions belong together.
+
+The notebook carries the real state (its code, outputs and file), and the new
+agent reads it with the same tools, so the work itself carries over. What
+doesn't: the old agent's own reasoning, the full detail of its tool calls,
+images in old messages, and its approvals and mode. Switching back starts
+another session; the first one can still be reopened, but doesn't know what
+happened after the handoff. This needs the work above and a second agent.
 
 ## Decisions for later
 
