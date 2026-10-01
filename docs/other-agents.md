@@ -225,6 +225,40 @@ lasting rules stay in the folder and whether Endeavor can read them.
 Still to test: whether a folder allow rule for a notebook run skips Claude's
 `PreToolUse` hook, which would let it bypass Ask to run.
 
+## Endeavor's copy of the transcript
+
+Not built yet.
+
+The agent's copy of a session is still the one that matters. Endeavor also
+keeps a display-only copy of each session's transcript, in its own app
+support folder, so the history can show before the agent (and the host's
+Julia) have loaded the session, including when a session's server is
+offline.
+
+- **At once, read-only.** Opening a session shows Endeavor's copy right
+  away, read-only, with a faint "Loading…" line. A message can still be
+  typed; it waits and sends once the agent has loaded the session.
+- **The swap.** When the agent's replay finishes, it replaces Endeavor's
+  copy. The replay carries no message ids, so it's matched against
+  Endeavor's copy by order and text. The view keeps its place: the message
+  at the top of the view stays where it was.
+  - If every message matches, nothing moves.
+  - If the replay only adds messages at the end — the session was
+    continued outside Endeavor, such as with `claude --resume` — the view
+    stays where it was, even at the bottom, and a floating button, "N new
+    messages ↓", appears above the composer.
+  - If earlier messages differ — the session was compacted, or rewound,
+    outside Endeavor — the thread updates around the view's place, and the
+    button reads "Jump to latest ↓" instead.
+- **Not only after a replay.** The same floating button appears in any long
+  transcript once the user has scrolled up, such as while Claude is still
+  streaming a reply.
+- **Display only.** Endeavor's copy is never sent to the agent. The cost is
+  disk space in Endeavor's own folder, and a second place the conversation
+  is stored on this Mac. It also helps "Continue with another agent" above:
+  step 2 needs the conversation so far, and Endeavor's own copy already has
+  it.
+
 ## Decisions for later
 
 - Should Claude move to skills through the MCP server too, or keep the plugin?
