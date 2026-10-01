@@ -17,10 +17,86 @@ pub enum Change {
     Removed,
 }
 
-/// One edited cell: a short label and its line diff.
+/// One edited cell or file: a short label and its line diff, and for a
+/// notebook cell the edit itself.
 pub struct CellDiff {
     pub label: String,
     pub lines: Vec<(Change, String)>,
+    pub edit: Option<CellEdit>,
+}
+
+/// A notebook cell's code before and after one tool call: no `before` for a
+/// cell the call added, no `after` for one it deleted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellEdit {
+    pub cell: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+impl CellEdit {
+    fn diff(self) -> CellDiff {
+        let short = &self.cell[..self.cell.len().min(8)];
+        let label = match (&self.before, &self.after) {
+            (None, _) => "new cell".to_owned(),
+            (_, None) => format!("cell {short} (deleted)"),
+            _ => format!("cell {short}"),
+        };
+        let lines = line_diff(self.before.as_deref().unwrap_or(""), self.after.as_deref().unwrap_or(""));
+        CellDiff { label, lines, edit: Some(self) }
+    }
+}
+
+/// What a turn did to a cell, all its edits taken together.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CellChange {
+    New,
+    Edited,
+    Deleted,
+}
+
+/// A row of the end-of-turn card: a cell the turn changed, by its net change.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChangedCell {
+    pub cell: String,
+    /// What the cell defines, else "cell" and its id's first characters.
+    pub name: String,
+    pub change: CellChange,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// The cells a turn's edits changed, in the order first touched, each by its
+/// net change: a cell edited twice is one row, and one put back as it was, or
+/// added and then deleted, is none. `name` says what a cell's code defines.
+pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>, name: impl Fn(&str) -> Option<String>) -> Vec<ChangedCell> {
+    let mut cells: Vec<CellEdit> = Vec::new();
+    for edit in edits {
+        match cells.iter_mut().find(|c| c.cell == edit.cell) {
+            Some(first) => first.after.clone_from(&edit.after),
+            None => cells.push(edit.clone()),
+        }
+    }
+    cells
+        .into_iter()
+        .filter_map(|CellEdit { cell, before, after }| {
+            let change = match (&before, &after) {
+                (None, None) => return None,
+                (Some(b), Some(a)) if b == a => return None,
+                (None, Some(_)) => CellChange::New,
+                (Some(_), None) => CellChange::Deleted,
+                (Some(_), Some(_)) => CellChange::Edited,
+            };
+            let (old, new) = (before.as_deref().unwrap_or(""), after.as_deref().unwrap_or(""));
+            let (added, removed) = line_diff(old, new).iter().fold((0, 0), |(a, r), (c, _)| match c {
+                Change::Added => (a + 1, r),
+                Change::Removed => (a, r + 1),
+                Change::Same => (a, r),
+            });
+            let name = name(after.as_deref().unwrap_or(old)).unwrap_or_else(|| format!("cell {}", &cell[..cell.len().min(8)]));
+            Some(ChangedCell { cell, name, change, added, removed })
+        })
+        .collect()
 }
 
 /// The JSON a runtime tool returned, from an ACP `rawOutput`: the MCP content
@@ -72,11 +148,12 @@ impl CellCodes {
         }
     }
 
-    /// Diffs for an edit tool call (from its input), recording the new code.
-    pub fn diff(&mut self, tool: &str, input: &Value) -> Vec<CellDiff> {
+    /// Diffs for a completed edit tool call, from its input (and its result,
+    /// which has a new cell's id), recording the new code.
+    pub fn diff(&mut self, tool: &str, input: &Value, result: &Value) -> Vec<CellDiff> {
         let mut edit = |id: &str, new: &str| {
             let old = self.0.insert(id.to_owned(), new.to_owned()).unwrap_or_default();
-            CellDiff { label: format!("cell {}", &id[..id.len().min(8)]), lines: line_diff(&old, new) }
+            CellEdit { cell: id.to_owned(), before: Some(old), after: Some(new.to_owned()) }.diff()
         };
         match tool {
             "edit_cell" => match (input["cell_id"].as_str(), input["code"].as_str()) {
@@ -89,16 +166,16 @@ impl CellCodes {
                 .flatten()
                 .filter_map(|c| Some(edit(c["cell_id"].as_str()?, c["code"].as_str()?)))
                 .collect(),
-            // The new cell's id only arrives with the result; show its code as added.
-            "add_cell" => input["code"]
-                .as_str()
-                .map(|code| vec![CellDiff { label: "new cell".into(), lines: line_diff("", code) }])
-                .unwrap_or_default(),
+            "add_cell" => match (input["code"].as_str(), result["cell_id"].as_str()) {
+                (Some(code), Some(id)) => vec![CellEdit { cell: id.to_owned(), before: None, after: Some(code.to_owned()) }.diff()],
+                (Some(code), None) => vec![CellDiff { label: "new cell".into(), lines: line_diff("", code), edit: None }],
+                (None, _) => vec![],
+            },
             "delete_cell" => input["cell_id"]
                 .as_str()
                 .and_then(|id| {
                     let old = self.0.remove(id)?;
-                    Some(vec![CellDiff { label: format!("cell {} (deleted)", &id[..id.len().min(8)]), lines: line_diff(&old, "") }])
+                    Some(vec![CellEdit { cell: id.to_owned(), before: Some(old), after: None }.diff()])
                 })
                 .unwrap_or_default(),
             _ => vec![],
@@ -176,22 +253,21 @@ mod tests {
     fn diffs_an_edit_against_the_last_read() {
         let mut codes = CellCodes::default();
         codes.observe("read_cell", &json!({ "cell_id": C1, "code": "x = 1" }));
-        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }));
+        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
         assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())]);
         // The edit becomes the new baseline.
-        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 3" }));
+        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 3" }), &json!({}));
         assert_eq!(d[0].lines[0], (Removed, "x = 2".into()));
     }
 
     #[test]
     fn an_edit_to_a_cell_add_cell_made_diffs_against_its_added_code() {
         let mut codes = CellCodes::default();
-        // add_cell's own diff is built from its input, before the new cell has an
-        // id; its reply, once the id comes back, is what a later edit diffs against.
-        let d = codes.diff("add_cell", &json!({ "code": "x = 1" }));
-        assert_eq!(d[0].lines, vec![(Added, "x = 1".into())], "add_cell's own diff still shows the whole cell as added");
-        codes.observe("add_cell", &json!({ "cell_id": C1, "code": "x = 1" }));
-        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }));
+        let reply = json!({ "cell_id": C1, "code": "x = 1" });
+        codes.observe("add_cell", &reply);
+        let d = codes.diff("add_cell", &json!({ "code": "x = 1" }), &reply);
+        assert_eq!((d[0].label.as_str(), &d[0].lines), ("new cell", &vec![(Added, "x = 1".into())]));
+        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
         assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())], "not the whole cell again");
     }
 
@@ -200,12 +276,43 @@ mod tests {
         let code = format!("{MARKER}{C1}\nusing Plots\n\n{MARKER}{C2}\n# md:\nmd\"# Title\"");
         let mut codes = CellCodes::default();
         codes.observe("read_notebook_code", &json!({ "code": code }));
-        let d = codes.diff("edit_cells", &json!({ "cells": [
+        let cells = json!({ "cells": [
             { "cell_id": C1, "code": "using Plots" },
             { "cell_id": C2, "code": "md\"# New title\"" },
-        ]}));
+        ]});
+        let d = codes.diff("edit_cells", &cells, &json!({}));
         assert!(d[0].lines.iter().all(|(c, _)| *c == Same), "unchanged cell");
         assert_eq!(d[1].lines, vec![(Removed, "md\"# Title\"".into()), (Added, "md\"# New title\"".into())]);
+    }
+
+    #[test]
+    fn a_turn_counts_each_cell_once_by_its_net_change() {
+        const C3: &str = "bbbbbbbb-7777-4888-9999-aaaaaaaaaaaa";
+        const C4: &str = "cccccccc-7777-4888-9999-aaaaaaaaaaaa";
+        const C5: &str = "dddddddd-7777-4888-9999-aaaaaaaaaaaa";
+        let mut codes = CellCodes::default();
+        let mut diffs = Vec::new();
+        let mut call = |tool: &str, input: Value, result: Value| {
+            codes.observe(tool, &result);
+            diffs.extend(codes.diff(tool, &input, &result));
+        };
+        let code = format!("{MARKER}{C1}\nrate = 0.1\nk = 2\n\n{MARKER}{C3}\nplot(rate)\n\n{MARKER}{C4}\nn = 5");
+        call("read_notebook_code", json!({}), json!({ "code": code }));
+        call("edit_cell", json!({ "cell_id": C1, "code": "rate = 0.2\nk = 2" }), json!({}));
+        call("add_cell", json!({ "code": "fit = 1" }), json!({ "cell_id": C2, "code": "fit = 1" }));
+        call("edit_cells", json!({ "cells": [{ "cell_id": C1, "code": "rate = 0.3\nk = 2\nm = 1" }, { "cell_id": C4, "code": "n = 6" }] }), json!({}));
+        call("edit_cell", json!({ "cell_id": C4, "code": "n = 5" }), json!({}));
+        call("edit_cell", json!({ "cell_id": C2, "code": "fit = 2\nfit2 = 3" }), json!({}));
+        call("delete_cell", json!({ "cell_id": C3 }), json!({}));
+        call("add_cell", json!({ "code": "tmp = 0" }), json!({ "cell_id": C5, "code": "tmp = 0" }));
+        call("delete_cell", json!({ "cell_id": C5 }), json!({}));
+        let cells = net_changes(diffs.iter().filter_map(|d| d.edit.as_ref()), crate::session::defined_name);
+        let row = |cell: &str, name: &str, change, added, removed| ChangedCell { cell: cell.into(), name: name.into(), change, added, removed };
+        assert_eq!(
+            cells,
+            [row(C1, "rate", CellChange::Edited, 2, 1), row(C2, "fit", CellChange::New, 2, 0), row(C3, "cell bbbbbbbb", CellChange::Deleted, 0, 1)],
+            "C4 is back as it was; C5 was added and deleted again"
+        );
     }
 
     #[test]

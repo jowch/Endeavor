@@ -16,6 +16,7 @@ use gpui::*;
 use serde_json::{Value, json};
 
 use crate::approval::{self, Tone};
+use crate::celldiff::CellChange;
 use crate::connection::HostPane;
 use crate::new_session::{EXAMPLES, NotebookChoice};
 use crate::notebook_pane::PaneShows;
@@ -314,6 +315,21 @@ impl Workspace {
                 Entry::Note(text) => Some(json!({ "kind": "note", "text": text.to_string() })),
                 Entry::Plan(entries) => Some(json!({ "kind": "plan", "progress": approval::progress(entries), "items": plan_items(entries) })),
                 Entry::Tool { .. } | Entry::Thought { .. } => Some(row(s, ix, false)),
+                Entry::Changes(cells) => Some(json!({
+                    "kind": "changes",
+                    "cells": cells.iter().map(|c| json!({
+                        "name": c.name,
+                        "cell": c.cell,
+                        "tag": match c.change {
+                            CellChange::New => Some("new"),
+                            CellChange::Edited => None,
+                            CellChange::Deleted => Some("deleted"),
+                        },
+                        "added": c.added,
+                        "removed": c.removed,
+                        "shows": c.change != CellChange::Deleted,
+                    })).collect::<Vec<_>>(),
+                })),
                 Entry::Permission { .. } | Entry::RunState(_) => None,
             });
             ix += 1;

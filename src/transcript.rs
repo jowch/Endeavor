@@ -224,6 +224,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .children(warnings.iter().map(run_state_line))
             .into_any_element(),
         Entry::Tool { .. } | Entry::Thought { .. } => render_row(session, ix, false, window, cx),
+        Entry::Changes(cells) => render_changes(key, ix, cells, cx),
         Entry::Plan(entries) => div()
             .flex()
             .flex_col()
@@ -404,6 +405,51 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
         }))
     });
     div().flex().flex_col().gap(px(6.)).child(header).children(list).into_any_element()
+}
+
+/// The end-of-turn card: a row per cell the turn changed (icon, name, a
+/// `new` or `deleted` tag, ± lines), which shows the cell in the notebook. A
+/// deleted cell has nothing to show.
+fn render_changes(key: u64, ix: usize, cells: &[celldiff::ChangedCell], cx: &mut Context<Workspace>) -> AnyElement {
+    use celldiff::CellChange;
+    let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::chat_meta_small()).text_color(color).child(text);
+    let tag = |text: &'static str| div().flex_none().px(px(5.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).text_size(theme::size_meta_small()).child(text);
+    let rows = cells.iter().enumerate().map(|(n, cell)| {
+        let deleted = cell.change == CellChange::Deleted;
+        let tag_text = match cell.change {
+            CellChange::New => ", new",
+            CellChange::Edited => "",
+            CellChange::Deleted => ", deleted",
+        };
+        let label = format!("{}{tag_text}, {} added, {} removed", cell.name, cell.added, cell.removed);
+        let id = cell.cell.clone();
+        div()
+            .id(ElementId::NamedInteger(format!("changed-cell-{n}").into(), key << 32 | ix as u64))
+            .aria_label(label)
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .h(px(28.))
+            .px(px(8.))
+            .when(n > 0, |d| d.border_t_1().border_color(theme::border()))
+            .text_size(theme::chat_meta())
+            .text_color(theme::text_faint())
+            .child(crate::new_session::glyph(crate::new_session::Glyph::Code, theme::text_faint()))
+            .child(mono(cell.name.clone(), if deleted { theme::text_faint() } else { theme::text_secondary() }).min_w_0().truncate())
+            .when(cell.change == CellChange::New, |d| d.child(tag("new")))
+            .when(deleted, |d| d.child(tag("deleted")))
+            .child(div().flex_1())
+            .when(cell.added > 0, |d| d.child(mono(format!("+{}", cell.added), theme::diff_add())))
+            .when(cell.removed > 0, |d| d.child(mono(format!("−{}", cell.removed), theme::diff_del())))
+            .when(!deleted, |d| {
+                d.role(Role::Button)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::row_active()).text_color(theme::text_secondary()))
+                    .child(div().flex_none().child("›"))
+                    .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(vec![id.clone()], cx)))
+            })
+    });
+    div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).overflow_hidden().children(rows).into_any_element()
 }
 
 /// A tool call's folded row: its line, its edits' ± counts, and its state at the end.
@@ -870,7 +916,7 @@ fn file_diff(kind: ToolKind, title: &str, path: Option<&Path>, input: &serde_jso
         (old, new, _) => (old.unwrap_or(""), new.unwrap_or("")),
     };
     let label = file_path(path, input).map_or_else(|| "edit".into(), |p| file_name(&p));
-    Some(celldiff::CellDiff { label, lines: celldiff::line_diff(old, new) })
+    Some(celldiff::CellDiff { label, lines: celldiff::line_diff(old, new), edit: None })
 }
 
 #[cfg(test)]
@@ -950,6 +996,7 @@ mod tests {
         let diff = |lines: &[(Change, &str)]| CellDiff {
             label: "cell 47ce3f7e".into(),
             lines: lines.iter().map(|(c, l)| (match c { Change::Added => Change::Added, Change::Removed => Change::Removed, Change::Same => Change::Same }, l.to_string())).collect(),
+            edit: None,
         };
         assert_eq!(super::cell_name(&diff(&[(Change::Added, "x = 5 + 5")])), "x");
         assert_eq!(super::cell_name(&diff(&[(Change::Removed, "old = 1"), (Change::Added, "model(S, p) = p[1] * S")])), "model");

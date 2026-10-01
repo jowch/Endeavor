@@ -76,6 +76,8 @@ pub enum Entry {
     /// What a turn left unrun or still running, cut back as the runtime reports
     /// progress: it shows only what is still true, and nothing once all is.
     RunState(Vec<pluto::RunWarning>),
+    /// The end-of-turn card: the cells the turn changed.
+    Changes(Vec<celldiff::ChangedCell>),
 }
 
 /// The answer to a call's prompt, shown on its row.
@@ -706,6 +708,9 @@ impl Session {
         self.id = Some(started.id);
         self.modes = started.modes;
         self.config = started.config;
+        if self.replaying {
+            self.push_changes();
+        }
         self.replaying = false;
         let mut effects: Vec<Effect> = self.replayed_path.take().map(Effect::ReopenNotebook).into_iter().collect();
         if let Some(mode) = self.start_mode.take() {
@@ -807,6 +812,7 @@ impl Session {
         let mut effects = Vec::new();
         match event {
             SessionEvent::TurnEnded(reason) => {
+                self.push_changes();
                 // Stopped to send the next message: its bubble says so.
                 if let Some(note) = turn_ended_note(reason).filter(|_| !(reason == StopReason::Cancelled && self.outbox.stopping())) {
                     self.note(note);
@@ -821,6 +827,7 @@ impl Session {
             SessionEvent::TurnFailed(_) if self.outbox.held => self.turn_unanswered(),
             SessionEvent::ApiFailed(error) => return self.api_failed(&error),
             SessionEvent::TurnFailed(e) => {
+                self.push_changes();
                 self.note(format!("⚠ Turn failed: {e}"));
                 self.turn_ended(&mut effects);
             }
@@ -900,6 +907,24 @@ impl Session {
         self.apply(SessionEvent::TurnFailed(error.to_owned()))
     }
 
+    /// The end-of-turn card for the turn's edits since it began (or since its
+    /// last card), when they changed any cell.
+    fn push_changes(&mut self) {
+        let last_card = self.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).map_or(0, |ix| ix + 1);
+        let from = last_card.max(self.turn_start());
+        let edits = self.entries[from..]
+            .iter()
+            .flat_map(|e| match e {
+                Entry::Tool { diffs, .. } => diffs.as_slice(),
+                _ => &[],
+            })
+            .filter_map(|d| d.edit.as_ref());
+        let cells = celldiff::net_changes(edits, defined_name);
+        if !cells.is_empty() {
+            self.push(Entry::Changes(cells));
+        }
+    }
+
     fn turn_ended(&mut self, effects: &mut Vec<Effect>) {
         self.turn_entry = None;
         let next = self.outbox.turn_ended();
@@ -937,7 +962,10 @@ impl Session {
                             text if text.is_empty() || attach::is_app_text(&text) => return,
                             // Claude Code's own marker for a turn it stopped mid-flight: not
                             // the user's words, so replay shows the same note a live stop does.
-                            text if attach::is_stopped_marker(&text) => return self.note("You stopped Claude"),
+                            text if attach::is_stopped_marker(&text) => {
+                                self.push_changes();
+                                return self.note("You stopped Claude");
+                            }
                             text => (Some(text), None),
                         },
                     },
@@ -966,7 +994,11 @@ impl Session {
                         }
                         attachments.extend(attachment);
                     }
-                    _ => self.push(Entry::User { text: text.unwrap_or_default().into(), expanded: false, attachments: attachment.into_iter().collect(), delivery: Delivery::Turn, sent: None }),
+                    _ => {
+                        // Replayed history has no turn ends: the next message marks one.
+                        self.push_changes();
+                        self.push(Entry::User { text: text.unwrap_or_default().into(), expanded: false, attachments: attachment.into_iter().collect(), delivery: Delivery::Turn, sent: None })
+                    }
                 }
                 self.mark(self.entries.len() - 1);
             }
@@ -1089,7 +1121,7 @@ impl Session {
         }
         self.cell_codes.observe(tool, &result);
         if let Some(input) = input {
-            *diffs = self.cell_codes.diff(tool, input);
+            *diffs = self.cell_codes.diff(tool, input, &result);
         }
         if !matches!(tool, "open_notebook" | "new_notebook") {
             return None;
@@ -1806,6 +1838,72 @@ more" }"#);
         assert!(s.busy_since.is_some());
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(s.busy_since.is_none());
+    }
+
+    /// A completed notebook tool call, as Claude Code reports it live and replays it.
+    fn notebook_call(id: &str, tool: &str, input: serde_json::Value, result: serde_json::Value) -> [SessionEvent; 2] {
+        use agent_client_protocol::schema::v1::{ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
+        let output = serde_json::json!([{ "type": "text", "text": result.to_string() }]);
+        [
+            SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), format!("mcp__notebook__{tool}")).raw_input(input))),
+            SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_string(), ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output)))),
+        ]
+    }
+
+    fn changes(s: &Session) -> Vec<Vec<(String, crate::celldiff::CellChange, usize, usize)>> {
+        let cards = s.entries.iter().filter_map(|e| if let Entry::Changes(cells) = e { Some(cells) } else { None });
+        cards.map(|cells| cells.iter().map(|c| (c.name.clone(), c.change, c.added, c.removed)).collect()).collect()
+    }
+
+    #[test]
+    fn a_turn_that_changed_cells_ends_with_its_card() {
+        use crate::celldiff::CellChange;
+        use serde_json::json;
+        const A: &str = "11111111-2222-4333-8444-555555555555";
+        const B: &str = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("fit it"), false);
+        for event in [
+            notebook_call("t1", "read_cell", json!({ "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" })),
+            notebook_call("t2", "edit_cell", json!({ "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true })),
+            notebook_call("t3", "add_cell", json!({ "code": "fit = 1" }), json!({ "cell_id": B, "code": "fit = 1" })),
+            notebook_call("t4", "edit_cell", json!({ "cell_id": A, "code": "rate = 0.3\nk = 2" }), json!({ "ok": true })),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            s.apply(event);
+        }
+        assert!(changes(&s).is_empty(), "no card while the turn runs");
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert!(matches!(s.entries.last(), Some(Entry::Changes(_))), "the card ends the turn");
+        assert_eq!(changes(&s), [vec![("rate".to_string(), CellChange::Edited, 2, 1), ("fit".to_string(), CellChange::New, 1, 0)]]);
+        s.submit(text("thanks"), false);
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert_eq!(changes(&s).len(), 1, "a turn that changed no cell has no card");
+    }
+
+    #[test]
+    fn a_reopened_session_shows_each_turns_card() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+        use crate::celldiff::CellChange;
+        use serde_json::json;
+        const A: &str = "11111111-2222-4333-8444-555555555555";
+        let user = |t: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(t)))));
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
+        s.apply(user("add a cell"));
+        for event in notebook_call("t1", "add_cell", json!({ "code": "x = 1" }), json!({ "cell_id": A, "code": "x = 1" })) {
+            s.apply(event);
+        }
+        s.apply(user("now delete it"));
+        assert_eq!(changes(&s), [vec![("x".to_string(), CellChange::New, 1, 0)]], "the next message ends the replayed turn");
+        assert!(matches!(&s.entries[2], Entry::Changes(_)), "the card sits before the next message");
+        for event in notebook_call("t2", "delete_cell", json!({ "cell_id": A }), json!({ "ok": true })) {
+            s.apply(event);
+        }
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        assert_eq!(changes(&s)[1], [("x".to_string(), CellChange::Deleted, 0, 1)], "the replay's end ends its last turn");
     }
 
     #[test]

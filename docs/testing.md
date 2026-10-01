@@ -82,7 +82,10 @@ To wait for something, poll the dump. For example, loop until
   `note` (such as "Claude stopped: …"), `plan`, `thought`, `tool` and `run`. A run of tool calls is one `run` entry with its
   summary line and its rows. A `tool` row has its text ("Edited `fit`"), its
   +/− counts, how it was answered, its state (`…`, `failed` or `denied`) and
-  its cell diffs. Also `activity` (the working line), `pinned_plan`, and
+  its cell diffs. A `changes` entry is the end-of-turn card: its `cells`,
+  each with the `name` shown, the `cell` id, `tag` (`new`, `deleted` or
+  null), the net `added` and `removed` line counts over the turn, and
+  `shows` (false for a deleted cell, whose row has no `›`). Also `activity` (the working line), `pinned_plan`, and
   `approval`: the card above the composer (`approval` or `plan`) with its
   title, code, lines, `plan` (its title, numbered `steps`, whether it's
   `open`, and the `text` shown when it is) and buttons (each with its label, key and `weight`:
