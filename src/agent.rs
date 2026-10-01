@@ -423,6 +423,8 @@ async fn run(
             },
             agent_client_protocol::on_receive_request!(),
         )
+        // Without this the loop below only notices the adapter is gone at its next command.
+        .on_close(async |_| Err(agent_client_protocol::Error::internal_error().data("Claude's process exited")))
         .connect_with(agent, async move |connection: ConnectionTo<Agent>| {
             let init = connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(ClientCapabilities::new().session(
@@ -462,6 +464,8 @@ async fn run(
                         match result {
                             Ok(response) => emit(&session, SessionEvent::TurnEnded(response.stop_reason)),
                             Err(e) if e.code == ErrorCode::AuthRequired => emit(&session, SessionEvent::AuthRequired),
+                            // The adapter went: `AgentEvent::Failed` follows, and the reply is cut off.
+                            Err(e) if agent_client_protocol::is_incoming_transport_closed(&e) => {}
                             // claude-agent-acp marks the failures it can tell apart (Claude's
                             // API failing after Claude Code's retries, a usage limit) with an
                             // `errorKind`, and gives the error's text as the message.

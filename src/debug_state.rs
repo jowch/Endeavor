@@ -359,8 +359,13 @@ impl Workspace {
                     })).collect::<Vec<_>>(),
                 })),
                 Entry::Failed(f) if f.used && matches!(f.kind, session::FailedKind::NoAnswer { .. }) => None,
+                Entry::Failed(f) if matches!(f.kind, session::FailedKind::CutOff) => Some(json!({
+                    "kind": "note",
+                    "text": f.kind.title(),
+                    "button": (!f.used).then(|| f.kind.action()),
+                })),
                 Entry::Failed(f) => Some(json!({
-                    "kind": if matches!(f.kind, session::FailedKind::CutOff) { "note" } else { "failed" },
+                    "kind": "failed",
                     "title": f.kind.title(),
                     "text": f.kind.body(),
                     "button": (!f.used).then(|| f.kind.action()),
