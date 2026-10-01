@@ -114,6 +114,7 @@ const OPEN_NOTEBOOK: Act = act("Opening", "open", "opened", "a notebook", "{n} n
 const NEW_NOTEBOOK: Act = act("Creating", "create", "created", "a notebook", "{n} notebooks");
 const ALLOW_RUN: Act = act("Letting", "let", "let", "the notebook run", "the notebook run");
 const KEEP_ALIVE: Act = act("Keeping", "keep", "kept", "the notebook running", "the notebook running");
+const SKILL: Act = act("Using", "use", "used", "a skill", "{n} skills");
 const OTHER: Act = act("Using", "use", "used", "a tool", "{n} tools");
 
 /// What a running call can be named by on the working line.
@@ -179,6 +180,7 @@ fn act_of(title: &str, kind: ToolKind, input: &Value) -> (Act, usize) {
         ToolKind::Fetch => SEARCH,
         ToolKind::Execute => COMMAND,
         ToolKind::Think => TODOS,
+        _ if title.starts_with("Load skill") => SKILL,
         _ => OTHER,
     };
     (act, 1)
@@ -286,6 +288,7 @@ mod tests {
             "Ran 4 cells"
         );
         assert_eq!(summary([("mcp__notebook__submit_changes", ToolKind::Other, &null)]), "Ran the changed cells");
+        assert_eq!(summary([("Load skill: dataviz", ToolKind::Other, &null), ("Load skill: pdf", ToolKind::Other, &null)]), "Used 2 skills");
         assert_eq!(
             summary([("Write a.txt", ToolKind::Edit, &null), ("Edit b.txt", ToolKind::Edit, &null), ("grep x", ToolKind::Search, &null)]),
             "Wrote a file, edited a file, ran a search"

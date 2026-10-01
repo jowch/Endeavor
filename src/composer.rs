@@ -20,21 +20,23 @@ use crate::attach::{self, Attachment, Icon};
 use crate::hosts::{HostId, Place};
 use crate::new_session::{Glyph, glyph};
 use crate::session::{self, Entry, ModeChoice, Session};
+use crate::slash::{self, Listing, Own};
 use crate::{Workspace, context_ring, theme, tool_button};
 use crate::theme::FocusRing as _;
 
-actions!(composer, [AddFiles, ListUp, ListDown, ListPick, PickMode1, PickMode2, PickMode3, PickMode4]);
+actions!(composer, [AddFiles, ListUp, ListDown, ListPick, ListFill, PickMode1, PickMode2, PickMode3, PickMode4]);
 
 /// Keys for the composer's lists. Registered after gpui-component's, so they
 /// beat the text box's own up, down, enter and tab while a list is open.
 pub fn key_bindings() -> Vec<KeyBinding> {
     let mut bindings = vec![KeyBinding::new("secondary-u", AddFiles, Some("Input")), KeyBinding::new("secondary-u", AddFiles, None)];
-    for context in ["MentionList > Input", "ModeMenu > Input", "ModeMenu"] {
+    for context in ["MentionList > Input", "SlashList > Input", "ModeMenu > Input", "ModeMenu"] {
         bindings.push(KeyBinding::new("up", ListUp, Some(context)));
         bindings.push(KeyBinding::new("down", ListDown, Some(context)));
         bindings.push(KeyBinding::new("enter", ListPick, Some(context)));
     }
     bindings.push(KeyBinding::new("tab", ListPick, Some("MentionList > Input")));
+    bindings.push(KeyBinding::new("tab", ListFill, Some("SlashList > Input")));
     for context in ["ModeMenu > Input", "ModeMenu"] {
         bindings.push(KeyBinding::new("1", PickMode1, Some(context)));
         bindings.push(KeyBinding::new("2", PickMode2, Some(context)));
@@ -62,6 +64,51 @@ pub enum Files {
 /// How many rows the @ list shows.
 const MENTIONS_SHOWN: usize = 8;
 
+/// The slash list's height: about 12 rows, then it scrolls.
+const SLASH_LIST_MAX: f32 = 340.;
+
+/// A choice after /mode or /model, as the toolbar's menus offer it.
+#[derive(Clone)]
+pub(crate) struct Choice {
+    pub name: String,
+    pub description: Option<String>,
+    pub current: bool,
+    pick: ChoicePick,
+}
+
+#[derive(Clone)]
+enum ChoicePick {
+    Mode(usize),
+    Model(SessionConfigValueId),
+}
+
+/// The slash list as it stands for the box's text.
+pub(crate) enum SlashView {
+    /// "/" and a name being typed: the commands that match.
+    Commands { commands: Vec<slash::Command>, listing: Listing, query: String, waiting: bool },
+    /// "/mode " or "/model ": its choices.
+    Choices { own: Own, choices: Vec<Choice> },
+}
+
+impl SlashView {
+    fn len(&self) -> usize {
+        match self {
+            SlashView::Commands { listing: Listing::Names(rows) | Listing::Descriptions(rows), .. } => rows.len(),
+            SlashView::Commands { .. } => 0,
+            SlashView::Choices { choices, .. } => choices.len(),
+        }
+    }
+
+    /// The row selected as the list opens or its text changes: the first, or
+    /// the current choice when every choice shows.
+    fn initial(&self) -> usize {
+        match self {
+            SlashView::Choices { choices, .. } => choices.iter().position(|c| c.current).unwrap_or(0),
+            SlashView::Commands { .. } => 0,
+        }
+    }
+}
+
 pub struct Composer {
     /// Chips in the box, sent with the next message.
     pub attachments: Vec<Attachment>,
@@ -72,8 +119,12 @@ pub struct Composer {
     pub menu: Option<Menu>,
     /// The "@query" being typed (its byte range), which opens the @ list.
     typing: Option<(Range<usize>, String)>,
-    /// The highlighted row of the open list (the @ list or the mode menu).
+    /// The highlighted row of the open list (the @, slash or mode list).
     selected: usize,
+    /// The text the slash list was closed on with Esc; it opens again once
+    /// the text changes.
+    slash_closed: Option<String>,
+    slash_scroll: ScrollHandle,
     /// Each folder's files, listed on the first @ there.
     files: HashMap<Place, Files>,
     /// Why the last files couldn't be attached.
@@ -103,6 +154,8 @@ impl Composer {
             menu: None,
             typing: None,
             selected: 0,
+            slash_closed: None,
+            slash_scroll: ScrollHandle::new(),
             files: HashMap::new(),
             notice: None,
             hovered: None,
@@ -338,6 +391,13 @@ impl Workspace {
                 self.list_files(place, cx);
             }
         }
+        if text != old
+            && let Some(view) = self.slash_view(cx)
+        {
+            self.composer.menu = None;
+            self.composer.selected = view.initial();
+            self.composer.slash_scroll.scroll_to_item(self.composer.selected);
+        }
         cx.notify();
     }
 
@@ -419,8 +479,184 @@ impl Workspace {
         cx.notify();
     }
 
-    fn list_len(&self) -> usize {
+    /// Every slash command: Endeavor's, and Claude Code's once it has sent them.
+    pub(crate) fn slash_commands(&self) -> Vec<slash::Command> {
+        slash::commands(self.active_session().map(|s| s.commands.as_slice()).filter(|c| !c.is_empty()))
+    }
+
+    /// The choices after /mode or /model that match what follows it.
+    fn own_choices(&self, own: Own, query: &str) -> Vec<Choice> {
+        let all: Vec<Choice> = match own {
+            Own::Mode => {
+                let (choices, current) = self.mode_list();
+                choices
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, c)| Choice { name: c.name, description: Some(c.description), current: current == Some(i), pick: ChoicePick::Mode(i) })
+                    .collect()
+            }
+            Own::Model => match self.config_for(self.active_session(), "model") {
+                Some((current, options)) => options
+                    .into_iter()
+                    .map(|o| Choice { current: o.value == current, name: o.name, description: o.description, pick: ChoicePick::Model(o.value) })
+                    .collect(),
+                None => Vec::new(),
+            },
+        };
+        let names: Vec<String> = all.iter().map(|c| c.name.clone()).collect();
+        slash::choices(query, &names).into_iter().map(|i| all[i].clone()).collect()
+    }
+
+    /// The slash list for the box's text, unless Esc closed it.
+    pub(crate) fn slash_view(&self, cx: &App) -> Option<SlashView> {
         if self.composer.typing.is_some() {
+            return None;
+        }
+        let text = self.input.read(cx).value().to_string();
+        if self.composer.slash_closed.as_deref() == Some(text.as_str()) {
+            return None;
+        }
+        if let Some(query) = slash::typing(&text) {
+            let commands = self.slash_commands();
+            let listing = slash::filter(query, &commands);
+            let waiting = self.active_session().is_none_or(|s| s.commands.is_empty());
+            return Some(SlashView::Commands { commands, listing, query: query.to_string(), waiting });
+        }
+        let (own, rest) = slash::own_command(&text)?;
+        Some(SlashView::Choices { own, choices: self.own_choices(own, rest) })
+    }
+
+    /// Put `text` in the box with the caret at its end.
+    fn set_composer_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        let end = text.len();
+        self.input.update(cx, |s, cx| {
+            s.set_value(text, window, cx);
+            s.set_selected_range(end..end, cx);
+            s.focus(window, cx);
+        });
+        if let Some(view) = self.slash_view(cx) {
+            self.composer.selected = view.initial();
+            self.composer.slash_scroll.scroll_to_item(self.composer.selected);
+        }
+    }
+
+    /// Send what's in the box: to the session, or to start one.
+    fn send_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active.is_some() {
+            self.submit(false, window, cx);
+        } else {
+            self.start_session(window, cx);
+        }
+    }
+
+    /// ⏎ (or a click) on the slash list's row `i`: a command that takes
+    /// nothing runs; one that takes words, and Endeavor's, are filled in. ⇥
+    /// (`fill`) only fills in. A choice after /mode or /model applies.
+    fn slash_choose(&mut self, view: SlashView, i: usize, fill: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match view {
+            SlashView::Commands { commands, listing, .. } => {
+                let rows = match listing {
+                    Listing::Names(rows) | Listing::Descriptions(rows) => rows,
+                    // Not a command: ⏎ sends it as a message.
+                    Listing::Nothing if !fill => return self.send_composer(window, cx),
+                    Listing::Nothing => return,
+                };
+                let Some(command) = rows.get(i).map(|row| &commands[row.command]) else { return };
+                if fill || command.own.is_some() || command.words.is_some() {
+                    self.set_composer_text(format!("/{} ", command.name), window, cx);
+                } else {
+                    self.set_composer_text(format!("/{}", command.name), window, cx);
+                    self.send_composer(window, cx);
+                }
+            }
+            SlashView::Choices { choices, .. } => {
+                if let Some(choice) = choices.into_iter().nth(i) {
+                    self.apply_choice(choice.pick, window, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// A /mode or /model choice: applied at once, as the toolbar's menu
+    /// would; the box clears and nothing is sent.
+    fn apply_choice(&mut self, pick: ChoicePick, window: &mut Window, cx: &mut Context<Self>) {
+        match pick {
+            ChoicePick::Mode(i) => self.pick_mode(i, cx),
+            ChoicePick::Model(value) => self.pick_config("model", value, cx),
+        }
+        self.composer.slash_closed = None;
+        self.set_composer_text(String::new(), window, cx);
+    }
+
+    /// Sending "/mode …" or "/model …" (with the list closed, or ⌘⏎): it is
+    /// Endeavor's, so it applies the best match and is never sent. With
+    /// nothing after it, or no match, the list opens. False: not Endeavor's.
+    pub(crate) fn run_own_command(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let text = self.input.read(cx).value().trim().to_string();
+        let names = |own| self.own_choices(own, "").into_iter().map(|c| c.name).collect();
+        let Some(send) = slash::own_send(&text, names) else { return false };
+        self.composer.slash_closed = None;
+        match send {
+            slash::OwnSend::Apply(own, i) => {
+                if let Some(choice) = self.own_choices(own, "").into_iter().nth(i) {
+                    self.apply_choice(choice.pick, window, cx);
+                }
+            }
+            slash::OwnSend::Open(own) if slash::own_command(&text).is_some_and(|(_, rest)| rest.is_empty()) => {
+                let name = if own == Own::Mode { "mode" } else { "model" };
+                self.set_composer_text(format!("/{name} "), window, cx);
+            }
+            slash::OwnSend::Open(_) => {}
+        }
+        cx.notify();
+        true
+    }
+
+    /// The slash list and the command token, for the debug state.
+    pub(crate) fn slash_state(&self, cx: &App) -> serde_json::Value {
+        use serde_json::json;
+        let text = self.input.read(cx).value().to_string();
+        let commands = self.slash_commands();
+        let token = slash::token(&text, &commands).map(|(len, c)| json!({ "text": &text[..len], "hint": c.words.clone().filter(|_| text.len() == len + 1) }));
+        let selected = self.composer.selected;
+        let list = match self.slash_view(cx) {
+            None => serde_json::Value::Null,
+            Some(SlashView::Commands { commands, listing, waiting, .. }) => {
+                let (kind, rows) = match listing {
+                    Listing::Names(rows) => ("names", rows),
+                    Listing::Descriptions(rows) => ("descriptions", rows),
+                    Listing::Nothing => ("nothing", Vec::new()),
+                };
+                let rows: Vec<_> = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, row)| {
+                        let c = &commands[row.command];
+                        let source = if kind == "descriptions" { &c.description } else { &c.name };
+                        json!({
+                            "group": c.group.heading(),
+                            "name": format!("/{}", c.name),
+                            "hint": c.hint,
+                            "marked": row.marks.iter().map(|r| &source[r.clone()]).collect::<Vec<_>>(),
+                            "selected": i == selected,
+                        })
+                    })
+                    .collect();
+                json!({ "shows": kind, "rows": rows, "waiting": waiting })
+            }
+            Some(SlashView::Choices { own, choices }) => json!({
+                "shows": if own == Own::Mode { "modes" } else { "models" },
+                "rows": choices.iter().enumerate().map(|(i, c)| json!({ "name": c.name, "current": c.current, "selected": i == selected })).collect::<Vec<_>>(),
+            }),
+        };
+        json!({ "list": list, "token": token })
+    }
+
+    fn list_len(&self, cx: &App) -> usize {
+        if let Some(view) = self.slash_view(cx) {
+            view.len()
+        } else if self.composer.typing.is_some() {
             self.mention_matches().len()
         } else if self.composer.menu == Some(Menu::Mode) {
             self.mode_list().0.len()
@@ -430,12 +666,13 @@ impl Workspace {
     }
 
     fn list_move(&mut self, down: bool, cx: &mut Context<Self>) {
-        let n = self.list_len();
+        let n = self.list_len(cx);
         if n == 0 {
             return;
         }
         let at = self.composer.selected.min(n - 1);
         self.composer.selected = if down { (at + 1) % n } else { (at + n - 1) % n };
+        self.composer.slash_scroll.scroll_to_item(self.composer.selected);
         cx.notify();
     }
 
@@ -448,7 +685,9 @@ impl Workspace {
     }
 
     pub fn list_pick(&mut self, _: &ListPick, window: &mut Window, cx: &mut Context<Self>) {
-        if self.composer.typing.is_some() {
+        if let Some(view) = self.slash_view(cx) {
+            self.slash_choose(view, self.composer.selected, false, window, cx);
+        } else if self.composer.typing.is_some() {
             if let Some(path) = self.mention_matches().into_iter().nth(self.composer.selected) {
                 self.pick_mention(path, window, cx);
             } else {
@@ -460,6 +699,12 @@ impl Workspace {
         }
     }
 
+    pub fn list_fill(&mut self, _: &ListFill, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(view) = self.slash_view(cx) {
+            self.slash_choose(view, self.composer.selected, true, window, cx);
+        }
+    }
+
     pub fn pick_mode_key(&mut self, i: usize, cx: &mut Context<Self>) {
         if self.composer.menu == Some(Menu::Mode) {
             self.pick_mode(i, cx);
@@ -468,7 +713,11 @@ impl Workspace {
 
     /// Esc closes the composer's menus and lists first.
     pub fn close_composer_menus(&mut self, cx: &mut Context<Self>) -> bool {
-        let open = self.composer.menu.is_some() || self.composer.typing.is_some() || self.chip_popover.is_some();
+        let slash = self.slash_view(cx).is_some();
+        if slash {
+            self.composer.slash_closed = Some(self.input.read(cx).value().to_string());
+        }
+        let open = slash || self.composer.menu.is_some() || self.composer.typing.is_some() || self.chip_popover.is_some();
         self.composer.menu = None;
         self.composer.typing = None;
         self.chip_popover = None;
@@ -680,7 +929,10 @@ impl Workspace {
         }
         let empty = self.composer_empty(cx);
         let busy = self.claude.up() && session.is_some_and(|s| s.outbox.busy && s.id.is_some() && !s.agent_waiting && !s.opening());
-        let list_context = if self.composer.typing.is_some() {
+        let slash = self.slash_view(cx);
+        let list_context = if slash.is_some() {
+            "SlashList"
+        } else if self.composer.typing.is_some() {
             "MentionList"
         } else if self.composer.menu == Some(Menu::Mode) {
             "ModeMenu"
@@ -749,13 +1001,14 @@ impl Workspace {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.attach_paths(paths.paths().to_vec(), window, cx)))
             .when(!chips.is_empty(), |d| d.child(div().ml(px(10.)).flex().flex_wrap().gap(px(4.)).children(chips)))
             .child(div().flex().items_end().gap_2().child(div().relative().flex_1().min_w_0().child(text_box).child(token_marks)).child(div().mb(px(6.)).child(send)))
-            .children(self.render_list(session, cx))
+            .children(self.render_list(session, slash, cx))
             .children(self.render_hover_preview());
         div()
             .key_context(list_context)
             .on_action(cx.listener(Self::list_up))
             .on_action(cx.listener(Self::list_down))
             .on_action(cx.listener(Self::list_pick))
+            .on_action(cx.listener(Self::list_fill))
             .on_action(cx.listener(|this, _: &PickMode1, _, cx| this.pick_mode_key(0, cx)))
             .on_action(cx.listener(|this, _: &PickMode2, _, cx| this.pick_mode_key(1, cx)))
             .on_action(cx.listener(|this, _: &PickMode3, _, cx| this.pick_mode_key(2, cx)))
@@ -770,23 +1023,33 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// A tint behind each @ mention in the text, so it reads as one piece.
+    /// A tint behind each @ mention in the text, and behind a slash command
+    /// at its start, so each reads as one piece; after a command alone, the
+    /// words it takes, faint.
     fn token_marks(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let input = self.input.clone();
         let mentions = self.composer.mentions.clone();
+        let commands = self.slash_commands();
         let _ = cx;
         canvas(
             |_, _, _| (),
             move |bounds, _, window, cx| {
                 let state = input.read(cx);
                 let text = state.value().to_string();
-                for range in attach::token_ranges(&text, &mentions) {
-                    let Some(b) = state.range_to_bounds(&range) else { continue };
-                    let b = Bounds::from_corners(point(b.left() - px(2.), b.top()), point(b.right() + px(2.), b.bottom()));
-                    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                let command = slash::token(&text, &commands);
+                let hint = command.and_then(|(len, c)| c.words.clone().filter(|_| text.len() == len + 1)).zip(state.range_to_bounds(&(text.len()..text.len())));
+                let marks: Vec<_> = command.map(|(len, _)| 0..len).into_iter().chain(attach::token_ranges(&text, &mentions)).filter_map(|range| state.range_to_bounds(&range)).collect();
+                window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                    for b in marks {
+                        let b = Bounds::from_corners(point(b.left() - px(2.), b.top()), point(b.right() + px(2.), b.bottom()));
                         window.paint_quad(fill(b, theme::accent().opacity(0.28)).corner_radii(px(3.)));
-                    });
-                }
+                    }
+                    if let Some((hint, caret)) = hint {
+                        let run = TextRun { len: hint.len(), font: font(theme::SANS), color: theme::text_faint().into(), background_color: None, underline: None, strikethrough: None };
+                        let line = window.text_system().shape_line(hint.into(), theme::chat_body(), &[run], None);
+                        let _ = line.paint(point(caret.left() + px(3.), caret.top()), caret.size.height, TextAlign::Left, None, window, cx);
+                    }
+                });
             },
         )
         .absolute()
@@ -835,9 +1098,122 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The open list above the box: the @ list, or a menu from the row under it.
-    fn render_list(&self, session: Option<&Session>, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The slash list above the box, as wide as it.
+    fn render_slash(&self, view: SlashView, cx: &mut Context<Self>) -> AnyElement {
+        let selected = self.composer.selected;
+        let heading = |text: String| div().px(px(8.)).pt(px(6.)).pb(px(2.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(text);
+        let line = |text: String| div().px(px(8.)).py(px(5.)).text_size(theme::chat_meta()).text_color(theme::text_faint()).child(text);
+        let select = |i: usize| {
+            cx.listener(move |this: &mut Self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>| {
+                if *hovered && this.composer.selected != i {
+                    this.composer.selected = i;
+                    cx.notify();
+                }
+            })
+        };
+        let mut rows: Vec<AnyElement> = Vec::new();
+        let mut after: Vec<Div> = Vec::new();
+        match view {
+            SlashView::Commands { commands, listing, query, waiting } => {
+                let (found, described) = match listing {
+                    Listing::Names(found) => (found, false),
+                    Listing::Descriptions(found) => (found, true),
+                    Listing::Nothing => (Vec::new(), false),
+                };
+                if found.is_empty() {
+                    after.push(line(format!("No command named /{query}. {} sends “/{query}” to Claude as a message.", slash::ENTER)));
+                }
+                let mark = HighlightStyle { color: Some(theme::text_primary().into()), ..Default::default() };
+                let mut group = None;
+                for (i, row) in found.into_iter().enumerate() {
+                    let command = &commands[row.command];
+                    let head = match described {
+                        true => (i == 0).then(|| heading(format!("No command is named “{query}”. Described as:"))),
+                        false => (group != Some(command.group)).then(|| heading(command.group.heading().into())),
+                    };
+                    group = Some(command.group);
+                    let name = format!("/{}", command.name);
+                    let name_marks: Vec<_> = if described { Vec::new() } else { row.marks.iter().map(|r| (r.start + 1..r.end + 1, mark)).collect() };
+                    let description = command.description.lines().next().unwrap_or_default();
+                    let (description, description_marks): (String, Vec<_>) = match row.marks.first().filter(|r| described && r.end <= description.len()) {
+                        Some(r) => {
+                            let (from, shown) = slash::around(description, r.start);
+                            (shown, vec![(r.start - from..r.end - from, mark)])
+                        }
+                        None => (description.to_string(), Vec::new()),
+                    };
+                    let key = (command.own == Some(Own::Mode)).then_some(slash::SHIFT_TAB);
+                    let item = popup_row(ElementId::NamedInteger("slash".into(), i as u64), i == selected)
+                        .gap(px(12.))
+                        .child(
+                            div()
+                                .w(px(160.))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_baseline()
+                                .gap(px(6.))
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .font_family(theme::MONO)
+                                        .text_size(theme::chat_code())
+                                        .text_color(if query.is_empty() || described { theme::text_primary() } else { theme::text_secondary() })
+                                        .child(StyledText::new(name).with_highlights(name_marks)),
+                                )
+                                .children(command.hint.clone().map(|h| div().min_w_0().truncate().font_family(theme::MONO).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(h))),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().text_size(theme::chat_meta()).text_color(theme::text_muted()).child(StyledText::new(description).with_highlights(description_marks)))
+                        .children(key.map(|k| div().flex_shrink_0().text_size(theme::chat_meta()).text_color(theme::text_faint()).child(k)))
+                        .on_hover(select(i))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(view) = this.slash_view(cx) {
+                                this.slash_choose(view, i, false, window, cx);
+                            }
+                        }));
+                    rows.push(div().flex().flex_col().children(head).child(item).into_any_element());
+                }
+                if waiting {
+                    after.push(line("Claude's commands appear once it's connected".into()));
+                }
+            }
+            SlashView::Choices { own, choices } => {
+                let title = if own == Own::Mode { "Mode" } else { "Model" };
+                if choices.is_empty() {
+                    after.push(line(format!("No {} matches", title.to_lowercase())));
+                }
+                for (i, choice) in choices.into_iter().enumerate() {
+                    let item = popup_row(ElementId::NamedInteger("slash-choice".into(), i as u64), i == selected)
+                        .gap(px(12.))
+                        .child(div().w(px(160.)).flex_shrink_0().truncate().child(choice.name))
+                        .child(div().flex_1().min_w_0().truncate().text_size(theme::chat_meta()).text_color(theme::text_muted()).children(choice.description))
+                        .child(div().w(px(12.)).flex_shrink_0().text_color(theme::accent_text()).child(if choice.current { "✓" } else { "" }))
+                        .on_hover(select(i))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(view) = this.slash_view(cx) {
+                                this.slash_choose(view, i, false, window, cx);
+                            }
+                        }));
+                    rows.push(div().flex().flex_col().children((i == 0).then(|| heading(title.into()))).child(item).into_any_element());
+                }
+            }
+        }
+        let footer = div().mt(px(4.)).pt(px(5.)).px(px(8.)).pb(px(1.)).border_t_1().border_color(theme::border()).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(slash::FOOTER);
+        let list = popup()
+            .id("slash-list")
+            .child(div().id("slash-rows").flex().flex_col().max_h(px(SLASH_LIST_MAX)).overflow_y_scroll().track_scroll(&self.composer.slash_scroll).children(rows))
+            .children(after)
+            .child(footer);
+        div().absolute().bottom(relative(1.)).mb(px(6.)).occlude().left_0().right_0().child(list).into_any_element()
+    }
+
+    /// The open list above the box: the slash list, the @ list, or a menu
+    /// from the row under it.
+    fn render_list(&self, session: Option<&Session>, slash: Option<SlashView>, cx: &mut Context<Self>) -> Option<AnyElement> {
         let above = |d: Div| d.absolute().bottom(relative(1.)).mb(px(6.)).occlude();
+        if let Some(view) = slash {
+            return Some(self.render_slash(view, cx));
+        }
         if self.composer.typing.is_some() {
             let status = match self.composer_place().and_then(|p| self.composer.files.get(&p)) {
                 None => Some("Choose a folder first".to_string()),
@@ -867,7 +1243,6 @@ impl Workspace {
         let menu = self.composer.menu?;
         let body = match menu {
             Menu::Plus => {
-                let commands = session.is_some_and(|s| !s.commands.is_empty());
                 popup()
                     .w(px(240.))
                     .child(
@@ -878,20 +1253,15 @@ impl Workspace {
                             .on_click(cx.listener(|this, _, window, cx| this.add_files(&AddFiles, window, cx))),
                     )
                     .child(
-                        if commands { popup_row("plus-commands".into(), false) } else { inert_row("plus-commands".into()).text_color(theme::text_section()) }
-                            .child(glyph(Glyph::Slash, if commands { theme::text_muted() } else { theme::text_section() }))
+                        popup_row("plus-commands".into(), false)
+                            .child(glyph(Glyph::Slash, theme::text_muted()))
                             .child(div().flex_1().child("Slash commands"))
-                            .when(commands, |d| {
-                                d.on_click(cx.listener(|this, _, window, cx| {
-                                    this.composer.menu = None;
-                                    this.input.update(cx, |s, cx| {
-                                        s.set_value("/", window, cx);
-                                        s.focus(window, cx);
-                                    });
-                                    window.dispatch_action(Box::new(gpui_component::input::MoveToEnd), cx);
-                                    cx.notify();
-                                }))
-                            }),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.composer.menu = None;
+                                this.composer.slash_closed = None;
+                                this.set_composer_text("/".into(), window, cx);
+                                cx.notify();
+                            })),
                     )
                     .into_any_element()
             }

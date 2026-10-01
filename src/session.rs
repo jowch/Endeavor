@@ -369,6 +369,8 @@ pub struct Session {
     pub usage: Option<(u64, u64)>,
     /// Slash commands the agent offers.
     pub commands: Vec<AvailableCommand>,
+    /// A /compact is running: the context used before it, for the note after.
+    compacting: Option<Option<(u64, u64)>>,
     /// The policy last sent to the runtime.
     policy_sent: &'static str,
     /// On a cluster: what its job asks for (from the resources chip).
@@ -566,6 +568,7 @@ impl Session {
             config: Vec::new(),
             usage: None,
             commands: Vec::new(),
+            compacting: None,
             policy_sent: "ask",
             resources: None,
             start_mode: None,
@@ -1076,7 +1079,10 @@ impl Session {
             self.note("This session isn't open, so nothing was sent");
             return Vec::new();
         }
-        if let Some(context) = self.start_context.take() {
+        // A command goes alone; the context waits for the next message.
+        if !crate::slash::is_command(&message.text)
+            && let Some(context) = self.start_context.take()
+        {
             message.blocks.insert(0, context);
         }
         self.title_from(&message.text);
@@ -1112,6 +1118,9 @@ impl Session {
         let again = shown.is_none() && matches!(turn, Turn::Prompt(_));
         effects.push(Effect::Send(turn));
         if let Some(Shown { text, attachments, delivery }) = shown {
+            if text.split_whitespace().next() == Some("/compact") {
+                self.compacting = Some(self.usage);
+            }
             self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery, sent: Some(SystemTime::now()) });
             self.turn_entry = Some(self.entries.len() - 1);
             self.busy_since.get_or_insert_with(Instant::now);
@@ -1178,6 +1187,9 @@ impl Session {
                 } else if let Some(note) = turn_ended_note(reason).filter(|_| !(reason == StopReason::Cancelled && self.outbox.stopping())) {
                     // Stopped to send the next message: its bubble says so.
                     self.note(note);
+                }
+                if let Some(before) = self.compacting.take().filter(|_| reason == StopReason::EndTurn) {
+                    self.note(compacted_note(before, self.usage));
                 }
                 self.drop_prompts();
                 self.turn_ended(&mut effects);
@@ -1776,6 +1788,15 @@ impl Session {
 
 /// The note for a turn that ended before Claude finished, in plain words.
 /// Notes read as labels: one clause, no full stop.
+/// The quiet line after a /compact: "Conversation summarized. Context 62% → 11%."
+fn compacted_note(before: Option<(u64, u64)>, after: Option<(u64, u64)>) -> String {
+    let percent = |(used, size): (u64, u64)| (size > 0).then(|| used * 100 / size);
+    match (before.and_then(percent), after.and_then(percent)) {
+        (Some(a), Some(b)) if a != b => format!("Conversation summarized. Context {a}% → {b}%."),
+        _ => "Conversation summarized.".into(),
+    }
+}
+
 pub(crate) fn turn_ended_note(reason: StopReason) -> Option<&'static str> {
     Some(match reason {
         StopReason::EndTurn => return None,
@@ -2122,6 +2143,51 @@ mod tests {
 
     fn text(s: &str) -> Queued {
         Queued::new(s.into(), vec![], vec![])
+    }
+
+    #[test]
+    fn a_slash_command_goes_first_and_alone() {
+        use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+        let words = |effects: &[Effect]| -> Vec<String> {
+            effects
+                .iter()
+                .find_map(|e| match e {
+                    Effect::Send(Turn::Prompt(blocks)) => Some(blocks.iter().map(|b| match b {
+                        ContentBlock::Text(t) => t.text.clone(),
+                        _ => "other".into(),
+                    }).collect()),
+                    _ => None,
+                })
+                .expect("a prompt")
+        };
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.start_context = Some(ContentBlock::Text(TextContent::new("[Endeavor] The notebook moved.")));
+        let blocks = crate::attach::prompt_blocks("/compact keep the fits", &[], &["data.csv".into()]);
+        let sent = words(&s.submit(Queued::new("/compact keep the fits".into(), vec![], blocks), false));
+        assert_eq!(sent[0], "/compact keep the fits");
+        assert_eq!(sent.len(), 2, "the command, then the note on @ mentions");
+        // The moved-notebook note waits for a message it can go with.
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        let sent = words(&s.submit(Queued::new("plot it".into(), vec![], crate::attach::prompt_blocks("plot it", &[], &[])), false));
+        assert_eq!(sent, ["[Endeavor] The notebook moved.", "plot it"]);
+    }
+
+    #[test]
+    fn compact_ends_with_a_quiet_note() {
+        use agent_client_protocol::schema::v1::{SessionUpdate, UsageUpdate};
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.apply(SessionEvent::Update(SessionUpdate::UsageUpdate(UsageUpdate::new(124_000, 200_000))));
+        s.submit(text("/compact"), false);
+        s.apply(SessionEvent::Update(SessionUpdate::UsageUpdate(UsageUpdate::new(22_000, 200_000))));
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        let Some(Entry::Note(note)) = s.entries.last() else { panic!("a note last") };
+        assert_eq!(note.as_ref(), "Conversation summarized. Context 62% → 11%.");
+        // Other messages get no such note.
+        s.submit(text("/context"), false);
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert!(matches!(s.entries.last(), Some(Entry::User { .. })));
     }
 
     #[test]

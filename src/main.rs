@@ -60,6 +60,7 @@ mod sidebar;
 mod sidebar_filter;
 mod settings_panel;
 mod signin;
+mod slash;
 #[cfg(target_os = "macos")]
 mod snapshot;
 #[cfg(target_os = "macos")]
@@ -549,10 +550,6 @@ impl Workspace {
         });
         composer::subscribe(&input, window, cx);
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
-            // The slash-command menu follows what's typed.
-            if matches!(event, InputEvent::Change) {
-                cx.notify();
-            }
             if let InputEvent::PressEnter { secondary, shift: false } = event {
                 // An empty box answers the sign-in card: ⏎ signs in again.
                 if input.read(cx).value().trim().is_empty() && this.sign_in_again(cx) {
@@ -764,7 +761,7 @@ impl Workspace {
     /// preview. On a server, Julia starts now if it isn't running.
     fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popover(window, cx);
-        if self.composer_empty(cx) {
+        if self.composer_empty(cx) || self.run_own_command(window, cx) {
             return;
         }
         let host = self.draft.host.clone();
@@ -1302,10 +1299,11 @@ impl Workspace {
 
     fn submit(&mut self, now: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.active else { return };
-        if self.composer_empty(cx) {
+        if self.composer_empty(cx) || self.run_own_command(window, cx) {
             return;
         }
-        let context = self.viewing_context(cx);
+        // Claude Code reads a command only at the start of the message.
+        let context = if slash::is_command(self.input.read(cx).value().trim()) { None } else { self.viewing_context(cx) };
         self.send(key, context, now, window, cx);
     }
 
@@ -1439,46 +1437,6 @@ impl Workspace {
 
     fn find_previous(&mut self, _: &FindPrevious, _: &mut Window, cx: &mut Context<Self>) {
         self.find_in_page(true, cx);
-    }
-
-    /// "/" at the start of the box lists the agent's commands matching what follows;
-    /// a click fills in the command.
-    fn render_commands(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
-        const SHOWN: usize = 8;
-        let text = self.input.read(cx).value().to_string();
-        let typed = text.strip_prefix('/').filter(|t| !t.contains(char::is_whitespace))?;
-        let matches: Vec<_> = session.commands.iter().filter(|c| c.name.starts_with(typed)).take(SHOWN).collect();
-        if matches.is_empty() {
-            return None;
-        }
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .p(px(4.))
-                .map(theme::popover)
-                .children(matches.into_iter().enumerate().map(|(i, command)| {
-                    let name = command.name.clone();
-                    div()
-                        .id(ElementId::NamedInteger("command".into(), i as u64))
-                        .flex()
-                        .gap_3()
-                        .px(px(8.))
-                        .py(px(4.))
-                        .rounded(px(5.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::row_active()))
-                        .child(div().flex_shrink_0().font_family(theme::MONO).text_size(theme::chat_code()).child(format!("/{}", command.name)))
-                        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(theme::text_muted()).child(command.description.clone()))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.input.update(cx, |s, cx| s.set_value(format!("/{name} "), window, cx));
-                            // The box keeps focus; put the caret after the command.
-                            window.dispatch_action(Box::new(gpui_component::input::MoveToEnd), cx);
-                            cx.notify();
-                        }))
-                }))
-                .into_any_element(),
-        )
     }
 
     /// Zoom the notebook by `step` (or back to 100%), kept in settings.
@@ -2123,7 +2081,6 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .children(self.render_commands(session, cx))
                     .children(approval::render_pinned_plan(session, cx))
                     .children(self.render_offline_line(Some(session), cx))
                     .children(self.render_usage_line(cx))
@@ -2370,6 +2327,7 @@ fn main() {
             KeyBinding::new("shift-tab", CycleMode, Some("Composer > Input")),
             KeyBinding::new("shift-tab", CycleMode, Some("ModeMenu > Input")),
             KeyBinding::new("shift-tab", CycleMode, Some("MentionList > Input")),
+            KeyBinding::new("shift-tab", CycleMode, Some("SlashList > Input")),
             KeyBinding::new("secondary-b", ToggleSidebar, Some("Input")),
             KeyBinding::new("secondary-b", ToggleSidebar, None),
             KeyBinding::new("secondary-n", NewSession, Some("Input")),

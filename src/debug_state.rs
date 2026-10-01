@@ -505,12 +505,6 @@ impl Workspace {
         let mut notice = |kind: &str, text: String| above.push(json!({ "kind": kind, "text": text }));
         match session {
             Some(s) => {
-                if let Some(typed) = text.strip_prefix('/').filter(|t| !t.contains(char::is_whitespace)) {
-                    let names: Vec<String> = s.commands.iter().filter(|c| c.name.starts_with(typed)).take(8).map(|c| format!("/{}", c.name)).collect();
-                    if !names.is_empty() {
-                        notice("commands", names.join(" "));
-                    }
-                }
                 if let Some(line) = self.offline_line(Some(s)) {
                     notice("offline", line.into());
                 }
@@ -558,6 +552,7 @@ impl Workspace {
             "point": json!({ "enabled": notebook_open, "on": self.annotating }),
             "above": above,
             "queue": queue,
+            "slash": self.slash_state(cx),
             "tips": json!({
                 "file": self.active.is_none() && self.file_tip_shows(),
                 "point": self.point_tip_shows(self.webview.read(cx).visible() && notebook_open),

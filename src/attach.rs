@@ -237,6 +237,11 @@ impl Attachment {
 pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String]) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     let note = |s: String| ContentBlock::Text(TextContent::new(s));
+    // Claude Code reads a slash command only from the message's first block.
+    let command = crate::slash::is_command(text);
+    if command {
+        blocks.push(note(text.to_string()));
+    }
     if attachments.iter().any(|a| !a.cells().is_empty()) {
         blocks.push(note(
             "[Endeavor] The user attached notebook cells to this message. Each <cell> below shows a cell's \
@@ -276,7 +281,7 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
             mentioned.join(", ")
         )));
     }
-    if !text.is_empty() {
+    if !text.is_empty() && !command {
         blocks.push(note(text.to_string()));
     }
     blocks

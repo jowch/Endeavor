@@ -190,6 +190,23 @@ fn bubble_lines(text: &SharedString, width: f32, window: &Window) -> usize {
         .map_or(0, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum())
 }
 
+/// How long the slash command starting a sent message is ("/compact"), when
+/// it is one Claude Code knows.
+fn sent_command(session: &Session, text: &str) -> Option<usize> {
+    let name = text.strip_prefix('/')?.split(char::is_whitespace).next()?;
+    (session.commands.iter().any(|c| c.name == name) || crate::slash::hidden(name)).then(|| name.len() + 1)
+}
+
+/// A sent message's words, as written; a command at the start in the code
+/// font, tinted as it was in the box.
+fn user_text(session: &Session, text: &SharedString) -> AnyElement {
+    let Some(len) = sent_command(session, text) else { return text.clone().into_any_element() };
+    let color: Hsla = theme::text_primary().into();
+    let run = |len, font_family: &'static str, background_color| TextRun { len, font: font(font_family), color, background_color, underline: None, strikethrough: None };
+    let runs = vec![run(len, theme::MONO, Some(theme::accent().opacity(0.28).into())), run(text.len() - len, theme::SANS, None)];
+    StyledText::new(text.clone()).with_runs(runs.into_iter().filter(|r| r.len > 0).collect()).into_any_element()
+}
+
 fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, window: &mut Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let key = session.key;
     let muted = theme::text_muted();
@@ -223,7 +240,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered());
             let line_height = theme::chat_line_body();
             if text.is_empty() || bubble_lines(text, bubble_width(this.settings.layout.chat_width), window) <= FOLD_AFTER {
-                let bubble = bubble.when(!text.is_empty(), |d| d.child(text.clone()));
+                let bubble = bubble.when(!text.is_empty(), |d| d.child(user_text(session, text)));
                 return Some(column.child(bubble).children(delivered).children(unanswered).child(actions).into_any_element());
             }
             let fade = div()
@@ -235,7 +252,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .bg(linear_gradient(180., linear_color_stop(theme::bg_raised().opacity(0.), 0.), linear_color_stop(theme::bg_raised(), 1.)));
             let body = div()
                 .relative()
-                .child(text.clone())
+                .child(user_text(session, text))
                 .when(!*expanded, |d| d.max_h(line_height * FOLD_TO as f32).overflow_hidden().child(fade));
             column
                 .child(bubble.child(body))
@@ -1006,7 +1023,10 @@ fn tool_line(title: &str, kind: ToolKind, path: Option<&Path>, input: &serde_jso
             Some(url) => line("Fetched", Some(url_host(url)), true),
             None => line("Searched", field("query").or(Some(title)), true),
         },
-        _ => line(&first_line(title), None, false),
+        _ => match title.strip_prefix("Load skill: ") {
+            Some(skill) => line("Used skill", Some(skill), true),
+            None => line(&first_line(title), None, false),
+        },
     }
 }
 
