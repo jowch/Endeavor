@@ -68,12 +68,11 @@ pub fn render_transcript(session: &Session, margin: Pixels, cx: &mut Context<Wor
 /// of the transcript: "3 new messages ↓" after a replay added some below,
 /// else "Jump to latest ↓". It scrolls to the end, which follows again.
 pub fn render_jump(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
-    let following = session.list.is_following_tail();
-    let at_end = session.list.is_scrolled_to_end();
-    if following || at_end == Some(true) {
+    if session.below.get().is_some() && session.reached_end.take() {
         session.below.set(None);
+        session.list.set_follow_mode(FollowMode::Tail);
     }
-    let label = crate::transcript_copy::pill(following, at_end, session.below.get())?;
+    let label = crate::transcript_copy::pill(session.list.is_following_tail(), session.list.is_scrolled_to_end(), session.below.get())?;
     let key = session.key;
     Some(
         div()

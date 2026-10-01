@@ -6,6 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
 use agent_client_protocol::Responder;
@@ -341,8 +342,12 @@ pub struct Session {
     /// Reopening from Endeavor's copy of the transcript: `entries` shows the
     /// copy, and the agent's replay gathers here until it has all arrived.
     replay: Option<Vec<Entry>>,
-    /// What the replay left below a view it kept in place, for the floating button.
+    /// What the replay left below a view it kept in place, for the floating
+    /// button. While it's set the list doesn't follow its end, until the
+    /// button is pressed or the user scrolls to the end (`reached_end`).
     pub below: Cell<Option<transcript_copy::Below>>,
+    /// The user has scrolled the list's last entry into view.
+    pub reached_end: Rc<Cell<bool>>,
     /// When reopening began, for the wait line's time.
     pub opening_since: Option<Instant>,
     /// Loading the session again after Claude's process restarted: its history
@@ -392,7 +397,7 @@ pub struct Session {
     /// A changed-cells card's row, by its entry index and row number.
     changed_cell_focus: RefCell<HashMap<(usize, usize), FocusHandle>>,
     /// Each reply's parsed markdown, by its entry index (see `reply_text`).
-    replies: RefCell<HashMap<usize, (Entity<TextViewState>, Subscription)>>,
+    replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -509,6 +514,15 @@ pub fn folder_name(path: &Path) -> String {
 
 impl Session {
     pub fn new(key: u64, place: Place, server: Option<String>) -> Self {
+        let reached_end = Rc::new(Cell::new(false));
+        let list = ListState::new(0, ListAlignment::Top, px(1000.));
+        list.set_follow_mode(FollowMode::Tail);
+        let reached = reached_end.clone();
+        list.set_scroll_handler(move |event, _, _| {
+            if event.visible_range.end >= event.count {
+                reached.set(true);
+            }
+        });
         Self {
             key,
             id: None,
@@ -528,11 +542,7 @@ impl Session {
             stopped: None,
             missing: false,
             user_edits: Vec::new(),
-            list: {
-                let list = ListState::new(0, ListAlignment::Top, px(1000.));
-                list.set_follow_mode(FollowMode::Tail);
-                list
-            },
+            list,
             list_len: Cell::new(0),
             dirty_from: Cell::new(None),
             busy_since: None,
@@ -546,6 +556,7 @@ impl Session {
             replaying: false,
             replay: None,
             below: Cell::new(None),
+            reached_end,
             opening_since: None,
             reloading: false,
             cut_off: false,
@@ -616,12 +627,15 @@ impl Session {
     /// transcript under the reader. When a parse lands, the reply's list item
     /// is measured again, even while it is off screen.
     pub fn reply_text(&self, ix: usize, text: &str, cx: &mut App) -> Entity<TextViewState> {
-        let existing = self.replies.borrow().get(&ix).map(|(state, _)| state.clone());
+        let existing = self.replies.borrow().get(&ix).map(|(state, ..)| state.clone());
         let state = existing.unwrap_or_else(|| {
             let state = cx.new(|cx| TextViewState::markdown(text, cx));
             let list = self.list.clone();
-            let remeasure = cx.observe(&state, move |_, _| list.remeasure_items(ix..ix + 1));
-            self.replies.borrow_mut().insert(ix, (state.clone(), remeasure));
+            // Its entry can move when a replay replaces Endeavor's copy (`keep_replies`).
+            let at = Rc::new(Cell::new(ix));
+            let entry = at.clone();
+            let remeasure = cx.observe(&state, move |_, _| list.remeasure_items(entry.get()..entry.get() + 1));
+            self.replies.borrow_mut().insert(ix, (state.clone(), at, remeasure));
             state
         });
         state.update(cx, |state, cx| state.set_text(text, cx));
@@ -630,13 +644,13 @@ impl Session {
 
     /// Where the reply at entry `ix` was last drawn, if it has been.
     pub fn reply_bounds(&self, ix: usize, cx: &App) -> Option<Bounds<Pixels>> {
-        self.replies.borrow().get(&ix).map(|(state, _)| state.read(cx).bounds())
+        self.replies.borrow().get(&ix).map(|(state, ..)| state.read(cx).bounds())
     }
 
     /// The first reply with text selected in it: its entry, and the text.
     pub fn selected_reply(&self, cx: &App) -> Option<(usize, String)> {
         let replies = self.replies.borrow();
-        let mut selected: Vec<(usize, String)> = replies.iter().map(|(ix, (state, _))| (*ix, state.read(cx).selected_text())).filter(|(_, text)| !text.trim().is_empty()).collect();
+        let mut selected: Vec<(usize, String)> = replies.iter().map(|(ix, (state, ..))| (*ix, state.read(cx).selected_text())).filter(|(_, text)| !text.trim().is_empty()).collect();
         selected.sort_by_key(|(ix, _)| *ix);
         selected.into_iter().next().map(|(ix, text)| (ix, text.trim().to_string()))
     }
@@ -993,22 +1007,26 @@ impl Session {
         let replay = self.replay.take().unwrap_or_default();
         let top = self.list.logical_scroll_top();
         let len = self.entries.len();
+        let replies: Vec<(usize, String)> = self.entries.iter().enumerate().filter_map(|(ix, e)| if let Entry::Agent { text, .. } = e { Some((ix, text.clone())) } else { None }).collect();
         let merged = transcript_copy::merge(&mut self.entries, replay, top.item_ix);
+        self.reached_end.set(false);
         match merged.swap {
             Swap::Same => {}
             Swap::Added { messages } => {
-                self.list.pause_following_tail();
+                // Not even at the end: a reply measures short until its text is laid out.
+                self.list.set_follow_mode(FollowMode::Normal);
+                self.list.scroll_to(top);
                 self.mark(len);
                 self.below.set(Some(Below::New(messages)));
             }
             Swap::Changed => {
-                self.replies.get_mut().clear();
+                self.keep_replies(&replies);
                 self.open_runs.clear();
                 self.mark(0);
                 self.sync_list();
                 let offset_in_item = if merged.found { top.offset_in_item } else { px(0.) };
+                self.list.set_follow_mode(FollowMode::Normal);
                 self.list.scroll_to(ListOffset { item_ix: merged.anchor, offset_in_item });
-                self.list.pause_following_tail();
                 self.below.set(Some(Below::Changed));
             }
         }
@@ -1019,6 +1037,23 @@ impl Session {
                 self.mark(self.entries.len() - 1);
             }
             _ => self.push(Entry::Reopened(SystemTime::now())),
+        }
+    }
+
+    /// The replies laid out from the copy (`old`: their entries and texts)
+    /// keep their laid-out text where the same reply is now, so they keep
+    /// their height and the view its place.
+    fn keep_replies(&mut self, old: &[(usize, String)]) {
+        let mut laid_out = std::mem::take(self.replies.get_mut());
+        let mut taken = HashSet::new();
+        for (ix, entry) in self.entries.iter().enumerate() {
+            let Entry::Agent { text, .. } = entry else { continue };
+            let Some((was, _)) = old.iter().find(|(was, t)| t == text && !taken.contains(was)) else { continue };
+            taken.insert(*was);
+            if let Some(reply) = laid_out.remove(was) {
+                reply.1.set(ix);
+                self.replies.get_mut().insert(ix, reply);
+            }
         }
     }
 

@@ -227,7 +227,17 @@ Still to test: whether a folder allow rule for a notebook run skips Claude's
 
 ## Endeavor's copy of the transcript
 
-Not built yet.
+Built (`src/transcript_copy.rs`; docs/ui-spec.md, Layout and Chat). The
+copy is saved when a turn ends and when the session closes, as
+`transcripts/<session id>.json` in Endeavor's support folder, with long
+tool input and output cut short; deleting a session deletes it. Opening a
+session with a copy shows it at once, read-only, with "Loading…" (or the
+usual Julia, server or Claude wait line); the replay gathers aside and then
+replaces it as below, matching messages and tool calls by order and text
+(a tool call also by its id). The floating button shows in any transcript
+scrolled up from its end. Not built: step 2 of "Continue with another
+agent" reading this copy. A session saved before this has no copy, and
+opens on its summary as before.
 
 The agent's copy of a session is still the one that matters. Endeavor also
 keeps a display-only copy of each session's transcript, in its own app

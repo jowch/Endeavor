@@ -348,12 +348,12 @@ pub enum Below {
     Changed,
 }
 
-/// The floating button above the composer, while the transcript isn't
-/// following its end: its words, or None when it doesn't show. `at_end`:
-/// whether the view is at the end, None when the list can't tell yet (not
-/// scrollable, or entries below not measured); `below`: what a replay left there.
+/// The floating button above the composer: its words, or None when it
+/// doesn't show. It shows while a replay has left something below the view
+/// (`below`), or the user has scrolled up from the end (`following` stopped,
+/// `at_end` false; None while the list can't tell).
 pub fn pill(following: bool, at_end: Option<bool>, below: Option<Below>) -> Option<String> {
-    let shows = !following && at_end.map_or(below.is_some(), |at_end| !at_end);
+    let shows = below.is_some() || (!following && at_end == Some(false));
     shows.then(|| match below {
         Some(Below::New(1)) => "1 new message ↓".to_owned(),
         Some(Below::New(n)) if n > 1 => format!("{n} new messages ↓"),
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn the_button_shows_when_the_view_has_left_the_end() {
         assert_eq!(pill(true, Some(true), None), None);
-        assert_eq!(pill(false, Some(true), Some(Below::New(3))), None, "back at the end");
+        assert_eq!(pill(true, Some(true), Some(Below::New(3))).as_deref(), Some("3 new messages ↓"), "until the user goes to them");
         assert_eq!(pill(false, Some(false), None).as_deref(), Some("Jump to latest ↓"));
         assert_eq!(pill(false, None, Some(Below::New(3))).as_deref(), Some("3 new messages ↓"));
         assert_eq!(pill(false, Some(false), Some(Below::New(1))).as_deref(), Some("1 new message ↓"));
