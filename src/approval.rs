@@ -33,9 +33,11 @@ pub(crate) struct ApprovalView {
     /// "In this folder", under the ⌄ on Always this session: the agent's own
     /// lasting rule, offered when the agent keeps those in the folder.
     pub folder: Option<PermissionOption>,
-    /// The notebook cells it asks to run, and those that re-run after them.
+    /// The notebook cells it asks to run, those that re-run after them, and
+    /// those it needs that never ran (they run first).
     pub cells: Vec<String>,
     pub rerun: Vec<String>,
+    pub needed: Vec<String>,
     /// The prompts waiting behind this one, by their questions.
     pub then: Vec<String>,
     /// The cells' names, as the heading names them.
@@ -156,6 +158,7 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
             folder: None,
             cells: vec![],
             rerun: vec![],
+            needed: vec![],
             then: vec![],
             names: vec![],
         });
@@ -195,6 +198,7 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
         _ => vec![],
     };
     let rerun = preview.as_ref().map(|p| p.dependent_ids.clone()).unwrap_or_default();
+    let needed = preview.as_ref().map(|p| p.needed_ids.clone()).unwrap_or_default();
 
     // (label, key, option, scope)
     let mut buttons: Vec<(String, &'static str, PermissionOption, Scope)> = Vec::new();
@@ -227,7 +231,7 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
             CardButton { label, hint, weight, option, scope }
         })
         .collect();
-    Some(ApprovalView { heading: ask.heading, count: None, code: ask.code, lines: ask.lines, plan: None, buttons, folder, cells, rerun, then: vec![], names: ask.names })
+    Some(ApprovalView { heading: ask.heading, count: None, code: ask.code, lines: ask.lines, plan: None, buttons, folder, cells, rerun, needed, then: vec![], names: ask.names })
 }
 
 /// A prompt's question, the word on its ⏎ button, and its body.
@@ -1160,6 +1164,7 @@ mod tests {
         }
         let run = super::view_at(&s, s.entries.len() - 1).unwrap();
         assert_eq!(run.lines.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["Also runs 1 cell it needs that hasn't run yet.", "Also re-runs 1 cell that depends on it."]);
+        assert_eq!(run.needed, vec!["a".to_string()]);
 
         let long = super::CardCode::Plain((1..=15).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n"));
         assert_eq!(long.line_count(), 15);

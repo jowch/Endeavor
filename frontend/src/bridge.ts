@@ -90,7 +90,8 @@ export type ToPage =
   // its server is out of reach, so the page can be read but not changed.
   // `crash`: Julia stopped twice under it, so it opened in safe preview; the
   // callout says so instead (its body names cells in `backticks`).
-  // `ask_cells`: the cells the chat's card asks to run; `rerun_cells`: those that re-run after them.
+  // `ask_cells`: the cells the chat's card asks to run; `rerun_cells`: those
+  // that re-run after them; `needed_ids`: those it needs that never ran (they run first).
   | {
       type: "context";
       host: string;
@@ -99,6 +100,7 @@ export type ToPage =
       crash?: { title: string; body: string } | null;
       ask_cells?: string[];
       rerun_cells?: string[];
+      needed_ids?: string[];
     }
   // Share and ⋮ items that act in the page, with Pluto's own functions.
   | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" }

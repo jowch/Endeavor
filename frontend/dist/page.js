@@ -700,6 +700,7 @@
   }
   pluto-cell[data-endeavor-ask="asks"]::after { content: "\\25CF  Claude asks to run this."; color: var(--e-accent-text); }
   pluto-cell[data-endeavor-ask="reruns"]::after { content: "Re-runs after it"; color: var(--e-text-muted); }
+  pluto-cell[data-endeavor-ask="needed"]::after { content: "Runs first: it hasn't run yet"; color: var(--e-text-muted); }
   pluto-cell[data-endeavor-ask]::before {
     content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
     border-radius: 2px; pointer-events: none;
@@ -708,12 +709,13 @@
 `;
   var asked = [];
   var rerun = [];
+  var needed = [];
   var observer = null;
   var onScreen = /* @__PURE__ */ new Set();
   var lastSent = null;
   function apply() {
     for (const cell of document.querySelectorAll("pluto-cell")) {
-      const mark = asked.includes(cell.id) ? "asks" : rerun.includes(cell.id) ? "reruns" : null;
+      const mark = asked.includes(cell.id) ? "asks" : rerun.includes(cell.id) ? "reruns" : needed.includes(cell.id) ? "needed" : null;
       if (mark === null) {
         if (cell.hasAttribute("data-endeavor-ask")) cell.removeAttribute("data-endeavor-ask");
       } else if (cell.getAttribute("data-endeavor-ask") !== mark) {
@@ -751,6 +753,7 @@
       const changed = cells.join() !== asked.join();
       asked = cells;
       rerun = (msg.rerun_cells ?? []).filter((id) => !cells.includes(id));
+      needed = (msg.needed_ids ?? []).filter((id) => !cells.includes(id) && !rerun.includes(id));
       apply();
       if (changed) watch();
     });

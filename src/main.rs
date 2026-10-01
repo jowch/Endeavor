@@ -137,14 +137,27 @@ fn app_file(name: &str) -> Option<PathBuf> {
 }
 
 fn load_json<T: serde::de::DeserializeOwned + Default>(name: &str) -> T {
-    let text = app_file(name).and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
-    serde_json::from_str(&text).unwrap_or_default()
+    app_file(name).map(|f| load_json_at(&f)).unwrap_or_default()
 }
 
 fn save_json(name: &str, value: &impl serde::Serialize) {
+    if let Some(file) = app_file(name) {
+        save_json_at(&file, value);
+    }
+}
+
+/// `load_json`'s read, by path (split out so the round trip is unit-testable
+/// without the real Application Support folder).
+fn load_json_at<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// `save_json`'s write, by path.
+fn save_json_at(path: &Path, value: &impl serde::Serialize) {
     // ponytail: best effort; losing these lists only costs a folder pick or a filter.
-    if let (Some(file), Ok(json)) = (app_file(name), serde_json::to_string_pretty(value)) {
-        let _ = std::fs::create_dir_all(file.parent().unwrap()).and_then(|_| std::fs::write(file, json));
+    if let (Some(parent), Ok(json)) = (path.parent(), serde_json::to_string_pretty(value)) {
+        let _ = std::fs::create_dir_all(parent).and_then(|_| std::fs::write(path, json));
     }
 }
 
@@ -333,6 +346,10 @@ pub struct Workspace {
     /// Each session's notebook file, by session id (persisted), for reopening it
     /// with the session: one the app opened isn't in the agent's history.
     session_notebooks: HashMap<String, Place>,
+    /// A "notebook moved" note waiting to reach the agent, by session id
+    /// (persisted): set when the user locates or moves a session's notebook
+    /// file, and cleared once it's actually sent, so it survives a quit in between.
+    pending_moved: HashMap<String, String>,
     renaming: Option<sidebar::Rename>,
     menu: Option<PopupMenu>,
     /// Folders showing all their past sessions, not just the newest.
@@ -628,6 +645,7 @@ impl Workspace {
             filter_menu: None,
             sidebar_search: None,
             session_notebooks: load_json("notebooks.json"),
+            pending_moved: load_json("pending-context.json"),
             renaming: None,
             menu: None,
             expanded: HashSet::new(),
@@ -880,6 +898,8 @@ impl Workspace {
         let named = self.titles.get(&id.to_string()).cloned();
         let resources = self.session_resources.get(&id.to_string()).cloned();
         let mode = self.session_modes.get(&id.to_string()).cloned();
+        // A "notebook moved" note that never reached the agent before the app quit.
+        let pending = self.pending_moved.get(&id.to_string()).cloned();
         let (title, untitled) = self.past_title(&id);
         let notebook = self.session_notebooks.get(&id.to_string()).map(|p| p.path.display().to_string());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
@@ -892,6 +912,7 @@ impl Workspace {
         session.run_without_asking = self.settings.run_without_asking;
         session.start_mode = mode;
         session.resources = resources;
+        session.start_context = pending.map(|text| ContentBlock::Text(TextContent::new(text)));
         if self.holds(&session) {
             session.hold();
         }
@@ -962,6 +983,9 @@ impl Workspace {
         }
         if self.session_notebooks.remove(&id.to_string()).is_some() {
             save_json("notebooks.json", &self.session_notebooks);
+        }
+        if self.pending_moved.remove(&id.to_string()).is_some() {
+            save_json("pending-context.json", &self.pending_moved);
         }
         cx.notify();
     }
@@ -1282,8 +1306,7 @@ impl Workspace {
             return self.submit_message(key, context, (text, attachments, mentioned), now, cx);
         }
         let (queued, ticket) = Queued::copying(text.clone(), attachments.clone(), context.into_iter().collect());
-        let Some(session) = self.session_mut(key) else { return };
-        let effects = session.submit(queued, now);
+        let effects = self.submit_for(key, queued, now);
         self.apply_effects(key, effects, cx);
         let (progress, mut progressed) = futures::channel::mpsc::unbounded::<attach::Progress>();
         let channel = self.connection(&place.host).and_then(|c| c.channel.clone());
@@ -1340,9 +1363,25 @@ impl Workspace {
         let (text, attachments, mentioned) = message;
         let mut blocks: Vec<_> = context.into_iter().collect();
         blocks.extend(attach::prompt_blocks(&text, &attachments, &mentioned));
-        let Some(session) = self.session_mut(key) else { return };
-        let effects = session.submit(Queued::new(text, attachments, blocks), now);
+        let effects = self.submit_for(key, Queued::new(text, attachments, blocks), now);
         self.apply_effects(key, effects, cx);
+    }
+
+    /// `session.submit`, plus: once its message carries away a pending
+    /// "notebook moved" note (`notebook_moved`'s `start_context`), the
+    /// persisted copy goes too, so a later restart doesn't resend it.
+    fn submit_for(&mut self, key: u64, queued: Queued, now: bool) -> Vec<Effect> {
+        let Some(session) = self.session_mut(key) else { return Vec::new() };
+        let had_context = session.start_context.is_some();
+        let effects = session.submit(queued, now);
+        let sent = had_context && session.start_context.is_none();
+        let id = session.id.clone();
+        if let Some(id) = id.filter(|_| sent) {
+            if self.pending_moved.remove(&id.to_string()).is_some() {
+                save_json("pending-context.json", &self.pending_moved);
+            }
+        }
+        effects
     }
 
     pub fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
@@ -1716,8 +1755,7 @@ impl Workspace {
                 let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
                 let attachments = vec![ask.attachment];
                 blocks.extend(attach::prompt_blocks(&ask.text, &attachments, &[]));
-                let Some(session) = self.session_mut(key) else { return };
-                let effects = session.submit(Queued::new(ask.text, attachments, blocks), ask.now);
+                let effects = self.submit_for(key, Queued::new(ask.text, attachments, blocks), ask.now);
                 self.apply_effects(key, effects, cx);
             }
             Some(annotate::Message::Shoot { id, rect }) => self.shoot(id, rect, cx),
@@ -1784,8 +1822,7 @@ impl Workspace {
         self.open_before_sending(key, cx);
         let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
         blocks.extend(attach::prompt_blocks("", &quotes, &[]));
-        let Some(session) = self.session_mut(key) else { return };
-        let effects = session.submit(Queued::new(String::new(), quotes, blocks), false);
+        let effects = self.submit_for(key, Queued::new(String::new(), quotes, blocks), false);
         self.apply_effects(key, effects, cx);
         cx.notify();
     }
@@ -2498,7 +2535,8 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::viewed_notebook_id;
+    use super::{load_json_at, save_json_at, viewed_notebook_id};
+    use std::collections::HashMap;
 
     #[test]
     fn notebook_id_from_pluto_url() {
@@ -2507,5 +2545,31 @@ mod tests {
         assert_eq!(viewed_notebook_id(&url), Some(id));
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/?secret=s3cr3t"), None);
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/edit?id=../../secret"), None);
+    }
+
+    /// `pending_moved` (the "notebook moved" note waiting to reach the agent,
+    /// by session id): a move saves it, a restart's fresh load still has it,
+    /// and once it's sent, clearing and saving again leaves it gone for good.
+    #[test]
+    fn pending_moved_note_survives_a_restart_and_clears_once_sent() {
+        let dir = std::env::temp_dir().join(format!("endeavor-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let file = dir.join("pending-context.json");
+
+        let mut pending: HashMap<String, String> = HashMap::new();
+        pending.insert("session-1".into(), "[Endeavor] The session's notebook file moved from a.jl to b.jl.".into());
+        save_json_at(&file, &pending);
+
+        // The app quit before the note went out; reopening the session loads it fresh.
+        let restored: HashMap<String, String> = load_json_at(&file);
+        assert_eq!(restored.get("session-1").map(String::as_str), Some("[Endeavor] The session's notebook file moved from a.jl to b.jl."));
+
+        // A later message carries it to the agent: it's cleared and the clear is saved.
+        let mut after_send = restored;
+        after_send.remove("session-1");
+        save_json_at(&file, &after_send);
+        let reloaded: HashMap<String, String> = load_json_at(&file);
+        assert!(reloaded.is_empty(), "sent and saved: nothing left to resend after another restart");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

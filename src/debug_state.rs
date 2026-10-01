@@ -314,6 +314,7 @@ impl Workspace {
                 "always_menu": s.asks.always_menu,
                 "cells": card.cells,
                 "rerun": card.rerun,
+                "needed": card.needed,
                 "cells_visible": s.asks.cells_visible,
                 "plan": card.plan.map(|p| json!({ "title": p.title, "steps": p.steps, "open": p.open, "text": if p.open || p.steps.is_none() { Some(p.full) } else { None } })),
                 "buttons": card.buttons.iter().map(|b| json!({ "label": b.label, "key": b.hint, "weight": b.weight.label() })).collect::<Vec<_>>(),

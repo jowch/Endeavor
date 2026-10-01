@@ -730,10 +730,11 @@ impl Workspace {
             host => self.hosts.name(host),
         };
         let crash = self.notebook_at(session.key).and_then(|at| self.crashes.callout(&at)).map(|(title, body)| serde_json::json!({ "title": title, "body": body }));
-        // The cells the card asks to run, and those that re-run after them, for their lines in the page.
+        // The cells the card asks to run, those that re-run after them, and
+        // those it needs that never ran (they run first), for their lines in the page.
         let card = crate::approval::approval_view(session);
-        let (ask_cells, rerun_cells) = card.map(|c| (c.cells, c.rerun)).unwrap_or_default();
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells });
+        let (ask_cells, rerun_cells, needed_ids) = card.map(|c| (c.cells, c.rerun, c.needed)).unwrap_or_default();
+        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
@@ -819,8 +820,7 @@ impl Workspace {
         let context = format!("[Endeavor] Pkg's log for {name} (its end), from the notebook's Status:\n```\n{log}\n```");
         use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
         let blocks = vec![ContentBlock::Text(TextContent::new(context)), ContentBlock::Text(TextContent::new(text.clone()))];
-        let Some(session) = self.session_mut(key) else { return };
-        let effects = session.submit(crate::outbox::Queued::new(text, Vec::new(), blocks), false);
+        let effects = self.submit_for(key, crate::outbox::Queued::new(text, Vec::new(), blocks), false);
         self.apply_effects(key, effects, cx);
     }
 
@@ -964,6 +964,7 @@ impl Workspace {
         let keys: Vec<u64> = self.sessions.iter().filter(|s| s.place.host == *host && s.notebook_path.as_deref() == Some(old)).map(|s| s.key).collect();
         for key in keys {
             self.bind_notebook(key, new.clone(), cx);
+            let mut persist = None;
             if let Some(session) = self.session_mut(key) {
                 use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
                 session.missing = false;
@@ -976,7 +977,15 @@ impl Workspace {
                     Some(ContentBlock::Text(t)) => format!("{}\n\n{moved}", t.text),
                     _ => moved,
                 };
-                session.start_context = Some(ContentBlock::Text(TextContent::new(text)));
+                session.start_context = Some(ContentBlock::Text(TextContent::new(text.clone())));
+                // Kept on disk too, so a quit before the note is sent doesn't lose it.
+                if let Some(id) = session.id.clone() {
+                    persist = Some((id.to_string(), text));
+                }
+            }
+            if let Some((id, text)) = persist {
+                self.pending_moved.insert(id, text);
+                crate::save_json("pending-context.json", &self.pending_moved);
             }
         }
     }

@@ -1,8 +1,9 @@
 // The chat's card asks to run cells (docs/ui-spec.md, "Approval card"): the
 // asked-about cells get an orange line "Claude asks to run this." and the
-// accent stripe, and the cells that would re-run after them "Re-runs after it"
-// in grey. The page tells the app whether an asked-about cell is on screen,
-// so the card offers "Show in notebook" only when it isn't.
+// accent stripe; the cells that would re-run after them "Re-runs after it"
+// in grey; and the cells it needs that never ran "Runs first: it hasn't run
+// yet", also in grey. The page tells the app whether an asked-about cell is
+// on screen, so the card offers "Show in notebook" only when it isn't.
 
 import { on, send } from "./bridge";
 import { onRedraw } from "./redraw";
@@ -14,6 +15,7 @@ const css = `
   }
   pluto-cell[data-endeavor-ask="asks"]::after { content: "\\25CF  Claude asks to run this."; color: var(--e-accent-text); }
   pluto-cell[data-endeavor-ask="reruns"]::after { content: "Re-runs after it"; color: var(--e-text-muted); }
+  pluto-cell[data-endeavor-ask="needed"]::after { content: "Runs first: it hasn't run yet"; color: var(--e-text-muted); }
   pluto-cell[data-endeavor-ask]::before {
     content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
     border-radius: 2px; pointer-events: none;
@@ -23,13 +25,14 @@ const css = `
 
 let asked: string[] = [];
 let rerun: string[] = [];
+let needed: string[] = [];
 let observer: IntersectionObserver | null = null;
 const onScreen = new Set<string>();
 let lastSent: boolean | null = null;
 
 function apply() {
   for (const cell of document.querySelectorAll<HTMLElement>("pluto-cell")) {
-    const mark = asked.includes(cell.id) ? "asks" : rerun.includes(cell.id) ? "reruns" : null;
+    const mark = asked.includes(cell.id) ? "asks" : rerun.includes(cell.id) ? "reruns" : needed.includes(cell.id) ? "needed" : null;
     if (mark === null) {
       if (cell.hasAttribute("data-endeavor-ask")) cell.removeAttribute("data-endeavor-ask");
     } else if (cell.getAttribute("data-endeavor-ask") !== mark) {
@@ -70,6 +73,7 @@ export function initAsking(): void {
     const changed = cells.join() !== asked.join();
     asked = cells;
     rerun = (msg.rerun_cells ?? []).filter((id) => !cells.includes(id));
+    needed = (msg.needed_ids ?? []).filter((id) => !cells.includes(id) && !rerun.includes(id));
     apply();
     if (changed) watch();
   });
