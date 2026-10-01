@@ -24,6 +24,7 @@ use crate::session::{Effect, Session, Stopped, folder_name};
 use crate::settings::NotebookTheme;
 use crate::overlay;
 use crate::menu::MenuTarget;
+use crate::notice::{Notice, Retry, Spot};
 use crate::{Workspace, platform, pluto, theme};
 
 /// An item in the notebook's ⋮ menu or its Share menu.
@@ -780,12 +781,14 @@ impl Workspace {
             return;
         }
         let Some(bridge) = self.session_bridge(key) else { return };
-        let task = cx.background_executor().spawn(async move { pluto::allow_execution(&bridge, &notebook) });
+        let task = cx.background_executor().spawn({
+            let notebook = notebook.clone();
+            async move { pluto::allow_execution(&bridge, &notebook) }
+        });
         cx.spawn(async move |this, cx| {
             if let Err(e) = task.await {
                 let _ = this.update(cx, |this, cx| {
-                    this.status = format!("⚠ Couldn't run the notebook: {e}").into();
-                    cx.notify();
+                    this.show_notice(Notice::new(Spot::Pane, "Couldn't run the notebook", &e, Some(Retry::RunNotebook(notebook))), cx);
                 });
             }
         })
@@ -798,8 +801,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             if let Err(e) = task.await {
                 let _ = this.update(cx, |this, cx| {
-                    this.status = format!("⚠ Couldn't restart the notebook: {e}").into();
-                    cx.notify();
+                    this.show_notice(Notice::new(Spot::NotebookRight, "Couldn't restart the notebook", &e, Some(Retry::RestartNotebook(key))), cx);
                 });
             }
         })
@@ -859,7 +861,7 @@ impl Workspace {
     }
 
     /// Save one of Pluto's exports (`kind`: its URL path) where the user picks.
-    fn export(&mut self, key: u64, kind: &'static str, extension: &'static str, cx: &mut Context<Self>) {
+    pub(crate) fn export(&mut self, key: u64, kind: &'static str, extension: &'static str, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let (Some(id), Some(path)) = (session.notebook.clone(), session.notebook_path.clone()) else { return };
         let Some(runtime) = self.connection(&session.place.host).and_then(|c| c.runtime.as_ref()) else { return };
@@ -873,18 +875,21 @@ impl Workspace {
         let picked = cx.prompt_for_new_path(&dir, Some(&format!("{stem}.{extension}")));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(target))) = picked.await else { return };
+            let file = target.file_name().map_or_else(|| format!("{stem}.{extension}"), |f| f.to_string_lossy().into_owned());
+            let folder = target.parent().map(Path::to_path_buf).unwrap_or_default();
             let saved = cx.background_executor().spawn(async move { pluto::fetch(&url).and_then(|bytes| std::fs::write(&target, bytes).map_err(|e| e.to_string())) }).await;
             if let Err(e) = saved {
                 let _ = this.update(cx, |this, cx| {
-                    this.status = format!("⚠ Couldn't export: {e}").into();
-                    cx.notify();
+                    let mut notice = Notice::new(Spot::NotebookRight, format!("Couldn't export {file}"), &e, Some(Retry::Export { key, kind, extension }));
+                    notice.reason = crate::notice::export_reason(&e, &folder);
+                    this.show_notice(notice, cx);
                 });
             }
         })
         .detach();
     }
 
-    fn start_notebook_rename(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_notebook_rename(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook_path.clone()) else { return };
         let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
         let input = cx.new(|cx| InputState::new(window, cx).default_value(stem));
@@ -914,11 +919,11 @@ impl Workspace {
             return cx.notify();
         }
         let target = old.with_file_name(format!("{name}.jl"));
-        self.move_notebook(key, target.display().to_string(), cx);
+        self.move_notebook(key, target.display().to_string(), true, cx);
     }
 
     /// Move to…: a folder on This Mac, from the macOS panel.
-    fn move_notebook_to(&mut self, key: u64, cx: &mut Context<Self>) {
+    pub(crate) fn move_notebook_to(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(path) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook_path.clone()) else { return };
         let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Move here".into()) });
         cx.spawn(async move |this, cx| {
@@ -926,14 +931,14 @@ impl Workspace {
             let Some(folder) = folders.into_iter().next() else { return };
             let Some(name) = Path::new(&path).file_name() else { return };
             let target = folder.join(name).display().to_string();
-            let _ = this.update(cx, |this, cx| this.move_notebook(key, target, cx));
+            let _ = this.update(cx, |this, cx| this.move_notebook(key, target, false, cx));
         })
         .detach();
     }
 
-    /// Rename or move session `key`'s notebook file (Pluto moves it), then point
-    /// every session on it at the new path and tell the agent.
-    fn move_notebook(&mut self, key: u64, target: String, cx: &mut Context<Self>) {
+    /// Rename (`renaming`) or move session `key`'s notebook file (Pluto moves
+    /// it), then point every session on it at the new path and tell the agent.
+    fn move_notebook(&mut self, key: u64, target: String, renaming: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some((id, old, host)) = self.sessions.iter().find(|s| s.key == key).and_then(|s| Some((s.notebook.clone()?, s.notebook_path.clone()?, s.place.host.clone()))) else { return };
         let task = cx.background_executor().spawn(async move { pluto::move_notebook(&bridge, &id, &target) });
@@ -942,7 +947,8 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(new) => this.notebook_moved(&host, &old, new, cx),
-                    Err(e) => this.status = format!("⚠ Couldn't rename the notebook: {e}").into(),
+                    Err(e) if renaming => this.show_notice(Notice::new(Spot::NotebookLeft, "Couldn't rename the notebook", &e, Some(Retry::Rename(key))), cx),
+                    Err(e) => this.show_notice(Notice::new(Spot::NotebookRight, "Couldn't move the notebook", &e, Some(Retry::MoveTo(key))), cx),
                 }
                 cx.notify();
             });
@@ -1031,7 +1037,7 @@ impl Workspace {
     }
 
     /// New notebook, from the empty pages: made in the session's folder and shown.
-    fn new_notebook_here(&mut self, key: u64, cx: &mut Context<Self>) {
+    pub(crate) fn new_notebook_here(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let task = cx.background_executor().spawn(async move { pluto::new_notebook(&bridge, key) });
         cx.spawn(async move |this, cx| {
@@ -1045,10 +1051,7 @@ impl Workspace {
                     }
                     this.apply_effects(key, vec![Effect::ShowNotebook { id, path: Some(path) }], cx);
                 }
-                Err(e) => {
-                    this.status = format!("⚠ Couldn't make a notebook: {e}").into();
-                    cx.notify();
-                }
+                Err(e) => this.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &e, Some(Retry::NewNotebook(key))), cx),
             });
         })
         .detach();

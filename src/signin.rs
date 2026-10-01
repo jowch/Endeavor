@@ -495,23 +495,31 @@ impl Workspace {
 
     /// Settings' Sign out: asks first, then signs Claude Code out on this computer.
     pub fn sign_out_of_claude(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_confirm("Sign out of Claude?", "Claude stops answering in every session until you sign in again.", "Sign out", window, cx, |_, _, cx| {
-            cx.spawn(async move |this, cx| {
-                let done = cx.background_executor().spawn(async { log_out() }).await;
-                let _ = this.update(cx, |this, cx| {
-                    match done {
-                        Ok(()) => {
-                            this.account = Account::SignedOut(Stage::Account);
-                            this.sync_holds(cx);
-                        }
-                        Err(e) => this.status = format!("Couldn't sign out: {e}").into(),
-                    }
-                    this.refresh_profile(cx);
-                    cx.notify();
-                });
-            })
-            .detach();
+        self.open_confirm("Sign out of Claude?", "Claude stops answering in every session until you sign in again.", "Sign out", window, cx, |this, _, cx| {
+            this.sign_out_now(cx);
         });
+    }
+
+    /// Sign Claude Code out on this computer, asked already.
+    pub fn sign_out_now(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let done = cx.background_executor().spawn(async { log_out() }).await;
+            let _ = this.update(cx, |this, cx| {
+                match done {
+                    Ok(()) => {
+                        this.account = Account::SignedOut(Stage::Account);
+                        this.sync_holds(cx);
+                    }
+                    Err(e) => {
+                        let notice = crate::notice::Notice::new(crate::notice::Spot::Settings, "Couldn't sign out", &e, Some(crate::notice::Retry::SignOut));
+                        this.show_notice(notice, cx);
+                    }
+                }
+                this.refresh_profile(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// The expired card's Enter: sign in the way it was done last.

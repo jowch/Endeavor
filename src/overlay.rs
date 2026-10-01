@@ -71,6 +71,8 @@ pub enum Hole {
     Settings,
     /// The confirm dialog.
     Confirm,
+    /// A one-off failure's notice.
+    Notice,
 }
 
 /// The open holes, in the web view's coordinates from its top-left corner, and

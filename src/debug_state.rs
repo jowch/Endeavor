@@ -117,6 +117,13 @@ impl Workspace {
             "composer": self.composer_state(active, cx),
             "settings": self.settings_debug(cx),
             "confirm": self.confirm.as_ref().map(crate::confirm::Confirm::debug_state),
+            "notice": self.notice.as_ref().map(|n| json!({
+                "spot": n.spot.label(),
+                "title": n.title,
+                "text": n.reason,
+                "button": n.retry.as_ref().map(|r| r.label()),
+                "details": n.details().then(|| json!({ "open": n.details_open, "text": n.raw })),
+            })),
             "page": page,
         })
     }

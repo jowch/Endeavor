@@ -35,6 +35,7 @@ mod logs;
 mod new_session;
 mod network;
 mod notebook_pane;
+mod notice;
 mod offline;
 mod orbit;
 mod outbox;
@@ -398,6 +399,8 @@ pub struct Workspace {
     usage_limit: Option<offline::UsageLimit>,
     /// Notebooks whose Julia stopped by itself, and the runs after Restart Julia.
     crashes: crash::Crashes,
+    /// A one-off failure's notice, under the control that was used.
+    notice: Option<notice::Notice>,
     /// Servers sessions can run on (persisted in hosts.json).
     hosts: hosts::Hosts,
     /// Adding a server, or its settings.
@@ -647,6 +650,7 @@ impl Workspace {
             claude_details_open: false,
             usage_limit: None,
             crashes: crash::Crashes::default(),
+            notice: None,
             hosts: hosts::Hosts::load(),
             server_dialog: None,
             asks: VecDeque::new(),
@@ -1079,7 +1083,7 @@ impl Workspace {
 
     /// Stop session `key`'s notebook at `path` (Pluto shuts it down); every
     /// session on it shows it stopped, with Start.
-    fn stop_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
+    pub(crate) fn stop_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
         let stop = cx.background_executor().spawn({
@@ -1099,7 +1103,10 @@ impl Workspace {
                         }
                         this.note_stopped_file(&host, path.clone(), cx);
                     }
-                    Err(e) => this.status = format!("⚠ Couldn't stop {}: {e}", folder_name(Path::new(&path))).into(),
+                    Err(e) => {
+                        let title = format!("Couldn't stop {}", folder_name(Path::new(&path)));
+                        this.show_notice(notice::Notice::new(notice::Spot::NotebookRight, title, &e, Some(notice::Retry::StopNotebook(key, path.clone()))), cx);
+                    }
                 }
                 cx.notify();
             });
@@ -2016,6 +2023,7 @@ impl Render for Workspace {
             (overlay::Hole::Tooltip, notebook_pane::tooltip_over_notebook()),
             (overlay::Hole::Settings, settings_over_notebook),
             (overlay::Hole::Confirm, confirm_over_notebook),
+            (overlay::Hole::Notice, show_webview && self.notice.as_ref().is_some_and(|n| n.spot != notice::Spot::Settings)),
         ] {
             if !open {
                 overlay::set_hole(webview, hole, None);
@@ -2134,6 +2142,7 @@ impl Render for Workspace {
             .child(self.divider(Divider::Chat, theme::divider(), cx))
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_w(px(NOTEBOOK_MIN))
                     .h_full()
@@ -2144,8 +2153,10 @@ impl Render for Workspace {
                     .child(notebook_header)
                     .children(self.render_find_bar(window, cx).filter(|_| show_webview))
                     .children(active.and_then(|ix| self.render_pane_warning(&self.sessions[ix], cx)))
-                    .child(div().flex_1().min_h_0().child(notebook)),
+                    .child(div().flex_1().min_h_0().child(notebook))
+                    .children(self.render_notice(false, cx)),
             )
+            .children(self.render_notice(true, cx))
             // Deferred so they paint, and take clicks, above everything else.
             .children(self.render_settings_panel(window, cx).map(|d| deferred(d).with_priority(2)))
             .children(self.render_server_dialog(window, cx).map(|d| deferred(d).with_priority(3)))

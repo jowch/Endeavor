@@ -21,6 +21,8 @@ pub enum Hole {
     Settings,
     /// The confirm dialog.
     Confirm,
+    /// A one-off failure's notice.
+    Notice,
 }
 
 #[derive(Default)]

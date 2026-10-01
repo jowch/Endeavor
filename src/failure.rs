@@ -152,7 +152,7 @@ pub fn page(icon: Glyph, title: impl Into<SharedString>, body: Vec<AnyElement>, 
 
 /// A one-off failure, under the control that was used: what didn't happen,
 /// why, a way on, and ×. It stays until closed or tried again.
-pub fn notice(title: impl Into<SharedString>, body: impl Into<SharedString>, buttons: Vec<AnyElement>, close: impl Fn(&mut Window, &mut App) + 'static) -> Stateful<Div> {
+pub fn notice(title: impl Into<SharedString>, body: impl Into<SharedString>, buttons: Vec<AnyElement>, details: Option<AnyElement>, close: impl Fn(&mut Window, &mut App) + 'static) -> Stateful<Div> {
     div()
         .id("failure-notice")
         .role(Role::Alert)
@@ -198,6 +198,7 @@ pub fn notice(title: impl Into<SharedString>, body: impl Into<SharedString>, but
                         ),
                 )
                 .child(div().text_color(theme::text_secondary()).child(body.into()))
-                .when(!buttons.is_empty(), |d| d.child(div().mt(px(4.)).flex().gap(px(8.)).children(buttons))),
+                .when(!buttons.is_empty(), |d| d.child(div().mt(px(4.)).flex().gap(px(8.)).children(buttons)))
+                .children(details),
         )
 }
