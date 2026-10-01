@@ -10,7 +10,7 @@ const MARKER: &str = "# ╔═╡ ";
 /// Unchanged lines kept around each change when a diff is long.
 const CONTEXT: usize = 2;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Change {
     Same,
     Added,
@@ -19,6 +19,7 @@ pub enum Change {
 
 /// One edited cell or file: a short label and its line diff, and for a
 /// notebook cell the edit itself.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CellDiff {
     pub label: String,
     pub lines: Vec<(Change, String)>,
@@ -27,7 +28,7 @@ pub struct CellDiff {
 
 /// A notebook cell's code before and after one tool call: no `before` for a
 /// cell the call added, no `after` for one it deleted.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CellEdit {
     pub cell: String,
     pub before: Option<String>,
@@ -48,7 +49,7 @@ impl CellEdit {
 }
 
 /// What a turn did to a cell, all its edits taken together.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CellChange {
     New,
     Edited,
@@ -56,7 +57,7 @@ pub enum CellChange {
 }
 
 /// A row of the end-of-turn card: a cell the turn changed, by its net change.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChangedCell {
     pub cell: String,
     /// What the cell defines, else "cell" and its id's first characters.

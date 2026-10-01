@@ -68,6 +68,7 @@ mod splash;
 mod theme;
 mod tips;
 mod transcript;
+mod transcript_copy;
 mod trouble;
 mod turtle;
 mod when;
@@ -905,7 +906,11 @@ impl Workspace {
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
         // The row keeps its handle as it turns from past to open, so keyboard focus stays on it.
         let row_focus = self.past_row_focus.get_mut().remove(&id);
+        let copy = transcript_copy::load(&id.to_string());
         let mut session = Session::loading(key, id, place, server, title);
+        if let Some(copy) = copy {
+            session.show_copy(copy);
+        }
         session.named = named.is_some();
         session.untitled = untitled;
         // A session from before modes were saved keeps the agent's own mode.
@@ -933,9 +938,19 @@ impl Workspace {
         self.activate(key, cx);
     }
 
+    /// Save Endeavor's copy of a session's transcript (a turn ended, or it's
+    /// closing). Not while its history loads: then it shows the copy itself.
+    fn keep_transcript(&self, key: u64) {
+        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
+        if let Some(id) = session.id.as_ref().filter(|_| !session.opening() && session.failed.is_none()) {
+            transcript_copy::save(&id.to_string(), &session.entries);
+        }
+    }
+
     /// Stop an open session; it goes back to its folder's history.
     fn close_session(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(ix) = self.sessions.iter().position(|s| s.key == key) else { return };
+        self.keep_transcript(key);
         let session = self.sessions.remove(ix);
         if let Some(id) = session.id {
             let _ = self.agent_tx.unbounded_send(Command::CloseSession(id));
@@ -987,6 +1002,7 @@ impl Workspace {
         if self.pending_moved.remove(&id.to_string()).is_some() {
             save_json("pending-context.json", &self.pending_moved);
         }
+        transcript_copy::delete(&id.to_string());
         cx.notify();
     }
 
@@ -1210,7 +1226,10 @@ impl Workspace {
                         self.load_notebook(&host, &id, cx);
                     }
                 }
-                Effect::CheckRunState => self.check_run_state(key, cx),
+                Effect::CheckRunState => {
+                    self.keep_transcript(key);
+                    self.check_run_state(key, cx)
+                }
                 Effect::SetPolicy(policy) => self.send_policy(key, policy, cx),
                 Effect::SignedOut => self.signed_out(cx),
                 Effect::Asked(ix) => self.prompt_arrived(key, ix),
@@ -1701,8 +1720,11 @@ impl Workspace {
             })
             .collect();
         let open: HashSet<String> = self.sessions.iter().filter_map(|s| Some(s.id.as_ref()?.to_string())).collect();
+        let before: Vec<String> = self.records.saved().keys().cloned().collect();
         if self.records.merge(agent, scope, listed, &open) {
             self.save_records();
+            // Sessions their agent no longer has: their copies of the transcript go too.
+            before.iter().filter(|id| self.records.get(id).is_none()).for_each(|id| transcript_copy::delete(id));
         }
     }
 
@@ -2073,7 +2095,7 @@ impl Workspace {
             .map(|d| match &session.failed {
                 Some(failure) => d.child(div().flex_1().min_h_0().child(self.render_open_failure(session, failure, cx))),
                 // The history shows whole once it has loaded, not growing as it arrives.
-                None if session.opening() => d.child(div().flex_1().min_h_0()),
+                None if session.opening() && !session.showing_copy() => d.child(div().flex_1().min_h_0()),
                 None => d.child(
                     div()
                         .relative()
@@ -2089,6 +2111,7 @@ impl Workspace {
                         .child(transcript::render_transcript(session, margin, cx))
                         .children(top_fade)
                         .children(bottom_fade)
+                        .children(transcript::render_jump(session, cx))
                         .children(self.render_reply(window, cx)),
                 ),
             })
@@ -2195,7 +2218,22 @@ impl Render for Workspace {
             .child(title)
             .children(folder.map(|f| {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family(theme::MONO).text_size(theme::size_meta_small()).child(f)
-            }));
+            }))
+            .when(active.is_some_and(|ix| self.sessions[ix].showing_copy()), |d| {
+                d.child(
+                    div()
+                        .id("read-only")
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .text_size(theme::size_meta_small())
+                        .text_color(theme::text_faint())
+                        .child(new_session::glyph(new_session::Glyph::Lock, theme::text_faint()))
+                        .child("Read-only")
+                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("Endeavor's own copy, shown while Claude loads this session").build(window, cx)),
+                )
+            });
         let notebook_header = column_header("notebook-header").map(|d| match active {
             None => d.child(self.draft_pane_header()),
             Some(ix) => {

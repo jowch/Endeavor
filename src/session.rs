@@ -27,6 +27,7 @@ use crate::hosts::Place;
 use crate::permits::{Asked, Asks, Rule};
 use crate::pluto;
 use crate::runs;
+use crate::transcript_copy::{self, Below, Swap};
 use crate::outbox::{Copying, Delivery, Dispatch, Outbox, Queued, Shown};
 
 pub enum Entry {
@@ -150,7 +151,7 @@ fn partway_reason(reason: StopReason) -> Option<&'static str> {
 }
 
 /// The answer to a call's prompt, shown on its row.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Approval {
     Allowed,
     /// "Always this session": allowed, and later matching prompts in this
@@ -337,6 +338,11 @@ pub struct Session {
     pub(crate) open_runs: HashSet<ToolCallId>,
     /// Reopening a past session: its history is replaying.
     replaying: bool,
+    /// Reopening from Endeavor's copy of the transcript: `entries` shows the
+    /// copy, and the agent's replay gathers here until it has all arrived.
+    replay: Option<Vec<Entry>>,
+    /// What the replay left below a view it kept in place, for the floating button.
+    pub below: Cell<Option<transcript_copy::Below>>,
     /// When reopening began, for the wait line's time.
     pub opening_since: Option<Instant>,
     /// Loading the session again after Claude's process restarted: its history
@@ -538,6 +544,8 @@ impl Session {
             plan_open: false,
             open_runs: HashSet::new(),
             replaying: false,
+            replay: None,
+            below: Cell::new(None),
             opening_since: None,
             reloading: false,
             cut_off: false,
@@ -666,11 +674,21 @@ impl Session {
         self.agent_waiting = true;
     }
 
+    /// The history starts loading over: the replay so far goes (Endeavor's copy stays on show).
+    fn clear_history(&mut self) {
+        match &mut self.replay {
+            Some(replay) => replay.clear(),
+            None => {
+                self.entries.clear();
+                self.replies.get_mut().clear();
+                self.open_runs.clear();
+                self.mark(0);
+            }
+        }
+    }
+
     fn clear_for_replay(&mut self) {
-        self.entries.clear();
-        self.replies.get_mut().clear();
-        self.open_runs.clear();
-        self.mark(0);
+        self.clear_history();
         self.outbox = Outbox::waiting();
         self.replaying = true;
         self.opening_since = Some(Instant::now());
@@ -691,6 +709,20 @@ impl Session {
         session.replaying = true;
         session.opening_since = Some(Instant::now());
         session
+    }
+
+    /// Show Endeavor's copy of this session's transcript while its history
+    /// loads: read-only, at its end. The replay replaces it once it's all in.
+    pub fn show_copy(&mut self, entries: Vec<Entry>) {
+        self.entries = entries;
+        self.replay = Some(Vec::new());
+        self.mark(0);
+        self.list.set_follow_mode(FollowMode::Tail);
+    }
+
+    /// Reopening, with Endeavor's copy of the transcript showing meanwhile.
+    pub fn showing_copy(&self) -> bool {
+        self.opening() && self.replay.is_some()
     }
 
     /// The current choice of a select config option, by its display name (e.g.
@@ -925,7 +957,9 @@ impl Session {
         self.id = Some(started.id);
         self.modes = started.modes;
         self.config = started.config;
-        if self.replaying {
+        if let Some(replay) = self.replay.take().filter(|_| self.replaying) {
+            self.take_replay(replay);
+        } else if self.replaying {
             self.push_changes();
             // The history shows whole, at its end, with a line between it and what comes now.
             if !self.entries.is_empty() {
@@ -948,6 +982,57 @@ impl Session {
         let next = self.outbox.turn_ended();
         self.dispatch(next, &mut effects);
         effects
+    }
+
+    /// The replay has all arrived: it replaces the copy on show, and the view
+    /// keeps its place (see `transcript_copy::merge`).
+    fn take_replay(&mut self, replay: Vec<Entry>) {
+        self.replay = Some(replay);
+        // The last turn's card, as a reopen without a copy gets.
+        self.in_replay(Session::push_changes);
+        let replay = self.replay.take().unwrap_or_default();
+        let top = self.list.logical_scroll_top();
+        let len = self.entries.len();
+        let merged = transcript_copy::merge(&mut self.entries, replay, top.item_ix);
+        match merged.swap {
+            Swap::Same => {}
+            Swap::Added { messages } => {
+                self.list.pause_following_tail();
+                self.mark(len);
+                self.below.set(Some(Below::New(messages)));
+            }
+            Swap::Changed => {
+                self.replies.get_mut().clear();
+                self.open_runs.clear();
+                self.mark(0);
+                self.sync_list();
+                let offset_in_item = if merged.found { top.offset_in_item } else { px(0.) };
+                self.list.scroll_to(ListOffset { item_ix: merged.anchor, offset_in_item });
+                self.list.pause_following_tail();
+                self.below.set(Some(Below::Changed));
+            }
+        }
+        // One line between the history and what comes now: a reopen with no turn since moves it.
+        match self.entries.last_mut() {
+            Some(Entry::Reopened(at)) => {
+                *at = SystemTime::now();
+                self.mark(self.entries.len() - 1);
+            }
+            _ => self.push(Entry::Reopened(SystemTime::now())),
+        }
+    }
+
+    /// Run `f` on the replay's entries while the copy shows, else on the transcript.
+    fn in_replay<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let Some(mut replay) = self.replay.take() else { return f(self) };
+        // The list shows the copy: what the replay changes isn't on screen.
+        let dirty = self.dirty_from.get();
+        std::mem::swap(&mut self.entries, &mut replay);
+        let result = f(self);
+        std::mem::swap(&mut self.entries, &mut replay);
+        self.dirty_from.set(dirty);
+        self.replay = Some(replay);
+        result
     }
 
     /// Send or queue a message. Before the session exists everything queues.
@@ -1038,6 +1123,13 @@ impl Session {
     }
 
     pub fn apply(&mut self, event: SessionEvent) -> Vec<Effect> {
+        if self.replaying {
+            return self.in_replay(|s| s.apply_now(event));
+        }
+        self.apply_now(event)
+    }
+
+    fn apply_now(&mut self, event: SessionEvent) -> Vec<Effect> {
         let mut effects = Vec::new();
         // The transcript already has what a reload replays.
         if self.reloading && matches!(event, SessionEvent::Update(_)) {
@@ -1231,10 +1323,7 @@ impl Session {
         self.agent_waiting = true;
         // A load cut short starts over; a loaded transcript stays and its replay is skipped.
         if self.replaying {
-            self.entries.clear();
-            self.replies.get_mut().clear();
-            self.open_runs.clear();
-            self.mark(0);
+            self.clear_history();
         } else {
             self.reloading = self.id.is_some();
         }
@@ -2179,6 +2268,42 @@ mod tests {
     }
 
     #[test]
+    fn a_session_opened_from_endeavors_copy_shows_it_until_the_replay_replaces_it() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
+        let said = |s: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
+        let reply = |s: &str| SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
+        let words = |s: &Session| {
+            s.entries
+                .iter()
+                .map(|e| match e {
+                    Entry::User { text, .. } => format!("you: {text}"),
+                    Entry::Agent { text, .. } => format!("claude: {text}"),
+                    Entry::Reopened(_) => "reopened".into(),
+                    _ => "other".into(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Fit".into());
+        s.show_copy(vec![
+            Entry::User { text: "fit it".into(), expanded: false, attachments: Vec::new(), delivery: crate::outbox::Delivery::Turn, sent: None },
+            Entry::Agent { text: "Done.".into(), at: None },
+        ]);
+        assert!(s.showing_copy());
+        s.apply(said("fit it"));
+        s.apply(reply("Done."));
+        s.apply(said("and plot it"));
+        s.apply(reply("Plotted."));
+        assert_eq!(words(&s), ["you: fit it", "claude: Done."], "the copy shows while the replay arrives");
+        s.submit(text("thanks"), true);
+        assert_eq!(words(&s), ["you: fit it", "claude: Done."], "a message waits for the session to open");
+        let effects = s.started(Started::new(SessionId::new("abc"), None, None));
+        assert!(!s.showing_copy());
+        assert_eq!(words(&s), ["you: fit it", "claude: Done.", "you: and plot it", "claude: Plotted.", "reopened", "you: thanks"]);
+        assert_eq!(s.below.get(), Some(crate::transcript_copy::Below::New(2)));
+        assert!(effects.iter().any(|e| matches!(e, Effect::Send(_))), "the waiting message goes once open");
+    }
+
+    #[test]
     fn live_messages_know_when_they_were_sent_and_replayed_ones_do_not() {
         use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
         let reply = |t: &str| SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(t)))));
@@ -2241,22 +2366,8 @@ mod tests {
     /// adapter stores links and text files as text, and a text file's contents
     /// after the rest (claude-agent-acp's `promptToClaude`).
     fn as_replayed(blocks: Vec<agent_client_protocol::schema::v1::ContentBlock>) -> Vec<SessionEvent> {
-        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, EmbeddedResourceResource, SessionUpdate, TextContent};
-        let text = |s: String| ContentBlock::Text(TextContent::new(s));
-        let (mut content, mut context) = (Vec::new(), Vec::new());
-        for block in blocks {
-            match block {
-                ContentBlock::ResourceLink(link) => content.push(text(link.uri)),
-                ContentBlock::Resource(r) => {
-                    if let EmbeddedResourceResource::TextResourceContents(t) = r.resource {
-                        content.push(text(t.uri.clone()));
-                        context.push(text(format!("\n<context ref=\"{}\">\n{}\n</context>", t.uri, t.text)));
-                    }
-                }
-                other => content.push(other),
-            }
-        }
-        content.into_iter().chain(context).map(|b| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(b)))).collect()
+        use agent_client_protocol::schema::v1::{ContentChunk, SessionUpdate};
+        crate::transcript_copy::as_replayed(blocks).into_iter().map(|b| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(b)))).collect()
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! A session on its way to open: what it waits for, the wait line above the
-//! composer, and, for a past session whose history hasn't loaded, the summary
-//! the chat shows in place of its transcript.
+//! composer, and, for a past session whose history hasn't loaded and that has
+//! no copy of its transcript in Endeavor (`transcript_copy`), the summary the
+//! chat shows in place of its transcript.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -27,6 +28,8 @@ pub enum Waiting {
     Claude { julia: bool },
     /// Claude is loading the history.
     Conversation,
+    /// Claude is loading the history, and Endeavor's copy of it shows meanwhile.
+    Copy,
 }
 
 /// The wait line shows the time so far after this long.
@@ -43,6 +46,7 @@ impl Waiting {
             Waiting::Julia(Some(server)) => format!("Starting Julia on {server}…"),
             Waiting::Claude { .. } => return None,
             Waiting::Conversation => return Some("Loading the conversation…".to_owned()),
+            Waiting::Copy => return Some("Loading…".to_owned()),
         };
         Some(match waited.filter(|w| *w >= SHOW_TIME_AFTER) {
             Some(w) => format!("{text} {}:{:02}", w.as_secs() / 60, w.as_secs() % 60),
@@ -57,7 +61,7 @@ impl Waiting {
             Waiting::Connecting(_) | Waiting::Julia(_) => "The conversation shows once Julia is running.".to_owned(),
             Waiting::Claude { julia: true } => "The conversation shows once Claude and Julia are running.".to_owned(),
             Waiting::Claude { julia: false } => "The conversation shows once Claude is running.".to_owned(),
-            Waiting::Conversation => "The conversation appears once all of it has loaded.".to_owned(),
+            Waiting::Conversation | Waiting::Copy => "The conversation appears once all of it has loaded.".to_owned(),
         }
     }
 
@@ -102,7 +106,7 @@ impl Workspace {
             return Some(Waiting::Claude { julia: !julia_ready });
         }
         if julia_ready {
-            return session.opening().then_some(Waiting::Conversation);
+            return session.opening().then_some(if session.showing_copy() { Waiting::Copy } else { Waiting::Conversation });
         }
         match (connection.map(|c| &c.status), server) {
             (Some(Status::Connecting), Some(server)) => Some(Waiting::Connecting(server)),
@@ -157,7 +161,7 @@ impl Workspace {
 
     /// The summary's lines under the title, while `session`'s history hasn't loaded.
     pub fn opening_summary(&self, session: &Session) -> Option<(Option<String>, String)> {
-        if !session.opening() {
+        if !session.opening() || session.showing_copy() {
             return None;
         }
         let note = self.session_wait(session).unwrap_or(Waiting::Conversation).note();
@@ -205,6 +209,7 @@ mod tests {
         assert_eq!(Waiting::Julia(Some("lab-server".into())).line(None).as_deref(), Some("Starting Julia on lab-server…"));
         assert_eq!(Waiting::Connecting("lab-server".into()).line(Some(Duration::from_secs(75))).as_deref(), Some("Connecting to lab-server… 1:15"));
         assert_eq!(Waiting::Conversation.line(Some(Duration::from_secs(30))).as_deref(), Some("Loading the conversation…"));
+        assert_eq!(Waiting::Copy.line(Some(Duration::from_secs(30))).as_deref(), Some("Loading…"), "Endeavor's copy shows meanwhile");
         assert_eq!(Waiting::Unreachable("lab-server".into()).line(None).as_deref(), Some("Can't reach lab-server. Endeavor keeps trying."));
         assert_eq!(Waiting::Claude { julia: true }.line(None), None, "Claude's own line says it");
     }

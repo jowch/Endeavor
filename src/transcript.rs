@@ -64,6 +64,53 @@ pub fn render_transcript(session: &Session, margin: Pixels, cx: &mut Context<Wor
     .pt_3()
 }
 
+/// The floating button above the composer while the view has left the end
+/// of the transcript: "3 new messages ↓" after a replay added some below,
+/// else "Jump to latest ↓". It scrolls to the end, which follows again.
+pub fn render_jump(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+    let following = session.list.is_following_tail();
+    let at_end = session.list.is_scrolled_to_end();
+    if following || at_end == Some(true) {
+        session.below.set(None);
+    }
+    let label = crate::transcript_copy::pill(following, at_end, session.below.get())?;
+    let key = session.key;
+    Some(
+        div()
+            .absolute()
+            .bottom(px(8.))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .id(ElementId::NamedInteger("jump-to-latest".into(), key))
+                    .role(Role::Button)
+                    .px(px(12.))
+                    .py(px(4.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme::popover_edge())
+                    .bg(theme::popover_bg())
+                    .shadow(theme::popover_shadow())
+                    .cursor_pointer()
+                    .text_size(theme::chat_meta())
+                    .text_color(theme::text_primary())
+                    .hover(|s| s.bg(theme::button_hover()))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(session) = this.sessions.iter().find(|s| s.key == key) {
+                            session.below.set(None);
+                            session.list.set_follow_mode(FollowMode::Tail);
+                        }
+                        cx.notify();
+                    })),
+            )
+            .into_any_element(),
+    )
+}
+
 /// The working line: an orbit, then what the agent is doing and for how long
 /// ("Adding `residuals` · 12s"), or nothing while it waits on the user.
 /// `offline_since`: the network went away then; a turn that has heard nothing

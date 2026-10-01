@@ -32,7 +32,7 @@ pub struct Queued {
 }
 
 /// How a sent message reached Claude, as its bubble says.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum Delivery {
     /// It started a turn of its own.
     #[default]
