@@ -275,8 +275,8 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
         lines.push(("Nothing depends on it yet.".into(), Tone::Faint));
     } else if let Some(p) = preview.filter(|p| p.dependents > 0) {
         let n = p.dependents;
-        let cells = if n == 1 { "cell" } else { "cells" };
-        lines.push((format!("Also re-runs {n} {cells} that depend on {them}."), Tone::Muted));
+        let (cells, depend) = if n == 1 { ("cell", "depends") } else { ("cells", "depend") };
+        lines.push((format!("Also re-runs {n} {cells} that {depend} on {them}."), Tone::Muted));
     }
     if tool == "delete_cell" {
         lines.push((format!("{} in the notebook brings the cell back.", crate::platform::shortcut!("Z")), Tone::Muted));
