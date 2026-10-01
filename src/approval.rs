@@ -143,7 +143,7 @@ pub(crate) fn heading_at(session: &Session, ix: usize) -> Option<String> {
 /// many dependents re-run; the agent's own prompts get a question in its
 /// verb (Edit, Create, Run, Fetch) and never its option labels or tool names.
 fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
-    let Entry::Permission { title, options, runs_code, tool, input, preview, plan, kind, path, .. } = session.entries.get(ix)? else { return None };
+    let Entry::Permission { title, code, options, runs_code, tool, input, preview, plan, kind, path, .. } = session.entries.get(ix)? else { return None };
     if let Some(plan) = plan {
         let card = PlanCard { open: session.plan_open, ..plan_card(plan) };
         return Some(ApprovalView {
@@ -162,7 +162,7 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
     }
     let tool = tool.as_deref().unwrap_or("");
     let ask = if !*runs_code {
-        agent_prompt(session, title, *kind, input, path.as_deref())
+        agent_prompt(session, title, *kind, input, path.as_deref(), code.as_deref())
     } else if tool == "run_shell" {
         let host = session.server.clone().unwrap_or_else(|| "the server".into());
         let folder = session.place.path.display().to_string();
@@ -285,9 +285,9 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
 }
 
 /// The agent's own prompt (Manual, or a call its rules ask about), in Endeavor's words.
-fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &serde_json::Value, path: Option<&Path>) -> Prompt {
+/// `existing`: for a write, the file's text when the prompt came, if it was there.
+fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &serde_json::Value, path: Option<&Path>, existing: Option<&str>) -> Prompt {
     let field = |name: &str| input[name].as_str().filter(|s| !s.trim().is_empty());
-    let local = session.place.host == HostId::ThisMac;
     let here = crate::platform::this_computer!();
     let folder = tilde(&session.place.path);
     // A file inside the session's folder by its path there, else by its name.
@@ -332,12 +332,11 @@ fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &
             return Prompt { heading: format!("Edit `{}`?", named(file)), verb: "Edit", code: Some(CardCode::Diff(lines)), lines: vec![in_folder(file)], ..Default::default() };
         }
         if let Some(content) = input["content"].as_str() {
-            let existing = local.then(|| std::fs::read_to_string(file).ok()).flatten();
             return match existing {
                 Some(old) => Prompt {
                     heading: format!("Replace `{}`?", named(file)),
                     verb: "Replace",
-                    code: Some(CardCode::Diff(celldiff::line_diff(&old, content))),
+                    code: Some(CardCode::Diff(celldiff::line_diff(old, content))),
                     lines: vec![in_folder(file)],
                     ..Default::default()
                 },

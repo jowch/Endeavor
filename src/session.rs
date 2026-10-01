@@ -59,7 +59,8 @@ pub enum Entry {
     Permission {
         call: ToolCallId,
         title: String,
-        /// Code the call would run, when known.
+        /// Code the call would run, when known; for a write over an existing
+        /// file on This Mac, the file's text when the prompt came (its card shows the change).
         code: Option<String>,
         options: Vec<PermissionOption>,
         responder: Option<Responder<RequestPermissionResponse>>,
@@ -1101,10 +1102,12 @@ impl Session {
                     self.approve(&call, approval, &title, &input);
                     return effects;
                 }
-                let code = input["code"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned));
+                let written = (kind == Some(ToolKind::Edit) && input["content"].is_string() && self.place.host == crate::hosts::HostId::ThisMac)
+                    .then(|| input["file_path"].as_str().and_then(|f| std::fs::read_to_string(f).ok()))
+                    .flatten();
+                let code = written.or_else(|| {
+                    input["code"].as_str().map(str::to_owned).or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned))
+                });
                 let tool = title.strip_prefix(celldiff::TOOL_PREFIX).map(str::to_owned);
                 if let Some(tool) = tool.clone().filter(|t| runs_code && t != "run_shell") {
                     effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
