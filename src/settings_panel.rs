@@ -1457,6 +1457,8 @@ impl Workspace {
             .gap(px(18.))
             .border_r_1()
             .border_color(theme::border())
+            // GPUI clips the panel's children to a rectangle, not its rounded corners.
+            .rounded_l(px(13.))
             .bg(nav_bg())
             .child(search_box)
             .children(list(true, cx))
