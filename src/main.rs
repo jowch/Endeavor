@@ -17,12 +17,14 @@ mod annotate;
 mod approval;
 mod attach;
 mod celldiff;
+mod claude_process;
 mod composer;
 mod confirm;
 mod connection;
 #[cfg(debug_assertions)]
 mod debug_state;
 mod details;
+mod failure;
 mod find_bar;
 mod gate;
 mod host_list;
@@ -60,6 +62,7 @@ mod splash;
 mod theme;
 mod tips;
 mod transcript;
+mod trouble;
 mod turtle;
 mod when;
 #[cfg(target_os = "linux")]
@@ -385,7 +388,13 @@ pub struct Workspace {
     /// runtime of the moment; kept for the whole launch.
     listeners: HashMap<HostId, Arc<runtime::Listener>>,
     /// The composer's placeholder as last set (it changes while Claude works).
-    placeholder: &'static str,
+    placeholder: SharedString,
+    /// Claude Code's adapter process: up, restarting by itself, or left stopped.
+    claude: claude_process::Process,
+    /// The "Claude isn't running" card's Details are open.
+    claude_details_open: bool,
+    /// The account's usage limit was reached: messages wait until it resets.
+    usage_limit: Option<offline::UsageLimit>,
     /// Servers sessions can run on (persisted in hosts.json).
     hosts: hosts::Hosts,
     /// Adding a server, or its settings.
@@ -563,7 +572,9 @@ impl Workspace {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             let Ok(busy) = this.update(cx, |this, cx| {
                 this.check_opening(cx);
-                this.sessions.iter().any(|s| s.busy_since.is_some())
+                this.check_usage_limit(cx);
+                this.usage_limit.is_some()
+                    || this.sessions.iter().any(|s| s.busy_since.is_some())
                     || this.connections.values().any(|c| matches!(c.status, connection::Status::Connecting | connection::Status::Starting))
             }) else {
                 break;
@@ -628,7 +639,10 @@ impl Workspace {
             file_tip: false,
             connections: HashMap::new(),
             listeners: HashMap::new(),
-            placeholder: "Type / for commands",
+            placeholder: "Type / for commands".into(),
+            claude: claude_process::Process::default(),
+            claude_details_open: false,
+            usage_limit: None,
             hosts: hosts::Hosts::load(),
             server_dialog: None,
             asks: VecDeque::new(),
@@ -797,6 +811,10 @@ impl Workspace {
     /// host's runtime is ready, since its tools go to that runtime's bridge.
     /// Until then it waits, and the host connects and starts Julia.
     pub fn request_agent(&mut self, key: u64, cx: &mut Context<Self>) {
+        // Claude is restarting or down: it opens once Claude is back (`claude_ready`).
+        if !self.claude.up() {
+            return;
+        }
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let host = session.place.host.clone();
         let Some(bridge) = self.bridge(&host) else { return self.ensure_runtime(&host, cx) };
@@ -1114,6 +1132,7 @@ impl Workspace {
                 Effect::CheckRunState => self.check_run_state(key, cx),
                 Effect::SetPolicy(policy) => self.send_policy(key, policy, cx),
                 Effect::SignedOut => self.signed_out(cx),
+                Effect::UsageLimit(reset) => self.hit_usage_limit(reset, cx),
                 Effect::PreviewRun { ix, tool, input } => {
                     let Some(bridge) = self.session_bridge(key) else { continue };
                     let task = cx.background_executor().spawn(async move { pluto::run_preview(&bridge, &tool, &input) });
@@ -1467,6 +1486,7 @@ impl Workspace {
                 self.status = "Claude connected.".into();
                 self.agent_ready = true;
                 self.agent_failed = false;
+                self.claude_ready(cx);
                 self.finish_setup(cx);
                 let mut listed = HashSet::new();
                 for place in &self.recent {
@@ -1497,16 +1517,14 @@ impl Workspace {
                     session.id = Some(id);
                 }
             }
-            AgentEvent::Failed(e) => {
-                self.status = format!("⚠ Agent stopped: {e}").into();
+            // First launch: the setup screen says why, with Retry.
+            AgentEvent::Failed(e) if self.setup.is_some() => {
                 self.agent_failed = true;
                 if let Some(setup) = &mut self.setup {
-                    setup.fail(e.clone());
-                }
-                for session in &mut self.sessions {
-                    session.note(format!("⚠ Agent stopped: {e}"));
+                    setup.fail(e);
                 }
             }
+            AgentEvent::Failed(e) => self.claude_stopped(e, cx),
             AgentEvent::Started { key, result } => {
                 let Some(session) = self.session_mut(key) else { return };
                 match result {
@@ -1551,9 +1569,9 @@ impl Workspace {
                     Err(e) => session.fail(&e),
                 }
             }
-            AgentEvent::Session(id, agent::SessionEvent::ApiFailed(error)) => {
+            AgentEvent::Session(id, agent::SessionEvent::TurnFailed { kind, error }) => {
                 let Some(key) = self.sessions.iter().find(|s| s.id.as_ref() == Some(&id)).map(|s| s.key) else { return };
-                self.api_failed(key, error, cx);
+                self.turn_failed(key, kind, error, cx);
             }
             AgentEvent::Session(id, event) => {
                 let Some(session) = self.sessions.iter_mut().find(|s| s.id.as_ref() == Some(&id)) else { return };
@@ -1757,12 +1775,14 @@ impl Workspace {
     }
 
     fn restart_agent(&mut self, cx: &mut Context<Self>) {
+        // The failed agent thread dropped its command channel; start with a new one.
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        self.agent_tx = tx;
         if self.bridge(&HostId::ThisMac).is_some() {
-            // The failed agent thread dropped its command channel; start with a new one.
-            let (tx, rx) = futures::channel::mpsc::unbounded();
-            self.agent_tx = tx;
             self.start_agent(rx, cx);
         } else {
+            // Started once This Mac's Julia is up (`on_ready`).
+            self.agent_rx = Some(rx);
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
@@ -1932,6 +1952,8 @@ impl Workspace {
                     .children(self.render_commands(session, cx))
                     .children(approval::render_pinned_plan(session, cx))
                     .children(self.render_offline_line(Some(session), cx))
+                    .children(self.render_usage_line(cx))
+                    .children(self.render_claude_trouble(cx))
                     .children(self.render_sign_in_card(cx))
                     .children(approval::render_approval(session, cx))
                     .child(approval::render_queue(self, session, cx))
@@ -1993,14 +2015,14 @@ impl Render for Workspace {
                 .into_any_element();
         }
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
-        let placeholder = match active {
-            None => "What do you want to work on?",
-            Some(_) if working => concat!("Queue a message, or ", crate::platform::shortcut!("⏎"), " to steer"),
-            Some(_) if self.offline_since.is_some() => "Write a message. It sends when you're back online.",
-            Some(_) => "Type / for commands",
+        let placeholder: SharedString = match active {
+            None => "What do you want to work on?".into(),
+            Some(_) if working && self.claude.up() => concat!("Queue a message, or ", crate::platform::shortcut!("⏎"), " to steer").into(),
+            Some(_) if self.offline_since.is_some() => "Write a message. It sends when you're back online.".into(),
+            Some(_) => self.waiting_placeholder().unwrap_or_else(|| "Type / for commands".into()),
         };
         if self.placeholder != placeholder {
-            self.placeholder = placeholder;
+            self.placeholder = placeholder.clone();
             self.input.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
         }
         let chat = match active {

@@ -9,7 +9,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::hosts::{HostId, Place};
 use crate::menu::MenuTarget;
-use crate::new_session::{self, Glyph, NotebookChoice, glyph, menu_row};
+use crate::new_session::{Glyph, NotebookChoice, glyph, menu_row};
 use crate::session::{Session, folder_name};
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
 use crate::theme::FocusRing as _;
@@ -184,6 +184,39 @@ fn end_slot(id: impl Into<ElementId>) -> Stateful<Div> {
 /// A row's end mark: `end_slot`, pulled further right by the row's own
 /// `px(10.)` (`sidebar_row`) that the folder heading's + doesn't have to
 /// cross, so it lands on the same centre line as the +.
+/// The mark before the status line's words.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum StatusMark {
+    Offline,
+    /// An orange dot.
+    SignedOut,
+    /// A spinner: it fixes itself.
+    Waiting,
+    /// A red dot: it needs the user.
+    NeedsYou,
+}
+
+impl StatusMark {
+    pub fn label(self) -> &'static str {
+        match self {
+            StatusMark::Offline => "offline",
+            StatusMark::SignedOut => "signed_out",
+            StatusMark::Waiting => "spinner",
+            StatusMark::NeedsYou => "red_dot",
+        }
+    }
+
+    fn render(self, cx: &App) -> AnyElement {
+        let dot = |color: Rgba| div().size(px(6.)).flex_shrink_0().rounded_full().bg(color).into_any_element();
+        match self {
+            StatusMark::Offline => glyph(Glyph::WifiOff, theme::text_muted()).into_any_element(),
+            StatusMark::SignedOut => dot(theme::accent()),
+            StatusMark::Waiting => crate::orbit::orbit_with("status-waiting".into(), 12., theme::orbit_sphere(), cx),
+            StatusMark::NeedsYou => dot(theme::danger()),
+        }
+    }
+}
+
 fn row_end_mark(id: impl Into<ElementId>) -> Stateful<Div> {
     end_slot(id).mr(px(-16.))
 }
@@ -455,15 +488,22 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The sidebar's status line: a mark when it matters to every session, and the words.
-    pub(crate) fn status_line(&self) -> (Option<AnyElement>, SharedString) {
+    /// The sidebar's status line: app-wide states only, with a mark when it
+    /// matters to every session (red only when something needs the user).
+    pub(crate) fn status_line(&self) -> (Option<StatusMark>, SharedString) {
         if self.offline_since.is_some() {
-            let mark = new_session::glyph(new_session::Glyph::WifiOff, theme::text_muted());
-            return (Some(mark.into_any_element()), "Offline · reconnects by itself".into());
+            return (Some(StatusMark::Offline), "Offline · reconnects by itself".into());
         }
         if self.account.signed_out() {
-            let dot = div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::accent());
-            return (Some(dot.into_any_element()), "Signed out of Claude.".into());
+            return (Some(StatusMark::SignedOut), "Signed out of Claude.".into());
+        }
+        match self.claude.state {
+            crate::claude_process::State::Restarting => return (Some(StatusMark::Waiting), "Restarting Claude…".into()),
+            crate::claude_process::State::Down => return (Some(StatusMark::NeedsYou), crate::claude_process::DOWN_TITLE.into()),
+            crate::claude_process::State::Up => {}
+        }
+        if let Some(host) = self.crashed_host() {
+            return (Some(StatusMark::NeedsYou), format!("Julia on {host} stopped").into());
         }
         (None, self.status.clone())
     }
@@ -954,6 +994,7 @@ impl Workspace {
                     .px_1()
                     .child({
                         let (mark, status) = self.status_line();
+                        let mark = mark.map(|m| m.render(cx));
                         div()
                             .id("status")
                             .flex_1()

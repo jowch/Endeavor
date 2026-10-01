@@ -94,6 +94,18 @@ impl Workspace {
         json!({
             "window": self.window_state(),
             "offline": self.offline_since.map(|since| json!({ "for_secs": since.elapsed().as_secs(), "trying": self.probing })),
+            "claude": {
+                "state": match self.claude.state {
+                    crate::claude_process::State::Up => "up",
+                    crate::claude_process::State::Restarting => "restarting",
+                    crate::claude_process::State::Down => "down",
+                },
+                "error": (!self.claude.up()).then(|| self.claude.error.clone()),
+                "details_open": self.claude_details_open,
+            },
+            "usage_limit": self.usage_limit.as_ref().map(|l| json!({
+                "resets_in_secs": l.until.map(|at| at.duration_since(std::time::SystemTime::now()).unwrap_or_default().as_secs()),
+            })),
             "sign_in": self.sign_in_state(),
             "sidebar": self.sidebar_state(cx),
             "new_session": (self.active.is_none()).then(|| self.new_session_state()),
@@ -230,6 +242,7 @@ impl Workspace {
             "folders": folders,
             "restart": self.restart_row(),
             "status": self.status_line().1.to_string(),
+            "status_mark": self.status_line().0.map(|m| m.label()),
         })
     }
 
@@ -332,6 +345,14 @@ impl Workspace {
                         "shows": c.change != CellChange::Deleted,
                     })).collect::<Vec<_>>(),
                 })),
+                Entry::Failed(f) if f.used && matches!(f.kind, session::FailedKind::NoAnswer { .. }) => None,
+                Entry::Failed(f) => Some(json!({
+                    "kind": if matches!(f.kind, session::FailedKind::CutOff) { "note" } else { "failed" },
+                    "title": f.kind.title(),
+                    "text": f.kind.body(),
+                    "button": (!f.used).then(|| f.kind.action()),
+                    "details": f.raw.as_ref().map(|raw| json!({ "open": f.details_open, "text": raw })),
+                })),
                 Entry::Permission { .. } | Entry::RunState(_) => None,
             });
             ix += 1;
@@ -430,6 +451,14 @@ impl Workspace {
                 }
                 if let Some(line) = self.offline_line(Some(s)) {
                     notice("offline", line.into());
+                }
+                if let Some(line) = self.usage_line() {
+                    notice("usage_limit", line);
+                }
+                match self.claude.state {
+                    crate::claude_process::State::Restarting => notice("claude_restarting", crate::claude_process::RESTARTING.into()),
+                    crate::claude_process::State::Down => notice("claude_down", format!("{} · {}", crate::claude_process::DOWN_TITLE, crate::claude_process::DOWN_BODY)),
+                    crate::claude_process::State::Up => {}
                 }
                 if let Some(heading) = self.queue_heading(s) {
                     notice("queue_heading", heading);

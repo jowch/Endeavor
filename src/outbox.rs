@@ -177,6 +177,29 @@ impl Outbox {
         self.next()
     }
 
+    /// The running turn failed: its message, for Try again.
+    pub fn take_current(&mut self) -> Option<Vec<ContentBlock>> {
+        self.current.take()
+    }
+
+    /// Try again: a failed turn's message goes again, ahead of the queue
+    /// (when Claude can be reached and nothing else runs).
+    pub fn send_again(&mut self, blocks: Vec<ContentBlock>) -> Option<Dispatch> {
+        self.unanswered = Some(blocks);
+        self.next()
+    }
+
+    /// Claude's process stopped: the running turn is gone, and nothing goes
+    /// until the session is open again (`turn_ended`). A Cmd+Enter message
+    /// waiting to join the turn queues instead.
+    pub fn restart(&mut self) {
+        self.busy = true;
+        self.current = None;
+        for q in &mut self.items {
+            q.in_flight = false;
+        }
+    }
+
     pub fn has_unanswered(&self) -> bool {
         self.unanswered.is_some()
     }

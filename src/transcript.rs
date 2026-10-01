@@ -12,10 +12,13 @@ use gpui_component::tooltip::Tooltip;
 use crate::Workspace;
 use crate::celldiff;
 use crate::details;
+use crate::failure;
+use crate::new_session::Glyph;
 use crate::outbox::Delivery;
 use crate::pluto;
 use crate::runs;
-use crate::session::{Approval, Entry, Session, defined_name, file_name, file_path};
+use crate::session::{Approval, Entry, Failed, FailedKind, Session, defined_name, file_name, file_path};
+use crate::signin::Look;
 use crate::theme;
 
 /// A run-state warning as the transcript shows it.
@@ -234,7 +237,49 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .into_any_element(),
         // Pending: shown as the approval card above the composer (render_approval).
         Entry::Permission { .. } => return None,
+        Entry::Failed(failed) => return render_failed(key, ix, failed, cx),
     })
+}
+
+/// A turn that didn't finish: its card (Try again, Continue, Details), or
+/// the quiet note after a restart. A card whose Try again was pressed goes.
+fn render_failed(key: u64, ix: usize, failed: &Failed, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+    let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
+    let run = move |this: &mut Workspace, cx: &mut Context<Workspace>| {
+        let Some(session) = this.session_mut(key) else { return };
+        let effects = match &session.entries.get(ix) {
+            Some(Entry::Failed(Failed { kind: FailedKind::NoAnswer { .. }, .. })) => session.try_again(ix),
+            _ => session.continue_reply(ix),
+        };
+        this.apply_effects(key, effects, cx);
+    };
+    let button = |look| {
+        let icon = if matches!(failed.kind, FailedKind::NoAnswer { .. }) { Glyph::Restart } else { Glyph::Play };
+        failure::action(id("failed-action"), Some(icon), failed.kind.action(), look).on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
+    };
+    match &failed.kind {
+        FailedKind::NoAnswer { .. } if failed.used => None,
+        FailedKind::CutOff => Some(
+            div()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(8.))
+                .child(div().text_size(theme::chat_meta()).text_color(theme::text_faint()).child(failed.kind.title()))
+                .when(!failed.used, |d| d.child(button(Look::Secondary)))
+                .into_any_element(),
+        ),
+        kind => {
+            let details = failed.raw.clone().map(|raw| {
+                let entity = cx.entity().downgrade();
+                failure::details(id("failed-details"), raw, failed.details_open, move |_, cx| {
+                    let _ = entity.update(cx, |this, cx| this.with_session(key, cx, |s| s.toggle_details(ix)));
+                })
+            });
+            let buttons = (!failed.used).then(|| button(Look::Primary).into_any_element()).into_iter().collect();
+            Some(failure::card(kind.title(), kind.body(), buttons, details).into_any_element())
+        }
+    }
 }
 
 /// The line under a message sent with Cmd+Enter while Claude worked.

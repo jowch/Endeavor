@@ -95,6 +95,9 @@ pub struct Connection {
     /// never got through (a bad host name, a wrong password): that stays
     /// "Not connected", with Reconnect.
     pub lost: Option<Lost>,
+    /// Julia exited by itself (not a Stop, a restart or a quit), and hasn't
+    /// been started since.
+    pub crashed: bool,
 }
 
 /// A dropped server connection.
@@ -215,6 +218,7 @@ impl Connection {
             idle_stopped: HashSet::new(),
             watching: Arc::default(),
             lost: None,
+            crashed: false,
         }
     }
 
@@ -250,6 +254,17 @@ impl Workspace {
     /// The bridge of `host`'s runtime, while it's ready.
     pub fn bridge(&self, host: &HostId) -> Option<Bridge> {
         self.connections.get(host).and_then(Connection::bridge)
+    }
+
+    /// A host whose Julia stopped by itself and hasn't started since, by name
+    /// ("This Mac", a server's), for the sidebar's status line.
+    pub fn crashed_host(&self) -> Option<String> {
+        let mut crashed: Vec<&HostId> = self.connections.iter().filter(|(_, c)| c.crashed && matches!(c.status, Status::Died(_))).map(|(h, _)| h).collect();
+        crashed.sort_by_key(|h| **h != HostId::ThisMac);
+        crashed.first().map(|host| match host {
+            HostId::ThisMac => crate::platform::this_computer!().to_string(),
+            host => self.hosts.name(host),
+        })
     }
 
     /// The runtime of the session `key`'s host.
@@ -364,6 +379,7 @@ impl Workspace {
         }
         let Some(channel) = connection.channel.clone() else { return };
         connection.status = Status::Starting;
+        connection.crashed = false;
         connection.cancelling = false;
         connection.found = None;
         connection.job = None;
@@ -687,7 +703,11 @@ impl Workspace {
             Update::Notice(notice) => {
                 let gone = connection.forget_runtime();
                 connection.status = match notice {
-                    Notice::Died(reason) => Status::Died(reason),
+                    // Heard only when Julia went by itself: the app's own stops leave first.
+                    Notice::Died(reason) => {
+                        connection.crashed = true;
+                        Status::Died(reason)
+                    }
                     Notice::Replaced => {
                         connection.channel = None;
                         Status::Replaced

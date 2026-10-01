@@ -839,14 +839,18 @@ impl Workspace {
     pub fn unanswered_text(&self) -> &'static str {
         if self.account.signed_out() {
             "Not answered yet. It sends again once you sign in."
-        } else {
+        } else if self.offline_since().is_some() {
             "Not answered yet. It sends again when you're back."
+        } else if !self.claude.up() {
+            "Not answered yet. It sends again once Claude is back."
+        } else {
+            "Not answered yet"
         }
     }
 
     /// Claude can't answer now: messages wait.
     pub fn out_of_reach(&self) -> bool {
-        self.account.signed_out() || self.offline_since().is_some()
+        self.account.signed_out() || self.offline_since().is_some() || self.usage_limit.is_some() || !self.claude.up()
     }
 
     /// A session's messages wait: Claude can't be reached, or its server is

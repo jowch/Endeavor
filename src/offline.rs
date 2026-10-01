@@ -4,12 +4,14 @@
 //! Mac keeps working, a server's notebook stays readable but read-only, and a
 //! first launch's setup pauses.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::Workspace;
+use crate::failure::{self, Lead};
+use crate::trouble::{Reset, Trouble};
 use crate::hosts::HostId;
 use crate::new_session::{Glyph, glyph, glyph_at};
 use crate::session::Session;
@@ -20,6 +22,11 @@ use crate::theme::FocusRing as _;
 
 /// How long a server that can't be reached waits between tries.
 pub const RETRY_EVERY: Duration = Duration::from_secs(15);
+
+/// The account's usage limit, reached: when it resets, if Claude Code said.
+pub struct UsageLimit {
+    pub until: Option<SystemTime>,
+}
 
 /// A connect error that means the server couldn't be reached (as opposed to,
 /// say, a refused key): worth trying again by itself.
@@ -110,11 +117,17 @@ impl Workspace {
         }
     }
 
-    /// Claude's API failed a session's turn. If it can't be reached from here
-    /// either, that's offline even while the system has a network (a dead
-    /// Wi-Fi, say): the message waits and goes again once it can be reached.
-    /// Otherwise the turn failed.
-    pub fn api_failed(&mut self, key: u64, error: String, cx: &mut Context<Self>) {
+    /// A session's turn failed. A usage limit or a lost sign-in waits at once.
+    /// Otherwise, if Claude can't be reached from here either, that's offline
+    /// even while the system has a network (a dead Wi-Fi, say): the message
+    /// waits and goes again once it can be reached. Else the turn failed.
+    pub fn turn_failed(&mut self, key: u64, kind: Option<String>, error: String, cx: &mut Context<Self>) {
+        let trouble = crate::trouble::classify(kind.as_deref(), &error);
+        if matches!(trouble, Trouble::UsageLimit(_) | Trouble::SignIn) {
+            let Some(session) = self.session_mut(key) else { return };
+            let effects = session.turn_failed(trouble, &error);
+            return self.apply_effects(key, effects, cx);
+        }
         let probe = self.offline_since.is_none().then(|| cx.background_executor().spawn(async { crate::network::probe() }));
         cx.spawn(async move |this, cx| {
             let reachable = match probe {
@@ -127,11 +140,71 @@ impl Workspace {
                     this.recheck(cx);
                 }
                 let Some(session) = this.session_mut(key) else { return };
-                let effects = session.api_failed(&error);
+                let effects = session.turn_failed(trouble, &error);
                 this.apply_effects(key, effects, cx);
             });
         })
         .detach();
+    }
+
+    /// A turn hit the account's usage limit: every session's messages wait
+    /// until it resets (when the message said when), then go by themselves.
+    pub fn hit_usage_limit(&mut self, reset: Option<Reset>, cx: &mut Context<Self>) {
+        let until = reset.and_then(|r| crate::trouble::resolve(r, SystemTime::now(), crate::trouble::local_offset()));
+        self.usage_limit = Some(UsageLimit { until });
+        self.sync_holds(cx);
+        cx.notify();
+    }
+
+    /// Every second: past the reset, the waiting messages go.
+    pub fn check_usage_limit(&mut self, cx: &mut Context<Self>) {
+        if self.usage_limit.as_ref().and_then(|l| l.until).is_some_and(|until| SystemTime::now() >= until) {
+            self.end_usage_limit(cx);
+        }
+    }
+
+    /// The limit has reset, or Try now: what waited goes. If the limit
+    /// still holds, the next turn says so again.
+    pub fn end_usage_limit(&mut self, cx: &mut Context<Self>) {
+        if self.usage_limit.take().is_some() {
+            self.sync_holds(cx);
+            cx.notify();
+        }
+    }
+
+    /// The usage-limit line above the composer, as it reads now.
+    pub fn usage_line(&self) -> Option<String> {
+        let limit = self.usage_limit.as_ref()?;
+        let waiting = self.sessions.iter().any(|s| s.unanswered.is_some() || !s.outbox.items.is_empty());
+        Some(crate::trouble::usage_line(limit.until, SystemTime::now(), crate::trouble::local_offset(), waiting))
+    }
+
+    pub fn render_usage_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text = self.usage_line()?;
+        let until = self.usage_limit.as_ref().and_then(|l| l.until);
+        let try_now = until.is_none().then(|| {
+            button("usage-try-now", "Try now", Look::Secondary).h(px(24.)).on_click(cx.listener(|this, _, _, cx| this.end_usage_limit(cx))).into_any_element()
+        });
+        Some(failure::wait_line(Lead::Clock, text, try_now, cx).into_any_element())
+    }
+
+    /// The composer's placeholder while messages wait for Claude: until the
+    /// usage limit resets, or until Claude's process is back.
+    pub fn waiting_placeholder(&self) -> Option<SharedString> {
+        use crate::claude_process::State;
+        match self.claude.state {
+            State::Restarting => return Some("Write a message. It sends once Claude is back.".into()),
+            State::Down => return Some("Write a message. It sends once Claude is running.".into()),
+            State::Up => {}
+        }
+        let limit = self.usage_limit.as_ref()?;
+        Some(match limit.until {
+            Some(at) => {
+                let when = crate::trouble::when_text(at, SystemTime::now(), crate::trouble::local_offset());
+                format!("Write a message. It sends {when}.").into()
+            }
+            None => "Write a message. It sends once your limit resets.".into(),
+        })
     }
 
     /// Offline on Claude's API's word, not the system's, which won't say when
@@ -285,6 +358,10 @@ impl Workspace {
             "These send in order when you're back.".to_owned()
         } else if self.account.signed_out() {
             "These send in order once you sign in.".to_owned()
+        } else if !self.claude.up() {
+            "These send in order once Claude is back.".to_owned()
+        } else if self.usage_limit.is_some() {
+            "These send in order once your limit resets.".to_owned()
         } else {
             format!("These send in order once {} is back.", self.hosts.name(&session.place.host))
         })

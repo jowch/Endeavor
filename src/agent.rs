@@ -118,6 +118,33 @@ fn fake_auth_error() -> bool {
     false
 }
 
+/// Debug builds only: while the file `ENDEAVOR_TEST_TURN_ERROR` names exists,
+/// turns end as the file says, without reaching Claude. Its first line is the
+/// adapter's error kind (`-` for none), or `max_tokens` / `max_turn_requests`
+/// for a turn that stops at a limit; the rest is the error's message. A
+/// limit, and `transport_lost`, come after a short made-up reply.
+fn fake_turn_error() -> Option<Vec<SessionEvent>> {
+    #[cfg(debug_assertions)]
+    if let Some(file) = std::env::var_os("ENDEAVOR_TEST_TURN_ERROR")
+        && let Ok(text) = std::fs::read_to_string(file)
+    {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
+        let (kind, message) = text.split_once('\n').unwrap_or((&text, ""));
+        let kind = kind.trim();
+        let partial = SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+            "(test) I'll resample the rows 1,000 times and refit the model on each copy. First the resampling cell:",
+        )))));
+        let end = match kind {
+            "max_tokens" => SessionEvent::TurnEnded(StopReason::MaxTokens),
+            "max_turn_requests" => SessionEvent::TurnEnded(StopReason::MaxTurnRequests),
+            _ => SessionEvent::TurnFailed { kind: (kind != "-").then(|| kind.to_owned()), error: message.trim().to_owned() },
+        };
+        let midway = matches!(kind, "max_tokens" | "max_turn_requests" | "transport_lost");
+        return Some(if midway { vec![partial, end] } else { vec![end] });
+    }
+    None
+}
+
 /// The command that runs the ACP adapter: the app's own Node and a `npm ci` of
 /// the pinned lockfile (integrity-checked), both installed on first launch.
 fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
@@ -282,11 +309,13 @@ pub enum SessionEvent {
     /// Answer by calling `respond` on the responder; the agent waits until then.
     Permission(RequestPermissionRequest, Responder<RequestPermissionResponse>),
     TurnEnded(StopReason),
-    /// The turn failed outright (the session stays usable).
-    TurnFailed(String),
-    /// The turn failed because Claude's API couldn't be reached or failed
-    /// ("API Error: …"); the agent also wrote the error as its reply.
-    ApiFailed(String),
+    /// The turn failed (the session stays usable): the adapter's kind for it
+    /// (`errorKind`, such as `server_error`, `overloaded`, `rate_limit`), when
+    /// it gave one, and the error. For an API failure the agent also wrote the
+    /// error as its reply.
+    TurnFailed { kind: Option<String>, error: String },
+    /// A model or effort change was refused.
+    ConfigFailed(String),
     /// The turn failed because Claude's sign-in ran out.
     AuthRequired,
     /// A `SendNow` joined the running turn.
@@ -433,13 +462,14 @@ async fn run(
                         match result {
                             Ok(response) => emit(&session, SessionEvent::TurnEnded(response.stop_reason)),
                             Err(e) if e.code == ErrorCode::AuthRequired => emit(&session, SessionEvent::AuthRequired),
-                            // claude-agent-acp's mark for Claude's API failing the turn with a
-                            // connection or server error, after Claude Code's retries.
-                            Err(e) if e.code == ErrorCode::InternalError && e.data.as_ref().and_then(|d| d.get("errorKind")?.as_str()) == Some("server_error") => {
-                                let error = e.message.strip_prefix("Internal error: ").unwrap_or(&e.message).to_owned();
-                                emit(&session, SessionEvent::ApiFailed(error));
+                            // claude-agent-acp marks the failures it can tell apart (Claude's
+                            // API failing after Claude Code's retries, a usage limit) with an
+                            // `errorKind`, and gives the error's text as the message.
+                            Err(e) => {
+                                let kind = e.data.as_ref().and_then(|d| d.get("errorKind")?.as_str()).map(str::to_owned);
+                                let error = if kind.is_some() { e.message.clone() } else { e.to_string() };
+                                emit(&session, SessionEvent::TurnFailed { kind, error });
                             }
-                            Err(e) => emit(&session, SessionEvent::TurnFailed(e.to_string())),
                         }
                         continue;
                     }
@@ -457,7 +487,7 @@ async fn run(
                     Either::Left(Some(Done::Config(session, result))) => {
                         match result {
                             Ok(reply) => emit(&session, SessionEvent::Config(reply.config_options)),
-                            Err(e) => emit(&session, SessionEvent::TurnFailed(format!("Couldn't change the setting: {e}"))),
+                            Err(e) => emit(&session, SessionEvent::ConfigFailed(format!("Couldn't change the setting: {e}"))),
                         }
                         continue;
                     }
@@ -520,6 +550,11 @@ async fn run(
                     }
                     Command::Turn(session, Turn::Prompt(_) | Turn::SendNow(_)) if !running.contains(&session) && fake_auth_error() => {
                         emit(&session, SessionEvent::AuthRequired);
+                    }
+                    Command::Turn(session, Turn::Prompt(_) | Turn::SendNow(_)) if !running.contains(&session) && let Some(fake) = fake_turn_error() => {
+                        for event in fake {
+                            emit(&session, event);
+                        }
                     }
                     Command::Turn(session, Turn::Prompt(prompt) | Turn::SendNow(prompt)) if !running.contains(&session) => {
                         running.insert(session.clone());
@@ -632,7 +667,7 @@ mod tests {
                         result.expect("loaded");
                         break;
                     }
-                    AgentEvent::Session(_, SessionEvent::TurnFailed(e)) | AgentEvent::Failed(e) => panic!("{e}"),
+                    AgentEvent::Session(_, SessionEvent::TurnFailed { error: e, .. }) | AgentEvent::Failed(e) => panic!("{e}"),
                     _ => {}
                 }
             }
@@ -679,7 +714,7 @@ mod tests {
                         result.expect("copy loaded");
                         break;
                     }
-                    AgentEvent::Session(_, SessionEvent::TurnFailed(e)) | AgentEvent::Failed(e) => panic!("{e}"),
+                    AgentEvent::Session(_, SessionEvent::TurnFailed { error: e, .. }) | AgentEvent::Failed(e) => panic!("{e}"),
                     _ => {}
                 }
             }
@@ -724,7 +759,7 @@ mod tests {
                         completed |= u.fields.status == Some(ToolCallStatus::Completed);
                     }
                     AgentEvent::Session(_, SessionEvent::TurnEnded(_)) => break,
-                    AgentEvent::Session(_, SessionEvent::TurnFailed(e)) | AgentEvent::Failed(e) => panic!("{e}"),
+                    AgentEvent::Session(_, SessionEvent::TurnFailed { error: e, .. }) | AgentEvent::Failed(e) => panic!("{e}"),
                     _ => {}
                 }
             }
@@ -817,7 +852,7 @@ mod tests {
                             break;
                         }
                     }
-                    AgentEvent::Session(_, SessionEvent::TurnFailed(e)) | AgentEvent::Failed(e) => panic!("{e}"),
+                    AgentEvent::Session(_, SessionEvent::TurnFailed { error: e, .. }) | AgentEvent::Failed(e) => panic!("{e}"),
                     _ => {}
                 }
             }

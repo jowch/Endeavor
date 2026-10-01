@@ -78,6 +78,68 @@ pub enum Entry {
     RunState(Vec<pluto::RunWarning>),
     /// The end-of-turn card: the cells the turn changed.
     Changes(Vec<celldiff::ChangedCell>),
+    /// A turn that didn't finish: a card where the reply would be, or the
+    /// quiet note after Claude restarted under it.
+    Failed(Failed),
+}
+
+/// A turn that didn't finish, and the one thing to do about it.
+pub struct Failed {
+    pub kind: FailedKind,
+    /// The error as Claude Code gave it, under Details.
+    pub raw: Option<String>,
+    pub details_open: bool,
+    /// Its Try again or Continue was pressed: a Try again card goes (the
+    /// message is answered under it), a Continue button goes.
+    pub used: bool,
+}
+
+pub enum FailedKind {
+    /// No reply came. Try again sends the kept message again: its blocks, and
+    /// its bubble, to mark while it waits.
+    NoAnswer { reason: &'static str, message: Option<(Option<usize>, Vec<ContentBlock>)> },
+    /// The reply stopped partway; what came stays, and Continue picks it up.
+    Partway { reason: &'static str },
+    /// Claude's process stopped under this reply and was restarted.
+    CutOff,
+}
+
+impl FailedKind {
+    pub fn title(&self) -> &'static str {
+        match self {
+            FailedKind::NoAnswer { .. } => "Claude couldn't answer",
+            FailedKind::Partway { .. } => "Claude stopped before finishing",
+            FailedKind::CutOff => "Claude restarted. This reply was cut off.",
+        }
+    }
+
+    pub fn body(&self) -> String {
+        match self {
+            FailedKind::NoAnswer { reason, .. } => format!("{reason} Your message is kept."),
+            FailedKind::Partway { reason } => (*reason).to_owned(),
+            FailedKind::CutOff => String::new(),
+        }
+    }
+
+    /// Its button: Try again, or Continue.
+    pub fn action(&self) -> &'static str {
+        match self {
+            FailedKind::NoAnswer { .. } => "Try again",
+            FailedKind::Partway { .. } | FailedKind::CutOff => "Continue",
+        }
+    }
+}
+
+/// What Continue sends, as a message of its own.
+pub const CONTINUE: &str = "Continue from where you stopped.";
+
+/// Why a reply stopped partway, for a turn that ended at one of Claude Code's limits.
+fn partway_reason(reason: StopReason) -> Option<&'static str> {
+    match reason {
+        StopReason::MaxTokens => Some("The reply reached its length limit."),
+        StopReason::MaxTurnRequests => Some("Claude took too many steps in one go."),
+        _ => None,
+    }
 }
 
 /// The answer to a call's prompt, shown on its row.
@@ -122,6 +184,8 @@ pub enum Effect {
     SetPolicy(&'static str),
     /// A turn failed for want of sign-in: Claude is signed out.
     SignedOut,
+    /// A turn hit the account's usage limit: messages wait until it resets.
+    UsageLimit(Option<crate::trouble::Reset>),
 }
 
 /// A select config option's current value and its choices.
@@ -243,6 +307,12 @@ pub struct Session {
     pub(crate) open_runs: HashSet<ToolCallId>,
     /// Reopening a past session: its history is replaying.
     replaying: bool,
+    /// Loading the session again after Claude's process restarted: its history
+    /// replays, and the transcript already has it.
+    reloading: bool,
+    /// Claude's process stopped while this session's reply came: once it's
+    /// back, the transcript says the reply was cut off.
+    cut_off: bool,
     /// Notebook file to open once the agent session is up: the one the replayed
     /// history last opened, or the one picked on the new-session screen.
     replayed_path: Option<String>,
@@ -375,6 +445,8 @@ impl Session {
             plan_open: false,
             open_runs: HashSet::new(),
             replaying: false,
+            reloading: false,
+            cut_off: false,
             replayed_path: None,
             failed: None,
             modes: None,
@@ -712,6 +784,10 @@ impl Session {
             self.push_changes();
         }
         self.replaying = false;
+        self.reloading = false;
+        if std::mem::take(&mut self.cut_off) {
+            self.push(Entry::Failed(Failed { kind: FailedKind::CutOff, raw: None, details_open: false, used: false }));
+        }
         let mut effects: Vec<Effect> = self.replayed_path.take().map(Effect::ReopenNotebook).into_iter().collect();
         if let Some(mode) = self.start_mode.take() {
             effects.extend(self.set_mode(&mode));
@@ -810,11 +886,17 @@ impl Session {
 
     pub fn apply(&mut self, event: SessionEvent) -> Vec<Effect> {
         let mut effects = Vec::new();
+        // The transcript already has what a reload replays.
+        if self.reloading && matches!(event, SessionEvent::Update(_)) {
+            return effects;
+        }
         match event {
             SessionEvent::TurnEnded(reason) => {
                 self.push_changes();
-                // Stopped to send the next message: its bubble says so.
-                if let Some(note) = turn_ended_note(reason).filter(|_| !(reason == StopReason::Cancelled && self.outbox.stopping())) {
+                if let Some(reason) = partway_reason(reason) {
+                    self.push(Entry::Failed(Failed { kind: FailedKind::Partway { reason }, raw: None, details_open: false, used: false }));
+                } else if let Some(note) = turn_ended_note(reason).filter(|_| !(reason == StopReason::Cancelled && self.outbox.stopping())) {
+                    // Stopped to send the next message: its bubble says so.
                     self.note(note);
                 }
                 self.turn_ended(&mut effects);
@@ -823,14 +905,8 @@ impl Session {
                 self.turn_unanswered();
                 effects.push(Effect::SignedOut);
             }
-            // Held: Claude went out of reach while it worked.
-            SessionEvent::TurnFailed(_) if self.outbox.held => self.turn_unanswered(),
-            SessionEvent::ApiFailed(error) => return self.api_failed(&error),
-            SessionEvent::TurnFailed(e) => {
-                self.push_changes();
-                self.note(format!("⚠ Turn failed: {e}"));
-                self.turn_ended(&mut effects);
-            }
+            SessionEvent::TurnFailed { kind, error } => return self.turn_failed(crate::trouble::classify(kind.as_deref(), &error), &error),
+            SessionEvent::ConfigFailed(e) => self.note(e),
             SessionEvent::Steered => {
                 if let Some(Shown { text, attachments, delivery }) = self.outbox.steered() {
                     self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery, sent: Some(SystemTime::now()) });
@@ -888,13 +964,16 @@ impl Session {
         effects
     }
 
-    /// Claude's API failed the turn: the reply that only repeats the error goes,
-    /// then the turn fails, or, held because Claude is out of reach, its message
-    /// waits to go again.
-    pub fn api_failed(&mut self, error: &str) -> Vec<Effect> {
+    /// The turn failed. The reply that only repeats the error goes. Held
+    /// because Claude is out of reach, signed out or at its usage limit, the
+    /// message waits to go again; otherwise a card says why, where the reply
+    /// would have been, with Try again, or Continue for a reply that had begun.
+    pub fn turn_failed(&mut self, trouble: crate::trouble::Trouble, error: &str) -> Vec<Effect> {
+        use crate::trouble::Trouble;
+        let said = error.trim().strip_prefix("Internal error: ").unwrap_or(error.trim());
         let last = self.entries.len().saturating_sub(1);
         if let Some(Entry::Agent { text, .. }) = self.entries.last_mut()
-            && let Some(before) = text.trim_end().strip_suffix(error)
+            && let Some(before) = text.trim_end().strip_suffix(said)
         {
             let before = before.trim_end().to_owned();
             self.mark(last);
@@ -904,7 +983,100 @@ impl Session {
                 *text = before;
             }
         }
-        self.apply(SessionEvent::TurnFailed(error.to_owned()))
+        let mut effects = Vec::new();
+        match trouble {
+            _ if self.outbox.held => self.turn_unanswered(),
+            Trouble::SignIn => {
+                self.turn_unanswered();
+                effects.push(Effect::SignedOut);
+            }
+            Trouble::UsageLimit(reset) => {
+                self.turn_unanswered();
+                effects.push(Effect::UsageLimit(reset));
+            }
+            trouble => {
+                self.push_changes();
+                let kind = if trouble == Trouble::Connection && self.replied() {
+                    FailedKind::Partway { reason: "The connection to Claude dropped partway through this reply." }
+                } else {
+                    FailedKind::NoAnswer { reason: trouble.reason(), message: self.outbox.take_current().map(|blocks| (self.turn_entry, blocks)) }
+                };
+                self.push(Entry::Failed(Failed { kind, raw: Some(said.to_owned()), details_open: false, used: false }));
+                self.turn_ended(&mut effects);
+            }
+        }
+        effects
+    }
+
+    /// Claude said or did something in this turn.
+    fn replied(&self) -> bool {
+        self.entries.iter().skip(self.turn_start() + 1).any(|e| matches!(e, Entry::Agent { .. } | Entry::Tool { .. }))
+    }
+
+    /// Try again on the card at `ix`: its message goes again, first, without a
+    /// second bubble, and the card goes.
+    pub fn try_again(&mut self, ix: usize) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        let Some(Entry::Failed(failed)) = self.entries.get_mut(ix) else { return effects };
+        let FailedKind::NoAnswer { message, .. } = &mut failed.kind else { return effects };
+        let Some((bubble, blocks)) = message.take() else { return effects };
+        failed.used = true;
+        self.mark(ix);
+        self.unanswered = bubble;
+        if let Some(ix) = bubble {
+            self.mark(ix);
+        }
+        let next = self.outbox.send_again(blocks);
+        self.dispatch(next, &mut effects);
+        effects
+    }
+
+    /// Continue on the card or note at `ix`: a new message asks Claude to pick up where it stopped.
+    pub fn continue_reply(&mut self, ix: usize) -> Vec<Effect> {
+        let Some(Entry::Failed(failed)) = self.entries.get_mut(ix) else { return Vec::new() };
+        if failed.used || matches!(failed.kind, FailedKind::NoAnswer { .. }) {
+            return Vec::new();
+        }
+        failed.used = true;
+        self.mark(ix);
+        let blocks = vec![ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(CONTINUE))];
+        self.submit(Queued::new(CONTINUE.into(), Vec::new(), blocks), false)
+    }
+
+    pub fn toggle_details(&mut self, ix: usize) {
+        if let Some(Entry::Failed(failed)) = self.entries.get_mut(ix) {
+            failed.details_open = !failed.details_open;
+            self.mark(ix);
+        }
+    }
+
+    /// Claude's process stopped. A reply under way is cut off (said so once
+    /// it's back), the agent's open prompts can't be answered any more, and
+    /// the session opens again, in its mode, once Claude is back; until then
+    /// messages queue.
+    pub fn agent_stopped(&mut self) {
+        if self.failed.is_some() {
+            return;
+        }
+        if self.busy_since.is_some() && self.id.is_some() {
+            self.push_changes();
+            self.cut_off = true;
+        }
+        for entry in &mut self.entries {
+            if let Entry::Permission { responder, .. } = entry {
+                *responder = None;
+            }
+        }
+        self.mark(0);
+        self.turn_entry = None;
+        self.busy_since = None;
+        self.end_thought();
+        self.outbox.restart();
+        self.agent_waiting = true;
+        self.reloading = self.id.is_some();
+        if self.start_mode.is_none() {
+            self.start_mode = self.mode();
+        }
     }
 
     /// The end-of-turn card for the turn's edits since it began (or since its
@@ -1573,19 +1745,105 @@ mod tests {
         let mut s = Session::new(1, Place::local("/tmp/project"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
 
+        let failed = || SessionEvent::TurnFailed { kind: Some("server_error".into()), error: ERROR.into() };
         s.submit(text("plot it"), false);
         s.apply(reply(ERROR));
         s.hold();
-        s.apply(SessionEvent::ApiFailed(ERROR.into()));
+        s.apply(failed());
         assert!(matches!(s.entries.as_slice(), [Entry::User { .. }]), "offline: only the message, kept");
         assert_eq!(s.unanswered, Some(0));
 
         s.release();
         s.apply(reply("Here it is.\n\n"));
         s.apply(reply(ERROR));
-        s.apply(SessionEvent::ApiFailed(ERROR.into()));
-        assert!(matches!(&s.entries[1..], [Entry::Agent { text: said, .. }, Entry::Note(note)]
-            if said == "Here it is." && note.as_ref() == format!("⚠ Turn failed: {ERROR}")));
+        s.apply(failed());
+        assert!(matches!(&s.entries[1..], [Entry::Agent { text: said, .. }, Entry::Failed(super::Failed { kind: super::FailedKind::Partway { reason }, raw: Some(raw), .. })]
+            if said == "Here it is." && *reason == "The connection to Claude dropped partway through this reply." && raw == ERROR));
+    }
+
+    fn card(s: &Session, ix: usize) -> (&'static str, String, &'static str, bool) {
+        match &s.entries[ix] {
+            Entry::Failed(f) => (f.kind.title(), f.kind.body(), f.kind.action(), f.used),
+            _ => panic!("not a failure"),
+        }
+    }
+
+    #[test]
+    fn a_turn_claude_couldnt_answer_keeps_its_message_for_try_again() {
+        const OVERLOADED: &str = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("add bootstrap intervals"), false);
+        let effects = s.apply(SessionEvent::TurnFailed { kind: Some("server_error".into()), error: OVERLOADED.into() });
+        assert!(matches!(effects.as_slice(), [Effect::CheckRunState]), "no retry by itself");
+        assert_eq!(card(&s, 1), ("Claude couldn't answer", "Anthropic's servers are busy right now. Your message is kept.".into(), "Try again", false));
+
+        let effects = s.try_again(1);
+        assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]), "the same message goes again");
+        assert_eq!(s.entries.len(), 2, "no second bubble");
+        assert!(card(&s, 1).3, "the card goes");
+        assert!(s.try_again(1).is_empty(), "only once");
+        assert!(s.busy_since.is_some());
+    }
+
+    #[test]
+    fn a_reply_that_stops_partway_stays_and_continue_picks_it_up() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("explain"), false);
+        s.apply(SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("First the resampling cell:"))))));
+        s.apply(SessionEvent::TurnEnded(StopReason::MaxTokens));
+        assert_eq!(card(&s, 2), ("Claude stopped before finishing", "The reply reached its length limit.".into(), "Continue", false));
+        let effects = s.continue_reply(2);
+        assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]));
+        assert!(matches!(&s.entries[3], Entry::User { text, .. } if text.as_ref() == "Continue from where you stopped."));
+        assert!(card(&s, 2).3, "its button goes");
+
+        s.apply(SessionEvent::TurnEnded(StopReason::MaxTurnRequests));
+        assert_eq!(card(&s, 4).1, "Claude took too many steps in one go.");
+        // Stopped by the user: still a quiet note.
+        s.submit(text("again"), false);
+        s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(note)) if note.as_ref() == "You stopped Claude"));
+    }
+
+    #[test]
+    fn a_usage_limit_holds_the_message_until_it_resets() {
+        use crate::trouble::Reset;
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("plot it"), false);
+        let effects = s.apply(SessionEvent::TurnFailed { kind: Some("rate_limit".into()), error: "Internal error: You've hit your session limit · resets 3pm (America/Los_Angeles)".into() });
+        assert!(matches!(effects.as_slice(), [Effect::UsageLimit(Some(Reset::At { date: None, hour: 15, minute: 0 }))]));
+        assert_eq!(s.unanswered, Some(0), "Not answered yet");
+        assert!(s.submit(text("and the axes"), false).is_empty(), "new messages queue");
+        assert!(matches!(s.release().as_slice(), [Effect::Send(Turn::Prompt(_))]), "at the reset, the held message goes");
+    }
+
+    #[test]
+    fn only_a_session_whose_reply_was_cut_off_says_so_after_a_restart() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+        let mut working = Session::new(1, Place::local("/tmp/project"), None);
+        working.started(Started::new(SessionId::new("a"), None, None));
+        working.submit(text("fit it"), false);
+        working.apply(SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("First the model:"))))));
+        let mut idle = Session::new(2, Place::local("/tmp/project"), None);
+        idle.started(Started::new(SessionId::new("b"), None, None));
+
+        for s in [&mut working, &mut idle] {
+            s.agent_stopped();
+            assert!(s.agent_waiting && s.busy_since.is_none());
+            assert!(s.submit(text("meanwhile"), false).is_empty(), "messages queue while Claude is down");
+        }
+        // The reload replays the history the transcript already has.
+        working.apply(SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("replayed"))))));
+        let effects = working.started(Started::new(SessionId::new("a"), None, None));
+        assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]), "the queued message goes once it's back");
+        assert!(matches!(&working.entries[1], Entry::Agent { text, .. } if text == "First the model:"));
+        assert_eq!(card(&working, 2), ("Claude restarted. This reply was cut off.", String::new(), "Continue", false));
+        idle.started(Started::new(SessionId::new("b"), None, None));
+        assert!(!idle.entries.iter().any(|e| matches!(e, Entry::Failed(_))), "an idle session gets no note");
     }
 
     #[test]
