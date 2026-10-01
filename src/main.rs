@@ -2060,7 +2060,7 @@ impl Render for Workspace {
                 .children(confirm)
                 .into_any_element();
         }
-        let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy);
+        let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy && !self.sessions[ix].agent_waiting);
         let placeholder: SharedString = match active {
             None => "What do you want to work on?".into(),
             Some(_) if working && self.claude.up() => concat!("Queue a message, or ", crate::platform::shortcut!("⏎"), " to steer").into(),

@@ -95,7 +95,8 @@ In order. Each part is also useful to Claude, or harmless to it.
     keeps its own record of each session (its agent, place, title and last
     activity; `sessions.json` already has the place) and draws the sidebar
     from it at launch. Each agent's listing then updates the record: new
-    titles, sessions started outside Endeavor, ones deleted elsewhere. An
+    titles and times, and sessions deleted elsewhere (sessions an agent made
+    outside Endeavor aren't added). An
     agent that can't list sessions adds none. The default agent starts at
     launch, alongside Julia, and others start when one of their sessions is
     opened or started. A session needs its agent and its host's Julia only

@@ -150,8 +150,8 @@ impl Records {
     }
 
     /// Bring the record up to date with one agent's listing of `scope`: new
-    /// titles and times, sessions started outside Endeavor (only where the
-    /// listing says which folder they're in), and none of that agent's
+    /// titles and times for Endeavor's own sessions (others the agent lists,
+    /// such as the Claude Code CLI's, aren't added), and none of that agent's
     /// sessions in `scope` that the listing no longer has, except `keep`
     /// (open sessions, which an agent may not list until their first turn).
     /// Other agents' sessions are untouched. True if anything changed.
@@ -162,11 +162,7 @@ impl Records {
             r.agent != agent || keep.contains(id) || ids.contains(id.as_str()) || !r.place.as_ref().is_some_and(|p| scope.covers(p))
         });
         for Listed { id, title, updated } in listed {
-            let record = match (self.records.get_mut(&id), &scope) {
-                (Some(record), _) if record.agent == agent => record,
-                (Some(_), _) | (None, Scope::Host(_)) => continue,
-                (None, Scope::Folder(_)) => self.records.entry(id).or_insert(Record { agent, place: None, title: None, updated: None }),
-            };
+            let Some(record) = self.records.get_mut(&id).filter(|r| r.agent == agent) else { continue };
             if let (None, Scope::Folder(folder)) = (&record.place, &scope) {
                 record.place = Some(folder.clone());
             }
@@ -261,7 +257,7 @@ mod tests {
         assert!(changed);
         let f = Some(Place::local("/f"));
         assert_eq!(records.get("kept"), Some(&record(f.clone(), Some("New title"), Some(50))));
-        assert_eq!(records.get("cli"), Some(&record(f.clone(), Some("From the CLI"), Some(40))));
+        assert_eq!(records.get("cli"), None, "a session Endeavor didn't make isn't added");
         assert_eq!(records.get("bare"), Some(&record(f.clone(), None, Some(30))));
         assert_eq!(records.get("open"), Some(&record(f.clone(), None, None)));
         assert_eq!(records.get("other_folder"), Some(&record(Some(Place::local("/g")), None, None)));
