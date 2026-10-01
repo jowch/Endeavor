@@ -66,23 +66,45 @@ To wait for something, poll the dump. For example, loop until
   it's `for` (`row`, `session` for the chat header's title, `notebook` or
   `share`) and its `items`, each with its `label` and `key`.
 - `offline`. Null when online. Otherwise, how long the app has been offline.
+- `claude`. Claude Code's adapter process: `state` is `up`, `restarting`
+  (it stopped by itself and is starting again) or `down` (it stopped twice in
+  a minute); `error` is why it last stopped, with the log's last lines (null
+  while up); `details_open` is whether the "Claude isn't running" card's
+  Details are open.
+- `usage_limit`. Null unless a turn hit the account's usage limit. Then
+  `resets_in_secs`, or null when Claude Code's message gave no time.
+- `notice`. A one-off failure's notice (a failed export, rename, move, run,
+  restart, stop, new notebook or sign out), or null: its `spot` (where it
+  hangs: `notebook_name`, `notebook_buttons`, `notebook_pane` or
+  `settings`), `title`, `text` (the plain reason), `button` and `details`
+  (`open`, and the raw error) when the error says more than the reason.
 - `sign_in`. `account` is `unknown`, `signed_in` or `signed_out`. When signed
   out, `stage` says where sign-in is, and `card` says whether its card shows
   above the composer.
 - `sidebar`. The folders in order. Each row has its title, `active`, and
   `mark` (`needs_approval`, `working` or `archived`). Also the "Show N more"
-  line, the Restart Julia row, and the status line.
+  line, the Restart Julia row, the status line (`status`) and its mark
+  (`status_mark`: `offline`, `signed_out`, `spinner` while Claude restarts,
+  `red_dot` when something needs the user, or null).
 - `new_session`, on the new-session screen. The chips (where, resources, folder,
   notebook) with their labels, the mode, the notice and connection notice, and
   either `resume` (Pick up where you left off) or `examples`.
-- `session`, for the active session. The title, `renaming_title` (the name
+- `session`, for the active session. `failed` is null unless it couldn't
+  open; then the page in place of its transcript: `kind` (`in_cli` for one
+  open in the Claude Code CLI, else `other`), `title`, `text`, `buttons` and
+  `details` (`other` only). The title, `renaming_title` (the name
   box in the chat header, from the session menu's Rename), and `transcript`: the entries
   in order, as drawn. The entry kinds are `user` (with chips, the "Not
   answered yet" line, and `delivery`, the line under a message sent with ⌘⏎
   while Claude worked, and `quotes`: each quote's `source`, `excerpt`,
   whether it has a `picture`, and its `comment`), `reply` (both with `actions`: the hover row's `copy`
   label, "Copied" just after a copy, and `time`, null for replayed history),
-  `note` (such as "Claude stopped: …"), `plan`, `thought`, `tool` and `run`. A run of tool calls is one `run` entry with its
+  `note` (such as "You stopped Claude"; the note after Claude's process
+  restarted under a reply also has its `button`, "Continue", null once
+  pressed), `failed` (a turn that didn't finish: its `title`, `text`,
+  `button` "Try again" or "Continue", null once pressed, and `details`, the
+  raw error; a Try again card leaves the transcript once pressed), `plan`,
+  `thought`, `tool` and `run`. A run of tool calls is one `run` entry with its
   summary line and its rows. A `tool` row has its text ("Edited `fit`"), its
   +/− counts, how it was answered, its state (`…`, `failed` or `denied`) and
   its cell diffs. A `changes` entry is the end-of-turn card: its `cells`,
@@ -111,6 +133,16 @@ To wait for something, poll the dump. For example, loop until
     `not_connected`, with the host and the reason.
   - `stopped`: the notebook was stopped. `stopped.idle_hours` is set when it
     stopped for being idle.
+  - `crashed`: its own Julia stopped by itself: "Julia stopped unexpectedly".
+    (All of a host's Julia stopping shows as `host`, with `host_pane.kind`
+    `julia_crashed`, and the same page.)
+
+  `crash` is null unless Julia stopped by itself under the notebook: its
+  `state` (`stopped`, `rerunning` after Restart Julia until that run is
+  done, `again` when it stopped again during that run and the notebook
+  opened in safe preview), the `cell` that was running, the `page` (its
+  `title`, `text` and `buttons`, while `stopped`) and the safe-preview
+  `callout` (its `title` and `body`, while `again`).
   - `missing`: its file isn't there.
   - `no_notebook`: the turtle's "No notebook in this session yet".
 
@@ -127,7 +159,8 @@ To wait for something, poll the dump. For example, loop until
   be used and whether it's on). `reply` is Reply on a selection in the chat:
   `shows` is `pill`, `prompt` (with the `quote`, the `text` typed and whether
   the `menu` is open); null when none shows. `above` lists the lines above
-  the box (slash commands, offline, queue heading, notices). `queue` lists the
+  the box (slash commands, offline, `usage_limit`, `claude_restarting`,
+  `claude_down`, queue heading, notices). `queue` lists the
   waiting messages, each with its label (`sending now…`, `copying files…`).
   `tips` says whether the file tip and the Point tip show.
 - `settings`, while Settings is open. The `section` and `page` (a
@@ -270,6 +303,23 @@ folder.
   says "Opening". After 5 s the app loads the page again by itself. While the
   file says `keep`, loading a notebook loads a blank page instead, so the pane
   stays stuck and shows "Reload notebook". Delete the file before clicking it.
+- `ENDEAVOR_TEST_TURN_ERROR`: a file path. While the file exists, every
+  turn ends as the file says, without reaching Claude. Its first line is the
+  adapter's error kind (`server_error`, `overloaded`, `rate_limit`,
+  `transport_lost`, or `-` for none), or `max_tokens` / `max_turn_requests`
+  for a turn that stops at a limit; the next line is the error's message.
+  A limit and `transport_lost` come after a short made-up reply. Examples:
+  `server_error` with `API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`
+  gives "Claude couldn't answer"; `rate_limit` with
+  `You've hit your session limit · resets 3:05pm (America/Los_Angeles)`
+  gives the usage-limit line, counting down to 3:05 PM.
+- Claude's process stopping: end the test app's adapter, its child
+  `node …/claude-agent-acp/dist/index.js` (`pgrep -P <app pid> -f
+  claude-agent-acp`). Twice within a minute leaves it stopped. Julia
+  stopping: end the runtime's Julia (the child of `endeavor-remote --helper
+  core`) for the host-wide page. A notebook's own Julia (a child of that
+  Julia) ended with `kill -9` isn't noticed by Pluto until something it
+  waits on fails, so the per-notebook page can't be produced that way.
 - `ENDEAVOR_TEST_NO_STEERING`: a file path. While the file exists, ⌘⏎ during
   a turn takes the path for an agent that can't steer: the turn stops, and the
   message goes next, marked "Stopped Claude's work to send this".
