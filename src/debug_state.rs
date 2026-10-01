@@ -348,6 +348,7 @@ impl Workspace {
                 })),
                 Entry::Agent { text, at } => Some(json!({ "kind": "reply", "text": text, "actions": message_actions(true, *at, s.copied == Some(ix)) })),
                 Entry::Note(text) => Some(json!({ "kind": "note", "text": text.to_string() })),
+                Entry::Reopened(at) => Some(json!({ "kind": "divider", "text": format!("Reopened {}", crate::when::day_at(*at)) })),
                 Entry::Plan(entries) => Some(json!({ "kind": "plan", "progress": approval::progress(entries), "items": plan_items(entries) })),
                 Entry::Tool { .. } | Entry::Thought { .. } => Some(row(s, ix, false)),
                 Entry::Changes(cells) => Some(json!({

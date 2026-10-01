@@ -217,6 +217,19 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
         Entry::Note(text) => div().text_size(theme::chat_meta()).text_color(muted).child(text.clone()).into_any_element(),
+        Entry::Reopened(at) => {
+            let rule = || div().flex_1().h(px(1.)).bg(theme::border());
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .text_size(theme::chat_meta())
+                .text_color(theme::text_faint())
+                .child(rule())
+                .child(format!("Reopened {}", crate::when::day_at(*at)))
+                .child(rule())
+                .into_any_element()
+        }
         Entry::RunState(warnings) if warnings.is_empty() => return None,
         Entry::RunState(warnings) => div()
             .flex()

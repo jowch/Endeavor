@@ -37,6 +37,7 @@ mod network;
 mod notebook_pane;
 mod notice;
 mod offline;
+mod opening;
 mod orbit;
 mod outbox;
 #[cfg(target_os = "macos")]
@@ -867,9 +868,6 @@ impl Workspace {
         // The row keeps its handle as it turns from past to open, so keyboard focus stays on it.
         let row_focus = self.past_row_focus.get_mut().remove(&id);
         let mut session = Session::loading(key, id, place, server, title);
-        if let Some(path) = &notebook {
-            session.open_on_start(path.clone());
-        }
         session.named = named.is_some();
         session.untitled = untitled;
         // A session from before modes were saved keeps the agent's own mode.
@@ -880,9 +878,17 @@ impl Workspace {
             session.hold();
         }
         *session.focus.get_mut() = row_focus;
+        let host = session.place.host.clone();
         self.sessions.push(session);
+        // The recorded notebook opens as soon as its Julia is ready, without
+        // waiting for the history: now if it's up, else with the runtime's
+        // reopen (`reopen_notebooks`). Without one, the history's last
+        // notebook opens once it has loaded (`Effect::ReopenNotebook`).
         if let Some(path) = notebook {
-            self.bind_notebook(key, path, cx);
+            self.bind_notebook(key, path.clone(), cx);
+            if self.bridge(&host).is_some() {
+                self.open_for_session(key, path, false, cx);
+            }
         }
         self.request_agent(key, cx);
         self.activate(key, cx);
@@ -1960,13 +1966,18 @@ impl Workspace {
                 .h(px(24.))
                 .bg(linear_gradient(180., linear_color_stop(theme::bg_page().opacity(0.), 0.), linear_color_stop(theme::bg_page(), 1.)))
         });
+        let summary = self.render_opening_summary(session);
         div()
+            .relative()
             .flex_1()
             .flex()
             .flex_col()
             .min_h_0()
+            .children(summary)
             .map(|d| match &session.failed {
                 Some(failure) => d.child(div().flex_1().min_h_0().child(self.render_open_failure(session, failure, cx))),
+                // The history shows whole once it has loaded, not growing as it arrives.
+                None if session.opening() => d.child(div().flex_1().min_h_0()),
                 None => d.child(
                     div()
                         .relative()
@@ -2061,8 +2072,10 @@ impl Render for Workspace {
                 .into_any_element();
         }
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy && !self.sessions[ix].agent_waiting);
+        let opening_wait = active.and_then(|ix| self.session_wait(&self.sessions[ix])).filter(|w| !matches!(w, opening::Waiting::Claude { .. }));
         let placeholder: SharedString = match active {
             None => "What do you want to work on?".into(),
+            Some(_) if opening_wait.is_some() => opening_wait.as_ref().map(opening::Waiting::placeholder).unwrap_or_default().into(),
             Some(_) if working && self.claude.up() => concat!("Queue a message, or ", crate::platform::shortcut!("⏎"), " to steer").into(),
             Some(_) if self.offline_since.is_some() => "Write a message. It sends when you're back online.".into(),
             Some(_) => self.waiting_placeholder().unwrap_or_else(|| "Type / for commands".into()),

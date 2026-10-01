@@ -257,24 +257,6 @@ impl Workspace {
         self.connections.get(host).and_then(Connection::bridge)
     }
 
-    /// A session waiting to open until its host's Julia is up, while it's on
-    /// its way: the quiet line that says so. Offline, a stopped Julia and a
-    /// stopped Claude have their own.
-    pub fn runtime_wait(&self, session: &Session) -> Option<String> {
-        let host = &session.place.host;
-        let on_its_way = matches!(self.status(host), None | Some(Status::Connecting | Status::Starting | Status::Browsing));
-        let waits = session.agent_waiting && session.failed.is_none() && self.claude.up() && self.offline_since.is_none();
-        (waits && on_its_way && self.bridge(host).is_none()).then(|| match host {
-            HostId::ThisMac => "Starting Julia…".to_owned(),
-            HostId::Server(_) => format!("Starting Julia on {}…", self.hosts.name(host)),
-        })
-    }
-
-    pub fn render_runtime_wait(&self, session: &Session, cx: &App) -> Option<AnyElement> {
-        let text = self.runtime_wait(session)?;
-        Some(crate::failure::wait_line(crate::failure::Lead::Spinner("runtime-wait".into()), text, None, cx).into_any_element())
-    }
-
     /// A host whose Julia stopped by itself and hasn't started since, by name
     /// ("This Mac", a server's), for the sidebar's status line.
     pub fn crashed_host(&self) -> Option<String> {

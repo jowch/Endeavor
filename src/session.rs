@@ -81,6 +81,8 @@ pub enum Entry {
     /// A turn that didn't finish: a card where the reply would be, or the
     /// quiet note after Claude restarted under it.
     Failed(Failed),
+    /// After a reopened session's history: the faint "Reopened today at 9:14" line.
+    Reopened(SystemTime),
 }
 
 /// A turn that didn't finish, and the one thing to do about it.
@@ -307,6 +309,8 @@ pub struct Session {
     pub(crate) open_runs: HashSet<ToolCallId>,
     /// Reopening a past session: its history is replaying.
     replaying: bool,
+    /// When reopening began, for the wait line's time.
+    pub opening_since: Option<Instant>,
     /// Loading the session again after Claude's process restarted: its history
     /// replays, and the transcript already has it.
     reloading: bool,
@@ -485,6 +489,7 @@ impl Session {
             plan_open: false,
             open_runs: HashSet::new(),
             replaying: false,
+            opening_since: None,
             reloading: false,
             cut_off: false,
             replayed_path: None,
@@ -584,6 +589,7 @@ impl Session {
         self.outbox.busy = false;
         self.busy_since = None;
         self.replaying = false;
+        self.opening_since = None;
         self.reloading = false;
     }
 
@@ -617,6 +623,7 @@ impl Session {
         self.mark(0);
         self.outbox = Outbox::waiting();
         self.replaying = true;
+        self.opening_since = Some(Instant::now());
     }
 
     pub fn toggle_failure_details(&mut self) {
@@ -632,6 +639,7 @@ impl Session {
         session.id = Some(id);
         session.title = title;
         session.replaying = true;
+        session.opening_since = Some(Instant::now());
         session
     }
 
@@ -840,6 +848,12 @@ impl Session {
         self.list_len.set(self.entries.len());
     }
 
+    /// A past session whose history hasn't loaded yet: the chat shows its
+    /// summary, and messages wait for it.
+    pub fn opening(&self) -> bool {
+        self.replaying && self.failed.is_none()
+    }
+
     /// Open this notebook file in the notebook pane once the agent session is up
     /// (Julia is running by then).
     pub fn open_on_start(&mut self, path: String) {
@@ -853,8 +867,15 @@ impl Session {
         self.config = started.config;
         if self.replaying {
             self.push_changes();
+            // The history shows whole, at its end, with a line between it and what comes now.
+            if !self.entries.is_empty() {
+                self.push(Entry::Reopened(SystemTime::now()));
+            }
+            self.list.set_follow_mode(FollowMode::Tail);
+            self.list.scroll_to_end();
         }
         self.replaying = false;
+        self.opening_since = None;
         self.reloading = false;
         if std::mem::take(&mut self.cut_off) {
             self.push(Entry::Failed(Failed { kind: FailedKind::CutOff, raw: None, details_open: false, used: false }));
@@ -880,7 +901,8 @@ impl Session {
         }
         self.title_from(&message.text);
         let mut effects = Vec::new();
-        let dispatch = self.outbox.submit(message, now && self.id.is_some());
+        // A reopened session has its id while its history loads, but nothing goes until it's open.
+        let dispatch = self.outbox.submit(message, now && self.id.is_some() && !self.replaying);
         self.dispatch(dispatch, &mut effects);
         effects
     }
@@ -1144,7 +1166,15 @@ impl Session {
         self.end_thought();
         self.outbox.restart();
         self.agent_waiting = true;
-        self.reloading = self.id.is_some();
+        // A load cut short starts over; a loaded transcript stays and its replay is skipped.
+        if self.replaying {
+            self.entries.clear();
+            self.replies.get_mut().clear();
+            self.open_runs.clear();
+            self.mark(0);
+        } else {
+            self.reloading = self.id.is_some();
+        }
         if self.start_mode.is_none() {
             self.start_mode = self.mode();
         }
@@ -1293,7 +1323,11 @@ impl Session {
                 if let Some((id, path)) = self.on_tool_update(update) {
                     if self.replaying {
                         // History, not a live open: that id belongs to an earlier Julia.
-                        self.replayed_path = path.or(self.replayed_path.take());
+                        // The notebook Endeavor recorded wins over the history's: the
+                        // user may have located the file since Claude last opened it.
+                        if self.notebook_path.is_none() {
+                            self.replayed_path = path.or(self.replayed_path.take());
+                        }
                     } else {
                         effects.push(Effect::ShowNotebook { id, path });
                     }
@@ -1945,7 +1979,7 @@ mod tests {
         assert_eq!(attachments.as_slice(), [Attachment::Text { name: "notes.txt".into(), text: "t,y".into() }]);
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.apply(chunk("live echo"));
-        assert_eq!(s.entries.len(), 1, "after loading, user chunks are ignored");
+        assert_eq!(s.entries.len(), 2, "after loading, user chunks are ignored (the second entry is the Reopened line)");
     }
 
     #[test]
@@ -1955,6 +1989,7 @@ mod tests {
         let times = |s: &Session| -> Vec<bool> {
             s.entries
                 .iter()
+                .filter(|e| !matches!(e, Entry::Reopened(_)))
                 .map(|e| match e {
                     Entry::User { sent, .. } => sent.is_some(),
                     Entry::Agent { at, .. } => at.is_some(),
@@ -2105,6 +2140,71 @@ more" }"#);
             let effects = s.started(Started::new(SessionId::new("abc"), None, None));
             assert!(matches!(effects.first(), Some(Effect::ReopenNotebook(p)) if p == "/tmp/a.jl"), "{title}");
         }
+    }
+
+    #[test]
+    fn a_located_notebook_wins_over_the_one_the_history_last_opened() {
+        use agent_client_protocol::schema::v1::{SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
+        // The user located the file at its new path, which Endeavor recorded; Claude's history still opens the old one.
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
+        s.notebook_path = Some("/tmp/archive/a.jl".into());
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__notebook__open_notebook"))));
+        let output = serde_json::json!([{ "type": "text", "text": "{\"notebook_id\":\"old-id\",\"path\":\"/tmp/a.jl\"}" }]);
+        let done = ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output));
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(done)));
+        let effects = s.started(Started::new(SessionId::new("abc"), None, None));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::ReopenNotebook(_))), "the recorded notebook opened already; the old path doesn't come back");
+        assert_eq!(s.notebook_path.as_deref(), Some("/tmp/archive/a.jl"));
+    }
+
+    #[test]
+    fn a_message_written_while_the_history_loads_waits_and_goes_once_open() {
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
+        assert!(s.opening());
+        assert!(s.submit(text("now plot it"), true).is_empty(), "nothing goes while the history loads, not even to steer");
+        assert!(s.entries.is_empty());
+        let effects = s.started(Started::new(SessionId::new("abc"), None, None));
+        assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]), "it goes once the session is open");
+        assert!(!s.opening());
+    }
+
+    #[test]
+    fn a_reopened_history_shows_whole_once_loaded_then_a_reopened_line() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
+        let reply = |t: &str| SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(t)))));
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
+        assert!(s.opening_since.is_some());
+        s.apply(reply("The interval is [0.081, 0.097] per minute."));
+        assert!(s.opening(), "still the summary while the history arrives");
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        assert!(!s.opening());
+        assert!(s.opening_since.is_none());
+        assert!(matches!(s.entries.as_slice(), [Entry::Agent { .. }, Entry::Reopened(_)]));
+        assert!(s.list.is_following_tail(), "it shows scrolled to the end");
+
+        let mut empty = Session::loading(2, SessionId::new("def"), Place::local("/tmp"), None, "Old".into());
+        empty.started(Started::new(SessionId::new("def"), None, None));
+        assert!(empty.entries.is_empty(), "no line under nothing");
+
+        let mut new = Session::new(3, Place::local("/tmp"), None);
+        assert!(!new.opening(), "a new session has no history to wait for");
+        new.started(Started::new(SessionId::new("ghi"), None, None));
+        assert!(new.entries.is_empty());
+    }
+
+    #[test]
+    fn claude_restarting_mid_load_starts_the_history_over_and_keeps_waiting_messages() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
+        let reply = |t: &str| SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(t)))));
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
+        s.apply(reply("first half"));
+        s.submit(text("then this"), false);
+        s.agent_stopped();
+        assert!(s.entries.is_empty(), "the part loaded so far goes; the next load brings it all");
+        s.apply(reply("whole history"));
+        let effects = s.started(Started::new(SessionId::new("abc"), None, None));
+        assert!(matches!(&s.entries[0], Entry::Agent { text, .. } if text == "whole history"));
+        assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]), "the waiting message goes");
     }
 
     #[test]

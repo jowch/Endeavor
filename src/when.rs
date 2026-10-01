@@ -79,6 +79,33 @@ fn clock_at(at: u64, now: u64, offset: i64) -> String {
     format!("{} {h}:{m:02}", WEEKDAYS[day.rem_euclid(7) as usize])
 }
 
+/// A moment as a day and clock time, in local time: "today at 9:14",
+/// "yesterday at 16:40", "Monday at 11:02" within the week, else "Aug 12 at 9:14".
+pub fn day_at(then: SystemTime) -> String {
+    day_at_with(then, SystemTime::now(), local_offset())
+}
+
+fn day_at_with(then: SystemTime, now: SystemTime, offset: i64) -> String {
+    let local = |t: SystemTime| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 + offset;
+    let (then_local, now_local) = (local(then), local(now));
+    let (h, m) = (then_local.rem_euclid(86400) / 3600, then_local.rem_euclid(3600) / 60);
+    let day = then_local.div_euclid(86400);
+    let day_name = match now_local.div_euclid(86400) - day {
+        0 => "today".to_owned(),
+        1 => "yesterday".to_owned(),
+        2..=6 => {
+            const WEEKDAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
+            WEEKDAYS[day.rem_euclid(7) as usize].to_owned()
+        }
+        _ => {
+            const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            let (month, d) = civil_from_days(day);
+            format!("{} {d}", MONTHS[(month - 1) as usize])
+        }
+    };
+    format!("{day_name} at {h}:{m:02}")
+}
+
 fn ago_at(then: SystemTime, now: SystemTime, offset: i64) -> String {
     let secs = now.duration_since(then).unwrap_or_default().as_secs() as i64;
     let then_secs = then.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 + offset;
@@ -122,6 +149,17 @@ mod tests {
         assert_eq!(clock_at(secs("2026-09-26T18:40:00Z"), now, 0), "18:40");
         assert_eq!(clock_at(secs("2026-09-27T09:05:00Z"), now, 0), "Sun 9:05");
         assert_eq!(clock_at(secs("2026-09-26T22:30:00Z"), now, 7200), "Sun 0:30");
+    }
+
+    #[test]
+    fn day_and_time_say_today_yesterday_the_weekday_or_the_date() {
+        let now = at("2026-09-26T15:00:00Z");
+        let day = |then| day_at_with(at(then), now, 0);
+        assert_eq!(day("2026-09-26T09:14:00Z"), "today at 9:14");
+        assert_eq!(day("2026-09-25T16:40:00Z"), "yesterday at 16:40");
+        assert_eq!(day("2026-09-21T11:02:00Z"), "Monday at 11:02");
+        assert_eq!(day("2026-09-12T08:05:00Z"), "Sep 12 at 8:05");
+        assert_eq!(day_at_with(at("2026-09-25T23:30:00Z"), now, 7200), "today at 1:30");
     }
 
     #[test]
