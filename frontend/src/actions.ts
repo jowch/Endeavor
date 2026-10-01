@@ -47,8 +47,8 @@ const shortcuts: Array<[string, string] | string> = [
   "Select cells by dragging a box from the space between them, then:",
   [`${cmd} C / ${cmd} X / ${cmd} V`, "Copy / cut / paste the selected cells"],
   "Endeavor",
-  [`${cmd} K`, "Ask Claude about the cell"],
-  [`${cmd} ⇧ K`, "Point: pick cells or draw a box to ask about"],
+  [`${cmd} E`, "Ask Claude about the selection, or the cell"],
+  [`${cmd} ⇧ E`, "Point: pick cells or draw a box to ask about"],
 ];
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);

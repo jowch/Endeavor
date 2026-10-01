@@ -7,7 +7,7 @@ use std::time::UNIX_EPOCH;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{InputEvent, Textarea, TextareaState};
 
 use crate::attach::{Attachment, Quote, Quoted};
 use crate::new_session::{Glyph, glyph};
@@ -25,11 +25,25 @@ pub struct Selected {
     at: Point<Pixels>,
 }
 
+impl Selected {
+    fn draft_key(&self) -> (u64, usize, String) {
+        (self.key, self.entry, self.text.clone())
+    }
+}
+
 /// The chat's Reply: the pill offered for a selection, or the prompt it opened.
 pub enum Reply {
     Pill(Selected),
-    Prompt { selected: Selected, input: Entity<InputState>, menu: bool },
+    Prompt { selected: Selected, input: Entity<TextareaState>, menu: bool },
 }
+
+/// Words typed in Reply's prompt and left there, by the selection they reply
+/// to (session, reply, text): reopening it on that selection brings them back.
+pub type Drafts = std::collections::HashMap<(u64, usize, String), String>;
+
+/// The prompt's keys as this platform writes them.
+const SEND_KEY: &str = if cfg!(target_os = "macos") { "↩" } else { "Enter" };
+const ADD_KEY: &str = if cfg!(target_os = "macos") { "⌘↩" } else { "Ctrl+Enter" };
 
 /// How far under the pointer the pill and the prompt open: past the rest of
 /// the selection's last line.
@@ -79,20 +93,35 @@ impl Workspace {
         }
     }
 
-    /// ⌘J, or a click on the pill: open the prompt for the offered selection.
+    /// ⌘E (or ⌘J), or a click on the pill: open the prompt for the offered
+    /// selection, with its draft selected if it has one. ⌘E again closes it.
     pub fn reply_to_selection(&mut self, _: &ReplyToSelection, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.reply, Some(Reply::Prompt { .. })) {
+            self.close_reply(cx);
+            return;
+        }
         if !matches!(self.reply, Some(Reply::Pill(_))) {
             self.check_reply_selection(window.mouse_position(), cx);
         }
         let Some(Reply::Pill(selected)) = self.reply.take() else { return };
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Reply to Claude"));
+        // ↩ sends, ⌘↩ adds to the message, ⇧↩ is a new line; six lines, then it scrolls.
+        let input = cx.new(|cx| TextareaState::new(window, cx).placeholder("Reply to Claude").submit_on_enter(true).auto_grow(1, 6));
         cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { secondary, .. } = event {
-                this.finish_reply(*secondary, window, cx);
+            match event {
+                InputEvent::PressEnter { secondary, shift: false } => this.finish_reply(*secondary, window, cx),
+                InputEvent::Change => cx.notify(),
+                _ => {}
             }
         })
         .detach();
         input.update(cx, |s, cx| s.focus(window, cx));
+        if let Some(draft) = self.reply_drafts.get(&selected.draft_key()).cloned() {
+            let len = draft.len();
+            input.update(cx, |s, cx| {
+                s.set_value(draft, window, cx);
+                s.set_selected_range(0..len, cx);
+            });
+        }
         self.reply = Some(Reply::Prompt { selected, input, menu: false });
         cx.notify();
     }
@@ -102,6 +131,7 @@ impl Workspace {
     pub fn finish_reply(&mut self, add: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Reply::Prompt { selected, input, .. }) = self.reply.take() else { return };
         let comment = input.read(cx).value().trim().to_string();
+        self.reply_drafts.remove(&selected.draft_key());
         let at = self.sessions.iter().find(|s| s.key == selected.key).and_then(|s| match s.entries.get(selected.entry) {
             Some(Entry::Agent { at: Some(at), .. }) => Some(crate::when::clock(at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())),
             _ => None,
@@ -113,8 +143,17 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Esc, or a click elsewhere: close the prompt (or take the pill away).
+    /// Esc, or a click elsewhere: close the prompt, keeping its words as the
+    /// selection's draft (or take the pill away).
     pub fn close_reply(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(Reply::Prompt { selected, input, .. }) = &self.reply {
+            let words = input.read(cx).value().to_string();
+            if words.trim().is_empty() {
+                self.reply_drafts.remove(&selected.draft_key());
+            } else {
+                self.reply_drafts.insert(selected.draft_key(), words);
+            }
+        }
         let open = self.reply.take().is_some();
         if open {
             cx.notify();
@@ -177,7 +216,7 @@ impl Workspace {
                             .text_color(theme::text_primary())
                             .child(glyph(Glyph::Bubble, theme::icon_grey()))
                             .child("Reply")
-                            .child(div().text_size(px(11.)).text_color(theme::text_faint()).child(crate::platform::shortcut!("J"))),
+                            .child(div().text_size(px(11.)).text_color(theme::text_faint()).child(crate::platform::shortcut!("E"))),
                     )
                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                         if matches!(this.reply, Some(Reply::Pill(_))) {
@@ -189,42 +228,71 @@ impl Workspace {
             ),
             Reply::Prompt { input, menu, .. } => {
                 let focused = input.read(cx).focus_handle(cx).is_focused(window);
+                let empty = input.read(cx).value().trim().is_empty();
+                let working = self.active_session().is_some_and(|s| s.outbox.busy && !s.agent_waiting);
                 // Inside the prompt's frame, so a click on it isn't a click outside.
                 let menu = menu.then(|| {
                     div()
                         .self_end()
-                        .w(px(210.))
+                        .w(px(if cfg!(target_os = "macos") { 216. } else { 236. }))
                         .p(px(4.))
                         .flex()
                         .flex_col()
                         .map(theme::popover)
                         .rounded(px(10.))
-                        .child(menu_row("reply-send", "Send reply", "↩", Glyph::ArrowUp).on_click(cx.listener(|this, _, window, cx| this.finish_reply(false, window, cx))))
                         .child(
-                            menu_row("reply-add", "Add to message", crate::platform::shortcut!("↩"), Glyph::Plus)
-                                .on_click(cx.listener(|this, _, window, cx| this.finish_reply(true, window, cx))),
+                            menu_row("reply-send", if working { "Send after this turn" } else { "Send now" }, SEND_KEY, Glyph::ArrowUp)
+                                .on_click(cx.listener(|this, _, window, cx| this.finish_reply(false, window, cx))),
                         )
+                        .child(menu_row("reply-add", "Add to message", ADD_KEY, Glyph::Lines).on_click(cx.listener(|this, _, window, cx| this.finish_reply(true, window, cx))))
                 });
-                let options = div()
-                    .id("reply-options")
+                let send = div()
+                    .id("reply-send-button")
                     .role(Role::Button)
-                    .aria_label("Send options")
+                    .aria_label("Send")
                     .flex_shrink_0()
                     .size(px(24.))
                     .flex()
                     .items_center()
                     .justify_center()
+                    .rounded_full()
+                    .cursor_pointer()
+                    .bg(if empty { theme::bg_raised() } else { theme::accent() })
+                    .child(glyph(Glyph::ArrowUp, if empty { theme::text_faint() } else { gpui::white().into() }))
+                    .on_click(cx.listener(|this, _, window, cx| this.finish_reply(false, window, cx)));
+                let options = div()
+                    .id("reply-options")
+                    .role(Role::Button)
+                    .aria_label("Send options")
+                    .flex_shrink_0()
+                    .w(px(18.))
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .rounded(px(5.))
                     .cursor_pointer()
-                    .bg(theme::bg_raised())
-                    .hover(|s| s.bg(theme::menu_hover()))
-                    .child(glyph(Glyph::ArrowUp, theme::text_primary()))
+                    .when(menu.is_some(), |d| d.bg(theme::control_edge()))
+                    .hover(|s| s.bg(theme::control_edge()))
+                    .child(glyph(Glyph::Chevron, theme::text_muted()))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(Reply::Prompt { menu, .. }) = &mut this.reply {
                             *menu = !*menu;
                             cx.notify();
                         }
                     }));
+                let head = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .pl(px(4.))
+                    .pr(px(2.))
+                    .text_size(theme::chat_meta_small())
+                    .line_height(px(17.))
+                    .text_color(theme::text_faint())
+                    .whitespace_nowrap()
+                    .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.)).overflow_hidden().child(glyph(Glyph::Lines, theme::text_faint())).child("Claude's reply"))
+                    .child(div().flex_shrink_0().text_size(px(11.)).child(format!("{SEND_KEY} {} · {ADD_KEY} add to message", if working { "queue" } else { "send" })));
                 place(
                     prompt_width,
                     frame()
@@ -232,17 +300,21 @@ impl Workspace {
                         .role(Role::Dialog)
                         .aria_label("Reply")
                         .w(prompt_width)
-                        .p(px(8.))
+                        .pt(px(7.))
+                        .px(px(8.))
+                        .pb(px(8.))
                         .rounded(px(10.))
                         .flex()
                         .flex_col()
                         .gap(px(6.))
+                        .child(head)
                         .child(
                             div()
+                                .mx(px(4.))
                                 .border_l_2()
-                                .border_color(theme::composer_edge())
+                                .border_color(theme::control_edge())
                                 .pl(px(8.))
-                                .text_size(px(12.5))
+                                .text_size(px(11.5))
                                 .line_height(px(17.))
                                 .text_color(theme::text_faint())
                                 .whitespace_nowrap()
@@ -254,18 +326,26 @@ impl Workspace {
                             div()
                                 .min_h(px(34.))
                                 .flex()
-                                .items_center()
-                                .gap(px(6.))
+                                .items_end()
+                                .gap(px(4.))
                                 .pl(px(9.))
-                                .pr(px(5.))
+                                .pr(px(4.))
                                 .py(px(4.))
                                 .rounded(px(6.))
                                 .border_1()
-                                .border_color(if focused { theme::accent_text() } else { theme::control_edge() })
+                                .border_color(if focused { theme::focus_ring() } else { theme::control_edge() })
                                 .bg(theme::bg_page())
-                                .child(div().flex_1().min_w_0().child(Input::new(input).appearance(false).aria_label("Reply to Claude").text_size(theme::chat_body())))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .py(px(1.5))
+                                        .child(Textarea::new(input).appearance(false).aria_label("Reply to Claude").text_size(theme::chat_body()).line_height(px(21.))),
+                                )
+                                .child(send)
                                 .child(options),
                         )
+                        .when(working, |d| d.child(div().px(px(4.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child("Claude is working. This goes after its turn.")))
                         .children(menu)
                         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                             this.close_reply(cx);

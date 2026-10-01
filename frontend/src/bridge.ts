@@ -17,8 +17,9 @@ export type ToApp =
   // Fix with Claude / Explain on a cell's error.
   | { type: "ask"; kind: "fix" | "explain"; notebook: string | null; cell: string; code: string; error: string }
   // ⌘E on a cell / the agent button between cells: about this cell, fill this
-  // empty cell, or add a new cell after it. `now` (⌘⏎) joins a running turn.
-  | { type: "prompt"; notebook: string | null; cell: string; code: string; where: "about" | "fill" | "before" | "after"; text: string; now: boolean }
+  // empty cell, or add a new cell before or after it. Sent now (queued while
+  // Claude works), or (`add`) added to the composer's message.
+  | { type: "prompt"; notebook: string | null; cell: string; code: string; where: "about" | "fill" | "before" | "after"; text: string; add: boolean }
   // A cell's code now, answering the app's `code` (null: no such cell here).
   | { type: "code"; cell: string; code: string | null }
   // The shown notebook's state for the app's header, whenever it changes.
@@ -56,6 +57,8 @@ export type ToApp =
       callout: boolean;
       // Reply on a selection: its pill or its prompt, if either shows.
       reply: "pill" | "prompt" | null;
+      // The open prompt (⌘E, ✦ Claude, Reply): what it's about, its top line, and its words.
+      prompt: { kind: string; about: string; text: string } | null;
       alerts: string[] | null;
     };
 
@@ -101,6 +104,8 @@ export type ToPage =
       ask_cells?: string[];
       rerun_cells?: string[];
       needed_ids?: string[];
+      // Claude is working: the prompts' ↩ queues.
+      working?: boolean;
     }
   // Share and ⋮ items that act in the page, with Pluto's own functions.
   | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" }

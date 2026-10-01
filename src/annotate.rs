@@ -45,8 +45,8 @@ const MAX_SIDE: f64 = 100_000.;
 pub struct Ask {
     pub text: String,
     pub attachment: Attachment,
-    /// Cmd+Enter: join the running turn instead of waiting in the queue.
-    pub now: bool,
+    /// Add to the composer's message (the prompt's ⌘↩) instead of sending it.
+    pub add: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -129,7 +129,6 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
         return None;
     }
     let uuid = |key: &str| v.get(key)?.as_str().filter(|s| is_uuid(s)).map(str::to_owned);
-    let now = v.get("now").and_then(|n| n.as_bool()).unwrap_or(false);
     match v.get("type")?.as_str()? {
         "ready" => Some(Message::Ready),
         // Fix with Claude / Explain on a cell's error.
@@ -142,12 +141,14 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             };
             let cell = Cell { id, code: capped(v.get("code"), MAX_CODE) };
             let attachment = Attachment::Error { notebook, cell, text: capped(v.get("error"), MAX_COMMENT) };
-            Some(Message::Ask(Ask { text: text.into(), attachment, now: false }))
+            Some(Message::Ask(Ask { text: text.into(), attachment, add: false }))
         }
-        // ⌘E on a cell, or the agent button between cells.
+        // ⌘E on a cell, or the agent button between cells. Added to the
+        // message, a question about a cell is a quote of the whole cell.
         "prompt" => {
             let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
             let text = capped(v.get("text"), MAX_COMMENT);
+            let add = v.get("add").and_then(|a| a.as_bool()).unwrap_or(false);
             let ask = match v.get("where")?.as_str()? {
                 "about" => CellAsk::About,
                 "fill" => CellAsk::Fill,
@@ -156,7 +157,12 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
                 _ => return None,
             };
             let cell = Cell { id, code: capped(v.get("code"), MAX_CODE) };
-            Some(Message::Ask(Ask { text, attachment: Attachment::Cells { notebook, cells: vec![cell], ask }, now }))
+            if add && ask == CellAsk::About {
+                let name = defined_name(&cell.code).unwrap_or_else(|| "cell".into());
+                let from = Quoted::Cell { notebook, cell: cell.id, name, part: Part::Whole(cell.code) };
+                return Some(Message::Quote(Picks { quotes: vec![(from, None)], comment: text, add }));
+            }
+            Some(Message::Ask(Ask { text, attachment: Attachment::Cells { notebook, cells: vec![cell], ask }, add }))
         }
         "mode" => Some(Message::Mode(v.get("on")?.as_bool()?)),
         "quote" => {
@@ -304,20 +310,30 @@ mod tests {
             Some(Message::Ask(Ask {
                 text: "Fix the error in this cell.".into(),
                 attachment: Attachment::Error { notebook: NB.into(), cell: cell("x = lsq(1)"), text: "UndefVarError: lsq".into() },
-                now: false,
+                add: false,
             }))
         );
         assert!(matches!(ask("explain"), Some(Message::Ask(a)) if a.text.starts_with("Explain")));
         assert_eq!(ask("delete everything"), None);
         assert_eq!(parse_with(r#"{"type":"send"}"#, ""), None);
-        let prompt = |place: &str| {
-            parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","code":"","where":"{place}","text":"plot it","now":true}}"#), "")
+        let prompt = |place: &str, add: bool| {
+            parse_with(&format!(r#"{{"type":"prompt","notebook":"{NB}","cell":"{C1}","code":"y = 2","where":"{place}","text":"plot it","add":{add}}}"#), "")
         };
         assert_eq!(
-            prompt("after"),
-            Some(Message::Ask(Ask { text: "plot it".into(), attachment: Attachment::Cells { notebook: NB.into(), cells: vec![cell("")], ask: CellAsk::After }, now: true }))
+            prompt("after", false),
+            Some(Message::Ask(Ask { text: "plot it".into(), attachment: Attachment::Cells { notebook: NB.into(), cells: vec![cell("y = 2")], ask: CellAsk::After }, add: false }))
         );
-        assert_eq!(prompt("anywhere"), None);
+        assert!(matches!(prompt("fill", true), Some(Message::Ask(Ask { add: true, .. }))));
+        // ⌘↩ on a question about a cell: the cell and the words become one quote card.
+        assert_eq!(
+            prompt("about", true),
+            Some(Message::Quote(Picks {
+                quotes: vec![(Quoted::Cell { notebook: NB.into(), cell: C1.into(), name: "y".into(), part: Part::Whole("y = 2".into()) }, None)],
+                comment: "plot it".into(),
+                add: true,
+            }))
+        );
+        assert_eq!(prompt("anywhere", false), None);
         let picks = format!(
             r#"{{"type":"quote","notebook":"{NB}","comment":"why so slow?","add":true,"picks":[
                 {{"part":"lines","cell":"{C1}","code":"s = sum(xs)\nt = 2","lines":[1,1],"text":"s = sum(xs)"}},

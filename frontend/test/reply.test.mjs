@@ -33,7 +33,7 @@ async function page(platform = "MacIntel") {
     return new Promise((done) => setTimeout(done, 10));
   };
   const enter = (meta) =>
-    window.document.querySelector("#endeavor-reply textarea").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", metaKey: meta, bubbles: true }));
+    window.document.querySelector("#endeavor-ask textarea").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", metaKey: meta, bubbles: true }));
   return { window, document: window.document, sent, select, enter };
 }
 
@@ -42,12 +42,13 @@ test("a selection in code offers Reply, which sends the lines and the reply", as
   const lines = document.querySelectorAll(".cm-line");
   await select(lines[1].firstChild, 2, lines[2].firstChild, 11);
   const pill = document.querySelector("#endeavor-reply-pill");
-  assert.equal(pill?.textContent, "Reply ⌘J");
+  assert.equal(pill?.textContent, "Reply ⌘E");
   pill.querySelector("button").click();
   assert.ok(!document.querySelector("#endeavor-reply-pill"), "the pill gives way to the prompt");
-  assert.equal(document.querySelector("#endeavor-reply .source").textContent, "rates · lines 2–3");
-  assert.equal(document.querySelector("#endeavor-reply .quote").textContent, "rows = rand(1:n, n) fit(rows)");
-  document.querySelector("#endeavor-reply textarea").value = "Should this sample with replacement?";
+  assert.equal(document.querySelector("#endeavor-ask .what").textContent, "rates·lines 2–3");
+  assert.equal(document.querySelector("#endeavor-ask .quote").textContent, "rows = rand(1:n, n) fit(rows)");
+  assert.equal(document.querySelector("#endeavor-ask textarea").placeholder, "Ask Claude about these lines");
+  document.querySelector("#endeavor-ask textarea").value = "Should this sample with replacement?";
   enter(false);
   assert.deepEqual(sent.at(-1), {
     type: "quote",
@@ -56,16 +57,17 @@ test("a selection in code offers Reply, which sends the lines and the reply", as
     comment: "Should this sample with replacement?",
     add: false,
   });
-  assert.ok(!document.querySelector("#endeavor-reply"), "sending closes the prompt");
+  assert.ok(!document.querySelector("#endeavor-ask"), "sending closes the prompt");
 });
 
-test("⌘J on output text opens the prompt; ⌘↩ adds the quote to the message", async () => {
+for (const key of ["e", "j"]) {
+test(`⌘${key.toUpperCase()} on output text opens the prompt; ⌘↩ adds the quote to the message`, async () => {
   const { window, document, sent, select, enter } = await page();
   const text = document.querySelector("pluto-output p").firstChild;
   await select(text, 4, text, 14);
-  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "j", metaKey: true }));
-  assert.equal(document.querySelector("#endeavor-reply .source").textContent, "rates · output");
-  document.querySelector("#endeavor-reply textarea").value = "why 95?";
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key, metaKey: true }));
+  assert.equal(document.querySelector("#endeavor-ask .what").textContent, "rates·output");
+  document.querySelector("#endeavor-ask textarea").value = "why 95?";
   enter(true);
   assert.deepEqual(sent.at(-1), {
     type: "quote",
@@ -74,18 +76,22 @@ test("⌘J on output text opens the prompt; ⌘↩ adds the quote to the message
     comment: "why 95?",
     add: true,
   });
-  assert.equal(document.querySelector("#endeavor-reply"), null, "the prompt closes; the card above the composer shows it was added");
+  assert.equal(document.querySelector("#endeavor-ask"), null, "the prompt closes; the card above the composer shows it was added");
   assert.equal(window.getSelection().rangeCount, 0, "the selection clears");
 });
+}
 
-test("off macOS, Ctrl+J opens the prompt and its hints say Ctrl", async () => {
+test("off macOS, Ctrl+E opens the prompt and its keys are spelled out", async () => {
   const { window, document, select } = await page("Linux x86_64");
   const text = document.querySelector("pluto-output p").firstChild;
   await select(text, 4, text, 14);
-  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "j", metaKey: true }));
-  assert.equal(document.querySelector("#endeavor-reply"), null, "⌘ does nothing off macOS");
-  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "j", ctrlKey: true }));
-  assert.equal(document.querySelector("#endeavor-reply [data-add=true] .key").textContent, "Ctrl+↩");
+  assert.equal(document.querySelector("#endeavor-reply-pill").textContent, "Reply Ctrl+E");
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "e", metaKey: true }));
+  assert.equal(document.querySelector("#endeavor-ask"), null, "⌘ does nothing off macOS");
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "e", ctrlKey: true }));
+  assert.equal(document.querySelector("#endeavor-ask .keys .idle").parentElement.textContent, "Enter sendEnter queue · Ctrl+Enter add to message");
+  assert.equal(document.querySelector("#endeavor-ask [data-add=true] .key").textContent, "Ctrl+Enter");
+  assert.equal(document.querySelector("#endeavor-ask [data-add=false] .key").textContent, "Enter");
 });
 
 test("the prompt's menu sends or adds; Esc closes it", async () => {
@@ -93,17 +99,17 @@ test("the prompt's menu sends or adds; Esc closes it", async () => {
   const text = document.querySelector("pluto-output p").firstChild;
   await select(text, 4, text, 14);
   document.querySelector("#endeavor-reply-pill button").click();
-  const menu = document.querySelector("#endeavor-reply [role=menu]");
+  const menu = document.querySelector("#endeavor-ask [role=menu]");
   assert.ok(menu.hidden);
-  document.querySelector("#endeavor-reply .options").click();
-  assert.deepEqual([...menu.querySelectorAll("[role=menuitem]")].map((r) => r.textContent), ["Send reply↩", "Add to message⌘↩"]);
+  document.querySelector("#endeavor-ask .options").click();
+  assert.deepEqual([...menu.querySelectorAll("[role=menuitem]")].map((r) => r.textContent), ["Send nowSend after this turn↩", "Add to message⌘↩"]);
   menu.querySelector("[data-add=true]").click();
   assert.equal(sent.at(-1).add, true);
 
   await select(text, 4, text, 14);
   document.querySelector("#endeavor-reply-pill button").click();
-  document.querySelector("#endeavor-reply textarea").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  assert.ok(!document.querySelector("#endeavor-reply"));
+  document.querySelector("#endeavor-ask textarea").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.ok(!document.querySelector("#endeavor-ask"));
   assert.equal(window.getSelection().toString(), "middle 95%", "Esc keeps the selection");
 });
 

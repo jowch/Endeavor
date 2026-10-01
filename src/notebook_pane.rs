@@ -734,7 +734,9 @@ impl Workspace {
         // those it needs that never ran (they run first), for their lines in the page.
         let card = crate::approval::approval_view(session);
         let (ask_cells, rerun_cells, needed_ids) = card.map(|c| (c.cells, c.rerun, c.needed)).unwrap_or_default();
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids });
+        // Claude is working: the page's prompts queue what they send.
+        let working = session.outbox.busy && !session.agent_waiting;
+        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;

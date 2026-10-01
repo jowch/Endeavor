@@ -365,6 +365,8 @@ pub struct Workspace {
     chip_popover: Option<composer::ChipPopover>,
     /// Reply on text selected in one of Claude's replies.
     reply: Option<quotes::Reply>,
+    /// Words left in Reply's prompt by Esc or a click elsewhere, per selection.
+    reply_drafts: quotes::Drafts,
     /// The agent's config options (model, effort) as the last session offered
     /// them (persisted), so the new-session screen can offer them too.
     agent_options: Vec<agent_client_protocol::schema::v1::SessionConfigOption>,
@@ -532,9 +534,9 @@ impl Workspace {
         })
         .detach();
 
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             while let Some(body) = page_rx.next().await {
-                if this.update(cx, |this, cx| this.on_page_message(&body, cx)).is_err() {
+                if this.update_in(cx, |this, window, cx| this.on_page_message(&body, window, cx)).is_err() {
                     break;
                 }
             }
@@ -655,6 +657,7 @@ impl Workspace {
             composer: composer::Composer::new(cx),
             chip_popover: None,
             reply: None,
+            reply_drafts: Default::default(),
             agent_options: load_json("agent-options.json"),
             setup: Setup::needed().then(Setup::default),
             agent_ready: false,
@@ -1700,7 +1703,7 @@ impl Workspace {
         self.webview.update(cx, |w, _| w.load_url(&url));
     }
 
-    fn on_page_message(&mut self, body: &str, cx: &mut Context<Self>) {
+    fn on_page_message(&mut self, body: &str, window: &mut Window, cx: &mut Context<Self>) {
         match annotate::parse(body) {
             Some(annotate::Message::Ready) => {
                 // A fresh page: it gets its context again, and reports its own state.
@@ -1729,13 +1732,20 @@ impl Workspace {
                     self.point_tip_done();
                 }
             }
+            Some(annotate::Message::Ask(ask)) if ask.add => {
+                // A new cell asked for with ⌘↩: its chip and the words join the composer's message.
+                self.composer.attachments.push(ask.attachment);
+                let typed = self.input.read(cx).value().trim_end().to_string();
+                let text = if typed.is_empty() { ask.text } else { format!("{typed}\n{}", ask.text) };
+                self.input.update(cx, |s, cx| s.set_value(text, window, cx));
+            }
             Some(annotate::Message::Ask(ask)) => {
                 let Some(key) = self.active else { return };
                 self.open_before_sending(key, cx);
                 let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
                 let attachments = vec![ask.attachment];
                 blocks.extend(attach::prompt_blocks(&ask.text, &attachments, &[]));
-                let effects = self.submit_for(key, Queued::new(ask.text, attachments, blocks), ask.now);
+                let effects = self.submit_for(key, Queued::new(ask.text, attachments, blocks), false);
                 self.apply_effects(key, effects, cx);
             }
             Some(annotate::Message::Shoot { id, rect }) => self.shoot(id, rect, cx),
@@ -2320,6 +2330,9 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
             KeyBinding::new("secondary-shift-e", ToggleAnnotation, None),
+            // ⌘E on text selected in a reply; ⌘J is the older key for it.
+            KeyBinding::new("secondary-e", ReplyToSelection, Some("Input")),
+            KeyBinding::new("secondary-e", ReplyToSelection, None),
             KeyBinding::new("secondary-j", ReplyToSelection, Some("Input")),
             KeyBinding::new("secondary-j", ReplyToSelection, None),
             // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).

@@ -4,15 +4,16 @@
 // edge. A drag that starts on code picks whole lines, a drag anywhere else
 // (or any ⌥-drag) draws a box, and Shift adds to the pick. Pluto's own
 // selected cells are picked on entry. The comment bar opens by the pick
-// (place.ts) and works like Reply's prompt (quote.ts): ↩ sends the picks and
+// (place.ts) and is the same prompt as ⌘E's and Reply's (askbox.ts): ↩ sends the picks and
 // the comment now, ⌘↩ adds them to the chat's message, and Point stays on for
 // the next pick. Only ⌘⇧E toggles Point (⌘E alone asks about a cell).
 
 import { byUser, on, send } from "./bridge";
 import { barPlace } from "./place";
-import { type Box, type Pick, SHOOTING, cellName, pickSource, quoteField, sendQuote, shoot } from "./quote";
+import { askBox } from "./askbox";
+import { type Box, type Pick, SHOOTING, cellName, pickSource, sendQuote, shoot } from "./quote";
 import { cellCode } from "./reveal";
-import { modHeld, shortcut } from "./keys";
+import { modHeld } from "./keys";
 
 const css = `
   /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
@@ -54,9 +55,6 @@ const css = `
     #annotate-hint, #annotate-bar { border-color: var(--e-popover-edge); }
     #annotate-hint { box-shadow: 0 12px 32px var(--e-shadow-popover); }
   }
-  #annotate-bar .head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-  #annotate-bar .status { flex: 1; min-width: 0; color: var(--e-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #annotate-bar .keys { flex: none; color: var(--e-text-faint); }
   /* While the app takes a picture, the notebook shows as it is. */
   body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box, body.annotating.${SHOOTING} #annotate-tag,
   body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
@@ -165,14 +163,12 @@ export function initAnnotate(): void {
   hint.innerHTML = `<span>Click to pick · drag over code lines · drag elsewhere for a box</span><span>·</span><span class="done" role="button">Done</span>`;
   const bar = document.createElement("div");
   bar.id = "annotate-bar";
-  bar.innerHTML = `<div class="head"><span class="status"></span><span class="keys">↩ send · ${shortcut("↩")} add to message</span></div>`;
-  const status = bar.querySelector<HTMLElement>(".status")!;
-  const field = quoteField("Comment for Claude…", "Send", (add, e) => byUser(e) && sendComment(add));
+  const field = askBox({ label: "Comment for Claude", placeholder: "Comment for Claude…", done: (add, e) => byUser(e) && sendComment(add) });
   const text = field.text;
   bar.append(field.root);
   document.head.append(style);
   document.body.append(frame, box, tag, hint, bar);
-  state = { picks, status: () => (active() ? status.textContent ?? "" : ""), comment: () => text.value };
+  state = { picks, status: () => (active() ? field.what.textContent ?? "" : ""), comment: () => text.value };
 
   function drawBox(b: Box | null) {
     box.classList.toggle("shown", !!b);
@@ -225,7 +221,7 @@ export function initAnnotate(): void {
       for (const line of p.lines ?? []) line.classList.add("annotate-line");
     }
     drawBox([...picks].reverse().find((p) => p.box)?.box ?? null);
-    status.textContent = pickStatus(picks.map((p) => p.pick));
+    field.setWhat("none", "", pickStatus(picks.map((p) => p.pick)));
     place();
   }
 
@@ -286,6 +282,7 @@ export function initAnnotate(): void {
     const sending = picks.splice(0, picks.length);
     const comment = text.value.trim();
     text.value = "";
+    text.dispatchEvent(new Event("input"));
     refresh();
     const out: Pick[] = [];
     for (const p of sending) {

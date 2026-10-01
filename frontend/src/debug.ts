@@ -3,6 +3,7 @@
 
 import { pointState } from "./annotate";
 import { on, send } from "./bridge";
+import { askState } from "./prompt";
 
 export function initDebug(): void {
   on("debug", () => {
@@ -19,7 +20,8 @@ export function initDebug(): void {
       comment: point.comment,
       drawer: drawer === "docs" || drawer === "status" ? drawer : null,
       callout: !!document.querySelector("#endeavor-safe.shown"),
-      reply: document.querySelector("#endeavor-reply") ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
+      reply: askState()?.kind === "selection" ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
+      prompt: askState(),
       // Recorded by the debug build's own script, which wraps `alert`.
       alerts: (window as { __endeavorAlerts?: string[] }).__endeavorAlerts ?? null,
     });

@@ -3,6 +3,7 @@
 
 import { initActions } from "./actions";
 import { initAnnotate } from "./annotate";
+import { initAskBox } from "./askbox";
 import { initAsking } from "./asking";
 import { send } from "./bridge";
 import { initCells } from "./cells";
@@ -11,7 +12,6 @@ import { initDiffs } from "./diff";
 import { initDrawer } from "./drawer";
 import { initPrompt } from "./prompt";
 import { initQuote } from "./quote";
-import { initReply } from "./reply";
 import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
 import { initRail } from "./rail";
@@ -24,12 +24,12 @@ import { watchRedraws } from "./redraw";
 function init() {
   initTheme();
   initQuote();
+  initAskBox();
   initAnnotate();
   initCells();
   initAsking();
   initDiffs();
   initPrompt();
-  initReply();
   initErrors();
   initRail();
   initReveal();

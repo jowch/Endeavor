@@ -1,14 +1,12 @@
 // Reply on text selected in the notebook: a selection in one cell's code,
-// output or rendered Markdown offers a "Reply ⌘J" pill under it, and the pill
-// or ⌘J opens a small prompt with the quote. ↩ sends the quote and the reply
-// now, ⌘↩ adds them to the chat's message (quote.ts), Esc closes the prompt
-// and leaves the selection as it was.
+// output or rendered Markdown offers a "Reply ⌘E" pill under it; the pill (or
+// ⌘E, or ⌘J) opens the prompt with the quote (prompt.ts).
 
 import { byUser } from "./bridge";
 import { pillPlace } from "./place";
-import { type Pick, pickSource, quoteField, sendQuote } from "./quote";
+import { type Pick } from "./quote";
 import { cellCode } from "./reveal";
-import { modHeld, shortcut } from "./keys";
+import { shortcut } from "./keys";
 
 const css = `
   #endeavor-reply-pill { position: absolute; z-index: 1000; display: inline-flex; align-items: center; height: 30px; box-sizing: border-box;
@@ -18,16 +16,10 @@ const css = `
     background: transparent; color: var(--e-text-primary); font: inherit; cursor: pointer; }
   #endeavor-reply-pill button:hover { background: var(--e-menu-hover); }
   #endeavor-reply-pill .key { font-size: 11px; color: var(--e-text-faint); }
-  #endeavor-reply { position: absolute; z-index: 1000; width: 380px; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px;
-    padding: 8px; border-radius: 10px; border: 1px solid var(--e-popover-edge); background: var(--e-popover-bg);
-    box-shadow: 0 12px 32px var(--e-shadow-popover); font: 13px system-ui, sans-serif; color: var(--e-text-primary); }
-  #endeavor-reply .quote { border-left: 2px solid var(--e-control-edge); padding-left: 8px; font-size: 12.5px; line-height: 17px;
-    color: var(--e-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #endeavor-reply .source { font-size: 12px; color: var(--e-text-faint); }
 `;
 
-/** Text selected in one cell, as a pick, and where it is on the page. */
-type Found = { cell: HTMLElement; pick: Pick; quote: string; rects: DOMRect[] };
+/** Text selected in one cell, as a pick, and the range it covers. */
+export type Found = { cell: HTMLElement; pick: Pick; quote: string; range: Range };
 
 /** A line's number in a cell's editor, counting from 1 (from the DOM when there's no editor to ask). */
 function lineOf(node: Node, content: Element): number {
@@ -46,8 +38,6 @@ export function selectedInCell(): Found | null {
   const element = node instanceof Element ? node : node.parentElement;
   const cell = element?.closest<HTMLElement>("pluto-cell");
   if (!cell || element?.closest("[data-endeavor-ui]")) return null;
-  const rects = [...range.getClientRects()];
-  if (!rects.length) rects.push(range.getBoundingClientRect());
   const code = cellCode(cell);
   const content = element?.closest(".cm-content");
   if (content) {
@@ -60,77 +50,34 @@ export function selectedInCell(): Found | null {
     // Without the editor to ask, the whole lines: the page's text has no line breaks.
     const quote = main && !main.empty ? view.state.sliceDoc(main.from, main.to) : code.split("\n").slice(first - 1, last).join("\n");
     if (!quote.trim()) return null;
-    return { cell, pick: { part: "lines", cell: cell.id, code, lines: [first, last], text: quote }, quote, rects };
+    return { cell, pick: { part: "lines", cell: cell.id, code, lines: [first, last], text: quote }, quote, range: range.cloneRange() };
   }
   if (!element?.closest("pluto-output")) return null;
   const quote = selection.toString().trim();
-  return quote ? { cell, pick: { part: "output", cell: cell.id, code, text: quote }, quote, rects } : null;
+  return quote ? { cell, pick: { part: "output", cell: cell.id, code, text: quote }, quote, range: range.cloneRange() } : null;
 }
 
-/** The pill's place for a selection, in page coordinates. */
-function pillAt(found: Found): { left: number; top: number } {
-  const at = pillPlace(found.rects, window.innerHeight);
-  return { left: at.left + window.scrollX, top: at.top + window.scrollY };
+let pill: HTMLElement | null = null;
+
+export function hidePill(): void {
+  pill?.remove();
+  pill = null;
 }
 
-export function initReply(): void {
+/** The selection's line boxes, in the viewport. */
+export function rangeRects(range: Range): DOMRect[] {
+  const rects = [...range.getClientRects()];
+  return rects.length ? rects : [range.getBoundingClientRect()];
+}
+
+/** Offer the pill for each new selection; `open` opens the prompt for it. */
+export function initReply(open: (found: Found) => void): void {
   const style = document.createElement("style");
   style.textContent = css;
   document.head.append(style);
-  let pill: HTMLElement | null = null;
-  let prompt: HTMLElement | null = null;
-  const hidePill = () => {
-    pill?.remove();
-    pill = null;
-  };
-  const close = () => {
-    prompt?.remove();
-    prompt = null;
-  };
-
-  function open(found: Found) {
-    hidePill();
-    close();
-    const box = document.createElement("div");
-    box.id = "endeavor-reply";
-    box.dataset.endeavorUi = "";
-    box.setAttribute("role", "dialog");
-    box.setAttribute("aria-label", "Reply");
-    const quote = document.createElement("div");
-    quote.className = "quote";
-    quote.textContent = found.quote.split(/\s+/).join(" ").trim();
-    const source = document.createElement("div");
-    source.className = "source";
-    source.textContent = pickSource(found.pick);
-    const field = quoteField("Reply to Claude", "Send reply", (add, e) => {
-      if (!byUser(e)) return;
-      sendQuote([found.pick], field.text.value.trim(), add);
-      if (add) window.getSelection()?.removeAllRanges();
-      close();
-    });
-    // Capture, like the field's own keys, which stop the event there.
-    field.text.addEventListener(
-      "keydown",
-      (e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          close();
-        }
-      },
-      true,
-    );
-    box.append(quote, source, field.root);
-    document.body.append(box);
-    const place = pillAt(found);
-    box.style.left = `${Math.min(place.left - 12, window.scrollX + window.innerWidth - 388)}px`;
-    box.style.top = `${place.top}px`;
-    prompt = box;
-    requestAnimationFrame(() => field.text.focus());
-  }
-
   document.addEventListener("mouseup", (e) => {
-    const target = e.target as Node;
-    if (pill?.contains(target) || prompt?.contains(target) || document.body.classList.contains("annotating")) return;
+    const target = e.target as Element;
+    if (pill?.contains(target) || target.closest?.("[data-endeavor-ui]") || document.body.classList.contains("annotating")) return;
     // After the browser has settled the selection.
     setTimeout(() => {
       hidePill();
@@ -139,32 +86,15 @@ export function initReply(): void {
       pill = document.createElement("div");
       pill.id = "endeavor-reply-pill";
       pill.dataset.endeavorUi = "";
-      pill.innerHTML = `<button aria-label="Reply">Reply <span class="key">${shortcut("J")}</span></button>`;
-      const place = pillAt(found);
-      pill.style.left = `${place.left}px`;
-      pill.style.top = `${place.top}px`;
+      pill.innerHTML = `<button aria-label="Reply">Reply <span class="key">${shortcut("E")}</span></button>`;
+      const at = pillPlace(rangeRects(found.range), window.innerHeight);
+      pill.style.left = `${at.left + window.scrollX}px`;
+      pill.style.top = `${at.top + window.scrollY}px`;
       // Keep the selection: pressing the pill would otherwise clear it first.
       pill.onmousedown = (event) => event.preventDefault();
       pill.querySelector("button")!.onclick = (event) => byUser(event) && open(found);
       document.body.append(pill);
     });
   });
-  document.addEventListener("mousedown", (e) => {
-    if (prompt && !prompt.contains(e.target as Node)) close();
-  });
-  // Window capture: before CodeMirror and Pluto see ⌘J.
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if (modHeld(e) && !e.shiftKey && e.key.toLowerCase() === "j") {
-        const found = selectedInCell();
-        if (!found || document.body.classList.contains("annotating")) return;
-        e.preventDefault();
-        e.stopPropagation();
-        return open(found);
-      }
-      if (!prompt?.contains(e.target as Node)) hidePill();
-    },
-    true,
-  );
+  window.addEventListener("keydown", () => hidePill(), true);
 }

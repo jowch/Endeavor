@@ -19,7 +19,7 @@ test("debug answers with Point's picks and the alerts shown", async () => {
   await new Promise((done) => (window.document.readyState === "loading" ? window.addEventListener("DOMContentLoaded", done) : done()));
 
   window.__endeavor.receive({ type: "debug" });
-  assert.deepEqual(sent.at(-1), { type: "debug", point: false, picked: [], picks: [], box: false, point_status: "", comment: "", drawer: null, callout: false, reply: null, alerts: null });
+  assert.deepEqual(sent.at(-1), { type: "debug", point: false, picked: [], picks: [], box: false, point_status: "", comment: "", drawer: null, callout: false, reply: null, prompt: null, alerts: null });
 
   window.__endeavor.receive({ type: "annotate", on: true });
   window.document.getElementById(C).dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -37,6 +37,7 @@ test("debug answers with Point's picks and the alerts shown", async () => {
     drawer: null,
     callout: false,
     reply: null,
+    prompt: null,
     alerts: ["Could not save"],
   });
 });
