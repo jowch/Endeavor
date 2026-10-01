@@ -1057,26 +1057,62 @@ impl Workspace {
         .detach();
     }
 
-    /// Locate file…: pick where the missing notebook went (This Mac); the session follows it.
-    fn locate_file(&mut self, key: u64, cx: &mut Context<Self>) {
+    /// Pick session `key`'s notebook file: where its missing notebook went
+    /// (Locate file…), or the notebook of a session whose history couldn't
+    /// load (Open the notebook only). This Mac uses the file panel; a server,
+    /// the in-app folder browser, from the session's folder.
+    pub(crate) fn pick_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
-        let Some(old) = session.notebook_path.clone() else { return };
         let host = session.place.host.clone();
+        let folder = session.place.path.clone();
+        if host != HostId::ThisMac {
+            self.locate = Some(new_session::Browser { host, pick_for: Some(key), path: folder.clone(), listing: None });
+            return self.browse_to(folder, cx);
+        }
         #[cfg(target_os = "macos")]
-        if let Some(dir) = Path::new(&old).parent().filter(|d| d.is_dir()) {
-            new_session::set_open_panel_folder(dir);
+        {
+            let old_dir = session.notebook_path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| d.is_dir()).map(Path::to_path_buf);
+            new_session::set_open_panel_folder(&old_dir.unwrap_or(folder));
         }
         let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Use this notebook".into()) });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
             let Some(new) = paths.into_iter().next() else { return };
-            let _ = this.update(cx, |this, cx| {
-                let new = new.display().to_string();
-                this.notebook_moved(&host, &old, new.clone(), cx);
-                this.open_for_session(key, new, false, cx);
-            });
+            let _ = this.update(cx, |this, cx| this.notebook_located(key, new.display().to_string(), cx));
         })
         .detach();
+    }
+
+    /// The user picked session `key`'s notebook file at `new`: a missing
+    /// notebook's sessions follow it there (and Claude is told), a session
+    /// without one takes it, and it opens in safe preview.
+    pub(crate) fn notebook_located(&mut self, key: u64, new: String, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
+        let host = session.place.host.clone();
+        match session.notebook_path.clone() {
+            Some(old) => self.notebook_moved(&host, &old, new.clone(), cx),
+            None => self.bind_notebook(key, new.clone(), cx),
+        }
+        self.open_for_session(key, new, false, cx);
+    }
+
+    /// The server folder browser picking session `key`'s notebook, as a popover under the button that opened it.
+    pub(crate) fn render_notebook_picker(&self, key: u64, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let browser = self.locate.as_ref().filter(|b| b.pick_for == Some(key))?;
+        let body = div()
+            .id("notebook-picker")
+            .occlude()
+            .w(px(380.))
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .map(theme::popover)
+            .font_family(theme::SANS)
+            .text_size(theme::size_body())
+            .text_color(theme::text_primary())
+            .text_left()
+            .child(self.browser_menu(browser, cx));
+        Some(div().absolute().top(px(34.)).left_0().child(deferred(anchored().child(body)).with_priority(1)).into_any_element())
     }
 
     /// Open a notebook in a new session…: This Mac's file panel, else the
@@ -1115,7 +1151,6 @@ impl Workspace {
             PaneShows::Page => return None,
             PaneShows::Crashed => self.render_crash_page(key, cx),
             PaneShows::Missing => {
-                let local = session.place.host == HostId::ThisMac;
                 div()
                     .size_full()
                     .flex()
@@ -1132,7 +1167,12 @@ impl Workspace {
                             .mt(px(6.))
                             .flex()
                             .gap(px(12.))
-                            .when(local, |d| d.child(page_button("locate-file", Glyph::Search, "Locate file…", false).on_click(cx.listener(move |this, _, _, cx| this.locate_file(key, cx)))))
+                            .child(
+                                div()
+                                    .relative()
+                                    .child(page_button("locate-file", Glyph::Search, "Locate file…", false).on_click(cx.listener(move |this, _, _, cx| this.pick_notebook(key, cx))))
+                                    .children(self.render_notebook_picker(key, cx)),
+                            )
                             .child(page_button("new-notebook-here", Glyph::File, "New notebook in this session", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx)))),
                     )
                     .into_any_element()

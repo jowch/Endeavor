@@ -151,18 +151,23 @@ impl Workspace {
         Some(failure::wait_line(Lead::Spinner(ElementId::NamedInteger("runtime-wait".into(), session.key)), text, None, cx).into_any_element())
     }
 
-    /// The chat of a past session whose history hasn't loaded: its title, when
-    /// it was last active and its notebook, and one line on what it waits for.
-    /// Laid over the whole chat column, so its centre lines up with the
-    /// notebook pane's starting block.
-    pub fn render_opening_summary(&self, session: &Session) -> Option<AnyElement> {
+    /// The summary's lines under the title, while `session`'s history hasn't loaded.
+    pub fn opening_summary(&self, session: &Session) -> Option<(Option<String>, String)> {
         if !session.opening() {
             return None;
         }
         let note = self.session_wait(session).unwrap_or(Waiting::Conversation).note();
         let updated = session.id.as_ref().and_then(|id| self.records.get(&id.to_string())?.updated).map(|secs| UNIX_EPOCH + Duration::from_secs(secs));
         let notebook = session.notebook_path.as_deref().map(|p| crate::session::folder_name(std::path::Path::new(p)));
-        let meta = last_active(updated, notebook.as_deref(), session.server.as_deref());
+        Some((last_active(updated, notebook.as_deref(), session.server.as_deref()), note))
+    }
+
+    /// The chat of a past session whose history hasn't loaded: its title, when
+    /// it was last active and its notebook, and one line on what it waits for.
+    /// Laid over the whole chat column, so its centre lines up with the
+    /// notebook pane's starting block.
+    pub fn render_opening_summary(&self, session: &Session) -> Option<AnyElement> {
+        let (meta, note) = self.opening_summary(session)?;
         Some(
             div()
                 .absolute()

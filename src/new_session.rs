@@ -75,6 +75,10 @@ pub struct Draft {
 
 /// The server folder browser: the folder shown, and its folders and notebooks once listed.
 pub struct Browser {
+    pub host: HostId,
+    /// Picking a notebook file for this session (Locate file…, Open the
+    /// notebook only) rather than the new session's folder.
+    pub pick_for: Option<u64>,
     pub path: PathBuf,
     pub listing: Option<Result<Vec<Entry>, String>>,
 }
@@ -419,15 +423,34 @@ impl Workspace {
         .detach();
     }
 
-    /// Show `path` in the server folder browser.
+    /// The open folder browser: a session's notebook pick, else the new-session screen's.
+    fn browser_mut(&mut self) -> Option<&mut Browser> {
+        if self.locate.is_some() { self.locate.as_mut() } else { self.draft.browser.as_mut() }
+    }
+
+    /// Show `path` in the open folder browser (the new-session screen's, unless
+    /// a session is picking its notebook).
     pub(crate) fn browse_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let host = self.draft.host.clone();
-        self.draft.browser = Some(Browser { path: path.clone(), listing: None });
-        let Some(list) = self.ask_files(&host, Request::List { path: path.display().to_string() }, cx) else { return };
+        let (host, pick_for) = match &self.locate {
+            Some(b) => (b.host.clone(), b.pick_for),
+            None => (self.draft.host.clone(), None),
+        };
+        let browser = Browser { host: host.clone(), pick_for, path: path.clone(), listing: None };
+        match pick_for {
+            Some(_) => self.locate = Some(browser),
+            None => self.draft.browser = Some(browser),
+        }
+        let Some(list) = self.ask_files(&host, Request::List { path: path.display().to_string() }, cx) else {
+            let name = self.hosts.name(&host);
+            if let Some(browser) = self.browser_mut() {
+                browser.listing = Some(Err(format!("Can't reach {name} right now.")));
+            }
+            return cx.notify();
+        };
         cx.spawn(async move |this, cx| {
             let listed = list.await;
             let _ = this.update(cx, |this, cx| {
-                let Some(browser) = this.draft.browser.as_mut().filter(|b| b.path == path) else { return };
+                let Some(browser) = this.browser_mut().filter(|b| b.path == path) else { return };
                 match listed {
                     Ok(Reply::List { path, entries }) => {
                         browser.path = path;
@@ -742,7 +765,7 @@ impl Workspace {
             Chip::Where => (240., self.where_menu(cx).into_any_element()),
             Chip::Folder => (360., self.folder_menu(cx).into_any_element()),
             Chip::Notebook => (320., self.notebook_menu(cx).into_any_element()),
-            Chip::Browse => (380., self.browser_menu(cx).into_any_element()),
+            Chip::Browse => (380., self.draft.browser.as_ref().map(|b| self.browser_menu(b, cx).into_any_element()).unwrap_or_else(|| div().into_any_element())),
             Chip::Resources => (300., self.resources_menu(cx).into_any_element()),
         };
         let body = div()
@@ -978,10 +1001,11 @@ impl Workspace {
     }
 
     /// A server's folder browser: where it is (each part a way back up), its
-    /// folders to open, its notebooks for orientation, and "Choose this folder".
-    fn browser_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let Some(browser) = &self.draft.browser else { return div() };
+    /// folders to open, and its notebooks: for orientation and "Choose this
+    /// folder", or, when picking a session's notebook, to pick.
+    pub(crate) fn browser_menu(&self, browser: &Browser, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let path = browser.path.clone();
+        let picking = browser.pick_for;
         let mut crumbs: Vec<(String, PathBuf)> = path.ancestors().map(|p| (folder_name(p), p.to_path_buf())).collect();
         crumbs.reverse();
         let crumbs = crumbs.into_iter().enumerate().flat_map(|(i, (name, at))| {
@@ -1008,7 +1032,7 @@ impl Workspace {
         let rows: Vec<AnyElement> = match &browser.listing {
             None => vec![div().py(px(4.)).pl(px(28.)).text_color(theme::text_faint()).child("Loading…").into_any_element()],
             Some(Err(e)) => vec![div().py(px(4.)).px(px(8.)).text_size(theme::size_meta()).text_color(theme::danger()).child(e.clone()).into_any_element()],
-            Some(Ok(entries)) if entries.is_empty() => vec![div().py(px(4.)).pl(px(28.)).text_color(theme::text_faint()).child("No folders here").into_any_element()],
+            Some(Ok(entries)) if entries.is_empty() => vec![div().py(px(4.)).pl(px(28.)).text_color(theme::text_faint()).child(if picking.is_some() { "No folders or notebooks here" } else { "No folders here" }).into_any_element()],
             Some(Ok(entries)) => entries
                 .iter()
                 .enumerate()
@@ -1020,6 +1044,17 @@ impl Workspace {
                             .child(glyph(Glyph::Folder, theme::text_muted()))
                             .child(name.child(entry.name.clone()))
                             .on_click(cx.listener(move |this, _, _, cx| this.browse_to(into.clone(), cx)))
+                            .into_any_element()
+                    } else if let Some(key) = picking {
+                        let file = path.join(&entry.name).display().to_string();
+                        menu_row(("browse-file", i), false, false)
+                            .child(glyph(Glyph::File, theme::text_muted()))
+                            .child(name.font_family(theme::MONO).text_size(theme::size_code()).child(entry.name.clone()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.locate = None;
+                                this.notebook_located(key, file.clone(), cx);
+                                cx.notify();
+                            }))
                             .into_any_element()
                     } else {
                         // Notebooks show where they are; only folders open.
@@ -1044,8 +1079,8 @@ impl Workspace {
             .child(div().flex().flex_wrap().items_center().px(px(6.)).py(px(4.)).font_family(theme::MONO).text_size(theme::size_meta_small()).children(crumbs))
             .children(up)
             .child(div().id("browse-rows").max_h(px(300.)).overflow_y_scroll().flex().flex_col().children(rows))
-            .child(div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge()))
-            .child(
+            .when(picking.is_none(), |d| d.child(div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge())))
+            .when(picking.is_none(), |d| d.child(
                 div().flex().justify_end().p(px(4.)).child(
                     div()
                         .id("choose-folder")
@@ -1061,7 +1096,7 @@ impl Workspace {
                         .child("Choose this folder")
                         .on_click(cx.listener(move |this, _, window, cx| this.set_draft_folder(choose.clone(), window, cx))),
                 ),
-            )
+            ))
     }
 
     fn notebook_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

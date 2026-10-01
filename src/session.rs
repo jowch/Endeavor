@@ -415,18 +415,36 @@ impl Failure {
         }
     }
 
-    /// The page's words. `notebook_fine`: the session has a notebook, and its file is there.
-    pub fn body(&self, notebook_fine: bool) -> String {
+    /// The page's words, which say where the session's notebook stands.
+    pub fn body(&self, notebook: Beside) -> String {
         match self.kind {
             OpenFailure::InCli => "It's running in a terminal. Close it there, then Try again. Or open a copy here: it has the \
                                    conversation so far, and the two go separate ways after that."
                 .into(),
             OpenFailure::Other(reason) => {
                 let why = reason.unwrap_or("Claude Code couldn't load it.");
-                if notebook_fine { format!("{why} The notebook and its file are fine.") } else { why.to_owned() }
+                match notebook {
+                    Beside::Open => format!("{why} The notebook is open beside it."),
+                    Beside::Fine => format!("{why} The notebook and its file are fine."),
+                    Beside::Unknown => format!("{}, so Endeavor doesn't know its notebook yet.", why.trim_end_matches('.')),
+                    Beside::Nothing => why.to_owned(),
+                }
             }
         }
     }
+}
+
+/// Where a session that couldn't open stands with its notebook.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Beside {
+    /// It's open in the pane.
+    Open,
+    /// Its file is there, though it isn't open.
+    Fine,
+    /// A past session with no notebook in Endeavor's record: only its history knows it.
+    Unknown,
+    /// None, or its file is gone.
+    Nothing,
 }
 
 /// A session title from its first message: cut at a word boundary, with "…".
@@ -848,6 +866,16 @@ impl Session {
         self.list_len.set(self.entries.len());
     }
 
+    /// Where the session stands with its notebook, for the page when it couldn't open.
+    pub fn notebook_beside(&self) -> Beside {
+        match (&self.notebook_path, self.missing) {
+            (Some(_), false) if self.notebook.is_some() => Beside::Open,
+            (Some(_), false) => Beside::Fine,
+            (None, _) if self.id.is_some() => Beside::Unknown,
+            _ => Beside::Nothing,
+        }
+    }
+
     /// A past session whose history hasn't loaded yet: the chat shows its
     /// summary, and messages wait for it.
     pub fn opening(&self) -> bool {
@@ -924,7 +952,7 @@ impl Session {
     }
 
     pub fn interrupt(&self) -> Option<Effect> {
-        self.outbox.busy.then_some(Effect::Send(Turn::Cancel)).filter(|_| self.id.is_some())
+        self.outbox.busy.then_some(Effect::Send(Turn::Cancel)).filter(|_| self.id.is_some() && !self.replaying)
     }
 
     fn dispatch(&mut self, dispatch: Option<Dispatch>, effects: &mut Vec<Effect>) {
@@ -2108,7 +2136,7 @@ mod tests {
         other.fail(r#"Internal error: { "details": "boom happened
 more" }"#);
         let failure = other.failed.as_ref().unwrap();
-        assert_eq!((failure.title(false), failure.body(false).as_str()), ("Couldn't open this session", "Claude Code couldn't load it."));
+        assert_eq!((failure.title(false), failure.body(super::Beside::Nothing).as_str()), ("Couldn't open this session", "Claude Code couldn't load it."));
         assert!(failure.raw.contains("boom happened"), "the raw error is under Details");
         other.retry_open();
         assert!(other.failed.is_none() && other.agent_waiting && other.id.is_some(), "Try again loads it again");
@@ -2122,7 +2150,9 @@ more" }"#);
         assert_eq!(open_failure("Internal error: Session abc not found"), OpenFailure::Other(Some("Claude Code no longer has its history.")));
         assert_eq!(open_failure("Error: Session abc is running as a background session (abc). Run `claude attach abc` to open it"), OpenFailure::InCli);
         let failure = super::Failure { kind: open_failure("Unexpected token } in JSON"), raw: String::new(), details_open: false };
-        assert_eq!(failure.body(true), "Its history couldn't be read. The notebook and its file are fine.");
+        assert_eq!(failure.body(super::Beside::Fine), "Its history couldn't be read. The notebook and its file are fine.");
+        assert_eq!(failure.body(super::Beside::Open), "Its history couldn't be read. The notebook is open beside it.");
+        assert_eq!(failure.body(super::Beside::Unknown), "Its history couldn't be read, so Endeavor doesn't know its notebook yet.");
         assert_eq!(failure.title(true), "Couldn't start this session");
     }
 

@@ -284,13 +284,18 @@ impl Workspace {
             "failed": s.failed.as_ref().map(|f| json!({
                 "kind": match f.kind { session::OpenFailure::InCli => "in_cli", session::OpenFailure::Other(_) => "other" },
                 "title": f.title(s.id.is_none()),
-                "text": f.body(s.notebook_path.is_some() && !s.missing),
-                "buttons": match f.kind { session::OpenFailure::InCli => vec!["Open a copy", "Try again"], session::OpenFailure::Other(_) => vec!["Try again"] },
+                "text": f.body(s.notebook_beside()),
+                "buttons": match f.kind {
+                    session::OpenFailure::InCli => vec!["Open a copy", "Try again"],
+                    session::OpenFailure::Other(_) if s.notebook_beside() == session::Beside::Unknown => vec!["Try again", "Open the notebook only"],
+                    session::OpenFailure::Other(_) => vec!["Try again"],
+                },
                 "details": matches!(f.kind, session::OpenFailure::Other(_)).then(|| json!({ "open": f.details_open, "text": f.raw })),
             })),
             "transcript": self.transcript(s),
             "scroll": scroll_state(s),
             "wait_line": self.runtime_wait(s),
+            "opening": self.opening_summary(s).map(|(meta, note)| json!({ "title": s.title, "meta": meta, "note": note })),
             "activity": transcript::activity(s, self.offline_since).map(|a| [Some(a.verb), a.object, a.took].into_iter().flatten().collect::<Vec<_>>().join(" ")),
             "pinned_plan": s.pinned_plan().and_then(|ix| match &s.entries[ix] {
                 Entry::Plan(entries) => Some(json!({ "progress": approval::progress(entries), "folded": s.plan_folded, "items": plan_items(entries) })),

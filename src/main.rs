@@ -311,6 +311,8 @@ pub struct Workspace {
     next_key: u64,
     /// The new-session screen's choices.
     draft: Draft,
+    /// The folder browser picking a session's notebook on a server (Locate file…, Open the notebook only).
+    locate: Option<new_session::Browser>,
     /// Working folders on every host, most recent first (persisted).
     recent: Vec<Place>,
     /// Every session's agent, place, title and last activity (persisted): the
@@ -604,6 +606,7 @@ impl Workspace {
             // running): starting from the clock keeps them from matching an earlier launch's.
             next_key: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_millis() as u64),
             draft,
+            locate: None,
             recent,
             records: load_records(),
             this_mac_was_ready: false,
@@ -951,9 +954,10 @@ impl Workspace {
     /// A menu or popover open that a click outside it, even on the web view,
     /// or Esc should close: the session row / notebook ⋮ and Share menus, the
     /// composer's Mode/Plus/Config menu, a sent chip's popover, the sidebar's
-    /// Active/All filter, and a new-session chip's popover.
+    /// Active/All filter, a new-session chip's popover, and the notebook picker.
     fn dismissible_open(&self) -> bool {
         self.confirm.is_some()
+            || self.locate.is_some()
             || self.menu.is_some()
             || self.composer.menu.is_some()
             || self.chip_popover.is_some()
@@ -980,6 +984,7 @@ impl Workspace {
         self.close_menu(window, cx);
         self.close_composer_menus(cx);
         self.close_filter_menu(window, cx);
+        self.locate = None;
         if self.draft.popover.is_some() {
             self.close_popover(window, cx);
         }
@@ -1915,7 +1920,6 @@ impl Workspace {
     /// In place of the transcript of a session that couldn't open: why, and the ways on.
     fn render_open_failure(&self, session: &Session, failure: &session::Failure, cx: &mut Context<Self>) -> AnyElement {
         let key = session.key;
-        let fine = session.notebook_path.is_some() && !session.missing;
         let try_again = |look| {
             failure::action("open-try-again", Some(new_session::Glyph::Restart), "Try again", look).on_click(cx.listener(move |this, _, _, cx| this.retry_open(key, cx)))
         };
@@ -1934,10 +1938,24 @@ impl Workspace {
                 let details = failure::details("open-details", failure.raw.clone(), failure.details_open, move |_, cx| {
                     let _ = entity.update(cx, |this, cx| this.with_session(key, cx, Session::toggle_failure_details));
                 });
-                (vec![try_again(signin::Look::Primary).into_any_element()], Some(details))
+                let mut buttons = vec![try_again(signin::Look::Primary).into_any_element()];
+                // Only its history knows its notebook: pick it, and it opens beside this page.
+                if session.notebook_beside() == session::Beside::Unknown {
+                    buttons.push(
+                        div()
+                            .relative()
+                            .child(
+                                failure::action("open-notebook-only", Some(new_session::Glyph::File), "Open the notebook only", signin::Look::Secondary)
+                                    .on_click(cx.listener(move |this, _, _, cx| this.pick_notebook(key, cx))),
+                            )
+                            .children(self.render_notebook_picker(key, cx))
+                            .into_any_element(),
+                    );
+                }
+                (buttons, Some(details))
             }
         };
-        let body = vec![div().child(failure.body(fine)).into_any_element()];
+        let body = vec![div().child(failure.body(session.notebook_beside())).into_any_element()];
         failure::page(new_session::Glyph::Bubble, failure.title(session.id.is_none()), body, buttons, details).into_any_element()
     }
 
