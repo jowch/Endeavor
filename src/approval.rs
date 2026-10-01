@@ -269,6 +269,12 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
     let waiting = code.is_none() && one && preview.is_none() && tool != "submit_changes";
     let code = code.or_else(|| waiting.then(|| CardCode::Plain("…".into())));
     let them = if question.names.len() > 1 || preview.is_some_and(|p| p.count > 1) { "them" } else { "it" };
+    if let Some(n) = preview.map(|p| p.needed_ids.len()).filter(|n| *n > 0) {
+        let need = if them == "it" { "it needs" } else { "they need" };
+        let cells = if n == 1 { "cell" } else { "cells" };
+        let has = if n == 1 { "hasn't" } else { "haven't" };
+        lines.push((format!("Also runs {n} {cells} {need} that {has} run yet."), Tone::Muted));
+    }
     if waiting {
         lines.push(("Finding out what it runs…".into(), Tone::Muted));
     } else if tool == "add_cell" {
@@ -1142,6 +1148,18 @@ mod tests {
         assert_eq!(run.code, Some(super::CardCode::Plain("…".into())), "before the runtime says what it runs");
         assert_eq!(run.lines[0].0, "Finding out what it runs…");
         assert_eq!(run.cells, vec!["a".to_string()]);
+        // Once the runtime says: `b` needs `a`, which never ran, and `c` re-runs after it.
+        if let Some(Entry::Permission { preview, .. }) = s.entries.last_mut() {
+            *preview = Some(crate::pluto::RunPreview {
+                count: 1,
+                cells: vec![crate::pluto::PreviewCell { id: Some("b".into()), name: Some("b".into()), code: "b = a + 1".into() }],
+                needed_ids: vec!["a".into()],
+                dependents: 1,
+                ..Default::default()
+            });
+        }
+        let run = super::view_at(&s, s.entries.len() - 1).unwrap();
+        assert_eq!(run.lines.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["Also runs 1 cell it needs that hasn't run yet.", "Also re-runs 1 cell that depend on it."]);
 
         let long = super::CardCode::Plain((1..=15).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n"));
         assert_eq!(long.line_count(), 15);

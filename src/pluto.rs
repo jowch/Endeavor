@@ -183,6 +183,9 @@ pub struct RunPreview {
     pub all: bool,
     pub count: usize,
     pub cells: Vec<PreviewCell>,
+    /// Cells these depend on that never ran, which run first.
+    #[serde(default)]
+    pub needed_ids: Vec<String>,
     /// Other cells that re-run with these.
     pub dependents: usize,
     /// Those cells' ids (a runtime older than this field sends none).
