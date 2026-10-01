@@ -131,6 +131,7 @@ impl Workspace {
             "modal": modal,
             "settings_open": self.settings_panel.is_some(),
             "menu_open": self.menu.is_some(),
+            "menu": self.menu_state(),
         })
     }
 
@@ -252,6 +253,7 @@ impl Workspace {
     fn session_state(&self, s: &Session) -> Value {
         json!({
             "title": s.title,
+            "renaming_title": self.renaming.as_ref().is_some_and(|r| r.in_header && r.row == Row::Open(s.key)),
             "folder": self.folder_heading(&s.place),
             "failed": s.failed.as_ref().map(|f| json!({ "message": f.message, "can_copy": f.can_copy })),
             "transcript": self.transcript(s),

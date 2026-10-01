@@ -15,33 +15,47 @@ use crate::sidebar::{Row, RowAction};
 use crate::theme;
 use crate::{Interrupt, Workspace};
 
-/// What a menu is for: a sidebar row (⋮), an open session's notebook (⋮), or
-/// its Share button.
+/// What a menu is for: a sidebar row (⋮), the open session's title in the
+/// chat header (⌄), an open session's notebook (⋮), or its Share button.
 #[derive(Clone, PartialEq)]
 pub(crate) enum MenuTarget {
     Row(Row),
+    Session(u64),
     Notebook(u64),
     Share(u64),
 }
 
-/// A menu item, with what it acts on.
+impl MenuTarget {
+    /// The session a sidebar row's or the chat header's menu acts on, and
+    /// whether it's the header's.
+    fn session_row(&self) -> Option<(Row, bool)> {
+        match self {
+            MenuTarget::Row(row) => Some((row.clone(), false)),
+            MenuTarget::Session(key) => Some((Row::Open(*key), true)),
+            MenuTarget::Notebook(_) | MenuTarget::Share(_) => None,
+        }
+    }
+}
+
+/// A menu item, with what it acts on. `in_header`: picked from the chat
+/// header's session menu, so Rename opens the name box there.
 #[derive(Clone, PartialEq)]
 enum MenuPick {
-    Row(Row, RowAction),
+    Row { row: Row, action: RowAction, in_header: bool },
     Notebook(u64, NotebookAction),
 }
 
 impl MenuPick {
     fn label(&self) -> &'static str {
         match self {
-            MenuPick::Row(_, action) => action.label(),
+            MenuPick::Row { action, .. } => action.label(),
             MenuPick::Notebook(_, action) => action.label(),
         }
     }
 
     fn shortcut(&self) -> (&'static str, &'static str) {
         match self {
-            MenuPick::Row(_, action) => action.shortcut(),
+            MenuPick::Row { action, .. } => action.shortcut(),
             MenuPick::Notebook(_, action) => action.shortcut(),
         }
     }
@@ -49,7 +63,7 @@ impl MenuPick {
     /// Shown in the danger colour.
     fn danger(&self) -> bool {
         match self {
-            MenuPick::Row(_, action) => *action == RowAction::Delete,
+            MenuPick::Row { action, .. } => *action == RowAction::Delete,
             MenuPick::Notebook(_, action) => action.danger(),
         }
     }
@@ -57,7 +71,7 @@ impl MenuPick {
     /// Items in one group sit together, with a separator between groups.
     fn group(&self) -> u8 {
         match self {
-            MenuPick::Row(_, action) => (*action == RowAction::Delete) as u8,
+            MenuPick::Row { action, .. } => (*action == RowAction::Delete) as u8,
             MenuPick::Notebook(_, action) => action.group(),
         }
     }
@@ -78,7 +92,10 @@ pub(crate) struct PopupMenu {
 impl Workspace {
     fn menu_picks(&self, target: &MenuTarget) -> Vec<MenuPick> {
         match target {
-            MenuTarget::Row(row) => self.row_actions(row).into_iter().map(|action| MenuPick::Row(row.clone(), action)).collect(),
+            MenuTarget::Row(_) | MenuTarget::Session(_) => {
+                let Some((row, in_header)) = target.session_row() else { return Vec::new() };
+                self.row_actions(&row).into_iter().map(|action| MenuPick::Row { row: row.clone(), action, in_header }).collect()
+            }
             MenuTarget::Notebook(key) => {
                 let session = self.sessions.iter().find(|s| s.key == *key);
                 let open = session.is_some_and(|s| s.notebook.is_some() && s.stopped.is_none() && !s.missing);
@@ -89,6 +106,19 @@ impl Workspace {
             }
             MenuTarget::Share(key) => NotebookAction::for_share().into_iter().map(|action| MenuPick::Notebook(*key, action)).collect(),
         }
+    }
+
+    /// The open menu for the state dump: what it's for, and its items with their keys.
+    pub(crate) fn menu_state(&self) -> Option<serde_json::Value> {
+        let menu = self.menu.as_ref()?;
+        let target = match menu.target {
+            MenuTarget::Row(_) => "row",
+            MenuTarget::Session(_) => "session",
+            MenuTarget::Notebook(_) => "notebook",
+            MenuTarget::Share(_) => "share",
+        };
+        let items: Vec<_> = self.menu_picks(&menu.target).iter().map(|p| serde_json::json!({ "label": p.label(), "key": p.shortcut().1 })).collect();
+        Some(serde_json::json!({ "for": target, "items": items }))
     }
 
     pub(crate) fn open_menu(&mut self, target: MenuTarget, at: Option<Point<Pixels>>, window: &mut Window, cx: &mut Context<Self>) {
@@ -112,7 +142,8 @@ impl Workspace {
     fn pick(&mut self, pick: MenuPick, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menu(window, cx);
         match pick {
-            MenuPick::Row(row, action) => self.row_action(row, action, window, cx),
+            MenuPick::Row { row, action: RowAction::Rename, in_header: true } => self.start_rename(row, true, window, cx),
+            MenuPick::Row { row, action, .. } => self.row_action(row, action, window, cx),
             MenuPick::Notebook(key, action) => self.notebook_action(key, action, window, cx),
         }
     }
@@ -128,7 +159,7 @@ impl Workspace {
             let separator = new_group.then(|| div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge()).into_any_element());
             let action = match &pick {
                 MenuPick::Notebook(_, action) => Some(*action),
-                MenuPick::Row(..) => None,
+                MenuPick::Row { .. } => None,
             };
             let section = action.and_then(|a| a.section()).map(|heading| {
                 div().px(px(8.)).pt(px(4.)).pb(px(2.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(heading).into_any_element()
@@ -239,12 +270,17 @@ impl Workspace {
             .children(head)
             .children(items)
             .children(foot);
+        // The session menu hangs from the title's left edge; an un-positioned
+        // menu otherwise hangs from its button's right edge.
+        let from_left = matches!(menu.target, MenuTarget::Session(_));
         let placed = match menu.at {
             Some(at) => anchored().position(at),
+            None if from_left => anchored().anchor(Anchor::TopLeft),
             None => anchored().anchor(Anchor::TopRight),
         };
-        // The wrapper puts an un-positioned menu under the button's right edge.
-        div().absolute().top(px(28.)).right_0().child(deferred(placed.child(body)).with_priority(1))
+        let wrapper = div().absolute().top(px(28.));
+        let wrapper = if from_left { wrapper.left_0() } else { wrapper.right_0() };
+        wrapper.child(deferred(placed.child(body)).with_priority(1))
     }
 
     fn menu_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -276,7 +312,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{MenuPick, NotebookAction};
+    use super::{MenuPick, MenuTarget, NotebookAction};
     use crate::sidebar::{Row, RowAction};
 
     #[test]
@@ -284,6 +320,13 @@ mod tests {
         assert!(MenuPick::Notebook(1, NotebookAction::Stop).danger());
         assert!(!MenuPick::Notebook(1, NotebookAction::Reveal).danger());
         assert_ne!(MenuPick::Notebook(1, NotebookAction::Rename).group(), MenuPick::Notebook(1, NotebookAction::LookEndeavor).group());
-        assert_eq!(MenuPick::Row(Row::Open(1), RowAction::Delete).group(), 1);
+        assert_eq!(MenuPick::Row { row: Row::Open(1), action: RowAction::Delete, in_header: false }.group(), 1);
+    }
+
+    #[test]
+    fn the_session_menu_acts_on_the_open_sessions_row() {
+        assert!(MenuTarget::Session(3).session_row() == Some((Row::Open(3), true)));
+        assert!(MenuTarget::Row(Row::Open(3)).session_row() == Some((Row::Open(3), false)));
+        assert!(MenuTarget::Notebook(3).session_row().is_none());
     }
 }

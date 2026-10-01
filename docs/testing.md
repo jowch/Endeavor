@@ -62,7 +62,9 @@ To wait for something, poll the dump. For example, loop until
 - `window`. The screen: `new_session`, `session`, `sign_in` or `splash`.
   Also the setup step, an open dialog (`server_dialog`, `ssh_prompt`,
   `login_node_warning`), whether Settings is open (`settings_open`), and
-  whether a menu is open.
+  whether a menu is open (`menu_open`). `menu` is the open ⋮ or ⌄ menu: what
+  it's `for` (`row`, `session` for the chat header's title, `notebook` or
+  `share`) and its `items`, each with its `label` and `key`.
 - `offline`. Null when online. Otherwise, how long the app has been offline.
 - `sign_in`. `account` is `unknown`, `signed_in` or `signed_out`. When signed
   out, `stage` says where sign-in is, and `card` says whether its card shows
@@ -73,7 +75,8 @@ To wait for something, poll the dump. For example, loop until
 - `new_session`, on the new-session screen. The chips (where, resources, folder,
   notebook) with their labels, the mode, the notice and connection notice, and
   either `resume` (Pick up where you left off) or `examples`.
-- `session`, for the active session. The title, and `transcript`: the entries
+- `session`, for the active session. The title, `renaming_title` (the name
+  box in the chat header, from the session menu's Rename), and `transcript`: the entries
   in order, as drawn. The entry kinds are `user` (with chips, the "Not
   answered yet" line, and `delivery`, the line under a message sent with ⌘⏎
   while Claude worked, and `quotes`: each quote's `source`, `excerpt`,

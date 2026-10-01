@@ -331,8 +331,7 @@ pub struct Workspace {
     /// Each session's notebook file, by session id (persisted), for reopening it
     /// with the session: one the app opened isn't in the agent's history.
     session_notebooks: HashMap<String, Place>,
-    /// The session being renamed, and its name box.
-    renaming: Option<(Row, Entity<InputState>)>,
+    renaming: Option<sidebar::Rename>,
     menu: Option<PopupMenu>,
     /// Folders showing all their past sessions, not just the newest.
     expanded: HashSet<Place>,
@@ -880,7 +879,7 @@ impl Workspace {
             let _ = self.agent_tx.unbounded_send(Command::CloseSession(id));
         }
         let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: session.place.host.agent_cwd(&session.place.path) });
-        if self.renaming.as_ref().is_some_and(|(row, _)| *row == Row::Open(key)) {
+        if self.renaming.as_ref().is_some_and(|r| r.row == Row::Open(key)) {
             self.renaming = None;
         }
         if self.active == Some(key) {
@@ -908,7 +907,7 @@ impl Workspace {
         for past in self.past.values_mut() {
             past.retain(|info| info.session_id != id);
         }
-        if self.renaming.as_ref().is_some_and(|(row, _)| matches!(row, Row::Past(p, _) if *p == id)) {
+        if self.renaming.as_ref().is_some_and(|r| matches!(&r.row, Row::Past(p, _) if *p == id)) {
             self.renaming = None;
         }
         self.ours.remove(&id.to_string());
@@ -2010,12 +2009,12 @@ impl Render for Workspace {
         };
         // Chat header: the session and its folder; the notebook header: its file.
         let (title, folder) = match active {
-            Some(ix) => (self.sessions[ix].title.clone(), Some(self.folder_heading(&self.sessions[ix].place))),
-            None => ("New session".into(), None),
+            Some(ix) => (self.session_title(self.sessions[ix].key, self.sessions[ix].title.clone(), cx), Some(self.folder_heading(&self.sessions[ix].place))),
+            None => (div().overflow_hidden().whitespace_nowrap().child("New session").into_any_element(), None),
         };
         let chat_header = column_header("chat-header")
             .when(!self.settings.layout.sidebar_open, |d| d.when(cfg!(target_os = "macos"), |d| d.pl(px(TRAFFIC_LIGHTS))).child(sidebar_toggle(self, cx)))
-            .child(div().overflow_hidden().whitespace_nowrap().child(title))
+            .child(title)
             .children(folder.map(|f| {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family(theme::MONO).text_size(theme::size_meta_small()).child(f)
             }));

@@ -43,6 +43,14 @@ pub(crate) enum Row {
     Past(SessionId, Place),
 }
 
+/// A session being renamed and its name box: in its sidebar row, or in the
+/// chat header when the session menu's Rename opened it.
+pub(crate) struct Rename {
+    pub(crate) row: Row,
+    pub(crate) input: Entity<InputState>,
+    pub(crate) in_header: bool,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum RowAction {
     Rename,
@@ -375,7 +383,7 @@ impl Workspace {
 
     pub(crate) fn row_action(&mut self, row: Row, action: RowAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
-            RowAction::Rename => self.start_rename(row, window, cx),
+            RowAction::Rename => self.start_rename(row, false, window, cx),
             RowAction::Reveal => {
                 let folder = match &row {
                     Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.place.clone()),
@@ -406,7 +414,9 @@ impl Workspace {
         }
     }
 
-    fn start_rename(&mut self, row: Row, window: &mut Window, cx: &mut Context<Self>) {
+    /// Open a session's name box: in its sidebar row, or `in_header`, in the
+    /// chat header's title (the session menu's Rename).
+    pub(crate) fn start_rename(&mut self, row: Row, in_header: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(title) = self.row_title(&row) else { return };
         let input = cx.new(|cx| InputState::new(window, cx).default_value(title));
         input.update(cx, |s, cx| {
@@ -419,13 +429,13 @@ impl Workspace {
             }
         })
         .detach();
-        self.renaming = Some((row, input));
+        self.renaming = Some(Rename { row, input, in_header });
         cx.notify();
     }
 
     /// Keep the typed name (an empty one leaves the title as it was).
     fn finish_rename(&mut self, cx: &mut Context<Self>) {
-        let Some((row, input)) = self.renaming.take() else { return };
+        let Some(Rename { row, input, .. }) = self.renaming.take() else { return };
         let name = input.read(cx).value().trim().to_string();
         if name.is_empty() {
             return cx.notify();
@@ -485,7 +495,7 @@ impl Workspace {
     /// the row's notebook name, highlighted there. The title itself is
     /// highlighted while searching either way.
     fn row_lines(&self, row: &Row, title: &str, query: &str, folder_line: Option<&str>) -> Div {
-        if let Some((renaming, input)) = &self.renaming
+        if let Some(Rename { row: renaming, input, in_header: false }) = &self.renaming
             && renaming == row
         {
             return div().flex_1().child(Input::new(input).xsmall().text_size(theme::size_body()));
@@ -509,6 +519,51 @@ impl Workspace {
             .flex_col()
             .child(title_el)
             .children(second.map(|el| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(el)))
+    }
+
+    /// The chat header's session title and ⌄, which opens the session menu (a
+    /// sidebar row's ⋮ menu, for the open session); while renamed from that
+    /// menu, its name box instead.
+    pub(crate) fn session_title(&self, key: u64, title: String, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(Rename { row: Row::Open(renaming), input, in_header: true }) = &self.renaming
+            && *renaming == key
+        {
+            return div()
+                .w(px(260.))
+                .flex_shrink(1.)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Input::new(input).xsmall().text_size(theme::size_body()))
+                .into_any_element();
+        }
+        let target = MenuTarget::Session(key);
+        let menu = self.menu.as_ref().filter(|menu| menu.target == target);
+        div()
+            .id("session-title")
+            .role(Role::Button)
+            .aria_label(format!("{title}, session menu"))
+            .relative()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .h(px(26.))
+            .px(px(6.))
+            .ml(px(-6.))
+            .rounded(px(4.))
+            .cursor_pointer()
+            .border_2()
+            .border_color(gpui::transparent_black())
+            .track_focus(&self.dialog_focus("session-title", cx))
+            .tab_stop(true)
+            .focus_ring_on(theme::bg_page())
+            .when(menu.is_some(), |d| d.bg(theme::row_active()))
+            .hover(|s| s.bg(theme::row_active()))
+            .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(title))
+            .child(div().flex_shrink_0().child(glyph(Glyph::Chevron, theme::text_muted())))
+            .children(menu.map(|menu| self.render_menu(menu, cx)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, window, cx| this.open_menu(target.clone(), None, window, cx)))
+            .into_any_element()
     }
 
     /// A row's ⋮ button, and its menu while open.
@@ -634,7 +689,7 @@ impl Workspace {
                     // Double-click renames.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         if e.click_count() >= 2 {
-                            this.start_rename(Row::Open(key), window, cx);
+                            this.start_rename(Row::Open(key), false, window, cx);
                         } else {
                             this.activate(key, cx);
                         }
@@ -661,7 +716,7 @@ impl Workspace {
                     .child(self.row_more(row.clone(), group, false, cx))
                     .children(mark)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.renaming.as_ref().is_some_and(|(renaming, _)| *renaming == row) && let Some(info) = this.past_info(&id, &place) {
+                        if !this.renaming.as_ref().is_some_and(|r| r.row == row) && let Some(info) = this.past_info(&id, &place) {
                             this.open_past(info, place.clone(), cx);
                         }
                     }))
