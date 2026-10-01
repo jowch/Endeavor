@@ -868,6 +868,7 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_start()
                 .gap(px(6.))
                 .px(px(10.))
@@ -875,7 +876,7 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
                 .border_t_1()
                 .border_color(theme::accent().opacity(0.25))
                 .children(left.into_iter().map(|(_, b)| b.into_any_element()))
-                .child(div().flex_1().min_w_0().flex().justify_end().gap(px(6.)).children(right.into_iter().map(|(_, b)| b))),
+                .child(div().flex_1().flex().justify_end().gap(px(6.)).children(right.into_iter().map(|(_, b)| b))),
         )
         .into_any_element()
 }
