@@ -59,6 +59,8 @@ pub(crate) enum RowAction {
     Unarchive,
     Close,
     Delete,
+    /// The session menu's list of the agent's rules for the folder (not in a row's ⋮ menu).
+    FolderRules,
 }
 
 impl RowAction {
@@ -72,6 +74,7 @@ impl RowAction {
             RowAction::Unarchive => "Unarchive",
             RowAction::Close => "Close",
             RowAction::Delete => "Delete…",
+            RowAction::FolderRules => "Allowed in this folder",
         }
     }
 
@@ -84,6 +87,7 @@ impl RowAction {
             RowAction::Archive | RowAction::Unarchive => ("a", "A"),
             RowAction::Close => ("c", "C"),
             RowAction::Delete => ("backspace", "⌫"),
+            RowAction::FolderRules => ("l", "L"),
         }
     }
 
@@ -424,6 +428,11 @@ impl Workspace {
                     self.close_session(key, cx);
                 }
             }
+            RowAction::FolderRules => {
+                if let Row::Open(key) = row {
+                    self.open_menu(MenuTarget::FolderRules(key), None, window, cx);
+                }
+            }
             RowAction::Delete => {
                 let Some(title) = self.row_title(&row) else { return };
                 self.open_confirm(
@@ -567,7 +576,7 @@ impl Workspace {
                 .into_any_element();
         }
         let target = MenuTarget::Session(key);
-        let menu = self.menu.as_ref().filter(|menu| menu.target == target);
+        let menu = self.menu.as_ref().filter(|menu| menu.target == target || menu.target == MenuTarget::FolderRules(key));
         div()
             .id("session-title")
             .role(Role::Button)

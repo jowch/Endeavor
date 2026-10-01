@@ -24,6 +24,7 @@ use crate::agent::{SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
 use crate::gate;
 use crate::hosts::Place;
+use crate::permits::{Asked, Asks, Rule};
 use crate::pluto;
 use crate::runs;
 use crate::outbox::{Copying, Delivery, Dispatch, Outbox, Queued, Shown};
@@ -67,6 +68,9 @@ pub enum Entry {
         /// The notebook tool and its input, for the run card.
         tool: Option<String>,
         input: serde_json::Value,
+        /// The call's kind and the first file it touches, as the agent says.
+        kind: Option<ToolKind>,
+        path: Option<PathBuf>,
         /// What the run would run, once the runtime answers.
         preview: Option<pluto::RunPreview>,
         /// Plan mode's end: the plan to approve (markdown).
@@ -148,26 +152,49 @@ fn partway_reason(reason: StopReason) -> Option<&'static str> {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Approval {
     Allowed,
-    /// Allowed, and later runs in this session don't ask.
-    AllowedFromNowOn,
+    /// "Always this session": allowed, and later matching prompts in this
+    /// session are answered without a card (or, for runs, the session went to Auto).
+    ForSession,
+    /// "Always in this folder": the agent keeps the rule in the folder's settings.
+    InFolder,
     Denied,
-    /// "Always this session" was on, so it didn't ask.
+    /// The session runs without asking (Auto), so it didn't ask.
     WithoutAsking,
+    /// A plan approved with Start, Start in Auto, or sent back with Keep planning.
+    Started,
+    StartedInAuto,
+    KeptPlanning,
 }
 
 impl Approval {
     pub fn label(self) -> &'static str {
         match self {
             Approval::Allowed => "allowed",
-            Approval::AllowedFromNowOn => "allowed, won't ask again",
+            Approval::ForSession => "allowed for this session",
+            Approval::InFolder => "allowed in this folder",
             Approval::Denied => "denied",
             Approval::WithoutAsking => "ran without asking",
+            Approval::Started => "started",
+            Approval::StartedInAuto => "started in Auto",
+            Approval::KeptPlanning => "kept planning",
         }
     }
 }
 
+/// How far an answer that allows reaches.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Scope {
+    Once,
+    /// "Always this session": Endeavor remembers it (for runs: the session goes to Auto).
+    Session,
+    /// "Always in this folder": the agent's own lasting rule.
+    Folder,
+}
+
 /// Work a session hands back to the workspace.
 pub enum Effect {
+    /// A prompt waits for the user (its entry): a notification if Endeavor is in the background.
+    Asked(usize),
     Send(Turn),
     /// The agent opened or created this notebook (its id, and its file).
     ShowNotebook { id: String, path: Option<String> },
@@ -341,6 +368,9 @@ pub struct Session {
     /// The sidebar row's Tab-stop handle. Lazily created (no `App` is available
     /// in `Session::new`'s many test call sites) and cached, so it stays stable.
     pub focus: RefCell<Option<FocusHandle>>,
+    /// The agent's prompts as Endeavor answers them: "Always this session"
+    /// rules, the queued prompts' count, when each was answered.
+    pub asks: Asks,
     /// The open approval card's button handles, resized to match its button count.
     approval_focus: RefCell<Vec<FocusHandle>>,
     /// The pinned plan's fold toggle's Tab-stop handle.
@@ -520,6 +550,7 @@ impl Session {
             resources: None,
             start_mode: None,
             focus: RefCell::new(None),
+            asks: Asks::default(),
             approval_focus: RefCell::new(Vec::new()),
             pinned_plan_focus: RefCell::new(None),
             plan_card_focus: RefCell::new(None),
@@ -1020,6 +1051,7 @@ impl Session {
                     // Stopped to send the next message: its bubble says so.
                     self.note(note);
                 }
+                self.drop_prompts();
                 self.turn_ended(&mut effects);
             }
             SessionEvent::AuthRequired => {
@@ -1047,14 +1079,27 @@ impl Session {
                 // Only runs get the run card ("Always this session"); other notebook
                 // prompts (e.g. Manual asking before an edit) get the agent's options.
                 let input = fields.raw_input.clone().unwrap_or_default();
+                let kind = fields.kind;
+                let path = fields.locations.as_ref().and_then(|l| l.first()).map(|l| l.path.clone());
                 let runs_code = title.strip_prefix(celldiff::TOOL_PREFIX).is_some_and(|tool| gate::runs_code(tool, &input));
-                if runs_code && self.run_without_asking {
-                    if let Some(allow) = option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
-                        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
-                        let _ = responder.respond(RequestPermissionResponse::new(outcome));
-                        self.approve(&request.tool_call.tool_call_id, Approval::WithoutAsking, &title, &input);
-                        return effects;
-                    }
+                // The adapter's ExitPlanMode prompt: its options carry these ids.
+                let plan = request
+                    .options
+                    .iter()
+                    .any(|o| o.option_id.to_string().starts_with("exit-plan-"))
+                    .then(|| input["plan"].as_str().unwrap_or("").to_owned());
+                let call = request.tool_call.tool_call_id.clone();
+                let asked = Asked { title: &title, kind, input: &input, path: path.as_deref() };
+                let answered = match option_of_kind(&request.options, PermissionOptionKind::AllowOnce) {
+                    Some(allow) if plan.is_none() && runs_code && self.run_without_asking => Some((allow, Approval::WithoutAsking)),
+                    Some(allow) if plan.is_none() && !runs_code && self.asks.allowed(&asked) => Some((allow, Approval::ForSession)),
+                    _ => None,
+                };
+                if let Some((allow, approval)) = answered {
+                    let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
+                    let _ = responder.respond(RequestPermissionResponse::new(outcome));
+                    self.approve(&call, approval, &title, &input);
+                    return effects;
                 }
                 let code = input["code"]
                     .as_str()
@@ -1064,17 +1109,12 @@ impl Session {
                 if let Some(tool) = tool.clone().filter(|t| runs_code && t != "run_shell") {
                     effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
                 }
-                // The adapter's ExitPlanMode prompt: its options carry these ids.
-                let plan = request
-                    .options
-                    .iter()
-                    .any(|o| o.option_id.to_string().starts_with("exit-plan-"))
-                    .then(|| input["plan"].as_str().unwrap_or("").to_owned());
-                let call = request.tool_call.tool_call_id.clone();
                 if plan.is_some() {
                     self.plan_open = false;
                 }
-                self.push(Entry::Permission { call, title, code, options: request.options, responder: Some(responder), runs_code, tool, input, preview: None, plan });
+                self.asks.asked(self.waiting_prompts().len());
+                self.push(Entry::Permission { call, title, code, options: request.options, responder: Some(responder), runs_code, tool, input, kind, path, preview: None, plan });
+                effects.push(Effect::Asked(self.entries.len() - 1));
             }
             SessionEvent::Update(update) => {
                 self.heard = Some(Instant::now());
@@ -1183,11 +1223,7 @@ impl Session {
             self.push_changes();
             self.cut_off = true;
         }
-        for entry in &mut self.entries {
-            if let Entry::Permission { responder, .. } = entry {
-                *responder = None;
-            }
-        }
+        self.drop_prompts();
         self.mark(0);
         self.turn_entry = None;
         self.busy_since = None;
@@ -1502,9 +1538,34 @@ impl Session {
         self.busy_since.and(self.turn_plan())
     }
 
-    /// The permission request waiting for an answer, if any.
+    /// The permission request waiting for an answer, if any: the first of
+    /// those waiting, which the card shows.
     pub fn pending_permission(&self) -> Option<usize> {
-        self.entries.iter().position(|e| matches!(e, Entry::Permission { responder: Some(_), .. }))
+        self.waiting_prompts().first().copied()
+    }
+
+    /// Every prompt waiting for an answer, in the order they came.
+    pub fn waiting_prompts(&self) -> Vec<usize> {
+        self.entries.iter().enumerate().filter(|(_, e)| matches!(e, Entry::Permission { responder: Some(_), .. })).map(|(ix, _)| ix).collect()
+    }
+
+    /// Prompts the agent no longer waits on (its turn ended, its process
+    /// stopped): their cards go, and a note says which went unanswered.
+    fn drop_prompts(&mut self) {
+        let waiting = self.waiting_prompts();
+        let headings: Vec<String> = waiting.iter().filter_map(|ix| crate::approval::heading_at(self, *ix)).collect();
+        for ix in waiting {
+            if let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix)
+                && let Some(responder) = responder.take()
+            {
+                let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
+            }
+            self.mark(ix);
+        }
+        for heading in headings {
+            self.note(format!("Claude stopped before you answered “{}”", heading.replace('`', "")));
+        }
+        self.asks.forget_batch();
     }
 
     /// The agent is asking to let the notebook run ("Let this notebook run?").
@@ -1512,9 +1573,9 @@ impl Session {
         self.pending_permission().is_some_and(|ix| matches!(&self.entries[ix], Entry::Permission { tool: Some(tool), .. } if tool == "allow_execution"))
     }
 
-    /// Answer the pending request by kind (keys: ⏎ allow, ⌘⏎ always, Esc deny).
-    /// For a plan: ⏎ starts (asking before runs), ⌘⏎ starts in Auto.
-    pub fn answer_pending(&mut self, kind: PermissionOptionKind, stop_asking: bool) -> bool {
+    /// Answer the pending request by kind (keys: ⏎ allow, ⌘⏎ always this
+    /// session, Esc deny). For a plan: ⏎ starts (asking before runs), ⌘⏎ starts in Auto.
+    pub fn answer_pending(&mut self, kind: PermissionOptionKind, scope: Scope) -> bool {
         let Some(ix) = self.pending_permission() else { return false };
         let Entry::Permission { options, plan, .. } = &self.entries[ix] else { return false };
         let option = match (plan.is_some(), kind) {
@@ -1522,7 +1583,7 @@ impl Session {
             _ => option_of_kind(options, kind),
         };
         let Some(option) = option.cloned() else { return false };
-        self.answer(ix, &option, stop_asking);
+        self.answer(ix, &option, scope);
         true
     }
 
@@ -1532,22 +1593,52 @@ impl Session {
         }
     }
 
-    /// Answer a permission request; `stop_asking` approves this session's later runs.
-    pub fn answer(&mut self, ix: usize, option: &PermissionOption, stop_asking: bool) {
-        let Some(Entry::Permission { call, title, responder, input, .. }) = self.entries.get_mut(ix) else { return };
-        if let Some(responder) = responder.take() {
-            let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
-            let _ = responder.respond(RequestPermissionResponse::new(outcome));
-            let allowed = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
-            let approval = match (allowed, stop_asking) {
-                (true, true) => Approval::AllowedFromNowOn,
-                (true, false) => Approval::Allowed,
-                (false, _) => Approval::Denied,
+    /// Answer a permission request with `option`. `Scope::Session` remembers a
+    /// rule for this session (for runs and plans: runs stop asking), and
+    /// answers the prompts already waiting that it covers.
+    pub fn answer(&mut self, ix: usize, option: &PermissionOption, scope: Scope) {
+        let Some(Entry::Permission { call, title, responder, input, runs_code, plan, options, kind, path, .. }) = self.entries.get_mut(ix) else { return };
+        let Some(responder) = responder.take() else { return };
+        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
+        let _ = responder.respond(RequestPermissionResponse::new(outcome));
+        let allowed = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
+        let approval = answer_approval(allowed, plan.is_some(), scope);
+        let runs = *runs_code || plan.is_some();
+        let rule = (allowed && !runs && scope == Scope::Session).then(|| Rule::for_prompt(&Asked { title, kind: *kind, input, path: path.as_deref() }, options));
+        let (call, title, input) = (call.clone(), title.clone(), input.clone());
+        self.mark(ix);
+        self.asks.answered(call.clone());
+        self.approve(&call, approval, &title, &input);
+        if allowed && runs && scope == Scope::Session {
+            self.run_without_asking = true;
+        }
+        if let Some(rule) = rule {
+            self.asks.rules.push(rule);
+        }
+        if allowed && scope == Scope::Session {
+            self.answer_covered();
+        }
+    }
+
+    /// Prompts already waiting that "Always this session" now covers.
+    fn answer_covered(&mut self) {
+        for ix in self.waiting_prompts() {
+            let Entry::Permission { title, input, runs_code, plan, options, kind, path, .. } = &self.entries[ix] else { continue };
+            let asked = Asked { title, kind: *kind, input, path: path.as_deref() };
+            let approval = match () {
+                _ if plan.is_some() => continue,
+                _ if *runs_code && self.run_without_asking => Approval::WithoutAsking,
+                _ if !*runs_code && self.asks.allowed(&asked) => Approval::ForSession,
+                _ => continue,
             };
+            let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce).cloned() else { continue };
+            let Some(Entry::Permission { call, title, responder, input, .. }) = self.entries.get_mut(ix) else { continue };
+            let Some(responder) = responder.take() else { continue };
+            let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()))));
             let (call, title, input) = (call.clone(), title.clone(), input.clone());
             self.mark(ix);
+            self.asks.answered(call.clone());
             self.approve(&call, approval, &title, &input);
-            self.run_without_asking |= stop_asking;
         }
     }
 
@@ -1584,12 +1675,26 @@ pub(crate) fn turn_ended_note(reason: StopReason) -> Option<&'static str> {
 /// "Allowed: edit a cell", "Denied: run 2 cells".
 pub(crate) fn answer_note(approval: Approval, what: &str) -> String {
     let answer = match approval {
-        Approval::Allowed => "Allowed",
-        Approval::AllowedFromNowOn => "Allowed from now on",
+        Approval::Allowed | Approval::Started | Approval::StartedInAuto => "Allowed",
+        Approval::ForSession => "Allowed for this session",
+        Approval::InFolder => "Allowed in this folder",
         Approval::WithoutAsking => "Allowed without asking",
-        Approval::Denied => "Denied",
+        Approval::Denied | Approval::KeptPlanning => "Denied",
     };
     format!("{answer}: {what}")
+}
+
+/// The answer a prompt's row shows, from what the user picked.
+pub(crate) fn answer_approval(allowed: bool, plan: bool, scope: Scope) -> Approval {
+    match (allowed, plan, scope) {
+        (false, true, _) => Approval::KeptPlanning,
+        (false, false, _) => Approval::Denied,
+        (true, true, Scope::Session) => Approval::StartedInAuto,
+        (true, true, _) => Approval::Started,
+        (true, false, Scope::Once) => Approval::Allowed,
+        (true, false, Scope::Session) => Approval::ForSession,
+        (true, false, Scope::Folder) => Approval::InFolder,
+    }
 }
 
 /// The current value of a select config option, by id.
@@ -1658,6 +1763,8 @@ mod tests {
             runs_code: true,
             tool: None,
             input: serde_json::Value::Null,
+            kind: None,
+            path: None,
             preview: None,
             plan: None,
         };
@@ -1694,9 +1801,20 @@ mod tests {
         assert_eq!(turn_ended_note(StopReason::MaxTurnRequests), Some("Claude stopped: it took too many steps in one go"));
         assert_eq!(turn_ended_note(StopReason::Refusal), Some("Claude declined to continue"));
         assert_eq!(answer_note(Approval::Allowed, "edit a cell"), "Allowed: edit a cell");
-        assert_eq!(answer_note(Approval::AllowedFromNowOn, "run 2 cells"), "Allowed from now on: run 2 cells");
+        assert_eq!(answer_note(Approval::ForSession, "run 2 cells"), "Allowed for this session: run 2 cells");
         assert_eq!(answer_note(Approval::WithoutAsking, "run a cell"), "Allowed without asking: run a cell");
         assert_eq!(answer_note(Approval::Denied, "delete a cell"), "Denied: delete a cell");
+        use super::{Scope, answer_approval};
+        // What each answer reads as on its row.
+        assert_eq!(answer_approval(true, false, Scope::Once).label(), "allowed");
+        assert_eq!(answer_approval(true, false, Scope::Session).label(), "allowed for this session");
+        assert_eq!(answer_approval(true, false, Scope::Folder).label(), "allowed in this folder");
+        assert_eq!(answer_approval(false, false, Scope::Once).label(), "denied");
+        assert_eq!(answer_approval(true, true, Scope::Once).label(), "started");
+        assert_eq!(answer_approval(true, true, Scope::Session).label(), "started in Auto");
+        assert_eq!(answer_approval(false, true, Scope::Once).label(), "kept planning");
+        assert_eq!(crate::transcript::answered_line(Approval::ForSession, "14:03"), "Allowed for this session at 14:03");
+        assert_eq!(crate::transcript::answered_line(Approval::Denied, "14:06"), "Denied at 14:06");
 
         let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));

@@ -3,28 +3,88 @@
 
 use std::path::Path;
 
-use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, PlanEntry, PlanEntryStatus};
+use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, PlanEntry, PlanEntryStatus, ToolKind};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::text::{TextView, TextViewStyle};
 
 use crate::Workspace;
+use crate::celldiff::{self, Change};
+use crate::hosts::HostId;
+use crate::new_session::{Glyph, glyph, tilde};
 use crate::pluto;
 use crate::runs;
-use crate::session::{Entry, Session, defined_name, folder_name, option_of_kind, plan_option};
+use crate::session::{Entry, Scope, Session, defined_name, file_name, folder_name, option_of_kind, plan_option};
 use crate::theme;
-use crate::transcript::markdown_style;
 use crate::theme::FocusRing as _;
+use crate::transcript::markdown_style;
 
 /// The pending approval card, as it reads.
 pub(crate) struct ApprovalView {
     pub heading: String,
-    /// Code it would run, cut to its first lines.
-    pub code: Option<String>,
+    /// "1 of 3" while several prompts wait.
+    pub count: Option<String>,
+    /// What it would run or change: code, a command, a diff.
+    pub code: Option<CardCode>,
     pub lines: Vec<(String, Tone)>,
     /// Plan mode's end: the plan to approve, in place of code and lines.
     pub plan: Option<PlanCard>,
     pub buttons: Vec<CardButton>,
+    /// "In this folder", under the ⌄ on Always this session: the agent's own
+    /// lasting rule, offered when the agent keeps those in the folder.
+    pub folder: Option<PermissionOption>,
+    /// The notebook cells it asks to run, and those that re-run after them.
+    pub cells: Vec<String>,
+    pub rerun: Vec<String>,
+    /// The prompts waiting behind this one, by their questions.
+    pub then: Vec<String>,
+    /// The cells' names, as the heading names them.
+    pub names: Vec<String>,
+}
+
+/// A card's code box.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CardCode {
+    Plain(String),
+    /// The change, removed lines first, in the transcript's diff colours.
+    Diff(Vec<(Change, String)>),
+    /// Code going away (a deleted cell), struck through.
+    Struck(String),
+}
+
+/// The card shows this many lines of code until "Show all N lines".
+pub(crate) const CODE_LINES: usize = 8;
+
+impl CardCode {
+    fn lines(&self) -> Vec<(Change, String)> {
+        match self {
+            CardCode::Plain(code) | CardCode::Struck(code) => code.lines().map(|l| (Change::Same, l.to_owned())).collect(),
+            CardCode::Diff(lines) => lines.clone(),
+        }
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.lines().len()
+    }
+
+    /// As plain text (diff lines marked "- " and "+ "), cut to the first lines unless `all`.
+    pub fn text(&self, all: bool) -> String {
+        let lines = self.lines();
+        let mut shown: Vec<String> = lines
+            .iter()
+            .take(if all { usize::MAX } else { CODE_LINES })
+            .map(|(change, line)| match (self, change) {
+                (CardCode::Diff(_), Change::Added) => format!("+ {line}"),
+                (CardCode::Diff(_), Change::Removed) => format!("- {line}"),
+                (CardCode::Diff(_), Change::Same) => format!("  {line}"),
+                _ => line.clone(),
+            })
+            .collect();
+        if !all && lines.len() > CODE_LINES {
+            shown.push("…".into());
+        }
+        shown.join("\n")
+    }
 }
 
 /// A line's colour; `backticked` names in it are mono.
@@ -32,6 +92,7 @@ pub(crate) struct ApprovalView {
 pub(crate) enum Tone {
     Muted,
     Secondary,
+    Faint,
 }
 
 pub(crate) struct CardButton {
@@ -39,9 +100,9 @@ pub(crate) struct CardButton {
     /// The key that presses it.
     pub hint: &'static str,
     pub weight: Weight,
-    option: PermissionOption,
-    /// Approve this session's runs from now on.
-    stop: bool,
+    pub option: PermissionOption,
+    /// How far the answer reaches.
+    pub scope: Scope,
 }
 
 /// How a card's button looks and where it sits: the answer that declines on
@@ -63,36 +124,56 @@ impl Weight {
     }
 }
 
-/// The pending approval, pinned above the composer: the only heavy element
-/// (accent edge, soft ring, filled primary). Runs get "Run N cells?", the cells,
-/// and how many dependents re-run; other prompts get the agent's own options.
+/// The card for the first prompt waiting: the only heavy element (accent
+/// edge, soft ring, filled primary), with a count and the prompts behind it.
 pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
-    let ix = session.pending_permission()?;
-    let Entry::Permission { title, code, options, runs_code, tool, input, preview, plan, .. } = &session.entries[ix] else { return None };
+    let waiting = session.waiting_prompts();
+    let mut view = view_at(session, *waiting.first()?)?;
+    view.count = session.asks.count();
+    view.then = waiting[1..].iter().filter_map(|ix| view_at(session, *ix)).map(|v| v.heading.trim_end_matches('?').to_owned()).collect();
+    Some(view)
+}
+
+/// A prompt's question ("Run `rates`?"), for the note when it went unanswered.
+pub(crate) fn heading_at(session: &Session, ix: usize) -> Option<String> {
+    view_at(session, ix).map(|v| v.heading)
+}
+
+/// What one prompt's card says. Runs get "Run N cells?", the cells, and how
+/// many dependents re-run; the agent's own prompts get a question in its
+/// verb (Edit, Create, Run, Fetch) and never its option labels or tool names.
+fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
+    let Entry::Permission { title, options, runs_code, tool, input, preview, plan, kind, path, .. } = session.entries.get(ix)? else { return None };
     if let Some(plan) = plan {
         let card = PlanCard { open: session.plan_open, ..plan_card(plan) };
-        return Some(ApprovalView { heading: "Plan".into(), code: None, lines: vec![], plan: Some(card), buttons: plan_buttons(options) });
+        return Some(ApprovalView {
+            heading: "Plan".into(),
+            count: None,
+            code: None,
+            lines: vec![],
+            plan: Some(card),
+            buttons: plan_buttons(options),
+            folder: None,
+            cells: vec![],
+            rerun: vec![],
+            then: vec![],
+            names: vec![],
+        });
     }
     let tool = tool.as_deref().unwrap_or("");
-
-    let mut run_word = "Run";
-    let (heading, lines): (String, Vec<(String, Tone)>) = if !*runs_code {
-        let muted = |text: &str| (text.to_owned(), Tone::Muted);
-        if let Some(what) = runs::asked(title, input) {
-            (format!("Let Claude {what}?"), vec![])
-        } else if input["command"].is_string() {
-            // Claude Code's own shell: its title is the whole command, shown below instead.
-            (concat!("Run a command on ", crate::platform::this_computer!(), "?").into(), input["description"].as_str().map(muted).into_iter().collect())
-        } else {
-            let short = cut_line(title, 60);
-            let full = (short != title.trim()).then(|| muted(title));
-            (format!("Allow {short}?"), full.into_iter().collect())
-        }
+    let ask = if !*runs_code {
+        agent_prompt(session, title, *kind, input, path.as_deref())
     } else if tool == "run_shell" {
         let host = session.server.clone().unwrap_or_else(|| "the server".into());
         let folder = session.place.path.display().to_string();
         let cwd = input["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or(&folder);
-        (format!("Run a command on {host}?"), vec![(format!("In {cwd}"), Tone::Muted)])
+        Prompt {
+            heading: format!("Run a command on {host}?"),
+            verb: "Run",
+            code: input["command"].as_str().map(|c| CardCode::Plain(c.to_owned())),
+            lines: vec![(format!("In {cwd}"), Tone::Muted)],
+            ..Default::default()
+        }
     } else if tool == "allow_execution" {
         let file = session.notebook_path.as_deref().map(|p| folder_name(Path::new(p)));
         let host = session.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());
@@ -101,97 +182,241 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
             lines.push((line, Tone::Secondary));
         }
         lines.push((format!("Nothing runs yet. Running it lets its code read and change files on {host}."), Tone::Muted));
-        ("Let this notebook run?".into(), lines)
+        Prompt { heading: "Let this notebook run?".into(), verb: "Run notebook", code: None, lines, ..Default::default() }
     } else {
-        let question = run_question(tool, preview.as_ref(), input);
-        run_word = question.button;
-        let mut lines = Vec::new();
-        if question.names.len() > 1 && preview.as_ref().is_none_or(|p| !p.all) {
-            const SHOWN: usize = 5;
-            let mut names = question.names.iter().take(SHOWN).map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
-            if question.names.len() > SHOWN {
-                names.push_str(&format!(" and {} more", question.names.len() - SHOWN));
-            }
-            lines.push((names, Tone::Secondary));
-        }
-        if let Some(p) = preview.as_ref().filter(|p| p.dependents > 0) {
-            let them = if p.count == 1 { "it" } else { "them" };
-            let n = p.dependents;
-            let cells = if n == 1 { "cell" } else { "cells" };
-            lines.push((format!("Also re-runs {n} {cells} that depend on {them}."), Tone::Muted));
-        }
-        (question.heading, lines)
+        run_prompt(session, tool, input, preview.as_ref())
     };
-    // A single cell's code (or the new cell's) is short enough to show.
-    let code = code
-        .clone()
-        .or_else(|| input["code"].as_str().map(str::to_owned))
-        .or_else(|| input["command"].as_str().map(str::to_owned))
-        .or_else(|| preview.as_ref().and_then(|p| p.cells.first()).map(|c| c.code.clone())).filter(|_| preview.as_ref().is_none_or(|p| p.count <= 1 && !p.all));
-    let code = code.map(|code| {
-        const LINES: usize = 8;
-        let mut shown: Vec<&str> = code.lines().take(LINES).collect();
-        if code.lines().count() > LINES {
-            shown.push("…");
-        }
-        shown.join("\n")
-    });
 
-    // (label, key, option, runs from now on without asking)
-    let mut buttons: Vec<(String, &'static str, PermissionOption, bool)> = Vec::new();
-    if tool == "allow_execution" {
+    let cells: Vec<String> = match preview.as_ref().filter(|p| !p.all) {
+        Some(p) if p.cells.iter().any(|c| c.id.is_some()) => p.cells.iter().filter_map(|c| c.id.clone()).collect(),
+        _ if *runs_code && !matches!(tool, "allow_execution" | "run_shell" | "run_all_cells") => {
+            input["cell_id"].as_str().map(str::to_owned).into_iter().chain(input["cell_ids"].as_array().into_iter().flatten().filter_map(|c| c.as_str().map(str::to_owned))).collect()
+        }
+        _ => vec![],
+    };
+    let rerun = preview.as_ref().map(|p| p.dependent_ids.clone()).unwrap_or_default();
+
+    // (label, key, option, scope)
+    let mut buttons: Vec<(String, &'static str, PermissionOption, Scope)> = Vec::new();
+    let allow = option_of_kind(options, PermissionOptionKind::AllowOnce);
+    let deny = option_of_kind(options, PermissionOptionKind::RejectOnce);
+    if tool == "allow_execution" && *runs_code {
         // The same question as the notebook's safe-preview callout: once, not "always".
-        if let Some(deny) = option_of_kind(options, PermissionOptionKind::RejectOnce) {
-            buttons.push(("Not now".into(), "esc", deny.clone(), false));
-        }
-        if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
-            buttons.push(("Run notebook".into(), "⏎", allow.clone(), false));
-        }
-    } else if *runs_code {
-        if let Some(deny) = option_of_kind(options, PermissionOptionKind::RejectOnce) {
-            buttons.push(("Deny".into(), "esc", deny.clone(), false));
-        }
-        if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce) {
-            buttons.push(("Always this session".into(), crate::platform::shortcut!("⏎"), allow.clone(), true));
-            buttons.push((run_word.into(), "⏎", allow.clone(), false));
-        }
-    }
-    if buttons.is_empty() {
+        buttons.extend(deny.map(|d| ("Not now".into(), "esc", d.clone(), Scope::Once)));
+        buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
+    } else if let Some(allow) = allow {
+        buttons.extend(deny.map(|d| ("Deny".into(), "esc", d.clone(), Scope::Once)));
+        buttons.push(("Always this session".into(), crate::platform::shortcut!("⏎"), allow.clone(), Scope::Session));
+        buttons.push((ask.verb.into(), "⏎", allow.clone(), Scope::Once));
+    } else {
         buttons = option_buttons(options);
     }
+    let folder = (!*runs_code && crate::agent::CLAUDE_CODE.folder_rules.is_some() && session.place.host == HostId::ThisMac)
+        .then(|| crate::permits::folder_rule_option(options).cloned())
+        .flatten();
     let primary = buttons.iter().rposition(|(_, _, o, _)| matches!(o.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways));
     let buttons = buttons
         .into_iter()
         .enumerate()
-        .map(|(i, (label, hint, option, stop))| {
+        .map(|(i, (label, hint, option, scope))| {
             let weight = match option.kind {
                 _ if Some(i) == primary => Weight::Primary,
                 PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways => Weight::Quiet,
                 _ => Weight::Outlined,
             };
-            CardButton { label, hint, weight, option, stop }
+            CardButton { label, hint, weight, option, scope }
         })
         .collect();
-    Some(ApprovalView { heading, code, lines, plan: None, buttons })
+    Some(ApprovalView { heading: ask.heading, count: None, code: ask.code, lines: ask.lines, plan: None, buttons, folder, cells, rerun, then: vec![], names: ask.names })
 }
 
-pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+/// A prompt's question, the word on its ⏎ button, and its body.
+#[derive(Default)]
+struct Prompt {
+    heading: String,
+    verb: &'static str,
+    code: Option<CardCode>,
+    lines: Vec<(String, Tone)>,
+    names: Vec<String>,
+}
+
+/// A run card (the execution gate): "Run `rates`?" with the cell's code, the
+/// edit as a diff, a new cell's code, a deleted cell struck through.
+fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview: Option<&pluto::RunPreview>) -> Prompt {
+    let question = run_question(tool, preview, input);
+    let mut lines = Vec::new();
+    if question.names.len() > 1 && preview.is_none_or(|p| !p.all) {
+        const SHOWN: usize = 5;
+        let mut names = question.names.iter().take(SHOWN).map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
+        if question.names.len() > SHOWN {
+            names.push_str(&format!(" and {} more", question.names.len() - SHOWN));
+        }
+        lines.push((names, Tone::Secondary));
+    }
+    let one = preview.is_none_or(|p| p.count <= 1 && !p.all) && question.names.len() <= 1;
+    let old = input["cell_id"].as_str().and_then(|id| session.cell_codes.get(id)).map(str::to_owned).or_else(|| preview.and_then(|p| p.cells.first()).map(|c| c.code.clone()));
+    let new = input["code"].as_str();
+    let code = match (tool, new) {
+        ("add_cell", Some(code)) => Some(CardCode::Plain(code.to_owned())),
+        ("edit_cell", Some(code)) => Some(match old.as_deref().filter(|o| !o.trim().is_empty()) {
+            Some(old) if old != code => CardCode::Diff(celldiff::line_diff(old, code)),
+            _ => CardCode::Plain(code.to_owned()),
+        }),
+        ("delete_cell", _) => old.map(CardCode::Struck),
+        _ if one => old.map(CardCode::Plain),
+        _ => None,
+    };
+    let waiting = code.is_none() && one && preview.is_none() && tool != "submit_changes";
+    let code = code.or_else(|| waiting.then(|| CardCode::Plain("…".into())));
+    let them = if question.names.len() > 1 || preview.is_some_and(|p| p.count > 1) { "them" } else { "it" };
+    if waiting {
+        lines.push(("Finding out what it runs…".into(), Tone::Muted));
+    } else if tool == "add_cell" {
+        lines.push(("Nothing depends on it yet.".into(), Tone::Faint));
+    } else if let Some(p) = preview.filter(|p| p.dependents > 0) {
+        let n = p.dependents;
+        let cells = if n == 1 { "cell" } else { "cells" };
+        lines.push((format!("Also re-runs {n} {cells} that depend on {them}."), Tone::Muted));
+    }
+    if tool == "delete_cell" {
+        lines.push((format!("{} in the notebook brings the cell back.", crate::platform::shortcut!("Z")), Tone::Muted));
+    }
+    Prompt { heading: question.heading, verb: question.button, code, lines, names: question.names }
+}
+
+/// The agent's own prompt (Manual, or a call its rules ask about), in Endeavor's words.
+fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &serde_json::Value, path: Option<&Path>) -> Prompt {
+    let field = |name: &str| input[name].as_str().filter(|s| !s.trim().is_empty());
+    let local = session.place.host == HostId::ThisMac;
+    let here = crate::platform::this_computer!();
+    let folder = tilde(&session.place.path);
+    // A file inside the session's folder by its path there, else by its name.
+    let named = |file: &str| {
+        Path::new(file).strip_prefix(&session.place.path).ok().map(|p| p.display().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(|| file_name(file))
+    };
+    let file = path.map(|p| p.display().to_string()).or_else(|| field("file_path").or(field("notebook_path")).map(str::to_owned));
+    let in_folder = |file: &str| {
+        let dir = Path::new(file).parent().map(tilde).unwrap_or_else(|| folder.clone());
+        (format!("In {dir}"), Tone::Muted)
+    };
+
+    if let Some(command) = field("command").filter(|_| kind.is_none_or(|k| k == ToolKind::Execute)) {
+        let mut lines: Vec<(String, Tone)> = field("description").map(|d| (d.to_owned(), Tone::Secondary)).into_iter().collect();
+        let cwd = field("cwd").map(|c| tilde(Path::new(c))).unwrap_or_else(|| folder.clone());
+        lines.push((format!("In {cwd}"), Tone::Muted));
+        return Prompt { heading: format!("Run a command on {here}?"), verb: "Run", code: Some(CardCode::Plain(command.to_owned())), lines, ..Default::default() };
+    }
+    if kind == Some(ToolKind::Fetch) {
+        if let Some(url) = field("url") {
+            return Prompt {
+                heading: "Fetch a web page?".into(),
+                verb: "Fetch",
+                code: Some(CardCode::Plain(url.to_owned())),
+                lines: vec![(format!("Claude reads the page. Nothing on {here} changes."), Tone::Muted)],
+                ..Default::default()
+            };
+        }
+        if let Some(query) = field("query") {
+            return Prompt { heading: "Search the web?".into(), verb: "Search", code: Some(CardCode::Plain(query.to_owned())), lines: vec![], ..Default::default() };
+        }
+    }
+    if kind == Some(ToolKind::Edit)
+        && let Some(file) = file.as_deref()
+    {
+        let edits: Vec<(&str, &str)> = match input["edits"].as_array() {
+            Some(edits) => edits.iter().filter_map(|e| Some((e["old_string"].as_str()?, e["new_string"].as_str()?))).collect(),
+            None => field("old_string").or(Some("")).zip(input["new_string"].as_str()).filter(|_| input["new_string"].is_string()).into_iter().collect(),
+        };
+        if !edits.is_empty() {
+            let lines = edits.iter().flat_map(|(old, new)| celldiff::line_diff(old, new)).collect();
+            return Prompt { heading: format!("Edit `{}`?", named(file)), verb: "Edit", code: Some(CardCode::Diff(lines)), lines: vec![in_folder(file)], ..Default::default() };
+        }
+        if let Some(content) = input["content"].as_str() {
+            let existing = local.then(|| std::fs::read_to_string(file).ok()).flatten();
+            return match existing {
+                Some(old) => Prompt {
+                    heading: format!("Replace `{}`?", named(file)),
+                    verb: "Replace",
+                    code: Some(CardCode::Diff(celldiff::line_diff(&old, content))),
+                    lines: vec![in_folder(file)],
+                    ..Default::default()
+                },
+                None => {
+                    let dir = Path::new(file).parent().map(tilde).unwrap_or_else(|| folder.clone());
+                    Prompt {
+                        heading: format!("Create `{}`?", named(file)),
+                        verb: "Create",
+                        code: Some(CardCode::Plain(content.to_owned())),
+                        lines: vec![(format!("New file in {dir}. Nothing runs."), Tone::Muted)],
+                        ..Default::default()
+                    }
+                }
+            };
+        }
+    }
+    if let Some(tool) = celldiff::notebook_tool(title) {
+        let nothing_runs = ("Nothing runs. In Manual, every change to the notebook asks.".to_owned(), Tone::Muted);
+        let question = run_question(tool, None, input);
+        let what = question.heading.split(" and run").next().unwrap_or("").trim_end_matches('?').to_owned();
+        match tool {
+            "edit_cell" if input["code"].is_string() => {
+                let new = input["code"].as_str().unwrap_or("");
+                let old = input["cell_id"].as_str().and_then(|id| session.cell_codes.get(id)).filter(|o| !o.trim().is_empty());
+                let code = match old {
+                    Some(old) if old != new => CardCode::Diff(celldiff::line_diff(old, new)),
+                    _ => CardCode::Plain(new.to_owned()),
+                };
+                return Prompt { heading: format!("{what}?"), verb: "Edit", code: Some(code), lines: vec![nothing_runs], ..Default::default() };
+            }
+            "add_cell" if input["code"].is_string() => {
+                let code = input["code"].as_str().unwrap_or("").to_owned();
+                return Prompt { heading: format!("{what}?"), verb: "Add", code: Some(CardCode::Plain(code)), lines: vec![nothing_runs], ..Default::default() };
+            }
+            "edit_cells" => return Prompt { heading: format!("{what}?"), verb: "Edit", code: None, lines: vec![nothing_runs], ..Default::default() },
+            _ => {}
+        }
+        if let Some(what) = runs::asked(title, input) {
+            return Prompt { heading: format!("Let Claude {what}?"), verb: "Allow", code: None, lines: vec![], ..Default::default() };
+        }
+    }
+    let short = cut_line(&plain_title(title), 60);
+    let full = (short != title.trim() && !title.starts_with("mcp__")).then(|| (title.to_owned(), Tone::Muted));
+    Prompt { heading: format!("Allow {short}?"), verb: "Allow", code: None, lines: full.into_iter().collect(), ..Default::default() }
+}
+
+/// A tool's title without its raw name: `mcp__github__create_issue` → "`create issue` from `github`".
+fn plain_title(title: &str) -> String {
+    match title.trim().strip_prefix("mcp__").map(|t| t.split_once("__").unwrap_or((t, ""))) {
+        Some((server, "")) => format!("a `{server}` tool"),
+        Some((server, name)) => format!("`{}` from `{server}`", name.replace('_', " ")),
+        None => title.trim().to_owned(),
+    }
+}
+
+pub fn render_approval(session: &Session, notebook_shown: bool, window: &Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let ix = session.pending_permission()?;
     let view = approval_view(session)?;
     let key = session.key;
+    let folder = view.folder.clone();
+    let always_menu = session.asks.always_menu && folder.is_some();
     let buttons = view
         .buttons
         .into_iter()
         .enumerate()
-        .map(|(i, CardButton { label, hint, weight, option, stop })| {
+        .map(|(i, CardButton { label, hint, weight, option, scope })| {
             let focus = session.approval_focus(i, cx);
-            let button = approval_button(ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64)), &label, hint, weight, &focus)
-                .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, stop))))
-                .into_any_element();
+            let id = ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64));
+            let button = approval_button(id, &label, hint, weight, &focus).on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, scope))));
+            // "Always this session" with a ⌄ for "In this folder", when the agent keeps folder rules.
+            let button = match (&folder, scope) {
+                (Some(folder), Scope::Session) => always_split(session, ix, button, folder.clone(), always_menu, cx),
+                _ => button.into_any_element(),
+            };
             (weight, button)
         })
         .collect();
-    if let Some(plan) = view.plan {
+    let heading = card_heading(&view.heading, view.count.as_deref());
+    let card = if let Some(plan) = view.plan {
         let shown = match (&plan.steps, plan.open) {
             (Some(steps), false) => steps.clone(),
             _ => plan.full.clone(),
@@ -206,43 +431,235 @@ pub fn render_approval(session: &Session, cx: &mut Context<Workspace>) -> Option
             .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), shown).style(plan_style()));
         let toggle = plan.steps.is_some().then(|| {
             let label = if plan.open { "Show only the steps" } else { "Show the whole plan" };
-            div()
-                .id(ElementId::NamedInteger("plan-toggle".into(), key))
-                .role(Role::Button)
-                .aria_label(label)
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .cursor_pointer()
-                .text_color(theme::text_faint())
-                .hover(|s| s.text_color(theme::text_secondary()))
-                .track_focus(&session.plan_card_focus(cx))
-                .tab_stop(true)
-                .focus_ring_on(theme::bg_urgent())
-                .child(label)
-                .child(if plan.open { "⌄" } else { "›" })
+            toggle_link(ElementId::NamedInteger("plan-toggle".into(), key), label, plan.open, &session.plan_card_focus(cx))
                 .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.plan_open = !s.plan_open)))
                 .into_any_element()
         });
         let body = title.into_iter().chain([text.into_any_element()]).chain(toggle).collect();
-        return Some(approval_card(card_heading(&view.heading), body, buttons));
-    }
-    let code = view.code.map(|code| {
-        div().font_family(theme::MONO).text_size(theme::chat_code()).p(px(6.)).rounded(px(4.)).bg(theme::bg_page()).text_color(theme::text_secondary()).child(code).into_any_element()
+        approval_card(heading, body, buttons)
+    } else {
+        let mut body: Vec<AnyElement> = Vec::new();
+        // The asked-about cell is off screen in the notebook: a line to show it.
+        if notebook_shown && session.asks.cells_visible == Some(false) && !view.cells.is_empty() {
+            let cells = view.cells.clone();
+            body.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(theme::chat_meta_small())
+                    .text_color(theme::text_muted())
+                    .child(glyph(Glyph::Code, theme::text_muted()))
+                    .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO).child(view.names.join(", ")))
+                    .child(
+                        div()
+                            .id(ElementId::NamedInteger("perm-show".into(), key))
+                            .role(Role::Link)
+                            .aria_label("Show in notebook")
+                            .cursor_pointer()
+                            .text_color(theme::accent_text())
+                            .hover(|s| s.underline())
+                            .child("Show in notebook →")
+                            .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(cells.clone(), cx))),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if let Some(code) = &view.code {
+            let open = session.asks.code_open;
+            let max_h = window.viewport_size().height * 0.4;
+            body.push(code_box(code, open, max_h, ElementId::NamedInteger("perm-code".into(), key)));
+            let n = code.line_count();
+            if n > CODE_LINES {
+                let label = if open { format!("Show the first {CODE_LINES} lines") } else { format!("Show all {n} lines") };
+                body.push(
+                    toggle_link(ElementId::NamedInteger("perm-code-toggle".into(), key), &label, open, &session.plan_card_focus(cx))
+                        .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.asks.code_open = !s.asks.code_open)))
+                        .into_any_element(),
+                );
+            }
+        }
+        body.extend(view.lines.into_iter().map(|(text, tone)| {
+            let color = match tone {
+                Tone::Muted => theme::text_muted(),
+                Tone::Secondary => theme::text_secondary(),
+                Tone::Faint => theme::text_faint(),
+            };
+            inline_code(&text, theme::chat_meta_small()).text_color(color).into_any_element()
+        }));
+        approval_card(heading, body, buttons)
+    };
+    // One height through a run of queued prompts: the chat above doesn't move.
+    // The opened code box doesn't count: closing it again shrinks the card.
+    let height = session.asks.card_height.clone();
+    let measure = !session.asks.code_open;
+    let min = height.get().filter(|_| measure);
+    let card = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .when_some(min, |d, h| d.min_h(h))
+        .child(card)
+        .child(
+            canvas(
+                move |bounds, _, _| {
+                    if measure && height.get().is_none_or(|h| bounds.size.height > h) {
+                        height.set(Some(bounds.size.height));
+                    }
+                },
+                |_, _, _, _| (),
+            )
+            .absolute()
+            .size_full(),
+        );
+    let then = (!view.then.is_empty()).then(|| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .pt(px(2.))
+            .text_size(theme::chat_meta())
+            .text_color(theme::text_muted())
+            .child(glyph(Glyph::Clock, theme::text_muted()))
+            .child(inline_code(&format!("Then: {}", view.then.join(" · ")), theme::chat_meta_small()).min_w_0())
     });
-    let lines = view.lines.into_iter().map(|(text, tone)| {
-        let color = match tone {
-            Tone::Muted => theme::text_muted(),
-            Tone::Secondary => theme::text_secondary(),
-        };
-        inline_code(&text, theme::chat_meta_small()).text_color(color).into_any_element()
-    });
-    Some(approval_card(card_heading(&view.heading), code.into_iter().chain(lines).collect(), buttons))
+    Some(div().flex().flex_col().gap(px(6.)).child(card).children(then).into_any_element())
 }
 
-/// The agent's own options as buttons: declining first, allowing once last
-/// (the primary one), with the keys that answer them (⏎ allows once, Esc declines).
-fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, PermissionOption, bool)> {
+/// The outlined "Always this session" with its ⌄, which opens This session / In this folder.
+fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: PermissionOption, open: bool, cx: &mut Context<Workspace>) -> AnyElement {
+    let key = session.key;
+    let chevron = div()
+        .id(ElementId::NamedInteger("perm-always-more".into(), key))
+        .role(Role::Button)
+        .aria_label("More ways to always allow")
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(20.))
+        .h(px(30.))
+        .rounded_r(px(5.))
+        .border_2()
+        .border_l_0()
+        .border_color(theme::control_edge())
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::bg_raised()))
+        .when(open, |d| d.bg(theme::bg_raised()))
+        .child(glyph(Glyph::Chevron, theme::text_muted()))
+        .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.asks.always_menu = !s.asks.always_menu)));
+    let item = |id: &'static str, label: &'static str, hint: &'static str| {
+        div()
+            .id(ElementId::NamedInteger(id.into(), key))
+            .role(Role::MenuItem)
+            .aria_label(label)
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(4.))
+            .cursor_pointer()
+            .hover(|s| s.bg(theme::menu_hover()))
+            .child(label)
+            .child(div().text_color(theme::text_faint()).child(hint))
+    };
+    let allow = match &session.entries[ix] {
+        Entry::Permission { options, .. } => option_of_kind(options, PermissionOptionKind::AllowOnce).cloned(),
+        _ => None,
+    };
+    let menu = open.then(|| {
+        let mut this_session = item("perm-always-session", "This session", crate::platform::shortcut!("⏎"));
+        if let Some(allow) = allow {
+            this_session = this_session.on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &allow, Scope::Session))));
+        }
+        let in_folder = item("perm-always-folder", "In this folder", "").on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &folder, Scope::Folder))));
+        deferred(
+            anchored().anchor(Anchor::TopLeft).child(
+                div()
+                    .id(ElementId::NamedInteger("perm-always-menu".into(), key))
+                    .occlude()
+                    .mt(px(4.))
+                    .w(px(170.))
+                    .p(px(4.))
+                    .flex()
+                    .flex_col()
+                    .map(theme::popover)
+                    .text_size(theme::chat_meta())
+                    .text_color(theme::text_primary())
+                    .on_mouse_down_out(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.asks.always_menu = false)))
+                    .child(this_session)
+                    .child(in_folder),
+            ),
+        )
+        .with_priority(1)
+    });
+    div()
+        .relative()
+        .flex()
+        .child(button.rounded_r(px(0.)))
+        .child(chevron)
+        .child(div().absolute().top(px(30.)).left_0().children(menu))
+        .into_any_element()
+}
+
+/// A card's code box: the first lines (all of them, scrolling past `max_h`, once opened).
+fn code_box(code: &CardCode, open: bool, max_h: Pixels, id: ElementId) -> AnyElement {
+    let lines = code.lines();
+    let total = lines.len();
+    let struck = matches!(code, CardCode::Struck(_));
+    let rows = lines.into_iter().take(if open { usize::MAX } else { CODE_LINES }).map(|(change, line)| {
+        let (sign, bg) = match change {
+            Change::Added => (Some("+ "), Some(theme::diff_add_tint())),
+            Change::Removed => (Some("- "), Some(theme::diff_del_tint())),
+            Change::Same if matches!(code, CardCode::Diff(_)) => (Some("  "), None),
+            Change::Same => (None, None),
+        };
+        div()
+            .px(px(6.))
+            .whitespace_nowrap()
+            .when_some(bg, |d, bg| d.bg(bg))
+            .when(struck, |d| d.line_through())
+            .child(format!("{}{}", sign.unwrap_or(""), if line.is_empty() { " " } else { &line }))
+    });
+    let more = (!open && total > CODE_LINES).then(|| div().px(px(6.)).child("…"));
+    div()
+        .id(id)
+        .font_family(theme::MONO)
+        .text_size(theme::chat_code())
+        .py(px(6.))
+        .rounded(px(4.))
+        .bg(theme::bg_page())
+        .text_color(theme::text_secondary())
+        .when(open, |d| d.max_h(max_h).overflow_y_scroll())
+        .overflow_x_hidden()
+        .children(rows)
+        .children(more)
+        .into_any_element()
+}
+
+/// A faint "Show all …" / "Show the whole plan" toggle under a card's code or plan.
+fn toggle_link(id: ElementId, label: &str, open: bool, focus: &FocusHandle) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label.to_owned())
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .cursor_pointer()
+        .text_color(theme::text_faint())
+        .hover(|s| s.text_color(theme::text_secondary()))
+        .track_focus(focus)
+        .tab_stop(true)
+        .focus_ring_on(theme::bg_urgent())
+        .child(label.to_owned())
+        .child(if open { "⌄" } else { "›" })
+}
+
+/// The agent's own options as buttons, for a prompt without an allow-once
+/// option: declining first, then the rest, in Endeavor's words.
+fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, PermissionOption, Scope)> {
     let rank = |o: &PermissionOption| match o.kind {
         PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways => 0,
         PermissionOptionKind::AllowOnce => 2,
@@ -250,14 +667,17 @@ fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, Pe
     };
     let mut sorted: Vec<&PermissionOption> = options.iter().collect();
     sorted.sort_by_key(|o| rank(o));
-    let keyed = |kind: PermissionOptionKind, hint: &'static str, o: &PermissionOption| {
-        option_of_kind(options, kind).is_some_and(|k| k.option_id == o.option_id).then_some(hint)
-    };
     sorted
         .into_iter()
         .map(|o| {
-            let hint = keyed(PermissionOptionKind::AllowOnce, "⏎", o).or_else(|| keyed(PermissionOptionKind::RejectOnce, "esc", o)).unwrap_or("");
-            (o.name.clone(), hint, o.clone(), false)
+            let (label, hint, scope) = match o.kind {
+                PermissionOptionKind::RejectOnce => ("Deny", "esc", Scope::Once),
+                PermissionOptionKind::RejectAlways => ("Never", "", Scope::Once),
+                PermissionOptionKind::AllowAlways if crate::permits::folder_rule_option(options).is_some() => ("Always in this folder", "", Scope::Folder),
+                PermissionOptionKind::AllowAlways => ("Always", "", Scope::Once),
+                _ => ("Allow", "⏎", Scope::Once),
+            };
+            (label.to_owned(), hint, o.clone(), scope)
         })
         .collect()
 }
@@ -273,6 +693,11 @@ pub(crate) struct PlanCard {
     pub full: String,
     /// The whole plan is showing.
     pub open: bool,
+}
+
+/// A plan's own title, from the heading that opens it.
+pub(crate) fn plan_title(markdown: &str) -> Option<String> {
+    plan_card(markdown).title
 }
 
 /// Splits a plan (markdown) into its title, its numbered steps and the rest.
@@ -335,7 +760,7 @@ fn plan_buttons(options: &[PermissionOption]) -> Vec<CardButton> {
     ];
     buttons
         .into_iter()
-        .filter_map(|(label, hint, option, stop, weight)| Some(CardButton { label: label.into(), hint, weight, option: option?.clone(), stop }))
+        .filter_map(|(label, hint, option, stop, weight)| Some(CardButton { label: label.into(), hint, weight, option: option?.clone(), scope: if stop { Scope::Session } else { Scope::Once } }))
         .collect()
 }
 
@@ -451,16 +876,27 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
                 .border_t_1()
                 .border_color(theme::accent().opacity(0.25))
                 .children(left.into_iter().map(|(_, b)| b.into_any_element()))
-                // The agent's own labels can be long: these wrap among themselves.
-                .child(div().flex_1().min_w_0().flex().flex_wrap().justify_end().gap(px(6.)).children(right.into_iter().map(|(_, b)| b))),
+                .child(div().flex_1().min_w_0().flex().justify_end().gap(px(6.)).children(right.into_iter().map(|(_, b)| b))),
         )
         .into_any_element()
 }
 
 /// A card's heading: chat subhead size, medium, with `backticked` names in
 /// chat code size mono.
-fn card_heading(text: &str) -> AnyElement {
-    inline_code(text, theme::chat_code()).text_size(theme::chat_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).into_any_element()
+/// `count` ("1 of 3") sits at its right, muted.
+fn card_heading(text: &str, count: Option<&str>) -> AnyElement {
+    let heading = inline_code(text, theme::chat_code()).text_size(theme::chat_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary());
+    match count {
+        None => heading.into_any_element(),
+        Some(count) => div()
+            .flex()
+            .items_start()
+            .justify_between()
+            .gap(px(8.))
+            .child(heading.min_w_0())
+            .child(div().flex_none().pt(px(2.)).text_size(theme::chat_meta_small()).text_color(theme::text_muted()).child(count.to_owned()))
+            .into_any_element(),
+    }
 }
 
 fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus: &FocusHandle) -> Stateful<Div> {
@@ -605,17 +1041,112 @@ pub fn render_queue(this: &Workspace, session: &Session, cx: &mut Context<Worksp
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_agents_own_options_put_allowing_last_and_declining_first() {
-        use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind};
-        // The adapter's order for a tool it has no special wording for.
-        let options = [
+    use crate::celldiff::Change;
+    use crate::hosts::Place;
+    use crate::session::{Entry, Scope, Session};
+    use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, ToolCallId, ToolKind};
+    use serde_json::{Value, json};
+
+    /// Claude Code's options for a Bash call with a suggested rule (the adapter's own labels).
+    fn claude_options() -> Vec<PermissionOption> {
+        vec![
             PermissionOption::new("allow-once", "Yes", PermissionOptionKind::AllowOnce),
-            PermissionOption::new("allow-with-updates", "Yes, and don't ask again", PermissionOptionKind::AllowAlways),
+            PermissionOption::new("allow-with-updates", "Yes, and don't ask again for npm test commands", PermissionOptionKind::AllowAlways),
             PermissionOption::new("reject", "No", PermissionOptionKind::RejectOnce),
-        ];
-        let buttons: Vec<(String, &str)> = super::option_buttons(&options).into_iter().map(|(label, hint, _, _)| (label, hint)).collect();
-        assert_eq!(buttons, vec![("No".into(), "esc"), ("Yes, and don't ask again".into(), ""), ("Yes".into(), "⏎")]);
+        ]
+    }
+
+    fn prompt(s: &mut Session, title: &str, kind: ToolKind, input: Value, runs_code: bool, options: Vec<PermissionOption>) -> super::ApprovalView {
+        let tool = title.strip_prefix("mcp__notebook__").map(str::to_owned);
+        s.entries.push(Entry::Permission {
+            call: ToolCallId::new("c"),
+            title: title.into(),
+            code: None,
+            options,
+            responder: None,
+            runs_code,
+            tool,
+            input,
+            kind: Some(kind),
+            path: None,
+            preview: None,
+            plan: None,
+        });
+        super::view_at(s, s.entries.len() - 1).expect("a card")
+    }
+
+    fn buttons(view: &super::ApprovalView) -> Vec<(String, &'static str, Scope, String)> {
+        view.buttons.iter().map(|b| (b.label.clone(), b.hint, b.scope, b.option.option_id.to_string())).collect()
+    }
+
+    #[test]
+    fn the_agents_prompts_read_in_endeavors_words_never_its_labels() {
+        let mut s = Session::new(1, Place::local("/Users/jc/projects/decay-fits"), None);
+        let shortcut = crate::platform::shortcut!("⏎");
+
+        let bash = prompt(&mut s, "npm test", ToolKind::Execute, json!({ "command": "npm test", "description": "Runs the tests" }), false, claude_options());
+        assert_eq!(bash.heading, "Run a command on This Mac?");
+        assert_eq!(bash.code, Some(super::CardCode::Plain("npm test".into())));
+        assert_eq!(bash.lines[0].0, "Runs the tests");
+        assert!(bash.lines[1].0.starts_with("In ") && bash.lines[1].0.ends_with("projects/decay-fits"));
+        // ⏎ allows once, ⌘⏎ is Always this session (allow-once, remembered by Endeavor),
+        // and "In this folder" is the agent's own allow-always, under the ⌄.
+        assert_eq!(
+            buttons(&bash),
+            vec![
+                ("Deny".into(), "esc", Scope::Once, "reject".into()),
+                ("Always this session".into(), shortcut, Scope::Session, "allow-once".into()),
+                ("Run".into(), "⏎", Scope::Once, "allow-once".into())
+            ]
+        );
+        assert_eq!(bash.folder.map(|o| o.option_id.to_string()).as_deref(), Some("allow-with-updates"));
+
+        let edit = prompt(&mut s, "Edit notes.md", ToolKind::Edit, json!({ "file_path": "/Users/jc/projects/decay-fits/notes.md", "old_string": "a\nold", "new_string": "a\nnew" }), false, claude_options()[..1].iter().chain(&claude_options()[2..]).cloned().collect());
+        assert_eq!(edit.heading, "Edit `notes.md`?");
+        assert_eq!(edit.code, Some(super::CardCode::Diff(vec![(Change::Same, "a".into()), (Change::Removed, "old".into()), (Change::Added, "new".into())])));
+        assert_eq!(buttons(&edit).iter().map(|b| b.0.as_str()).collect::<Vec<_>>(), vec!["Deny", "Always this session", "Edit"]);
+        assert!(edit.folder.is_none(), "no allow-always option: no In this folder");
+
+        let create = prompt(&mut s, "Write", ToolKind::Edit, json!({ "file_path": "/Users/jc/projects/decay-fits/scripts/clean.jl", "content": "using CSV" }), false, claude_options());
+        assert_eq!(create.heading, "Create `scripts/clean.jl`?");
+        assert!(create.lines[0].0.starts_with("New file in ") && create.lines[0].0.ends_with("decay-fits/scripts. Nothing runs."));
+        assert_eq!(buttons(&create)[2].0, "Create");
+
+        let fetch = prompt(&mut s, "Fetch", ToolKind::Fetch, json!({ "url": "https://juliastats.org/Bootstrap.jl/stable/" }), false, claude_options());
+        assert_eq!((fetch.heading.as_str(), buttons(&fetch)[2].0.as_str()), ("Fetch a web page?", "Fetch"));
+        assert_eq!(fetch.lines[0].0, "Claude reads the page. Nothing on This Mac changes.");
+
+        let mcp = prompt(&mut s, "mcp__github__create_issue", ToolKind::Other, json!({}), false, claude_options());
+        assert_eq!(mcp.heading, "Allow `create issue` from `github`?");
+        assert!(mcp.lines.is_empty(), "never the raw tool name");
+        assert_eq!(buttons(&mcp)[2].0, "Allow");
+
+        let manual = prompt(&mut s, "mcp__notebook__add_cell", ToolKind::Other, json!({ "code": "residuals = 1" }), false, claude_options());
+        assert_eq!((manual.heading.as_str(), buttons(&manual)[2].0.as_str()), ("Add `residuals`?", "Add"));
+        assert_eq!(manual.lines[0].0, "Nothing runs. In Manual, every change to the notebook asks.");
+    }
+
+    #[test]
+    fn run_cards_show_what_runs_and_offer_no_folder_rule() {
+        let mut s = Session::new(1, Place::local("/tmp/p"), None);
+        let gate = || vec![PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce), PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce)];
+        let add = prompt(&mut s, "mcp__notebook__add_cell", ToolKind::Other, json!({ "code": "residuals = y .- fit", "run_after": true }), true, gate());
+        assert_eq!(add.heading, "Add `residuals` and run it?");
+        assert_eq!(add.code, Some(super::CardCode::Plain("residuals = y .- fit".into())));
+        assert_eq!(add.lines.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["Nothing depends on it yet."]);
+        assert_eq!(buttons(&add).iter().map(|b| (b.0.as_str(), b.2)).collect::<Vec<_>>(), vec![("Deny", Scope::Once), ("Always this session", Scope::Session), ("Add and run", Scope::Once)]);
+        assert!(add.folder.is_none());
+
+        let run = prompt(&mut s, "mcp__notebook__execute_cell", ToolKind::Other, json!({ "cell_id": "a" }), true, gate());
+        assert_eq!(run.heading, "Run a cell?");
+        assert_eq!(run.code, Some(super::CardCode::Plain("…".into())), "before the runtime says what it runs");
+        assert_eq!(run.lines[0].0, "Finding out what it runs…");
+        assert_eq!(run.cells, vec!["a".to_string()]);
+
+        let long = super::CardCode::Plain((1..=15).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n"));
+        assert_eq!(long.line_count(), 15);
+        assert_eq!(long.text(false).lines().count(), 9, "eight lines and …");
+        assert_eq!(long.text(true).lines().count(), 15);
     }
 
     #[test]
@@ -624,7 +1155,7 @@ mod tests {
         use serde_json::json;
         let one = |name: Option<&str>, code: &str| RunPreview {
             count: 1,
-            cells: vec![PreviewCell { name: name.map(str::to_owned), code: code.into() }],
+            cells: vec![PreviewCell { id: None, name: name.map(str::to_owned), code: code.into() }],
             ..Default::default()
         };
         let heading = |tool, p: &RunPreview, input| super::run_question(tool, Some(p), &input).heading;
@@ -679,7 +1210,7 @@ mod tests {
     #[test]
     fn the_run_notebook_card_says_what_the_notebook_uses() {
         use crate::pluto::{PreviewCell, RunPreview};
-        let cell = |code: &str| PreviewCell { name: None, code: code.into() };
+        let cell = |code: &str| PreviewCell { id: None, name: None, code: code.into() };
         let preview = RunPreview {
             all: true,
             count: 7,

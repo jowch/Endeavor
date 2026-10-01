@@ -34,6 +34,8 @@ export type ToApp =
       connected: boolean;
       drawer: "docs" | "status" | null;
     }
+  // Whether a cell the chat's card asks to run is on screen.
+  | { type: "asked_visible"; visible: boolean }
   // Run notebook in the safe-preview callout.
   | { type: "run_notebook"; notebook: string }
   // The Status failure box: Fix with Claude (with the package's log), Restart notebook.
@@ -88,7 +90,16 @@ export type ToPage =
   // its server is out of reach, so the page can be read but not changed.
   // `crash`: Julia stopped twice under it, so it opened in safe preview; the
   // callout says so instead (its body names cells in `backticks`).
-  | { type: "context"; host: string; asking: boolean; readonly: boolean; crash?: { title: string; body: string } | null }
+  // `ask_cells`: the cells the chat's card asks to run; `rerun_cells`: those that re-run after them.
+  | {
+      type: "context";
+      host: string;
+      asking: boolean;
+      readonly: boolean;
+      crash?: { title: string; body: string } | null;
+      ask_cells?: string[];
+      rerun_cells?: string[];
+    }
   // Share and ⋮ items that act in the page, with Pluto's own functions.
   | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" }
   // A debug build's state dump asks what the page shows.

@@ -185,6 +185,9 @@ pub struct RunPreview {
     pub cells: Vec<PreviewCell>,
     /// Other cells that re-run with these.
     pub dependents: usize,
+    /// Those cells' ids (a runtime older than this field sends none).
+    #[serde(default)]
+    pub dependent_ids: Vec<String>,
     /// The packages a whole-notebook run loads, in notebook order.
     #[serde(default)]
     pub packages: Vec<String>,
@@ -192,6 +195,8 @@ pub struct RunPreview {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PreviewCell {
+    #[serde(default)]
+    pub id: Option<String>,
     /// What the cell defines, e.g. "fit, model".
     pub name: Option<String>,
     pub code: String,

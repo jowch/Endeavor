@@ -304,11 +304,21 @@ impl Workspace {
             "approval": approval::approval_view(s).map(|card| json!({
                 "kind": if card.plan.is_some() { "plan" } else { "approval" },
                 "title": card.heading,
-                "code": card.code,
-                "lines": card.lines.into_iter().map(|(text, tone)| json!({ "text": text, "tone": match tone { Tone::Muted => "muted", Tone::Secondary => "secondary" } })).collect::<Vec<_>>(),
+                "count": card.count,
+                "code": card.code.as_ref().map(|c| c.text(s.asks.code_open)),
+                "code_lines": card.code.as_ref().map(|c| c.line_count()),
+                "code_open": s.asks.code_open,
+                "lines": card.lines.into_iter().map(|(text, tone)| json!({ "text": text, "tone": match tone { Tone::Muted => "muted", Tone::Secondary => "secondary", Tone::Faint => "faint" } })).collect::<Vec<_>>(),
+                "then": card.then,
+                "in_this_folder": card.folder.is_some(),
+                "always_menu": s.asks.always_menu,
+                "cells": card.cells,
+                "rerun": card.rerun,
+                "cells_visible": s.asks.cells_visible,
                 "plan": card.plan.map(|p| json!({ "title": p.title, "steps": p.steps, "open": p.open, "text": if p.open || p.steps.is_none() { Some(p.full) } else { None } })),
                 "buttons": card.buttons.iter().map(|b| json!({ "label": b.label, "key": b.hint, "weight": b.weight.label() })).collect::<Vec<_>>(),
             })),
+            "session_rules": s.asks.rules.len(),
         })
     }
 

@@ -43,6 +43,8 @@ mod outbox;
 #[cfg(target_os = "macos")]
 mod overlay;
 mod platform;
+mod permits;
+mod notify;
 mod pluto;
 mod quotes;
 mod records;
@@ -418,6 +420,10 @@ pub struct Workspace {
     page: annotate::PageState,
     /// The last `context` message sent to the page (resent when it changes).
     page_context: String,
+    /// Endeavor's window is the active one (prompts arriving otherwise notify).
+    window_active: bool,
+    /// When the last "Claude is waiting for you" notification went out.
+    last_ask_notice: Option<std::time::Instant>,
     /// The notebook being renamed in its header, and its name box.
     notebook_rename: Option<(u64, Entity<InputState>)>,
     /// The session whose job resources are open from the Julia-not-running page's gear.
@@ -534,13 +540,15 @@ impl Workspace {
                 if input.read(cx).value().trim().is_empty() && this.sign_in_again(cx) {
                     return;
                 }
-                // An empty box answers a pending approval: ⏎ allow, ⌘⏎ allow and stop asking.
+                // An empty box answers a pending approval: ⏎ allow, ⌘⏎ always this session.
+                // With words in it, ⏎ queues them as it does while Claude works.
                 if input.read(cx).value().trim().is_empty()
                     && let Some(key) = this.active
                     && this.session_mut(key).is_some_and(|s| s.pending_permission().is_some())
                 {
+                    let scope = if *secondary { session::Scope::Session } else { session::Scope::Once };
                     this.with_session(key, cx, |s| {
-                        s.answer_pending(PermissionOptionKind::AllowOnce, *secondary);
+                        s.answer_pending(PermissionOptionKind::AllowOnce, scope);
                     });
                     return;
                 }
@@ -588,8 +596,13 @@ impl Workspace {
         .detach();
 
         cx.observe_window_activation(window, |this, window, cx| {
+            this.window_active = window.is_window_active();
             if window.is_window_active() {
                 this.recheck_sign_in(cx);
+                // Back from a "Claude is waiting for you" notification: its session.
+                if let Some(key) = notify::take_clicked().filter(|key| this.sessions.iter().any(|s| s.key == *key)) {
+                    this.activate(key, cx);
+                }
             }
         })
         .detach();
@@ -658,6 +671,8 @@ impl Workspace {
             questions_tx,
             page: annotate::PageState::default(),
             page_context: String::new(),
+            window_active: true,
+            last_ask_notice: None,
             notebook_rename: None,
             pane_resources: None,
             pane_partition_menu: false,
@@ -1137,6 +1152,19 @@ impl Workspace {
         cx.background_executor().spawn(async move { pluto::set_folder(&bridge, &folder) }).detach();
     }
 
+    /// A prompt waits in session `key`: with Endeavor in the background, one
+    /// notification, then none from any session for `permits::NOTIFY_QUIET`.
+    fn prompt_arrived(&mut self, key: u64, ix: usize) {
+        let now = std::time::Instant::now();
+        if self.window_active || !permits::may_notify(self.last_ask_notice, now) {
+            return;
+        }
+        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
+        let Some(question) = approval::heading_at(session, ix) else { return };
+        self.last_ask_notice = Some(now);
+        notify::waiting(&question, &session.title, key);
+    }
+
     fn apply_effects(&mut self, key: u64, effects: Vec<Effect>, cx: &mut Context<Self>) {
         for effect in effects {
             match effect {
@@ -1161,6 +1189,7 @@ impl Workspace {
                 Effect::CheckRunState => self.check_run_state(key, cx),
                 Effect::SetPolicy(policy) => self.send_policy(key, policy, cx),
                 Effect::SignedOut => self.signed_out(cx),
+                Effect::Asked(ix) => self.prompt_arrived(key, ix),
                 Effect::UsageLimit(reset) => self.hit_usage_limit(reset, cx),
                 Effect::PreviewRun { ix, tool, input } => {
                     let Some(bridge) = self.session_bridge(key) else { continue };
@@ -1498,9 +1527,16 @@ impl Workspace {
             return;
         }
         let Some(key) = self.active else { return };
-        // Esc denies a pending approval before it stops the turn.
+        // Esc closes the card's ⌄ menu, then denies a pending approval, before it stops the turn.
         if let Some(s) = self.session_mut(key)
-            && s.answer_pending(PermissionOptionKind::RejectOnce, false)
+            && s.asks.always_menu
+        {
+            s.asks.always_menu = false;
+            cx.notify();
+            return;
+        }
+        if let Some(s) = self.session_mut(key)
+            && s.answer_pending(PermissionOptionKind::RejectOnce, session::Scope::Once)
         {
             cx.notify();
             return;
@@ -1657,6 +1693,11 @@ impl Workspace {
             }
             Some(annotate::Message::State(state)) => return self.on_page_state(state, cx),
             Some(annotate::Message::RunNotebook { notebook }) => self.run_notebook(notebook, cx),
+            Some(annotate::Message::AskedVisible(visible)) => {
+                if let Some(key) = self.active {
+                    self.with_session(key, cx, |s| s.asks.cells_visible = Some(visible));
+                }
+            }
             Some(annotate::Message::Restart { notebook }) => {
                 if let Some(key) = self.active_session().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())).map(|s| s.key) {
                     self.restart_notebook(key, cx);
@@ -2029,7 +2070,7 @@ impl Workspace {
                     .children(self.render_runtime_wait(session, cx))
                     .children(self.render_claude_trouble(cx))
                     .children(self.render_sign_in_card(cx))
-                    .children(approval::render_approval(session, cx))
+                    .children(approval::render_approval(session, notebook_open && session.notebook.as_deref() == Some(self.page.notebook.as_str()), window, cx))
                     .child(approval::render_queue(self, session, cx))
                     .child(self.render_composer(Some(session), notebook_open, window, cx)),
             )
@@ -2094,6 +2135,7 @@ impl Render for Workspace {
         let placeholder: SharedString = match active {
             None => "What do you want to work on?".into(),
             Some(_) if opening_wait.is_some() => opening_wait.as_ref().map(opening::Waiting::placeholder).unwrap_or_default().into(),
+            Some(ix) if self.sessions[ix].pending_permission().is_some() => "Queue a message".into(),
             Some(_) if working && self.claude.up() => concat!("Queue a message, or ", crate::platform::shortcut!("⏎"), " to steer").into(),
             Some(_) if self.offline_since.is_some() => "Write a message. It sends when you're back online.".into(),
             Some(_) => self.waiting_placeholder().unwrap_or_else(|| "Type / for commands".into()),

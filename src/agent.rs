@@ -25,6 +25,19 @@ use futures::{FutureExt, StreamExt};
 use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
 
+/// What Endeavor relies on about the agent it runs, so another agent can differ.
+pub struct AgentFacts {
+    /// Where the agent keeps "don't ask again" rules inside the session
+    /// folder, if it does: Endeavor then offers "Always in this folder" and
+    /// lists the rules. None for an agent whose lasting rules live elsewhere
+    /// (Cursor's change the user's global config).
+    pub folder_rules: Option<&'static str>,
+}
+
+/// Claude Code writes its rules to the folder's `.claude/settings.local.json`
+/// (Endeavor's session options load `local` settings).
+pub const CLAUDE_CODE: AgentFacts = AgentFacts { folder_rules: Some(".claude/settings.local.json") };
+
 /// In the app's resources, `adapter/` holds package.json + package-lock.json
 /// pinning the ACP adapter and its dependencies.
 const ADAPTER_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";

@@ -657,8 +657,13 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 )
             })
             .into_any_element(),
-        Entry::Tool { title, kind, path, input, output, diffs, expanded, approval, .. } => {
+        Entry::Tool { id: call, title, kind, path, input, output, diffs, expanded, approval, .. } => {
             let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
+            // An opened row that was asked about ends with the answer and its time.
+            let answered = (*approval).zip(session.asks.answered_at.get(call)).filter(|_| *expanded).map(|(approval, at)| {
+                let secs = at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                div().text_size(theme::chat_meta()).text_color(theme::text_muted()).child(answered_line(approval, &crate::when::clock(secs)))
+            });
             let Some(ToolRow { line: summary, file_diff, added, removed, failed, state }) = tool_row(session, entry) else { return div().into_any_element() };
             let aria_label = format!(
                 "{}{}, {}",
@@ -709,7 +714,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                         .child(div().flex_none().child(if *expanded { "⌄" } else { "›" }))
                         .on_click(toggle),
                 )
-                .when(*expanded, |d| d.children(all_diffs.into_iter().map(render_diff)).children(input_panel).children(output_panel))
+                .when(*expanded, |d| d.children(all_diffs.into_iter().map(render_diff)).children(input_panel).children(output_panel).children(answered))
                 .into_any_element()
         }
         _ => div().into_any_element(),
@@ -805,6 +810,14 @@ fn render_diff(diff: &celldiff::CellDiff) -> impl IntoElement + use<> {
         .when(diff.lines.len() > MAX_LINES, |d| {
             d.child(div().px_2().text_color(theme::text_muted()).child(format!("… {} more lines", diff.lines.len() - MAX_LINES)))
         })
+}
+
+/// An opened row's answer: "Allowed at 14:02", "Denied at 14:06".
+pub(crate) fn answered_line(approval: Approval, clock: &str) -> String {
+    let label = approval.label();
+    let mut chars = label.chars();
+    let capital = chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default();
+    format!("{capital} at {clock}")
 }
 
 /// A tool call as a verb: "Edited", "Ran", …; other tools keep their own title.
@@ -938,6 +951,11 @@ fn tool_line(title: &str, kind: ToolKind, path: Option<&Path>, input: &serde_jso
             }
         }
         ToolKind::Search => line("Searched", field("pattern").or(field("query")).or(Some(title)), true),
+        // Plan mode's end: the plan, by its title.
+        ToolKind::SwitchMode if input["plan"].is_string() => {
+            let plan = crate::approval::plan_title(input["plan"].as_str().unwrap_or(""));
+            ToolLine { verb: "Plan".into(), object: plan, mono: false, full: None }
+        }
         ToolKind::Fetch => match field("url") {
             Some(url) => line("Fetched", Some(url_host(url)), true),
             None => line("Searched", field("query").or(Some(title)), true),

@@ -3,6 +3,7 @@
 
 import { initActions } from "./actions";
 import { initAnnotate } from "./annotate";
+import { initAsking } from "./asking";
 import { send } from "./bridge";
 import { initCells } from "./cells";
 import { initDebug } from "./debug";
@@ -25,6 +26,7 @@ function init() {
   initQuote();
   initAnnotate();
   initCells();
+  initAsking();
   initDiffs();
   initPrompt();
   initReply();

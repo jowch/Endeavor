@@ -66,6 +66,8 @@ pub enum Message {
     State(PageState),
     /// Run notebook, in the safe-preview callout.
     RunNotebook { notebook: String },
+    /// Whether the cells the chat's card asks to run are on screen.
+    AskedVisible(bool),
     /// Fix with Claude, in Status's box for a package that failed.
     FixPackage { notebook: String, name: String, log: String },
     /// Restart notebook, in the same box.
@@ -204,6 +206,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             Some(Message::Debug(page))
         }
         "run_notebook" => Some(Message::RunNotebook { notebook: uuid("notebook")? }),
+        "asked_visible" => Some(Message::AskedVisible(v.get("visible")?.as_bool()?)),
         "restart" => Some(Message::Restart { notebook: uuid("notebook")? }),
         "fix_package" => Some(Message::FixPackage {
             notebook: uuid("notebook")?,
@@ -384,6 +387,7 @@ mod tests {
             }))
         );
         assert_eq!(parse_with(&format!(r#"{{"type":"run_notebook","notebook":"{NB}"}}"#), ""), Some(Message::RunNotebook { notebook: NB.into() }));
+        assert_eq!(parse_with(r#"{"type":"asked_visible","visible":false}"#, ""), Some(Message::AskedVisible(false)));
         assert_eq!(parse_with(&format!(r#"{{"type":"restart","notebook":"{NB}"}}"#), ""), Some(Message::Restart { notebook: NB.into() }));
         assert_eq!(
             parse_with(&format!(r#"{{"type":"fix_package","notebook":"{NB}","name":"Plots","log":"✗ Plots"}}"#), ""),

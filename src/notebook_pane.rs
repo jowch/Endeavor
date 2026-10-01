@@ -730,7 +730,10 @@ impl Workspace {
             host => self.hosts.name(host),
         };
         let crash = self.notebook_at(session.key).and_then(|at| self.crashes.callout(&at)).map(|(title, body)| serde_json::json!({ "title": title, "body": body }));
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash });
+        // The cells the card asks to run, and those that re-run after them, for their lines in the page.
+        let card = crate::approval::approval_view(session);
+        let (ask_cells, rerun_cells) = card.map(|c| (c.cells, c.rerun)).unwrap_or_default();
+        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
@@ -749,7 +752,7 @@ impl Workspace {
             if left_safe {
                 self.with_session(key, cx, |s| {
                     if s.asking_to_run() {
-                        s.answer_pending(agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce, false);
+                        s.answer_pending(agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce, crate::session::Scope::Once);
                     }
                 });
                 // Let run after a second stop: the callout has said its piece.
@@ -774,7 +777,7 @@ impl Workspace {
         let mut answered = false;
         self.with_session(key, cx, |s| {
             if s.asking_to_run() {
-                answered = s.answer_pending(agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce, false);
+                answered = s.answer_pending(agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce, crate::session::Scope::Once);
             }
         });
         if answered {

@@ -692,8 +692,73 @@
     }).observe(document.body, { childList: true, subtree: true });
   }
 
-  // src/rail.ts
+  // src/asking.ts
   var css5 = `
+  pluto-cell[data-endeavor-ask] { margin-top: 26px; }
+  pluto-cell[data-endeavor-ask]::after {
+    position: absolute; left: 0; top: -22px; font: 12px/18px var(--sans-serif-font-stack, system-ui); pointer-events: none;
+  }
+  pluto-cell[data-endeavor-ask="asks"]::after { content: "\\25CF  Claude asks to run this."; color: var(--e-accent-text); }
+  pluto-cell[data-endeavor-ask="reruns"]::after { content: "Re-runs after it"; color: var(--e-text-muted); }
+  pluto-cell[data-endeavor-ask]::before {
+    content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
+    border-radius: 2px; pointer-events: none;
+    background: repeating-linear-gradient(-45deg, var(--e-accent) 0 3px, var(--e-stripe-tint) 3px 6px);
+  }
+`;
+  var asked = [];
+  var rerun = [];
+  var observer = null;
+  var onScreen = /* @__PURE__ */ new Set();
+  var lastSent = null;
+  function apply() {
+    for (const cell of document.querySelectorAll("pluto-cell")) {
+      const mark = asked.includes(cell.id) ? "asks" : rerun.includes(cell.id) ? "reruns" : null;
+      if (mark === null) {
+        if (cell.hasAttribute("data-endeavor-ask")) cell.removeAttribute("data-endeavor-ask");
+      } else if (cell.getAttribute("data-endeavor-ask") !== mark) {
+        cell.setAttribute("data-endeavor-ask", mark);
+      }
+    }
+  }
+  function report() {
+    if (!asked.some((id) => document.getElementById(id))) return;
+    const visible = asked.some((id) => onScreen.has(id));
+    if (visible === lastSent) return;
+    lastSent = visible;
+    send({ type: "asked_visible", visible });
+  }
+  function watch() {
+    observer?.disconnect();
+    onScreen.clear();
+    lastSent = null;
+    if (typeof IntersectionObserver === "undefined") return;
+    observer = new IntersectionObserver((entries) => {
+      for (const e of entries) e.isIntersecting ? onScreen.add(e.target.id) : onScreen.delete(e.target.id);
+      report();
+    });
+    for (const id of asked) {
+      const cell = document.getElementById(id);
+      if (cell) observer.observe(cell);
+    }
+  }
+  function initAsking() {
+    const style2 = document.createElement("style");
+    style2.textContent = css5;
+    document.head.append(style2);
+    on("context", (msg) => {
+      const cells = msg.ask_cells ?? [];
+      const changed = cells.join() !== asked.join();
+      asked = cells;
+      rerun = (msg.rerun_cells ?? []).filter((id) => !cells.includes(id));
+      apply();
+      if (changed) watch();
+    });
+    onRedraw(apply);
+  }
+
+  // src/rail.ts
+  var css6 = `
   #endeavor-rail { position: fixed; right: 4px; top: 10px; bottom: 10px; width: 3px; z-index: 50; pointer-events: none; }
   #endeavor-rail a { position: absolute; left: 0; right: 0; min-height: 4px; border-radius: 2px;
     background: var(--e-accent); pointer-events: auto; cursor: pointer; }
@@ -721,7 +786,7 @@
   }
   function initRail() {
     const style2 = document.createElement("style");
-    style2.textContent = css5;
+    style2.textContent = css6;
     rail = document.createElement("div");
     rail.id = "endeavor-rail";
     rail.dataset.endeavorUi = "";
@@ -733,7 +798,7 @@
   var redrawRail = () => rail && draw();
 
   // src/cells.ts
-  var css6 = `
+  var css7 = `
   pluto-cell { position: relative; }
   pluto-cell[data-endeavor="unrun"]::before, pluto-cell.code_differs::before {
     content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
@@ -748,7 +813,7 @@
   pluto-cell[data-endeavor="unrun"][data-author="agent"] > pluto-input { display: block !important; opacity: 1 !important; }
 `;
   var states = /* @__PURE__ */ new Map();
-  function apply() {
+  function apply2() {
     for (const cell of document.querySelectorAll("pluto-cell")) {
       const state2 = states.get(cell.id);
       setAttr(cell, "data-endeavor", state2?.unrun ? "unrun" : null);
@@ -764,14 +829,14 @@
   }
   function initCells() {
     const style2 = document.createElement("style");
-    style2.textContent = css6;
+    style2.textContent = css7;
     document.head.append(style2);
     on("cells", (msg) => {
       states = new Map(msg.cells.map((c) => [c.cell_id, c]));
-      apply();
+      apply2();
       redrawRail();
     });
-    onRedraw(apply);
+    onRedraw(apply2);
   }
 
   // src/debug.ts
@@ -798,7 +863,7 @@
   }
 
   // src/diff.ts
-  var css7 = `
+  var css8 = `
   .cm-line.endeavor-add { position: relative; z-index: 0; }
   .cm-line.endeavor-add::before {
     content: ""; position: absolute; z-index: -1; pointer-events: none;
@@ -955,7 +1020,7 @@
   }
   function initDiffs() {
     const style2 = document.createElement("style");
-    style2.textContent = css7;
+    style2.textContent = css8;
     document.head.append(style2);
     on("cells", (msg) => {
       befores.clear();
@@ -1104,7 +1169,7 @@
   var listeners = [];
   var last = null;
   var model = null;
-  var lastSent = "";
+  var lastSent2 = "";
   var context = { host: "This Mac", asking: false, crash: null };
   var drawerOf = () => null;
   function onNotebook(listener) {
@@ -1118,7 +1183,7 @@
   function setDrawerSource(source) {
     drawerOf = source;
   }
-  function report() {
+  function report2() {
     const editor = window.editor_state;
     if (!last || !model) return;
     const msg = {
@@ -1134,17 +1199,17 @@
       drawer: drawerOf()
     };
     const json = JSON.stringify(msg);
-    if (json === lastSent) return;
-    lastSent = json;
+    if (json === lastSent2) return;
+    lastSent2 = json;
     send(msg);
   }
   function tick() {
     const nb = window.editor_state?.notebook;
-    if (!nb?.cell_order || nb === last) return report();
+    if (!nb?.cell_order || nb === last) return report2();
     last = nb;
     model = statusModel(nb);
     for (const listener of listeners) listener(nb, model);
-    report();
+    report2();
   }
   var ticks = [];
   function every(ms, hook) {
@@ -1170,12 +1235,12 @@
       context.crash = msg.crash ?? null;
       if (last && model) listeners.forEach((l) => l(last, model));
     });
-    lastSent = "";
+    lastSent2 = "";
   }
 
   // src/drawer.ts
   var HEADER = 36;
-  var css8 = `
+  var css9 = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
   /* Separate from --endeavor-drawer-h (the drawer's own height, which also
@@ -1294,7 +1359,7 @@
     window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: next === "docs" ? "docs" : null }));
     echoing = false;
     render();
-    report();
+    report2();
   }
   function pick(next) {
     openDrawer(next);
@@ -1383,7 +1448,7 @@
   }
   function initDrawer() {
     const style2 = document.createElement("style");
-    style2.textContent = css8;
+    style2.textContent = css9;
     document.head.append(style2);
     setHeight(height());
     drawer = document.createElement("div");
@@ -1435,7 +1500,7 @@
 
   // src/prompt.ts
   var AGENT = "Claude";
-  var css9 = `
+  var css10 = `
   /* Beside Pluto's "+" in the gap above a cell (and below the last one): faint
      while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
@@ -1520,7 +1585,7 @@
   }
   function initPrompt() {
     const style2 = document.createElement("style");
-    style2.textContent = css9;
+    style2.textContent = css10;
     document.head.append(style2);
     window.addEventListener(
       "keydown",
@@ -1560,7 +1625,7 @@
   }
 
   // src/reply.ts
-  var css10 = `
+  var css11 = `
   #endeavor-reply-pill { position: absolute; z-index: 1000; display: inline-flex; align-items: center; height: 30px; box-sizing: border-box;
     padding: 0 3px; border-radius: 8px; border: 1px solid var(--e-popover-edge); background: var(--e-popover-bg);
     box-shadow: 0 8px 24px var(--e-shadow-popover); font: 13px/18px system-ui, sans-serif; }
@@ -1613,7 +1678,7 @@
   }
   function initReply() {
     const style2 = document.createElement("style");
-    style2.textContent = css10;
+    style2.textContent = css11;
     document.head.append(style2);
     let pill = null;
     let prompt = null;
@@ -1714,12 +1779,12 @@
     window.WebSocket = Held;
   }
   function style() {
-    const css13 = document.createElement("style");
-    css13.textContent = `
+    const css14 = document.createElement("style");
+    css14.textContent = `
     body.${CLASS} pluto-notebook { opacity: 0.85; }
     body.${CLASS} pluto-notebook, body.${CLASS} pluto-notebook * { pointer-events: none !important; }
   `;
-    document.head.append(css13);
+    document.head.append(css14);
   }
   function blockKeys(e) {
     if (!readonly) return;
@@ -1746,7 +1811,7 @@
 
   // src/errors.ts
   var AGENT2 = "Claude";
-  var css11 = `
+  var css12 = `
   .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
   .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
     background: transparent; color: var(--e-accent-text); border: 1px solid var(--e-accent); }
@@ -1772,13 +1837,13 @@
   }
   function initErrors() {
     const style2 = document.createElement("style");
-    style2.textContent = css11;
+    style2.textContent = css12;
     document.head.append(style2);
     onRedraw(decorate2);
   }
 
   // src/safe.ts
-  var css12 = `
+  var css13 = `
   #endeavor-safe { display: none; }
   html[data-endeavor-look="endeavor"] #endeavor-safe.shown { display: flex; }
   #endeavor-safe { gap: 10px; align-items: flex-start; margin: 0 0 20px 0; padding: 12px 14px;
@@ -1823,7 +1888,7 @@
   }
   function initSafe() {
     const style2 = document.createElement("style");
-    style2.textContent = css12;
+    style2.textContent = css13;
     document.head.append(style2);
     callout = document.createElement("div");
     callout.id = "endeavor-safe";
@@ -2145,6 +2210,7 @@ footer form#feedback { display: none !important; }
     initQuote();
     initAnnotate();
     initCells();
+    initAsking();
     initDiffs();
     initPrompt();
     initReply();

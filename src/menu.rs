@@ -23,6 +23,8 @@ pub(crate) enum MenuTarget {
     Session(u64),
     Notebook(u64),
     Share(u64),
+    /// The session menu's "Allowed in this folder": the agent's own rules for its folder.
+    FolderRules(u64),
 }
 
 impl MenuTarget {
@@ -32,7 +34,7 @@ impl MenuTarget {
         match self {
             MenuTarget::Row(row) => Some((row.clone(), false)),
             MenuTarget::Session(key) => Some((Row::Open(*key), true)),
-            MenuTarget::Notebook(_) | MenuTarget::Share(_) => None,
+            MenuTarget::Notebook(_) | MenuTarget::Share(_) | MenuTarget::FolderRules(_) => None,
         }
     }
 }
@@ -80,6 +82,8 @@ impl MenuPick {
 /// An open ⋮ / ⋯ menu.
 pub(crate) struct PopupMenu {
     pub(crate) target: MenuTarget,
+    /// The folder's rules, for `FolderRules`, as read when it opened.
+    rules: Vec<String>,
     /// Where a right-click opened it; None hangs it under the ⋮ button.
     at: Option<Point<Pixels>>,
     /// The item picked with the arrow keys or the pointer.
@@ -94,8 +98,18 @@ impl Workspace {
         match target {
             MenuTarget::Row(_) | MenuTarget::Session(_) => {
                 let Some((row, in_header)) = target.session_row() else { return Vec::new() };
-                self.row_actions(&row).into_iter().map(|action| MenuPick::Row { row: row.clone(), action, in_header }).collect()
+                let mut actions = self.row_actions(&row);
+                // The session menu lists the agent's folder rules, for This Mac's folders.
+                if let MenuTarget::Session(key) = target
+                    && crate::agent::CLAUDE_CODE.folder_rules.is_some()
+                    && self.sessions.iter().any(|s| s.key == *key && s.place.host == HostId::ThisMac)
+                {
+                    let at = actions.iter().position(|a| *a == RowAction::Rename).map_or(0, |i| i + 1);
+                    actions.insert(at, RowAction::FolderRules);
+                }
+                actions.into_iter().map(|action| MenuPick::Row { row: row.clone(), action, in_header }).collect()
             }
+            MenuTarget::FolderRules(_) => Vec::new(),
             MenuTarget::Notebook(key) => {
                 let session = self.sessions.iter().find(|s| s.key == *key);
                 let open = session.is_some_and(|s| s.notebook.is_some() && s.stopped.is_none() && !s.missing);
@@ -116,7 +130,11 @@ impl Workspace {
             MenuTarget::Session(_) => "session",
             MenuTarget::Notebook(_) => "notebook",
             MenuTarget::Share(_) => "share",
+            MenuTarget::FolderRules(_) => "folder_rules",
         };
+        if matches!(menu.target, MenuTarget::FolderRules(_)) {
+            return Some(serde_json::json!({ "for": target, "rules": menu.rules, "words": menu.rules.iter().map(|r| crate::permits::rule_words(r)).collect::<Vec<_>>() }));
+        }
         let items: Vec<_> = self.menu_picks(&menu.target).iter().map(|p| serde_json::json!({ "label": p.label(), "key": p.shortcut().1 })).collect();
         Some(serde_json::json!({ "for": target, "items": items }))
     }
@@ -128,7 +146,11 @@ impl Workspace {
         };
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        self.menu = Some(PopupMenu { target, at, selected: None, focus, restore });
+        let rules = match &target {
+            MenuTarget::FolderRules(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| crate::permits::folder_rules(&s.place.path)).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        self.menu = Some(PopupMenu { target, rules, at, selected: None, focus, restore });
         cx.notify();
     }
 
@@ -148,8 +170,72 @@ impl Workspace {
         }
     }
 
+    /// Remove one of the folder's rules from the agent's settings file, and
+    /// show the list as the file now reads.
+    fn remove_folder_rule(&mut self, key: u64, rule: String, cx: &mut Context<Self>) {
+        let Some(folder) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.path.clone()) else { return };
+        if let Err(e) = crate::permits::remove_folder_rule(&folder, &rule) {
+            eprintln!("remove folder rule {rule}: {e}");
+        }
+        if let Some(menu) = self.menu.as_mut().filter(|m| m.target == MenuTarget::FolderRules(key)) {
+            menu.rules = crate::permits::folder_rules(&folder);
+        }
+        cx.notify();
+    }
+
+    /// "Allowed in this folder": the agent's rules for the session's folder in
+    /// plain words, each with Remove. Endeavor keeps no copy; it reads the file.
+    fn folder_rules_body(&self, key: u64, menu: &PopupMenu, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let heading = div().px(px(8.)).pt(px(4.)).pb(px(6.)).text_size(theme::size_meta()).font_weight(FontWeight::MEDIUM).child("Allowed in this folder");
+        let rows: Vec<AnyElement> = menu
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, rule)| {
+                let words = crate::permits::rule_words(rule);
+                let text = div().flex_1().min_w_0().flex().flex_wrap().children(words.split('`').enumerate().map(|(j, part)| {
+                    let d = div().child(part.replace(' ', "\u{a0}"));
+                    if j % 2 == 1 { d.font_family(theme::MONO).text_size(theme::size_meta_small()) } else { d }
+                }));
+                let rule = rule.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .px(px(8.))
+                    .py(px(5.))
+                    .text_size(theme::size_meta())
+                    .child(text)
+                    .child(
+                        div()
+                            .id(ElementId::NamedInteger("folder-rule-remove".into(), i as u64))
+                            .role(Role::Button)
+                            .aria_label(format!("Remove {words}"))
+                            .flex_none()
+                            .cursor_pointer()
+                            .text_color(theme::text_faint())
+                            .hover(|s| s.text_color(theme::danger()))
+                            .child("Remove")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.remove_folder_rule(key, rule.clone(), cx);
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let empty = rows.is_empty().then(|| {
+            div().px(px(8.)).pb(px(6.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("Nothing yet. Choosing “In this folder” on a prompt adds a rule here.").into_any_element()
+        });
+        [heading.into_any_element()].into_iter().chain(rows).chain(empty).collect()
+    }
+
     /// A menu, under its ⋮ / ⋯ button or at the pointer that right-clicked.
     pub(crate) fn render_menu(&self, menu: &PopupMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let rules_body = match menu.target {
+            MenuTarget::FolderRules(key) => Some(self.folder_rules_body(key, menu, cx)),
+            _ => None,
+        };
         let picks = self.menu_picks(&menu.target);
         let groups: Vec<u8> = picks.iter().map(MenuPick::group).collect();
         let notebook_menu = matches!(menu.target, MenuTarget::Notebook(_) | MenuTarget::Share(_));
@@ -256,7 +342,7 @@ impl Workspace {
             .role(Role::Menu)
             .track_focus(&menu.focus)
             .occlude()
-            .w(px(if notebook_menu { 290. } else { 210. }))
+            .w(px(if notebook_menu || rules_body.is_some() { 290. } else { 210. }))
             .p(px(4.))
             .flex()
             .flex_col()
@@ -269,10 +355,11 @@ impl Workspace {
             .children(hole)
             .children(head)
             .children(items)
+            .children(rules_body.into_iter().flatten())
             .children(foot);
         // The session menu hangs from the title's left edge; an un-positioned
         // menu otherwise hangs from its button's right edge.
-        let from_left = matches!(menu.target, MenuTarget::Session(_));
+        let from_left = matches!(menu.target, MenuTarget::Session(_) | MenuTarget::FolderRules(_));
         let placed = match menu.at {
             Some(at) => anchored().position(at),
             None if from_left => anchored().anchor(Anchor::TopLeft),
@@ -294,6 +381,13 @@ impl Workspace {
         }
         let Some(menu) = self.menu.as_mut() else { return };
         let n = picks.len();
+        if n == 0 {
+            if e.keystroke.key == "escape" {
+                cx.stop_propagation();
+                self.close_menu(window, cx);
+            }
+            return;
+        }
         match e.keystroke.key.as_str() {
             "down" => menu.selected = Some(menu.selected.map_or(0, |i| (i + 1) % n)),
             "up" => menu.selected = Some(menu.selected.map_or(n - 1, |i| (i + n - 1) % n)),
