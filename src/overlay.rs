@@ -51,7 +51,31 @@ unsafe impl RefEncode for CGColor {
     const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("CGColor", &[]));
 }
 
+#[repr(C)]
+struct CGPath {
+    _private: [u8; 0],
+}
+unsafe impl RefEncode for CGPath {
+    const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("CGPath", &[]));
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGPathCreateMutable() -> *mut CGPath;
+    fn CGPathMoveToPoint(path: *mut CGPath, transform: *const std::ffi::c_void, x: f64, y: f64);
+    fn CGPathAddLineToPoint(path: *mut CGPath, transform: *const std::ffi::c_void, x: f64, y: f64);
+    fn CGPathCloseSubpath(path: *mut CGPath);
+    fn CGPathRelease(path: *mut CGPath);
+}
+
 impl CGRect {
+    fn overlaps(&self, other: &CGRect) -> bool {
+        self.origin.x < other.origin.x + other.size.width
+            && other.origin.x < self.origin.x + self.size.width
+            && self.origin.y < other.origin.y + other.size.height
+            && other.origin.y < self.origin.y + self.size.height
+    }
+
     pub(crate) fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
         CGRect { origin: CGPoint { x, y }, size: CGSize { width: width.max(0.), height: height.max(0.) } }
     }
@@ -73,6 +97,20 @@ pub enum Hole {
     Confirm,
     /// A one-off failure's notice.
     Notice,
+}
+
+impl Hole {
+    /// The corner radius of what the hole is cut for, so the notebook shows
+    /// right up to its rounded corners.
+    fn radius(self) -> f64 {
+        match self {
+            Hole::Menu | Hole::Tip => 8.,
+            Hole::Tooltip => 5.,
+            Hole::Notice => 10.,
+            Hole::Confirm => 12.,
+            Hole::Settings => 14.,
+        }
+    }
 }
 
 /// The open holes, in the web view's coordinates from its top-left corner, and
@@ -178,11 +216,13 @@ fn around(w: f64, h: f64, holes: &[CGRect]) -> Vec<CGRect> {
     cells
 }
 
-/// Everything in `bounds` but `holes` (all from the top-left), as a mask layer.
-unsafe fn mask_around(bounds: CGRect, holes: &[CGRect], flipped: bool) -> *mut AnyObject {
+/// Everything in `bounds` but `holes` (all from the top-left, each with its
+/// corner radius), as a mask layer.
+unsafe fn mask_around(bounds: CGRect, holes: &[(CGRect, f64)], flipped: bool) -> *mut AnyObject {
     unsafe {
         let (w, h) = (bounds.size.width, bounds.size.height);
-        let around = around(w, h, holes);
+        let rects: Vec<CGRect> = holes.iter().map(|(rect, _)| *rect).collect();
+        let around = around(w, h, &rects);
         let mask: *mut AnyObject = msg_send![class!(CALayer), layer];
         let _: () = msg_send![mask, setFrame: bounds];
         let black: *mut AnyObject = msg_send![class!(NSColor), blackColor];
@@ -196,8 +236,59 @@ unsafe fn mask_around(bounds: CGRect, holes: &[CGRect], flipped: bool) -> *mut A
             let _: () = msg_send![part, setBackgroundColor: black];
             let _: () = msg_send![mask, addSublayer: part];
         }
+        let slivers = corner_slivers(holes);
+        if !slivers.is_empty() {
+            let path = CGPathCreateMutable();
+            for sliver in &slivers {
+                for (i, &(x, y)) in sliver.iter().enumerate() {
+                    let y = if flipped { y } else { h - y };
+                    if i == 0 {
+                        CGPathMoveToPoint(path, std::ptr::null(), x, y);
+                    } else {
+                        CGPathAddLineToPoint(path, std::ptr::null(), x, y);
+                    }
+                }
+                CGPathCloseSubpath(path);
+            }
+            let shape: *mut AnyObject = msg_send![class!(CAShapeLayer), layer];
+            let _: () = msg_send![shape, setFrame: CGRect::new(0., 0., w, h)];
+            let _: () = msg_send![shape, setFillColor: black];
+            let _: () = msg_send![shape, setPath: path as *const CGPath];
+            CGPathRelease(path);
+            let _: () = msg_send![mask, addSublayer: shape];
+        }
         mask
     }
+}
+
+/// The parts of each hole outside its rounded corners, as polygons from the
+/// top-left: the web view shows there again. A corner that another hole
+/// overlaps stays cut, since that hole's content is drawn there.
+fn corner_slivers(holes: &[(CGRect, f64)]) -> Vec<Vec<(f64, f64)>> {
+    const STEPS: usize = 8;
+    let mut out = Vec::new();
+    for (i, (rect, radius)) in holes.iter().enumerate() {
+        let r = radius.min(rect.size.width / 2.).min(rect.size.height / 2.);
+        if r <= 0. {
+            continue;
+        }
+        let (x0, y0, x1, y1) = (rect.origin.x, rect.origin.y, rect.origin.x + rect.size.width, rect.origin.y + rect.size.height);
+        for (px, py, sx, sy) in [(x0, y0, 1., 1.), (x1, y0, -1., 1.), (x0, y1, 1., -1.), (x1, y1, -1., -1.)] {
+            let square = CGRect::new(px.min(px + sx * r), py.min(py + sy * r), r, r);
+            let covered = holes.iter().enumerate().any(|(j, (other, _))| j != i && other.overlaps(&square));
+            if covered {
+                continue;
+            }
+            let (cx, cy) = (px + sx * r, py + sy * r);
+            let mut points = vec![(px, py)];
+            points.extend((0..=STEPS).map(|k| {
+                let t = k as f64 / STEPS as f64 * std::f64::consts::FRAC_PI_2;
+                (cx - sx * r * t.sin(), cy - sy * r * t.cos())
+            }));
+            out.push(points);
+        }
+    }
+    out
 }
 
 fn cg_rect(b: Bounds<Pixels>) -> CGRect {
@@ -251,7 +342,7 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
             return;
         }
         holes.view = view;
-        holes.rects.iter().map(|(_, rect)| *rect).collect::<Vec<_>>()
+        holes.rects.iter().map(|(owner, rect)| (*rect, owner.radius())).collect::<Vec<_>>()
     };
     install_send_event();
     unsafe { mask(view as *mut AnyObject, &rects) }
@@ -267,13 +358,13 @@ pub fn close_hole_at(owner: Hole, hole: Bounds<Pixels>) {
             return;
         }
         holes.rects.retain(|r| *r != open);
-        (holes.view, holes.rects.iter().map(|(_, rect)| *rect).collect::<Vec<_>>())
+        (holes.view, holes.rects.iter().map(|(owner, rect)| (*rect, owner.radius())).collect::<Vec<_>>())
     };
     unsafe { mask(view as *mut AnyObject, &rects) }
 }
 
 /// Mask the web view's layer around `holes`, or not at all when there are none.
-unsafe fn mask(view: *mut AnyObject, holes: &[CGRect]) {
+unsafe fn mask(view: *mut AnyObject, holes: &[(CGRect, f64)]) {
     unsafe {
         let layer: *mut AnyObject = msg_send![view, layer];
         if layer.is_null() {
@@ -295,7 +386,7 @@ unsafe fn mask(view: *mut AnyObject, holes: &[CGRect]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CGRect, around};
+    use super::{CGRect, around, corner_slivers};
 
     fn area(rects: &[CGRect]) -> f64 {
         rects.iter().map(|r| r.size.width * r.size.height).sum()
@@ -312,4 +403,18 @@ mod tests {
         assert!(visible.iter().any(|cell| cell.contains(50., 30.)));
         assert_eq!(area(&around(1000., 800., &[])), 1000. * 800.);
     }
+
+    #[test]
+    fn rounded_holes_give_the_corners_back_unless_another_hole_is_there() {
+        let panel = CGRect::new(100., 100., 300., 200.);
+        let slivers = corner_slivers(&[(panel, 10.)]);
+        assert_eq!(slivers.len(), 4);
+        let top_left = &slivers[0];
+        assert_eq!((top_left[0], top_left[1], *top_left.last().unwrap()), ((100., 100.), (110., 100.), (100., 110.)));
+        assert!(top_left.iter().all(|&(x, y)| (100. ..=110.).contains(&x) && (100. ..=110.).contains(&y)));
+        let menu = CGRect::new(380., 90., 60., 40.);
+        assert_eq!(corner_slivers(&[(panel, 10.), (menu, 0.)]).len(), 3, "the menu over the top-right corner keeps it cut");
+        assert!(corner_slivers(&[(panel, 0.)]).is_empty());
+    }
+
 }
