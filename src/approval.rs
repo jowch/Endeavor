@@ -1159,7 +1159,7 @@ mod tests {
             });
         }
         let run = super::view_at(&s, s.entries.len() - 1).unwrap();
-        assert_eq!(run.lines.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["Also runs 1 cell it needs that hasn't run yet.", "Also re-runs 1 cell that depend on it."]);
+        assert_eq!(run.lines.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["Also runs 1 cell it needs that hasn't run yet.", "Also re-runs 1 cell that depends on it."]);
 
         let long = super::CardCode::Plain((1..=15).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n"));
         assert_eq!(long.line_count(), 15);
