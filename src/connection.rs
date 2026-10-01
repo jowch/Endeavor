@@ -872,6 +872,7 @@ impl Workspace {
         if refreshed {
             cx.notify();
         }
+        let exits = crate::crash::new_exits(&connection.notebooks, &list, &event["cells"]);
         connection.notebooks = list;
         for (notebook, cell, name) in pluto::user_edits(&connection.cells, &event["cells"]) {
             for session in self.sessions.iter_mut().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())) {
@@ -884,6 +885,9 @@ impl Workspace {
             self.note_stopped_file(host, path, cx);
         }
         self.crash_progress(host);
+        for (path, cell) in exits {
+            self.notebook_stopped((host.clone(), path), cell, cx);
+        }
     }
 
     /// Reopen the notebooks that were open in `host`'s last runtime (unless this

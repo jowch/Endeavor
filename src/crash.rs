@@ -4,9 +4,9 @@
 //! instead, so a cell that takes Julia down can't do it in a loop.
 //!
 //! A notebook's own Julia (Pluto runs each notebook in a process of its own)
-//! is seen to stop through its page, so only for the notebook on screen; all
-//! of a host's Julia stopping is heard from its helper, for each notebook
-//! that was running there.
+//! is seen to stop in the runtime's notebook list (`exited`, with the cells
+//! that were running) and through its page; all of a host's Julia stopping
+//! is heard from its helper, for each notebook that was running there.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -76,10 +76,18 @@ impl Crashes {
         self.running.get(at).cloned().flatten()
     }
 
-    /// Julia stopped under the notebook at `at`, while `cell` ran.
+    /// Julia stopped under the notebook at `at`, while `cell` ran. A stop
+    /// heard twice (the runtime's list and the page) may name the cell only
+    /// the second time.
     pub fn stopped(&mut self, at: At, cell: Option<String>, now: Instant) -> Heard {
-        match self.crashes.get(&at) {
-            Some(Crash::Stopped { .. } | Crash::Again { .. }) => Heard::Known,
+        match self.crashes.get_mut(&at) {
+            Some(Crash::Stopped { cell: known, .. }) => {
+                if known.is_none() {
+                    *known = cell;
+                }
+                Heard::Known
+            }
+            Some(Crash::Again { .. }) => Heard::Known,
             // The restart itself takes the old process down.
             Some(Crash::Rerunning { since, .. }) if now.duration_since(*since) < RESTART_SETTLE => Heard::Known,
             Some(Crash::Rerunning { cell: first, .. }) => {
@@ -161,17 +169,28 @@ impl Workspace {
     pub fn page_process(&mut self, key: u64, dead: bool, was_dead: bool, cx: &mut Context<Self>) {
         let Some(at) = self.notebook_at(key) else { return };
         if dead && !was_dead {
-            let cell = self.crashes.was_running(&at);
-            match self.crashes.stopped(at.clone(), cell, Instant::now()) {
-                Heard::First => eprintln!("Julia stopped under {}", at.1),
-                Heard::Again => {
-                    eprintln!("Julia stopped again under {} while it ran after a restart; opening it in safe preview", at.1);
-                    self.reopen_in_safe_preview(key, at.1, cx);
-                }
-                Heard::Known => {}
-            }
+            self.notebook_stopped(at, None, cx);
         } else if !dead && was_dead {
             self.crashes.restarted(&at, Instant::now());
+        }
+        cx.notify();
+    }
+
+    /// The notebook at `at`'s own Julia stopped by itself, while `cell` ran
+    /// if known (else the cell last seen running). A second stop during the
+    /// run after Restart Julia opens it in safe preview in the session that has it.
+    pub fn notebook_stopped(&mut self, at: At, cell: Option<String>, cx: &mut Context<Self>) {
+        let cell = cell.or_else(|| self.crashes.was_running(&at));
+        match self.crashes.stopped(at.clone(), cell, Instant::now()) {
+            Heard::First => eprintln!("Julia stopped under {}", at.1),
+            Heard::Again => {
+                eprintln!("Julia stopped again under {} while it ran after a restart; opening it in safe preview", at.1);
+                let session = self.sessions.iter().find(|s| s.place.host == at.0 && s.notebook_path.as_deref() == Some(at.1.as_str()));
+                if let Some(key) = session.map(|s| s.key) {
+                    self.reopen_in_safe_preview(key, at.1, cx);
+                }
+            }
+            Heard::Known => {}
         }
         cx.notify();
     }
@@ -297,6 +316,25 @@ pub fn running_cell(nb: &serde_json::Value, cells: &serde_json::Value) -> Option
     cell["name"].as_str().map(str::to_owned)
 }
 
+/// The notebooks whose own Julia stopped by itself since the list `before`
+/// (`list_notebooks` shape), each with the cell that was running, by name
+/// when the runtime knows it (`cells`, `/events` shape).
+pub fn new_exits(before: &serde_json::Value, now: &serde_json::Value, cells: &serde_json::Value) -> Vec<(String, Option<String>)> {
+    let exited = |list: &serde_json::Value, path: &str| list.as_array().into_iter().flatten().any(|nb| nb["path"] == path && nb["exited"].is_object());
+    let notebooks = now.as_array().into_iter().flatten().filter(|nb| nb["exited"].is_object());
+    notebooks
+        .filter_map(|nb| {
+            let path = nb["path"].as_str()?;
+            if exited(before, path) {
+                return None;
+            }
+            let id = nb["exited"]["running"].as_array().and_then(|r| r.first()).and_then(|c| c.as_str());
+            let name = id.and_then(|id| cells[nb["notebook_id"].as_str()?].as_array()?.iter().find(|c| c["cell_id"] == id)?["name"].as_str().map(str::to_owned));
+            Some((path.to_owned(), name))
+        })
+        .collect()
+}
+
 /// The notebooks that were let run (`list_notebooks` shape): the ones a stop of all of Julia stops.
 pub fn running_notebooks(notebooks: &serde_json::Value) -> Vec<String> {
     let allowed = notebooks.as_array().into_iter().flatten().filter(|nb| nb["execution_allowed"] == true);
@@ -306,7 +344,7 @@ pub fn running_notebooks(notebooks: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]`.
-    use super::{At, Crash, Crashes, Heard, page_text, running_cell, running_notebooks};
+    use super::{At, Crash, Crashes, Heard, new_exits, page_text, running_cell, running_notebooks};
     use crate::hosts::HostId;
     use std::time::{Duration, Instant};
     use serde_json::json;
@@ -377,5 +415,23 @@ mod tests {
         c.progress(&at(), true, Some("rates".into()), true, t);
         c.progress(&at(), false, None, false, t);
         assert_eq!(c.was_running(&at()).as_deref(), Some("rates"));
+    }
+
+    #[test]
+    fn a_notebooks_own_julia_ending_is_heard_once_with_the_cell_it_ran() {
+        let cells = json!({ "n1": [{ "cell_id": "c1", "name": "data" }, { "cell_id": "c2", "name": "rates" }] });
+        let running = json!([{ "notebook_id": "n1", "path": "/lab/fit_decay.jl", "running": ["c2"], "execution_allowed": true }]);
+        let exited = json!([{ "notebook_id": "n1", "path": "/lab/fit_decay.jl", "running": [], "execution_allowed": false, "exited": { "running": ["c2"] } }]);
+        assert_eq!(new_exits(&running, &exited, &cells), [("/lab/fit_decay.jl".to_owned(), Some("rates".to_owned()))]);
+        assert_eq!(new_exits(&exited, &exited, &cells), [], "already heard");
+        let idle = json!([{ "notebook_id": "n1", "path": "/lab/fit_decay.jl", "running": [], "exited": { "running": [] } }]);
+        assert_eq!(new_exits(&running, &idle, &cells), [("/lab/fit_decay.jl".to_owned(), None)], "nothing was running");
+
+        // The page may say so first, without the cell; the runtime's list names it.
+        let t = Instant::now();
+        let mut c = Crashes::default();
+        assert_eq!(c.stopped(at(), None, t), Heard::First);
+        assert_eq!(c.stopped(at(), Some("rates".into()), t), Heard::Known);
+        assert_eq!(c.stopped_at(&at()), Some(Some("rates")));
     }
 }
