@@ -195,6 +195,36 @@ images in old messages, and its approvals and mode. Switching back starts
 another session; the first one can still be reopened, but doesn't know what
 happened after the handoff. This needs the work above and a second agent.
 
+## Permission rules
+
+Decided 2026-10-01. Each rule has one owner, chosen by how long it lasts, so
+nothing has to be kept in sync:
+
+- **Always this session** belongs to Endeavor. Endeavor answers the request
+  with the agent's allow-once option and remembers a rule in memory for that
+  session; later matching requests get allow-once at once, with no card. The
+  agent only ever sees allow-once, so this works the same for every agent and
+  writes nothing to its config. For Endeavor's own run prompts it switches the
+  session to Auto instead. What counts as the same request: the same file for
+  edits, the same site for fetches, and for commands the prefix the agent's
+  own suggested rule names.
+- **Always in this folder** belongs to the agent. It is offered only on the
+  agent's own prompts, only when the request carries an allow-always option,
+  and only for agents whose lasting rules stay inside the session folder.
+  Claude Code writes them to `.claude/settings.local.json`, which Endeavor's
+  session options load (`settingSources` always includes `local`). Cursor's
+  "always" changes the user's global config, so Cursor gets only "This
+  session". Endeavor keeps no copy; it reads the agent's settings to list the
+  folder's rules ("Allowed in this folder" in the session menu, each with
+  Remove).
+
+A call that a folder rule allows never reaches Endeavor, so its row has no
+"allowed" mark. The per-agent table (work item 5) records whether an agent's
+lasting rules stay in the folder and whether Endeavor can read them.
+
+Still to test: whether a folder allow rule for a notebook run skips Claude's
+`PreToolUse` hook, which would let it bypass Ask to run.
+
 ## Decisions for later
 
 - Should Claude move to skills through the MCP server too, or keep the plugin?
