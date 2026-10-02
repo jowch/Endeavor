@@ -211,14 +211,28 @@ impl Workspace {
         let q = &session.outbox.items[ix];
         let id = q.id;
         let group: SharedString = format!("queued-{id}").into();
-        let chips = q
+        let chips: Vec<_> = q
             .attachments
             .iter()
             .enumerate()
             .filter(|(_, a)| !matches!(a, Attachment::Quote(_)))
-            .map(|(i, a)| chip(ElementId::NamedInteger("queued-chip".into(), (id << 8) | i as u64), a).h(px(20.)));
+            .map(|(i, a)| chip(ElementId::NamedInteger("queued-chip".into(), (id << 8) | i as u64), a).h(px(20.)))
+            .collect();
         // The bubble's quote parts, under ids of their own.
         let quotes = self.render_sent_quotes(key, 0xF0_0000 | (id as usize & 0xFFFF), &q.attachments, cx);
+        // With nothing above the words, they take the first line.
+        let words_first = chips.is_empty() && quotes.is_empty();
+        let words = (!q.text.is_empty()).then(|| {
+            div()
+                .id(ElementId::NamedInteger("queued-open-words".into(), id))
+                .cursor_pointer()
+                .text_size(theme::chat_body())
+                .line_height(theme::chat_line_body())
+                .text_color(theme::text_secondary())
+                .child(q.text.clone())
+                .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.queue_open = None)))
+        });
+        let (head_words, body_words) = if words_first { (words.map(|w| w.flex_1().min_w_0()), None) } else { (None, words) };
         row_frame(&group, id)
             .flex()
             .flex_col()
@@ -230,29 +244,28 @@ impl Workspace {
             .child(
                 div()
                     .flex()
-                    .items_center()
+                    .items_start()
                     .gap(px(6.))
                     .min_h(px(20.))
-                    .children(n.map(number))
-                    .child(div().flex_1().min_w_0().flex().flex_wrap().gap(px(4.)).children(chips))
+                    .children(n.map(|n| number(n).mt(px(3.))))
+                    .child(div().flex_1().min_w_0().flex().flex_wrap().gap(px(4.)).children(chips).children(head_words))
                     .when(!q.in_flight(), |d| d.child(self.row_buttons(session, ix, &group, true, cx))),
             )
-            .child(
-                div()
-                    .id(ElementId::NamedInteger("queued-open-words".into(), id))
-                    .pl(px(if n.is_some() { 18. } else { 0. }))
-                    .pr(px(6.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .cursor_pointer()
-                    .text_size(theme::chat_body())
-                    .line_height(theme::chat_line_body())
-                    .text_color(theme::text_secondary())
-                    .children(quotes)
-                    .when(!q.text.is_empty(), |d| d.child(q.text.clone()))
-                    .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.queue_open = None))),
-            )
+            .when(!words_first, |d| {
+                d.child(
+                    div()
+                        .pl(px(if n.is_some() { 18. } else { 0. }))
+                        .pr(px(6.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .text_size(theme::chat_body())
+                        .line_height(theme::chat_line_body())
+                        .text_color(theme::text_secondary())
+                        .children(quotes)
+                        .children(body_words),
+                )
+            })
             .into_any_element()
     }
 
