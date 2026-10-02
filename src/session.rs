@@ -1758,6 +1758,44 @@ impl Session {
         self.asks.forget_batch();
     }
 
+    /// Fix with Claude / Explain asks from the notebook's error boxes that are
+    /// under way: (cell, "fix" | "explain", queued). The running turn's, if it
+    /// is one, then those waiting in the queue.
+    pub fn error_asks(&self) -> Vec<(String, &'static str, bool)> {
+        let ask = |text: &str, attachments: &[Attachment], queued: bool| {
+            let kind = if text == crate::annotate::EXPLAIN_ERROR { "explain" } else { "fix" };
+            attachments.iter().find_map(|a| match a {
+                Attachment::Error { cell, .. } => Some((cell.id.clone(), kind, queued)),
+                _ => None,
+            })
+        };
+        let mut asks = Vec::new();
+        if self.outbox.busy {
+            if let Some(Entry::User { text, attachments, .. }) = self.entries.get(self.turn_start()) {
+                asks.extend(ask(text, attachments, false));
+            }
+        }
+        asks.extend(self.outbox.items.iter().filter_map(|q| ask(&q.text, &q.attachments, !q.in_flight())));
+        asks
+    }
+
+    /// Scroll the transcript to the running turn's message, when it is the
+    /// error ask about `cell`.
+    pub fn show_error_ask(&mut self, cell: &str) {
+        if self.error_asks().iter().any(|(id, _, queued)| id == cell && !queued) {
+            self.list.set_follow_mode(FollowMode::Normal);
+            self.list.scroll_to_reveal_item(self.turn_start());
+        }
+    }
+
+    /// Take the queued error ask about `cell` out of the queue.
+    pub fn cancel_error_ask(&mut self, cell: &str) {
+        let about = |q: &crate::outbox::Queued| q.attachments.iter().any(|a| matches!(a, Attachment::Error { cell: c, .. } if c.id == cell));
+        if let Some(ix) = self.outbox.items.iter().position(|q| !q.in_flight() && about(q)) {
+            self.outbox.take(ix);
+        }
+    }
+
     /// The agent is asking to let the notebook run ("Let this notebook run?").
     pub fn asking_to_run(&self) -> bool {
         self.pending_permission().is_some_and(|ix| matches!(&self.entries[ix], Entry::Permission { tool: Some(tool), .. } if tool == "allow_execution"))
@@ -2198,6 +2236,27 @@ mod tests {
 
     fn text(s: &str) -> Queued {
         Queued::new(s.into(), vec![], vec![])
+    }
+
+    #[test]
+    fn error_asks_say_which_cell_claude_is_on_and_which_wait() {
+        use crate::attach::Cell;
+        let error = |cell: &str, text: &str| {
+            let attachment = Attachment::Error { notebook: "nb".into(), cell: Cell { id: cell.into(), code: "x".into() }, text: "boom".into() };
+            Queued::new(text.into(), vec![attachment], vec![])
+        };
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(error("c1", crate::annotate::FIX_ERROR), false);
+        s.submit(error("c2", crate::annotate::EXPLAIN_ERROR), false);
+        s.submit(text("and plot it"), false);
+        assert_eq!(s.error_asks(), vec![("c1".to_string(), "fix", false), ("c2".to_string(), "explain", true)]);
+        s.cancel_error_ask("c2");
+        s.cancel_error_ask("c1");
+        assert_eq!(s.error_asks(), vec![("c1".to_string(), "fix", false)], "the running one can't be cancelled");
+        assert_eq!(s.outbox.items.len(), 1);
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert!(s.error_asks().is_empty());
     }
 
     #[test]

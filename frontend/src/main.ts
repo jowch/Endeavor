@@ -14,6 +14,7 @@ import { initPrompt } from "./prompt";
 import { initQuote } from "./quote";
 import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
+import { initFolded } from "./folded";
 import { initRail } from "./rail";
 import { initReveal } from "./reveal";
 import { initSafe } from "./safe";
@@ -27,6 +28,7 @@ function init() {
   initAskBox();
   initAnnotate();
   initCells();
+  initFolded();
   initAsking();
   initDiffs();
   initPrompt();

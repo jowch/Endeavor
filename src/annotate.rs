@@ -40,6 +40,10 @@ const MAX_CODE: usize = 20_000;
 /// Bounds a drawn box's coordinates, in CSS pixels.
 const MAX_SIDE: f64 = 100_000.;
 
+/// The words Fix with Claude and Explain send with a cell's error.
+pub const FIX_ERROR: &str = "Fix the error in this cell.";
+pub const EXPLAIN_ERROR: &str = "Explain this error; don't change anything yet.";
+
 /// A message the user sent from the notebook: their words, and what it's about.
 #[derive(Debug, PartialEq)]
 pub struct Ask {
@@ -72,6 +76,10 @@ pub enum Message {
     FixPackage { notebook: String, name: String, log: String },
     /// Restart notebook, in the same box.
     Restart { notebook: String },
+    /// "Show in chat" on an error box whose Fix or Explain Claude is answering.
+    ShowErrorAsk { cell: String },
+    /// "Cancel" on an error box whose Fix or Explain waits in the queue.
+    CancelErrorAsk { cell: String },
     /// The page's part of a state dump (debug_state.rs), as it sent it.
     #[cfg(debug_assertions)]
     Debug(serde_json::Value),
@@ -135,8 +143,8 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
         "ask" => {
             let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
             let text = match v.get("kind")?.as_str()? {
-                "fix" => "Fix the error in this cell.",
-                "explain" => "Explain this error; don't change anything yet.",
+                "fix" => FIX_ERROR,
+                "explain" => EXPLAIN_ERROR,
                 _ => return None,
             };
             let cell = Cell { id, code: capped(v.get("code"), MAX_CODE) };
@@ -214,6 +222,8 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
         "run_notebook" => Some(Message::RunNotebook { notebook: uuid("notebook")? }),
         "asked_visible" => Some(Message::AskedVisible(v.get("visible")?.as_bool()?)),
         "restart" => Some(Message::Restart { notebook: uuid("notebook")? }),
+        "error_ask_show" => Some(Message::ShowErrorAsk { cell: uuid("cell")? }),
+        "error_ask_cancel" => Some(Message::CancelErrorAsk { cell: uuid("cell")? }),
         "fix_package" => Some(Message::FixPackage {
             notebook: uuid("notebook")?,
             name: capped(v.get("name"), 200),
@@ -405,6 +415,9 @@ mod tests {
         assert_eq!(parse_with(&format!(r#"{{"type":"run_notebook","notebook":"{NB}"}}"#), ""), Some(Message::RunNotebook { notebook: NB.into() }));
         assert_eq!(parse_with(r#"{"type":"asked_visible","visible":false}"#, ""), Some(Message::AskedVisible(false)));
         assert_eq!(parse_with(&format!(r#"{{"type":"restart","notebook":"{NB}"}}"#), ""), Some(Message::Restart { notebook: NB.into() }));
+        assert_eq!(parse_with(&format!(r#"{{"type":"error_ask_show","cell":"{C1}"}}"#), ""), Some(Message::ShowErrorAsk { cell: C1.into() }));
+        assert_eq!(parse_with(&format!(r#"{{"type":"error_ask_cancel","cell":"{C1}"}}"#), ""), Some(Message::CancelErrorAsk { cell: C1.into() }));
+        assert_eq!(parse_with(r#"{"type":"error_ask_cancel","cell":"x"}"#, ""), None);
         assert_eq!(
             parse_with(&format!(r#"{{"type":"fix_package","notebook":"{NB}","name":"Plots","log":"✗ Plots"}}"#), ""),
             Some(Message::FixPackage { notebook: NB.into(), name: "Plots".into(), log: "✗ Plots".into() })

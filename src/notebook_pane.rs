@@ -736,7 +736,9 @@ impl Workspace {
         let (ask_cells, rerun_cells, needed_ids) = card.map(|c| (c.cells, c.rerun, c.needed)).unwrap_or_default();
         // Claude is working: the page's prompts queue what they send.
         let working = session.outbox.busy && !session.agent_waiting;
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working });
+        // Error boxes whose Fix or Explain Claude is answering, or that wait in the queue.
+        let error_asks: Vec<_> = session.error_asks().into_iter().map(|(cell, kind, queued)| serde_json::json!({ "cell": cell, "kind": kind, "queued": queued })).collect();
+        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;

@@ -42,6 +42,9 @@ export type ToApp =
   // The Status failure box: Fix with Claude (with the package's log), Restart notebook.
   | { type: "fix_package"; notebook: string; name: string; log: string }
   | { type: "restart"; notebook: string }
+  // On an error box Claude is answering: show its message in the chat; or take a queued one out of the queue.
+  | { type: "error_ask_show"; cell: string }
+  | { type: "error_ask_cancel"; cell: string }
   // Answering `debug`: Point, its picks and their cells, the drawer's tab, the
   // safe-preview callout, and the `alert`s shown (null outside debug builds).
   | {
@@ -71,7 +74,12 @@ export type CellState = {
   author: "agent" | "user" | null;
   /** An unrun cell's code before the agent's edits ("" if the agent added it). */
   before?: string | null;
+  /** A hash of the code: changes with each edit. */
+  version?: string;
 };
+
+/** A Fix with Claude / Explain under way: Claude is answering it, or it waits in the queue. */
+export type ErrorAsk = { cell: string; kind: "fix" | "explain"; queued: boolean };
 
 /** Messages the app sends the page. */
 export type ToPage =
@@ -106,6 +114,7 @@ export type ToPage =
       needed_ids?: string[];
       // Claude is working: the prompts' ↩ queues.
       working?: boolean;
+      error_asks?: ErrorAsk[];
     }
   // Share and ⋮ items that act in the page, with Pluto's own functions.
   | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" }

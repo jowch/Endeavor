@@ -1746,6 +1746,16 @@ impl Workspace {
                 }
             }
             Some(annotate::Message::FixPackage { notebook, name, log }) => self.fix_package(notebook, name, log, cx),
+            Some(annotate::Message::ShowErrorAsk { cell }) => {
+                if let Some(key) = self.active {
+                    self.with_session(key, cx, |s| s.show_error_ask(&cell));
+                }
+            }
+            Some(annotate::Message::CancelErrorAsk { cell }) => {
+                if let Some(key) = self.active {
+                    self.with_session(key, cx, |s| s.cancel_error_ask(&cell));
+                }
+            }
             Some(annotate::Message::Mode(on)) => {
                 self.annotating = on;
                 if on {

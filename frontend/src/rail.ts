@@ -1,7 +1,8 @@
 // The overview rail (docs/ui-spec.md): a 3px strip on the notebook's right edge
-// with a mark per unrun cell, placed by the cell's position in the notebook, so
-// off-screen changes show too. Clicking a mark scrolls to its cell. Reads the
-// marks cells.ts sets.
+// with a mark per cell Claude touched and that hasn't run (orange, as its bar)
+// and per cell with the user's own unrun edits (grey, as Pluto's code_differs
+// bar), placed by the cell's position in the notebook, so off-screen changes
+// show too. Clicking a mark scrolls to its cell. Reads the marks cells.ts sets.
 
 import { onRedraw } from "./redraw";
 
@@ -9,13 +10,13 @@ const css = `
   #endeavor-rail { position: fixed; right: 4px; top: 10px; bottom: 10px; width: 3px; z-index: 50; pointer-events: none; }
   #endeavor-rail a { position: absolute; left: 0; right: 0; min-height: 4px; border-radius: 2px;
     background: var(--e-accent); pointer-events: auto; cursor: pointer; }
-  #endeavor-rail a.user { background: var(--e-you-stripe); }
+  #endeavor-rail a.user { background: var(--code-differs-cell-color, var(--e-you-stripe)); }
 `;
 
 let rail: HTMLElement;
 
 function draw() {
-  const marked = [...document.querySelectorAll<HTMLElement>('pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
+  const marked = [...document.querySelectorAll<HTMLElement>('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
   const total = Math.max(document.documentElement.scrollHeight, 1);
   rail.replaceChildren(
     ...marked.map((cell) => {
@@ -23,7 +24,7 @@ function draw() {
       const top = cell.getBoundingClientRect().top + window.scrollY;
       mark.style.top = `${(100 * top) / total}%`;
       mark.style.height = `${(100 * cell.offsetHeight) / total}%`;
-      if (cell.dataset.author === "user" || cell.classList.contains("code_differs")) mark.className = "user";
+      if (!cell.hasAttribute("data-endeavor-bar")) mark.className = "user";
       mark.dataset.cell = cell.id;
       mark.onclick = (e) => {
         e.preventDefault();

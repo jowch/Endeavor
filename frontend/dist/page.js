@@ -4,7 +4,7 @@
   var handlers = {};
   var nonce = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
   var handler = window.webkit?.messageHandlers?.ipc;
-  var post = handler ? handler.postMessage.bind(handler) : (body2) => window.ipc?.postMessage(body2);
+  var post = handler ? handler.postMessage.bind(handler) : (body3) => window.ipc?.postMessage(body3);
   function send(msg) {
     post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
   }
@@ -73,25 +73,25 @@
   var escape = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   function sheet(html) {
     document.getElementById("endeavor-sheet")?.remove();
-    const el = document.createElement("div");
-    el.id = "endeavor-sheet";
-    el.dataset.endeavorUi = "";
-    el.innerHTML = `<div class="card">${html}</div>`;
-    el.onclick = (e) => e.target === el && el.remove();
-    el.addEventListener("keydown", (e) => {
+    const el2 = document.createElement("div");
+    el2.id = "endeavor-sheet";
+    el2.dataset.endeavorUi = "";
+    el2.innerHTML = `<div class="card">${html}</div>`;
+    el2.onclick = (e) => e.target === el2 && el2.remove();
+    el2.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        el.remove();
+        el2.remove();
       }
     });
-    document.body.append(el);
-    return el;
+    document.body.append(el2);
+    return el2;
   }
   function showShortcuts() {
     const rows = shortcuts.map((s) => typeof s === "string" ? `<div class="head">${escape(s)}</div>` : `<kbd>${escape(s[0])}</kbd><span>${escape(s[1])}</span>`).join("");
-    const el = sheet(`<h2>Keyboard shortcuts</h2><div class="keys">${rows}</div><p>The notebook file saves every time you run a cell.</p><div class="buttons"><button class="primary done">Done</button></div>`);
-    const done = el.querySelector(".done");
-    done.onclick = () => el.remove();
+    const el2 = sheet(`<h2>Keyboard shortcuts</h2><div class="keys">${rows}</div><p>The notebook file saves every time you run a cell.</p><div class="buttons"><button class="primary done">Done</button></div>`);
+    const done = el2.querySelector(".done");
+    done.onclick = () => el2.remove();
     done.focus();
   }
   var FEEDBACK_WAIT_MS = 2e4;
@@ -126,22 +126,22 @@
     return { sent, title: sent ? "Sent to Pluto's developers" : "Pluto couldn't send it", body: message.trim() };
   }
   function showFeedback() {
-    const el = sheet(
+    const el2 = sheet(
       `<h2>Feedback for Pluto's developers</h2><textarea placeholder="What would you tell the people who make Pluto?"></textarea><input class="email" type="email" placeholder="Email, if you'd like a reply (optional)"><p>This goes to the Pluto.jl team, not to Endeavor.</p><div class="buttons"><button class="cancel">Cancel</button><button class="primary send" disabled>Send</button></div>`
     );
-    const text = el.querySelector("textarea");
-    const email = el.querySelector("input.email");
-    const send2 = el.querySelector(".send");
+    const text = el2.querySelector("textarea");
+    const email = el2.querySelector("input.email");
+    const send2 = el2.querySelector(".send");
     text.focus();
     text.oninput = () => send2.disabled = text.value.trim().length < 4;
-    el.querySelector(".cancel").onclick = () => el.remove();
+    el2.querySelector(".cancel").onclick = () => el2.remove();
     send2.onclick = async () => {
-      const card = el.querySelector(".card");
+      const card = el2.querySelector(".card");
       card.innerHTML = `<h2>Sending\u2026</h2>`;
       const outcome = feedbackOutcome(await submitFeedback(text.value.trim(), email.value.trim()));
       card.innerHTML = `<h2>${escape(outcome.title)}</h2><p class="said">${escape(outcome.body)}</p><div class="buttons"><button class="primary">Done</button></div>`;
       const done = card.querySelector("button");
-      done.onclick = () => el.remove();
+      done.onclick = () => el2.remove();
       done.focus();
     };
   }
@@ -194,7 +194,7 @@
   }
 
   // src/askbox.ts
-  var svg = (body2, size = 12) => `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body2}</svg>`;
+  var svg = (body3, size = 12) => `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body3}</svg>`;
   var ICONS = {
     cell: svg(`<rect x="2.5" y="3" width="11" height="10" rx="1.5"></rect><path d="M5 6.5h6M5 9.5h4"></path>`),
     lines: svg(`<path d="M2 4.5h6M2 8h5M2 11.5h6"></path><path d="M11.5 3v10M10 3h3M10 13h3"></path>`),
@@ -363,8 +363,8 @@
     return `${cellName(pick2.code)} \xB7 ${part}`;
   }
   function sendQuote(picks, comment, add) {
-    const notebook = new URLSearchParams(location.search).get("id");
-    send({ type: "quote", notebook, picks, comment, add });
+    const notebook2 = new URLSearchParams(location.search).get("id");
+    send({ type: "quote", notebook: notebook2, picks, comment, add });
   }
   function initQuote() {
     on("shot", (msg) => waiting.get(msg.id)?.());
@@ -455,17 +455,17 @@
   var DRAG = 4;
   var FIGURE = "img, svg, canvas, video";
   var PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
-  function targetAt(el) {
-    const cell = el?.closest("pluto-cell");
-    if (!el || !cell) return null;
-    const input = el.closest("pluto-input");
+  function targetAt(el2) {
+    const cell = el2?.closest("pluto-cell");
+    if (!el2 || !cell) return null;
+    const input = el2.closest("pluto-input");
     if (input) return { part: "code", cell, el: input };
-    const output = el.closest("pluto-output");
+    const output = el2.closest("pluto-output");
     if (!output) return { part: "cell", cell, el: cell };
-    let figure = el.closest(FIGURE);
+    let figure = el2.closest(FIGURE);
     while (figure?.parentElement?.closest(FIGURE) && output.contains(figure.parentElement.closest(FIGURE))) figure = figure.parentElement.closest(FIGURE);
     if (figure && output.contains(figure)) return { part: "figure", cell, el: figure };
-    const paragraph = el.closest(PARAGRAPH);
+    const paragraph = el2.closest(PARAGRAPH);
     if (paragraph && output.contains(paragraph)) return { part: "output", cell, el: paragraph };
     return { part: output.querySelector(FIGURE) ? "figure" : "output", cell, el: output };
   }
@@ -526,13 +526,13 @@
     const hint = document.createElement("div");
     hint.id = "annotate-hint";
     hint.innerHTML = `<span>Click to pick \xB7 drag over code lines \xB7 drag elsewhere for a box</span><span>\xB7</span><span class="done" role="button">Done</span>`;
-    const bar = document.createElement("div");
-    bar.id = "annotate-bar";
+    const bar2 = document.createElement("div");
+    bar2.id = "annotate-bar";
     const field = askBox({ label: "Comment for Claude", placeholder: "Comment for Claude\u2026", done: (add, e) => byUser(e) && sendComment(add) });
     const text = field.text;
-    bar.append(field.root);
+    bar2.append(field.root);
     document.head.append(style2);
-    document.body.append(frame2, box, tag, hint, bar);
+    document.body.append(frame2, box, tag, hint, bar2);
     state = { picks, status: () => active() ? field.what.textContent ?? "" : "", comment: () => text.value };
     function drawBox(b) {
       box.classList.toggle("shown", !!b);
@@ -551,15 +551,15 @@
       const [first, end] = [shown[0].getBoundingClientRect(), shown[shown.length - 1].getBoundingClientRect()];
       return { left: first.left, top: first.top, right: Math.max(first.right, end.right), bottom: end.bottom };
     }
-    function place3() {
+    function place4() {
       const rect = lastRect();
-      bar.classList.toggle("placed", !!rect);
+      bar2.classList.toggle("placed", !!rect);
       if (!rect) {
-        bar.removeAttribute("style");
+        bar2.removeAttribute("style");
         return;
       }
-      const at = barPlace(rect, window.innerWidth, window.innerHeight, bar.offsetHeight);
-      Object.assign(bar.style, { left: `${at.left}px`, top: `${at.top}px`, width: `${at.width}px` });
+      const at = barPlace(rect, window.innerWidth, window.innerHeight, bar2.offsetHeight);
+      Object.assign(bar2.style, { left: `${at.left}px`, top: `${at.top}px`, width: `${at.width}px` });
     }
     function showHover(target) {
       hover?.el.classList.remove("annotate-hover");
@@ -572,15 +572,15 @@
       Object.assign(tag.style, { left: `${r.left + window.scrollX}px`, top: `${r.top + window.scrollY - 22}px` });
     }
     function refresh2() {
-      for (const el of document.querySelectorAll(".annotate-picked")) el.classList.remove("annotate-picked");
-      for (const el of document.querySelectorAll(".annotate-line")) el.classList.remove("annotate-line");
+      for (const el2 of document.querySelectorAll(".annotate-picked")) el2.classList.remove("annotate-picked");
+      for (const el2 of document.querySelectorAll(".annotate-line")) el2.classList.remove("annotate-line");
       for (const p of picks) {
         p.el?.classList.add("annotate-picked");
         for (const line of p.lines ?? []) line.classList.add("annotate-line");
       }
       drawBox([...picks].reverse().find((p) => p.box)?.box ?? null);
       field.setWhat("point", "", pickStatus(picks.map((p) => p.pick)));
-      place3();
+      place4();
     }
     function choose(next, add) {
       const at = picks.findIndex((p) => samePick(p, next));
@@ -590,19 +590,19 @@
       text.focus();
     }
     function targetPick(target) {
-      const { cell, el } = target;
+      const { cell, el: el2 } = target;
       const code = cellCode(cell);
       switch (target.part) {
         case "cell":
-          return { pick: { part: "cell", cell: cell.id, code }, el };
+          return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
         case "code": {
           const lines = code.split("\n").length;
-          return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el };
+          return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el: el2 };
         }
         case "output":
-          return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() }, el };
+          return { pick: { part: "output", cell: cell.id, code, text: (el2.innerText ?? el2.textContent ?? "").trim() }, el: el2 };
         case "figure":
-          return { pick: { part: "figure", cell: cell.id, code }, el };
+          return { pick: { part: "figure", cell: cell.id, code }, el: el2 };
       }
     }
     function linesPick(cell, from, to) {
@@ -648,11 +648,11 @@
       const [x, y] = [e.clientX + window.scrollX, e.clientY + window.scrollY];
       return { left: Math.min(drag.x, x), top: Math.min(drag.y, y), right: Math.max(drag.x, x), bottom: Math.max(drag.y, y) };
     };
-    const lineAt = (el, cell) => {
-      const line = el?.closest(".cm-line");
+    const lineAt = (el2, cell) => {
+      const line = el2?.closest(".cm-line");
       return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
     };
-    const ours = (target) => bar.contains(target) || hint.contains(target);
+    const ours = (target) => bar2.contains(target) || hint.contains(target);
     const swallow = (e) => {
       const target = e.target;
       if (!active() || ours(target)) return;
@@ -686,8 +686,8 @@
           const line = lineAt(e.target, drag.lines.cell);
           if (line) drag.lines.to = line;
           const shown = linesPick(drag.lines.cell, drag.lines.from, drag.lines.to);
-          for (const el of document.querySelectorAll(".annotate-line")) el.classList.remove("annotate-line");
-          for (const el of shown.lines ?? []) el.classList.add("annotate-line");
+          for (const el2 of document.querySelectorAll(".annotate-line")) el2.classList.remove("annotate-line");
+          for (const el2 of shown.lines ?? []) el2.classList.add("annotate-line");
           return;
         }
         document.body.classList.add("annotate-drawing");
@@ -715,8 +715,8 @@
       },
       true
     );
-    window.addEventListener("scroll", () => active() && place3(), true);
-    window.addEventListener("resize", () => active() && place3());
+    window.addEventListener("scroll", () => active() && place4(), true);
+    window.addEventListener("resize", () => active() && place4());
     window.addEventListener(
       "keydown",
       (e) => {
@@ -764,11 +764,6 @@
   pluto-cell[data-endeavor-ask="asks"]::after { content: "\\25CF  Claude asks to run this."; color: var(--e-accent-text); }
   pluto-cell[data-endeavor-ask="reruns"]::after { content: "Re-runs after it"; color: var(--e-text-muted); }
   pluto-cell[data-endeavor-ask="needed"]::after { content: "Runs first: it hasn't run yet"; color: var(--e-text-muted); }
-  pluto-cell[data-endeavor-ask]::before {
-    content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
-    border-radius: 2px; pointer-events: none;
-    background: repeating-linear-gradient(-45deg, var(--e-accent) 0 3px, var(--e-stripe-tint) 3px 6px);
-  }
 `;
   var asked = [];
   var rerun = [];
@@ -828,11 +823,11 @@
   #endeavor-rail { position: fixed; right: 4px; top: 10px; bottom: 10px; width: 3px; z-index: 50; pointer-events: none; }
   #endeavor-rail a { position: absolute; left: 0; right: 0; min-height: 4px; border-radius: 2px;
     background: var(--e-accent); pointer-events: auto; cursor: pointer; }
-  #endeavor-rail a.user { background: var(--e-you-stripe); }
+  #endeavor-rail a.user { background: var(--code-differs-cell-color, var(--e-you-stripe)); }
 `;
   var rail;
   function draw() {
-    const marked = [...document.querySelectorAll('pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
+    const marked = [...document.querySelectorAll('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
     const total = Math.max(document.documentElement.scrollHeight, 1);
     rail.replaceChildren(
       ...marked.map((cell) => {
@@ -840,7 +835,7 @@
         const top = cell.getBoundingClientRect().top + window.scrollY;
         mark.style.top = `${100 * top / total}%`;
         mark.style.height = `${100 * cell.offsetHeight / total}%`;
-        if (cell.dataset.author === "user" || cell.classList.contains("code_differs")) mark.className = "user";
+        if (!cell.hasAttribute("data-endeavor-bar")) mark.className = "user";
         mark.dataset.cell = cell.id;
         mark.onclick = (e) => {
           e.preventDefault();
@@ -864,33 +859,64 @@
   var redrawRail = () => rail && draw();
 
   // src/cells.ts
+  var bar = "pluto-editor:not(.___):not(.____) pluto-cell[data-endeavor-bar]";
   var css7 = `
   pluto-cell { position: relative; }
-  pluto-cell[data-endeavor="unrun"]::before, pluto-cell.code_differs::before {
-    content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 4px;
-    border-radius: 2px; pointer-events: none;
-    background: repeating-linear-gradient(-45deg, var(--e-accent) 0 3px, var(--e-stripe-tint) 3px 6px);
-  }
-  pluto-cell[data-endeavor="unrun"][data-author="user"]::before, pluto-cell.code_differs::before {
-    background: repeating-linear-gradient(-45deg, var(--e-you-stripe) 0 3px, var(--e-you-stripe-tint) 3px 6px);
-  }
   pluto-cell[data-endeavor="unrun"] > pluto-output { opacity: 0.4; }
-  /* Code the agent changed stays in view until it runs, even in a folded cell. */
-  pluto-cell[data-endeavor="unrun"][data-author="agent"] > pluto-input { display: block !important; opacity: 1 !important; }
+  ${bar} > pluto-trafficlight {
+    background: var(--e-accent); border-left-color: var(--e-accent); background-clip: padding-box;
+  }
+  ${bar}.queued > pluto-trafficlight, ${bar}.running > pluto-trafficlight {
+    background: var(--e-stripe-tint); border-left-color: var(--e-stripe-tint);
+  }
+  ${bar}.queued > pluto-trafficlight::after {
+    background: repeating-linear-gradient(-45deg, transparent, transparent 8px, var(--e-accent) 8px, var(--e-accent) 16px);
+    background-clip: padding-box; opacity: 0.99; background-size: 4px var(--patternHeight);
+  }
+  ${bar}.running > pluto-trafficlight::after {
+    background: repeating-linear-gradient(-45deg, var(--e-accent), var(--e-accent) 8px, var(--e-stripe-tint) 8px, var(--e-stripe-tint) 16px);
+    background-clip: content-box; opacity: 0.99; background-size: 4px var(--patternHeight);
+  }
 `;
+  var START_WAIT = 3e3;
   var states = /* @__PURE__ */ new Map();
+  var asked2 = [];
+  var approved = /* @__PURE__ */ new Map();
+  function touched(cell) {
+    const state2 = states.get(cell.id);
+    if (state2?.unrun && state2.author === "agent") return true;
+    if (asked2.includes(cell.id)) return true;
+    const run = approved.get(cell.id);
+    if (!run) return false;
+    if (cell.classList.contains("queued") || cell.classList.contains("running")) run.started = true;
+    else if (run.started || Date.now() - run.since > START_WAIT) approved.delete(cell.id);
+    return approved.has(cell.id);
+  }
+  var watching = 0;
+  function watchApproved() {
+    if (watching || !approved.size) return;
+    watching = window.setInterval(() => {
+      apply2();
+      redrawRail();
+      if (!approved.size) {
+        clearInterval(watching);
+        watching = 0;
+      }
+    }, 250);
+  }
   function apply2() {
     for (const cell of document.querySelectorAll("pluto-cell")) {
       const state2 = states.get(cell.id);
       setAttr(cell, "data-endeavor", state2?.unrun ? "unrun" : null);
       setAttr(cell, "data-author", state2?.author ?? null);
+      setAttr(cell, "data-endeavor-bar", touched(cell) ? "claude" : null);
     }
   }
-  function setAttr(el, name, value) {
+  function setAttr(el2, name, value) {
     if (value === null) {
-      if (el.hasAttribute(name)) el.removeAttribute(name);
-    } else if (el.getAttribute(name) !== value) {
-      el.setAttribute(name, value);
+      if (el2.hasAttribute(name)) el2.removeAttribute(name);
+    } else if (el2.getAttribute(name) !== value) {
+      el2.setAttribute(name, value);
     }
   }
   function initCells() {
@@ -901,6 +927,15 @@
       states = new Map(msg.cells.map((c) => [c.cell_id, c]));
       apply2();
       redrawRail();
+    });
+    on("context", (msg) => {
+      const now = msg.ask_cells ?? [];
+      for (const id of asked2) if (!now.includes(id)) approved.set(id, { since: Date.now(), started: false });
+      for (const id of now) approved.delete(id);
+      asked2 = now;
+      apply2();
+      redrawRail();
+      watchApproved();
     });
     onRedraw(apply2);
   }
@@ -954,7 +989,7 @@
     const rects = [...range.getClientRects()];
     return rects.length ? rects : [range.getBoundingClientRect()];
   }
-  function initReply(open2) {
+  function initReply(open3) {
     const style2 = document.createElement("style");
     style2.textContent = css8;
     document.head.append(style2);
@@ -973,7 +1008,7 @@
         pill.style.left = `${at.left + window.scrollX}px`;
         pill.style.top = `${at.top + window.scrollY}px`;
         pill.onmousedown = (event) => event.preventDefault();
-        pill.querySelector("button").onclick = (event) => byUser(event) && open2(found);
+        pill.querySelector("button").onclick = (event) => byUser(event) && open3(found);
         document.body.append(pill);
       });
     });
@@ -1085,9 +1120,9 @@
       sendQuote([t.found.pick], comment, add);
     } else {
       if (!comment) return;
-      const notebook = new URLSearchParams(location.search).get("id");
+      const notebook2 = new URLSearchParams(location.search).get("id");
       const where = t.kind !== "cell" ? t.kind : isEmpty(t.cell) ? "fill" : "about";
-      send({ type: "prompt", notebook, cell: t.cell.id, code: cellCode(t.cell), where, text: comment, add });
+      send({ type: "prompt", notebook: notebook2, cell: t.cell.id, code: cellCode(t.cell), where, text: comment, add });
     }
     o.box.text.value = "";
     closeAsk(t.kind === "cell");
@@ -1246,11 +1281,11 @@
       for (let j2 = m - 1; j2 >= 0; j2--)
         lcs[i2][j2] = a[i2] === b[j2] ? lcs[i2 + 1][j2 + 1] + 1 : Math.max(lcs[i2 + 1][j2], lcs[i2][j2 + 1]);
     const hunks = [];
-    let i = 0, j = 0, open2 = null;
-    const hunk = () => open2 ??= (hunks.push({ at: j, removed: [], added: [] }), hunks[hunks.length - 1]);
+    let i = 0, j = 0, open3 = null;
+    const hunk = () => open3 ??= (hunks.push({ at: j, removed: [], added: [] }), hunks[hunks.length - 1]);
     while (i < n || j < m) {
       if (i < n && j < m && a[i] === b[j]) {
-        open2 = null;
+        open3 = null;
         i++, j++;
       } else if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j])) {
         hunk().added.push(b[j++]);
@@ -1296,17 +1331,17 @@
     return {
       text,
       toDOM() {
-        const el = document.createElement("div");
-        el.className = "endeavor-del";
+        const el2 = document.createElement("div");
+        el2.className = "endeavor-del";
         if (span) {
           const mark = document.createElement("span");
           mark.className = "endeavor-del-ch";
           mark.textContent = text.slice(span[0], span[1]);
-          el.append(text.slice(0, span[0]), mark, text.slice(span[1]));
+          el2.append(text.slice(0, span[0]), mark, text.slice(span[1]));
         } else {
-          el.textContent = text || " ";
+          el2.textContent = text || " ";
         }
-        return el;
+        return el2;
       },
       eq(other) {
         return other.text === text;
@@ -1724,8 +1759,8 @@
   }
   var markFor = (state2) => state2 === "done" || state2 === "ready" ? `<span class="mark">\u2713</span>` : state2 === "failed" ? `<span class="mark failed">\u2715</span>` : state2 === "waiting" ? `<span class="mark waiting"></span>` : `<span class="mark busy"></span>`;
   function group(name, busy, summary, right, rows) {
-    const open2 = folded.get(name) ?? busy;
-    return `<details class="group" data-group="${name}"${open2 ? " open" : ""}><summary>${summary}<span class="right">${right}</span></summary>${rows}</details>`;
+    const open3 = folded.get(name) ?? busy;
+    return `<details class="group" data-group="${name}"${open3 ? " open" : ""}><summary>${summary}<span class="right">${right}</span></summary>${rows}</details>`;
   }
   function statusHtml(nb, m) {
     const steps = m.steps.map((s, i) => `${i ? `<span class="line"></span>` : ""}<span class="step ${s.phase}">${markFor(s.phase)}${s.name}</span>`).join("");
@@ -1819,20 +1854,20 @@
     const grip = drawer.querySelector(".grip");
     grip.onpointerdown = (e) => {
       grip.setPointerCapture(e.pointerId);
-      let pending = null;
+      let pending2 = null;
       let frame2 = 0;
       const move = (m) => {
-        pending = window.innerHeight - m.clientY;
+        pending2 = window.innerHeight - m.clientY;
         if (frame2) return;
         frame2 = requestAnimationFrame(() => {
           frame2 = 0;
-          if (pending !== null) setHeight(pending, false);
+          if (pending2 !== null) setHeight(pending2, false);
         });
       };
       const up = () => {
         grip.removeEventListener("pointermove", move);
         if (frame2) cancelAnimationFrame(frame2);
-        const h = setHeight(pending ?? drawer.offsetHeight);
+        const h = setHeight(pending2 ?? drawer.offsetHeight);
         try {
           localStorage.setItem("endeavor-drawer-h", String(h));
         } catch {
@@ -1868,12 +1903,12 @@
     window.WebSocket = Held;
   }
   function style() {
-    const css14 = document.createElement("style");
-    css14.textContent = `
+    const css15 = document.createElement("style");
+    css15.textContent = `
     body.${CLASS} pluto-notebook { opacity: 0.85; }
     body.${CLASS} pluto-notebook, body.${CLASS} pluto-notebook * { pointer-events: none !important; }
   `;
-    document.head.append(css14);
+    document.head.append(css15);
   }
   function blockKeys(e) {
     if (!readonly) return;
@@ -1900,39 +1935,386 @@
 
   // src/errors.ts
   var AGENT2 = "Claude";
+  var MAX_ERROR = 2e3;
+  var PENDING = 3e3;
+  var look = `html[data-endeavor-look="endeavor"]`;
   var css12 = `
-  .endeavor-ask { display: flex; gap: 8px; margin: 8px 0; }
-  .endeavor-ask button { font: 12px system-ui; padding: 3px 10px; border-radius: 4px; cursor: pointer;
-    background: transparent; color: var(--e-accent-text); border: 1px solid var(--e-accent); }
-  .endeavor-ask button.explain { color: var(--e-text-secondary); border-color: var(--e-control-edge); }
+  ${look} pluto-cell jlerror { border: 0; border-left: 3px solid var(--e-danger); border-radius: 0 6px 6px 0;
+    background: var(--e-danger-bg); padding: 8px 12px 10px; margin: 2px 0 0; }
+  ${look} pluto-cell jlerror > .error-header { display: none; }
+  ${look} pluto-cell jlerror > header { border-left: 0; background: transparent; padding: 0; color: var(--e-danger); }
+  ${look} pluto-cell jlerror > header > p:first-child { font-weight: normal; }
+  ${look} pluto-cell jlerror > header > p:not(:first-child) { color: var(--e-text-secondary); font: 12.5px/18px system-ui, sans-serif; }
+  ${look} pluto-cell jlerror[data-endeavor-error="upstream"] { border-left-color: var(--e-control-edge); background: transparent; }
+  ${look} pluto-cell jlerror > section { border-block-start: 0; margin-block-start: 6px; padding-block-start: 0; }
+  pluto-cell jlerror[data-endeavor-error] > section .stacktrace-header { display: none; }
+  pluto-cell jlerror[data-endeavor-error] > section.stacktrace-waiting-to-view,
+  pluto-cell jlerror[data-endeavor-trace="closed"] > section { display: none; }
+  pluto-cell jlerror[data-endeavor-error="upstream"] > header { display: none; }
+
+  .endeavor-ask { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; font: 12px/24px system-ui, sans-serif;
+    color: var(--e-text-secondary); flex-wrap: wrap; }
+  .endeavor-ask button.pill { height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px;
+    border-radius: 12px; border: 1px solid var(--e-pill-edge); background: var(--e-pill-bg); color: var(--e-text-secondary);
+    font: 12px/16px system-ui, sans-serif; white-space: nowrap; cursor: pointer; }
+  .endeavor-ask button.pill:hover { background: var(--e-button-hover); }
+  .endeavor-ask button.fix { border-color: var(--e-accent); color: var(--e-prompt-hover); }
+  .endeavor-ask .hint { margin-left: 6px; font-size: 11.5px; color: var(--e-text-faint); }
+  .endeavor-ask .spark { color: var(--e-prompt-hover); }
+  .endeavor-ask .dot { color: var(--e-text-faint); }
+  .endeavor-ask a, .endeavor-upstream a { color: var(--e-accent-text); cursor: pointer; text-decoration: none; }
+  .endeavor-ask a.cancel { color: var(--e-text-secondary); text-decoration: underline; text-underline-offset: 2px; }
+  .endeavor-ask svg { width: 12px; height: 12px; color: var(--e-text-muted); }
+  .endeavor-trace { display: flex; align-items: center; gap: 4px; margin-top: 4px; font: 12px/17px system-ui, sans-serif;
+    color: var(--e-text-muted); cursor: pointer; user-select: none; }
+  .endeavor-trace:hover { color: var(--e-text-secondary); }
+  .endeavor-upstream .message { font-family: var(--julia-mono-font-stack, JuliaMono, monospace); font-size: 12px; line-height: 18px;
+    color: var(--e-text-secondary); white-space: pre-wrap; }
+  .endeavor-upstream .why { display: flex; align-items: center; gap: 6px; margin-top: 6px; font: 12px/17px system-ui, sans-serif;
+    color: var(--e-text-muted); }
+  .endeavor-upstream code { font-size: 11.5px; color: var(--e-text-secondary); background: none; padding: 0; }
 `;
-  function decorate2() {
-    for (const error of document.querySelectorAll("pluto-cell jlerror")) {
-      if (error.querySelector(".endeavor-ask")) continue;
-      const cell = error.closest("pluto-cell");
-      if (!cell) continue;
-      const row = document.createElement("div");
-      row.className = "endeavor-ask";
-      row.innerHTML = `<button class="fix">Fix with ${AGENT2}</button><button class="explain">Explain</button>`;
+  var CLOCK = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.2l2 1.3"/></svg>`;
+  var asks = [];
+  var working = false;
+  var pending = /* @__PURE__ */ new Map();
+  var traceOpen = /* @__PURE__ */ new Set();
+  var notebook = () => window.editor_state?.notebook;
+  function body2(nb, id) {
+    const b = nb?.cell_results?.[id]?.output?.body;
+    return b && typeof b === "object" ? b : void 0;
+  }
+  function failedUpstreams(nb, id, seen = []) {
+    let found = {};
+    if (!nb?.cell_results?.[id]?.errored) return found;
+    const uses = nb.cell_dependencies?.[id]?.upstream_cells_map ?? {};
+    for (const [name, cells] of Object.entries(uses)) {
+      if (seen.includes(name)) continue;
+      seen.push(name);
+      for (const up of cells) {
+        const deeper = failedUpstreams(nb, up, seen);
+        found = { ...found, ...deeper };
+        if (Object.keys(deeper).length === 0 && nb.cell_results?.[up]?.errored && up !== id) found[name] = up;
+      }
+    }
+    return found;
+  }
+  function upstreamCause(nb, id) {
+    const msg = body2(nb, id)?.msg ?? "";
+    const sym = msg.match(/^UndefVarError: (.*?) not defined/)?.[1]?.replaceAll("`", "");
+    if (!sym) return null;
+    const fromAbove = Object.values(nb?.cell_dependencies ?? {}).some((d) => Object.keys(d.downstream_cells_map ?? {}).includes(sym));
+    const failed = failedUpstreams(nb, id);
+    return fromAbove && Object.keys(failed).length ? failed : null;
+  }
+  var plainMessage = (msg) => msg.split("\n")[0].replaceAll("`", "").replace(/Main\.var"workspace#\d+"/g, "Main");
+  function errorText(error, id) {
+    const b = body2(notebook(), id);
+    if (!b?.msg) return (error.querySelector("header")?.textContent ?? error.textContent ?? "").trim().slice(0, MAX_ERROR);
+    const frames = (b.stacktrace ?? []).map((f, i) => {
+      const cell = f.file?.match(/#==#([0-9a-f-]{36})/)?.[1];
+      const where = cell ? `cell ${cell}${f.line ? `, line ${f.line}` : ""}` : `${f.file ?? "?"}${f.line ? `:${f.line}` : ""}`;
+      return ` [${i + 1}] ${f.call ?? "?"} @ ${where}`;
+    });
+    return [b.msg.trim(), ...frames.length ? ["Stacktrace:", ...frames] : []].join("\n").slice(0, MAX_ERROR);
+  }
+  function traceLabel(frames, open3) {
+    const shown = frames.filter((f) => !(f.file === "none" && f.call === "top-level scope"));
+    const steps = (n) => `${n} step${n === 1 ? "" : "s"}`;
+    const mine = shown.filter((f) => f.file?.includes("#==#")).length;
+    const theirs = shown.length - mine;
+    if (open3 && mine && theirs) return `Stack trace \xB7 ${steps(mine)} in your notebook, ${theirs} inside packages`;
+    return `Stack trace \xB7 ${steps(shown.length)}`;
+  }
+  function statusOf(id) {
+    const told = asks.find((a) => a.cell === id);
+    if (told) return told;
+    const mine = pending.get(id);
+    if (mine && Date.now() - mine.at < PENDING) return mine;
+    pending.delete(id);
+    return null;
+  }
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    e.className = cls;
+    if (text !== void 0) e.textContent = text;
+    return e;
+  }
+  function link(text, cls, act) {
+    const a = el("a", cls, text);
+    a.href = "#";
+    a.onclick = (e) => {
+      e.preventDefault();
+      if (byUser(e)) act();
+    };
+    return a;
+  }
+  function fillActions(row, cell, error) {
+    const status = statusOf(cell.id);
+    const key = status ? `${status.kind}:${status.queued}` : "buttons";
+    if (row.dataset.key === key) return;
+    row.dataset.key = key;
+    row.replaceChildren();
+    if (!status) {
       const ask = (kind) => {
-        const text = (error.querySelector("header")?.textContent ?? error.textContent ?? "").trim().slice(0, 2e3);
-        const notebook = new URLSearchParams(location.search).get("id");
-        send({ type: "ask", kind, notebook, cell: cell.id, code: cellCode(cell), error: text });
+        if (statusOf(cell.id)) return;
+        const notebookId2 = new URLSearchParams(location.search).get("id");
+        send({ type: "ask", kind, notebook: notebookId2, cell: cell.id, code: cellCode(cell), error: errorText(error, cell.id) });
+        pending.set(cell.id, { cell: cell.id, kind, queued: working, at: Date.now() });
+        fillActions(row, cell, error);
+        setTimeout(decorate2, PENDING + 50);
       };
-      row.querySelector(".fix").onclick = (e) => byUser(e) && ask("fix");
-      row.querySelector(".explain").onclick = (e) => byUser(e) && ask("explain");
-      error.append(row);
+      const fix = el("button", "pill fix");
+      fix.append(el("span", "spark", "\u2726"), `Fix with ${AGENT2}`);
+      fix.onclick = (e) => byUser(e) && ask("fix");
+      const explain = el("button", "pill explain", "Explain");
+      explain.onclick = (e) => byUser(e) && ask("explain");
+      row.append(fix, explain, el("span", "hint", `or ${shortcut("E")} to ask something else`));
+    } else if (!status.queued) {
+      row.append(
+        el("span", "spark", "\u2726"),
+        `${AGENT2} is ${status.kind === "fix" ? "fixing" : "explaining"} this`,
+        el("span", "dot", "\xB7"),
+        link("Show in chat \u203A", "show", () => send({ type: "error_ask_show", cell: cell.id }))
+      );
+    } else {
+      const clock = el("span", "clock");
+      clock.innerHTML = CLOCK;
+      row.append(
+        clock,
+        `${status.kind === "fix" ? "Fix" : "Explain"} queued \xB7 sends after ${AGENT2}\u2019s current turn`,
+        el("span", "dot", "\xB7"),
+        link("Cancel", "cancel", () => {
+          pending.delete(cell.id);
+          send({ type: "error_ask_cancel", cell: cell.id });
+        })
+      );
+    }
+  }
+  function place2(after, node) {
+    if (after.nextElementSibling !== node) after.after(node);
+  }
+  function decorateOwn(error, cell, nb) {
+    error.querySelector(":scope > .endeavor-upstream")?.remove();
+    const header = error.querySelector(":scope > header");
+    if (!header) return;
+    let row = error.querySelector(":scope > .endeavor-ask");
+    if (!row) {
+      row = el("div", "endeavor-ask");
+      row.dataset.endeavorUi = "";
+    }
+    place2(header, row);
+    fillActions(row, cell, error);
+    const frames = body2(nb, cell.id)?.stacktrace;
+    const plutoTrace = error.querySelector(":scope > section");
+    let toggle = error.querySelector(":scope > .endeavor-trace");
+    if (!plutoTrace || frames && frames.length === 0) {
+      toggle?.remove();
+      return;
+    }
+    const open3 = traceOpen.has(cell.id);
+    const want = open3 ? "open" : "closed";
+    if (error.getAttribute("data-endeavor-trace") !== want) error.setAttribute("data-endeavor-trace", want);
+    if (!toggle) {
+      toggle = el("div", "endeavor-trace");
+      toggle.dataset.endeavorUi = "";
+      toggle.setAttribute("role", "button");
+      toggle.onclick = () => {
+        traceOpen.has(cell.id) ? traceOpen.delete(cell.id) : traceOpen.add(cell.id);
+        decorate2();
+      };
+    }
+    place2(row, toggle);
+    const label = `${frames ? traceLabel(frames, open3) : "Stack trace"} ${open3 ? "\u2304" : "\u203A"}`;
+    if (toggle.textContent !== label) toggle.textContent = label;
+    if (open3) error.querySelector(":scope > section.stacktrace-waiting-to-view button")?.click();
+  }
+  function decorateUpstream(error, cell, causes, nb) {
+    error.querySelector(":scope > .endeavor-ask")?.remove();
+    error.querySelector(":scope > .endeavor-trace")?.remove();
+    const header = error.querySelector(":scope > header");
+    if (!header) return;
+    const names = Object.keys(causes);
+    const key = `${names.join()}|${body2(nb, cell.id)?.msg ?? ""}`;
+    let box = error.querySelector(":scope > .endeavor-upstream");
+    if (!box) {
+      box = el("div", "endeavor-upstream");
+      box.dataset.endeavorUi = "";
+    }
+    place2(header, box);
+    if (box.dataset.key === key) return;
+    box.dataset.key = key;
+    const why = el("div", "why");
+    why.append("Fails because ");
+    names.forEach((name, i) => {
+      if (i) why.append(" or ");
+      why.append(el("code", "", name));
+    });
+    why.append(
+      " failed",
+      el("span", "dot", "\xB7"),
+      link("Show \u203A", "show", () => document.getElementById(causes[names[0]])?.scrollIntoView({ block: "center", behavior: "smooth" }))
+    );
+    box.replaceChildren(el("div", "message", plainMessage(body2(nb, cell.id)?.msg ?? "")), why);
+  }
+  function decorate2() {
+    const nb = notebook();
+    for (const error of document.querySelectorAll("pluto-cell jlerror")) {
+      const cell = error.closest("pluto-cell");
+      if (!cell || error.closest("pluto-log-dot")) continue;
+      const causes = upstreamCause(nb, cell.id);
+      const kind = causes ? "upstream" : "own";
+      if (error.getAttribute("data-endeavor-error") !== kind) error.setAttribute("data-endeavor-error", kind);
+      if (causes) decorateUpstream(error, cell, causes, nb);
+      else decorateOwn(error, cell, nb);
     }
   }
   function initErrors() {
     const style2 = document.createElement("style");
     style2.textContent = css12;
     document.head.append(style2);
+    on("context", (msg) => {
+      working = !!msg.working;
+      asks = msg.error_asks ?? [];
+      for (const a of asks) pending.delete(a.cell);
+      decorate2();
+    });
     onRedraw(decorate2);
   }
 
-  // src/safe.ts
+  // src/folded.ts
   var css13 = `
+  pluto-cell[data-endeavor-fold] > pluto-input { display: block !important; opacity: 1 !important; }
+  pluto-cell[data-endeavor-fold="closing"] > pluto-input { overflow: hidden; transition: height 200ms ease; }
+  pluto-cell[data-endeavor-fold="closing"] > .endeavor-fold-tag,
+  pluto-cell[data-endeavor-fold] > pluto-input > .preview_hidden_code_info { display: none !important; }
+  @media (any-pointer: fine) {
+    pluto-cell[data-endeavor-fold] > pluto-shoulder > button.foldcode { opacity: 0.6; }
+  }
+  pluto-cell > .endeavor-fold-tag {
+    position: absolute; right: 6px; z-index: 31; display: flex; align-items: center; gap: 5px;
+    height: 20px; padding: 0 7px; border-radius: 4px; border: 0; cursor: pointer;
+    background: var(--e-bg-tag); color: var(--e-text-tag); font: 11px/20px system-ui, sans-serif; user-select: none;
+  }
+  .endeavor-fold-tag svg { width: 12px; height: 12px; flex: none; }
+  .endeavor-fold-tag .now { display: none; }
+  .endeavor-fold-tag:hover { color: var(--e-text-primary); }
+  .endeavor-fold-tag:hover .label { display: none; }
+  .endeavor-fold-tag:hover .now { display: inline; }
+`;
+  var EYE_OFF = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 2l12 12"/><path d="M6.6 3.6A6.6 6.6 0 0 1 8 3.5c3.5 0 6 4.5 6 4.5a11 11 0 0 1-1.7 2.2M10.4 11.6A5.4 5.4 0 0 1 8 12.5C4.5 12.5 2 8 2 8a11 11 0 0 1 2.5-2.9"/><path d="M6.6 6.6a2 2 0 0 0 2.8 2.8"/></svg>`;
+  var open2 = /* @__PURE__ */ new Map();
+  var dismissed = /* @__PURE__ */ new Map();
+  var states2 = /* @__PURE__ */ new Map();
+  var reduced = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function update() {
+    for (const cell of document.querySelectorAll("pluto-cell")) {
+      const id = cell.id;
+      const state2 = states2.get(id);
+      const edited = !!state2?.unrun && state2.author === "agent";
+      if (edited && dismissed.has(id) && dismissed.get(id) !== state2?.version) dismissed.delete(id);
+      if (!edited && !open2.has(id)) dismissed.delete(id);
+      if (cell.getAttribute("data-endeavor-fold") === "closing") continue;
+      const folded2 = cell.classList.contains("code_folded");
+      if (edited && folded2 && !dismissed.has(id)) {
+        const kept = open2.get(id);
+        if (kept) kept.failed = false;
+        else open2.set(id, { failed: false });
+      } else if (open2.has(id) && (!folded2 || dismissed.has(id))) {
+        open2.delete(id);
+      } else if (open2.has(id) && state2 && !edited && !state2.running) {
+        if (state2.errored) open2.get(id).failed = true;
+        else {
+          open2.delete(id);
+          close(cell);
+          continue;
+        }
+      }
+      show(cell);
+    }
+  }
+  function show(cell) {
+    const kept = open2.get(cell.id);
+    const input = cell.querySelector(":scope > pluto-input");
+    let tag = cell.querySelector(":scope > .endeavor-fold-tag");
+    if (!kept) {
+      if (cell.hasAttribute("data-endeavor-fold")) cell.removeAttribute("data-endeavor-fold");
+      tag?.remove();
+      return;
+    }
+    if (cell.getAttribute("data-endeavor-fold") !== "open") cell.setAttribute("data-endeavor-fold", "open");
+    if (!input) return;
+    const label = kept.failed ? "Folded \xB7 shows until it runs without error" : "Folded \xB7 shows until it runs";
+    if (!tag) {
+      tag = document.createElement("div");
+      tag.setAttribute("role", "button");
+      tag.tabIndex = 0;
+      tag.className = "endeavor-fold-tag";
+      tag.dataset.endeavorUi = "";
+      tag.innerHTML = `${EYE_OFF}<span class="label"></span><span class="now">Fold now</span>`;
+      tag.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        foldNow(cell.id);
+      };
+      tag.onkeydown = (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        foldNow(cell.id);
+      };
+      cell.append(tag);
+    }
+    const top = `${input.offsetTop + 5}px`;
+    if (tag.style.top !== top) tag.style.top = top;
+    const span = tag.querySelector(".label");
+    if (span.textContent !== label) span.textContent = label;
+    tag.title = label;
+  }
+  function close(cell) {
+    const input = cell.querySelector(":scope > pluto-input");
+    if (!input || reduced()) return show(cell);
+    const height2 = input.offsetHeight;
+    cell.setAttribute("data-endeavor-fold", "closing");
+    input.style.height = `${height2}px`;
+    void input.offsetHeight;
+    input.style.height = "0px";
+    setTimeout(() => {
+      input.style.removeProperty("height");
+      if (cell.getAttribute("data-endeavor-fold") === "closing") cell.removeAttribute("data-endeavor-fold");
+      cell.querySelector(":scope > .endeavor-fold-tag")?.remove();
+    }, 200);
+  }
+  function foldNow(id) {
+    if (!open2.delete(id)) return;
+    dismissed.set(id, states2.get(id)?.version);
+    const cell = document.getElementById(id);
+    if (cell) show(cell);
+  }
+  function initFolded() {
+    const style2 = document.createElement("style");
+    style2.textContent = css13;
+    document.head.append(style2);
+    on("cells", (msg) => {
+      states2 = new Map(msg.cells.map((c) => [c.cell_id, c]));
+      update();
+    });
+    document.addEventListener(
+      "click",
+      (e) => {
+        const eye = e.target?.closest?.("pluto-shoulder > button.foldcode");
+        const cell = eye?.closest("pluto-cell");
+        if (!cell || cell.getAttribute("data-endeavor-fold") !== "open") return;
+        e.preventDefault();
+        e.stopPropagation();
+        foldNow(cell.id);
+      },
+      true
+    );
+    onRedraw(update);
+  }
+
+  // src/safe.ts
+  var css14 = `
   #endeavor-safe { display: none; }
   html[data-endeavor-look="endeavor"] #endeavor-safe.shown { display: flex; }
   #endeavor-safe { gap: 10px; align-items: flex-start; margin: 0 0 20px 0; padding: 12px 14px;
@@ -1964,26 +2346,26 @@
     const asking = context.asking ? `<div class="asking">Claude is asking to run it. Answer in the chat, or here.</div>` : "";
     const crash = context.crash;
     const title = crash ? escape3(crash.title) : "Safe preview";
-    const body2 = crash ? withCode(crash.body) : "You're reading and editing this file without running any code.";
-    const html = `${shield}<div class="text"><b>${title}</b>${body2}${asking}</div><button class="run">${play}Run notebook</button>`;
+    const body3 = crash ? withCode(crash.body) : "You're reading and editing this file without running any code.";
+    const html = `${shield}<div class="text"><b>${title}</b>${body3}${asking}</div><button class="run">${play}Run notebook</button>`;
     if (callout.innerHTML !== html) {
       callout.innerHTML = html;
       callout.querySelector(".run").onclick = (e) => byUser(e) && send({ type: "run_notebook", notebook: notebookId() });
     }
   }
-  function place2() {
-    const notebook = document.querySelector("main pluto-notebook");
-    if (notebook && callout.nextElementSibling !== notebook) notebook.before(callout);
+  function place3() {
+    const notebook2 = document.querySelector("main pluto-notebook");
+    if (notebook2 && callout.nextElementSibling !== notebook2) notebook2.before(callout);
   }
   function initSafe() {
     const style2 = document.createElement("style");
-    style2.textContent = css13;
+    style2.textContent = css14;
     document.head.append(style2);
     callout = document.createElement("div");
     callout.id = "endeavor-safe";
     callout.dataset.endeavorUi = "";
     onNotebook(render2);
-    onRedraw(place2);
+    onRedraw(place3);
   }
 
   // src/theme.ts
@@ -2026,12 +2408,12 @@
   --e-text-waiting: #5E5E5E;
   --e-text-code: #D4D4D4;
   --e-dot-waiting: #4A4A4E;
+  --e-danger: #E07A7A;
   --e-danger-edge: rgba(224, 122, 122, 0.4);
   --e-danger-bg: rgba(224, 122, 122, 0.06);
   --e-diff-add-ch: rgba(108, 199, 132, 0.28);
   --e-diff-del-ch: rgba(224, 122, 122, 0.28);
   --e-you-stripe: #9A9A9A;
-  --e-you-stripe-tint: rgba(154, 154, 154, 0.25);
   --e-stripe-tint: rgba(204, 63, 0, 0.3);
   --e-hover-edge: #FF7A40;
   --e-dim: rgba(0, 0, 0, 0.25);
@@ -2081,12 +2463,12 @@
     --e-text-waiting: #707078;
     --e-text-code: #26262B;
     --e-dot-waiting: #A6A6AE;
+    --e-danger: #B42A36;
     --e-danger-edge: rgba(180, 42, 54, 0.35);
     --e-danger-bg: rgba(180, 42, 54, 0.05);
     --e-diff-add-ch: rgba(28, 140, 70, 0.24);
     --e-diff-del-ch: rgba(200, 40, 60, 0.2);
     --e-you-stripe: #8A8A92;
-    --e-you-stripe-tint: rgba(138, 138, 146, 0.3);
     --e-stripe-tint: rgba(204, 63, 0, 0.25);
     --e-hover-edge: #CC3F00;
     --e-dim: rgba(20, 20, 30, 0.1);
@@ -2226,8 +2608,8 @@ pluto-editor > main { padding-top: 16px; }
 /* Left-aligned, not centred (Pluto classic stays centred): a floated
    PlutoUI TableOfContents sits at the right, and centring put it over the
    notebook rather than beside it. 731px keeps the same reading width Pluto
-   centred at; 48px on the left clears our striped edit-gutter bar
-   (cells.ts, 8px + 4px past the cell's own left edge) with room to spare.
+   centred at; 48px on the left leaves room for Pluto's shoulder (the
+   show/hide-code eye) and its status bar, 4px past the cell's left edge.
    Pluto's own rule sizes main at width: 100%, so the 48px margin has to come
    out of that width too (a plain margin-left would push it 48px past the
    pane's right edge instead); the 16px on the right is a small gap, the same
@@ -2300,6 +2682,7 @@ footer form#feedback { display: none !important; }
     initAskBox();
     initAnnotate();
     initCells();
+    initFolded();
     initAsking();
     initDiffs();
     initPrompt();

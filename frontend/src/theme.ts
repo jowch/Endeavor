@@ -56,12 +56,12 @@ const tokens = `
   --e-text-waiting: #5E5E5E;
   --e-text-code: #D4D4D4;
   --e-dot-waiting: #4A4A4E;
+  --e-danger: #E07A7A;
   --e-danger-edge: rgba(224, 122, 122, 0.4);
   --e-danger-bg: rgba(224, 122, 122, 0.06);
   --e-diff-add-ch: rgba(108, 199, 132, 0.28);
   --e-diff-del-ch: rgba(224, 122, 122, 0.28);
   --e-you-stripe: #9A9A9A;
-  --e-you-stripe-tint: rgba(154, 154, 154, 0.25);
   --e-stripe-tint: rgba(204, 63, 0, 0.3);
   --e-hover-edge: #FF7A40;
   --e-dim: rgba(0, 0, 0, 0.25);
@@ -111,12 +111,12 @@ const tokens = `
     --e-text-waiting: #707078;
     --e-text-code: #26262B;
     --e-dot-waiting: #A6A6AE;
+    --e-danger: #B42A36;
     --e-danger-edge: rgba(180, 42, 54, 0.35);
     --e-danger-bg: rgba(180, 42, 54, 0.05);
     --e-diff-add-ch: rgba(28, 140, 70, 0.24);
     --e-diff-del-ch: rgba(200, 40, 60, 0.2);
     --e-you-stripe: #8A8A92;
-    --e-you-stripe-tint: rgba(138, 138, 146, 0.3);
     --e-stripe-tint: rgba(204, 63, 0, 0.25);
     --e-hover-edge: #CC3F00;
     --e-dim: rgba(20, 20, 30, 0.1);
@@ -260,8 +260,8 @@ pluto-editor > main { padding-top: 16px; }
 /* Left-aligned, not centred (Pluto classic stays centred): a floated
    PlutoUI TableOfContents sits at the right, and centring put it over the
    notebook rather than beside it. 731px keeps the same reading width Pluto
-   centred at; 48px on the left clears our striped edit-gutter bar
-   (cells.ts, 8px + 4px past the cell's own left edge) with room to spare.
+   centred at; 48px on the left leaves room for Pluto's shoulder (the
+   show/hide-code eye) and its status bar, 4px past the cell's left edge.
    Pluto's own rule sizes main at width: 100%, so the 48px margin has to come
    out of that width too (a plain margin-left would push it 48px past the
    pane's right edge instead); the 16px on the right is a small gap, the same

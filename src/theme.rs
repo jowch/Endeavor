@@ -119,7 +119,7 @@ pub fn text_faint() -> Rgba { pick(0x858483, 0x66666E) }
 /// Section heads.
 pub fn text_section() -> Rgba { pick(0x888786, 0x6B6B73) }
 
-/// Filled primary (white text), unrun stripe, busy dot.
+/// Filled primary (white text), status bar of cells Claude touched, busy dot.
 pub fn accent() -> Rgba { rgb(0xCC3F00) }
 /// Orange text and icons.
 pub fn accent_text() -> Rgba { pick(0xE08A5E, 0xB23600) }
