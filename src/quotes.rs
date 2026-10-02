@@ -328,20 +328,20 @@ impl Workspace {
                                 .flex()
                                 .items_end()
                                 .gap(px(4.))
-                                .pl(px(9.))
                                 .pr(px(4.))
                                 .rounded(px(6.))
                                 .border_1()
                                 .border_color(if focused { theme::focus_ring() } else { theme::control_edge() })
                                 .bg(theme::bg_page())
                                 .child(
-                                    // No padding here: the Textarea already adds its own
-                                    // (gpui-component's multi-line editor padding), which
-                                    // is as close to the design's 34 px one-line height as
-                                    // that fixed padding allows.
+                                    // The Textarea's multi-line editor pads 8 px above and
+                                    // below and 10 px at the sides, and takes no size: no
+                                    // left padding here, and pulling it in by 2.5 px makes
+                                    // one line 34 px, as designed.
                                     div()
                                         .flex_1()
                                         .min_w_0()
+                                        .my(px(-2.5))
                                         .child(Textarea::new(input).appearance(false).aria_label("Reply to Claude").text_size(theme::chat_body()).line_height(px(21.))),
                                 )
                                 .child(send)
