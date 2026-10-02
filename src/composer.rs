@@ -1123,6 +1123,19 @@ impl Workspace {
                 if found.is_empty() {
                     after.push(line(format!("No command named /{query}. {} sends “/{query}” to Claude as a message.", slash::ENTER)));
                 }
+                // The name column: just wide enough for the longest visible
+                // name and its faint hint, capped so one long one doesn't
+                // crowd every description out.
+                let mono_width = |text: &str, size: Pixels| text.chars().count() as f32 * size.as_f32() * 0.625;
+                let name_col = found
+                    .iter()
+                    .map(|row| {
+                        let command = &commands[row.command];
+                        let name = mono_width(&command.name, theme::chat_code()) + mono_width("/", theme::chat_code());
+                        name + command.hint.as_deref().map_or(0., |h| 6. + mono_width(h, theme::chat_meta_small()))
+                    })
+                    .fold(0.0_f32, f32::max)
+                    .min(self.settings.layout.chat_width * 0.4);
                 let mark = HighlightStyle { color: Some(theme::text_primary().into()), ..Default::default() };
                 let mut group = None;
                 for (i, row) in found.into_iter().enumerate() {
@@ -1147,7 +1160,7 @@ impl Workspace {
                         .gap(px(12.))
                         .child(
                             div()
-                                .w(px(160.))
+                                .w(px(name_col))
                                 .flex_shrink_0()
                                 .flex()
                                 .items_baseline()

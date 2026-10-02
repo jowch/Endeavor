@@ -19,6 +19,8 @@ export const ICONS = {
   lines: svg(`<path d="M2 4.5h6M2 8h5M2 11.5h6"></path><path d="M11.5 3v10M10 3h3M10 13h3"></path>`),
   text: svg(`<path d="M3 4.5h10M3 8h10M3 11.5h6"></path>`),
   add: svg(`<path d="M8 3.5v9M3.5 8h9"></path>`),
+  // Point's own glyph (the board's Pointer icon, Glyph::Pointer in new_session.rs).
+  point: svg(`<path d="M3.3 2 3.3 13.3 6.4 10.4 8.8 14.7 10.7 13.7 8.4 9.5 12.7 9.5Z"></path>`),
   none: "",
 } as const;
 export type Icon = keyof typeof ICONS;

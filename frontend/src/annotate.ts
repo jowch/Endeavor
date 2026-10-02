@@ -221,7 +221,7 @@ export function initAnnotate(): void {
       for (const line of p.lines ?? []) line.classList.add("annotate-line");
     }
     drawBox([...picks].reverse().find((p) => p.box)?.box ?? null);
-    field.setWhat("none", "", pickStatus(picks.map((p) => p.pick)));
+    field.setWhat("point", "", pickStatus(picks.map((p) => p.pick)));
     place();
   }
 

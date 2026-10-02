@@ -200,6 +200,8 @@
     lines: svg(`<path d="M2 4.5h6M2 8h5M2 11.5h6"></path><path d="M11.5 3v10M10 3h3M10 13h3"></path>`),
     text: svg(`<path d="M3 4.5h10M3 8h10M3 11.5h6"></path>`),
     add: svg(`<path d="M8 3.5v9M3.5 8h9"></path>`),
+    // Point's own glyph (the board's Pointer icon, Glyph::Pointer in new_session.rs).
+    point: svg(`<path d="M3.3 2 3.3 13.3 6.4 10.4 8.8 14.7 10.7 13.7 8.4 9.5 12.7 9.5Z"></path>`),
     none: ""
   };
   var UP = svg(`<path d="M8 13V3.5M4 7.5l4-4 4 4"></path>`, 14);
@@ -577,7 +579,7 @@
         for (const line of p.lines ?? []) line.classList.add("annotate-line");
       }
       drawBox([...picks].reverse().find((p) => p.box)?.box ?? null);
-      field.setWhat("none", "", pickStatus(picks.map((p) => p.pick)));
+      field.setWhat("point", "", pickStatus(picks.map((p) => p.pick)));
       place3();
     }
     function choose(next, add) {

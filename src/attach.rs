@@ -106,7 +106,7 @@ impl Quote {
             Quoted::Reply { at: None, .. } => "Claude's reply".into(),
             Quoted::Cell { name, part, .. } => {
                 let part = match part {
-                    Part::Whole(_) => "cell".to_string(),
+                    Part::Whole(_) => "whole cell".to_string(),
                     Part::Lines { first, last, .. } if first == last => format!("line {first}"),
                     Part::Lines { first, last, .. } => format!("lines {first}–{last}"),
                     Part::Output(_) => "output".into(),
@@ -1168,7 +1168,7 @@ mod tests {
         .collect();
         assert_eq!(
             sources,
-            ["Claude's reply · 14:02", "Claude's reply", "rates · lines 3–5", "rates · line 4", "rates · cell", "rates · output", "rates · figure", "Box · 2 cells"]
+            ["Claude's reply · 14:02", "Claude's reply", "rates · lines 3–5", "rates · line 4", "rates · whole cell", "rates · output", "rates · figure", "Box · 2 cells"]
         );
     }
 
