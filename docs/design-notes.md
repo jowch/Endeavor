@@ -38,7 +38,26 @@ this for the agent's edits:
   `data-author` on the cells.
 
 Pluto's run button on an agent-edited cell runs it without the approval card.
-That's intended: the gate is for runs the agent starts.
+That's intended: the gate is for runs the agent starts. But a user's run
+(⌘S, ⇧⏎, ⌘⏎, the run button) also re-runs the agent-edited cells downstream
+of it, and when a card is waiting to run one of those it would run unasked and
+leave the card asking about something that already ran. So
+`frontend/src/runguard.ts` catches those in the capture phase, before Pluto,
+works out what they reach from `editor_state.notebook.cell_dependencies`
+(`downstream_cells_map`, transitively), and asks first when that includes a
+cell in the context's `waiting_runs` (every waiting run card's cells). Pluto's
+actions aren't reachable from the page, so Run anyway replays the user's event
+on its original target with the guard off. It answers the cards (`run_anyway`
+→ `Session::allow_runs_of`) only once the cells are queued or running in
+Pluto's state, so the approved call reaches the runtime after the user's run
+has them; the runtime then sees each target edited by the tools, not run by
+them since, and run (or running, which it waits for) after the edit, and
+answers with the usual receipt and an `already_ran::` warning instead of
+running them a second time (`tool_edits` in `NotebookState`). Runs the page
+can't catch (the cell's ⋯ menu, a run started from another window) are covered
+by the app: when every cell of a waiting `execute_cell` / `submit_changes`
+card goes from unrun to run in the `/events` stream, the card is answered as
+allowed with a note.
 
 ## Diffs in the CodeMirror gutter
 

@@ -328,9 +328,49 @@ pub fn user_edits(old: &Value, new: &Value) -> Vec<UserEdit> {
     edits
 }
 
+/// The cells that were unrun (the agent changed them) in `old` and have run
+/// since in `new`, by notebook, from two `/events` updates' `cells`.
+pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
+    let (Some(old), Some(new)) = (old.as_object(), new.as_object()) else { return Vec::new() };
+    let mut out = Vec::new();
+    for (notebook, cells) in new {
+        let was_unrun = |id: &str| old.get(notebook).and_then(Value::as_array).into_iter().flatten().any(|c| c["cell_id"] == id && c["unrun"] == true);
+        let ran: Vec<String> = cells
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["unrun"] == false && c["running"] != true)
+            .filter_map(|c| c["cell_id"].as_str())
+            .filter(|id| was_unrun(id))
+            .map(str::to_owned)
+            .collect();
+        if !ran.is_empty() {
+            out.push((notebook.clone(), ran));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RunWarning, run_warnings, still_true, user_edits};
+    use super::{RunWarning, cells_that_ran, run_warnings, still_true, user_edits};
+
+    #[test]
+    fn cells_that_ran_were_unrun_and_now_are_not() {
+        let old = json!({ "n1": [
+            { "cell_id": "a", "unrun": false, "running": false },
+            { "cell_id": "b", "unrun": true, "running": false },
+            { "cell_id": "c", "unrun": true, "running": false },
+            { "cell_id": "d", "unrun": true, "running": false },
+        ] });
+        let new = json!({ "n1": [
+            { "cell_id": "a", "unrun": false, "running": false },
+            { "cell_id": "b", "unrun": false, "running": false },
+            { "cell_id": "c", "unrun": true, "running": true },
+            { "cell_id": "d", "unrun": false, "running": true },
+        ], "n2": [{ "cell_id": "e", "unrun": false, "running": false }] });
+        assert_eq!(cells_that_ran(&old, &new), vec![("n1".to_owned(), vec!["b".to_owned()])]);
+    }
     use serde_json::json;
 
     fn texts(warnings: &[RunWarning]) -> Vec<String> {

@@ -1735,6 +1735,7 @@ impl Workspace {
             }
             Some(annotate::Message::State(state)) => return self.on_page_state(state, cx),
             Some(annotate::Message::RunNotebook { notebook }) => self.run_notebook(notebook, cx),
+            Some(annotate::Message::RunAnyway { notebook, cells }) => self.run_anyway(notebook, cells, cx),
             Some(annotate::Message::AskedVisible(visible)) => {
                 if let Some(key) = self.active {
                     self.with_session(key, cx, |s| s.asks.cells_visible = Some(visible));

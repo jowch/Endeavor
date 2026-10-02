@@ -897,6 +897,12 @@ impl Workspace {
                 session.note_user_edit(cell.clone(), name.clone());
             }
         }
+        for (notebook, cells) in pluto::cells_that_ran(&connection.cells, &event["cells"]) {
+            for session in self.sessions.iter_mut().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())) {
+                session.cells_ran(&cells);
+            }
+            cx.notify();
+        }
         connection.cells = event["cells"].take();
         self.push_cells(cx);
         for path in new_stops {

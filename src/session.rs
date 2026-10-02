@@ -397,6 +397,9 @@ pub struct Session {
     /// The agent's prompts as Endeavor answers them: "Always this session"
     /// rules, the queued prompts' count, when each was answered.
     pub asks: Asks,
+    /// Of each waiting run card's cells (by its call), those that went from
+    /// unrun to run some other way while it waited.
+    ran_while_asked: HashMap<String, HashSet<String>>,
     /// The open approval card's button handles, resized to match its button count.
     approval_focus: RefCell<Vec<FocusHandle>>,
     /// The pinned plan's fold toggle's Tab-stop handle.
@@ -591,6 +594,7 @@ impl Session {
             start_mode: None,
             focus: RefCell::new(None),
             asks: Asks::default(),
+            ran_while_asked: HashMap::new(),
             approval_focus: RefCell::new(Vec::new()),
             pinned_plan_focus: RefCell::new(None),
             plan_card_focus: RefCell::new(None),
@@ -1815,6 +1819,68 @@ impl Session {
         true
     }
 
+    /// Run anyway, in the page, when the user's own run reaches cells a card
+    /// asks to run: allow each waiting card asking about any of `cells`, as
+    /// its Run button does. How many it answered.
+    pub fn allow_runs_of(&mut self, cells: &[String]) -> usize {
+        let asking = self.prompts_running(&self.waiting_prompts(), cells);
+        for &ix in &asking {
+            let Some(Entry::Permission { options, .. }) = self.entries.get(ix) else { continue };
+            if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce).cloned() {
+                self.answer(ix, &allow, Scope::Once);
+            }
+        }
+        asking.len()
+    }
+
+    /// Of `prompts`, those asking to run any of `cells`.
+    fn prompts_running(&self, prompts: &[usize], cells: &[String]) -> Vec<usize> {
+        prompts.iter().copied().filter(|ix| crate::approval::run_cells_at(self, *ix).iter().any(|c| cells.contains(c))).collect()
+    }
+
+    /// `ran`: cells that were unrun and have run since, some way other than
+    /// the agent's call (the user's run reached them without asking first).
+    /// A card asking to run cells that have all run while it waited is
+    /// answered as allowed, with a note; the runtime doesn't run them again.
+    pub fn cells_ran(&mut self, ran: &[String]) {
+        for ix in self.ran_cards(&self.waiting_prompts(), ran) {
+            let names = crate::approval::heading_names_at(self, ix);
+            let Some(Entry::Permission { options, .. }) = self.entries.get(ix) else { continue };
+            let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce).cloned() else { continue };
+            self.answer(ix, &allow, Scope::Once);
+            let what = if names.is_empty() { "The cells".to_owned() } else { names.join(", ") };
+            self.note(format!("{what} ran after your change"));
+        }
+    }
+
+    /// Of `prompts`, the run cards (an `execute_cell` or `submit_changes` of
+    /// cells the agent had already changed) whose cells have all run while
+    /// they waited, counting `ran` now.
+    fn ran_cards(&mut self, prompts: &[usize], ran: &[String]) -> Vec<usize> {
+        let mut done = Vec::new();
+        let mut waiting = HashSet::new();
+        for &ix in prompts {
+            let Some(Entry::Permission { call, tool: Some(tool), runs_code: true, .. }) = self.entries.get(ix) else { continue };
+            if !matches!(tool.as_str(), "execute_cell" | "submit_changes") {
+                continue;
+            }
+            let call = call.to_string();
+            let cells = crate::approval::run_cells_at(self, ix);
+            if cells.is_empty() {
+                continue;
+            }
+            let seen = self.ran_while_asked.entry(call.clone()).or_default();
+            seen.extend(ran.iter().filter(|c| cells.contains(c)).cloned());
+            if cells.iter().all(|c| seen.contains(c)) {
+                done.push(ix);
+            } else {
+                waiting.insert(call);
+            }
+        }
+        self.ran_while_asked.retain(|call, _| waiting.contains(call));
+        done
+    }
+
     pub fn set_preview(&mut self, ix: usize, value: pluto::RunPreview) {
         if let Some(Entry::Permission { preview, .. }) = self.entries.get_mut(ix) {
             *preview = Some(value);
@@ -2035,6 +2101,42 @@ mod tests {
         let run_input = serde_json::json!({ "cell_id": "b" });
         let run = Asked { title: "mcp__notebook__execute_cell", kind: Some(ToolKind::Other), input: &run_input, path: None };
         assert_eq!(s.answer_on_arrival(&run, true, false), Some(Approval::WithoutAsking));
+    }
+
+    #[test]
+    fn run_cards_reached_by_the_users_run() {
+        use agent_client_protocol::schema::v1::ToolCallId;
+        let asked = |id: &str, tool: &str, input: serde_json::Value| Entry::Permission {
+            call: ToolCallId::new(id.to_string()),
+            title: format!("mcp__notebook__{tool}"),
+            code: None,
+            options: Vec::new(),
+            responder: None,
+            runs_code: true,
+            tool: Some(tool.into()),
+            input,
+            kind: None,
+            path: None,
+            preview: None,
+            plan: None,
+        };
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.push(asked("r1", "execute_cell", serde_json::json!({ "cell_id": "b" })));
+        s.push(asked("r2", "submit_changes", serde_json::json!({ "cell_ids": ["c", "d"] })));
+        s.push(asked("r3", "edit_cell", serde_json::json!({ "cell_id": "c", "code": "c = 2", "run_after": true })));
+        let prompts = [0, 1, 2];
+
+        // Run anyway answers the cards asking about any cell the user's run reaches.
+        assert_eq!(s.prompts_running(&prompts, &["a".into(), "b".into()]), vec![0]);
+        assert_eq!(s.prompts_running(&prompts, &["c".into()]), vec![1, 2]);
+        assert_eq!(s.prompts_running(&prompts, &["z".into()]), Vec::<usize>::new());
+
+        // Cells that ran without asking close a card once all of its cells have,
+        // and never a card that would change the code first.
+        assert_eq!(s.ran_cards(&prompts, &["b".into(), "c".into()]), vec![0]);
+        assert_eq!(s.ran_cards(&[1, 2], &[]), Vec::<usize>::new(), "d hasn't run");
+        assert_eq!(s.ran_cards(&[1, 2], &["d".into()]), vec![1], "c ran earlier, while it waited");
+        assert!(s.ran_while_asked.is_empty(), "nothing kept for cards no longer waiting");
     }
 
     #[test]

@@ -39,6 +39,8 @@ export type ToApp =
   | { type: "asked_visible"; visible: boolean }
   // Run notebook in the safe-preview callout.
   | { type: "run_notebook"; notebook: string }
+  // Run anyway: the user's run reaches these cells, which a card asks to run; answer those cards.
+  | { type: "run_anyway"; notebook: string; cells: string[] }
   // The Status failure box: Fix with Claude (with the package's log), Restart notebook.
   | { type: "fix_package"; notebook: string; name: string; log: string }
   | { type: "restart"; notebook: string }
@@ -115,6 +117,8 @@ export type ToPage =
       // Claude is working: the prompts' ↩ queues.
       working?: boolean;
       error_asks?: ErrorAsk[];
+      // Every waiting run card's cells, and what each defines: the user's run asks before reaching one.
+      waiting_runs?: Array<{ id: string; name?: string | null }>;
     }
   // Share and ⋮ items that act in the page, with Pluto's own functions.
   | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" }

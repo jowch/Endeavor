@@ -268,9 +268,9 @@
       quote.textContent = o.quote.text.split(/\s+/).join(" ").trim();
       field.before(quote);
     }
-    const showMenu = (shown) => {
-      menu.hidden = !shown;
-      options.setAttribute("aria-expanded", String(shown));
+    const showMenu = (shown2) => {
+      menu.hidden = !shown2;
+      options.setAttribute("aria-expanded", String(shown2));
     };
     const fit = () => {
       sendButton.classList.toggle("ready", !!text.value.trim());
@@ -546,9 +546,9 @@
         const b = last2.box;
         return { left: b.left - window.scrollX, top: b.top - window.scrollY, right: b.right - window.scrollX, bottom: b.bottom - window.scrollY };
       }
-      const shown = last2.lines?.length ? last2.lines : last2.el ? [last2.el] : [];
-      if (!shown.length) return null;
-      const [first, end] = [shown[0].getBoundingClientRect(), shown[shown.length - 1].getBoundingClientRect()];
+      const shown2 = last2.lines?.length ? last2.lines : last2.el ? [last2.el] : [];
+      if (!shown2.length) return null;
+      const [first, end] = [shown2[0].getBoundingClientRect(), shown2[shown2.length - 1].getBoundingClientRect()];
       return { left: first.left, top: first.top, right: Math.max(first.right, end.right), bottom: end.bottom };
     }
     function place4() {
@@ -685,9 +685,9 @@
         if (drag.lines) {
           const line = lineAt(e.target, drag.lines.cell);
           if (line) drag.lines.to = line;
-          const shown = linesPick(drag.lines.cell, drag.lines.from, drag.lines.to);
+          const shown2 = linesPick(drag.lines.cell, drag.lines.from, drag.lines.to);
           for (const el2 of document.querySelectorAll(".annotate-line")) el2.classList.remove("annotate-line");
-          for (const el2 of shown.lines ?? []) el2.classList.add("annotate-line");
+          for (const el2 of shown2.lines ?? []) el2.classList.add("annotate-line");
           return;
         }
         document.body.classList.add("annotate-drawing");
@@ -1451,7 +1451,7 @@
     return { precompiled, failed, added };
   }
   function importedPackages(codes) {
-    const names = [];
+    const names2 = [];
     for (const code of codes) {
       for (const line of code.split("\n")) {
         const m = line.match(/^\s*(?:using|import)\s+([^#]+)/);
@@ -1459,11 +1459,11 @@
         const list = m[1].split(":")[0];
         for (const part of list.split(",")) {
           const name = part.trim().split(/[.\s]/)[0];
-          if (/^[A-Za-z_]\w*$/.test(name) && !["Base", "Core", "Main"].includes(name) && !names.includes(name)) names.push(name);
+          if (/^[A-Za-z_]\w*$/.test(name) && !["Base", "Core", "Main"].includes(name) && !names2.includes(name)) names2.push(name);
         }
       }
     }
-    return names;
+    return names2;
   }
   function prettyTime(ns) {
     if (ns < 1e3) return `${Math.round(ns)} ns`;
@@ -1576,7 +1576,7 @@
     drawerOf = source;
   }
   function report2() {
-    const editor = window.editor_state;
+    const editor2 = window.editor_state;
     if (!last || !model) return;
     const msg = {
       type: "state",
@@ -1587,7 +1587,7 @@
       save_failed: model.saveFailed,
       package_failed: model.failure?.name ?? null,
       dead: last.process_status === "no_process",
-      connected: editor?.connected !== false,
+      connected: editor2?.connected !== false,
       drawer: drawerOf()
     };
     const json = JSON.stringify(msg);
@@ -1903,12 +1903,12 @@
     window.WebSocket = Held;
   }
   function style() {
-    const css15 = document.createElement("style");
-    css15.textContent = `
+    const css16 = document.createElement("style");
+    css16.textContent = `
     body.${CLASS} pluto-notebook { opacity: 0.85; }
     body.${CLASS} pluto-notebook, body.${CLASS} pluto-notebook * { pointer-events: none !important; }
   `;
-    document.head.append(css15);
+    document.head.append(css16);
   }
   function blockKeys(e) {
     if (!readonly) return;
@@ -2019,12 +2019,12 @@
     return [b.msg.trim(), ...frames.length ? ["Stacktrace:", ...frames] : []].join("\n").slice(0, MAX_ERROR);
   }
   function traceLabel(frames, open3) {
-    const shown = frames.filter((f) => !(f.file === "none" && f.call === "top-level scope"));
+    const shown2 = frames.filter((f) => !(f.file === "none" && f.call === "top-level scope"));
     const steps = (n) => `${n} step${n === 1 ? "" : "s"}`;
-    const mine = shown.filter((f) => f.file?.includes("#==#")).length;
-    const theirs = shown.length - mine;
+    const mine = shown2.filter((f) => f.file?.includes("#==#")).length;
+    const theirs = shown2.length - mine;
     if (open3 && mine && theirs) return `Stack trace \xB7 ${steps(mine)} in your notebook, ${theirs} inside packages`;
-    return `Stack trace \xB7 ${steps(shown.length)}`;
+    return `Stack trace \xB7 ${steps(shown2.length)}`;
   }
   function statusOf(id) {
     const told = asks.find((a) => a.cell === id);
@@ -2134,8 +2134,8 @@
     error.querySelector(":scope > .endeavor-trace")?.remove();
     const header = error.querySelector(":scope > header");
     if (!header) return;
-    const names = Object.keys(causes);
-    const key = `${names.join()}|${body2(nb, cell.id)?.msg ?? ""}`;
+    const names2 = Object.keys(causes);
+    const key = `${names2.join()}|${body2(nb, cell.id)?.msg ?? ""}`;
     let box = error.querySelector(":scope > .endeavor-upstream");
     if (!box) {
       box = el("div", "endeavor-upstream");
@@ -2146,14 +2146,14 @@
     box.dataset.key = key;
     const why = el("div", "why");
     why.append("Fails because ");
-    names.forEach((name, i) => {
+    names2.forEach((name, i) => {
       if (i) why.append(" or ");
       why.append(el("code", "", name));
     });
     why.append(
       " failed",
       el("span", "dot", "\xB7"),
-      link("Show \u203A", "show", () => document.getElementById(causes[names[0]])?.scrollIntoView({ block: "center", behavior: "smooth" }))
+      link("Show \u203A", "show", () => document.getElementById(causes[names2[0]])?.scrollIntoView({ block: "center", behavior: "smooth" }))
     );
     box.replaceChildren(el("div", "message", plainMessage(body2(nb, cell.id)?.msg ?? "")), why);
   }
@@ -2313,8 +2313,182 @@
     onRedraw(update);
   }
 
-  // src/safe.ts
+  // src/runguard.ts
+  function reach(start, deps) {
+    const seen = /* @__PURE__ */ new Set();
+    const todo = [...start];
+    while (todo.length) {
+      const id = todo.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const next of Object.values(deps[id]?.downstream_cells_map ?? {}).flat()) todo.push(next);
+    }
+    return [...seen];
+  }
   var css14 = `
+  #endeavor-runguard { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 210;
+    width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 14px 16px; border-radius: 10px;
+    border: 1px solid var(--e-dialog-edge); background: var(--e-dialog-bg); box-shadow: 0 16px 48px var(--e-dialog-shadow);
+    font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
+  #endeavor-runguard b { display: block; margin-bottom: 4px; font-weight: 600; font-size: 13.5px; color: var(--e-text-primary); }
+  #endeavor-runguard code { font: 12px JuliaMono, ui-monospace, monospace; padding: 0 3px; border-radius: 3px;
+    background: var(--e-bg-tag); color: var(--e-text-primary); }
+  #endeavor-runguard .buttons { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  #endeavor-runguard .gap { flex: 1; }
+  #endeavor-runguard button { padding: 4px 12px; border-radius: 5px; border: 1px solid var(--e-control-edge); background: var(--e-bg-raised);
+    color: var(--e-text-primary); font: 12.5px system-ui, sans-serif; cursor: pointer; }
+  #endeavor-runguard button.show { border-color: transparent; background: none; color: var(--e-accent-text); padding: 4px 6px; }
+  #endeavor-runguard button.primary { background: var(--e-accent); border-color: var(--e-accent); color: #fff; }
+  #endeavor-runguard .hint { color: var(--e-text-dim); font-size: 11.5px; margin-left: -2px; }
+  pluto-cell.endeavor-guard-show { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px; }
+`;
+  var waiting2 = [];
+  var replaying = false;
+  var shown = null;
+  var escape3 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  var editor = () => window.editor_state;
+  function changedCells(st) {
+    const local = st.cell_inputs_local ?? {};
+    const remote = st.notebook?.cell_inputs ?? {};
+    return (st.notebook?.cell_order ?? []).filter((id) => local[id] != null && remote[id]?.code !== local[id]?.code);
+  }
+  function differs(st, cell) {
+    const text = st.cell_inputs_local?.[cell.id]?.code ?? cellCode(cell);
+    return text !== st.notebook?.cell_inputs?.[cell.id]?.code;
+  }
+  function runStart(e, st) {
+    const target = e.target instanceof Element ? e.target : null;
+    const selected = st.selected_cells ?? [];
+    if (e.type === "click") {
+      const button = target?.closest("pluto-runarea.run button.runcell");
+      const cell = button?.closest("pluto-cell");
+      if (!cell) return null;
+      return { start: selected.includes(cell.id) ? selected : [cell.id], changes: false };
+    }
+    if (e.type !== "keydown") return null;
+    const k = e;
+    const inEditor = target?.closest("pluto-input") ? target.closest("pluto-cell") : null;
+    if (k.key?.toLowerCase() === "s" && modHeld(k) && !k.shiftKey && !k.altKey) {
+      const changed = changedCells(st);
+      return changed.length ? { start: changed, changes: true } : null;
+    }
+    if (k.key !== "Enter") return null;
+    if (k.shiftKey && !k.metaKey && !k.ctrlKey && !k.altKey) {
+      const start = [.../* @__PURE__ */ new Set([...inEditor ? [inEditor.id] : [], ...selected])];
+      return start.length ? { start, changes: false } : null;
+    }
+    if ((k.metaKey || k.ctrlKey) && !k.shiftKey && !k.altKey && inEditor) {
+      return differs(st, inEditor) ? { start: [inEditor.id], changes: true } : null;
+    }
+    return null;
+  }
+  function replayOf(e) {
+    const target = e.target;
+    if (e.type === "click") return () => target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const k = e;
+    const init2 = { key: k.key, code: k.code, shiftKey: k.shiftKey, ctrlKey: k.ctrlKey, metaKey: k.metaKey, altKey: k.altKey, bubbles: true, cancelable: true };
+    return () => {
+      target.focus?.();
+      target.dispatchEvent(new KeyboardEvent("keydown", init2));
+    };
+  }
+  var nameOf = (w, deps) => w.name || Object.keys(deps[w.id]?.downstream_cells_map ?? {})[0] || "a cell";
+  function names(list) {
+    const code = list.map((n) => `<code>${escape3(n)}</code>`);
+    return code.length <= 1 ? code.join("") : `${code.slice(0, -1).join(", ")} and ${code[code.length - 1]}`;
+  }
+  function outline(on2) {
+    for (const cell of document.querySelectorAll("pluto-cell.endeavor-guard-show")) cell.classList.remove("endeavor-guard-show");
+    if (!on2 || !shown) return;
+    const cells = shown.hit.map((w) => document.getElementById(w.id)).filter((c) => !!c);
+    cells[0]?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    for (const cell of cells) cell.classList.add("endeavor-guard-show");
+  }
+  function close2() {
+    outline(false);
+    shown?.el.remove();
+    shown = null;
+  }
+  function cancel() {
+    close2();
+  }
+  function runAnyway() {
+    if (!shown) return;
+    const { hit, replay } = shown;
+    close2();
+    const ids = hit.map((w) => w.id);
+    const results = () => editor()?.notebook?.cell_results ?? {};
+    const before = Object.fromEntries(ids.map((id) => [id, results()[id]?.last_run_timestamp]));
+    replaying = true;
+    try {
+      replay();
+    } finally {
+      replaying = false;
+    }
+    const started = Date.now();
+    const answer = () => {
+      const now = results();
+      const under_way = ids.every((id) => now[id]?.queued || now[id]?.running || now[id]?.last_run_timestamp !== before[id]);
+      if (under_way || Date.now() - started > 3e3) send({ type: "run_anyway", notebook: notebookId(), cells: ids });
+      else setTimeout(answer, 50);
+    };
+    answer();
+  }
+  function show2(hit, changes, replay, deps) {
+    close2();
+    const list = hit.map((w) => nameOf(w, deps));
+    const one = list.length === 1;
+    const el2 = document.createElement("div");
+    el2.id = "endeavor-runguard";
+    el2.dataset.endeavorUi = "";
+    el2.setAttribute("role", "dialog");
+    el2.setAttribute("aria-label", "Claude is waiting for your answer");
+    const what = changes ? "your changes" : "this";
+    el2.innerHTML = `<b>Claude is waiting for your answer on ${names(list)}.</b>Running ${what} now also runs ${one ? "it" : "them"}.<div class="buttons"><button class="show">Show ${one ? names(list) : "them"}</button><span class="gap"></span><button class="cancel">Cancel</button><span class="hint">esc</span><button class="primary run">Run anyway</button></div>`;
+    el2.querySelector(".show").onclick = () => outline(true);
+    el2.querySelector(".cancel").onclick = cancel;
+    el2.querySelector(".run").onclick = (e) => byUser(e) && runAnyway();
+    document.body.append(el2);
+    shown = { el: el2, hit, replay };
+    el2.querySelector(".run").focus();
+  }
+  function guard(e) {
+    if (replaying || !waiting2.length || !byUser(e)) return;
+    const st = editor();
+    if (!st?.notebook || st.notebook.process_status === "waiting_for_permission") return;
+    const run = runStart(e, st);
+    if (!run) return;
+    const deps = st.notebook.cell_dependencies ?? {};
+    const reached = new Set(reach(run.start, deps));
+    const hit = waiting2.filter((w) => reached.has(w.id));
+    if (!hit.length) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    show2(hit, run.changes, replayOf(e), deps);
+  }
+  function onKey2(e) {
+    if (shown && byUser(e) && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      if (e.key === "Escape" || e.key === "Enter") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return e.key === "Escape" ? cancel() : runAnyway();
+      }
+    }
+    guard(e);
+  }
+  function initRunGuard() {
+    const style2 = document.createElement("style");
+    style2.textContent = css14;
+    document.head.append(style2);
+    on("context", (msg) => {
+      waiting2 = msg.waiting_runs ?? [];
+    });
+    window.addEventListener("keydown", onKey2, true);
+    window.addEventListener("click", guard, true);
+  }
+
+  // src/safe.ts
+  var css15 = `
   #endeavor-safe { display: none; }
   html[data-endeavor-look="endeavor"] #endeavor-safe.shown { display: flex; }
   #endeavor-safe { gap: 10px; align-items: flex-start; margin: 0 0 20px 0; padding: 12px 14px;
@@ -2333,8 +2507,8 @@
   #endeavor-safe code { font: 12px JuliaMono, ui-monospace, monospace; padding: 0 3px; border-radius: 3px;
     background: var(--e-bg-tag); color: var(--e-text-primary); }
 `;
-  var escape3 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
-  var withCode = (s) => escape3(s).replace(/`([^`]*)`/g, "<code>$1</code>");
+  var escape4 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  var withCode = (s) => escape4(s).replace(/`([^`]*)`/g, "<code>$1</code>");
   var shield = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1.2 12 3v3.6c0 3-2.2 5.2-5 6.2-2.8-1-5-3.2-5-6.2V3z"/></svg>`;
   var play = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="stroke: var(--e-accent-text)" stroke-width="1.3"><path d="M2.5 1.5v7l6-3.5z"/></svg>`;
   var callout;
@@ -2345,7 +2519,7 @@
     if (!safe) return;
     const asking = context.asking ? `<div class="asking">Claude is asking to run it. Answer in the chat, or here.</div>` : "";
     const crash = context.crash;
-    const title = crash ? escape3(crash.title) : "Safe preview";
+    const title = crash ? escape4(crash.title) : "Safe preview";
     const body3 = crash ? withCode(crash.body) : "You're reading and editing this file without running any code.";
     const html = `${shield}<div class="text"><b>${title}</b>${body3}${asking}</div><button class="run">${play}Run notebook</button>`;
     if (callout.innerHTML !== html) {
@@ -2359,7 +2533,7 @@
   }
   function initSafe() {
     const style2 = document.createElement("style");
-    style2.textContent = css14;
+    style2.textContent = css15;
     document.head.append(style2);
     callout = document.createElement("div");
     callout.id = "endeavor-safe";
@@ -2689,6 +2863,7 @@ footer form#feedback { display: none !important; }
     initErrors();
     initRail();
     initReveal();
+    initRunGuard();
     initActions();
     initDrawer();
     initSafe();

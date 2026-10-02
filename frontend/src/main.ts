@@ -16,6 +16,7 @@ import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
 import { initFolded } from "./folded";
 import { initRail } from "./rail";
+import { initRunGuard } from "./runguard";
 import { initReveal } from "./reveal";
 import { initSafe } from "./safe";
 import { initState } from "./state";
@@ -35,6 +36,7 @@ function init() {
   initErrors();
   initRail();
   initReveal();
+  initRunGuard();
   initActions();
   initDrawer();
   initSafe();

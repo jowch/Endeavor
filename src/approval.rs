@@ -136,6 +136,39 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
     Some(view)
 }
 
+/// The notebook cells prompt `ix` asks to run (none for any other prompt).
+pub(crate) fn run_cells_at(session: &Session, ix: usize) -> Vec<String> {
+    view_at(session, ix).map(|v| v.cells).unwrap_or_default()
+}
+
+/// The names prompt `ix`'s heading gives its cells ("rates").
+pub(crate) fn heading_names_at(session: &Session, ix: usize) -> Vec<String> {
+    view_at(session, ix).map(|v| v.names).unwrap_or_default()
+}
+
+/// The cells every waiting run card asks to run, each once, with what it
+/// defines when known: the page asks before the user's own run reaches one.
+pub(crate) fn waiting_run_cells(session: &Session) -> Vec<(String, Option<String>)> {
+    let mut cells: Vec<(String, Option<String>)> = Vec::new();
+    for ix in session.waiting_prompts() {
+        let preview = match session.entries.get(ix) {
+            Some(Entry::Permission { preview, .. }) => preview.as_ref(),
+            _ => None,
+        };
+        for id in run_cells_at(session, ix) {
+            if cells.iter().any(|(c, _)| *c == id) {
+                continue;
+            }
+            let name = preview
+                .and_then(|p| p.cells.iter().find(|c| c.id.as_deref() == Some(id.as_str())))
+                .and_then(|c| c.name.clone())
+                .or_else(|| session.cell_codes.get(&id).and_then(defined_name));
+            cells.push((id, name));
+        }
+    }
+    cells
+}
+
 /// A prompt's question ("Run `rates`?"), for the note when it went unanswered.
 pub(crate) fn heading_at(session: &Session, ix: usize) -> Option<String> {
     view_at(session, ix).map(|v| v.heading)

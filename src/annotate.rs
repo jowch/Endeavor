@@ -72,6 +72,9 @@ pub enum Message {
     RunNotebook { notebook: String },
     /// Whether the cells the chat's card asks to run are on screen.
     AskedVisible(bool),
+    /// Run anyway, when the user's own run reaches cells a card asks to run:
+    /// allow the cards asking about `cells`, as their Run button does.
+    RunAnyway { notebook: String, cells: Vec<String> },
     /// Fix with Claude, in Status's box for a package that failed.
     FixPackage { notebook: String, name: String, log: String },
     /// Restart notebook, in the same box.
@@ -221,6 +224,10 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
         }
         "run_notebook" => Some(Message::RunNotebook { notebook: uuid("notebook")? }),
         "asked_visible" => Some(Message::AskedVisible(v.get("visible")?.as_bool()?)),
+        "run_anyway" => {
+            let cells: Vec<String> = v.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned)).collect::<Option<_>>()?;
+            (!cells.is_empty() && cells.len() <= MAX_CELLS).then_some(Message::RunAnyway { notebook: uuid("notebook")?, cells })
+        }
         "restart" => Some(Message::Restart { notebook: uuid("notebook")? }),
         "error_ask_show" => Some(Message::ShowErrorAsk { cell: uuid("cell")? }),
         "error_ask_cancel" => Some(Message::CancelErrorAsk { cell: uuid("cell")? }),
@@ -414,6 +421,11 @@ mod tests {
         );
         assert_eq!(parse_with(&format!(r#"{{"type":"run_notebook","notebook":"{NB}"}}"#), ""), Some(Message::RunNotebook { notebook: NB.into() }));
         assert_eq!(parse_with(r#"{"type":"asked_visible","visible":false}"#, ""), Some(Message::AskedVisible(false)));
+        assert_eq!(
+            parse_with(&format!(r#"{{"type":"run_anyway","notebook":"{NB}","cells":["{C1}"]}}"#), ""),
+            Some(Message::RunAnyway { notebook: NB.into(), cells: vec![C1.into()] })
+        );
+        assert_eq!(parse_with(&format!(r#"{{"type":"run_anyway","notebook":"{NB}","cells":["x"]}}"#), ""), None);
         assert_eq!(parse_with(&format!(r#"{{"type":"restart","notebook":"{NB}"}}"#), ""), Some(Message::Restart { notebook: NB.into() }));
         assert_eq!(parse_with(&format!(r#"{{"type":"error_ask_show","cell":"{C1}"}}"#), ""), Some(Message::ShowErrorAsk { cell: C1.into() }));
         assert_eq!(parse_with(&format!(r#"{{"type":"error_ask_cancel","cell":"{C1}"}}"#), ""), Some(Message::CancelErrorAsk { cell: C1.into() }));

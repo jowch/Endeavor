@@ -738,7 +738,9 @@ impl Workspace {
         let working = session.outbox.busy && !session.agent_waiting;
         // Error boxes whose Fix or Explain Claude is answering, or that wait in the queue.
         let error_asks: Vec<_> = session.error_asks().into_iter().map(|(cell, kind, queued)| serde_json::json!({ "cell": cell, "kind": kind, "queued": queued })).collect();
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks });
+        // Every waiting run card's cells: a run of the user's that reaches one asks first.
+        let waiting: Vec<serde_json::Value> = crate::approval::waiting_run_cells(session).into_iter().map(|(id, name)| serde_json::json!({ "id": id, "name": name })).collect();
+        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
@@ -801,6 +803,15 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    /// Run anyway, in the page: the user's run reaches `cells`, which cards
+    /// ask to run; those cards are answered as their Run button does.
+    pub fn run_anyway(&mut self, notebook: String, cells: Vec<String>, cx: &mut Context<Self>) {
+        let Some(key) = self.session_showing(&notebook) else { return };
+        self.with_session(key, cx, |s| {
+            s.allow_runs_of(&cells);
+        });
     }
 
     pub fn restart_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
