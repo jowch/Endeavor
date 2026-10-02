@@ -21,7 +21,7 @@ use crate::hosts::{HostId, Place};
 use crate::new_session::{Glyph, glyph};
 use crate::session::{self, Entry, ModeChoice, Session};
 use crate::slash::{self, Listing, Own};
-use crate::{Workspace, context_ring, theme, tool_button};
+use crate::{Workspace, theme, tool_button};
 use crate::theme::FocusRing as _;
 
 actions!(composer, [AddFiles, ListUp, ListDown, ListPick, ListFill, PickMode1, PickMode2, PickMode3, PickMode4]);
@@ -140,6 +140,9 @@ pub struct Composer {
     focus_model: FocusHandle,
     focus_effort: FocusHandle,
     focus_send: FocusHandle,
+    pub(crate) focus_context: FocusHandle,
+    /// The context ring's popover.
+    pub context: crate::context::RingPopover,
     /// Draft-chip remove buttons, resized to match `attachments` each render.
     /// A `RefCell` (like `rows` above) since render only has `&self`.
     focus_chip_remove: std::cell::RefCell<Vec<FocusHandle>>,
@@ -166,6 +169,8 @@ impl Composer {
             focus_model: cx.focus_handle().tab_stop(true),
             focus_effort: cx.focus_handle().tab_stop(true),
             focus_send: cx.focus_handle().tab_stop(true),
+            focus_context: cx.focus_handle().tab_stop(true),
+            context: Default::default(),
             focus_chip_remove: std::cell::RefCell::new(Vec::new()),
         }
     }
@@ -527,7 +532,7 @@ impl Workspace {
     }
 
     /// Put `text` in the box with the caret at its end.
-    fn set_composer_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn set_composer_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         let end = text.len();
         self.input.update(cx, |s, cx| {
             s.set_value(text, window, cx);
@@ -1019,7 +1024,7 @@ impl Workspace {
             .children(self.composer.notice.clone().map(|n| div().text_size(theme::chat_meta()).text_color(theme::accent_text()).child(n)))
             .children(self.render_quote_cards(cx))
             .child(the_box)
-            .child(self.render_toolbar(session, notebook_open, cx))
+            .child(self.render_toolbar(session, notebook_open, window, cx))
             .into_any_element()
     }
 
@@ -1355,10 +1360,9 @@ impl Workspace {
         )
     }
 
-    fn render_toolbar(&self, session: Option<&Session>, notebook_open: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_toolbar(&self, session: Option<&Session>, notebook_open: bool, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let narrow = self.settings.layout.chat_width < 400.;
         let mode = self.mode_label(session);
-        let usage = session.and_then(|s| s.usage).filter(|(_, size)| *size > 0);
         let open = |menu: Menu| self.composer.menu == Some(menu);
         div()
             .flex()
@@ -1449,32 +1453,7 @@ impl Workspace {
                     .into_iter()
                     .flatten(),
             )
-            .child(match usage {
-                // Shown on hover beside the ring: a tooltip would open under the notebook.
-                // The label covers the labels beside the ring rather than taking room from them.
-                Some((used, size)) => div()
-                    .id("context")
-                    .group("context")
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .px(px(5.))
-                    .child(
-                        div()
-                            .absolute()
-                            .right(relative(1.))
-                            .pl(px(6.))
-                            .whitespace_nowrap()
-                            .invisible()
-                            .bg(theme::bg_page())
-                            .text_color(theme::text_muted())
-                            .group_hover("context", |s| s.visible())
-                            .child(format!("{}% context", used * 100 / size)),
-                    )
-                    .child(context_ring(used as f32 / size as f32))
-                    .into_any_element(),
-                None => div().px(px(5.)).opacity(0.5).child(context_ring(0.)).into_any_element(),
-            })
+            .child(self.render_context_ring(session, window, cx))
     }
 
     /// Chips above a sent message (its quotes are in the bubble), and the
@@ -1567,19 +1546,6 @@ impl Workspace {
         // Closed by the shared click-outside backdrop (main.rs); occlude()
         // keeps a click on the popover itself from reaching it.
         div().absolute().top(relative(1.)).right_0().mt(px(4.)).child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(2)).into_any_element()
-    }
-
-    /// A queued message on one line: its chips, then its words cut to fit.
-    pub fn render_queued(&self, n: usize, attachments: &[Attachment], text: &str) -> Div {
-        div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .overflow_hidden()
-            .children(attachments.iter().enumerate().map(|(i, a)| chip(ElementId::NamedInteger("queued-chip".into(), ((n as u64) << 8) | i as u64), a)))
-            .child(div().min_w_0().truncate().child(text.lines().next().unwrap_or("").to_string()))
     }
 }
 

@@ -20,6 +20,7 @@ mod celldiff;
 mod claude_process;
 mod composer;
 mod confirm;
+mod context;
 mod connection;
 mod crash;
 #[cfg(debug_assertions)]
@@ -1540,7 +1541,7 @@ impl Workspace {
         if self.close_composer_menus(cx) {
             return;
         }
-        if self.cancel_queue_edit(window, cx) {
+        if self.cancel_queue_edit(window, cx) || self.close_context_popover(cx) {
             return;
         }
         // The filter menu closes itself (a submenu first) through its own

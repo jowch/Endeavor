@@ -3,6 +3,7 @@
 //! (it selects each match and scrolls to it). ⏎ and ⌘G go to the next match,
 //! ⇧⏎ and ⇧⌘G to the previous one, and Esc closes the bar.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 
@@ -18,10 +19,13 @@ pub struct FindBar {
 }
 
 /// What the bar says after the box: nothing until a search has an answer,
-/// then "Not found" when there's no match. WebKit's find gives no count.
+/// then "No matches" when there's none. WebKit's find gives no count.
 pub fn result_text(found: Option<bool>) -> Option<&'static str> {
-    (found == Some(false)).then_some("Not found")
+    (found == Some(false)).then_some("No matches")
 }
+
+/// The keys, at the bar's right, while there's text and something matches.
+pub const KEYS: &str = "↩ next · ⇧↩ previous · esc close";
 
 impl Workspace {
     /// ⌘F with the notebook's page on screen: open the bar, or select its text if it's open.
@@ -82,11 +86,16 @@ impl Workspace {
         .detach();
     }
 
-    /// The bar, under the notebook header.
+    /// The bar, under the notebook header: the box (its edge in the focus
+    /// colour while it has the keyboard, the danger colour with no match),
+    /// previous and next, "No matches", the keys and ×.
     pub fn render_find_bar(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let find = self.find.as_ref()?;
         let focused = find.input.read(cx).focus_handle(cx).is_focused(window);
-        let button = |id: &'static str, icon: Glyph, label: &'static str| {
+        let empty = find.input.read(cx).value().is_empty();
+        let missed = find.found == Some(false);
+        let can_step = !empty && !missed;
+        let button = |id: &'static str, icon: Glyph, label: &'static str, enabled: bool| {
             div()
                 .id(id)
                 .role(Role::Button)
@@ -97,44 +106,54 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::row_active()))
-                .child(glyph(icon, theme::text_muted()))
+                .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(theme::row_active())))
+                .child(glyph(icon, if enabled { theme::text_muted() } else { theme::text_section() }))
+                .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(label).build(window, cx))
+        };
+        let edge = if missed {
+            theme::danger()
+        } else if focused {
+            theme::focus_ring()
+        } else {
+            theme::control_edge()
         };
         Some(
             div()
                 .id("find-bar")
                 .role(Role::Search)
                 .aria_label("Find in notebook")
-                .h(px(40.))
+                .h(px(36.))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
-                .gap(px(6.))
-                .px_4()
+                .gap(px(4.))
+                .pl(px(16.))
+                .pr(px(10.))
                 .bg(theme::bg_page())
                 .border_b_1()
                 .border_color(theme::divider())
                 .child(
                     div()
-                        .w(px(260.))
+                        .w(px(240.))
+                        .flex_shrink_0()
                         .h(px(26.))
                         .flex()
                         .items_center()
                         .gap(px(6.))
                         .px(px(8.))
-                        .rounded(px(5.))
+                        .rounded(px(6.))
                         .bg(theme::composer_bg())
                         .border_1()
-                        .border_color(if focused { theme::accent() } else { theme::control_edge() })
+                        .border_color(edge)
                         .child(glyph(Glyph::Search, theme::text_muted()))
                         .child(div().flex_1().min_w_0().child(Input::new(&find.input).appearance(false).aria_label("Find in notebook").text_size(theme::size_body()))),
                 )
-                .child(button("find-previous", Glyph::ChevronUp, "Previous match").on_click(cx.listener(|this, _, _, cx| this.find_in_page(true, cx))))
-                .child(button("find-next", Glyph::Chevron, "Next match").on_click(cx.listener(|this, _, _, cx| this.find_in_page(false, cx))))
-                .children(result_text(find.found).map(|text| div().flex_shrink_0().ml(px(4.)).text_size(theme::size_meta()).text_color(theme::danger()).child(text)))
-                .child(div().flex_1())
-                .child(button("find-close", Glyph::Close, "Close find").on_click(cx.listener(|this, _, _, cx| this.close_find(cx))))
+                .child(button("find-previous", Glyph::ChevronUp, "Previous match (⇧↩)", can_step).when(can_step, |d| d.on_click(cx.listener(|this, _, _, cx| this.find_in_page(true, cx)))))
+                .child(button("find-next", Glyph::Chevron, "Next match (↩)", can_step).when(can_step, |d| d.on_click(cx.listener(|this, _, _, cx| this.find_in_page(false, cx)))))
+                .children(result_text(find.found).map(|text| div().flex_shrink_0().ml(px(6.)).text_size(theme::size_meta()).text_color(theme::text_muted()).child(text)))
+                .child(div().flex_1().min_w_0())
+                .when(can_step, |d| d.child(div().flex_shrink_1().min_w_0().truncate().text_size(px(11.5)).text_color(theme::text_faint()).child(KEYS)))
+                .child(button("find-close", Glyph::Close, "Close (esc)", true).on_click(cx.listener(|this, _, _, cx| this.close_find(cx))))
                 .into_any_element(),
         )
     }
@@ -145,9 +164,9 @@ mod tests {
     use super::result_text;
 
     #[test]
-    fn the_bar_says_not_found_only_after_a_search_without_a_match() {
+    fn the_bar_says_no_matches_only_after_a_search_without_a_match() {
         assert_eq!(result_text(None), None);
         assert_eq!(result_text(Some(true)), None);
-        assert_eq!(result_text(Some(false)), Some("Not found"));
+        assert_eq!(result_text(Some(false)), Some("No matches"));
     }
 }
