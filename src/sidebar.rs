@@ -9,7 +9,8 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::hosts::{HostId, Place};
 use crate::menu::MenuTarget;
-use crate::new_session::{Glyph, NotebookChoice, glyph, menu_row};
+use crate::new_session::{Glyph, NotebookChoice, glyph, glyph_at, menu_row};
+use crate::row_marks::{self, RowFacts, RowMark};
 use crate::session::{Session, folder_name};
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
 use crate::theme::FocusRing as _;
@@ -223,6 +224,27 @@ impl StatusMark {
 
 fn row_end_mark(id: impl Into<ElementId>) -> Stateful<Div> {
     end_slot(id).mr(px(-16.))
+}
+
+/// A row mark drawn in `slot`, with its words as the tooltip.
+fn mark_slot(slot: Stateful<Div>, mark: RowMark) -> Stateful<Div> {
+    let words: SharedString = mark.words().into();
+    let icon = match &mark {
+        RowMark::NeedsYou => div().size(px(6.)).flex_shrink_0().rounded_full().border_1().border_color(theme::accent()).into_any_element(),
+        RowMark::Error => glyph(Glyph::Warning, theme::danger()).into_any_element(),
+        RowMark::NewReply => div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::accent()).into_any_element(),
+        RowMark::ServerDown { .. } => glyph(Glyph::WifiOff, theme::text_muted()).into_any_element(),
+        RowMark::Waiting { count, .. } => div()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .text_size(theme::size_meta_small())
+            .text_color(theme::text_muted())
+            .child(glyph_at(Glyph::Clock, theme::text_muted(), 11. / 12.))
+            .child(count.to_string())
+            .into_any_element(),
+    };
+    slot.min_w(px(20.)).child(icon).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(words.clone()).build(window, cx))
 }
 
 /// `text` with the first case-insensitive match of `query` picked out in
@@ -662,11 +684,25 @@ impl Workspace {
         }
     }
 
-    /// Whether an open session's row shows the "waits for you" ring. The
-    /// orbiting "working" indicator no longer shows on sidebar rows at all
-    /// (it still shows elsewhere, e.g. the composer and the offline card).
-    pub(crate) fn row_mark(&self, s: &Session) -> bool {
-        s.needs_approval()
+    /// An open session's row mark (see `row_marks`). The orbiting "working"
+    /// indicator doesn't show on sidebar rows (it does in the composer and
+    /// the offline card).
+    pub(crate) fn row_mark(&self, s: &Session) -> Option<RowMark> {
+        let host_down = s.place.host != HostId::ThisMac && self.connections.get(&s.place.host).is_some_and(|c| c.lost.is_some());
+        let held = s.outbox.held && !s.outbox.items.is_empty() && !self.claude.up();
+        row_marks::row_mark(&RowFacts {
+            needs_you: s.needs_approval(),
+            error: s.errored || s.failed.is_some(),
+            new_reply: s.unseen && self.active != Some(s.key),
+            server_down: host_down.then(|| self.hosts.name(&s.place.host).to_string()),
+            waiting: held.then(|| (s.outbox.items.len(), "Claude is back".to_string())),
+            mac_offline: self.offline_since.is_some(),
+        })
+    }
+
+    /// A collapsed folder's mark: the strongest of its open sessions'.
+    pub(crate) fn folder_mark(&self, folder: &Place) -> Option<RowMark> {
+        row_marks::strongest(self.sessions.iter().filter(|s| &s.place == folder).filter_map(|s| self.row_mark(s)))
     }
 
     /// A folder's rows to show (Status- and search-filtered, sorted by Sort
@@ -716,15 +752,16 @@ impl Workspace {
                 let title_text = s.title.clone();
                 let folder_line = flat.then(|| self.folder_heading(&s.place));
                 let title = self.row_lines(&row, &title_text, query, folder_line.as_deref());
-                let mark = self.row_mark(s).then(|| row_end_mark("row-mark").child(div().size(px(6.)).rounded_full().border_1().border_color(theme::accent())));
+                let row_mark = self.row_mark(s);
+                let label = row_mark.as_ref().map_or_else(|| title_text.clone(), |m| m.label(&title_text));
+                let mark = row_mark.map(|m| mark_slot(row_end_mark("row-mark"), m));
                 self.session_row(row.clone(), group.clone(), active, cx)
-                    .aria_label(title_text)
+                    .aria_label(label)
                     .border_2()
                     .border_color(gpui::transparent_black())
                     .track_focus(&s.focus_handle(cx))
                     .tab_stop(true)
                     .focus_visible(|st| st.border_color(theme::focus_ring()))
-                    .when(s.failed.is_some(), |d| d.text_color(theme::text_section()))
                     .child(title)
                     .child(self.row_more(row.clone(), group, active, cx))
                     .children(mark)
@@ -770,10 +807,9 @@ impl Workspace {
     /// A folder's heading: its name (with a collapse chevron via "name ›"
     /// when collapsed) on the left, and a "New session in <folder>" + always
     /// visible on the right, sharing the row end marks' vertical line. A
-    /// collapsed folder with a session waiting for approval shows the ring
-    /// after the "›". Clicking the name collapses or expands; clicking + starts
+    /// collapsed folder shows its rows' strongest mark after the "›". Clicking the name collapses or expands; clicking + starts
     /// a session there. Each is its own Tab stop with the sidebar's focus ring.
-    fn render_folder_heading(&self, folder: &Place, collapsed: bool, needs_approval: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_folder_heading(&self, folder: &Place, collapsed: bool, mark: Option<RowMark>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = self.folder_heading(folder);
         let key = format!("{:?}-{}", folder.host, folder.path.display());
         let label = if collapsed { format!("{name} ›") } else { name.clone() };
@@ -801,9 +837,7 @@ impl Workspace {
             .focus_visible(|s| s.border_color(theme::focus_ring()))
             .hover(|s| s.bg(theme::row_active()))
             .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(label))
-            .when(collapsed && needs_approval, |d| {
-                d.child(div().size(px(6.)).flex_shrink_0().rounded_full().border_1().border_color(theme::accent()))
-            })
+            .children(mark.filter(|_| collapsed).map(|m| mark_slot(div().id("folder-mark").flex_shrink_0().ml(px(2.)), m)))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder_collapsed(toggle_folder.clone(), cx)));
         let plus_folder = folder.clone();
         let plus_label: SharedString = format!("New session in {name}").into();
@@ -863,7 +897,7 @@ impl Workspace {
                         return None;
                     }
                     any_matched = true;
-                    let needs_approval = self.sessions.iter().any(|s| s.place == folder && s.needs_approval());
+                    let mark = self.folder_mark(&folder);
                     let body: Vec<AnyElement> = rows.into_iter().map(|row| self.render_sidebar_row(row, &query, false, cx)).collect();
                     let more_row = more.map(|(label, fewer)| {
                         let folder = folder.clone();
@@ -884,7 +918,7 @@ impl Workspace {
                         div()
                             .flex()
                             .flex_col()
-                            .child(self.render_folder_heading(&folder, collapsed, needs_approval, cx))
+                            .child(self.render_folder_heading(&folder, collapsed, mark, cx))
                             .children(body)
                             .children(more_row)
                             .into_any_element(),

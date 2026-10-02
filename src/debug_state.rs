@@ -182,15 +182,19 @@ impl Workspace {
         let open = matches!(row, Row::Open(_));
         let active = matches!(row, Row::Open(key) if self.active == Some(*key));
         let failed = matches!(row, Row::Open(key) if self.sessions.iter().any(|s| s.key == *key && s.failed.is_some()));
-        let needs_approval = matches!(row, Row::Open(key) if self.sessions.iter().any(|s| s.key == *key && self.row_mark(s)));
+        let row_mark = match row {
+            Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).and_then(|s| self.row_mark(s)),
+            Row::Past(..) => None,
+        };
         let archived = self.row_session_id(row).is_some_and(|id| self.archived.contains(&id.to_string()));
-        let mark = if needs_approval { Some("needs_approval") } else if archived { Some("archived") } else { None };
+        let tooltip = row_mark.as_ref().map(|m| m.words());
+        let mark = row_mark.as_ref().map(|m| m.name()).or(archived.then_some("archived"));
         let source = match row {
             Row::Open(_) => None,
             Row::Past(_, place) if self.records.was_listed(place) => Some("listed"),
             Row::Past(..) => Some("record"),
         };
-        json!({ "title": title, "open": open, "active": active, "mark": mark, "failed": failed, "source": source })
+        json!({ "title": title, "open": open, "active": active, "mark": mark, "tooltip": tooltip, "failed": failed, "source": source })
     }
 
     fn sidebar_state(&self, cx: &App) -> Value {
@@ -229,11 +233,12 @@ impl Workspace {
                     if total == 0 && (searching || !show_empty) {
                         return None;
                     }
-                    let needs_approval = self.sessions.iter().any(|s| s.place == folder && s.needs_approval());
+                    let mark = self.folder_mark(&folder);
                     Some(json!({
                         "heading": self.folder_heading(&folder),
                         "collapsed": collapsed,
-                        "needs_approval": collapsed.then_some(needs_approval),
+                        "needs_approval": collapsed.then_some(mark == Some(crate::row_marks::RowMark::NeedsYou)),
+                        "mark": mark.filter(|_| collapsed).map(|m| m.name()),
                         "rows": rows.iter().map(|row| self.row_debug(row)).collect::<Vec<_>>(),
                         "more": more.map(|(label, _)| label),
                     }))

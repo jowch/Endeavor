@@ -1415,7 +1415,6 @@ impl Session {
             self.push_changes();
             self.cut_off = true;
             self.errored = true;
-            self.outbox.pause(Paused::Error);
         }
         self.drop_prompts();
         self.mark(0);
@@ -2366,6 +2365,20 @@ mod tests {
         assert_eq!(s.unanswered, Some(0), "Not answered yet");
         assert!(s.submit(text("and the axes"), false).is_empty(), "new messages queue");
         assert!(matches!(s.release().as_slice(), [Effect::Send(Turn::Prompt(_))]), "at the reset, the held message goes");
+    }
+
+    #[test]
+    fn a_stop_pauses_the_queue_and_marks_no_new_reply() {
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        s.started(Started::new(SessionId::new("a"), None, None));
+        s.submit(text("fit it"), false);
+        s.submit(text("then plot it"), false);
+        assert!(s.apply(SessionEvent::TurnEnded(StopReason::Cancelled)).iter().all(|e| !matches!(e, Effect::Send(_))));
+        assert_eq!(s.outbox.heading().as_deref(), Some("Paused after you stopped Claude"));
+        assert!(!s.unseen);
+        assert!(matches!(s.queue_action(crate::outbox::Outbox::send_next).as_slice(), [Effect::Send(Turn::Prompt(_))]));
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert!(s.unseen && !s.errored);
     }
 
     #[test]

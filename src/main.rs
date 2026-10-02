@@ -51,6 +51,7 @@ mod queue;
 mod quotes;
 mod records;
 mod remote;
+mod row_marks;
 mod resources;
 mod runs;
 mod runtime;
@@ -1181,6 +1182,9 @@ impl Workspace {
             webcontent::clear_find(self.webview.read(cx).raw());
         }
         self.active = Some(key);
+        if let Some(s) = self.session_mut(key) {
+            s.unseen = false;
+        }
         self.follow_folder(cx);
         if let Some((host, notebook)) = self.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
             self.load_notebook(&host, &notebook, cx);
@@ -1670,6 +1674,10 @@ impl Workspace {
                 }
                 self.apply_effects(key, effects, cx);
             }
+        }
+        // A reply in the open session is seen as it arrives.
+        if let Some(s) = self.active.and_then(|key| self.session_mut(key)) {
+            s.unseen = false;
         }
         cx.notify();
     }
