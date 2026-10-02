@@ -3,7 +3,8 @@
 //! and the workspace then opens the session it named (`take_clicked`).
 //!
 //! macOS's notification center only serves an app bundle with an identifier,
-//! so a bare development binary sends nothing.
+//! so a bare development binary sends nothing, and macOS refuses one run from a
+//! temporary folder.
 
 use std::sync::Mutex;
 
@@ -62,20 +63,29 @@ mod mac {
         }
         let Some(mtm) = MainThreadMarker::new() else { return };
         let center = UNUserNotificationCenter::currentNotificationCenter();
-        static SETUP: Once = Once::new();
-        SETUP.call_once(|| {
-            let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(mtm), init] };
-            center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-            // The center holds its delegate weakly; this one lives as long as the app.
-            std::mem::forget(delegate);
-            let asked = RcBlock::new(|_: Bool, _: *mut NSError| {});
-            center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert, &asked);
-        });
         let content = UNMutableNotificationContent::new();
         content.setTitle(&NSString::from_str(title));
         content.setBody(&NSString::from_str(body));
         let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&format!("{}{key}", super::PREFIX)), &content, None);
-        center.addNotificationRequest_withCompletionHandler(&request, None);
+        static SETUP: Once = Once::new();
+        let mut first = false;
+        SETUP.call_once(|| first = true);
+        if !first {
+            center.addNotificationRequest_withCompletionHandler(&request, None);
+            return;
+        }
+        let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(mtm), init] };
+        center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        // The center holds its delegate weakly; this one lives as long as the app.
+        std::mem::forget(delegate);
+        // A request added while macOS is still asking for permission is dropped,
+        // so the first one goes once the answer is in.
+        let asked = RcBlock::new(move |granted: Bool, _: *mut NSError| {
+            if granted.as_bool() {
+                UNUserNotificationCenter::currentNotificationCenter().addNotificationRequest_withCompletionHandler(&request, None);
+            }
+        });
+        center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert, &asked);
     }
 }
 
