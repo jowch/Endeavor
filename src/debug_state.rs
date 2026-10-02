@@ -537,9 +537,11 @@ impl Workspace {
         }
         let notebook_open = session.is_some_and(|s| s.notebook_path.is_some());
         let queue: Vec<Value> = session.into_iter().flat_map(|s| &s.outbox.items).map(|q| {
-            let label = if q.in_flight() { Some("sending now…") } else if q.is_copying() { Some("copying files…") } else { None };
+            let label = if q.in_flight() { Some("sending now…") } else if q.is_copying() { Some("copying files…") } else if q.editing() { Some("editing") } else { None };
             json!({ "text": q.text.lines().next().unwrap_or(""), "chips": q.attachments.iter().map(chip_label).collect::<Vec<_>>(), "label": label })
         }).collect();
+        let queue_line = session.and_then(|s| s.outbox.heading());
+        let removed = session.and_then(|s| s.outbox.removed_at(std::time::Instant::now())).map(|r| r.message.text.clone());
         json!({
             "text": text,
             "placeholder": self.placeholder,
@@ -552,6 +554,8 @@ impl Workspace {
             "point": json!({ "enabled": notebook_open, "on": self.annotating }),
             "above": above,
             "queue": queue,
+            "queue_line": queue_line,
+            "queue_removed": removed,
             "slash": self.slash_state(cx),
             "tips": json!({
                 "file": self.active.is_none() && self.file_tip_shows(),

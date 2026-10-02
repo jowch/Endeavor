@@ -1,5 +1,5 @@
 //! The pending-approval card above the composer: run/edit/plan prompts, the
-//! plan card, the pinned running plan, and the queued-message list.
+//! plan card, and the pinned running plan.
 
 use std::path::Path;
 
@@ -1011,42 +1011,6 @@ pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Opt
             .when(!folded, |d| d.children(plan_rows(entries)))
             .into_any_element(),
     )
-}
-
-/// Messages waiting for Claude: click ✎ to pull one back into the input, ✕ to drop it.
-pub fn render_queue(this: &Workspace, session: &Session, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
-    let muted = theme::text_muted();
-    let key = session.key;
-    div().flex().flex_col().gap_1().children(this.render_queue_heading(session)).children(session.outbox.items.iter().enumerate().map(|(i, q)| {
-        let id = |name: &'static str| ElementId::NamedInteger(name.into(), (key << 32) | i as u64);
-        div()
-            .flex()
-            .gap_2()
-            .text_color(muted)
-            .items_center()
-            .h(px(30.))
-            .px(px(10.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme::border())
-            .child(this.render_queued(i, &q.attachments, &q.text))
-            .when(q.in_flight(), |d| d.child("sending now…"))
-            .when(q.is_copying(), |d| d.child(div().flex_shrink_0().child("copying files…")))
-            .when(!q.in_flight(), |d| {
-                d.child(div().id(id("edit")).role(Role::Button).aria_label("Edit").cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✎").on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(q) = this.session_mut(key).and_then(|s| s.outbox.take(i)) {
-                        this.restore_composer(q.text, q.attachments, window, cx);
-                    }
-                })))
-            })
-            .when(!q.in_flight(), |d| {
-                d.child(div().id(id("drop")).role(Role::Button).aria_label("Remove").cursor_pointer().hover(|s| s.text_color(theme::text_primary())).child("✕").on_click(cx.listener(move |this, _, _, cx| {
-                    this.with_session(key, cx, |s| {
-                        s.outbox.take(i);
-                    })
-                })))
-            })
-    }))
 }
 
 #[cfg(test)]

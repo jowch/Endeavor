@@ -46,6 +46,7 @@ mod platform;
 mod permits;
 mod notify;
 mod pluto;
+mod queue;
 mod quotes;
 mod records;
 mod remote;
@@ -475,6 +476,8 @@ pub struct Workspace {
     confirm: Option<confirm::Confirm>,
     /// Find in the notebook, while its bar is open.
     find: Option<find_bar::FindBar>,
+    /// A queued message being edited in the composer.
+    queue_edit: Option<queue::QueueEdit>,
     /// Watches for the pane saying "Opening" for a notebook that's open (notebook_pane.rs).
     opening: notebook_pane::OpeningWatch,
     /// ENDEAVOR_TEST_STUCK_OPENING's file was there at the last check.
@@ -703,6 +706,7 @@ impl Workspace {
             sidebar_focus: cx.focus_handle(),
             confirm: None,
             find: None,
+            queue_edit: None,
             opening: notebook_pane::OpeningWatch::default(),
             #[cfg(debug_assertions)]
             test_blanked: false,
@@ -1322,11 +1326,15 @@ impl Workspace {
         self.open_before_sending(key, cx);
         let Some(place) = self.session_mut(key).map(|s| s.place.clone()) else { return };
         let Some((text, attachments, mentioned)) = self.take_composer(window, cx) else { return };
+        let edit = self.editing_queued(key);
+        if edit {
+            self.queue_edit_done(window, cx);
+        }
         if !attachments.iter().any(|a| matches!(a, attach::Attachment::Upload { .. })) {
-            return self.submit_message(key, context, (text, attachments, mentioned), now, cx);
+            return self.submit_message(key, context, (text, attachments, mentioned), now, edit, cx);
         }
         let (queued, ticket) = Queued::copying(text.clone(), attachments.clone(), context.into_iter().collect());
-        let effects = self.submit_for(key, queued, now);
+        let effects = self.submit_for(key, queued.as_edit(edit), now);
         self.apply_effects(key, effects, cx);
         let (progress, mut progressed) = futures::channel::mpsc::unbounded::<attach::Progress>();
         let channel = self.connection(&place.host).and_then(|c| c.channel.clone());
@@ -1379,11 +1387,11 @@ impl Workspace {
     }
 
     /// Submit a message as `take_composer` gives it: words, chips, mentions.
-    fn submit_message(&mut self, key: u64, context: Option<ContentBlock>, message: (String, Vec<attach::Attachment>, Vec<String>), now: bool, cx: &mut Context<Self>) {
+    fn submit_message(&mut self, key: u64, context: Option<ContentBlock>, message: (String, Vec<attach::Attachment>, Vec<String>), now: bool, edit: bool, cx: &mut Context<Self>) {
         let (text, attachments, mentioned) = message;
         let mut blocks: Vec<_> = context.into_iter().collect();
         blocks.extend(attach::prompt_blocks(&text, &attachments, &mentioned));
-        let effects = self.submit_for(key, Queued::new(text, attachments, blocks), now);
+        let effects = self.submit_for(key, Queued::new(text, attachments, blocks).as_edit(edit), now);
         self.apply_effects(key, effects, cx);
     }
 
@@ -1530,6 +1538,9 @@ impl Workspace {
             return self.close_find(cx);
         }
         if self.close_composer_menus(cx) {
+            return;
+        }
+        if self.cancel_queue_edit(window, cx) {
             return;
         }
         // The filter menu closes itself (a submenu first) through its own
@@ -2098,7 +2109,7 @@ impl Workspace {
                     .children(self.render_claude_trouble(cx))
                     .children(self.render_sign_in_card(cx))
                     .children(approval::render_approval(session, notebook_open && session.notebook.as_deref() == Some(self.page.notebook.as_str()), window, cx))
-                    .child(approval::render_queue(self, session, cx))
+                    .child(self.render_queue(session, cx))
                     .child(self.render_composer(Some(session), notebook_open, window, cx)),
             )
     }
@@ -2106,6 +2117,10 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Another session was opened while one's queued message was in the box.
+        if self.queue_edit.as_ref().is_some_and(|e| Some(e.key) != self.active) {
+            self.cancel_queue_edit(window, cx);
+        }
         let active = self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key));
         let stand_in = active.and_then(|ix| self.notebook_page(&self.sessions[ix], cx));
         self.sync_page_context(cx);

@@ -1468,6 +1468,8 @@ pub(crate) enum Glyph {
     Info,
     /// Finder: a window split down the middle.
     Finder,
+    /// Undo: an arrow turning back.
+    Undo,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -1769,6 +1771,16 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&ring);
                     polyline(&[(6., 5.4), (6., 8.6)]);
                     polyline(&[(6., 3.6), (6., 4.3)]);
+                }
+                Glyph::Undo => {
+                    let mut turn = vec![(3.4, 4.9)];
+                    turn.extend((0..=12).map(|i| {
+                        let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / 12.;
+                        (7.3 + 2.44 * a.cos(), 7.34 + 2.44 * a.sin())
+                    }));
+                    turn.push((5.25, 9.78));
+                    polyline(&turn);
+                    polyline(&[(5.06, 3.), (3.19, 4.9), (5.06, 6.75)]);
                 }
                 Glyph::Finder => {
                     polyline(&[(1.5, 2.), (10.5, 2.), (10.5, 10.), (1.5, 10.), (1.5, 2.)]);

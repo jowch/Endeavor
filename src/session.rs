@@ -29,7 +29,7 @@ use crate::permits::{Asked, Asks, Rule};
 use crate::pluto;
 use crate::runs;
 use crate::transcript_copy::{self, Below, Swap};
-use crate::outbox::{Copying, Delivery, Dispatch, Outbox, Queued, Shown};
+use crate::outbox::{Copying, Delivery, Dispatch, Outbox, Paused, Queued, Shown};
 
 pub enum Entry {
     /// The user's words and, above them, their chips. `sent`: when, not known
@@ -331,6 +331,18 @@ pub struct Session {
     pub unanswered: Option<usize>,
     /// The pinned plan (above the composer) is folded.
     pub plan_folded: bool,
+    /// The queued message opened in place (by its id).
+    pub queue_open: Option<u64>,
+    /// The queue shows all its rows, not the first three.
+    pub queue_all: bool,
+    /// The last turn stopped with an error (the sidebar's warning mark);
+    /// cleared when a new turn starts.
+    pub errored: bool,
+    /// A turn ended while the user was in another session (the sidebar's
+    /// new-reply dot); cleared when the session is opened.
+    pub unseen: bool,
+    /// The last /compact: when, and how full the context was before it.
+    pub summarized: Option<(SystemTime, Option<u64>)>,
     /// The message just copied from its Copy button, which shows a tick for a moment.
     pub copied: Option<usize>,
     /// The plan card shows the whole plan, not just its steps.
@@ -552,6 +564,11 @@ impl Session {
             heard: None,
             unanswered: None,
             plan_folded: false,
+            queue_open: None,
+            queue_all: false,
+            errored: false,
+            unseen: false,
+            summarized: None,
             copied: None,
             plan_open: false,
             open_runs: HashSet::new(),
@@ -1093,6 +1110,26 @@ impl Session {
         effects
     }
 
+    /// ✎ on queued message `ix`: its words and chips, for the composer.
+    pub fn begin_edit(&mut self, ix: usize) -> Option<(String, Vec<Attachment>)> {
+        let edit = self.outbox.begin_edit(ix);
+        self.queue_open = None;
+        edit
+    }
+
+    /// Run one of the outbox's queue actions and send what it starts.
+    pub fn queue_action(&mut self, act: impl FnOnce(&mut Outbox) -> Option<Dispatch>) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        let dispatch = act(&mut self.outbox);
+        self.dispatch(dispatch, &mut effects);
+        effects
+    }
+
+    /// Whether queued message `ix` can be sent now (its ↑): only once the session is open.
+    pub fn can_send_now(&self, ix: usize) -> bool {
+        self.id.is_some() && !self.replaying && !self.agent_waiting && self.outbox.can_send_now(ix)
+    }
+
     /// A queued message's files are copied (see `Outbox::copied`).
     pub fn copied(&mut self, ticket: Copying, done: Option<(Vec<Attachment>, Vec<ContentBlock>)>) -> Vec<Effect> {
         let mut effects = Vec::new();
@@ -1116,6 +1153,9 @@ impl Session {
     fn dispatch(&mut self, dispatch: Option<Dispatch>, effects: &mut Vec<Effect>) {
         let Some(Dispatch { turn, shown }) = dispatch else { return };
         let again = shown.is_none() && matches!(turn, Turn::Prompt(_));
+        if matches!(turn, Turn::Prompt(_)) {
+            self.errored = false;
+        }
         effects.push(Effect::Send(turn));
         if let Some(Shown { text, attachments, delivery }) = shown {
             if text.split_whitespace().next() == Some("/compact") {
@@ -1182,14 +1222,25 @@ impl Session {
         match event {
             SessionEvent::TurnEnded(reason) => {
                 self.push_changes();
+                let stopped_for_next = reason == StopReason::Cancelled && self.outbox.stopping();
                 if let Some(reason) = partway_reason(reason) {
                     self.push(Entry::Failed(Failed { kind: FailedKind::Partway { reason }, raw: None, details_open: false, used: false }));
-                } else if let Some(note) = turn_ended_note(reason).filter(|_| !(reason == StopReason::Cancelled && self.outbox.stopping())) {
+                    self.outbox.pause(Paused::Error);
+                    self.errored = true;
+                } else if let Some(note) = turn_ended_note(reason).filter(|_| !stopped_for_next) {
                     // Stopped to send the next message: its bubble says so.
                     self.note(note);
                 }
+                if reason == StopReason::Cancelled && !stopped_for_next {
+                    self.outbox.pause(Paused::Stopped);
+                }
+                if reason != StopReason::Cancelled && !self.replaying {
+                    self.unseen = true;
+                }
                 if let Some(before) = self.compacting.take().filter(|_| reason == StopReason::EndTurn) {
                     self.note(compacted_note(before, self.usage));
+                    let percent = before.filter(|(_, size)| *size > 0).map(|(used, size)| used * 100 / size);
+                    self.summarized = Some((SystemTime::now(), percent));
                 }
                 self.drop_prompts();
                 self.turn_ended(&mut effects);
@@ -1301,6 +1352,9 @@ impl Session {
                     FailedKind::NoAnswer { reason: trouble.reason(), message: self.outbox.take_current().map(|blocks| (self.turn_entry, blocks)) }
                 };
                 self.push(Entry::Failed(Failed { kind, raw: Some(said.to_owned()), details_open: false, used: false }));
+                self.outbox.pause(Paused::Error);
+                self.errored = true;
+                self.unseen = true;
                 self.turn_ended(&mut effects);
             }
         }
@@ -1360,6 +1414,8 @@ impl Session {
         if self.busy_since.is_some() && self.id.is_some() {
             self.push_changes();
             self.cut_off = true;
+            self.errored = true;
+            self.outbox.pause(Paused::Error);
         }
         self.drop_prompts();
         self.mark(0);
