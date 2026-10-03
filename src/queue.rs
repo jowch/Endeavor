@@ -14,7 +14,7 @@ use crate::composer::chip;
 use crate::new_session::{Glyph, glyph};
 use crate::outbox::{Dispatch, Outbox, UNDO_FOR};
 use crate::session::Session;
-use crate::theme;
+use crate::theme::{self, FocusRing as _};
 
 /// With more than this many rows, the stack shows `SHOWN` and "N more ›".
 const FOLD_OVER: usize = 4;
@@ -132,7 +132,7 @@ impl Workspace {
         let mut rows: Vec<AnyElement> = Vec::new();
         for (i, q) in outbox.items.iter().enumerate().take(shown) {
             if let Some((text, _)) = removed.as_ref().filter(|(_, at)| *at == i) {
-                rows.push(self.render_removed_row(key, text, cx));
+                rows.push(self.render_removed_row(session, text, cx));
             }
             let n = numbered.then_some(i + 1);
             rows.push(if q.editing() {
@@ -144,7 +144,7 @@ impl Workspace {
             });
         }
         if let Some((text, _)) = removed.as_ref().filter(|(_, at)| *at >= shown) {
-            rows.push(self.render_removed_row(key, text, cx));
+            rows.push(self.render_removed_row(session, text, cx));
         }
         if folded {
             rows.push(
@@ -274,7 +274,7 @@ impl Workspace {
         let key = session.key;
         let id = session.outbox.items[ix].id;
         let can_send = session.can_send_now(ix);
-        let button = |name: &'static str, icon: Glyph, label: &'static str, color: Rgba| {
+        let shape = |name: &'static str, icon: Glyph, label: &'static str, color: Rgba| {
             div()
                 .id(ElementId::NamedInteger(name.into(), id))
                 .role(Role::Button)
@@ -290,13 +290,18 @@ impl Workspace {
                 .child(glyph(icon, color))
                 .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(label).build(window, cx))
         };
+        let button = |name: &'static str, icon: Glyph, label: &'static str, color: Rgba| {
+            shape(name, icon, label, color).track_focus(&session.queue_focus(id, name, cx)).focus_ring_on(row_surface())
+        };
         let send = if can_send {
+            // Drawn see-through rather than hidden, so Tab still reaches it, and shown once it has focus.
             button("queued-send", Glyph::ArrowUp, "Send now (⌘↩)", theme::text_primary())
-                .invisible()
-                .group_hover(group.clone(), |s| s.visible())
+                .opacity(0.)
+                .group_hover(group.clone(), |s| s.opacity(1.))
+                .focus_visible(|s| s.opacity(1.))
                 .on_click(cx.listener(move |this, _, _, cx| this.queue_do(key, cx, move |o| o.send_now(ix))))
         } else {
-            button("queued-send", Glyph::ArrowUp, "Send now (⌘↩)", theme::text_section()).cursor_default().invisible().group_hover(group.clone(), |s| s.visible())
+            shape("queued-send", Glyph::ArrowUp, "Send now (⌘↩)", theme::text_section()).cursor_default().invisible().group_hover(group.clone(), |s| s.visible())
         };
         div()
             .flex_shrink_0()
@@ -311,7 +316,9 @@ impl Workspace {
     }
 
     /// Where a removed message was, for `UNDO_FOR`: "Removed "…"" and Undo.
-    fn render_removed_row(&self, key: u64, text: &str, cx: &mut Context<Self>) -> AnyElement {
+    fn render_removed_row(&self, session: &Session, text: &str, cx: &mut Context<Self>) -> AnyElement {
+        let key = session.key;
+        let focus = session.outbox.removed_at(Instant::now()).map(|r| session.queue_focus(r.message.id, "queued-undo", cx));
         div()
             .h(px(32.))
             .flex()
@@ -333,12 +340,19 @@ impl Workspace {
                     .cursor_pointer()
                     .text_color(theme::accent_text())
                     .hover(|s| s.underline())
+                    .rounded(px(4.))
+                    .when_some(focus, |d, focus| d.track_focus(&focus).focus_ring_on(row_surface()))
                     .child(glyph(Glyph::Undo, theme::accent_text()))
                     .child("Undo")
                     .on_click(cx.listener(move |this, _, _, cx| this.queue_do(key, cx, Outbox::undo_remove))),
             )
             .into_any_element()
     }
+}
+
+/// The rows' surface: sunken, or the composer's white in light.
+fn row_surface() -> Rgba {
+    if theme::is_light() { theme::composer_bg() } else { theme::bg_sunken() }
 }
 
 /// A row's frame: rounded, with a hairline, on the sunken surface (on the
@@ -350,7 +364,7 @@ fn row_frame(group: &SharedString, id: u64) -> Stateful<Div> {
         .rounded(px(8.))
         .border_1()
         .border_color(theme::border())
-        .bg(if theme::is_light() { theme::composer_bg() } else { theme::bg_sunken() })
+        .bg(row_surface())
         .when(theme::is_light(), |d| d.shadow(theme::composer_shadow()))
         .text_size(theme::size_body())
 }

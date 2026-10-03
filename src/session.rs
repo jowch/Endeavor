@@ -413,6 +413,8 @@ pub struct Session {
     row_focus: RefCell<HashMap<usize, FocusHandle>>,
     /// A changed-cells card's row, by its entry index and row number.
     changed_cell_focus: RefCell<HashMap<(usize, usize), FocusHandle>>,
+    /// A queued message's buttons (↑ ✎ ✕ ⌃, and Undo once removed), by the message's id and the button.
+    queue_focus: RefCell<HashMap<(u64, &'static str), FocusHandle>>,
     /// Each reply's parsed markdown, by its entry index (see `reply_text`).
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
 }
@@ -601,6 +603,7 @@ impl Session {
             run_focus: RefCell::new(HashMap::new()),
             row_focus: RefCell::new(HashMap::new()),
             changed_cell_focus: RefCell::new(HashMap::new()),
+            queue_focus: RefCell::new(HashMap::new()),
             replies: RefCell::new(HashMap::new()),
         }
     }
@@ -642,6 +645,11 @@ impl Session {
     /// A changed-cells card's row's Tab-stop handle, by the card's entry index and row number.
     pub fn changed_cell_focus(&self, ix: usize, row: usize, cx: &App) -> FocusHandle {
         self.changed_cell_focus.borrow_mut().entry((ix, row)).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
+    }
+
+    /// A queued message's button's Tab-stop handle, by the message's id and the button's name.
+    pub fn queue_focus(&self, id: u64, button: &'static str, cx: &App) -> FocusHandle {
+        self.queue_focus.borrow_mut().entry((id, button)).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
     /// The parsed markdown of the reply at entry `ix`, kept for as long as the
