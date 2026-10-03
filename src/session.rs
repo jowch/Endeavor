@@ -23,7 +23,6 @@ use gpui_component::text::TextViewState;
 use crate::attach::{self, Attachment, Part, Quote, Quoted};
 use crate::agent::{SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
-use crate::gate;
 use crate::hosts::Place;
 use crate::permits::{Asked, Asks, Rule};
 use crate::pluto;
@@ -65,8 +64,9 @@ pub enum Entry {
         /// file on This Mac, the file's text when the prompt came (its card shows the change).
         code: Option<String>,
         options: Vec<PermissionOption>,
-        responder: Option<Responder<RequestPermissionResponse>>,
-        /// Raised by the execution gate (a pluto call that runs code).
+        /// Who waits for the answer, until it's given.
+        responder: Option<Asker>,
+        /// A notebook call that runs code (a run card).
         runs_code: bool,
         /// The notebook tool and its input, for the run card.
         tool: Option<String>,
@@ -91,6 +91,17 @@ pub enum Entry {
     /// After a reopened session's history: the faint "Reopened today at 9:14" line.
     Reopened(SystemTime),
 }
+
+/// Who asked, and so who hears the answer: the agent's own permission
+/// request, or the runtime holding a run in Ask to run (its ask's id).
+pub enum Asker {
+    Agent(Responder<RequestPermissionResponse>),
+    Runtime(u64),
+}
+
+/// The option ids of the run cards the app makes for the runtime's asks.
+pub const RUN_ALLOW: &str = "allow";
+pub const RUN_DENY: &str = "deny";
 
 /// A turn that didn't finish, and the one thing to do about it.
 pub struct Failed {
@@ -215,7 +226,10 @@ pub enum Effect {
     /// Ask the runtime for a notebook call's result, which the agent didn't
     /// pass on (`Session::result_fetched` takes it).
     FetchResult { call: ToolCallId, tool: String, input: serde_json::Value },
-    /// Tell the runtime this session's policy changed ("plan" | "ask").
+    /// Answer a run the runtime holds (`ask`), with the cells the user's own
+    /// run reached meanwhile (each with its `last_run` before that run).
+    AnswerRun { ask: u64, allow: bool, user_ran: Vec<(String, f64)> },
+    /// Tell the runtime this session's policy changed ("plan" | "ask" | "auto").
     SetPolicy(&'static str),
     /// A turn failed for want of sign-in: Claude is signed out.
     SignedOut,
@@ -393,6 +407,11 @@ pub struct Session {
     pub runtime_older: Option<bool>,
     /// The older runtime's note is still to show (after the history, for a reopened session).
     older_note: bool,
+    /// The runtime's asks this session has shown or answered, so none shows twice.
+    seen_asks: HashSet<u64>,
+    /// Work for the workspace from an answer given outside `apply` (a click,
+    /// a key, the user's own run): taken with `take_later`.
+    later: Vec<Effect>,
     /// On a cluster: what its job asks for (from the resources chip).
     pub resources: Option<wire::slurm::Resources>,
     /// The mode to put the agent in once it is up: the new-session screen's pick,
@@ -602,6 +621,8 @@ impl Session {
             policy_sent: "ask",
             runtime_older: None,
             older_note: false,
+            seen_asks: HashSet::new(),
+            later: Vec::new(),
             resources: None,
             start_mode: None,
             focus: RefCell::new(None),
@@ -1316,13 +1337,18 @@ impl Session {
                 let input = input.unwrap_or_default();
                 let kind = fields.kind;
                 let path = fields.locations.as_ref().and_then(|l| l.first()).map(|l| l.path.clone());
-                let runs_code = celldiff::notebook_tool(&title).is_some_and(|tool| gate::runs_code(tool, &input));
+                let runs_code = celldiff::notebook_tool(&title).is_some_and(|tool| endeavor_remote::runs_code(tool, &input));
                 // The adapter's ExitPlanMode prompt: its options carry these ids.
                 let plan = request
                     .options
                     .iter()
                     .any(|o| o.option_id.to_string().starts_with("exit-plan-"))
                     .then(|| input["plan"].as_str().unwrap_or("").to_owned());
+                if let Some(allow) = self.runtime_asks_instead(runs_code && plan.is_none(), &request.options) {
+                    let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
+                    let _ = responder.respond(RequestPermissionResponse::new(outcome));
+                    return effects;
+                }
                 let call = request.tool_call.tool_call_id.clone();
                 let asked = Asked { title: &title, kind, input: &input, path: path.as_deref() };
                 let answered = option_of_kind(&request.options, PermissionOptionKind::AllowOnce).zip(self.answer_on_arrival(&asked, runs_code, plan.is_some()));
@@ -1346,7 +1372,7 @@ impl Session {
                     self.plan_open = false;
                 }
                 self.asks.asked(self.waiting_prompts().len());
-                self.push(Entry::Permission { call, title, code, options: request.options, responder: Some(responder), runs_code, tool, input, kind, path, preview: None, plan });
+                self.push(Entry::Permission { call, title, code, options: request.options, responder: Some(Asker::Agent(responder)), runs_code, tool, input, kind, path, preview: None, plan });
                 effects.push(Effect::Asked(self.entries.len() - 1));
             }
             SessionEvent::Update(update) => {
@@ -1847,10 +1873,14 @@ impl Session {
         let waiting = self.waiting_prompts();
         let headings: Vec<String> = waiting.iter().filter_map(|ix| crate::approval::heading_at(self, *ix)).collect();
         for ix in waiting {
-            if let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix)
-                && let Some(responder) = responder.take()
-            {
-                let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
+            if let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix) {
+                match responder.take() {
+                    Some(Asker::Agent(responder)) => {
+                        let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
+                    }
+                    Some(Asker::Runtime(ask)) => self.later.push(Effect::AnswerRun { ask, allow: false, user_ran: Vec::new() }),
+                    None => {}
+                }
             }
             self.mark(ix);
         }
@@ -1917,18 +1947,33 @@ impl Session {
         true
     }
 
-    /// Run anyway, in the page, when the user's own run reaches cells a card
-    /// asks to run: allow each waiting card asking about any of `cells`, as
-    /// its Run button does. How many it answered.
-    pub fn allow_runs_of(&mut self, cells: &[String]) -> usize {
-        let asking = self.prompts_running(&self.waiting_prompts(), cells);
+    /// Run anyway, in the page, when the user's own run reaches `cells` (each
+    /// with its `last_run` before that run) that cards ask to run: allow each
+    /// waiting card asking about any of them, as its Run button does. The
+    /// runtime's cards carry the cells in their answer, so the runtime doesn't
+    /// run them again; the agent's own (on an older runtime) only with
+    /// `agent`, once the app told the runtime itself. How many it answered.
+    pub fn allow_runs_of(&mut self, cells: &[(String, f64)], agent: bool) -> usize {
+        let ids: Vec<String> = cells.iter().map(|(id, _)| id.clone()).collect();
+        let asking = self.prompts_running(&self.waiting_prompts(), &ids);
+        let mut answered = 0;
         for &ix in &asking {
-            let Some(Entry::Permission { options, .. }) = self.entries.get(ix) else { continue };
+            let Some(Entry::Permission { options, responder, .. }) = self.entries.get(ix) else { continue };
+            if matches!(responder, Some(Asker::Agent(_))) && !agent {
+                continue;
+            }
             if let Some(allow) = option_of_kind(options, PermissionOptionKind::AllowOnce).cloned() {
-                self.answer(ix, &allow, Scope::Once);
+                self.answer_with(ix, &allow, Scope::Once, cells.to_vec());
+                answered += 1;
             }
         }
-        asking.len()
+        answered
+    }
+
+    /// Whether an agent's own card (on an older runtime) asks to run any of `cells`.
+    pub fn agent_asks_to_run(&self, cells: &[String]) -> bool {
+        let agents: Vec<usize> = self.waiting_prompts().into_iter().filter(|ix| matches!(&self.entries[*ix], Entry::Permission { responder: Some(Asker::Agent(_)), .. })).collect();
+        !self.prompts_running(&agents, cells).is_empty()
     }
 
     /// Of `prompts`, those asking to run any of `cells`.
@@ -1990,11 +2035,128 @@ impl Session {
     /// only this prompt: those already waiting stay questions of their own, and
     /// only prompts that arrive later are answered by the rule.
     pub fn answer(&mut self, ix: usize, option: &PermissionOption, scope: Scope) {
+        self.answer_with(ix, option, scope, Vec::new());
+    }
+
+    /// `answer`, telling the runtime which cells the user's own run reached
+    /// meanwhile (`user_ran`), for a run it holds.
+    fn answer_with(&mut self, ix: usize, option: &PermissionOption, scope: Scope, user_ran: Vec<(String, f64)>) {
         let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix) else { return };
-        let Some(responder) = responder.take() else { return };
-        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
-        let _ = responder.respond(RequestPermissionResponse::new(outcome));
+        let Some(asker) = responder.take() else { return };
+        match asker {
+            Asker::Agent(responder) => {
+                let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
+                let _ = responder.respond(RequestPermissionResponse::new(outcome));
+            }
+            Asker::Runtime(ask) => {
+                let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
+                self.later.push(Effect::AnswerRun { ask, allow, user_ran });
+            }
+        }
         self.record_answer(ix, option, scope);
+    }
+
+    /// What answers given outside `apply` left for the workspace to do.
+    pub fn take_later(&mut self) -> Vec<Effect> {
+        std::mem::take(&mut self.later)
+    }
+
+    /// The option that lets the agent's own prompt before a run through at
+    /// once, with no card and no mark on its row: the runtime asks before the
+    /// run itself (it's from the app's build, and runs ask first), and its
+    /// card is the one the user sees.
+    fn runtime_asks_instead<'a>(&self, run: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
+        let asks = run && self.runtime_older == Some(false) && self.policy() == "ask";
+        option_of_kind(options, PermissionOptionKind::AllowOnce).filter(|_| asks)
+    }
+
+    /// The runtime's runs waiting for an answer (its event's `asks`): each
+    /// new one of this session's gets a run card. A card whose ask has gone
+    /// (the agent gave up on the call) goes too, with a note.
+    pub fn runtime_asks_now(&mut self, asks: &[serde_json::Value]) -> Vec<Effect> {
+        let key = self.key.to_string();
+        let mine: Vec<&serde_json::Value> = asks.iter().filter(|a| a["owner"] == key.as_str()).collect();
+        let waiting: HashSet<u64> = mine.iter().filter_map(|a| a["id"].as_u64()).collect();
+        let gone: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, e)| matches!(e, Entry::Permission { responder: Some(Asker::Runtime(ask)), .. } if !waiting.contains(ask)).then_some(ix))
+            .collect();
+        for ix in gone {
+            let heading = crate::approval::heading_at(self, ix);
+            if let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix) {
+                *responder = None;
+            }
+            self.mark(ix);
+            if let Some(heading) = heading {
+                self.note(format!("Claude stopped waiting for your answer to “{}”", heading.replace('`', "")));
+            }
+        }
+        let mut effects = Vec::new();
+        for ask in mine {
+            if let Some(id) = ask["id"].as_u64().filter(|id| self.seen_asks.insert(*id)) {
+                effects.extend(self.runtime_ask(id, ask));
+            }
+        }
+        effects
+    }
+
+    /// A run card for the runtime's ask `id`; answered at once if the
+    /// session stopped asking since the call was made.
+    fn runtime_ask(&mut self, id: u64, ask: &serde_json::Value) -> Vec<Effect> {
+        let tool = ask["tool"].as_str().unwrap_or_default().to_owned();
+        let input = ask["arguments"].clone();
+        let title = format!("{}{tool}", celldiff::TOOL_PREFIX);
+        let call = self.asked_call(id, ask, &tool, &input);
+        if self.run_without_asking {
+            self.approve(&call, Approval::WithoutAsking, &title, &input);
+            return vec![Effect::AnswerRun { ask: id, allow: true, user_ran: Vec::new() }];
+        }
+        let options = vec![
+            PermissionOption::new(RUN_ALLOW, "Allow", PermissionOptionKind::AllowOnce),
+            PermissionOption::new(RUN_DENY, "Deny", PermissionOptionKind::RejectOnce),
+        ];
+        let code = input["code"].as_str().map(str::to_owned).or_else(|| input["cell_id"].as_str().and_then(|c| self.cell_codes.get(c)).map(str::to_owned));
+        let mut effects = Vec::new();
+        if tool != "run_shell" {
+            effects.push(Effect::PreviewRun { ix: self.entries.len(), tool: tool.clone(), input: input.clone() });
+        }
+        self.asks.asked(self.waiting_prompts().len());
+        self.push(Entry::Permission {
+            call,
+            title,
+            code,
+            options,
+            responder: Some(Asker::Runtime(id)),
+            runs_code: true,
+            tool: Some(tool),
+            input,
+            kind: None,
+            path: None,
+            preview: None,
+            plan: None,
+        });
+        effects.push(Effect::Asked(self.entries.len() - 1));
+        effects
+    }
+
+    /// The tool call an ask is about: the id the agent's client gave it, else
+    /// the latest call under way to the same tool with the same arguments,
+    /// else one made up (its answer then shows as a note).
+    fn asked_call(&self, id: u64, ask: &serde_json::Value, tool: &str, input: &serde_json::Value) -> ToolCallId {
+        if let Some(call) = ask["call_id"].as_str() {
+            return ToolCallId::new(call);
+        }
+        let under_way = |status: &ToolCallStatus| matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
+        self.entries
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Entry::Tool { id, title, status, input: Some(given), .. } if under_way(status) && celldiff::notebook_tool(title) == Some(tool) && given == input => Some(id.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| ToolCallId::new(format!("ask-{id}")))
     }
 
     /// How a prompt arriving now is answered without a card: in Auto for
@@ -2021,6 +2183,9 @@ impl Session {
         self.approve(&call, approval, &title, &input);
         if allowed && runs && scope == Scope::Session {
             self.run_without_asking = true;
+            let mut effects = Vec::new();
+            self.sync_policy(&mut effects);
+            self.later.extend(effects);
         }
         if let Some(rule) = rule {
             self.asks.rules.push(rule);
@@ -2134,13 +2299,13 @@ pub(crate) fn file_name(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
-    use super::{Effect, Entry, Mode, Session, SessionEvent, Started, Turn, app_modes};
+    use super::{Approval, Effect, Entry, Mode, Scope, Session, SessionEvent, Started, Turn, app_modes};
     use crate::attach::Attachment;
     use crate::hosts::Place;
     use crate::outbox::Queued;
     use agent_client_protocol::schema::v1::{
-        AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, SessionId, SessionMode, SessionModeState, SessionUpdate,
-        StopReason, UsageUpdate,
+        AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, PermissionOptionKind, SessionId, SessionMode, SessionModeState, SessionUpdate,
+        StopReason, ToolCallStatus, UsageUpdate,
     };
 
     #[test]
@@ -2235,6 +2400,98 @@ mod tests {
         assert_eq!(s.ran_cards(&[1, 2], &[]), Vec::<usize>::new(), "d hasn't run");
         assert_eq!(s.ran_cards(&[1, 2], &["d".into()]), vec![1], "c ran earlier, while it waited");
         assert!(s.ran_while_asked.is_empty(), "nothing kept for cards no longer waiting");
+    }
+
+    /// A session in Ask to run on a runtime from the app's build, with a
+    /// notebook call `t1` to execute cell `a` under way.
+    fn asking_session() -> Session {
+        use agent_client_protocol::schema::v1::{SessionMode, ToolCall};
+        let modes = SessionModeState::new("auto", vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
+        let mut s = Session::new(7, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("s1"), Some(modes), None));
+        s.runtime_build(false);
+        let call = ToolCall::new("t1", "mcp__notebook__execute_cell").raw_input(serde_json::json!({ "cell_id": "a" })).status(ToolCallStatus::InProgress);
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(call)));
+        s
+    }
+
+    fn ask(id: u64, call_id: Option<&str>) -> serde_json::Value {
+        serde_json::json!({ "id": id, "owner": "7", "call_id": call_id, "tool": "execute_cell", "arguments": { "cell_id": "a" }, "since": 1.0 })
+    }
+
+    /// A run answered: its ask, whether allowed, and the cells the user ran.
+    type Answered<'a> = (u64, bool, &'a [(String, f64)]);
+
+    fn answers(effects: &[Effect]) -> Vec<Answered<'_>> {
+        effects.iter().filter_map(|e| if let Effect::AnswerRun { ask, allow, user_ran } = e { Some((*ask, *allow, user_ran.as_slice())) } else { None }).collect()
+    }
+
+    #[test]
+    fn a_run_the_runtime_holds_is_one_card_and_its_answer_goes_back() {
+        let mut s = asking_session();
+        let effects = s.runtime_asks_now(&[ask(41, None), serde_json::json!({ "id": 9, "owner": "8", "tool": "execute_cell", "arguments": {} })]);
+        assert!(matches!(effects.as_slice(), [Effect::PreviewRun { tool, .. }, Effect::Asked(_)] if tool == "execute_cell"), "only this session's");
+        let card = s.pending_permission().expect("a run card");
+        let Entry::Permission { call, runs_code, options, .. } = &s.entries[card] else { panic!() };
+        assert_eq!((call.to_string(), *runs_code, options.len()), ("t1".into(), true, 2), "on the call under way with the same arguments");
+        assert!(s.runtime_asks_now(&[ask(41, None)]).is_empty(), "shown once");
+
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
+        assert_eq!(answers(&s.take_later()), [(41, true, &[][..])]);
+        assert!(matches!(&s.entries[0], Entry::Tool { approval: Some(Approval::Allowed), .. }));
+        assert!(s.runtime_asks_now(&[ask(41, None)]).is_empty() && s.pending_permission().is_none(), "answered: no card again while the runtime catches up");
+
+        // Denied, then Always this session: runs stop asking, and the runtime hears it.
+        s.runtime_asks_now(&[ask(42, Some("t1"))]);
+        assert!(s.answer_pending(PermissionOptionKind::RejectOnce, Scope::Once));
+        assert_eq!(answers(&s.take_later()), [(42, false, &[][..])]);
+        s.runtime_asks_now(&[ask(43, Some("t1"))]);
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Session));
+        let later = s.take_later();
+        assert_eq!(answers(&later), [(43, true, &[][..])]);
+        assert!(later.iter().any(|e| matches!(e, Effect::SetPolicy("auto"))) && s.mode_name().as_deref() == Some("Auto"));
+        // An ask already on its way when runs stopped asking: allowed with no card.
+        assert_eq!(answers(&s.runtime_asks_now(&[ask(44, Some("t1"))])), [(44, true, &[][..])]);
+        assert!(s.pending_permission().is_none());
+    }
+
+    #[test]
+    fn a_run_card_goes_when_the_agent_gives_up_or_the_turn_ends() {
+        let mut s = asking_session();
+        s.runtime_asks_now(&[ask(41, Some("t1"))]);
+        s.runtime_asks_now(&[]);
+        assert!(s.pending_permission().is_none());
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with("Claude stopped waiting for your answer to")));
+        assert!(s.take_later().is_empty(), "nothing to answer");
+
+        s.runtime_asks_now(&[ask(42, Some("t1"))]);
+        s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
+        assert_eq!(answers(&s.take_later()), [(42, false, &[][..])], "stopping the turn denies it");
+    }
+
+    #[test]
+    fn the_users_own_run_answers_the_card_and_the_runtime_hears_which_cells_ran() {
+        let mut s = asking_session();
+        s.runtime_asks_now(&[ask(41, Some("t1"))]);
+        assert_eq!(s.allow_runs_of(&[("a".into(), 5.5)], false), 1);
+        assert_eq!(answers(&s.take_later()), [(41, true, &[("a".to_owned(), 5.5)][..])]);
+    }
+
+    #[test]
+    fn the_agents_own_run_prompt_isnt_asked_twice() {
+        use agent_client_protocol::schema::v1::PermissionOption;
+        let options = [PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce), PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce)];
+        let allowed = |s: &Session, run: bool| s.runtime_asks_instead(run, &options).map(|o| o.option_id.to_string());
+        // The runtime holds the run and asks: the agent's own prompt is let through.
+        let mut s = asking_session();
+        assert_eq!(allowed(&s, true).as_deref(), Some("allow"));
+        assert_eq!(allowed(&s, false), None, "an edit that doesn't run is still the agent's card");
+        // A runtime from an older build, or one that hasn't said, doesn't ask: the agent's prompt is the card.
+        s.runtime_build(true);
+        assert_eq!(allowed(&s, true), None);
+        let mut s = asking_session();
+        s.runtime_older = None;
+        assert_eq!(allowed(&s, true), None);
     }
 
     #[test]

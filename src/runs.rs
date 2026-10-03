@@ -48,14 +48,21 @@ const DENIED_TEXT: &str = "User refused permission to run tool";
 
 /// A live denial is known right away, from the approval card's answer
 /// (`session::Approval::Denied`). A reopened session has no such answer to
-/// replay, only the call's raw result, which for a denial is `DENIED_TEXT`
-/// and nothing else — as a plain string, or (a notebook tool's MCP shape) the
-/// first content block's text.
+/// replay, only the call's raw result: for the agent's own prompt
+/// `DENIED_TEXT` and nothing else, as a plain string or (a notebook tool's
+/// MCP shape) the first content block's text; for a run the runtime asked
+/// about, its `not_approved` error, or for an edit that was to run after,
+/// the edit's receipt with a `not_approved` warning (the edit was kept).
 pub fn denied(output: Option<&Value>) -> bool {
     fn text(v: &Value) -> Option<&str> {
         v.as_str().or_else(|| v.get(0).and_then(|c| c["text"].as_str()))
     }
-    output.and_then(text) == Some(DENIED_TEXT)
+    if output.and_then(text) == Some(DENIED_TEXT) {
+        return true;
+    }
+    let Some(result) = output.and_then(celldiff::tool_json) else { return false };
+    let unrun = result["warnings"].as_array().into_iter().flatten().any(|w| w.as_str().is_some_and(|w| w.starts_with("not_approved::")));
+    result["error"] == "not_approved" || unrun
 }
 
 /// One kind of work, worded as "`verb` `one`" for a single one and
@@ -373,6 +380,13 @@ mod tests {
         let denied_mcp = json!([{"type": "text", "text": "User refused permission to run tool"}]);
         assert!(super::denied(Some(&denied_mcp)));
         assert!(!super::failed(ToolCallStatus::Failed, "mcp__notebook__execute_cell", Some(&denied_mcp)));
+
+        // A run the runtime asked about, denied: its refusal, or an edit kept but not run.
+        let refused = json!([{"type": "text", "text": "{\"error\":\"not_approved\",\"message\":\"The user chose not to run this.\"}"}]);
+        assert!(super::denied(Some(&refused)));
+        assert!(!super::failed(ToolCallStatus::Failed, "mcp__notebook__execute_cell", Some(&refused)));
+        let kept = json!([{"type": "text", "text": "{\"applied\":true,\"warnings\":[\"not_approved::The user chose not to run this yet. The edit is kept, staged and not run.\"]}"}]);
+        assert!(super::denied(Some(&kept)));
 
         // A real failure still counts as one.
         assert!(!super::denied(Some(&json!("some other error"))));

@@ -922,6 +922,13 @@ impl Workspace {
             }
             cx.notify();
         }
+        let asks = event["asks"].as_array().cloned().unwrap_or_default();
+        let on_host: Vec<u64> = self.sessions.iter().filter(|s| s.place.host == *host).map(|s| s.key).collect();
+        for key in on_host {
+            let effects = self.session_mut(key).map(|s| s.runtime_asks_now(&asks)).unwrap_or_default();
+            self.apply_effects(key, effects, cx);
+        }
+        let Some(connection) = self.connections.get_mut(host) else { return };
         connection.cells = event["cells"].take();
         self.push_cells(cx);
         for path in new_stops {

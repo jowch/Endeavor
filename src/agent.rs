@@ -203,7 +203,13 @@ fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
 
     // The plugin's execution-gate hook calls back into this binary (see gate.rs).
     let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-    Ok(vec![format!("ENDEAVOR_BIN={exe}"), node.display().to_string(), entry.display().to_string()])
+    Ok(vec![
+        format!("ENDEAVOR_BIN={exe}"),
+        // A run waits in the runtime for the user's answer, for as long as that takes.
+        "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0".into(),
+        node.display().to_string(),
+        entry.display().to_string(),
+    ])
 }
 
 /// Claude Code's own tools that read, write or run things on this Mac: off in

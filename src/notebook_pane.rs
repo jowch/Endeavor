@@ -806,26 +806,36 @@ impl Workspace {
     }
 
     /// Run anyway, in the page: the user's run reaches `cells` (each with its
-    /// `last_run` from before), which cards ask to run. The runtime hears it
-    /// first, so the approved calls don't run them again; then those cards are
-    /// answered as their Run button does.
+    /// `last_run` from before), which cards ask to run. Those cards are
+    /// answered as their Run button does, telling the runtime which cells the
+    /// user ran, so the approved calls don't run them again. An older
+    /// runtime's agent cards wait until the runtime has heard it on its own.
     pub fn run_anyway(&mut self, notebook: String, cells: Vec<(String, f64)>, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
         let ids: Vec<String> = cells.iter().map(|(id, _)| id.clone()).collect();
+        let mut agent = false;
+        self.with_session(key, cx, |s| {
+            s.allow_runs_of(&cells, false);
+            agent = s.agent_asks_to_run(&ids);
+        });
+        if !agent {
+            return;
+        }
         let Some(bridge) = self.session_bridge(key) else {
             self.with_session(key, cx, |s| {
-                s.allow_runs_of(&ids);
+                s.allow_runs_of(&cells, true);
             });
             return;
         };
-        let task = cx.background_executor().spawn(async move { pluto::run_anyway(&bridge, &notebook, &cells) });
+        let told = cells.clone();
+        let task = cx.background_executor().spawn(async move { pluto::run_anyway(&bridge, &notebook, &told) });
         cx.spawn(async move |this, cx| {
             if let Err(e) = task.await {
                 eprintln!("Run anyway: the runtime didn't hear which cells the user ran: {e}");
             }
             let _ = this.update(cx, |this, cx| {
                 this.with_session(key, cx, |s| {
-                    s.allow_runs_of(&ids);
+                    s.allow_runs_of(&cells, true);
                 });
             });
         })

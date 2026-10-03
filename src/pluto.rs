@@ -54,9 +54,17 @@ pub fn call_tool(bridge: &Bridge, tool: &str, arguments: Value) -> Result<Value,
 }
 
 /// Set an agent session's policy in the runtime ("plan" refuses its notebook
-/// writes and runs); `owner` is the session's key, sent as its MCP header.
+/// writes and runs, "ask" holds a run until the app answers, "auto" runs it);
+/// `owner` is the session's key, sent as its MCP header.
 pub fn set_policy(bridge: &Bridge, owner: u64, policy: &str) -> Result<(), String> {
-    rpc(bridge, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy })).map(|_| ())
+    rpc(bridge, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy, "asks": true })).map(|_| ())
+}
+
+/// Answer a run the runtime holds (its ask `id`), with the cells the user's
+/// own run reached while it waited (each with its `last_run` before that run).
+pub fn answer_run(bridge: &Bridge, id: u64, allow: bool, user_ran: &[(String, f64)]) -> Result<(), String> {
+    let user_ran: Vec<Value> = user_ran.iter().map(|(id, last_run)| json!({ "cell_id": id, "last_run": last_run })).collect();
+    app_call(bridge, "endeavor/answer_run", json!({ "id": id, "allow": allow, "user_ran": user_ran })).map(|_| ())
 }
 
 /// Bind an agent session (`owner`, its key) to its one notebook file; the runtime
@@ -114,8 +122,9 @@ pub fn restart_notebook(bridge: &Bridge, notebook_id: &str) -> Result<(), String
 }
 
 /// The user's run reached `cells` (with each one's `last_run` before it),
-/// which the agent's waiting cards ask to run: the runtime won't run them
-/// again for the approved calls.
+/// which the agent's waiting cards ask to run: an older runtime won't run
+/// them again for the approved calls. A runtime from this build hears it in
+/// the answer to its own ask instead (`answer_run`).
 pub fn run_anyway(bridge: &Bridge, notebook_id: &str, cells: &[(String, f64)]) -> Result<(), String> {
     let cells: Vec<Value> = cells.iter().map(|(id, last_run)| json!({ "cell_id": id, "last_run": last_run })).collect();
     app_call(bridge, "endeavor/run_anyway", json!({ "notebook_id": notebook_id, "cells": cells })).map(|_| ())

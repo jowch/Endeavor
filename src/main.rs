@@ -751,8 +751,7 @@ impl Workspace {
     pub fn with_session(&mut self, key: u64, cx: &mut Context<Self>, f: impl FnOnce(&mut Session)) {
         if let Some(session) = self.session_mut(key) {
             f(session);
-            self.save_mode(key);
-            cx.notify();
+            self.apply_effects(key, Vec::new(), cx);
         }
     }
 
@@ -1221,7 +1220,8 @@ impl Workspace {
         notify::waiting(&question, &session.title, key);
     }
 
-    fn apply_effects(&mut self, key: u64, effects: Vec<Effect>, cx: &mut Context<Self>) {
+    fn apply_effects(&mut self, key: u64, mut effects: Vec<Effect>, cx: &mut Context<Self>) {
+        effects.extend(self.session_mut(key).map(Session::take_later).unwrap_or_default());
         for effect in effects {
             match effect {
                 Effect::Send(turn) => {
@@ -1277,6 +1277,17 @@ impl Workspace {
                         Err(e) => eprintln!("tool result: {e}"),
                     })
                     .detach();
+                }
+                Effect::AnswerRun { ask, allow, user_ran } => {
+                    let Some(bridge) = self.session_bridge(key) else { continue };
+                    cx.background_executor()
+                        .spawn(async move {
+                            // The ask may have gone meanwhile (the agent gave up on the call).
+                            if let Err(e) = pluto::answer_run(&bridge, ask, allow, &user_ran) {
+                                eprintln!("answer run {ask}: {e}");
+                            }
+                        })
+                        .detach();
                 }
                 Effect::SetConfig(id_, value) => {
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
@@ -1600,7 +1611,7 @@ impl Workspace {
         if let Some(s) = self.session_mut(key)
             && s.answer_pending(PermissionOptionKind::RejectOnce, session::Scope::Once)
         {
-            cx.notify();
+            self.apply_effects(key, Vec::new(), cx);
             return;
         }
         if let Some(effect) = self.active_session().and_then(Session::interrupt) {
