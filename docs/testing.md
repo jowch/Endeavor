@@ -275,7 +275,11 @@ To land a change:
 
 1. Commit and push EndeavorMCP's `main`.
 2. Delete the `[patch]`, then pin the new commit:
-   `cargo update -p endeavor-remote -p wire`.
+   `cargo update -p endeavor-remote`. It moves `wire` too, since both come
+   from the same repository. It may also re-pick which `windows-sys`
+   version a few crates use; that's harmless, but you can instead change the
+   commit hash in the two `source` lines by hand and check with
+   `cargo metadata --locked --format-version 1 >/dev/null`.
 3. Commit `Cargo.lock` with the app's change.
 
 ## Other debug switches
