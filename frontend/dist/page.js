@@ -136,11 +136,11 @@
     text.oninput = () => send2.disabled = text.value.trim().length < 4;
     el2.querySelector(".cancel").onclick = () => el2.remove();
     send2.onclick = async () => {
-      const card = el2.querySelector(".card");
-      card.innerHTML = `<h2>Sending\u2026</h2>`;
+      const card2 = el2.querySelector(".card");
+      card2.innerHTML = `<h2>Sending\u2026</h2>`;
       const outcome = feedbackOutcome(await submitFeedback(text.value.trim(), email.value.trim()));
-      card.innerHTML = `<h2>${escape(outcome.title)}</h2><p class="said">${escape(outcome.body)}</p><div class="buttons"><button class="primary">Done</button></div>`;
-      const done = card.querySelector("button");
+      card2.innerHTML = `<h2>${escape(outcome.title)}</h2><p class="said">${escape(outcome.body)}</p><div class="buttons"><button class="primary">Done</button></div>`;
+      const done = card2.querySelector("button");
       done.onclick = () => el2.remove();
       done.focus();
     };
@@ -818,6 +818,238 @@
     onRedraw(apply);
   }
 
+  // src/status.ts
+  function phaseOf(entry) {
+    if (!entry) return "waiting";
+    if (entry.success === false) return "failed";
+    if (entry.finished_at != null) return "done";
+    if (entry.started_at != null) return "busy";
+    return "waiting";
+  }
+  var ansi = /\x1b\[[0-9;]*m/g;
+  function parsePkgLog(log) {
+    const precompiled = [];
+    const failed = [];
+    const added = [];
+    let inManifest = false;
+    for (const raw of log.replace(ansi, "").split("\n")) {
+      const line = raw.trimEnd();
+      const mark = line.match(/^\s*(?:[\d.]+\s*ms)?\s*([✓✗])\s+([\w.]+)/);
+      if (mark) (mark[1] === "\u2713" ? precompiled : failed).push(mark[2]);
+      if (/^\s*Updating\s+`.*Manifest\.toml`/.test(line)) {
+        inManifest = true;
+        continue;
+      }
+      const entry = line.match(/\[[0-9a-f]{8}\]\s+(\+)?\s*([\w.]+)/);
+      if (!entry) inManifest = false;
+      else if (inManifest && entry[1]) added.push(entry[2]);
+    }
+    return { precompiled, failed, added };
+  }
+  function importedPackages(codes) {
+    const names2 = [];
+    for (const code of codes) {
+      for (const line of code.split("\n")) {
+        const m = line.match(/^\s*(?:using|import)\s+([^#]+)/);
+        if (!m) continue;
+        const list = m[1].split(":")[0];
+        for (const part of list.split(",")) {
+          const name = part.trim().split(/[.\s]/)[0];
+          if (/^[A-Za-z_]\w*$/.test(name) && !["Base", "Core", "Main"].includes(name) && !names2.includes(name)) names2.push(name);
+        }
+      }
+    }
+    return names2;
+  }
+  function prettyTime(ns) {
+    if (ns < 1e3) return `${Math.round(ns)} ns`;
+    if (ns < 1e6) return `${Math.round(ns / 1e3)} \xB5s`;
+    if (ns < 1e9) return `${Math.round(ns / 1e6)} ms`;
+    const s = ns / 1e9;
+    if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
+    return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+  }
+  function definedNames(map) {
+    return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
+  }
+  function cellName2(nb, id) {
+    const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
+    if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
+    const first = (nb.cell_inputs[id]?.code ?? "").split("\n").find((l) => l.trim()) ?? "";
+    const line = first.trim();
+    return line.length > 28 ? `${line.slice(0, 27)}\u2026` : line;
+  }
+  function statusModel(nb) {
+    const tree = nb.status_tree?.subtasks ?? {};
+    const pkgTask = tree.pkg;
+    const pkgPhase = phaseOf(pkgTask);
+    const runTask = tree.run;
+    const workspace = phaseOf(tree.workspace);
+    const running = nb.process_status === "ready" || nb.process_status === "starting";
+    const steps = [
+      { name: "Start Julia", phase: tree.workspace ? workspace : running ? "done" : "waiting" },
+      { name: "Packages", phase: pkgTask ? pkgPhase : running ? "done" : "waiting" },
+      { name: "Run cells", phase: phaseOf(runTask) }
+    ];
+    const nbpkg = nb.nbpkg ?? {};
+    const installed2 = nbpkg.installed_versions ?? {};
+    const busy = new Set(nbpkg.busy_packages ?? []);
+    const log = parsePkgLog(nbpkg.terminal_outputs?.nbpkg_sync ?? "");
+    const precompiled = new Set(log.precompiled);
+    const failedSet = new Set(log.failed);
+    const precompiling = phaseOf(pkgTask?.subtasks?.precompile) === "busy";
+    const codes = nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? "");
+    const direct = importedPackages(codes);
+    for (const name of [...Object.keys(installed2), ...busy].sort()) {
+      if (!name.startsWith("__internal") && name !== "nbpkg_sync" && !direct.includes(name)) direct.push(name);
+    }
+    const packages = direct.map((name) => {
+      const version = installed2[name];
+      const detail = version === "stdlib" ? "standard library" : version ?? "";
+      let state2;
+      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state2 = "failed";
+      else if (busy.has(name) && pkgPhase === "busy") state2 = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
+      else if (version != null) state2 = "ready";
+      else if (pkgPhase === "done") state2 = Object.keys(installed2).length ? "failed" : "ready";
+      else state2 = "waiting";
+      const notFound = state2 === "failed" && version == null && pkgPhase === "done";
+      return { name, state: state2, detail: state2 === "ready" ? detail : notFound ? "not found" : "" };
+    });
+    const deps = log.added.filter((n) => !direct.includes(n));
+    const depsRow = deps.length ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length } : null;
+    const cells = nb.cell_order.map((id) => {
+      const r = nb.cell_results[id] ?? {};
+      const state2 = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
+      const time = (state2 === "done" || state2 === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
+      return { id, name: cellName2(nb, id), state: state2, time };
+    });
+    const failedPkg = packages.find((p) => p.state === "failed");
+    const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
+    if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
+    const readyPkgs = packages.filter((p) => p.state === "ready").length;
+    const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
+    const runTotal = Object.keys(evaluate).length;
+    const runDone = Object.values(evaluate).filter((e) => e.finished_at != null).length;
+    let busyText = null;
+    if (steps[0].phase === "busy") busyText = "Starting Julia";
+    else if (pkgPhase === "busy") busyText = packages.length ? `Installing packages \xB7 ${readyPkgs} of ${packages.length}` : "Installing packages";
+    else if (steps[2].phase === "busy") busyText = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
+    const restart = nbpkg.restart_required_msg ? "required" : nbpkg.restart_recommended_msg ? "recommended" : null;
+    let headline;
+    if (nb.process_status === "waiting_for_permission") headline = "Safe preview \xB7 nothing has run";
+    else if (failure) headline = `Package failed \xB7 ${failure.name}`;
+    else if (busyText?.startsWith("Running")) headline = `Running cells \xB7 ${runDone} of ${runTotal}`;
+    else if (busyText) headline = busyText;
+    else if (restart === "required") headline = "Restart needed";
+    else if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") headline = "Julia stopped";
+    else headline = "Ready";
+    return {
+      headline,
+      steps,
+      packages,
+      deps: depsRow,
+      cells,
+      failure,
+      busy: busyText,
+      saveFailed: tree.saving?.success === false,
+      restart
+    };
+  }
+
+  // src/state.ts
+  var listeners = [];
+  var last = null;
+  var model = null;
+  var lastSent2 = "";
+  var context = { host: "This Mac", asking: false, crash: null };
+  var drawerOf = () => null;
+  function onNotebook(listener) {
+    listeners.push(listener);
+    if (last && model) listener(last, model);
+  }
+  function current() {
+    return last && model ? { nb: last, model } : null;
+  }
+  var notebookId = () => new URLSearchParams(location.search).get("id") ?? "";
+  function setDrawerSource(source) {
+    drawerOf = source;
+  }
+  function report2() {
+    const editor2 = window.editor_state;
+    if (!last || !model) return;
+    const msg = {
+      type: "state",
+      notebook: notebookId(),
+      safe: last.process_status === "waiting_for_permission",
+      busy: model.busy,
+      restart: model.restart,
+      save_failed: model.saveFailed,
+      package_failed: model.failure?.name ?? null,
+      dead: last.process_status === "no_process",
+      connected: editor2?.connected !== false,
+      drawer: drawerOf()
+    };
+    const json = JSON.stringify(msg);
+    if (json === lastSent2) return;
+    lastSent2 = json;
+    send(msg);
+  }
+  function tick() {
+    const nb = window.editor_state?.notebook;
+    if (!nb?.cell_order || nb === last) return report2();
+    last = nb;
+    model = statusModel(nb);
+    for (const listener of listeners) listener(nb, model);
+    report2();
+  }
+  var ticks = [];
+  function every(ms, hook) {
+    let lastRun = 0;
+    ticks.push(() => {
+      const now = performance.now();
+      if (now - lastRun >= ms) {
+        lastRun = now;
+        hook();
+      }
+    });
+  }
+  function frame() {
+    ticks.forEach((t) => t());
+    requestAnimationFrame(frame);
+  }
+  function initState() {
+    every(250, tick);
+    if (document.querySelector("pluto-editor")) requestAnimationFrame(frame);
+    on("context", (msg) => {
+      context.host = msg.host;
+      context.asking = msg.asking;
+      context.crash = msg.crash ?? null;
+      if (last && model) listeners.forEach((l) => l(last, model));
+    });
+    lastSent2 = "";
+  }
+
+  // src/cardkey.ts
+  var card = null;
+  function nothingFocused() {
+    const el2 = document.activeElement;
+    return !el2 || el2 === document.body || el2 === document.documentElement;
+  }
+  function onKey(e) {
+    if (card === null || e.key !== "Enter" || e.repeat || e.isComposing || !byUser(e)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (!nothingFocused() || document.body.classList.contains("annotating")) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    send({ type: "answer_card", notebook: notebookId(), card });
+  }
+  function initCardKey() {
+    on("context", (msg) => {
+      card = msg.card ?? null;
+    });
+    window.addEventListener("keydown", onKey, true);
+  }
+
   // src/rail.ts
   var css6 = `
   #endeavor-rail { position: fixed; right: 4px; top: 10px; bottom: 10px; width: 3px; z-index: 50; pointer-events: none; }
@@ -1178,7 +1410,7 @@
   function askState() {
     return open && { kind: open.target.kind, about: open.box.what.textContent ?? "", text: open.box.text.value };
   }
-  function onKey(e) {
+  function onKey2(e) {
     const key = e.key.toLowerCase();
     if (!modHeld(e) || e.shiftKey || e.altKey || key !== "e" && key !== "j") return;
     if (document.body.classList.contains("annotating")) return;
@@ -1200,7 +1432,7 @@
     style2.textContent = css9;
     document.head.append(style2);
     initReply((found) => openAsk({ kind: "selection", found }));
-    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keydown", onKey2, true);
     document.addEventListener("mousedown", (e) => {
       if (open && !open.box.root.contains(e.target)) closeAsk(false);
     });
@@ -1420,217 +1652,6 @@
       refresh();
     });
     onRedraw(refresh);
-  }
-
-  // src/status.ts
-  function phaseOf(entry) {
-    if (!entry) return "waiting";
-    if (entry.success === false) return "failed";
-    if (entry.finished_at != null) return "done";
-    if (entry.started_at != null) return "busy";
-    return "waiting";
-  }
-  var ansi = /\x1b\[[0-9;]*m/g;
-  function parsePkgLog(log) {
-    const precompiled = [];
-    const failed = [];
-    const added = [];
-    let inManifest = false;
-    for (const raw of log.replace(ansi, "").split("\n")) {
-      const line = raw.trimEnd();
-      const mark = line.match(/^\s*(?:[\d.]+\s*ms)?\s*([✓✗])\s+([\w.]+)/);
-      if (mark) (mark[1] === "\u2713" ? precompiled : failed).push(mark[2]);
-      if (/^\s*Updating\s+`.*Manifest\.toml`/.test(line)) {
-        inManifest = true;
-        continue;
-      }
-      const entry = line.match(/\[[0-9a-f]{8}\]\s+(\+)?\s*([\w.]+)/);
-      if (!entry) inManifest = false;
-      else if (inManifest && entry[1]) added.push(entry[2]);
-    }
-    return { precompiled, failed, added };
-  }
-  function importedPackages(codes) {
-    const names2 = [];
-    for (const code of codes) {
-      for (const line of code.split("\n")) {
-        const m = line.match(/^\s*(?:using|import)\s+([^#]+)/);
-        if (!m) continue;
-        const list = m[1].split(":")[0];
-        for (const part of list.split(",")) {
-          const name = part.trim().split(/[.\s]/)[0];
-          if (/^[A-Za-z_]\w*$/.test(name) && !["Base", "Core", "Main"].includes(name) && !names2.includes(name)) names2.push(name);
-        }
-      }
-    }
-    return names2;
-  }
-  function prettyTime(ns) {
-    if (ns < 1e3) return `${Math.round(ns)} ns`;
-    if (ns < 1e6) return `${Math.round(ns / 1e3)} \xB5s`;
-    if (ns < 1e9) return `${Math.round(ns / 1e6)} ms`;
-    const s = ns / 1e9;
-    if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
-    return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
-  }
-  function definedNames(map) {
-    return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
-  }
-  function cellName2(nb, id) {
-    const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
-    if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
-    const first = (nb.cell_inputs[id]?.code ?? "").split("\n").find((l) => l.trim()) ?? "";
-    const line = first.trim();
-    return line.length > 28 ? `${line.slice(0, 27)}\u2026` : line;
-  }
-  function statusModel(nb) {
-    const tree = nb.status_tree?.subtasks ?? {};
-    const pkgTask = tree.pkg;
-    const pkgPhase = phaseOf(pkgTask);
-    const runTask = tree.run;
-    const workspace = phaseOf(tree.workspace);
-    const running = nb.process_status === "ready" || nb.process_status === "starting";
-    const steps = [
-      { name: "Start Julia", phase: tree.workspace ? workspace : running ? "done" : "waiting" },
-      { name: "Packages", phase: pkgTask ? pkgPhase : running ? "done" : "waiting" },
-      { name: "Run cells", phase: phaseOf(runTask) }
-    ];
-    const nbpkg = nb.nbpkg ?? {};
-    const installed2 = nbpkg.installed_versions ?? {};
-    const busy = new Set(nbpkg.busy_packages ?? []);
-    const log = parsePkgLog(nbpkg.terminal_outputs?.nbpkg_sync ?? "");
-    const precompiled = new Set(log.precompiled);
-    const failedSet = new Set(log.failed);
-    const precompiling = phaseOf(pkgTask?.subtasks?.precompile) === "busy";
-    const codes = nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? "");
-    const direct = importedPackages(codes);
-    for (const name of [...Object.keys(installed2), ...busy].sort()) {
-      if (!name.startsWith("__internal") && name !== "nbpkg_sync" && !direct.includes(name)) direct.push(name);
-    }
-    const packages = direct.map((name) => {
-      const version = installed2[name];
-      const detail = version === "stdlib" ? "standard library" : version ?? "";
-      let state2;
-      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state2 = "failed";
-      else if (busy.has(name) && pkgPhase === "busy") state2 = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
-      else if (version != null) state2 = "ready";
-      else if (pkgPhase === "done") state2 = Object.keys(installed2).length ? "failed" : "ready";
-      else state2 = "waiting";
-      const notFound = state2 === "failed" && version == null && pkgPhase === "done";
-      return { name, state: state2, detail: state2 === "ready" ? detail : notFound ? "not found" : "" };
-    });
-    const deps = log.added.filter((n) => !direct.includes(n));
-    const depsRow = deps.length ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length } : null;
-    const cells = nb.cell_order.map((id) => {
-      const r = nb.cell_results[id] ?? {};
-      const state2 = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
-      const time = (state2 === "done" || state2 === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
-      return { id, name: cellName2(nb, id), state: state2, time };
-    });
-    const failedPkg = packages.find((p) => p.state === "failed");
-    const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
-    if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
-    const readyPkgs = packages.filter((p) => p.state === "ready").length;
-    const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
-    const runTotal = Object.keys(evaluate).length;
-    const runDone = Object.values(evaluate).filter((e) => e.finished_at != null).length;
-    let busyText = null;
-    if (steps[0].phase === "busy") busyText = "Starting Julia";
-    else if (pkgPhase === "busy") busyText = packages.length ? `Installing packages \xB7 ${readyPkgs} of ${packages.length}` : "Installing packages";
-    else if (steps[2].phase === "busy") busyText = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
-    const restart = nbpkg.restart_required_msg ? "required" : nbpkg.restart_recommended_msg ? "recommended" : null;
-    let headline;
-    if (nb.process_status === "waiting_for_permission") headline = "Safe preview \xB7 nothing has run";
-    else if (failure) headline = `Package failed \xB7 ${failure.name}`;
-    else if (busyText?.startsWith("Running")) headline = `Running cells \xB7 ${runDone} of ${runTotal}`;
-    else if (busyText) headline = busyText;
-    else if (restart === "required") headline = "Restart needed";
-    else if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") headline = "Julia stopped";
-    else headline = "Ready";
-    return {
-      headline,
-      steps,
-      packages,
-      deps: depsRow,
-      cells,
-      failure,
-      busy: busyText,
-      saveFailed: tree.saving?.success === false,
-      restart
-    };
-  }
-
-  // src/state.ts
-  var listeners = [];
-  var last = null;
-  var model = null;
-  var lastSent2 = "";
-  var context = { host: "This Mac", asking: false, crash: null };
-  var drawerOf = () => null;
-  function onNotebook(listener) {
-    listeners.push(listener);
-    if (last && model) listener(last, model);
-  }
-  function current() {
-    return last && model ? { nb: last, model } : null;
-  }
-  var notebookId = () => new URLSearchParams(location.search).get("id") ?? "";
-  function setDrawerSource(source) {
-    drawerOf = source;
-  }
-  function report2() {
-    const editor2 = window.editor_state;
-    if (!last || !model) return;
-    const msg = {
-      type: "state",
-      notebook: notebookId(),
-      safe: last.process_status === "waiting_for_permission",
-      busy: model.busy,
-      restart: model.restart,
-      save_failed: model.saveFailed,
-      package_failed: model.failure?.name ?? null,
-      dead: last.process_status === "no_process",
-      connected: editor2?.connected !== false,
-      drawer: drawerOf()
-    };
-    const json = JSON.stringify(msg);
-    if (json === lastSent2) return;
-    lastSent2 = json;
-    send(msg);
-  }
-  function tick() {
-    const nb = window.editor_state?.notebook;
-    if (!nb?.cell_order || nb === last) return report2();
-    last = nb;
-    model = statusModel(nb);
-    for (const listener of listeners) listener(nb, model);
-    report2();
-  }
-  var ticks = [];
-  function every(ms, hook) {
-    let lastRun = 0;
-    ticks.push(() => {
-      const now = performance.now();
-      if (now - lastRun >= ms) {
-        lastRun = now;
-        hook();
-      }
-    });
-  }
-  function frame() {
-    ticks.forEach((t) => t());
-    requestAnimationFrame(frame);
-  }
-  function initState() {
-    every(250, tick);
-    if (document.querySelector("pluto-editor")) requestAnimationFrame(frame);
-    on("context", (msg) => {
-      context.host = msg.host;
-      context.asking = msg.asking;
-      context.crash = msg.crash ?? null;
-      if (last && model) listeners.forEach((l) => l(last, model));
-    });
-    lastSent2 = "";
   }
 
   // src/drawer.ts
@@ -2479,7 +2500,7 @@
     e.stopImmediatePropagation();
     show2(hit, run.changes, replayOf(e), deps);
   }
-  function onKey2(e) {
+  function onKey3(e) {
     if (shown && byUser(e) && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       if (e.key === "Escape" || e.key === "Enter") {
         e.preventDefault();
@@ -2496,7 +2517,7 @@
     on("context", (msg) => {
       waiting2 = msg.waiting_runs ?? [];
     });
-    window.addEventListener("keydown", onKey2, true);
+    window.addEventListener("keydown", onKey3, true);
     window.addEventListener("click", guard, true);
   }
 
@@ -2877,6 +2898,7 @@ footer form#feedback { display: none !important; }
     initRail();
     initReveal();
     initRunGuard();
+    initCardKey();
     initActions();
     initDrawer();
     initSafe();

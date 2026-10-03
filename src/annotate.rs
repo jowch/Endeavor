@@ -76,6 +76,9 @@ pub enum Message {
     /// allow the cards asking about `cells`, as their Run button does. Each
     /// cell comes with Pluto's `last_run_timestamp` from before the user's run.
     RunAnyway { notebook: String, cells: Vec<(String, f64)> },
+    /// ⏎ in the page with nothing focused: answer the waiting card `card`
+    /// (the context's id for it) as its filled button does.
+    AnswerCard { notebook: String, card: usize },
     /// Fix with Claude, in Status's box for a package that failed.
     FixPackage { notebook: String, name: String, log: String },
     /// Restart notebook, in the same box.
@@ -230,6 +233,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             let cells: Vec<(String, f64)> = v.get("cells")?.as_array()?.iter().map(cell).collect::<Option<_>>()?;
             (!cells.is_empty() && cells.len() <= MAX_CELLS).then_some(Message::RunAnyway { notebook: uuid("notebook")?, cells })
         }
+        "answer_card" => Some(Message::AnswerCard { notebook: uuid("notebook")?, card: usize::try_from(v.get("card")?.as_u64()?).ok()? }),
         "restart" => Some(Message::Restart { notebook: uuid("notebook")? }),
         "error_ask_show" => Some(Message::ShowErrorAsk { cell: uuid("cell")? }),
         "error_ask_cancel" => Some(Message::CancelErrorAsk { cell: uuid("cell")? }),
@@ -429,6 +433,9 @@ mod tests {
             Some(Message::RunAnyway { notebook: NB.into(), cells: vec![(C1.into(), 1759400000.5), (C2.into(), 0.0)] })
         );
         assert_eq!(parse_with(&format!(r#"{{"type":"run_anyway","notebook":"{NB}","cells":[{{"id":"x","last_run":1}}]}}"#), ""), None);
+        assert_eq!(parse_with(&format!(r#"{{"type":"answer_card","notebook":"{NB}","card":7}}"#), ""), Some(Message::AnswerCard { notebook: NB.into(), card: 7 }));
+        assert_eq!(parse_with(&format!(r#"{{"type":"answer_card","notebook":"{NB}","card":-1}}"#), ""), None);
+        assert_eq!(parse_with(r#"{"type":"answer_card","notebook":"x","card":7}"#, ""), None);
         assert_eq!(parse_with(&format!(r#"{{"type":"restart","notebook":"{NB}"}}"#), ""), Some(Message::Restart { notebook: NB.into() }));
         assert_eq!(parse_with(&format!(r#"{{"type":"error_ask_show","cell":"{C1}"}}"#), ""), Some(Message::ShowErrorAsk { cell: C1.into() }));
         assert_eq!(parse_with(&format!(r#"{{"type":"error_ask_cancel","cell":"{C1}"}}"#), ""), Some(Message::CancelErrorAsk { cell: C1.into() }));

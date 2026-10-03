@@ -5,6 +5,7 @@ import { initActions } from "./actions";
 import { initAnnotate } from "./annotate";
 import { initAskBox } from "./askbox";
 import { initAsking } from "./asking";
+import { initCardKey } from "./cardkey";
 import { send } from "./bridge";
 import { initCells } from "./cells";
 import { initDebug } from "./debug";
@@ -37,6 +38,7 @@ function init() {
   initRail();
   initReveal();
   initRunGuard();
+  initCardKey();
   initActions();
   initDrawer();
   initSafe();

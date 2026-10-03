@@ -733,6 +733,8 @@ impl Workspace {
         // The cells the card asks to run, those that re-run after them, and
         // those it needs that never ran (they run first), for their lines in the page.
         let card = crate::approval::approval_view(session);
+        // The waiting card, by its entry: ⏎ in the page answers it, and only it.
+        let card_ix = card.as_ref().and(session.pending_permission());
         let (ask_cells, rerun_cells, needed_ids) = card.map(|c| (c.cells, c.rerun, c.needed)).unwrap_or_default();
         // Claude is working: the page's prompts queue what they send.
         let working = session.outbox.busy && !session.agent_waiting;
@@ -740,7 +742,7 @@ impl Workspace {
         let error_asks: Vec<_> = session.error_asks().into_iter().map(|(cell, kind, queued)| serde_json::json!({ "cell": cell, "kind": kind, "queued": queued })).collect();
         // Every waiting run card's cells: a run of the user's that reaches one asks first.
         let waiting: Vec<serde_json::Value> = crate::approval::waiting_run_cells(session).into_iter().map(|(id, name)| serde_json::json!({ "id": id, "name": name })).collect();
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting });
+        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
@@ -810,6 +812,17 @@ impl Workspace {
     /// answered as their Run button does, telling the runtime which cells the
     /// user ran, so the approved calls don't run them again. An older
     /// runtime's agent cards wait until the runtime has heard it on its own.
+    /// ⏎ in the page with nothing focused: the filled answer to the card the
+    /// page was told about, if it is still the one waiting.
+    pub fn answer_card(&mut self, notebook: String, card: usize, cx: &mut Context<Self>) {
+        let Some(key) = self.session_showing(&notebook) else { return };
+        self.with_session(key, cx, |s| {
+            if s.pending_permission() == Some(card) {
+                s.answer_pending(agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce, crate::session::Scope::Once);
+            }
+        });
+    }
+
     pub fn run_anyway(&mut self, notebook: String, cells: Vec<(String, f64)>, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
         let ids: Vec<String> = cells.iter().map(|(id, _)| id.clone()).collect();
