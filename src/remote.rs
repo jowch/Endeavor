@@ -137,11 +137,8 @@ Are you sure you want to continue connecting (yes/no/[fingerprint])? ")" = yes ]
 /// This app's helper and runtime, as the name of their folder on a server:
 /// the app version plus a hash of what gets installed, so edits reinstall.
 pub fn version() -> Result<String, String> {
-    let mut hash = Fnv::default();
-    for (path, contents, _) in runtime_files()? {
-        hash.add(path.as_bytes());
-        hash.add(&contents);
-    }
+    let mut hash = wire::tree::Fnv::default();
+    hash.add_files(runtime_files()?.iter().map(|(path, contents, _)| (path.as_str(), contents.as_slice())));
     for helper in bundled_helpers() {
         hash.add(&std::fs::read(&helper).map_err(|e| format!("{}: {e}", helper.display()))?);
     }
@@ -153,23 +150,6 @@ pub fn version() -> Result<String, String> {
 pub fn build() -> Option<&'static str> {
     static BUILD: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     BUILD.get_or_init(|| version().map_err(|e| eprintln!("Couldn't work out this build's version: {e}")).ok()).as_deref()
-}
-
-/// FNV-1a: stable across builds, unlike std's hasher.
-struct Fnv(u64);
-
-impl Default for Fnv {
-    fn default() -> Self {
-        Fnv(0xcbf2_9ce4_8422_2325)
-    }
-}
-
-impl Fnv {
-    fn add(&mut self, bytes: &[u8]) {
-        for &b in bytes.iter().chain(&[0xff]) {
-            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0100_0000_01b3);
-        }
-    }
 }
 
 /// The script ssh runs on the server, as one line: the server's login shell
@@ -196,29 +176,7 @@ pub fn bootstrap_script(version: &str) -> String {
 
 /// The files of `runtime/` as (path in the tar, contents, executable), sorted.
 fn runtime_files() -> Result<Vec<(String, Vec<u8>, bool)>, String> {
-    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, Vec<u8>, bool)>) -> Result<(), String> {
-        let mut entries: Vec<_> = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.flatten().collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let name = format!("{prefix}/{}", entry.file_name().to_string_lossy());
-            let meta = std::fs::metadata(entry.path()).map_err(|e| e.to_string())?;
-            if meta.is_dir() {
-                walk(&entry.path(), &name, out)?;
-            } else {
-                let contents = std::fs::read(entry.path()).map_err(|e| e.to_string())?;
-                #[cfg(unix)]
-                let executable = meta.permissions().mode() & 0o111 != 0;
-                // No file in runtime/ is executable (git records none); install_tar marks the helper by name.
-                #[cfg(windows)]
-                let executable = false;
-                out.push((name, contents, executable));
-            }
-        }
-        Ok(())
-    }
-    let mut files = Vec::new();
-    walk(&crate::install::resources().join("runtime"), "runtime", &mut files)?;
-    Ok(files)
+    wire::tree::files(&crate::install::resources().join("runtime"), "runtime")
 }
 
 /// Folders holding helpers for other platforms (scripts/helpers.sh):
