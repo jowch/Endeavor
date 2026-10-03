@@ -22,7 +22,13 @@ const MAX_ERROR = 2000;
 const PENDING = 3000;
 
 const look = `html[data-endeavor-look="endeavor"]`;
+// The grey edge is the only bar such a cell gets: Pluto's red one goes back to
+// its normal look. The extra :not() outranks Pluto's `pluto-editor:not(.___)`.
+const upstreamBar = `${look} pluto-editor:not(.___):not(.____) pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
 const css = `
+  ${upstreamBar} > pluto-trafficlight { background: var(--normal-cell-color); border-left-color: var(--normal-cell-color); }
+  ${upstreamBar}.selected > pluto-trafficlight { background: var(--selected-cell-color); border-left-color: var(--selected-cell-color); }
+  ${upstreamBar}.code_differs > pluto-trafficlight { background: var(--code-differs-cell-color); border-left-color: var(--code-differs-cell-color); }
   ${look} pluto-cell jlerror { border: 0; border-left: 3px solid var(--e-danger); border-radius: 0 6px 6px 0;
     background: var(--e-danger-bg); padding: 8px 12px 10px; margin: 2px 0 0; }
   ${look} pluto-cell jlerror > .error-header { display: none; }
@@ -272,14 +278,19 @@ function decorateUpstream(error: HTMLElement, cell: HTMLElement, causes: Record<
 
 function decorate() {
   const nb = notebook();
+  const decorated = new Set<HTMLElement>();
   for (const error of document.querySelectorAll<HTMLElement>("pluto-cell jlerror")) {
     const cell = error.closest<HTMLElement>("pluto-cell");
     if (!cell || error.closest("pluto-log-dot")) continue;
     const causes = upstreamCause(nb, cell.id);
     const kind = causes ? "upstream" : "own";
-    if (error.getAttribute("data-endeavor-error") !== kind) error.setAttribute("data-endeavor-error", kind);
+    for (const node of [error, cell]) if (node.getAttribute("data-endeavor-error") !== kind) node.setAttribute("data-endeavor-error", kind);
+    decorated.add(cell);
     if (causes) decorateUpstream(error, cell, causes, nb);
     else decorateOwn(error, cell, nb);
+  }
+  for (const cell of document.querySelectorAll<HTMLElement>("pluto-cell[data-endeavor-error]")) {
+    if (!decorated.has(cell)) cell.removeAttribute("data-endeavor-error");
   }
 }
 

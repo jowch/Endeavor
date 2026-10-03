@@ -17,6 +17,8 @@ async function page(html, editorState) {
   const sent = [];
   window.ipc = { postMessage: (body) => sent.push(JSON.parse(body)) };
   if (editorState) window.editor_state = editorState;
+  // With a pluto-editor, state.ts reads Pluto's state every frame; no frames here.
+  window.requestAnimationFrame = () => 0;
   window.eval(readFileSync(new URL("../dist/page.js", import.meta.url), "utf8"));
   await new Promise((done) => (window.document.readyState === "loading" ? window.addEventListener("DOMContentLoaded", done) : done()));
   const context = (extra) => window.__endeavor.receive({ type: "context", host: "This Mac", asking: false, readonly: false, ...extra });
@@ -128,6 +130,50 @@ test("a cell that fails because a cell above failed gets no buttons, only what f
   doc.getElementById(FIT).scrollIntoView = () => (shown = FIT);
   half.querySelector(".endeavor-upstream a").click();
   assert.equal(shown, FIT);
+});
+
+test("a cell that fails because a cell above failed has one bar: the grey edge, not Pluto's red", async () => {
+  const notebook = {
+    cell_results: {
+      [FIT]: { errored: true, output: { body: { msg: "UndefVarError: `p0` not defined", stacktrace: [] } } },
+      [HALF]: { errored: true, output: { body: { msg: "UndefVarError: `fit` not defined", stacktrace: [] } } },
+    },
+    cell_dependencies: {
+      [FIT]: { upstream_cells_map: { p0: [] }, downstream_cells_map: { fit: [HALF] } },
+      [HALF]: { upstream_cells_map: { fit: [FIT] }, downstream_cells_map: {} },
+    },
+  };
+  const cell = (id) => `<pluto-cell id="${id}" class="errored"><pluto-trafficlight></pluto-trafficlight></pluto-cell>`;
+  const { doc } = await page(`<pluto-editor><pluto-notebook>${cell(FIT)}${cell(HALF)}</pluto-notebook></pluto-editor>`, { notebook });
+  doc.documentElement.setAttribute("data-endeavor-look", "endeavor");
+  for (const id of [FIT, HALF]) doc.getElementById(id).insertAdjacentHTML("beforeend", errorBox("UndefVarError", false));
+  await tick();
+
+  /** The background our rules give a cell's bar, or "Pluto's" when none apply. */
+  const bar = (id) => {
+    const light = doc.getElementById(id).querySelector("pluto-trafficlight");
+    let found = "Pluto's";
+    for (const style of doc.head.querySelectorAll("style")) {
+      for (const [, selectors, body] of style.textContent.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        for (const selector of selectors.split(",").map((s) => s.trim())) {
+          if (selector.endsWith("> pluto-trafficlight") && light.matches(selector)) found = body.match(/background: ([^;]+);/)?.[1] ?? found;
+        }
+      }
+    }
+    return found;
+  };
+  assert.equal(bar(FIT), "Pluto's", "the cell where the error starts keeps Pluto's red bar");
+  assert.equal(bar(HALF), "var(--normal-cell-color)");
+  doc.getElementById(HALF).classList.add("selected");
+  assert.equal(bar(HALF), "var(--selected-cell-color)");
+
+  doc.getElementById(HALF).setAttribute("data-endeavor-bar", "claude");
+  assert.equal(bar(HALF), "var(--e-accent)", "a cell Claude touched keeps the accent bar");
+
+  doc.getElementById(HALF).querySelector("pluto-output").remove();
+  doc.getElementById(HALF).classList.remove("errored");
+  await tick();
+  assert.equal(doc.getElementById(HALF).getAttribute("data-endeavor-error"), null);
 });
 
 test("a long trace is folded to one line with its length, and opening it opens Pluto's trace", async () => {

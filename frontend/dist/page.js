@@ -1938,7 +1938,11 @@
   var MAX_ERROR = 2e3;
   var PENDING = 3e3;
   var look = `html[data-endeavor-look="endeavor"]`;
+  var upstreamBar = `${look} pluto-editor:not(.___):not(.____) pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
   var css12 = `
+  ${upstreamBar} > pluto-trafficlight { background: var(--normal-cell-color); border-left-color: var(--normal-cell-color); }
+  ${upstreamBar}.selected > pluto-trafficlight { background: var(--selected-cell-color); border-left-color: var(--selected-cell-color); }
+  ${upstreamBar}.code_differs > pluto-trafficlight { background: var(--code-differs-cell-color); border-left-color: var(--code-differs-cell-color); }
   ${look} pluto-cell jlerror { border: 0; border-left: 3px solid var(--e-danger); border-radius: 0 6px 6px 0;
     background: var(--e-danger-bg); padding: 8px 12px 10px; margin: 2px 0 0; }
   ${look} pluto-cell jlerror > .error-header { display: none; }
@@ -2159,14 +2163,19 @@
   }
   function decorate2() {
     const nb = notebook();
+    const decorated = /* @__PURE__ */ new Set();
     for (const error of document.querySelectorAll("pluto-cell jlerror")) {
       const cell = error.closest("pluto-cell");
       if (!cell || error.closest("pluto-log-dot")) continue;
       const causes = upstreamCause(nb, cell.id);
       const kind = causes ? "upstream" : "own";
-      if (error.getAttribute("data-endeavor-error") !== kind) error.setAttribute("data-endeavor-error", kind);
+      for (const node of [error, cell]) if (node.getAttribute("data-endeavor-error") !== kind) node.setAttribute("data-endeavor-error", kind);
+      decorated.add(cell);
       if (causes) decorateUpstream(error, cell, causes, nb);
       else decorateOwn(error, cell, nb);
+    }
+    for (const cell of document.querySelectorAll("pluto-cell[data-endeavor-error]")) {
+      if (!decorated.has(cell)) cell.removeAttribute("data-endeavor-error");
     }
   }
   function initErrors() {
@@ -2331,8 +2340,8 @@
     border: 1px solid var(--e-dialog-edge); background: var(--e-dialog-bg); box-shadow: 0 16px 48px var(--e-dialog-shadow);
     font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
   #endeavor-runguard b { display: block; margin-bottom: 4px; font-weight: 600; font-size: 13.5px; color: var(--e-text-primary); }
-  #endeavor-runguard code { font: 12px JuliaMono, ui-monospace, monospace; padding: 0 3px; border-radius: 3px;
-    background: var(--e-bg-tag); color: var(--e-text-primary); }
+  #endeavor-runguard code { font: 600 12.5px JuliaMono, ui-monospace, monospace; color: var(--e-text-primary); }
+  #endeavor-runguard button.show code { color: inherit; }
   #endeavor-runguard .buttons { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
   #endeavor-runguard .gap { flex: 1; }
   #endeavor-runguard button { padding: 4px 12px; border-radius: 5px; border: 1px solid var(--e-control-edge); background: var(--e-bg-raised);
