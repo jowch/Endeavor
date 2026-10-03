@@ -16,9 +16,14 @@ const SCRIPT: &str = include_str!("../frontend/dist/page.js");
 fn page_nonce() -> &'static str {
     static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NONCE.get_or_init(|| {
-        use std::io::Read;
         let mut bytes = [0u8; 16];
-        std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).expect("/dev/urandom");
+        #[cfg(unix)]
+        {
+            use std::io::Read;
+            std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).expect("/dev/urandom");
+        }
+        #[cfg(windows)]
+        getrandom::fill(&mut bytes).expect("random bytes");
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     })
 }

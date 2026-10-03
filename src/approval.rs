@@ -1096,7 +1096,7 @@ mod tests {
         let shortcut = crate::platform::shortcut!("⏎");
 
         let bash = prompt(&mut s, "npm test", ToolKind::Execute, json!({ "command": "npm test", "description": "Runs the tests" }), false, claude_options());
-        assert_eq!(bash.heading, "Run a command on This Mac?");
+        assert_eq!(bash.heading, format!("Run a command on {}?", crate::platform::this_computer!()));
         assert_eq!(bash.code, Some(super::CardCode::Plain("npm test".into())));
         assert_eq!(bash.lines[0].0, "Runs the tests");
         assert!(bash.lines[1].0.starts_with("In ") && bash.lines[1].0.ends_with("projects/decay-fits"));
@@ -1125,7 +1125,7 @@ mod tests {
 
         let fetch = prompt(&mut s, "Fetch", ToolKind::Fetch, json!({ "url": "https://juliastats.org/Bootstrap.jl/stable/" }), false, claude_options());
         assert_eq!((fetch.heading.as_str(), buttons(&fetch)[2].0.as_str()), ("Fetch a web page?", "Fetch"));
-        assert_eq!(fetch.lines[0].0, "Claude reads the page. Nothing on This Mac changes.");
+        assert_eq!(fetch.lines[0].0, format!("Claude reads the page. Nothing on {} changes.", crate::platform::this_computer!()));
 
         let mcp = prompt(&mut s, "mcp__github__create_issue", ToolKind::Other, json!({}), false, claude_options());
         assert_eq!(mcp.heading, "Allow `create issue` from `github`?");

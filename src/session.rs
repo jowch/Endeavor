@@ -2815,7 +2815,7 @@ mod tests {
         s.runtime_build(true);
         assert!(s.entries.is_empty(), "not while the history loads");
         s.started(Started::new(SessionId::new("old"), None, None));
-        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with("Julia on This Mac is from an older Endeavor.")));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with(&format!("Julia on {} is from an older Endeavor.", crate::platform::this_computer!()))));
     }
 
     #[test]
