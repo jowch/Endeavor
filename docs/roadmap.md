@@ -13,20 +13,20 @@ Endeavor is a native (GPUI) app with the live Pluto frontend in one pane and a
 Claude Code agent panel (over ACP) in the other. Notebooks run in a runtime
 per host: a Rust core (`endeavor-remote core`) that serves the agent's tools,
 with Julia running Pluto behind it as an adapter
-([runtime-core.md](runtime-core.md)). The runtime runs on this computer, on a
+([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)). The runtime runs on this computer, on a
 server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)).
 
 ## Next
 
 - **One port per runtime.** Pluto's page, MCP and the app's calls on one
   port answered by the core, with one token, instead of two ports. Built and
-  checked live on This Mac, a server and Slurm. Plan in [one-port.md](one-port.md).
+  checked live on This Mac, a server and Slurm. Plan in [one-port.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/one-port.md).
 - **The notebook tools as a standalone product.** Built: `endeavor-remote
   serve`, which a user runs on a workstation or inside their own cluster job
   and which prints the browser link, agent configs and the `ssh -L` line; the
-  stdio form `endeavor-remote mcp`; a Claude Code plugin in `claude-plugin/`.
-  Guide in [standalone.md](standalone.md), design in
-  [one-port.md](one-port.md), "The standalone command". Left: try the plugin
+  stdio form `endeavor-remote mcp`; a Claude Code plugin in EndeavorMCP's `claude-plugin/`.
+  Guide in [EndeavorMCP's README](https://github.com/jowch/EndeavorMCP#readme), design in
+  [one-port.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/one-port.md), "The standalone command". Left: try the plugin
   and Codex and Gemini for real, adapt the skills where they describe the
   app, a tagged release, and an update command (`endeavor-remote update`,
   maybe `endeavor update` after a rename). Its open questions: where it gets

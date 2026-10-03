@@ -49,7 +49,7 @@ _Listed 2026-10-03._
   runtime exposes one port answered by the core: Pluto at `/`, Endeavor's
   endpoints at `/mcp` and under `/endeavor/`, one token. Still to do: the live
   checks, then a standalone `endeavor serve` that prints one link to forward.
-  Plan and open checks in [one-port.md](one-port.md).
+  Plan and open checks in [one-port.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/one-port.md).
 
 ## Accessibility
 

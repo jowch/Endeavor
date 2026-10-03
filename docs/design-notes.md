@@ -147,7 +147,7 @@ No Pluto changes are needed: the runtime creates Pluto's session, so it sets
 `on_event` and reads cell state directly. The cost is depending on Pluto
 internals, so Pluto is pinned and the Pluto-touching code stays in one place.
 The language-neutral half has since moved into a Rust core, with Julia as
-the Pluto adapter: see [runtime-core.md](runtime-core.md).
+the Pluto adapter: see [runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md).
 
 ## Provenance and reproducibility (to revisit)
 

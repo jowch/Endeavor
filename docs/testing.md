@@ -241,56 +241,42 @@ helper, so the dump follows it.
 
 ## Runtime tests against real Julia
 
-`crates/endeavor-remote/tests/e2e_julia.rs` starts the helper and the core
-with the real Julia adapter, the way the app starts This Mac's runtime. The
-test then talks to the runtime the way Claude Code and the app do. It sends MCP
-over `POST /mcp` with the `X-Endeavor-Session` and `X-Endeavor-Host` headers,
-makes the app's `/endeavor/call`s, reaches Pluto's page and WebSocket as a
-browser does, and sends the helper's file requests. Plain
-`cargo test` skips it. To run it:
+The runtime, the helper, the MCP server and the skills are in
+[EndeavorMCP](https://github.com/jowch/EndeavorMCP), and so are the tests
+that start the runtime with real Julia, `e2e_julia` and `e2e_serve`. Run them
+in an EndeavorMCP checkout, as
+[its testing.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/testing.md)
+says:
 
 ```sh
 cargo test -p endeavor-remote --test e2e_julia -- --ignored --nocapture
 ```
 
-It takes about 40 s and prints how long each step took. Julia starts once, and
-the test goes through these steps in order:
+## Changing EndeavorMCP and the app together
 
-1. The MCP handshake. The server session gets the host tools and the This Mac
-   session doesn't.
-2. `new_notebook`, then add a cell, edit it, run it, and read its output (`42`).
-3. Pluto's page as a browser reaches it: a `?token=` link sets the cookie and
-   redirects; with the cookie the page loads and a WebSocket ping gets
-   Pluto's pong through the core. Pluto's own secret never comes back.
-4. `list_notebooks` marks `this_session` right for two sessions. A second
-   notebook for the same session is refused, and so is a change to the other
-   session's notebook.
-5. The run policy. `endeavor/run_preview` says what an asked run would run,
-   including a dependent cell. Plan mode refuses edits and runs but allows
-   reads.
-6. Uploads through the helper's `Place` and `Write`. The same file is reused.
-   A different file with the same name becomes `decay (2).csv`.
-7. Restart, as the app's Restart Julia does it. The test stops and starts the
-   runtime, then reopens each notebook. The unchanged notebook runs again. The
-   notebook whose file changed opens in safe preview.
-8. A notebook in safe preview doesn't run code until `allow_execution`.
-9. A notebook's own Julia killed during a run that `execute_cell` waits
-   for. The call fails with `process_exited` and "Julia stopped unexpectedly
-   while running `rates`. …", and `list_notebooks` has `exited` with that cell.
-10. Idle stop with a limit of about two seconds, seen on the app's
-    `/endeavor/events` stream. `ENDEAVOR_IDLE_CHECK_SECS` makes the core
-    check every second instead of every five minutes.
+Endeavor depends on EndeavorMCP's crates (`wire`, `endeavor-remote`) as a
+Cargo git dependency. `Cargo.lock` pins the commit. To build the app against
+a local EndeavorMCP checkout, add a `[patch]` in `.cargo/config.toml`, which
+git ignores:
 
-The test looks for Julia in this order. The first one found is used.
+```toml
+[patch."https://github.com/jowch/EndeavorMCP"]
+wire = { path = "/path/to/EndeavorMCP/crates/wire" }
+endeavor-remote = { path = "/path/to/EndeavorMCP/crates/endeavor-remote" }
+```
 
-1. `ENDEAVOR_E2E_JULIA`.
-2. The app's own Julia, at `~/Library/Application Support/endeavor/julia-*`.
-3. `julia` on the login shell's PATH.
+The patch also takes `runtime/` and the skills from that checkout, since the
+crate embeds them. It rewrites the two EndeavorMCP entries in `Cargo.lock` to
+local paths, so don't commit `Cargo.lock` while it's in place. Get the
+Linux helpers for that checkout with
+`ENDEAVOR_MCP=/path/to/EndeavorMCP scripts/helpers.sh`.
 
-If none is found, the test prints `SKIPPED` and passes. With the app's Julia,
-the app's depot supplies the packages. The test puts its own depot in front of
-it, under `target/tmp/e2e-julia`, so Julia writes there and not into the app's
-folder.
+To land a change:
+
+1. Commit and push EndeavorMCP's `main`.
+2. Delete the `[patch]`, then pin the new commit:
+   `cargo update -p endeavor-remote -p wire`.
+3. Commit `Cargo.lock` with the app's change.
 
 ## Other debug switches
 

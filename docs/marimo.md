@@ -33,7 +33,7 @@ Two things make this more than a port:
 
 - **Design the notebook-backend boundary against marimo** rather than
   Jupyter. The boundary is the core's engine interface
-  ([runtime-core.md](runtime-core.md)) and `Backend` in the app. marimo
+  ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)) and `Backend` in the app. marimo
   shares Pluto's model (reactive graph, plain-text file), so the boundary
   stays small; Jupyter stays in [roadmap.md](roadmap.md) "Later".
 - **Same tool names and shapes for both backends.** The agent calls
@@ -57,7 +57,7 @@ Today:
 - The helper starts `endeavor-remote core`, which serves the agent's MCP
   tools plus the app's `/call` methods and `/events` stream, and starts
   Julia (`runtime/boot.jl` and `EndeavorRuntime`, the Pluto adapter) as its
-  child ([runtime-core.md](runtime-core.md)). The core writes `runtime.json`
+  child ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)). The core writes `runtime.json`
   (ports, Pluto secret), and the helper relays the loopback ports.
 - The app shows Pluto's page in a webview and injects `frontend/dist/page.js`,
   which reads Pluto's DOM for change highlighting, annotations and theming.
@@ -93,7 +93,7 @@ already named `notebook` and cell links are `notebook://<backend>/…`.
 ## The Python runtime
 
 A new directory `runtime-py/` holds a Python package, `endeavor_runtime`,
-with a `uv.lock`. Under the core split ([runtime-core.md](runtime-core.md))
+with a `uv.lock`. Under the core split ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md))
 it is only the adapter: steps 1 and 2 below and `marimo_api.py`. `/events`,
 tool serving and the host tools come from the core, so steps 3 to 5 become
 the adapter's notifications and calls. The helper starts it the same way as the Julia runtime:

@@ -37,7 +37,7 @@ plain server, or inside a Slurm job on a cluster.
 The webview and Claude connect to `127.0.0.1:<port>` whether the runtime is
 local or remote:
 
-- The runtime has one port ([one-port.md](one-port.md)): the core answers
+- The runtime has one port ([one-port.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/one-port.md)): the core answers
   `/mcp` and `/endeavor/…` itself and passes every other path through to
   Pluto's private port.
 - The core's `Host` check looks at the host name only, not the port, so a
@@ -140,7 +140,7 @@ sends the launcher and the folder's name in the bootstrap's preamble.
 ```
 
 **Process (plain server).** The helper starts the runtime with `setsid`/`nohup`:
-`endeavor-remote core` ([runtime-core.md](runtime-core.md); on This Mac, where
+`endeavor-remote core` ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md); on This Mac, where
 the app is the helper, `endeavor --helper core`), which starts
 `julia boot.jl` as its child in the same process group, serves the runtime's
 one port and writes `runtime.json` (its own pid and that port; Pluto's port
@@ -264,7 +264,7 @@ folder in `sessions.json`.
 - **Local.** The app's local listener keeps a per-launch token as today,
   because other users on the same computer can reach local loopback.
 - **Pluto's secret** stays in the core, which adds it to what it passes on
-  to Pluto ([one-port.md](one-port.md)). The app and the page never see it.
+  to Pluto ([one-port.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/one-port.md)). The app and the page never see it.
 
 ## SSH client
 

@@ -9,9 +9,12 @@ A native macOS app with a Claude Code agent beside a live Pluto.jl notebook.
 See [docs/roadmap.md](docs/roadmap.md) for status and
 [docs/pluto-agent-design-doc.md](docs/pluto-agent-design-doc.md) for the design.
 
-The notebook tools also work without the app: run `endeavor-remote serve` on a
-workstation or cluster node and connect any MCP agent and a browser. See
-[docs/standalone.md](docs/standalone.md).
+The notebook tools (the runtime, the MCP server, the server helper and the
+Pluto skills) live in [EndeavorMCP](https://github.com/jowch/EndeavorMCP),
+which the app depends on as a Cargo git dependency. They also work without
+the app: run `endeavor-remote serve` on a workstation or cluster node and
+connect any MCP agent and a browser. See
+[EndeavorMCP's README](https://github.com/jowch/EndeavorMCP#readme).
 
 Run from source:
 
@@ -25,10 +28,13 @@ cargo run
 To keep the Linux helpers current by themselves, turn on the repo's git hooks
 once: `git config core.hooksPath .githooks`. After each pull or branch switch
 they fetch the helpers GitHub built for that commit.
-`scripts/helpers.sh` downloads the helper for Linux servers from the Helpers
-workflow's release on GitHub when that source was built there, else builds it
-(`scripts/build-helpers.sh`); it does nothing when it's already up to date.
-Without it the app can't connect to Linux servers.
+`scripts/helpers.sh` checks out the EndeavorMCP commit that `Cargo.lock`
+pins (in `target/endeavor-mcp`) and downloads the helper for Linux servers
+from EndeavorMCP's Helpers release when that source was built there, else
+builds it (EndeavorMCP's `scripts/build-helpers.sh`); it does nothing when
+it's already up to date. Without it the app can't connect to Linux servers.
+To change EndeavorMCP and the app together, see
+[docs/testing.md](docs/testing.md#changing-endeavormcp-and-the-app-together).
 
 Build the app: `scripts/bundle.sh` → `target/release/Endeavor.app` (ad-hoc
 signed, with the Linux helpers inside; it runs `scripts/helpers.sh` itself).

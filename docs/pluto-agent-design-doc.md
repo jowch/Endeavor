@@ -2,7 +2,7 @@
 
 The founding decisions behind Endeavor and their reasons. How the UI looks
 and behaves is in [ui-spec.md](ui-spec.md); the runtime is in
-[runtime-core.md](runtime-core.md). Section numbers are kept from the first
+[runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md). Section numbers are kept from the first
 draft, since code comments cite them.
 
 ## 1. Summary
@@ -64,7 +64,7 @@ second, independent connection to the same session.
   format differ structurally from Pluto's reactive graph and plain-`.jl`
   format. Cell identity and the dependency tools need Jupyter-specific
   equivalents; design the notebook boundary with this in mind
-  ([runtime-core.md](runtime-core.md) has the engine interface; marimo, the
+  ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md) has the engine interface; marimo, the
   closer match, is in [marimo.md](marimo.md)).
 - **Agent-specific MCP permission defaults.** Don't assume every ACP agent
   shows a permission prompt for MCP tool calls; the runtime enforces its
@@ -109,7 +109,7 @@ binary.
   `/call` and `/events`) and starts Julia running Pluto as its child. The
   core writes the ports, token and Pluto's secret to `runtime.json`, which
   the helper reads ([remote-sessions.md](remote-sessions.md),
-  [runtime-core.md](runtime-core.md)). The app is a client of the same
+  [runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)). The app is a client of the same
   bridge, so it sees what the agent's tools do.
 - **Lifetime.** The runtime runs detached, started by the helper, which the
   app reaches over its stdin/stdout. It stops when the app quits, unless the
