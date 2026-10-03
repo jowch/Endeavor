@@ -43,6 +43,15 @@ _Listed 2026-10-03._
   - **What the button does.** Put the earlier code back itself, or send Claude a message that the user wants those edits reverted, leaving Claude to work out the dependencies. The second felt odd but may be simpler.
   - Earlier exploration: [ui-spec.md](ui-spec.md) lists per-change and per-cell undo as explored and left out of the final states.
 
+## Runtime
+
+- [ ] One port per runtime — missing. Each runtime exposes Pluto's page and
+  Endeavor's endpoints (MCP, events, calls) on two ports, a leftover from
+  PlutoMCP.jl. Planned: one port answered by the core, Pluto at `/`,
+  Endeavor's endpoints under a prefix, one token; then a standalone
+  `endeavor serve` that prints one link to forward. Plan and open checks in
+  [one-port.md](one-port.md).
+
 ## Accessibility
 
 - [ ] The composer's text box shows its caret but no focus ring. GPUI 0.3.6
