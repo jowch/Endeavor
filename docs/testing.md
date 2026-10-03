@@ -245,7 +245,8 @@ helper, so the dump follows it.
 with the real Julia adapter, the way the app starts This Mac's runtime. The
 test then talks to the runtime the way Claude Code and the app do. It sends MCP
 over `POST /mcp` with the `X-Endeavor-Session` and `X-Endeavor-Host` headers,
-makes the app's `/call`s, and sends the helper's file requests. Plain
+makes the app's `/endeavor/call`s, reaches Pluto's page and WebSocket as a
+browser does, and sends the helper's file requests. Plain
 `cargo test` skips it. To run it:
 
 ```sh
@@ -258,24 +259,27 @@ the test goes through these steps in order:
 1. The MCP handshake. The server session gets the host tools and the This Mac
    session doesn't.
 2. `new_notebook`, then add a cell, edit it, run it, and read its output (`42`).
-3. `list_notebooks` marks `this_session` right for two sessions. A second
+3. Pluto's page as a browser reaches it: a `?token=` link sets the cookie and
+   redirects; with the cookie the page loads and a WebSocket ping gets
+   Pluto's pong through the core. Pluto's own secret never comes back.
+4. `list_notebooks` marks `this_session` right for two sessions. A second
    notebook for the same session is refused, and so is a change to the other
    session's notebook.
-4. The run policy. `endeavor/run_preview` says what an asked run would run,
+5. The run policy. `endeavor/run_preview` says what an asked run would run,
    including a dependent cell. Plan mode refuses edits and runs but allows
    reads.
-5. Uploads through the helper's `Place` and `Write`. The same file is reused.
+6. Uploads through the helper's `Place` and `Write`. The same file is reused.
    A different file with the same name becomes `decay (2).csv`.
-6. Restart, as the app's Restart Julia does it. The test stops and starts the
+7. Restart, as the app's Restart Julia does it. The test stops and starts the
    runtime, then reopens each notebook. The unchanged notebook runs again. The
    notebook whose file changed opens in safe preview.
-7. A notebook in safe preview doesn't run code until `allow_execution`.
-8. A notebook's own Julia killed during a run that `execute_cell` waits
+8. A notebook in safe preview doesn't run code until `allow_execution`.
+9. A notebook's own Julia killed during a run that `execute_cell` waits
    for. The call fails with `process_exited` and "Julia stopped unexpectedly
    while running `rates`. …", and `list_notebooks` has `exited` with that cell.
-9. Idle stop with a limit of about two seconds, seen on the app's `/events`
-   stream. `ENDEAVOR_IDLE_CHECK_SECS` makes the core check every second
-   instead of every five minutes.
+10. Idle stop with a limit of about two seconds, seen on the app's
+    `/endeavor/events` stream. `ENDEAVOR_IDLE_CHECK_SECS` makes the core
+    check every second instead of every five minutes.
 
 The test looks for Julia in this order. The first one found is used.
 

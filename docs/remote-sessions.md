@@ -37,17 +37,21 @@ plain server, or inside a Slurm job on a cluster.
 The webview and Claude connect to `127.0.0.1:<port>` whether the runtime is
 local or remote:
 
-- The bridge's `Host` check looks at the host name only, not the port, so a
+- The runtime has one port ([one-port.md](one-port.md)): the core answers
+  `/mcp` and `/endeavor/…` itself and passes every other path through to
+  Pluto's private port.
+- The core's `Host` check looks at the host name only, not the port, so a
   local port that differs from the remote one is accepted.
-- Pluto's `?secret=` and the bridge's bearer token protect both ports from
-  other users on a shared machine.
-- Crash reopen, safe preview, and restart go through `/events` and
+- The runtime's token protects its port from other users on a shared
+  machine: as a bearer header everywhere, or for Pluto's page as a cookie the
+  web view gets from a `?token=` link. Pluto's own secret never leaves the core.
+- Crash reopen, safe preview, and restart go through `/endeavor/events` and
   `open_notebook`, not local files.
 
 Both ends stay on loopback, so the security rule in
 [pluto-agent-design-doc.md](pluto-agent-design-doc.md) §6 ("never let the
 app's proxying extend beyond loopback") still holds. The runtime chooses its
-own ports (bind port 0), since the app only sees the local machine; the
+own port (bind port 0), since the app only sees the local machine; the
 helper makes the bridge token on the host, so it never has to travel in
 ssh's environment, which plain `ssh` drops; and the runtime outlives the
 connection, so stopping it is an explicit command.
@@ -57,8 +61,8 @@ connection, so stopping it is an explicit command.
 ```
 app (local)                        remote login host / server        runtime host
 ───────────                        ──────────────────────────        ────────────
-webview ─┐                                                            Pluto  :p1
-Claude  ─┼─ local listener ── ssh stdio ── endeavor-remote helper ──── bridge :p2
+webview ─┐                                                            core :port ── Pluto (private)
+Claude  ─┼─ local listener ── ssh stdio ── endeavor-remote helper ────           ── Julia's bridge (private)
 app     ─┘  127.0.0.1:<port>   (one ssh)   (relays, attaches)         (loopback)
 ```
 
@@ -90,18 +94,19 @@ separate `endeavor-remote` binary is what servers are sent. It:
    goes. Hello's `uploads` tells a helper with these from an older one.
 2. When the app sends `StartRuntime` (a session needs Julia), takes an
    exclusive lock on the runtime's state file (one client), then reads it. If
-   the runtime is alive, it connects to its ports. If not, it starts one (see
+   the runtime is alive, it connects to its port. If not, it starts one (see
    Launchers). Only this step takes a runtime over from another client, so
    browsing a server never does.
-3. Multiplexes HTTP and SSE connections between the runtime and the SSH stdio
-   channel.
+3. Multiplexes connections (HTTP, event streams, Pluto's WebSocket) between
+   the runtime's port and the SSH stdio channel.
 
 A runtime that dies, fails to start, or is stopped by the app leaves the
 helper connected, so starting it again needs no new SSH sign-in.
 
-**Local listener.** The app listens on local loopback ports and feeds each
-connection into the channel. The webview, the agent's MCP config
-(`agent.rs`), and the `/events` watcher keep using `127.0.0.1` URLs. Each host
+**Local listener.** The app listens on one local loopback port per host and
+feeds each connection into the channel. The webview (`/?token=…`), the
+agent's MCP config (`/mcp`, `agent.rs`), and the `/endeavor/events` watcher
+use `127.0.0.1` URLs on it. Each host
 has its own listener for the whole launch, so a session's MCP URL (and the
 token, kept in the host's state folder) survive reconnects and restarts. The
 app keeps one connection per host (`src/connection.rs`): its status
@@ -128,19 +133,21 @@ sends the launcher and the folder's name in the bootstrap's preamble.
 
 ```
 <state folder>/runtime.json   (mode 0600)
-{ "launcher": "process", "node": "labbox3", "pid": 81234,
-  "pluto_port": 40211, "mcp_port": 40212, "token": "…", "pluto_secret": "…" }
+{ "launcher": "process", "node": "labbox3", "pid": 81234, "job": "",
+  "started": null, "port": 40211, "token": "…" }
 { "launcher": "slurm", "job": "4812731", "node": "n2cn0216", "pid": 5120,
-  "pluto_port": 40211, "mcp_port": 40212, "token": "…", "pluto_secret": "…" }
+  "started": null, "port": 40211, "token": "…" }
 ```
 
 **Process (plain server).** The helper starts the runtime with `setsid`/`nohup`:
 `endeavor-remote core` ([runtime-core.md](runtime-core.md); on This Mac, where
 the app is the helper, `endeavor --helper core`), which starts
-`julia boot.jl` as its child in the same process group, serves the bridge port
-itself and writes `runtime.json` (its own pid and bridge port; Pluto's port is
-Julia's). A runtime an older helper started (Julia alone, `runtime.json` from
-`boot.jl`) is attached to the same way.
+`julia boot.jl` as its child in the same process group, serves the runtime's
+one port and writes `runtime.json` (its own pid and that port; Pluto's port
+and secret stay between the core and Julia, in `julia.json`). A runtime from
+a build before one port per runtime (`runtime.json` without `port`) is not
+attached to: the helper says Julia was started by an older Endeavor and asks
+for a restart, and Stop ends it by its pid.
 The runtime runs until the user stops it from the app's per-host list, or
 until a long idle timeout (days, with no notebooks open and nothing running)
 so forgotten runtimes don't pile up on shared machines. The state file
@@ -170,7 +177,7 @@ submits, waits and relays; Julia runs in a batch job.
   `job.sh` and runs `sbatch --parsable --job-name=endeavor` with the
   resources, the account and `--output` to the state folder's `runtime.log`.
   The script is `endeavor-remote node-start`, which becomes the core on the
-  compute node; it starts Julia on ports free there and writes `runtime.json`
+  compute node; it starts Julia on private ports free there and writes `runtime.json`
   with the node and `SLURM_JOB_ID`. `job.json` records the
   job until its runtime is up, so a reconnect waits for the same job instead
   of submitting another. Packages go to `$SCRATCH/endeavor/depot` when the
@@ -256,8 +263,8 @@ folder in `sessions.json`.
   for Keychain, Secret Service, or Windows Credential Manager.
 - **Local.** The app's local listener keeps a per-launch token as today,
   because other users on the same computer can reach local loopback.
-- **Pluto's secret** is fetched from the bridge after each connect instead of
-  parsed from a `READY` line.
+- **Pluto's secret** stays in the core, which adds it to what it passes on
+  to Pluto ([one-port.md](one-port.md)). The app and the page never see it.
 
 ## SSH client
 

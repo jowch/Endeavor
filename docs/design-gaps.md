@@ -45,12 +45,11 @@ _Listed 2026-10-03._
 
 ## Runtime
 
-- [ ] One port per runtime — missing. Each runtime exposes Pluto's page and
-  Endeavor's endpoints (MCP, events, calls) on two ports, a leftover from
-  PlutoMCP.jl. Planned: one port answered by the core, Pluto at `/`,
-  Endeavor's endpoints under a prefix, one token; then a standalone
-  `endeavor serve` that prints one link to forward. Plan and open checks in
-  [one-port.md](one-port.md).
+- [ ] One port per runtime — built, not yet checked live in the app. Each
+  runtime exposes one port answered by the core: Pluto at `/`, Endeavor's
+  endpoints at `/mcp` and under `/endeavor/`, one token. Still to do: the live
+  checks, then a standalone `endeavor serve` that prints one link to forward.
+  Plan and open checks in [one-port.md](one-port.md).
 
 ## Accessibility
 
