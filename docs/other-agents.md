@@ -182,6 +182,8 @@ In order. Each part is also useful to Claude, or harmless to it.
    and the app compares it with its own. On another build, or none, each
    session on that host gets a note to restart Julia, and the host's
    listener answers the agent's calls that runtime can't carry out safely.
+   It checks every request on a connection, also after one it passed
+   through (Claude Code sends `GET /mcp` first and reuses the connection).
    The rules are one function, `older_runtime::refusal`; today there is one:
    in Ask to run, a call that runs code fails with `older_runtime`. In
    Manual nothing is refused: an older runtime can't hold edits, so the app
