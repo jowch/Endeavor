@@ -353,7 +353,7 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
         .args(["connect", "--state-dir"])
         .arg(&state_dir)
         .args(["--julia", &julia, "--runtime"])
-        .arg(crate::install::resources().join("runtime"))
+        .arg(crate::install::runtime()?)
         .args(["--depot", &depot])
         // This Mac's state folder is its own, so another node name means a renamed Mac.
         .arg("--any-node");

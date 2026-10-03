@@ -5,10 +5,25 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-/// The app's own files (`runtime/`, `plugin/`, `adapter/`): Contents/Resources
-/// inside Endeavor.app, else the source tree (`cargo run`).
+use endeavor_remote::embedded;
+
+/// The app's own files (`adapter/`): Contents/Resources inside Endeavor.app,
+/// else the source tree (`cargo run`).
 pub fn resources() -> PathBuf {
     bundle_resources().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
+/// The Julia side of the runtime (`runtime/`), unpacked from the helper crate
+/// into the app's folder once per version.
+pub fn runtime() -> Result<PathBuf, String> {
+    let dir = endeavor_remote::unpack(&app_dir()?.join("runtime-files"), embedded::RUNTIME_VERSION, embedded::RUNTIME_FILES)?;
+    Ok(dir.join("runtime"))
+}
+
+/// The Pluto skills as the Claude Code plugin the app loads, unpacked the same way.
+pub fn plugin() -> Result<PathBuf, String> {
+    let dir = endeavor_remote::unpack(&app_dir()?.join("plugin"), embedded::PLUGIN_VERSION, embedded::PLUGIN_FILES)?;
+    Ok(dir.join("plugin"))
 }
 
 /// Running from Endeavor.app, not a source checkout.
@@ -18,7 +33,7 @@ pub fn bundled() -> bool {
 
 fn bundle_resources() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    Some(exe.parent()?.parent()?.join("Resources")).filter(|r| r.join("runtime").is_dir())
+    Some(exe.parent()?.parent()?.join("Resources")).filter(|r| r.join("adapter").is_dir())
 }
 
 /// Endeavor's folder in Application Support, on Linux in XDG_DATA_HOME, and on

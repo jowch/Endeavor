@@ -1,8 +1,9 @@
 #!/bin/sh
 # Build target/release/Endeavor.app: the release binaries (the app and its
-# runtime helper, endeavor-remote) plus the app's own files
-# (runtime/, plugin/, adapter/) and any helpers built for Linux servers
-# (target/helpers) in Contents/Resources. Julia, Node and the ACP
+# runtime helper, endeavor-remote) plus the app's own files (adapter/) and
+# any helpers built for Linux servers (target/helpers) in Contents/Resources.
+# runtime/ and the skills are built into the binaries (endeavor_remote::embedded),
+# and the app unpacks them. Julia, Node and the ACP
 # adapter are not bundled; the app installs them on first launch.
 # ponytail: ad-hoc signed; Developer ID signing + notarization come with sharing.
 set -eu
@@ -16,7 +17,7 @@ app=target/release/Endeavor.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/endeavor target/release/endeavor-remote "$app/Contents/MacOS/"
-cp -R runtime plugin adapter "$app/Contents/Resources/"
+cp -R adapter "$app/Contents/Resources/"
 cp assets/icon/Endeavor.icns "$app/Contents/Resources/"
 # Helpers for Linux servers (scripts/helpers.sh, above).
 if [ -d target/helpers ]; then

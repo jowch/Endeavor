@@ -138,7 +138,7 @@ Are you sure you want to continue connecting (yes/no/[fingerprint])? ")" = yes ]
 /// the app version plus a hash of what gets installed, so edits reinstall.
 pub fn version() -> Result<String, String> {
     let mut hash = wire::tree::Fnv::default();
-    hash.add_files(runtime_files()?.iter().map(|(path, contents, _)| (path.as_str(), contents.as_slice())));
+    hash.add(endeavor_remote::embedded::RUNTIME_VERSION.as_bytes());
     for helper in bundled_helpers() {
         hash.add(&std::fs::read(&helper).map_err(|e| format!("{}: {e}", helper.display()))?);
     }
@@ -174,9 +174,10 @@ pub fn bootstrap_script(version: &str) -> String {
     .join("; ")
 }
 
-/// The files of `runtime/` as (path in the tar, contents, executable), sorted.
-fn runtime_files() -> Result<Vec<(String, Vec<u8>, bool)>, String> {
-    wire::tree::files(&crate::install::resources().join("runtime"), "runtime")
+/// The files of `runtime/`, built into the helper crate, as (path in the tar,
+/// contents, executable), sorted.
+fn runtime_files() -> Vec<(String, Vec<u8>, bool)> {
+    endeavor_remote::embedded::RUNTIME_FILES.iter().map(|(path, contents)| ((*path).to_owned(), contents.to_vec(), false)).collect()
 }
 
 /// Folders holding helpers for other platforms (scripts/helpers.sh):
@@ -275,7 +276,7 @@ impl HelperFix {
 fn install_tar(helper: &Path) -> Result<Vec<u8>, String> {
     let helper_bytes = std::fs::read(helper).map_err(|e| format!("{}: {e}", helper.display()))?;
     let mut entries = vec![("endeavor-remote".to_owned(), helper_bytes, true)];
-    entries.extend(runtime_files()?);
+    entries.extend(runtime_files());
     let mut tar = Vec::new();
     let mut dirs: Vec<String> = Vec::new();
     for (path, contents, executable) in &entries {
@@ -715,7 +716,7 @@ mod tests {
         let unpacked = tmp.join("endeavor-remote");
         assert_eq!(std::fs::read_to_string(&unpacked).unwrap(), "#!/bin/sh\necho hi\n");
         assert_eq!(std::fs::metadata(&unpacked).unwrap().permissions().mode() & 0o777, 0o755);
-        for (path, contents, _) in runtime_files().unwrap() {
+        for (path, contents, _) in runtime_files() {
             assert_eq!(std::fs::read(tmp.join(&path)).unwrap(), contents, "{path}");
         }
         let _ = std::fs::remove_dir_all(&tmp);

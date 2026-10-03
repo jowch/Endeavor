@@ -1844,6 +1844,7 @@ dependencies = [
 [[package]]
 name = "endeavor-remote"
 version = "0.1.0"
+source = "git+https://github.com/jowch/EndeavorMCP#5a376e52d16ce710c3ed82caa743f28896cffaa7"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
@@ -9752,6 +9753,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
+source = "git+https://github.com/jowch/EndeavorMCP#5a376e52d16ce710c3ed82caa743f28896cffaa7"
 dependencies = [
  "base64 0.22.1",
  "dunce",

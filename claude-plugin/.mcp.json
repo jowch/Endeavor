@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "endeavor": {
-      "command": "endeavor-remote",
-      "args": ["mcp", "--skills", "plugin", "--folder", "${CLAUDE_PROJECT_DIR}"]
-    }
-  }
-}

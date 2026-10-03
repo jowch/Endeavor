@@ -31,3 +31,6 @@ runtime/EndeavorRuntime/Manifest.toml
 
 # Frontend build tools (the built frontend/dist/page.js is committed)
 frontend/node_modules/
+
+# A local [patch] for building against an EndeavorMCP checkout (docs/testing.md)
+.cargo/config.toml

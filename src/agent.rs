@@ -471,7 +471,7 @@ async fn run(
                 .and_then(|m| m.get("steering")?.get("supported")?.as_bool())
                 .unwrap_or(false);
             // Read per session, so a Settings change applies to the next one.
-            let plugin = crate::install::resources().join("plugin").display().to_string();
+            let plugin = crate::install::plugin().map_err(|e| agent_client_protocol::Error::internal_error().data(e))?.display().to_string();
             let options = |tools: &Tools| session_options(crate::settings::Settings::load().personal_claude, &plugin, tools.server.is_some()).as_object().cloned();
             let _ = events.unbounded_send(AgentEvent::Ready);
 
@@ -916,7 +916,7 @@ mod tests {
     /// the runtime offers is on one side or the other, so a new tool needs a decision here.
     #[test]
     fn reads_run_without_asking_and_everything_else_asks() {
-        let tools: Vec<String> = serde_json::from_str::<Vec<serde_json::Value>>(include_str!("../crates/endeavor-remote/src/notebook_tools.json"))
+        let tools: Vec<String> = serde_json::from_str::<Vec<serde_json::Value>>(endeavor_remote::NOTEBOOK_TOOLS_JSON)
             .unwrap()
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_owned())
