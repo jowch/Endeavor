@@ -95,6 +95,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(windows, ignore = "downloads aren't ported to Windows yet (docs/windows.md)")]
     fn installs_a_verified_tarball_and_rejects_a_bad_one() {
         let tmp = std::env::temp_dir().join(format!("endeavor-install-{}", std::process::id()));
         let src = tmp.join("src/thing-1.0/bin");

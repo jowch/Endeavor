@@ -303,6 +303,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "the app data folder isn't ported to Windows yet (docs/windows.md)")]
     fn server_sessions_share_one_agent_folder_per_server() {
         let lab = HostId::Server("server-1".into());
         let cwd = lab.agent_cwd(Path::new("/home/jc/qpcr"));
