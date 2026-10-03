@@ -39,7 +39,24 @@ pub struct Listener {
     name: String,
     upstream: Mutex<Upstream>,
     changed: Condvar,
+    /// What the app knows of the runtime and its sessions, to hold back what
+    /// a runtime from an older build can't do (`older_runtime`).
+    watch: Mutex<Watch>,
+    /// Said when the runtime's build is known.
+    known: Condvar,
 }
+
+#[derive(Default)]
+struct Watch {
+    /// Whether the runtime is from another build than the app; none until it says.
+    older: Option<bool>,
+    /// Each session's run policy, by its key.
+    policies: HashMap<String, &'static str>,
+}
+
+/// How long a call that an older runtime couldn't carry out waits for the
+/// runtime to say which build it is, after the app attaches to it.
+const BUILD_WAIT: Duration = Duration::from_secs(2);
 
 /// Where a listener's connections go.
 enum Upstream {
@@ -57,7 +74,14 @@ impl Listener {
         let pluto = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         let bridge = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         let ports = [&pluto, &bridge].map(|l| l.local_addr().unwrap().port());
-        let listener = Arc::new(Listener { ports, name: name.to_owned(), upstream: Mutex::new(Upstream::None), changed: Condvar::new() });
+        let listener = Arc::new(Listener {
+            ports,
+            name: name.to_owned(),
+            upstream: Mutex::new(Upstream::None),
+            changed: Condvar::new(),
+            watch: Mutex::default(),
+            known: Condvar::new(),
+        });
         for (socket, target) in [(pluto, Target::Pluto), (bridge, Target::Bridge)] {
             let listener = listener.clone();
             std::thread::spawn(move || {
@@ -75,6 +99,14 @@ impl Listener {
         let upstream = self.upstream.lock().unwrap();
         let (upstream, _) = self.changed.wait_timeout_while(upstream, HOLD, |u| matches!(u, Upstream::Away { .. })).unwrap();
         match &*upstream {
+            Upstream::Up { mux, .. } if target == Target::Bridge && self.watch.lock().unwrap().older != Some(false) => {
+                let mux = mux.clone();
+                drop(upstream);
+                let Ok((ours, theirs)) = loopback_pair() else { return };
+                if mux.open(target, theirs).is_ok() {
+                    let _ = endeavor_remote::serve_guarded(connection, ours, &|session, tool, arguments| self.refusal(session, tool, arguments));
+                }
+            }
             Upstream::Up { mux, .. } => {
                 let mux = mux.clone();
                 drop(upstream);
@@ -91,8 +123,31 @@ impl Listener {
     }
 
     fn attach(&self, mux: Arc<Mux>, mcp: wire::McpTransport, token: String) {
+        self.watch.lock().unwrap().older = None;
         *self.upstream.lock().unwrap() = Upstream::Up { mux, mcp, token };
         self.changed.notify_all();
+    }
+
+    /// The runtime said which build it came from: whether that's another than the app's.
+    pub fn runtime_build(&self, older: bool) {
+        self.watch.lock().unwrap().older = Some(older);
+        self.known.notify_all();
+    }
+
+    /// Session `key`'s run policy changed ("ask", "auto" or "plan").
+    pub fn set_policy(&self, key: u64, policy: &'static str) {
+        self.watch.lock().unwrap().policies.insert(key.to_string(), policy);
+    }
+
+    /// Why the agent's call to `tool` from session `session` is refused here:
+    /// something the runtime, from an older build, can't do safely. A runtime
+    /// that hasn't said which build it is yet counts as older once it has had
+    /// time to say.
+    fn refusal(&self, session: &str, tool: &str, arguments: &serde_json::Value) -> Option<String> {
+        let watch = self.watch.lock().unwrap();
+        let why = crate::older_runtime::refusal(watch.policies.get(session).copied().unwrap_or("ask"), tool, arguments)?;
+        let (watch, _) = self.known.wait_timeout_while(watch, BUILD_WAIT, |w| w.older.is_none()).unwrap();
+        (watch.older != Some(false)).then_some(why)
     }
 
     /// The runtime is away while `why` holds, if it was up.
@@ -151,6 +206,16 @@ impl Listener {
     fn forget(&self, mux: &Arc<Mux>) {
         self.away(format!("Endeavor lost the connection to {} and is reconnecting by itself. Try again in a moment.", self.name), Some(mux));
     }
+}
+
+/// Two ends of a loopback connection: one to read and write here, one for the relay.
+fn loopback_pair() -> std::io::Result<(TcpStream, TcpStream)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let ours = TcpStream::connect(listener.local_addr()?)?;
+    let (theirs, _) = listener.accept()?;
+    let _ = ours.set_nodelay(true);
+    let _ = theirs.set_nodelay(true);
+    Ok((ours, theirs))
 }
 
 /// A runtime the app is attached to, as its host's listener serves it.
@@ -283,6 +348,9 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
         .args(["--depot", &depot])
         // This Mac's state folder is its own, so another node name means a renamed Mac.
         .arg("--any-node");
+    if let Some(build) = crate::remote::build() {
+        command.args(["--build", build]);
+    }
     if !keep_running {
         command.arg("--quit-with-client");
     }
@@ -816,6 +884,23 @@ mod tests {
     #[test]
     fn an_sse_runtime_away_closes_connections_as_before() {
         assert_eq!(post(&away(wire::McpTransport::Sse), "secret", r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#), "");
+    }
+
+    #[test]
+    fn a_runtime_from_an_older_build_runs_nothing_in_ask_to_run() {
+        use std::io::{Read, Write};
+        let listener = super::Listener::start("lab-server").unwrap();
+        listener.attach(wire::relay::Mux::new(std::io::sink()), wire::McpTransport::Http, "secret".into());
+        listener.runtime_build(true);
+        listener.set_policy(7, "ask");
+        let mut socket = std::net::TcpStream::connect(("127.0.0.1", listener.bridge_port())).unwrap();
+        let body = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"execute_cell","arguments":{"cell_id":"a"}}}"#;
+        let request = format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Endeavor-Session: 7\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        socket.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        let _ = socket.read_to_string(&mut response);
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains(r#"\"error\":\"older_runtime\""#) && response.contains(r#""isError":true"#), "{response}");
     }
 
     #[test]

@@ -100,6 +100,9 @@ pub struct Connection {
     /// Julia exited by itself (not a Stop, a restart or a quit), and hasn't
     /// been started since.
     pub crashed: bool,
+    /// Whether its runtime is from another Endeavor build (`older_runtime`);
+    /// none until the runtime says which.
+    pub older: Option<bool>,
 }
 
 /// A dropped server connection.
@@ -219,6 +222,7 @@ impl Connection {
             cells: serde_json::Value::Null,
             idle_stopped: HashSet::new(),
             watching: Arc::default(),
+            older: None,
             lost: None,
             crashed: false,
         }
@@ -797,11 +801,14 @@ impl Workspace {
         if self.active_session().is_some_and(|s| s.place.host == *host) {
             self.follow_folder(cx);
         }
+        if let Some(connection) = self.connections.get_mut(host) {
+            connection.older = None;
+        }
         // A new runtime knows no session's notebook or policy.
         let on_host: Vec<&Session> = self.sessions.iter().filter(|s| s.place.host == *host).collect();
         let bound: Vec<(u64, String)> = on_host.iter().filter_map(|s| Some((s.key, s.notebook_path.clone()?))).collect();
         let folders: Vec<(u64, std::path::PathBuf)> = on_host.iter().map(|s| (s.key, s.place.path.clone())).collect();
-        let planning: Vec<u64> = on_host.iter().filter(|s| s.policy() == "plan").map(|s| s.key).collect();
+        let policies: Vec<(u64, &'static str)> = on_host.iter().map(|s| (s.key, s.policy())).collect();
         let waiting: Vec<u64> = on_host.iter().filter(|s| s.agent_waiting).map(|s| s.key).collect();
         for (key, path) in bound {
             let bridge = bridge.clone();
@@ -811,8 +818,8 @@ impl Workspace {
             let bridge = bridge.clone();
             cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
         }
-        for key in planning {
-            self.send_policy(key, "plan", cx);
+        for (key, policy) in policies {
+            self.send_policy(key, policy, cx);
         }
         self.reopen_notebooks(host, cx);
         self.watch_notebooks(host, cx);
@@ -858,6 +865,18 @@ impl Workspace {
     }
 
     fn on_notebooks_event(&mut self, host: &HostId, mut event: serde_json::Value, cx: &mut Context<Self>) {
+        let Some(connection) = self.connections.get_mut(host) else { return };
+        let older = crate::older_runtime::is_older(event["build"].as_str(), crate::remote::build());
+        if connection.older != Some(older) {
+            connection.older = Some(older);
+            if let Some(listener) = self.listeners.get(host) {
+                listener.runtime_build(older);
+            }
+            for session in self.sessions.iter_mut().filter(|s| s.place.host == *host && !s.agent_waiting) {
+                session.runtime_build(older);
+            }
+            cx.notify();
+        }
         let Some(connection) = self.connections.get_mut(host) else { return };
         // A notebook the runtime just stopped for being idle shows stopped, with
         // Start, in every session on it. Only new entries count: a stale one must

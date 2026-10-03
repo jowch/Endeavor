@@ -8,17 +8,7 @@ use std::io::Read;
 
 use serde_json::{Value, json};
 
-/// Does this notebook tool call run notebook code?
-pub fn runs_code(tool: &str, input: &Value) -> bool {
-    match tool {
-        // delete_cell re-runs the deleted cell's dependents (and can't be undone).
-        "execute_cell" | "submit_changes" | "run_all_cells" | "allow_execution" | "delete_cell" => true,
-        // A shell command on a session's server.
-        "run_shell" => true,
-        "add_cell" | "edit_cell" => input["run_after"].as_bool() == Some(true),
-        _ => false,
-    }
-}
+pub use endeavor_remote::runs_code;
 
 /// The hook's answer for one Claude Code PreToolUse payload: "ask" for notebook
 /// calls that run code, nothing (normal flow) otherwise.

@@ -388,6 +388,11 @@ pub struct Session {
     compacting: Option<Option<(u64, u64)>>,
     /// The policy last sent to the runtime.
     policy_sent: &'static str,
+    /// Whether its host's runtime is from another Endeavor build
+    /// (`older_runtime`); none until the runtime says which.
+    pub runtime_older: Option<bool>,
+    /// The older runtime's note is still to show (after the history, for a reopened session).
+    older_note: bool,
     /// On a cluster: what its job asks for (from the resources chip).
     pub resources: Option<wire::slurm::Resources>,
     /// The mode to put the agent in once it is up: the new-session screen's pick,
@@ -595,6 +600,8 @@ impl Session {
             commands: Vec::new(),
             compacting: None,
             policy_sent: "ask",
+            runtime_older: None,
+            older_note: false,
             resources: None,
             start_mode: None,
             focus: RefCell::new(None),
@@ -888,11 +895,32 @@ impl Session {
     }
 
     /// The runtime policy for the current mode: plan mode is read-only there too
-    /// (Claude's plan mode only restricts its own tools, not ours).
+    /// (Claude's plan mode only restricts its own tools, not ours); otherwise
+    /// runs ask first unless the session runs without asking.
     pub fn policy(&self) -> &'static str {
         match &self.modes {
             Some(m) if m.current_mode_id.to_string() == "plan" => "plan",
+            _ if self.run_without_asking => "auto",
             _ => "ask",
+        }
+    }
+
+    /// Its host's runtime said which build it is: from another build than
+    /// the app's (`older`) or not. An older one gets a note, once.
+    pub fn runtime_build(&mut self, older: bool) {
+        if self.runtime_older == Some(older) {
+            return;
+        }
+        self.runtime_older = Some(older);
+        self.older_note = older;
+        self.note_older_runtime();
+    }
+
+    fn note_older_runtime(&mut self) {
+        if self.older_note && !self.replaying {
+            self.older_note = false;
+            let host = self.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());
+            self.note(crate::older_runtime::note(&host));
         }
     }
 
@@ -1023,6 +1051,7 @@ impl Session {
         if std::mem::take(&mut self.cut_off) {
             self.push(Entry::Failed(Failed { kind: FailedKind::CutOff, raw: None, details_open: false, used: false }));
         }
+        self.note_older_runtime();
         let mut effects: Vec<Effect> = self.replayed_path.take().map(Effect::ReopenNotebook).into_iter().collect();
         if let Some(mode) = self.start_mode.take() {
             effects.extend(self.set_mode(&mode));
@@ -2310,8 +2339,8 @@ mod tests {
         // Leaving plan tells the runtime too.
         assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("ask")] if m.to_string() == "auto"));
         assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
-        // Auto is the same agent mode, with runs no longer asking.
-        assert!(s.cycle_mode().is_empty() && s.run_without_asking);
+        // Auto is the same agent mode, with runs no longer asking: only the runtime hears.
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetPolicy("auto")]) && s.run_without_asking);
         assert_eq!(s.mode_name().as_deref(), Some("Auto"));
         assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan")] if m.to_string() == "plan"));
         assert!(!s.run_without_asking);
@@ -2348,10 +2377,10 @@ mod tests {
             (s, effects)
         };
 
-        // Auto picked on the new-session screen: the agent is asked, and runs stop asking.
+        // Auto picked on the new-session screen: the agent is asked, and the runtime told runs stop asking.
         let (mut s, effects) = start("default", 2);
-        assert!(matches!(effects.as_slice(), [Effect::SetMode(m)] if m.to_string() == "auto"));
-        assert_eq!((s.mode_name().as_deref(), s.policy()), (Some("Auto"), "ask"));
+        assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("auto")] if m.to_string() == "auto"));
+        assert_eq!((s.mode_name().as_deref(), s.policy()), (Some("Auto"), "auto"));
         assert_eq!(s.mode(), Some(Mode { agent: "auto".into(), run_without_asking: true }));
 
         // A config change's reply, sent before the switch, comes back after the
@@ -2380,6 +2409,28 @@ mod tests {
     }
 
     #[test]
+    fn a_runtime_from_an_older_build_gets_a_note_once() {
+        let mut s = Session::new(1, Place::local("/tmp"), Some("gpu-box".into()));
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.runtime_build(false);
+        assert!(s.entries.is_empty(), "the app's own build: nothing to say");
+        s.runtime_build(true);
+        s.runtime_build(true);
+        let notes: Vec<String> = s.entries.iter().filter_map(|e| if let Entry::Note(n) = e { Some(n.to_string()) } else { None }).collect();
+        assert_eq!(
+            notes,
+            ["Julia on gpu-box is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let Claude run code."]
+        );
+
+        // A reopened session says so after its history.
+        let mut s = Session::loading(2, SessionId::new("old"), Place::local("/tmp"), None, "Fit".into());
+        s.runtime_build(true);
+        assert!(s.entries.is_empty(), "not while the history loads");
+        s.started(Started::new(SessionId::new("old"), None, None));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with("Julia on This Mac is from an older Endeavor.")));
+    }
+
+    #[test]
     fn the_mode_menu_picks_a_mode_directly() {
         let mut s = Session::new(1, Place::local("/tmp/project"), None);
         let modes = SessionModeState::new(
@@ -2391,7 +2442,7 @@ mod tests {
         assert_eq!(names, ["Manual", "Ask to run", "Auto", "Plan"]);
         assert_eq!(s.current_mode(), Some(0));
         let auto = s.mode_choices()[2].clone();
-        assert!(matches!(s.choose_mode(&auto).as_slice(), [Effect::SetMode(m)] if m.to_string() == "auto"));
+        assert!(matches!(s.choose_mode(&auto).as_slice(), [Effect::SetMode(m), Effect::SetPolicy("auto")] if m.to_string() == "auto"));
         assert_eq!((s.current_mode(), s.mode_name().as_deref()), (Some(2), Some("Auto")));
         let plan = s.mode_choices()[3].clone();
         assert!(matches!(s.choose_mode(&plan).as_slice(), [Effect::SetMode(_), Effect::SetPolicy("plan")]));

@@ -38,6 +38,7 @@ mod network;
 mod notebook_pane;
 mod notice;
 mod offline;
+mod older_runtime;
 mod opening;
 mod orbit;
 mod outbox;
@@ -871,7 +872,10 @@ impl Workspace {
         let Some(bridge) = self.bridge(&host) else { return self.ensure_runtime(&host, cx) };
         let tools = agent::Tools { bridge: bridge.clone(), server: session.server.clone() };
         let folder = session.place.path.clone();
+        let policy = session.policy();
         cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
+        self.send_policy(key, policy, cx);
+        let older = self.connections.get(&host).and_then(|c| c.older);
         let cwd = host.agent_cwd(&session.place.path);
         let _ = std::fs::create_dir_all(&cwd);
         let command = match session.id.clone() {
@@ -881,6 +885,9 @@ impl Workspace {
         let _ = self.agent_tx.unbounded_send(command);
         if let Some(session) = self.session_mut(key) {
             session.agent_waiting = false;
+            if let Some(older) = older {
+                session.runtime_build(older);
+            }
         }
     }
 
@@ -1434,6 +1441,10 @@ impl Workspace {
     }
 
     pub fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
+        let host = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone());
+        if let Some(listener) = host.and_then(|host| self.listeners.get(&host)) {
+            listener.set_policy(key, policy);
+        }
         let Some(bridge) = self.session_bridge(key) else { return };
         // ponytail: a failed send leaves the runtime's policy stale until the next change.
         cx.background_executor().spawn(async move { pluto::set_policy(&bridge, key, policy) }).detach();

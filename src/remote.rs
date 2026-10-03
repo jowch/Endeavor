@@ -141,6 +141,13 @@ pub fn version() -> Result<String, String> {
     Ok(format!("{}-{:016x}", env!("CARGO_PKG_VERSION"), hash.0))
 }
 
+/// `version()`, worked out once: the build a runtime this app starts
+/// reports, which the app compares with a runtime's own (`older_runtime`).
+pub fn build() -> Option<&'static str> {
+    static BUILD: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    BUILD.get_or_init(|| version().map_err(|e| eprintln!("Couldn't work out this build's version: {e}")).ok()).as_deref()
+}
+
 /// FNV-1a: stable across builds, unlike std's hasher.
 struct Fnv(u64);
 
@@ -175,7 +182,7 @@ pub fn bootstrap_script(version: &str) -> String {
         r#"echo "ENDEAVOR $(uname -s) $(uname -m) $s""#,
         r#"read -r jf && read -r jv && read -r ln && read -r sd || exit 1"#,
         r#"if [ $s = need ]; then read -r n || exit 1; t="$d.part.$$"; rm -rf "$t"; mkdir -p "$t" && head -c "$n" | (cd "$t" && tar xf -) || { rm -rf "$t"; echo "Endeavor: installing into $d failed" >&2; exit 1; }; rm -rf "$d"; mv "$t" "$d"; fi"#,
-        r#"exec "$d/endeavor-remote" connect --state-dir "$c/$sd" --launcher "$ln" "$jf" "$jv" --runtime "$d/runtime" --depot "$c/depot:""#,
+        r#"exec "$d/endeavor-remote" connect --state-dir "$c/$sd" --launcher "$ln" "$jf" "$jv" --runtime "$d/runtime" --depot "$c/depot:" --build "$v""#,
     ]
     .join("; ")
 }
