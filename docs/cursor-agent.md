@@ -1,8 +1,11 @@
 # Cursor as a second agent
 
-Findings from a spike on 2026-09-27, parked for now. Cursor can run
-Endeavor's notebook loop. Before adding it, Endeavor needs to stop depending
-on Claude-only behavior in two places: tool results and skills.
+Findings from a spike on 2026-09-27 and a live test in the app on
+2026-10-02. Cursor is parked. It can run Endeavor's notebook loop. The
+agent-neutral groundwork it needed is done (tool calls recognised by name,
+tool results from the runtime, skills through the notebook MCP server, runs
+held by the runtime; see [other-agents.md](other-agents.md)). What is left
+below is Cursor-specific.
 
 ## How it was tested
 
@@ -51,25 +54,15 @@ on Claude-only behavior in two places: tool results and skills.
 
 In order of importance:
 
-1. **Tool results are never sent.**
-   - A finished MCP call's `rawOutput` is only `{"success": true}` or
-     `{"rejected": true}`.
-   - The call starts titled "MCP: tool". An update renames it
-     "<server>: edit_cell" (then "pluto: edit_cell"; the server is now named
-     `notebook`) and sets `rawInput` to `{providerIdentifier, toolName, args}`.
-   - Endeavor recognises notebook tool calls by Claude's
-     `mcp__notebook__<tool>` title (`celldiff::notebook_tool`, used in
-     `runs.rs`, `details.rs` and `session.rs`'s `on_tool_update`). So under Cursor there are no cell diffs, no run
-     summaries and no tool details. The pane also doesn't follow a notebook
-     the agent opens.
-   - **Fix.** Identify tools by `rawInput.toolName` as well as by the title.
-     Get results from the runtime, not the agent: the runtime can keep each
-     call's result for the app to look up.
-   - Tool-call ids contain a newline.
-2. **Skills and hooks don't load.**
+1. **Skills reach Cursor only if it calls the guide.**
+   - Endeavor's skills come from the notebook MCP server's `notebook_guide`
+     tool. Cursor's MCP `instructions` never reach the model, and tool
+     descriptions load lazily, so calling the guide first depends on the
+     model choosing to (see the live test below).
    - `--plugin-dir` loads Endeavor's Claude-format `plugin/` as is in print
-     mode (`-p`). The `acp` command never passes it on.
-   - Linking the plugin into `~/.cursor/plugins/local/` doesn't load it either.
+     mode (`-p`). The `acp` command never passes it on. Linking the plugin
+     into `~/.cursor/plugins/local/` doesn't load it either. Worth asking
+     Cursor to honour `--plugin-dir` under `acp`.
    - Neither Claude `PreToolUse` hooks nor Cursor `beforeMCPExecution` hooks
      fire for MCP calls under `acp`.
    - Skills do load from `.cursor/skills`, `.claude/skills` or
@@ -79,20 +72,15 @@ In order of importance:
    - Cursor always loads the user's global `~/.claude/skills` and
      `~/.cursor/skills-cursor`. Endeavor has no way to keep the user's personal
      setup off, as it can for Claude.
-   - **Preferred fix.** Deliver the skills through the notebook MCP server, which
-     works for any agent. That could be MCP `instructions`, or a guide tool
-     that the model is told to call first. Whether Cursor passes
-     `instructions` to the model is untested.
-   - **Also worth doing.** Ask Cursor to honour `--plugin-dir` under `acp`.
-3. **Every notebook call asks for permission, reads included.**
+2. **Every notebook call asks for permission, reads included.**
    - The card offers Allow once, Allow always and Reject. Its title is like
-     "pluto-read_cell: read_cell" (server name at the time; now `notebook`),
-     and its content is the arguments as JSON.
+     "notebook-read_cell: read_cell", and its content is the arguments as
+     JSON.
    - Reject works.
    - Allow always likely writes the user's global Cursor config, so Endeavor
      should never answer it for the user.
    - Endeavor could answer Allow once to read-only notebook tools itself.
-4. **Plan approval is missing.**
+3. **Plan approval is missing.**
    - In plan mode Cursor sends a standard `plan` update. It then sends its own
      request, `cursor/create_plan`, with the plan's name, overview and
      markdown. Endeavor answers unknown requests with an error, so the plan is
@@ -100,7 +88,7 @@ In order of importance:
    - The CLI also has `cursor/ask_question`, `cursor/update_todos`,
      `cursor/task`, `cursor/generate_image`, `cursor/canvas` and
      `cursor/list_available_models`.
-5. **Choosing a model changes the user's global Cursor default.**
+4. **Choosing a model changes the user's global Cursor default.**
    - The only config options are `mode` and `model`. There are about 40
      models, some from providers other than Anthropic.
    - Effort is part of each model's id, as in
@@ -111,7 +99,7 @@ In order of importance:
    - Endeavor re-applies the last-picked model to every new session, so it
      would keep overwriting that default. Keep a separate saved model per
      agent, or don't re-apply it for Cursor.
-6. **Smaller gaps.**
+5. **Smaller gaps.**
    - **Send now.** There is no steering: `_session/steering` returns "Method
      not found". Endeavor's fallback, which cancels the turn and re-queues the
      message, still applies.
@@ -122,27 +110,25 @@ In order of importance:
      `<attached …>` markers.
    - **Claude named in the UI.** "Claude connected." and "Fix with Claude" are
      hard-coded.
-   - **Commands.** `available_commands_update`, about 30 commands including
-     personal skills, is stored but not shown.
+   - **Commands.** `available_commands_update` lists about 30 commands,
+     including personal skills.
    - **Leftovers on the user's machine.** Each session leaves a folder in
-     `~/.cursor/acp-sessions/`. The CLI also starts a `cursor-agent
-     worker-server` process that keeps running after the CLI exits.
+     `~/.cursor/acp-sessions/` and one in `~/.cursor/projects/`. The CLI also
+     starts a `cursor-agent worker-server` process that keeps running after
+     the CLI exits.
 
 ## Order of work when it resumes
 
-1. **Agent-neutral groundwork, useful for Claude too.**
-   - Identify tools by name, not title.
-   - Get tool results from the runtime.
-   - Deliver skills through the MCP server.
-   - Put per-agent facts in one table in `agent.rs`: launch command, sign-in
-     check, session `_meta`, and the name shown in the UI.
-   - Run one ACP connection per agent.
+1. **The rest of the agent-neutral work** ([other-agents.md](other-agents.md)
+   items 5 to 9): per-agent facts in one table in `agent.rs` (launch
+   command, sign-in check, session `_meta`, the name shown in the UI), one
+   ACP connection per agent, a per-agent saved model, and replay that splits
+   joined messages.
 2. **An agent picker on the new-session panel.**
 3. **Cursor-specific handling.**
    - Auto-approve read-only notebook tools.
    - Show `cursor/create_plan` as a plan-approval card.
    - A model picker that warns it changes the Cursor CLI default.
-   - Split joined user messages on replay.
 
 ## Testing note
 
@@ -153,7 +139,8 @@ a real machine, because that changes the user's Cursor default.
 
 ## 2026-10-02: a second live test
 
-Findings from a live session in the app, after the groundwork above landed.
+Findings from a live session in the app, with the agent-neutral groundwork
+partly in place.
 
 - Same CLI build, `2026.09.26-dd393fe`. `initialize`'s answer is unchanged.
   Tool-call ids no longer carry a newline.
@@ -163,8 +150,8 @@ Findings from a live session in the app, after the groundwork above landed.
 - MCP `instructions` don't reach the model, and tool descriptions load
   lazily. In one fresh session the guide was called second; in another it
   was never called, and that session went on to write a two-expression cell
-  and hit the error. A tool-misuse error now points an agent without the
-  plugin at `notebook_guide`, because of this.
+  and hit the error. Because of this, a tool-misuse error points an agent
+  without the plugin at `notebook_guide`.
 - The notebook call sequence: a placeholder `tool_call` ("MCP: tool", empty
   `rawInput`), a `tool_call_update` ("notebook: `<tool>`", `rawInput`
   `{providerIdentifier, toolName, args}`), `in_progress`, a
@@ -173,10 +160,11 @@ Findings from a live session in the app, after the groundwork above landed.
   when the tool call itself failed.
 - Every notebook call asks for permission, reads included (Allow once,
   Allow always, Reject). Cursor's own Find, Read and grep don't ask.
-- No hooks fire. The runtime's "ask" policy lets runs through; only
-  Cursor's own prompt stops them, and that depends on the user's global
-  Cursor approval settings. Work item 3 (ask before a run without a hook)
-  is still needed.
+- No hooks fire. At the time, the runtime's "ask" policy let runs through;
+  only Cursor's own prompt stopped them, and that depends on the user's
+  global Cursor approval settings. The runtime now holds runs itself
+  ([other-agents.md](other-agents.md), work item 3); no test of that with
+  Cursor is recorded.
 - Plan mode: a `plan` update, a "Create Plan" tool call with `rawInput`
   `{"_toolName": "createPlan", ...}`, then Cursor's own request,
   `cursor/create_plan`, carrying `{toolCallId, name, overview, plan,
