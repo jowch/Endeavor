@@ -249,12 +249,12 @@ in an EndeavorMCP checkout, as
 says:
 
 ```sh
-cargo test -p endeavor-remote --test e2e_julia -- --ignored --nocapture
+cargo test -p endeavor-mcp --test e2e_julia -- --ignored --nocapture
 ```
 
 ## Changing EndeavorMCP and the app together
 
-Endeavor depends on EndeavorMCP's crates (`wire`, `endeavor-remote`) as a
+Endeavor depends on EndeavorMCP's crates (`wire`, `endeavor-mcp`) as a
 Cargo git dependency. `Cargo.lock` pins the commit. To build the app against
 a local EndeavorMCP checkout, add a `[patch]` in `.cargo/config.toml`, which
 git ignores:
@@ -262,7 +262,7 @@ git ignores:
 ```toml
 [patch."https://github.com/jowch/EndeavorMCP"]
 wire = { path = "/path/to/EndeavorMCP/crates/wire" }
-endeavor-remote = { path = "/path/to/EndeavorMCP/crates/endeavor-remote" }
+endeavor-mcp = { path = "/path/to/EndeavorMCP/crates/endeavor-mcp" }
 ```
 
 The patch also takes `runtime/` and the skills from that checkout, since the
@@ -275,7 +275,7 @@ To land a change:
 
 1. Commit and push EndeavorMCP's `main`.
 2. Delete the `[patch]`, then pin the new commit:
-   `cargo update -p endeavor-remote`. It moves `wire` too, since both come
+   `cargo update -p endeavor-mcp`. It moves `wire` too, since both come
    from the same repository. It may also re-pick which `windows-sys`
    version a few crates use; that's harmless, but you can instead change the
    commit hash in the two `source` lines by hand and check with
@@ -289,7 +289,7 @@ To land a change:
 - `ENDEAVOR_TEST_UNREACHABLE`: a file path. While the file exists, the
   `local-test` server can't be reached. To show "Can't reach", connect a
   session to a server whose SSH host is `local-test`, create the file, and end
-  that server's `endeavor-remote connect` process. Opening Settings connects
+  that server's `endeavor connect` process. Opening Settings connects
   every server too, so the same works from Where notebooks run without a
   session.
 - `ENDEAVOR_TEST_PICK_JULIA`: a file path. While the file exists, Settings'
@@ -319,7 +319,7 @@ To land a change:
 - Claude's process stopping: end the test app's adapter, its child
   `node …/claude-agent-acp/dist/index.js` (`pgrep -P <app pid> -f
   claude-agent-acp`). Twice within a minute leaves it stopped. Julia
-  stopping: end the runtime's Julia (the child of `endeavor-remote --helper
+  stopping: end the runtime's Julia (the child of `endeavor --helper
   core`) for the host-wide page. For one notebook's page, end that
   notebook's own Julia, a child of the runtime's Julia (`pgrep -P <runtime
   Julia pid>`; one per running notebook), with `kill -9`, idle or while a

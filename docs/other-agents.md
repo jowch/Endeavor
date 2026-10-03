@@ -62,7 +62,7 @@ In order. Each part is also useful to Claude, or harmless to it.
    "notebook-read_cell: read_cell", "edit_cell (notebook MCP Server)"); a
    server name must end the word there, so `notebook_guide` isn't read as the
    server alone. The tool must be one the runtime offers
-   (`endeavor_remote::is_tool`). A permission request with no `rawInput`
+   (`endeavor_mcp::is_tool`). A permission request with no `rawInput`
    (Cursor's) takes the input already recorded on the matching
    `tool_call_update`. Everything after that, cards, approvals, run previews,
    diffs, the transcript and the pane following a new notebook, asks
@@ -71,7 +71,7 @@ In order. Each part is also useful to Claude, or harmless to it.
    (`permits::rule_words`).
 2. **Get tool results from the runtime.** Done. The core keeps each agent
    session's last 64 tool results in memory
-   (`crates/endeavor-remote/src/results.rs`), recorded before the reply goes
+   (`crates/endeavor-mcp/src/results.rs`), recorded before the reply goes
    out: the call's text content, whether it failed, and its key. The key is
    the session (`X-Endeavor-Session`), the id the agent's client gave the
    call when it sends one, and the tool and its arguments (in one canonical
@@ -93,14 +93,14 @@ In order. Each part is also useful to Claude, or harmless to it.
    while a reopened session replays: the runtime keys results by the app's
    session key, which a new launch doesn't share.
 3. **Ask before a run without a hook.** Done, in the runtime.
-   `endeavor_remote::runs_code` is the one list of calls that run code
+   `endeavor_mcp::runs_code` is the one list of calls that run code
    (`execute_cell`, `submit_changes`, `run_all_cells`, `allow_execution`,
    `delete_cell`, `run_shell`, and `edit_cell` or `add_cell` with
    `run_after`). The app tells the runtime each session's policy ("ask",
    "auto" or "plan") with `asks: true`; an app that doesn't send it doesn't
    get its runs held. In "ask", after the plan, host and one-notebook
    refusals, such a call waits in the runtime
-   (`crates/endeavor-remote/src/asks.rs`) and shows in the event stream's
+   (`crates/endeavor-mcp/src/asks.rs`) and shows in the event stream's
    `asks` (`{id, owner, call_id, tool, arguments, since}`). The app shows it
    as a run card and answers with `endeavor/answer_run {id, allow,
    user_ran}`; `user_ran` carries the cells the user's own run reached
@@ -124,7 +124,7 @@ In order. Each part is also useful to Claude, or harmless to it.
    Claude setup, a folder rule). The app adds `edits: true` to
    `endeavor/set_policy` in Manual (Claude's `default` mode); an older
    runtime ignores it and still holds runs. With it, the runtime holds every
-   call `endeavor_remote::changes_notebook` names (`edit_cell`, `edit_cells`,
+   call `endeavor_mcp::changes_notebook` names (`edit_cell`, `edit_cells`,
    `add_cell`, `delete_cell`, `move_cell`, `fold_cell`, `new_notebook`)
    whatever the run policy, so an edit still asks after runs were allowed
    for the session; `asks_first` is the one rule, used by the runtime and the
@@ -161,7 +161,7 @@ In order. Each part is also useful to Claude, or harmless to it.
    refused: an older runtime can't hold edits, so the app leaves the agent's
    own prompt to ask.
 4. **Give the agent the skills through the notebook MCP server.** Done, as a
-   guide tool (`crates/endeavor-remote/src/guide.rs`). The server's MCP
+   guide tool (`crates/endeavor-mcp/src/guide.rs`). The server's MCP
    `instructions` are three sentences: what the tools are for, and to call
    `notebook_guide` once before the first notebook call. With no arguments
    the tool returns the three skills (`pluto-session`, `pluto-workflow`,

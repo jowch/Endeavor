@@ -40,7 +40,7 @@ The remaining work is ranked at the end of this page.
   "Show in Files". Both come from `src/platform.rs`.
 - **First-run setup.** The app downloads and checks the pinned Linux Node.js,
   runs `npm ci` for the adapter, and precompiles Pluto and EndeavorRuntime.
-- **Local runtime.** `endeavor-remote` starts Julia 1.12.6 and reports the
+- **Local runtime.** `endeavor` starts Julia 1.12.6 and reports the
   Pluto and MCP ports. Quitting the app stops Julia.
 - **Notebook.** Pluto loads in the WebKitGTK web view at the right place and
   size, and follows the pane when the sidebar opens or the window resizes. Run
@@ -68,7 +68,7 @@ The remaining work is ranked at the end of this page.
 - **Servers.** From the Linux client, Add server, Test connection, a session on
   the server and running its notebook all work. Tested against the VM itself
   over `ssh localhost`. A Linux client sends a Linux server of its own
-  architecture its own `target/*/endeavor-remote`.
+  architecture its own `target/*/endeavor-helper`, installed there as `endeavor`.
 - **Browse… folder picker.** GPUI asks xdg-desktop-portal, whose GTK backend
   shows its folder chooser. The chosen folder becomes the session's folder.
   The picker starts in Recent, not in the current folder.
@@ -181,7 +181,7 @@ screenshots.
 5. Stop the app, Openbox and Xvfb:
 
    ```
-   ssh endeavor-linux 'pkill -x endeavor; pkill -x openbox; pkill -x Xvfb'
+   ssh endeavor-linux 'pkill -xf target/debug/endeavor; pkill -x openbox; pkill -x Xvfb'
    ```
 
 In an OrbStack machine, `xdg-open` is OrbStack's own version, which opens URLs

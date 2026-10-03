@@ -54,7 +54,7 @@ Two things make this more than a port:
 
 Today:
 
-- The helper starts `endeavor-remote core`, which serves the agent's MCP
+- The helper starts `endeavor core`, which serves the agent's MCP
   tools plus the app's `/call` methods and `/events` stream, and starts
   Julia (`runtime/boot.jl` and `EndeavorRuntime`, the Pluto adapter) as its
   child ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)). The core writes `runtime.json`
@@ -79,7 +79,7 @@ Today:
 | Notebook detection, `Backend::of_file` and `crates/wire/src/notebooks.rs` | Pluto header, `# ╔═╡` cells | also detect `app = marimo.App` in `.py` files; parse `@app.cell` for the new-session preview |
 | Notebook URL and ID, `Backend::notebook_url` | `/edit?id=` | per backend (marimo's form, believed `/?file=`, to confirm) |
 | Page script, `frontend/` | Pluto DOM, `--pluto-*` variables | a second adapter for marimo's DOM and CSS variables |
-| Runtime launch, `endeavor-remote`, `remote.rs`, `runtime.rs` | find or download Julia, ship `runtime/` | also find or download uv; ship `runtime-py/` |
+| Runtime launch, `endeavor-mcp`, `remote.rs`, `runtime.rs` | find or download Julia, ship `runtime/` | also find or download uv; ship `runtime-py/` |
 | Runtime state, `runtime.json` | one runtime per host | one per backend per host, each started lazily when a notebook of its kind opens |
 | Settings, splash | "My julia", "Restart Julia" | per backend, shown only once that backend is used |
 | Skills, prompt text in `main.rs` | Pluto and Julia content | marimo versions, chosen by the session's notebook |
@@ -181,7 +181,7 @@ To keep marimo notebooks as trustworthy a record, the runtime:
 - **Rust:** notebook detection and preview parsing for marimo files; the
   `Backend` choices.
 - **Remote helper:** the fake-runtime tests in
-  `crates/endeavor-remote/tests/connect.rs` gain a Python-runtime case.
+  `crates/endeavor-mcp/tests/connect.rs` gain a Python-runtime case.
 
 ## Build order
 

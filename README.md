@@ -12,7 +12,7 @@ See [docs/roadmap.md](docs/roadmap.md) for status and
 The notebook tools (the runtime, the MCP server, the server helper and the
 Pluto skills) live in [EndeavorMCP](https://github.com/jowch/EndeavorMCP),
 which the app depends on as a Cargo git dependency. They also work without
-the app: run `endeavor-remote serve` on a workstation or cluster node and
+the app: run `endeavor serve` on a workstation or cluster node and
 connect any MCP agent and a browser. See
 [EndeavorMCP's README](https://github.com/jowch/EndeavorMCP#readme).
 
@@ -20,7 +20,7 @@ Run from source:
 
 ```
 scripts/helpers.sh   # Linux servers' runtime helper, into target/helpers
-cargo build          # the app and its own helper, endeavor-remote
+cargo build          # the app and its helper for macOS servers, endeavor-helper
 cargo run
 ```
 

@@ -104,7 +104,7 @@ binary.
   manager embeds each notebook's env in its `.jl` file.
 - **"Use my Julia" ≠ "use my global env".** The opt-in swaps only the binary;
   Pluto and the adapter still come from the app's pinned project.
-- **Topology.** The `endeavor-remote` helper starts the runtime's core, which
+- **Topology.** The `endeavor` helper starts the runtime's core, which
   serves the bridge (the agent's MCP over Streamable HTTP, and the app's
   `/call` and `/events`) and starts Julia running Pluto as its child. The
   core writes the ports, token and Pluto's secret to `runtime.json`, which

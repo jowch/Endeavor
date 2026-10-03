@@ -11,7 +11,7 @@ comes from reading the code, the dependencies' sources, and
 
 **Summary:** a Windows port is feasible, and no single item blocks it. It is
 about **6–8 weeks** of work for one person to reach a usable app: roughly 3–4
-weeks in the app and 2–3 weeks in `endeavor-remote` and `wire`. It costs more
+weeks in the app and 2–3 weeks in `endeavor-mcp` and `wire`. It costs more
 than Linux did because Linux and macOS are both Unix, so the process and IPC
 code carried over almost unchanged. On Windows that code needs replacing: Unix
 signals, process groups, Unix sockets and `flock`. The UI and the web view
@@ -45,7 +45,7 @@ What the check showed about the dependencies:
   debug build runs only on the machine that built it). It comes with the
   Windows SDK too.
 - Small crates added for Windows only, all already in the tree: `chrono` in
-  the app (the time zone), `getrandom` in `endeavor-remote` (the bridge
+  the app (the time zone), `getrandom` in `endeavor-mcp` (the bridge
   token), `windows-sys` 0.61 in both (process control), `sha2` in the app
   (checking downloads) and `dunce` in `wire` (paths without `\\?\`).
 
@@ -63,9 +63,9 @@ half-work:
 | Where | What it says | What it needs |
 |---|---|---|
 | `src/remote.rs`, `Askpass` | "Endeavor can't connect to servers from Windows yet." | The askpass transport (loopback TCP or a named pipe), and an answer on `SSH_ASKPASS_REQUIRE`. |
-| `crates/endeavor-remote/src/askpass.rs`, `ask_app` | ssh prompts aren't supported on Windows yet | The same transport, on the helper's side. |
-| `crates/endeavor-remote/src/core.rs`, `main` | "Couldn't keep Julia's processes together with this one (Job Object): …" | Nothing, if Windows 8 or later: refuses rather than start a Julia whose workers could outlive it. |
-| `crates/endeavor-remote/src/lib.rs`, `Runtime::kill` | logs "the runtime (pid …) is gone or isn't the one recorded; not stopping it" | Nothing: it won't end a process whose start time doesn't match the record. |
+| `crates/endeavor-mcp/src/askpass.rs`, `ask_app` | ssh prompts aren't supported on Windows yet | The same transport, on the helper's side. |
+| `crates/endeavor-mcp/src/core.rs`, `main` | "Couldn't keep Julia's processes together with this one (Job Object): …" | Nothing, if Windows 8 or later: refuses rather than start a Julia whose workers could outlive it. |
+| `crates/endeavor-mcp/src/lib.rs`, `Runtime::kill` | logs "the runtime (pid …) is gone or isn't the one recorded; not stopping it" | Nothing: it won't end a process whose start time doesn't match the record. |
 
 ### How process control works on Windows
 
@@ -97,7 +97,7 @@ half-work:
 
 Each stub is marked "Not ported" in the code.
 
-**`endeavor-remote` (the app's local runtime runs it too):**
+**`endeavor-mcp` (the app's local runtime runs it too):**
 
 - `lib.rs`, `ask_to_hand_over`, `watch_replace_signal`, `block_sigusr1`: no
   handover between clients, so a second client waits for the lock (about 30 s)
@@ -149,7 +149,7 @@ under the user's own `%LOCALAPPDATA%`.
 - `src/remote.rs`, `kill_group`: does nothing. No ssh runs, since `Askpass`
   refuses.
 - `src/signin.rs`, `Login::cancel`: doesn't stop the sign-in's CLI. Needs a
-  Job Object (`endeavor_remote`'s `winproc` has the pieces).
+  Job Object (`endeavor_mcp`'s `winproc` has the pieces).
 
 Ported for real: the app data folder (`%LOCALAPPDATA%\Endeavor`,
 `src/install.rs`), the home folder for `~/.ssh` and Downloads, the depot list
@@ -172,7 +172,7 @@ conversion before checkout. It passes on `main`.
 Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 `tar`, symlinks or Unix sockets:
 
-- `crates/endeavor-remote/tests/connect.rs`, `core.rs` and `e2e_julia.rs`
+- `crates/endeavor-mcp/tests/connect.rs`, `core.rs` and `e2e_julia.rs`
   (whole files: the stand-in Julia is a `#!/bin/sh` script).
 - `tests/helper_mode.rs` (whole file).
 - `crates/wire/src/relay.rs`: all its tests (`UnixStream::pair`).
@@ -184,12 +184,12 @@ Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
   `a_server_without_a_helper_build_is_refused_plainly`, `askpass_round_trip`,
   `a_cancelled_password_prompt_ends_the_connect`.
 - `src/runtime.rs`: `repair_clears_stale_state_and_keeps_the_rest`.
-- `crates/endeavor-remote/src/notebooks/tests.rs`: the `file_info` check in
+- `crates/endeavor-mcp/src/notebooks/tests.rs`: the `file_info` check in
   `the_apps_notebook_actions_restart_move_file_info_and_new_notebook`.
 
 These run on Windows too, with paths and folders that follow Windows rules:
 
-- `crates/endeavor-remote/src/notebooks/tests.rs`, notebook paths (their
+- `crates/endeavor-mcp/src/notebooks/tests.rs`, notebook paths (their
   paths now use the platform's separator, and the Unix-only checks, such as
   `~user` and `/tmp`, are gated): `opening_and_making_notebooks`,
   `one_notebook_per_session`,
@@ -199,7 +199,7 @@ These run on Windows too, with paths and folders that follow Windows rules:
   `idle_notebooks_stop_but_running_kept_alive_and_recently_used_ones_dont`,
   `a_notebooks_state_goes_when_it_shuts_down_however_it_shuts_down`,
   `parses_ids_and_paths_as_julia_did`.
-- `crates/endeavor-remote/src/julia.rs`, the home folder:
+- `crates/endeavor-mcp/src/julia.rs`, the home folder:
   `versions_and_home_paths`.
 - `crates/wire/src/files.rs`, the home folder: `home_relative_paths` (also
   checks `~\` on Windows).
@@ -211,7 +211,7 @@ These run on Windows too, with paths and folders that follow Windows rules:
 
 Tests that run only on Windows:
 
-- `crates/endeavor-remote/src/winproc.rs`,
+- `crates/endeavor-mcp/src/winproc.rs`,
   `ending_the_jobs_first_process_ends_everything_it_started`: the test binary
   runs itself as a stand-in core that puts itself in the Job Object and
   starts a worker, which starts `ping`. Ending the core must end the worker
@@ -272,7 +272,7 @@ Windows](#how-process-control-works-on-windows)). Left:
 ### ssh from Windows (M if askpass works, L if not)
 
 - **Askpass transport (S).** The password and 2FA prompts reach the app over a
-  Unix socket (`src/remote.rs:619`, `crates/endeavor-remote/src/askpass.rs:34`).
+  Unix socket (`src/remote.rs:619`, `crates/endeavor-mcp/src/askpass.rs:34`).
   Rust's standard library has no Unix sockets on Windows. Use loopback TCP
   plus a per-launch token in an environment variable, or a named pipe with a
   user-only ACL.
@@ -327,7 +327,7 @@ code that runs only with servers, and upload names.
 - Executable layout differs: `bin\julia.exe`, `node.exe` at the top of the
   Node folder, and npm at `node_modules\npm\bin\npm-cli.js`
   (`src/install.rs`, `src/agent.rs`, `src/runtime.rs`).
-- The server's own Julia download (`crates/endeavor-remote/src/julia.rs`)
+- The server's own Julia download (`crates/endeavor-mcp/src/julia.rs`)
   stays Unix-only: a Windows server is out of scope.
 
 ### Notebook view (M–L, about 1–1.5 weeks)
@@ -388,7 +388,7 @@ Windows or set `CLAUDE_CODE_GIT_BASH_PATH`.
 ### Tests (M, 3–5 days; gating and CI done)
 
 Many tests use `sh -c`, `kill -9`, `pkill`, `tar`, `shasum` or a fake Julia
-written as a `#!/bin/sh` script (`crates/endeavor-remote/tests/common/mod.rs`),
+written as a `#!/bin/sh` script (`crates/endeavor-mcp/tests/common/mod.rs`),
 and `wire`'s relay tests use `UnixStream::pair`. These are gated with
 `#[cfg(unix)]`, and a Windows CI workflow runs the rest (see [CI](#ci)).
 Left: replace the fake Julia with a small Rust test binary so the

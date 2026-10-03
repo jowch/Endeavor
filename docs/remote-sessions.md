@@ -62,7 +62,7 @@ connection, so stopping it is an explicit command.
 app (local)                        remote login host / server        runtime host
 ───────────                        ──────────────────────────        ────────────
 webview ─┐                                                            core :port ── Pluto (private)
-Claude  ─┼─ local listener ── ssh stdio ── endeavor-remote helper ────           ── Julia's bridge (private)
+Claude  ─┼─ local listener ── ssh stdio ── endeavor helper ────           ── Julia's bridge (private)
 app     ─┘  127.0.0.1:<port>   (one ssh)   (relays, attaches)         (loopback)
 ```
 
@@ -73,13 +73,14 @@ helper and `runtime/` as a tar stream on the same stdin, unpacks them, and
 then starts it. Installing and connecting share one SSH session, so a Duo or
 other two-factor prompt appears once.
 
-**Helper.** `endeavor-remote` is a small static Rust binary built for Linux
+**Helper.** `endeavor` is a small static Rust binary built for Linux
 x86_64 and aarch64 and for macOS. It is not written in Julia, because it runs
 on every connect and Julia is slow to start, and it does not rely on `socat`
 or Python being installed. On the Mac itself the app runs its own binary as
 the helper (`endeavor --helper connect …`; the helper is a library the app
 links), so the local helper can't be missing or from another build; the
-separate `endeavor-remote` binary is what servers are sent. It:
+separate `endeavor` binary (on macOS, the app's `endeavor-helper` target) is
+what servers are sent. It:
 
 1. Says hello with the machine's name and home folder, and from then on
    answers file requests itself, without Julia: list a folder (folders and
@@ -140,7 +141,7 @@ sends the launcher and the folder's name in the bootstrap's preamble.
 ```
 
 **Process (plain server).** The helper starts the runtime with `setsid`/`nohup`:
-`endeavor-remote core` ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md); on This Mac, where
+`endeavor core` ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md); on This Mac, where
 the app is the helper, `endeavor --helper core`), which starts
 `julia boot.jl` as its child in the same process group, serves the runtime's
 one port and writes `runtime.json` (its own pid and that port; Pluto's port
@@ -156,7 +157,7 @@ reports that the runtime is on another node and does not start a second one.
 
 **Slurm (cluster).** HPC centers do not want long-lived notebook servers on
 login nodes (see Prior art). The helper on the login node
-(`connect --launcher slurm`, `crates/endeavor-remote/src/slurm.rs`) only
+(`connect --launcher slurm`, `crates/endeavor-mcp/src/slurm.rs`) only
 submits, waits and relays; Julia runs in a batch job.
 
 - **Settings.** A cluster entry has an SSH host, how to get Julia, an optional
@@ -176,7 +177,7 @@ submits, waits and relays; Julia runs in a batch job.
   node (the shared filesystem makes it the compute node's too), writes
   `job.sh` and runs `sbatch --parsable --job-name=endeavor` with the
   resources, the account and `--output` to the state folder's `runtime.log`.
-  The script is `endeavor-remote node-start`, which becomes the core on the
+  The script is `endeavor node-start`, which becomes the core on the
   compute node; it starts Julia on private ports free there and writes `runtime.json`
   with the node and `SLURM_JOB_ID`. `job.json` records the
   job until its runtime is up, so a reconnect waits for the same job instead
@@ -191,7 +192,7 @@ submits, waits and relays; Julia runs in a batch job.
   node with enough free CPUs and memory"), and a Cancel link, which runs
   `scancel`. Leaving the app leaves the job queued.
 - **Relay.** Once `runtime.json` names the job, the login helper starts
-  `endeavor-remote relay` on the job's node and passes the app's streams
+  `endeavor relay` on the job's node and passes the app's streams
   through its stdin and stdout; the runtime stays on the node's loopback.
   It tries `srun --jobid=<job> --overlap --unbuffered` first: it needs no SSH
   between nodes and works wherever the user can run job steps (Slurm 20.11
