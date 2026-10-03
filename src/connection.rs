@@ -294,10 +294,10 @@ impl Workspace {
     }
 
     /// Take `gone`'s notebook page out of the web view. Left there, it keeps
-    /// reconnecting to its port, where the host's next runtime listens with a
-    /// new Pluto secret, and Pluto then alerts that it "has lost authentication".
+    /// reconnecting to its port, where the host's next runtime listens, which
+    /// doesn't have the notebook the page shows.
     fn close_page(&mut self, gone: Option<Runtime>, cx: &mut Context<Self>) {
-        let Some((origin, _)) = gone.as_ref().and_then(|r| r.pluto_url.split_once('?')) else { return };
+        let Some((origin, _)) = gone.as_ref().and_then(|r| r.page_url.split_once('?')) else { return };
         self.blank_page(origin, cx);
     }
 
@@ -311,7 +311,7 @@ impl Workspace {
 
     /// The web view shows a page of `host`'s runtime.
     fn shows_page_of(&self, host: &HostId, cx: &App) -> bool {
-        let Some((origin, _)) = self.connections.get(host).and_then(|c| c.runtime.as_ref()).and_then(|r| r.pluto_url.split_once('?')) else { return false };
+        let Some((origin, _)) = self.connections.get(host).and_then(|c| c.runtime.as_ref()).and_then(|r| r.page_url.split_once('?')) else { return false };
         crate::webcontent::url(self.webview.read(cx).raw()).starts_with(origin)
     }
 
@@ -711,7 +711,7 @@ impl Workspace {
             Update::Notice(Notice::Lost(reason)) if !local => {
                 let was = connection.status.clone();
                 let gone = connection.forget_runtime();
-                let page = gone.as_ref().and_then(|r| r.pluto_url.split_once('?')).map(|(origin, _)| origin.to_owned()).filter(|_| shown);
+                let page = gone.as_ref().and_then(|r| r.page_url.split_once('?')).map(|(origin, _)| origin.to_owned()).filter(|_| shown);
                 connection.channel = None;
                 connection.status = Status::Failed(reason);
                 connection.lost = Some(Lost { page, was });
@@ -952,7 +952,7 @@ impl Workspace {
     fn reopen_notebooks(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get_mut(host) else { return };
         let Some(runtime) = connection.runtime.as_ref() else { return };
-        let (bridge, reattached, this_runtime) = (runtime.bridge.clone(), runtime.reattached, runtime.pluto_url.clone());
+        let (bridge, reattached, this_runtime) = (runtime.bridge.clone(), runtime.reattached, runtime.pid);
         let resume = std::mem::take(&mut connection.resume);
         let before = connection.last_notebooks.clone();
         let mut paths: Vec<String> = before.iter().map(|(_, p)| p.clone()).collect();
@@ -997,7 +997,7 @@ impl Workspace {
             let reopened: Vec<(String, String)> = reopened.into_iter().map(|(id, path, _)| (id, path)).collect();
             let _ = this.update(cx, |this, cx| {
                 // The runtime went (a second restart) while this reopen ran: the next one's reopen does it.
-                if this.connections.get(&host).and_then(|c| c.runtime.as_ref()).is_none_or(|r| r.pluto_url != this_runtime) {
+                if this.connections.get(&host).and_then(|c| c.runtime.as_ref()).is_none_or(|r| r.pid != this_runtime) {
                     eprintln!("Dropped a reopen of {} notebook(s) on {}: its runtime has gone", reopened.len(), this.hosts.name(&host));
                     return;
                 }

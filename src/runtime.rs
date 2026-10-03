@@ -2,9 +2,9 @@
 //! the endeavor-remote helper (docs/remote-sessions.md): the app runs it as a
 //! child on This Mac, and over ssh on a server (remote.rs). The helper answers
 //! file requests from the start, and attaches to the runtime in its state
-//! folder or starts one when asked. The webview and the agent reach a host's
-//! runtime through that host's local listener, whose two loopback ports stay
-//! the same for the whole launch.
+//! folder or starts one when asked. The webview, the agent and the app reach a
+//! host's runtime through that host's local listener, whose one loopback port
+//! stays the same for the whole launch.
 
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
@@ -20,7 +20,7 @@ use std::time::Duration;
 use wire::files;
 use wire::slurm::JobRequest;
 use wire::relay::Mux;
-use wire::{Frame, Target, ToApp, ToHelper};
+use wire::{Frame, ToApp, ToHelper};
 
 use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
@@ -32,10 +32,10 @@ const MIN_JULIA: (u32, u32) = (1, 11);
 /// to come back, so a short drop goes unnoticed.
 const HOLD: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 2 });
 
-/// The app's loopback ports for Pluto and a host's bridge. Each connection is
-/// relayed to the runtime of the moment.
+/// The app's loopback port for a host's runtime: Pluto's page, the agent's MCP
+/// and the app's calls. Each connection is relayed to the runtime of the moment.
 pub struct Listener {
-    ports: [u16; 2],
+    port: u16,
     /// The host, as the agent is told it.
     name: String,
     upstream: Mutex<Upstream>,
@@ -63,69 +63,65 @@ const BUILD_WAIT: Duration = Duration::from_secs(2);
 enum Upstream {
     /// No runtime yet: a connection is closed.
     None,
-    Up { mux: Arc<Mux>, mcp: wire::McpTransport, token: String },
+    Up { mux: Arc<Mux>, token: String },
     /// The runtime was up and the app is getting it back. A connection waits
-    /// for it up to `HOLD`; then an MCP request on the bridge is answered with
-    /// `why` (`endeavor_remote::serve_unreachable`), and anything else closed.
-    Away { mcp: wire::McpTransport, token: String, why: String },
+    /// for it up to `HOLD`; then an MCP request is answered with `why`
+    /// (`endeavor_remote::serve_unreachable`), and anything else closed.
+    Away { token: String, why: String },
 }
 
 impl Listener {
     pub fn start(name: &str) -> Result<Arc<Listener>, String> {
-        let pluto = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-        let bridge = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-        let ports = [&pluto, &bridge].map(|l| l.local_addr().unwrap().port());
+        let socket = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         let listener = Arc::new(Listener {
-            ports,
+            port: socket.local_addr().map_err(|e| e.to_string())?.port(),
             name: name.to_owned(),
             upstream: Mutex::new(Upstream::None),
             changed: Condvar::new(),
             watch: Mutex::default(),
             known: Condvar::new(),
         });
-        for (socket, target) in [(pluto, Target::Pluto), (bridge, Target::Bridge)] {
-            let listener = listener.clone();
-            std::thread::spawn(move || {
-                for connection in socket.incoming().map_while(Result::ok) {
-                    let listener = listener.clone();
-                    std::thread::spawn(move || listener.route(target, connection));
-                }
-            });
-        }
+        let accepting = listener.clone();
+        std::thread::spawn(move || {
+            for connection in socket.incoming().map_while(Result::ok) {
+                let listener = accepting.clone();
+                std::thread::spawn(move || listener.route(connection));
+            }
+        });
         Ok(listener)
     }
 
-    fn route(&self, target: Target, connection: TcpStream) {
+    fn route(&self, connection: TcpStream) {
         let _ = connection.set_nodelay(true);
         let upstream = self.upstream.lock().unwrap();
         let (upstream, _) = self.changed.wait_timeout_while(upstream, HOLD, |u| matches!(u, Upstream::Away { .. })).unwrap();
         match &*upstream {
-            Upstream::Up { mux, .. } if target == Target::Bridge && self.watch.lock().unwrap().older != Some(false) => {
+            Upstream::Up { mux, .. } if self.watch.lock().unwrap().older != Some(false) => {
                 let mux = mux.clone();
                 drop(upstream);
                 let Ok((ours, theirs)) = loopback_pair() else { return };
-                if mux.open(target, theirs).is_ok() {
+                if mux.open(theirs).is_ok() {
                     let _ = endeavor_remote::serve_guarded(connection, ours, &|session, tool, arguments| self.refusal(session, tool, arguments));
                 }
             }
             Upstream::Up { mux, .. } => {
                 let mux = mux.clone();
                 drop(upstream);
-                let _ = mux.open(target, connection);
+                let _ = mux.open(connection);
             }
-            Upstream::Away { mcp: wire::McpTransport::Http, token, why } if target == Target::Bridge => {
+            Upstream::Away { token, why } => {
                 let (token, why) = (token.clone(), why.clone());
                 drop(upstream);
                 let _ = connection.set_read_timeout(Some(Duration::from_secs(10)));
                 let _ = endeavor_remote::serve_unreachable(connection, &token, &why);
             }
-            Upstream::Away { .. } | Upstream::None => {}
+            Upstream::None => {}
         }
     }
 
-    fn attach(&self, mux: Arc<Mux>, mcp: wire::McpTransport, token: String) {
+    fn attach(&self, mux: Arc<Mux>, token: String) {
         self.watch.lock().unwrap().older = None;
-        *self.upstream.lock().unwrap() = Upstream::Up { mux, mcp, token };
+        *self.upstream.lock().unwrap() = Upstream::Up { mux, token };
         self.changed.notify_all();
     }
 
@@ -154,10 +150,10 @@ impl Listener {
     /// The runtime is away while `why` holds, if it was up.
     fn away(&self, why: String, only: Option<&Arc<Mux>>) {
         let mut upstream = self.upstream.lock().unwrap();
-        if let Upstream::Up { mux, mcp, token } = &*upstream
+        if let Upstream::Up { mux, token } = &*upstream
             && only.is_none_or(|only| Arc::ptr_eq(only, mux))
         {
-            *upstream = Upstream::Away { mcp: *mcp, token: token.clone(), why };
+            *upstream = Upstream::Away { token: token.clone(), why };
         }
     }
 
@@ -166,8 +162,8 @@ impl Listener {
     /// callers only reach for this once `away` (or `restarting`) already ran.
     fn still_away(&self, why: String) {
         let mut upstream = self.upstream.lock().unwrap();
-        if let Upstream::Away { mcp, token, .. } = &*upstream {
-            *upstream = Upstream::Away { mcp: *mcp, token: token.clone(), why };
+        if let Upstream::Away { token, .. } = &*upstream {
+            *upstream = Upstream::Away { token: token.clone(), why };
         }
     }
 
@@ -187,20 +183,19 @@ impl Listener {
         self.away(format!("Endeavor isn't connected to {}. Reconnect it to use its notebook again.", self.name), None);
     }
 
-    /// The bridge URL the agent's MCP config carries; the same for the whole
-    /// launch. `/mcp` for a core that speaks Streamable HTTP, else the
-    /// deprecated SSE transport (`/sse`) a runtime from before that still serves.
-    fn mcp_url(&self, mcp: wire::McpTransport) -> String {
-        let path = match mcp { wire::McpTransport::Http => "mcp", wire::McpTransport::Sse => "sse" };
-        format!("http://127.0.0.1:{}/{path}", self.ports[1])
+    /// The MCP URL the agent's config carries; the same for the whole launch.
+    fn mcp_url(&self) -> String {
+        format!("http://127.0.0.1:{}/mcp", self.port)
     }
 
-    pub fn bridge_port(&self) -> u16 {
-        self.ports[1]
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
-    fn pluto_url(&self, secret: &str) -> String {
-        format!("http://127.0.0.1:{}/?secret={secret}", self.ports[0])
+    /// The web view's way into Pluto's page: the core trades `token` in the
+    /// URL for a cookie, and drops it from the URL.
+    fn page_url(&self, token: &str) -> String {
+        format!("http://127.0.0.1:{}/?token={token}", self.port)
     }
 
     /// `mux`'s helper has gone; the app reconnects by itself.
@@ -222,8 +217,12 @@ fn loopback_pair() -> std::io::Result<(TcpStream, TcpStream)> {
 /// A runtime the app is attached to, as its host's listener serves it.
 #[derive(Clone, Debug)]
 pub struct Runtime {
-    pub pluto_url: String,
+    /// Pluto's start page, with the token that lets the web view in.
+    pub page_url: String,
     pub bridge: Bridge,
+    /// Its process, which tells it from the host's next runtime (the URLs
+    /// and the token stay the same).
+    pub pid: u32,
     /// It was already running (kept after the last quit, or on a server); this
     /// connect didn't start it.
     pub reattached: bool,
@@ -513,7 +512,7 @@ impl Channel {
                 let result = mux.run(
                     output,
                     // The app opens every stream; the helper never asks to.
-                    |mux, id, _| drop(mux.send(&Frame::Close { id })),
+                    |mux, id| drop(mux.send(&Frame::Close { id })),
                     |json| match serde_json::from_slice(json) {
                         Ok(ToApp::Files { id, reply }) => {
                             if let Some(waiting) = files.lock().unwrap().remove(&id) {
@@ -611,11 +610,11 @@ impl Channel {
         let runtime = loop {
             match events.recv() {
                 Ok(message @ (ToApp::Progress { .. } | ToApp::FoundJulia { .. } | ToApp::Submitted { .. } | ToApp::Queued { .. })) => on_message(message),
-                Ok(ToApp::Ready { node, token, pluto_secret, reattached, job, mcp, .. }) => {
+                Ok(ToApp::Ready { node, pid, token, reattached, job, .. }) => {
                     *self.listener.lock().unwrap() = Some(listener.clone());
-                    listener.attach(self.mux.clone(), mcp, token.clone());
-                    let bridge = Bridge { url: listener.mcp_url(mcp), token, transport: mcp };
-                    break Runtime { pluto_url: listener.pluto_url(&pluto_secret), bridge, reattached, node, job };
+                    listener.attach(self.mux.clone(), token.clone());
+                    let bridge = Bridge { url: listener.mcp_url(), token: token.clone() };
+                    break Runtime { page_url: listener.page_url(&token), bridge, pid, reattached, node, job };
                 }
                 Ok(ToApp::StartFailed { message } | ToApp::Error { message }) => return Err(message),
                 Ok(ToApp::Died { status, log_tail }) => {
@@ -861,11 +860,11 @@ mod tests {
         assert_eq!(diagnose(&[]), "It printed nothing.");
     }
 
-    /// A listener for lab-server whose runtime spoke `mcp` and has gone away.
-    fn away(mcp: wire::McpTransport) -> std::sync::Arc<super::Listener> {
+    /// A listener for lab-server whose runtime has gone away.
+    fn away() -> std::sync::Arc<super::Listener> {
         let listener = super::Listener::start("lab-server").unwrap();
         let mux = wire::relay::Mux::new(std::io::sink());
-        listener.attach(mux.clone(), mcp, "secret".into());
+        listener.attach(mux.clone(), "secret".into());
         listener.forget(&mux);
         listener
     }
@@ -873,7 +872,7 @@ mod tests {
     /// The raw HTTP response to POST `body` to `/mcp` on the listener's bridge port.
     fn post(listener: &super::Listener, token: &str, body: &str) -> String {
         use std::io::{Read, Write};
-        let mut socket = std::net::TcpStream::connect(("127.0.0.1", listener.bridge_port())).unwrap();
+        let mut socket = std::net::TcpStream::connect(("127.0.0.1", listener.port())).unwrap();
         let request = format!(
             "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
@@ -886,7 +885,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_while_the_server_is_away_fails_with_a_reason_to_retry() {
-        let response = post(&away(wire::McpTransport::Http), "secret", r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_notebooks","arguments":{}}}"#);
+        let response = post(&away(), "secret", r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_notebooks","arguments":{}}}"#);
         let (head, body) = response.split_once("\r\n\r\n").unwrap();
         assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
         assert_eq!(
@@ -897,36 +896,41 @@ mod tests {
 
     #[test]
     fn a_notification_while_the_server_is_away_is_accepted() {
-        let response = post(&away(wire::McpTransport::Http), "secret", r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        let response = post(&away(), "secret", r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
         assert!(response.starts_with("HTTP/1.1 202 Accepted\r\n"), "{response}");
     }
 
     #[test]
     fn a_ping_while_the_server_is_away_is_answered() {
-        let response = post(&away(wire::McpTransport::Http), "secret", r#"{"jsonrpc":"2.0","id":"p","method":"ping"}"#);
+        let response = post(&away(), "secret", r#"{"jsonrpc":"2.0","id":"p","method":"ping"}"#);
         assert!(response.ends_with("\r\n\r\n{\"id\":\"p\",\"jsonrpc\":\"2.0\",\"result\":{}}"), "{response}");
     }
 
     #[test]
     fn malformed_input_while_the_server_is_away_is_a_bad_request() {
-        let listener = away(wire::McpTransport::Http);
+        let listener = away();
         assert!(post(&listener, "secret", "{not json").starts_with("HTTP/1.1 400 Bad Request\r\n"));
         assert!(post(&listener, "wrong", r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).starts_with("HTTP/1.1 401 Unauthorized\r\n"));
     }
 
     #[test]
-    fn an_sse_runtime_away_closes_connections_as_before() {
-        assert_eq!(post(&away(wire::McpTransport::Sse), "secret", r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#), "");
+    fn plutos_page_while_the_server_is_away_is_closed_unanswered() {
+        use std::io::{Read, Write};
+        let mut socket = std::net::TcpStream::connect(("127.0.0.1", away().port())).unwrap();
+        socket.write_all(b"GET /edit?id=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: endeavor-abc=secret\r\n\r\n").unwrap();
+        let mut response = String::new();
+        let _ = socket.read_to_string(&mut response);
+        assert_eq!(response, "");
     }
 
     #[test]
     fn a_runtime_from_an_older_build_runs_nothing_in_ask_to_run() {
         use std::io::{Read, Write};
         let listener = super::Listener::start("lab-server").unwrap();
-        listener.attach(wire::relay::Mux::new(std::io::sink()), wire::McpTransport::Http, "secret".into());
+        listener.attach(wire::relay::Mux::new(std::io::sink()), "secret".into());
         listener.runtime_build(true);
         listener.set_mode(7, "ask");
-        let mut socket = std::net::TcpStream::connect(("127.0.0.1", listener.bridge_port())).unwrap();
+        let mut socket = std::net::TcpStream::connect(("127.0.0.1", listener.port())).unwrap();
         let body = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"execute_cell","arguments":{"cell_id":"a"}}}"#;
         let request = format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Endeavor-Session: 7\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         socket.write_all(request.as_bytes()).unwrap();
@@ -939,7 +943,7 @@ mod tests {
     #[test]
     fn restarting_julia_says_so() {
         let listener = super::Listener::start("This Mac").unwrap();
-        listener.attach(wire::relay::Mux::new(std::io::sink()), wire::McpTransport::Http, "secret".into());
+        listener.attach(wire::relay::Mux::new(std::io::sink()), "secret".into());
         listener.restarting();
         let response = post(&listener, "secret", r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notebooks"}}"#);
         assert!(response.contains(r#""text":"Endeavor is restarting Julia on This Mac. Try again in a moment.""#), "{response}");
@@ -948,7 +952,7 @@ mod tests {
     #[test]
     fn a_restart_that_fails_says_so_instead_of_restarting_forever() {
         let listener = super::Listener::start("This Mac").unwrap();
-        listener.attach(wire::relay::Mux::new(std::io::sink()), wire::McpTransport::Http, "secret".into());
+        listener.attach(wire::relay::Mux::new(std::io::sink()), "secret".into());
         // Before restarting() ran, there's nothing to correct: still up, a no-op.
         listener.restart_failed();
         assert!(matches!(&*listener.upstream.lock().unwrap(), super::Upstream::Up { .. }));
@@ -962,7 +966,7 @@ mod tests {
     fn stopping_on_purpose_says_so_not_that_it_reconnects_by_itself() {
         let listener = super::Listener::start("lab-server").unwrap();
         let mux = wire::relay::Mux::new(std::io::sink());
-        listener.attach(mux.clone(), wire::McpTransport::Http, "secret".into());
+        listener.attach(mux.clone(), "secret".into());
         listener.disconnected();
         let response = post(&listener, "secret", r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notebooks"}}"#);
         assert!(
@@ -1005,7 +1009,8 @@ fn live_die_and_restart() {
     let second = start_local(&channel, &listener, &|_| {}, |_| {}).expect("start again");
     assert!(!second.reattached);
     assert_eq!(second.bridge, first.bridge, "agent's MCP URL and token must survive a restart");
-    assert_ne!(second.pluto_url, first.pluto_url, "new Pluto secret");
+    assert_eq!(second.page_url, first.page_url, "the web view's URL survives a restart too");
+    assert_ne!(second.pid, first.pid, "a new runtime");
     let list = crate::pluto::call_tool(&second.bridge, "list_notebooks", serde_json::json!({})).unwrap();
     println!("restarted; list_notebooks = {list}");
     channel.stop();

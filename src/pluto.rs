@@ -1,6 +1,6 @@
-//! The app's own line to the runtime's tools: its bridge's loopback `/call` endpoint (MCP
-//! JSON-RPC). Used for app-side checks that shouldn't depend on the agent, like
-//! the end-of-turn run-state warning.
+//! The app's own line to the runtime's tools: its loopback `/endeavor/call`
+//! endpoint (MCP JSON-RPC). Used for app-side checks that shouldn't depend on
+//! the agent, like the end-of-turn run-state warning.
 
 use std::io::{BufRead, Read, Write};
 use std::net::TcpStream;
@@ -9,15 +9,13 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-/// One runtime's bridge as its host's listener serves it: the URL the agent's
-/// MCP config and the app use, the bearer token it requires, and how the
-/// agent reaches that URL (`url`'s path matches `transport`: `/mcp` for
-/// `Http`, `/sse` for `Sse`). All three stay the same across that host's runtimes.
+/// One runtime as its host's listener serves it: the MCP URL the agent's
+/// config carries (its host is the app's way in too), and the bearer token
+/// every path requires. Both stay the same across that host's runtimes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bridge {
     pub url: String,
     pub token: String,
-    pub transport: wire::McpTransport,
 }
 
 impl Bridge {
@@ -27,13 +25,13 @@ impl Bridge {
     }
 }
 
-/// Follow the runtime's notebook state (`GET /events`): `on_event` gets
+/// Follow the runtime's notebook state (`GET /endeavor/events`): `on_event` gets
 /// `{"notebooks": [list_notebooks summary], "cells": {id: [cell states]}}` now and
 /// after every change, until the runtime goes away.
 pub fn watch_notebooks(bridge: &Bridge, mut on_event: impl FnMut(Value)) -> Result<(), String> {
     let host = bridge.host()?;
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
-    write!(stream, "GET /events HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge.token)
+    write!(stream, "GET /endeavor/events HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge.token)
         .map_err(|e| e.to_string())?;
     for line in std::io::BufReader::new(stream).lines() {
         let line = line.map_err(|e| e.to_string())?;
@@ -165,13 +163,13 @@ pub fn allow_execution(bridge: &Bridge, notebook_id: &str) -> Result<(), String>
     call_tool(bridge, "allow_execution", json!({ "notebook_id": notebook_id })).map(|_| ())
 }
 
-/// GET a URL on Pluto's server (its exports), through the host's loopback relay.
-pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    let rest = url.strip_prefix("http://").ok_or("not an http URL")?;
-    let (host, path) = rest.split_once('/').ok_or("no path")?;
+/// GET `target` (a path and query) on Pluto's server, such as an export,
+/// through the host's loopback relay.
+pub fn fetch(bridge: &Bridge, target: &str) -> Result<Vec<u8>, String> {
+    let host = bridge.host()?;
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
     stream.set_read_timeout(Some(Duration::from_secs(120))).map_err(|e| e.to_string())?;
-    write!(stream, "GET /{path} HTTP/1.0\r\nHost: {host}\r\n\r\n").map_err(|e| e.to_string())?;
+    write!(stream, "GET {target} HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge.token).map_err(|e| e.to_string())?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).map_err(|e| e.to_string())?;
     http_body(&response)
@@ -239,7 +237,7 @@ pub fn run_preview(bridge: &Bridge, tool: &str, arguments: &Value) -> Result<Run
     serde_json::from_value(reply["result"].clone()).map_err(|e| e.to_string())
 }
 
-/// One JSON-RPC request to the bridge's app-only `/call` endpoint.
+/// One JSON-RPC request to the runtime's app-only `/endeavor/call` endpoint.
 fn rpc(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
     let host = bridge.host()?;
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
@@ -250,7 +248,7 @@ fn rpc(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
     // instead of dealing with chunked encoding.
     write!(
         stream,
-        "POST /call HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        "POST /endeavor/call HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
         bridge.token,
         body.len()
     )
@@ -474,7 +472,7 @@ mod tests {
 #[ignore]
 fn live_bridge() {
     let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
-    let bridge = Bridge { url, token: std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default(), transport: wire::McpTransport::Http };
+    let bridge = Bridge { url, token: std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default() };
     let list = call_tool(&bridge, "list_notebooks", json!({})).expect("list_notebooks");
     println!("list_notebooks: {list}\nwarnings: {:?}", run_warnings(&list));
     assert!(list.as_array().is_some_and(|a| a.iter().all(|nb| nb.get("pending_run").is_some())));

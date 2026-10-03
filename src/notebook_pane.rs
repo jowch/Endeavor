@@ -924,8 +924,8 @@ impl Workspace {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let (Some(id), Some(path)) = (session.notebook.clone(), session.notebook_path.clone()) else { return };
         let Some(runtime) = self.connection(&session.place.host).and_then(|c| c.runtime.as_ref()) else { return };
-        let offline = if kind == "notebookexport" { "offline_bundle=true&" } else { "" };
-        let url = runtime.pluto_url.replacen("/?", &format!("/{kind}?id={id}&{offline}"), 1);
+        let offline = if kind == "notebookexport" { "&offline_bundle=true" } else { "" };
+        let (bridge, export) = (runtime.bridge.clone(), format!("/{kind}?id={id}{offline}"));
         let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("notebook").to_string();
         let dir = match &session.place.host {
             HostId::ThisMac => Path::new(&path).parent().map(Path::to_path_buf).unwrap_or_default(),
@@ -936,7 +936,7 @@ impl Workspace {
             let Ok(Ok(Some(target))) = picked.await else { return };
             let file = target.file_name().map_or_else(|| format!("{stem}.{extension}"), |f| f.to_string_lossy().into_owned());
             let folder = target.parent().map(Path::to_path_buf).unwrap_or_default();
-            let saved = cx.background_executor().spawn(async move { pluto::fetch(&url).and_then(|bytes| std::fs::write(&target, bytes).map_err(|e| e.to_string())) }).await;
+            let saved = cx.background_executor().spawn(async move { pluto::fetch(&bridge, &export).and_then(|bytes| std::fs::write(&target, bytes).map_err(|e| e.to_string())) }).await;
             if let Err(e) = saved {
                 let _ = this.update(cx, |this, cx| {
                     let mut notice = Notice::new(Spot::NotebookRight, format!("Couldn't export {file}"), &e, Some(Retry::Export { key, kind, extension }));

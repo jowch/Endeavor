@@ -106,8 +106,8 @@ use splash::{Progress, Setup};
 use wire::backend::Backend;
 use crate::theme::FocusRing as _;
 
-/// Notebook id from a notebook page's URL. Only the id is used: the URL also
-/// carries the notebook server's secret, which must never reach the agent.
+/// Notebook id from a notebook page's URL. Only the id is used: the URL may
+/// also carry the runtime's token, which must never reach the agent.
 fn viewed_notebook_id(url: &str) -> Option<&str> {
     Backend::Pluto.notebook_id(url).filter(|id| annotate::is_uuid(id))
 }
@@ -1762,8 +1762,8 @@ impl Workspace {
     /// Show notebook `id` of `host`'s Pluto in the pane.
     pub fn load_notebook(&mut self, host: &HostId, id: &str, cx: &mut Context<Self>) {
         let Some(runtime) = self.connection(host).and_then(|c| c.runtime.as_ref()) else { return };
-        // pluto_url carries Pluto's secret; keep it app-side.
-        let url = Backend::Pluto.notebook_url(&runtime.pluto_url, id);
+        // page_url carries the runtime's token; keep it app-side.
+        let url = Backend::Pluto.notebook_url(&runtime.page_url, id);
         #[cfg(debug_assertions)]
         let url = if notebook_pane::test_stuck_opening().is_some_and(|keep| keep) { "about:blank".to_owned() } else { url };
         self.webview.update(cx, |w, _| w.load_url(&url));
@@ -2628,9 +2628,9 @@ mod tests {
     #[test]
     fn notebook_id_from_pluto_url() {
         let id = "6a1b2c3d-0000-4000-8000-1234567890ab";
-        let url = format!("http://127.0.0.1:1234/edit?secret=s3cr3t&id={id}");
+        let url = format!("http://127.0.0.1:1234/edit?token=t0k3n&id={id}");
         assert_eq!(viewed_notebook_id(&url), Some(id));
-        assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/?secret=s3cr3t"), None);
+        assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/?token=t0k3n"), None);
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/edit?id=../../secret"), None);
     }
 

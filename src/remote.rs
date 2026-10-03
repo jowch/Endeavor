@@ -502,7 +502,7 @@ pub fn test(server: &Server, askpass: Option<&Askpass>, cancel: &Cancel, on: &dy
     }
     let listener = test_listener()?;
     let runtime = start(&channel, &listener, None, on, |_| {})?;
-    let answered = bridge_ping(listener.bridge_port(), &runtime.bridge.token);
+    let answered = bridge_ping(listener.port(), &runtime.bridge.token);
     if runtime.reattached {
         channel.detach();
     } else {
@@ -531,7 +531,7 @@ fn bridge_ping(port: u16, token: &str) -> Result<(), String> {
     let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#;
     write!(
         socket,
-        "POST /call HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        "POST /endeavor/call HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     )
     .map_err(|e| e.to_string())?;
@@ -833,8 +833,7 @@ mod tests {
             });
             std::fs::create_dir_all(state_dir).unwrap();
             let state = serde_json::json!({
-                "launcher": "process", "node": hostname(), "pid": pid, "pluto_port": port, "mcp_port": port,
-                "token": token, "pluto_secret": "s3cret",
+                "launcher": "process", "node": hostname(), "pid": pid, "port": port, "token": token,
             });
             std::fs::write(state_dir.join("runtime.json"), state.to_string()).unwrap();
             FakeRuntime { process }
@@ -907,13 +906,14 @@ mod tests {
         let runtime = start(&channel, &listener, None, &on, |_| {}).expect("start");
         assert!(runtime.reattached);
         assert_eq!((runtime.bridge.token.as_str(), runtime.node.clone()), (token, hostname()));
-        assert!(runtime.pluto_url.ends_with("/?secret=s3cret"));
+        assert_eq!(runtime.page_url, format!("http://127.0.0.1:{}/?token={token}", listener.port()));
+        assert_eq!(runtime.bridge.url, format!("http://127.0.0.1:{}/mcp", listener.port()));
         let seen = seen.lock().unwrap().clone();
         let uname = if cfg!(target_os = "macos") { "Darwin" } else { "Linux" };
         assert!(matches!(&seen[0], Event::Connected { os, .. } if os == uname), "{seen:?}");
         assert_eq!(seen[1], Event::Helper { installed: true });
         assert!(matches!(&seen[2], Event::Started { reattached: true, .. }), "{seen:?}");
-        bridge_ping(listener.bridge_port(), token).expect("ping through the listener");
+        bridge_ping(listener.port(), token).expect("ping through the listener");
         channel.detach();
         assert!(fake.alive(), "detaching leaves it running");
 
