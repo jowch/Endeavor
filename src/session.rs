@@ -926,6 +926,16 @@ impl Session {
         }
     }
 
+    /// The session's mode as the rules for an older runtime name it
+    /// (`older_runtime::refusal`): "manual" when the agent asks before each
+    /// change itself (Claude's own default mode), else the runtime policy.
+    pub fn guard_mode(&self) -> &'static str {
+        match (&self.modes, self.policy()) {
+            (Some(m), "ask") if m.current_mode_id.to_string() == "default" => "manual",
+            (_, policy) => policy,
+        }
+    }
+
     /// Its host's runtime said which build it is: from another build than
     /// the app's (`older`) or not. An older one gets a note, once.
     pub fn runtime_build(&mut self, older: bool) {
@@ -2653,6 +2663,7 @@ mod tests {
         let (s, effects) = start("auto", 0);
         assert!(matches!(effects.as_slice(), [Effect::SetMode(m)] if m.to_string() == "default"));
         assert_eq!(s.mode_name().as_deref(), Some("Manual"));
+        assert_eq!((s.policy(), s.guard_mode()), ("ask", "manual"), "the runtime asks before runs; so does the agent");
 
         // A reopened session in Plan: the agent is asked and the runtime told.
         let (s, effects) = start("default", 3);
@@ -2663,6 +2674,7 @@ mod tests {
         let (s, effects) = start("auto", 1);
         assert!(effects.is_empty());
         assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
+        assert_eq!((s.policy(), s.guard_mode()), ("ask", "ask"));
     }
 
     #[test]

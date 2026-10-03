@@ -50,7 +50,7 @@ pub struct Listener {
 struct Watch {
     /// Whether the runtime is from another build than the app; none until it says.
     older: Option<bool>,
-    /// Each session's run policy, by its key.
+    /// Each session's mode (`Session::guard_mode`), by its key.
     policies: HashMap<String, &'static str>,
 }
 
@@ -134,9 +134,9 @@ impl Listener {
         self.known.notify_all();
     }
 
-    /// Session `key`'s run policy changed ("ask", "auto" or "plan").
-    pub fn set_policy(&self, key: u64, policy: &'static str) {
-        self.watch.lock().unwrap().policies.insert(key.to_string(), policy);
+    /// Session `key`'s mode, as `Session::guard_mode` names it.
+    pub fn set_mode(&self, key: u64, mode: &'static str) {
+        self.watch.lock().unwrap().policies.insert(key.to_string(), mode);
     }
 
     /// Why the agent's call to `tool` from session `session` is refused here:
@@ -892,7 +892,7 @@ mod tests {
         let listener = super::Listener::start("lab-server").unwrap();
         listener.attach(wire::relay::Mux::new(std::io::sink()), wire::McpTransport::Http, "secret".into());
         listener.runtime_build(true);
-        listener.set_policy(7, "ask");
+        listener.set_mode(7, "ask");
         let mut socket = std::net::TcpStream::connect(("127.0.0.1", listener.bridge_port())).unwrap();
         let body = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"execute_cell","arguments":{"cell_id":"a"}}}"#;
         let request = format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Endeavor-Session: 7\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len());

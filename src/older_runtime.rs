@@ -19,11 +19,12 @@ pub fn note(host: &str) -> String {
 }
 
 /// Why the app refuses an agent's call to `tool` with `arguments` on an older
-/// runtime, in session mode `policy` ("ask", "auto" or "plan"), as the tool
-/// error the agent reads.
-pub fn refusal(policy: &str, tool: &str, arguments: &Value) -> Option<String> {
-    // Asking before a run is the runtime's job now, and an older runtime doesn't ask.
-    if policy == "ask" && endeavor_remote::runs_code(tool, arguments) {
+/// runtime, in a session whose mode is `mode` (`Session::guard_mode`:
+/// "manual", "ask", "auto" or "plan"), as the tool error the agent reads.
+pub fn refusal(mode: &str, tool: &str, arguments: &Value) -> Option<String> {
+    // Asking before a run is the runtime's job now, and an older runtime
+    // doesn't ask. In Manual the agent still asks itself.
+    if mode == "ask" && endeavor_remote::runs_code(tool, arguments) {
         return Some(
             "ArgumentError: older_runtime::This notebook's Julia is from an older version of Endeavor, which can't ask the user before a run. \
              Don't run code: tell the user to restart Julia, or to switch to Auto to let runs go ahead without asking."
@@ -54,6 +55,7 @@ mod tests {
         assert!(!refused("ask", "edit_cell", json!({ "cell_id": "a", "code": "1" })), "edits still go through");
         assert!(!refused("ask", "read_cell", json!({ "cell_id": "a" })));
         assert!(!refused("auto", "execute_cell", json!({ "cell_id": "a" })), "Auto runs without asking anyway");
+        assert!(!refused("manual", "execute_cell", json!({ "cell_id": "a" })), "in Manual the agent asks first itself");
         assert!(!refused("plan", "execute_cell", json!({ "cell_id": "a" })), "the runtime refuses runs in Plan itself");
     }
 }
