@@ -10,7 +10,8 @@ waiting, what the notebook pane shows) comes from the state dump.
   Drive the app to the state, then read the part of the dump that shows it,
   for example `scripts/app-state.sh .notebook.header.tags`. Take a screenshot
   only when how it looks is part of the change.
-- **A runtime, transport or helper change.** Run the Julia tests (below).
+- **A runtime, transport or helper change.** Run the runtime tests against
+  real Julia (below).
   Then do the smoke test in the app, with a real Claude turn:
   1. Ask Claude for something that needs code. Claude makes its own notebook,
      and the pane follows it: `.notebook.shows` is `page`, and
@@ -82,7 +83,8 @@ To wait for something, poll the dump. For example, loop until
   out, `stage` says where sign-in is, and `card` says whether its card shows
   above the composer.
 - `sidebar`. The folders in order. Each row has its title, `active`, and
-  `mark` (`needs_approval`, `working` or `archived`). A past row's `source`
+  `mark` (`needs_approval`, `error`, `new_reply`, `server_down`, `waiting`
+  or `archived`) and its `tooltip`. A past row's `source`
   is `record` (from sessions.json, drawn at launch) until the agent has listed
   its folder this launch, then `listed`; an open row's is null. Also the "Show N more"
   line, the Restart Julia row, the status line (`status`) and its mark
