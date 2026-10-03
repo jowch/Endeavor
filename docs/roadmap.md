@@ -21,12 +21,20 @@ server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)
 - **One port per runtime.** Pluto's page, MCP and the app's calls on one
   port answered by the core, with one token, instead of two ports. Built and
   checked live on This Mac, a server and Slurm. Plan in [one-port.md](one-port.md).
-- **The notebook tools as a standalone product.** After one port: an
-  `endeavor serve` command a user runs on a workstation or inside their own
-  cluster job, which prints one link and one `ssh -L` line, and a stdio form
-  installed as a Claude Code, Codex or Gemini plugin. Login, ssh and the
-  tunnel stay with the user or their agent; approvals are the agent's own
-  prompts. Outline in [one-port.md](one-port.md), "The standalone command".
+- **The notebook tools as a standalone product.** Built: `endeavor-remote
+  serve`, which a user runs on a workstation or inside their own cluster job
+  and which prints the browser link, agent configs and the `ssh -L` line; the
+  stdio form `endeavor-remote mcp`; a Claude Code plugin in `claude-plugin/`.
+  Guide in [standalone.md](standalone.md), design in
+  [one-port.md](one-port.md), "The standalone command". Left: try the plugin
+  and Codex and Gemini for real, adapt the skills where they describe the
+  app, a tagged release, and an update command (`endeavor-remote update`,
+  maybe `endeavor update` after a rename). Its open questions: where it gets
+  new versions (the Helpers release assets that `scripts/helpers.sh`
+  downloads, or a tagged release), how it checks the download (checksum or
+  signature), replacing its own binary while it runs, what happens to a
+  runtime already running from the older build (the build check and Restart
+  Julia exist for the app), and how a `cargo install` user updates instead.
 
 ## Before sharing the app
 

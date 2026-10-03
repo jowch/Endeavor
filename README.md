@@ -9,6 +9,10 @@ A native macOS app with a Claude Code agent beside a live Pluto.jl notebook.
 See [docs/roadmap.md](docs/roadmap.md) for status and
 [docs/pluto-agent-design-doc.md](docs/pluto-agent-design-doc.md) for the design.
 
+The notebook tools also work without the app: run `endeavor-remote serve` on a
+workstation or cluster node and connect any MCP agent and a browser. See
+[docs/standalone.md](docs/standalone.md).
+
 Run from source:
 
 ```
