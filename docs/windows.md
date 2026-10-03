@@ -155,8 +155,7 @@ The Windows equivalents:
 - **Console windows (S–M).** Build as a GUI app
   (`#![windows_subsystem = "windows"]`) and pass `CREATE_NO_WINDOW` to every
   child process, or each one flashes a console. `logs.rs` redirects output
-  with `dup2`, which needs a Windows version. Check that the `hook-pretool`
-  output still reaches Claude Code.
+  with `dup2`, which needs a Windows version.
 - **Network-change watch (S).** Only macOS and Linux versions exist
   (`src/network.rs`). Windows: `NotifyIpInterfaceChange` or
   `INetworkListManager`.
@@ -175,10 +174,8 @@ The Windows equivalents:
 
 ### Claude Code on Windows (S–M, uncertain)
 
-Claude Code on Windows has needed Git Bash. The plugin's hook command
-(`plugin/hooks/hooks.json`: `"$ENDEAVOR_BIN" hook-pretool`) assumes a Unix
-shell, and a Windows exe path with backslashes needs testing. Setup may need
-to find Git for Windows or set `CLAUDE_CODE_GIT_BASH_PATH`.
+Claude Code on Windows has needed Git Bash. Setup may need to find Git for
+Windows or set `CLAUDE_CODE_GIT_BASH_PATH`.
 
 ### Packaging (M–L, about 1 week)
 

@@ -90,9 +90,9 @@ process running Pluto + PlutoMCP.
   Code setup is opt-in (Settings).
 - **Execution gate.** The agent asks before running notebook code
   (`execute_cell`, `submit_changes`, `run_all_cells`, `allow_execution`,
-  `delete_cell`, `run_after=true`): a plugin PreToolUse hook (`endeavor
-  hook-pretool`) answers "ask", and the panel offers Allow / Allow & stop
-  asking (this session) / Deny. Other ACP agents would need their own gate.
+  `delete_cell`, `run_after=true`): the runtime holds the call until the
+  user answers the run card (Allow / Allow & stop asking (this session) /
+  Deny), so it works for any ACP agent.
 - **Verified in the app (2026-09-25 click-through,** driven with synthetic
   input): folder picker, new/second/reopened sessions, run approvals and
   "stop asking", cell diffs, queue, ⌘↩ steering, Esc, annotation mode, Julia
