@@ -20,7 +20,7 @@ server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)
 
 - **One port per runtime.** Pluto's page, MCP and the app's calls on one
   port answered by the core, with one token, instead of two ports. Built and
-  checked live on This Mac and a server; Slurm is left. Plan in [one-port.md](one-port.md).
+  checked live on This Mac, a server and Slurm. Plan in [one-port.md](one-port.md).
 - **The notebook tools as a standalone product.** After one port: an
   `endeavor serve` command a user runs on a workstation or inside their own
   cluster job, which prints one link and one `ssh -L` line, and a stdio form
