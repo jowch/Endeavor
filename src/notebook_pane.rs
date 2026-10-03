@@ -1437,7 +1437,13 @@ impl Workspace {
                 )
                 .when(open, |d| d.child(self.pane_resources_popover(key, host, cx)))
         });
-        let start_label = if cluster || *host != HostId::ThisMac { format!("Start on {name}") } else { "Start Julia".to_string() };
+        let older = reason == endeavor_remote::OLDER_RUNTIME;
+        let on = if cluster || *host != HostId::ThisMac { format!(" on {name}") } else { String::new() };
+        let start_label = match (older, on.is_empty()) {
+            (true, _) => format!("Restart Julia{on}"),
+            (false, false) => format!("Start{on}"),
+            (false, true) => "Start Julia".to_string(),
+        };
         let host_for_start = host.clone();
         let fixes = self.fixes(host, reason);
         let repair = fixes.contains(&crate::connection::Fix::Repair);
@@ -1452,9 +1458,14 @@ impl Workspace {
                     .items_center()
                     .gap(px(10.))
                     .children(resources)
-                    .child(page_button("host-start", Glyph::Play, start_label, true).on_click(cx.listener(move |this, _, _, cx| {
+                    .child(page_button("host-start", Glyph::Play, start_label, true).on_click(cx.listener(move |this, _, window, cx| {
                         this.pane_resources = None;
-                        this.start_host(&host_for_start, cx);
+                        if !older {
+                            return this.start_host(&host_for_start, cx);
+                        }
+                        let host = host_for_start.clone();
+                        let body = "An older version of Endeavor started it. Notebooks open there stop; their files are saved.";
+                        this.open_confirm(format!("Restart Julia{on}?"), body, "Restart", window, cx, move |this, _, cx| this.restart_host(&host, cx));
                     })))
                     .children(fixes.into_iter().map(|fix| self.fix_button(fix, false, cx))),
             )

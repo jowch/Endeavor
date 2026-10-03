@@ -59,6 +59,8 @@ pub struct Connection {
     cancelling: bool,
     /// Stop Julia once connected (Stop in Settings' host list).
     stop_when_connected: bool,
+    /// Start Julia again once the Stop under way ends (`restart_host`).
+    start_after_stop: bool,
     /// Bumped by each check and stop, so an older check's answer is dropped.
     check: u64,
     /// A Stop is under way.
@@ -208,6 +210,7 @@ impl Connection {
             job_request: None,
             cancelling: false,
             stop_when_connected: false,
+            start_after_stop: false,
             check: 0,
             stopping: false,
             found: None,
@@ -1165,9 +1168,14 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             stop.await;
             let _ = this.update(cx, |this, cx| {
+                let mut restart = false;
                 if let Some(connection) = this.connections.get_mut(&host).filter(|c| c.id == id) {
                     connection.stopping = false;
                     connection.found = Some(Ok(RuntimeState::NotRunning));
+                    restart = std::mem::take(&mut connection.start_after_stop);
+                }
+                if restart {
+                    return this.start_host(&host, cx);
                 }
                 if host == HostId::ThisMac {
                     this.status = concat!("Julia on ", crate::platform::this_computer!(), " is stopped.").into();
@@ -1177,6 +1185,15 @@ impl Workspace {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Stop Julia on `host` and start it again: for Julia an older Endeavor
+    /// started, which this one can't attach to.
+    pub fn restart_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        self.stop_host(host, cx);
+        if let Some(connection) = self.connections.get_mut(host).filter(|c| c.stopping) {
+            connection.start_after_stop = true;
+        }
     }
 
     /// What runs on `host`, as far as the app knows, for the host list and the Where menu.
