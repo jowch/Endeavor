@@ -144,11 +144,13 @@ pub fn name_notebook_call(title: &mut String, input: &mut Option<Value>) {
 }
 
 /// The notebook server's name in any form: `notebook`, an older `pluto`, or
-/// either joined to more (`notebook-read_cell`).
+/// either joined to more (`notebook-read_cell`). The server name must end the
+/// word there: `_` keeps it going, so `notebook_guide` and `pluto_session_status`
+/// (tool names that happen to start with a server's name) aren't it.
 fn is_server(name: &str) -> bool {
     let name = name.trim().to_ascii_lowercase();
     [MCP_SERVER, "pluto"].iter().any(|server| {
-        name.strip_prefix(server).is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| !c.is_ascii_alphanumeric()))
+        name.strip_prefix(server).is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| !c.is_ascii_alphanumeric() && c != '_'))
     })
 }
 
@@ -401,6 +403,16 @@ mod tests {
         assert_eq!(named("notebook.execute_cell", Some(codex)), ("mcp__notebook__execute_cell".into(), Some(json!({ "cell_id": "c" }))));
         for title in ["notebook-read_cell: read_cell", "notebook: read_cell", "read_cell (notebook MCP Server)", "Tool: notebook/read_cell", "pluto: read_cell"] {
             assert_eq!(named(title, Some(args.clone())), ("mcp__notebook__read_cell".into(), Some(args.clone())), "{title}");
+        }
+        // A tool name starting with the server's own name ("notebook_guide",
+        // "pluto_session_status") must not be mistaken for the server itself.
+        for (title, tool) in [
+            ("notebook-notebook_guide: notebook_guide", "notebook_guide"),
+            ("notebook: notebook_guide", "notebook_guide"),
+            ("notebook-pluto_session_status: pluto_session_status", "pluto_session_status"),
+            ("pluto: pluto_session_status", "pluto_session_status"),
+        ] {
+            assert_eq!(named(title, Some(args.clone())), (format!("{TOOL_PREFIX}{tool}"), Some(args.clone())), "{title}");
         }
 
         // Claude's own names, and anything that isn't a notebook call, stay as they are.
