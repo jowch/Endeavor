@@ -808,7 +808,7 @@ impl Workspace {
         let on_host: Vec<&Session> = self.sessions.iter().filter(|s| s.place.host == *host).collect();
         let bound: Vec<(u64, String)> = on_host.iter().filter_map(|s| Some((s.key, s.notebook_path.clone()?))).collect();
         let folders: Vec<(u64, std::path::PathBuf)> = on_host.iter().map(|s| (s.key, s.place.path.clone())).collect();
-        let policies: Vec<(u64, &'static str)> = on_host.iter().map(|s| (s.key, s.policy())).collect();
+        let policies: Vec<(u64, &'static str, bool)> = on_host.iter().map(|s| (s.key, s.policy(), s.edits_ask())).collect();
         let waiting: Vec<u64> = on_host.iter().filter(|s| s.agent_waiting).map(|s| s.key).collect();
         for (key, path) in bound {
             let bridge = bridge.clone();
@@ -818,8 +818,8 @@ impl Workspace {
             let bridge = bridge.clone();
             cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
         }
-        for (key, policy) in policies {
-            self.send_policy(key, policy, cx);
+        for (key, policy, edits) in policies {
+            self.send_policy(key, policy, edits, cx);
         }
         self.reopen_notebooks(host, cx);
         self.watch_notebooks(host, cx);

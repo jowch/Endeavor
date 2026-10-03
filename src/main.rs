@@ -870,9 +870,9 @@ impl Workspace {
         let Some(bridge) = self.bridge(&host) else { return self.ensure_runtime(&host, cx) };
         let tools = agent::Tools { bridge: bridge.clone(), server: session.server.clone() };
         let folder = session.place.path.clone();
-        let policy = session.policy();
+        let (policy, edits) = (session.policy(), session.edits_ask());
         cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
-        self.send_policy(key, policy, cx);
+        self.send_policy(key, policy, edits, cx);
         let older = self.connections.get(&host).and_then(|c| c.older);
         let cwd = host.agent_cwd(&session.place.path);
         let _ = std::fs::create_dir_all(&cwd);
@@ -1245,7 +1245,7 @@ impl Workspace {
                     self.keep_transcript(key);
                     self.check_run_state(key, cx)
                 }
-                Effect::SetPolicy(policy) => self.send_policy(key, policy, cx),
+                Effect::SetPolicy(policy, edits) => self.send_policy(key, policy, edits, cx),
                 Effect::SignedOut => self.signed_out(cx),
                 Effect::Asked(ix) => self.prompt_arrived(key, ix),
                 Effect::UsageLimit(reset) => self.hit_usage_limit(reset, cx),
@@ -1460,11 +1460,11 @@ impl Workspace {
         effects
     }
 
-    pub fn send_policy(&self, key: u64, policy: &'static str, cx: &mut Context<Self>) {
+    pub fn send_policy(&self, key: u64, policy: &'static str, edits: bool, cx: &mut Context<Self>) {
         self.tell_listener(key);
         let Some(bridge) = self.session_bridge(key) else { return };
         // ponytail: a failed send leaves the runtime's policy stale until the next change.
-        cx.background_executor().spawn(async move { pluto::set_policy(&bridge, key, policy) }).detach();
+        cx.background_executor().spawn(async move { pluto::set_policy(&bridge, key, policy, edits) }).detach();
     }
 
     /// ⇧⇥: the active session's next mode (e.g. default → plan → auto).

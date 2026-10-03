@@ -143,8 +143,26 @@ In order. Each part is also useful to Claude, or harmless to it.
    names (else the latest call under way with the same tool and arguments).
    The agent's own prompt before a run the runtime asks about is answered
    allow-once at once, with no card and no mark on its row, so nothing is
-   asked twice; in Manual, Claude still asks about edits that don't run.
-   Always this session switches to Auto and tells the runtime "auto".
+   asked twice. Always this session on a run card switches to Auto and
+   tells the runtime "auto".
+
+   Manual holds edits in the runtime too, so it means the same whatever the
+   agent's own settings allow (Cursor's global "Allow always", a personal
+   Claude setup, a folder rule). The app adds `edits: true` to
+   `endeavor/set_policy` in Manual (Claude's `default` mode); an older
+   runtime ignores it and still holds runs. With it, the runtime holds every
+   call `endeavor_remote::changes_notebook` names (`edit_cell`, `edit_cells`,
+   `add_cell`, `delete_cell`, `move_cell`, `fold_cell`, `new_notebook`)
+   whatever the run policy, so an edit still asks after runs were allowed
+   for the session; `asks_first` is the one rule, used by the runtime and the
+   app. Reads never wait. The app shows a held edit as the edit card the
+   agent's own prompt would get, and lets the agent's own prompt for it
+   through at once. Denied, the change isn't made, even an edit that was to
+   run after, and the call fails with `not_approved` ("The user chose not to
+   make this change."). Always this session remembers the same rule as for
+   the agent's own prompts (the same tool), and the app answers later held
+   calls it matches at once. In this folder isn't offered on runtime cards:
+   the agent's folder rule only answers the agent's own prompt.
    Stopping the turn denies what still waits; a card whose call the agent
    gave up on goes, with a note. Claude Code aborts an MCP call with no
    answer for five minutes, so the app starts it with
@@ -161,7 +179,9 @@ In order. Each part is also useful to Claude, or harmless to it.
    session on that host gets a note to restart Julia, and the host's
    listener answers the agent's calls that runtime can't carry out safely.
    The rules are one function, `older_runtime::refusal`; today there is one:
-   in Ask to run, a call that runs code fails with `older_runtime`.
+   in Ask to run, a call that runs code fails with `older_runtime`. In
+   Manual nothing is refused: an older runtime can't hold edits, so the app
+   leaves the agent's own prompt to ask, as before the runtime held them.
 4. **Give the agent the skills through the notebook MCP server.** Either as
    the server's MCP `instructions`, or as a guide tool the model is told to
    call first. Keep the plugin for Claude unless the MCP route proves as good.
@@ -341,8 +361,9 @@ A call that a folder rule allows never reaches Endeavor, so its row has no
 "allowed" mark. The per-agent table (work item 5) records whether an agent's
 lasting rules stay in the folder and whether Endeavor can read them.
 
-A folder allow rule for a notebook run only answers Claude's own prompt:
-the runtime still holds the run in Ask to run.
+A folder allow rule for a notebook run, or in Manual for a notebook edit,
+only answers Claude's own prompt: the runtime still holds the call, and its
+card offers no "In this folder".
 
 ## Endeavor's copy of the transcript
 

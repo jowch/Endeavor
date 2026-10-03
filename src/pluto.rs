@@ -55,9 +55,10 @@ pub fn call_tool(bridge: &Bridge, tool: &str, arguments: Value) -> Result<Value,
 
 /// Set an agent session's policy in the runtime ("plan" refuses its notebook
 /// writes and runs, "ask" holds a run until the app answers, "auto" runs it);
-/// `owner` is the session's key, sent as its MCP header.
-pub fn set_policy(bridge: &Bridge, owner: u64, policy: &str) -> Result<(), String> {
-    rpc(bridge, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy, "asks": true })).map(|_| ())
+/// with `edits` (Manual) it holds a change to the notebook too. `owner` is
+/// the session's key, sent as its MCP header.
+pub fn set_policy(bridge: &Bridge, owner: u64, policy: &str, edits: bool) -> Result<(), String> {
+    rpc(bridge, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy, "asks": true, "edits": edits })).map(|_| ())
 }
 
 /// Answer a run the runtime holds (its ask `id`), with the cells the user's

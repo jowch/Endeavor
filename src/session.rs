@@ -93,13 +93,14 @@ pub enum Entry {
 }
 
 /// Who asked, and so who hears the answer: the agent's own permission
-/// request, or the runtime holding a run in Ask to run (its ask's id).
+/// request, or the runtime holding a call (its ask's id): a run in Ask to
+/// run, a run or edit in Manual.
 pub enum Asker {
     Agent(Responder<RequestPermissionResponse>),
     Runtime(u64),
 }
 
-/// The option ids of the run cards the app makes for the runtime's asks.
+/// The option ids of the cards the app makes for the runtime's asks.
 pub const RUN_ALLOW: &str = "allow";
 pub const RUN_DENY: &str = "deny";
 
@@ -226,11 +227,12 @@ pub enum Effect {
     /// Ask the runtime for a notebook call's result, which the agent didn't
     /// pass on (`Session::result_fetched` takes it).
     FetchResult { call: ToolCallId, tool: String, input: serde_json::Value },
-    /// Answer a run the runtime holds (`ask`), with the cells the user's own
+    /// Answer a call the runtime holds (`ask`), with the cells the user's own
     /// run reached meanwhile (each with its `last_run` before that run).
     AnswerRun { ask: u64, allow: bool, user_ran: Vec<(String, f64)> },
-    /// Tell the runtime this session's policy changed ("plan" | "ask" | "auto").
-    SetPolicy(&'static str),
+    /// Tell the runtime this session's policy changed ("plan" | "ask" |
+    /// "auto"), and whether its edits ask too (Manual).
+    SetPolicy(&'static str, bool),
     /// A turn failed for want of sign-in: Claude is signed out.
     SignedOut,
     /// A turn hit the account's usage limit: messages wait until it resets.
@@ -400,8 +402,8 @@ pub struct Session {
     pub commands: Vec<AvailableCommand>,
     /// A /compact is running: the context used before it, for the note after.
     compacting: Option<Option<(u64, u64)>>,
-    /// The policy last sent to the runtime.
-    policy_sent: &'static str,
+    /// The policy last sent to the runtime, and whether edits ask.
+    policy_sent: (&'static str, bool),
     /// Whether its host's runtime is from another Endeavor build
     /// (`older_runtime`); none until the runtime says which.
     pub runtime_older: Option<bool>,
@@ -618,7 +620,7 @@ impl Session {
             usage: None,
             commands: Vec::new(),
             compacting: None,
-            policy_sent: "ask",
+            policy_sent: ("ask", false),
             runtime_older: None,
             older_note: false,
             seen_asks: HashSet::new(),
@@ -926,6 +928,19 @@ impl Session {
         }
     }
 
+    /// Whether every change to the notebook asks first (Manual, Claude's own
+    /// default mode), whatever the agent's own settings allow: the runtime
+    /// holds those calls too.
+    pub fn edits_ask(&self) -> bool {
+        self.modes.as_ref().is_some_and(|m| m.current_mode_id.to_string() == "default")
+    }
+
+    /// Whether the runtime holds a call to notebook tool `tool` with `input`
+    /// for the user's answer, by the session's mode.
+    fn runtime_holds(&self, tool: &str, input: &serde_json::Value) -> bool {
+        endeavor_remote::asks_first(tool, input, self.policy(), self.edits_ask())
+    }
+
     /// The session's mode as the rules for an older runtime name it
     /// (`older_runtime::refusal`): "manual" when the agent asks before each
     /// change itself (Claude's own default mode), else the runtime policy.
@@ -956,10 +971,10 @@ impl Session {
     }
 
     fn sync_policy(&mut self, effects: &mut Vec<Effect>) {
-        let policy = self.policy();
+        let policy = (self.policy(), self.edits_ask());
         if policy != self.policy_sent {
             self.policy_sent = policy;
-            effects.push(Effect::SetPolicy(policy));
+            effects.push(Effect::SetPolicy(policy.0, policy.1));
         }
     }
 
@@ -1354,7 +1369,8 @@ impl Session {
                     .iter()
                     .any(|o| o.option_id.to_string().starts_with("exit-plan-"))
                     .then(|| input["plan"].as_str().unwrap_or("").to_owned());
-                if let Some(allow) = self.runtime_asks_instead(runs_code && plan.is_none(), &request.options) {
+                let held = plan.is_none() && celldiff::notebook_tool(&title).is_some_and(|tool| self.runtime_holds(tool, &input));
+                if let Some(allow) = self.runtime_asks_instead(held, &request.options) {
                     let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
                     let _ = responder.respond(RequestPermissionResponse::new(outcome));
                     return effects;
@@ -2071,18 +2087,19 @@ impl Session {
         std::mem::take(&mut self.later)
     }
 
-    /// The option that lets the agent's own prompt before a run through at
-    /// once, with no card and no mark on its row: the runtime asks before the
-    /// run itself (it's from the app's build, and runs ask first), and its
-    /// card is the one the user sees.
-    fn runtime_asks_instead<'a>(&self, run: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
-        let asks = run && self.runtime_older == Some(false) && self.policy() == "ask";
+    /// The option that lets the agent's own prompt through at once, with no
+    /// card and no mark on its row, for a call the runtime holds (`held`,
+    /// `runtime_holds`): the runtime asks about it itself (it's from the
+    /// app's build), and its card is the one the user sees.
+    fn runtime_asks_instead<'a>(&self, held: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
+        let asks = held && self.runtime_older == Some(false);
         option_of_kind(options, PermissionOptionKind::AllowOnce).filter(|_| asks)
     }
 
-    /// The runtime's runs waiting for an answer (its event's `asks`): each
-    /// new one of this session's gets a run card. A card whose ask has gone
-    /// (the agent gave up on the call) goes too, with a note.
+    /// The runtime's calls waiting for an answer (its event's `asks`): each
+    /// new one of this session's gets a run card, or an edit card for an edit
+    /// held in Manual. A card whose ask has gone (the agent gave up on the
+    /// call) goes too, with a note.
     pub fn runtime_asks_now(&mut self, asks: &[serde_json::Value]) -> Vec<Effect> {
         let key = self.key.to_string();
         let mine: Vec<&serde_json::Value> = asks.iter().filter(|a| a["owner"] == key.as_str()).collect();
@@ -2112,15 +2129,19 @@ impl Session {
         effects
     }
 
-    /// A run card for the runtime's ask `id`; answered at once if the
-    /// session stopped asking since the call was made.
+    /// A card for the runtime's ask `id`: a run card for a call that runs
+    /// code, else the edit card the agent's own prompt would get. Answered at
+    /// once as the agent's prompt would be: a run once runs stop asking, an
+    /// edit by an "Always this session" rule.
     fn runtime_ask(&mut self, id: u64, ask: &serde_json::Value) -> Vec<Effect> {
         let tool = ask["tool"].as_str().unwrap_or_default().to_owned();
         let input = ask["arguments"].clone();
         let title = format!("{}{tool}", celldiff::TOOL_PREFIX);
         let call = self.asked_call(id, ask, &tool, &input);
-        if self.run_without_asking {
-            self.approve(&call, Approval::WithoutAsking, &title, &input);
+        let runs_code = endeavor_remote::runs_code(&tool, &input);
+        let arrival = self.answer_on_arrival(&Asked { title: &title, kind: None, input: &input, path: None }, runs_code, false);
+        if let Some(approval) = arrival {
+            self.approve(&call, approval, &title, &input);
             return vec![Effect::AnswerRun { ask: id, allow: true, user_ran: Vec::new() }];
         }
         let options = vec![
@@ -2129,7 +2150,7 @@ impl Session {
         ];
         let code = input["code"].as_str().map(str::to_owned).or_else(|| input["cell_id"].as_str().and_then(|c| self.cell_codes.get(c)).map(str::to_owned));
         let mut effects = Vec::new();
-        if tool != "run_shell" {
+        if runs_code && tool != "run_shell" {
             effects.push(Effect::PreviewRun { ix: self.entries.len(), tool: tool.clone(), input: input.clone() });
         }
         self.asks.asked(self.waiting_prompts().len());
@@ -2139,7 +2160,7 @@ impl Session {
             code,
             options,
             responder: Some(Asker::Runtime(id)),
-            runs_code: true,
+            runs_code,
             tool: Some(tool),
             input,
             kind: None,
@@ -2459,7 +2480,7 @@ mod tests {
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Session));
         let later = s.take_later();
         assert_eq!(answers(&later), [(43, true, &[][..])]);
-        assert!(later.iter().any(|e| matches!(e, Effect::SetPolicy("auto"))) && s.mode_name().as_deref() == Some("Auto"));
+        assert!(later.iter().any(|e| matches!(e, Effect::SetPolicy("auto", _))) && s.mode_name().as_deref() == Some("Auto"));
         // An ask already on its way when runs stopped asking: allowed with no card.
         assert_eq!(answers(&s.runtime_asks_now(&[ask(44, Some("t1"))])), [(44, true, &[][..])]);
         assert!(s.pending_permission().is_none());
@@ -2502,6 +2523,104 @@ mod tests {
         let mut s = asking_session();
         s.runtime_older = None;
         assert_eq!(allowed(&s, true), None);
+    }
+
+    /// A session in Manual on a runtime from the app's build, with a notebook
+    /// call `e1` to edit cell `a` under way.
+    fn manual_session() -> Session {
+        use agent_client_protocol::schema::v1::{SessionMode, ToolCall};
+        let modes = SessionModeState::new("default", vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
+        let mut s = Session::new(7, Place::local("/tmp"), None);
+        let effects = s.started(Started::new(SessionId::new("s1"), Some(modes), None));
+        assert!(matches!(effects.as_slice(), [Effect::SetPolicy("ask", true)]), "the runtime hears that edits ask");
+        s.runtime_build(false);
+        s.cell_codes.observe("read_cell", &serde_json::json!({ "cell_id": "a", "code": "a = 1" }));
+        let call = ToolCall::new("e1", "mcp__notebook__edit_cell").raw_input(edit_input("a = 2")).status(ToolCallStatus::InProgress);
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(call)));
+        s
+    }
+
+    fn edit_input(code: &str) -> serde_json::Value {
+        serde_json::json!({ "notebook_id": "n", "cell_id": "a", "code": code })
+    }
+
+    fn held(id: u64, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "id": id, "owner": "7", "call_id": null, "tool": tool, "arguments": arguments, "since": 1.0 })
+    }
+
+    #[test]
+    fn in_manual_an_edit_the_runtime_holds_is_one_edit_card() {
+        use agent_client_protocol::schema::v1::PermissionOption;
+        let mut s = manual_session();
+        // The agent's own prompt before the edit is let through: the runtime asks instead.
+        let options = [
+            PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce),
+            PermissionOption::new("always", "Yes, and don't ask again for mcp__notebook__edit_cell commands", PermissionOptionKind::AllowAlways),
+            PermissionOption::new("reject", "No", PermissionOptionKind::RejectOnce),
+        ];
+        assert!(s.runtime_holds("edit_cell", &edit_input("a = 2")) && s.runtime_holds("move_cell", &serde_json::json!({})));
+        assert!(!s.runtime_holds("read_cell", &serde_json::json!({ "cell_id": "a" })), "reads never wait");
+        assert_eq!(s.runtime_asks_instead(true, &options).map(|o| o.option_id.to_string()).as_deref(), Some("allow"));
+
+        // The runtime's ask is the one card: the edit card, with the change as a diff.
+        let effects = s.runtime_asks_now(&[held(41, "edit_cell", edit_input("a = 2"))]);
+        assert!(matches!(effects.as_slice(), [Effect::Asked(_)]), "nothing to preview: it runs nothing");
+        assert_eq!(s.waiting_prompts().len(), 1);
+        let Entry::Permission { call, runs_code, .. } = &s.entries[s.pending_permission().unwrap()] else { panic!() };
+        assert_eq!((call.to_string(), *runs_code), ("e1".into(), false));
+        let card = crate::approval::approval_view(&s).unwrap();
+        assert_eq!(card.heading, "Edit `a`?");
+        assert!(matches!(&card.code, Some(crate::approval::CardCode::Diff(_))));
+        assert_eq!(card.lines[0].0, "Nothing runs. In Manual, every change to the notebook asks.");
+        let buttons: Vec<&str> = card.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(buttons, ["Deny", "Always this session", "Edit"]);
+        assert!(card.folder.is_none(), "no In this folder: the agent's folder rule wouldn't reach the runtime");
+
+        // Denied: the runtime hears it, and the row says so.
+        assert!(s.answer_pending(PermissionOptionKind::RejectOnce, Scope::Once));
+        assert_eq!(answers(&s.take_later()), [(41, false, &[][..])]);
+        assert!(matches!(&s.entries[0], Entry::Tool { approval: Some(Approval::Denied), .. }));
+
+        // Always this session: later edits with the same tool are allowed with no card; other changes still ask.
+        s.runtime_asks_now(&[held(42, "edit_cell", edit_input("a = 3"))]);
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Session));
+        let later = s.take_later();
+        assert_eq!(answers(&later), [(42, true, &[][..])]);
+        assert!(!later.iter().any(|e| matches!(e, Effect::SetPolicy(..))), "runs still ask");
+        assert_eq!(answers(&s.runtime_asks_now(&[held(43, "edit_cell", edit_input("a = 4"))])), [(43, true, &[][..])]);
+        assert!(s.pending_permission().is_none());
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.as_ref() == "Allowed for this session: edit a cell"));
+        s.runtime_asks_now(&[held(44, "move_cell", serde_json::json!({ "cell_id": "a", "after_cell_id": "" }))]);
+        assert!(s.pending_permission().is_some(), "moving a cell is another question");
+    }
+
+    #[test]
+    fn in_manual_a_run_is_still_a_run_card_and_edits_ask_after_runs_stop_asking() {
+        let mut s = manual_session();
+        let run = held(41, "edit_cell", serde_json::json!({ "notebook_id": "n", "cell_id": "a", "code": "a = 2", "run_after": true }));
+        let effects = s.runtime_asks_now(&[run]);
+        assert!(matches!(effects.as_slice(), [Effect::PreviewRun { .. }, Effect::Asked(_)]));
+        assert_eq!(crate::approval::approval_view(&s).unwrap().heading, "Edit `a` and run it?");
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Session));
+        let later = s.take_later();
+        assert!(later.iter().any(|e| matches!(e, Effect::SetPolicy("auto", true))), "runs stop asking; edits still do");
+        assert_eq!(s.mode_name().as_deref(), Some("Manual"));
+        assert!(!s.runtime_holds("execute_cell", &serde_json::json!({ "cell_id": "a" })));
+        assert!(s.runtime_holds("add_cell", &serde_json::json!({ "code": "b = 1" })));
+        s.runtime_asks_now(&[held(42, "add_cell", serde_json::json!({ "code": "b = 1" }))]);
+        assert!(s.pending_permission().is_some(), "an edit still asks");
+    }
+
+    #[test]
+    fn ask_to_run_and_an_older_runtime_leave_edits_to_the_agent() {
+        // Ask to run: the runtime doesn't hold an edit, so the agent's prompt (if any) is the card.
+        let s = asking_session();
+        assert!(!s.edits_ask() && !s.runtime_holds("edit_cell", &edit_input("a = 2")));
+        // An older runtime in Manual can't hold edits: the agent's own prompt asks.
+        let mut s = manual_session();
+        s.runtime_build(true);
+        let options = [agent_client_protocol::schema::v1::PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce)];
+        assert_eq!(s.runtime_asks_instead(s.runtime_holds("edit_cell", &edit_input("a = 2")), &options), None);
     }
 
     #[test]
@@ -2601,15 +2720,15 @@ mod tests {
         assert_eq!(s.mode_name().as_deref(), Some("Manual"), "another agent mode: its own name");
 
         // ⇧⇥ moves on at once and asks the agent: Plan → Ask to run → Auto → Plan.
-        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan")] if m.to_string() == "plan"));
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan", _)] if m.to_string() == "plan"));
         assert_eq!(s.mode_name().as_deref(), Some("Plan"));
         // Leaving plan tells the runtime too.
-        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("ask")] if m.to_string() == "auto"));
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("ask", _)] if m.to_string() == "auto"));
         assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
         // Auto is the same agent mode, with runs no longer asking: only the runtime hears.
-        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetPolicy("auto")]) && s.run_without_asking);
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetPolicy("auto", _)]) && s.run_without_asking);
         assert_eq!(s.mode_name().as_deref(), Some("Auto"));
-        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan")] if m.to_string() == "plan"));
+        assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan", _)] if m.to_string() == "plan"));
         assert!(!s.run_without_asking);
 
         // The agent's own updates win.
@@ -2646,7 +2765,7 @@ mod tests {
 
         // Auto picked on the new-session screen: the agent is asked, and the runtime told runs stop asking.
         let (mut s, effects) = start("default", 2);
-        assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("auto")] if m.to_string() == "auto"));
+        assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("auto", _)] if m.to_string() == "auto"));
         assert_eq!((s.mode_name().as_deref(), s.policy()), (Some("Auto"), "auto"));
         assert_eq!(s.mode(), Some(Mode { agent: "auto".into(), run_without_asking: true }));
 
@@ -2661,13 +2780,13 @@ mod tests {
 
         // Manual is applied too, when the agent starts in another mode.
         let (s, effects) = start("auto", 0);
-        assert!(matches!(effects.as_slice(), [Effect::SetMode(m)] if m.to_string() == "default"));
+        assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("ask", true)] if m.to_string() == "default"), "edits ask too");
         assert_eq!(s.mode_name().as_deref(), Some("Manual"));
         assert_eq!((s.policy(), s.guard_mode()), ("ask", "manual"), "the runtime asks before runs; so does the agent");
 
         // A reopened session in Plan: the agent is asked and the runtime told.
         let (s, effects) = start("default", 3);
-        assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan")] if m.to_string() == "plan"));
+        assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan", _)] if m.to_string() == "plan"));
         assert_eq!(s.mode_name().as_deref(), Some("Plan"));
 
         // Already in the mode: nothing to ask.
@@ -2711,10 +2830,10 @@ mod tests {
         assert_eq!(names, ["Manual", "Ask to run", "Auto", "Plan"]);
         assert_eq!(s.current_mode(), Some(0));
         let auto = s.mode_choices()[2].clone();
-        assert!(matches!(s.choose_mode(&auto).as_slice(), [Effect::SetMode(m), Effect::SetPolicy("auto")] if m.to_string() == "auto"));
+        assert!(matches!(s.choose_mode(&auto).as_slice(), [Effect::SetMode(m), Effect::SetPolicy("auto", _)] if m.to_string() == "auto"));
         assert_eq!((s.current_mode(), s.mode_name().as_deref()), (Some(2), Some("Auto")));
         let plan = s.mode_choices()[3].clone();
-        assert!(matches!(s.choose_mode(&plan).as_slice(), [Effect::SetMode(_), Effect::SetPolicy("plan")]));
+        assert!(matches!(s.choose_mode(&plan).as_slice(), [Effect::SetMode(_), Effect::SetPolicy("plan", _)]));
         assert!(!s.run_without_asking);
 
         // An agent without plan and auto: its own modes and descriptions.
