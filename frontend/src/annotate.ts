@@ -1,4 +1,4 @@
-// Point (design doc §4.2, "annotation mode" in the code). While it's on, the
+// Point ("annotation mode" in the code). While it's on, the
 // pointer picks the smallest thing under it instead of editing: a figure or
 // an output, a code block, a Markdown paragraph, or the whole cell from its
 // edge. A drag that starts on code picks whole lines, a drag anywhere else

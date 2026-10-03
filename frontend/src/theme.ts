@@ -271,7 +271,7 @@ pluto-editor > main { padding-top: 16px; }
 pluto-editor main { margin-left: 48px !important; margin-right: auto !important; width: calc(100% - 48px - 16px) !important; max-width: 731px !important; }
 pluto-runarea > span { font-size: 10px; }
 /* The web view draws over native views, so the notebook header can't blur
-   what's under it (docs/design-gaps.md, "Translucent headers with blur").
+   what's under it (docs/ui-spec.md, "Fades, not blur").
    Instead, the top of the page fades into the page background, so a cell
    scrolled toward the top softens instead of cutting off hard. Fixed to the
    viewport, not the scroller, and never over the first cell at rest: the

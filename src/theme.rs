@@ -238,10 +238,10 @@ pub fn size_title() -> Pixels { px(21.) }
 /// interface font at the same size.
 pub fn size_code() -> Pixels { px(12.) }
 
-// The chat column (the transcript, the composer and its cards, docs/design-gaps.md's
-// notes on chat text): the same ladder, one step up, so chat's reading text sits a
-// size larger than the rest of the interface (sidebar, Settings, menus, the notebook
-// header), which keeps `size_meta_small` .. `size_code` unchanged.
+// The chat column (the transcript, the composer and its cards): the same ladder,
+// one step up, so chat's reading text sits a size larger than the rest of the
+// interface (sidebar, Settings, menus, the notebook header), which keeps
+// `size_meta_small` .. `size_code` unchanged.
 
 /// Chat: keyboard hints. One step up from `size_meta_small`.
 pub fn chat_meta_small() -> Pixels { px(12.) }

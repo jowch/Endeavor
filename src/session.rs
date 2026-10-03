@@ -1714,7 +1714,6 @@ impl Session {
                 Some(description) => self.note(format!("{}: {description}", notice.title)),
                 None => self.note(notice.title),
             },
-            // ponytail: modes, usage, available commands not shown yet.
             _ => {}
         }
     }

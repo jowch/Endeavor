@@ -1,6 +1,5 @@
 //! Messages from the page script (frontend/, Point, Reply on a selection and
-//! asking about cells), turned into chat messages with their attachments
-//! (design doc §4.2–4.3).
+//! asking about cells), turned into chat messages with their attachments.
 
 use crate::attach::{Attachment, Cell, CellAsk, Part, Quoted};
 use crate::session::defined_name;

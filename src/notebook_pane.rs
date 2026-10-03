@@ -1,8 +1,8 @@
 //! The notebook pane around Pluto's page: its header (the notebook system's
 //! logo, the file, where it runs, what state it's in, then Point, Share, Live
 //! docs, Status and ⋮), the Share and ⋮ menus' actions, and the pages drawn
-//! natively when there's no notebook to show (docs/design-gaps.md, "Notebook
-//! pane"). In the Pluto classic look the header keeps only the logo, file,
+//! natively when there's no notebook to show (docs/ui-spec.md, "Notebook
+//! (Pluto)"). In the Pluto classic look the header keeps only the logo, file,
 //! host, Point and ⋮, since Pluto's own page has the rest.
 
 use std::cell::Cell;
