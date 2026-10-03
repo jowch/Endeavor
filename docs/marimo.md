@@ -1,8 +1,8 @@
 # marimo notebooks
 
 Design for adding marimo (reactive Python notebooks) as a second notebook
-backend next to Pluto. Nothing here is built yet. Settled work moves to
-[roadmap.md](roadmap.md) once scheduled.
+backend next to Pluto. The app-side boundary (build step 1) is built;
+nothing marimo-specific is.
 
 _Drafted 2026-09-26, against marimo 0.25.0 (released 2026-09-23)_
 
@@ -31,12 +31,11 @@ Two things make this more than a port:
 
 ## Decisions
 
-- **Build the notebook-backend boundary first**, designed against marimo
-  rather than Jupyter. This is the `notebook-model` boundary of
-  [pluto-agent-design-doc.md](pluto-agent-design-doc.md) §8, which no code
-  implements yet. marimo shares Pluto's model (reactive graph, plain-text
-  file), so the boundary stays small; Jupyter stays in
-  [roadmap.md](roadmap.md) "Later".
+- **Design the notebook-backend boundary against marimo** rather than
+  Jupyter. The boundary is the core's engine interface
+  ([runtime-core.md](runtime-core.md)) and `Backend` in the app. marimo
+  shares Pluto's model (reactive graph, plain-text file), so the boundary
+  stays small; Jupyter stays in [roadmap.md](roadmap.md) "Later".
 - **Same tool names and shapes for both backends.** The agent calls
   `read_cell`, `edit_cell`, `execute_cell`, `get_cell_dependencies` and the
   rest whatever the notebook is. Language differences go in the skills, not
@@ -55,20 +54,18 @@ Two things make this more than a port:
 
 Today:
 
-- `crates/endeavor-remote` starts `julia --project=runtime runtime/boot.jl
-  <pluto_port> <mcp_port>` with `ENDEAVOR_TOKEN`, `ENDEAVOR_STATE` and
-  `ENDEAVOR_LAUNCHER` set. Once up, `boot.jl` writes `runtime.json`
-  (ports, Pluto secret), and the helper relays the two loopback ports.
-- `EndeavorRuntime` (Julia, about 3,200 lines) runs Pluto in-process and
-  serves the agent's MCP tools plus the app's `/call` methods and `/events`
-  stream.
+- The helper starts `endeavor-remote core`, which serves the agent's MCP
+  tools plus the app's `/call` methods and `/events` stream, and starts
+  Julia (`runtime/boot.jl` and `EndeavorRuntime`, the Pluto adapter) as its
+  child ([runtime-core.md](runtime-core.md)). The core writes `runtime.json`
+  (ports, Pluto secret), and the helper relays the loopback ports.
 - The app shows Pluto's page in a webview and injects `frontend/dist/page.js`,
   which reads Pluto's DOM for change highlighting, annotations and theming.
 
 ### What already works for both
 
 - The ssh relay and the wire protocol (only field names say "pluto").
-- The bridge: JSON-RPC over HTTP/SSE, bearer token, and the `/events` schema
+- The bridge: MCP over Streamable HTTP, bearer token, and the `/events` schema
   `{notebooks, cells: [cell_id, running, errored, unrun, author, before,
   version, name]}`.
 - Messages between the app and the page script (string notebook and cell IDs).
@@ -79,24 +76,27 @@ Today:
 
 | Where | Today | Change |
 | --- | --- | --- |
-| Tool prefix `mcp__pluto__` in `celldiff.rs`, `session.rs` | hard-coded | one name for the bridge MCP server (e.g. `notebook`), used by both |
-| Notebook detection, `crates/wire/src/notebooks.rs` | Pluto header, `# ╔═╡` cells | also detect `app = marimo.App` in `.py` files; parse `@app.cell` for the new-session preview |
-| Notebook URL and ID, `main.rs:53` | `/edit?id=` | per backend (marimo's form, believed `/?file=`, to confirm) |
-| Annotation URI, `annotate.rs` | `pluto://notebook/…/cell/…` | `notebook://<backend>/…` |
+| Notebook detection, `Backend::of_file` and `crates/wire/src/notebooks.rs` | Pluto header, `# ╔═╡` cells | also detect `app = marimo.App` in `.py` files; parse `@app.cell` for the new-session preview |
+| Notebook URL and ID, `Backend::notebook_url` | `/edit?id=` | per backend (marimo's form, believed `/?file=`, to confirm) |
 | Page script, `frontend/` | Pluto DOM, `--pluto-*` variables | a second adapter for marimo's DOM and CSS variables |
 | Runtime launch, `endeavor-remote`, `remote.rs`, `runtime.rs` | find or download Julia, ship `runtime/` | also find or download uv; ship `runtime-py/` |
 | Runtime state, `runtime.json` | one runtime per host | one per backend per host, each started lazily when a notebook of its kind opens |
 | Settings, splash | "My julia", "Restart Julia" | per backend, shown only once that backend is used |
 | Skills, prompt text in `main.rs` | Pluto and Julia content | marimo versions, chosen by the session's notebook |
 
-The app-side boundary is a small enum, not a trait object: `Backend::{Pluto,
-Marimo}` with the handful of differences above (detection, URL, page adapter,
-launch command, skill set). Two known backends don't need dynamic dispatch.
+The app-side boundary is a small enum, not a trait object: `Backend` in
+`crates/wire/src/backend.rs`, today with Pluto only, gains `Marimo` with the
+handful of differences above (detection, URL, page adapter, launch command,
+skill set). Two known backends don't need dynamic dispatch. The MCP server is
+already named `notebook` and cell links are `notebook://<backend>/…`.
 
 ## The Python runtime
 
 A new directory `runtime-py/` holds a Python package, `endeavor_runtime`,
-with a `uv.lock`. The helper starts it the same way as the Julia runtime:
+with a `uv.lock`. Under the core split ([runtime-core.md](runtime-core.md))
+it is only the adapter: steps 1 and 2 below and `marimo_api.py`. `/events`,
+tool serving and the host tools come from the core, so steps 3 to 5 become
+the adapter's notifications and calls. The helper starts it the same way as the Julia runtime:
 
 ```
 uv run --project runtime-py python -m endeavor_runtime <notebook_port> <mcp_port>
@@ -125,9 +125,7 @@ Inside, it:
 5. Serves the host tools, ported from `HostTools.jl`.
 
 All calls into marimo internals live in one module, `marimo_api.py`, so an
-upgrade touches one file. The Julia runtime's lesson
-([design-notes.md](design-notes.md): Pluto calls ended up spread across eight
-files) applies here too.
+upgrade touches one file.
 
 ### Differences the runtime has to cover
 
@@ -187,9 +185,8 @@ To keep marimo notebooks as trustworthy a record, the runtime:
 
 ## Build order
 
-1. The app-side boundary with Pluto as the only backend: rename the MCP server
-   and URI scheme, add `Backend`, move Pluto-specific strings behind it. No
-   behaviour change; existing tests pass.
+1. The app-side boundary with Pluto as the only backend: the MCP server
+   named `notebook`, `notebook://` cell links, `Backend`. Done.
 2. `runtime-py` with the launch contract, marimo server, websocket client and
    `/events`, plus read-only tools. The app opens and shows a marimo notebook.
 3. Editing and running tools, staging, run policy, ancestors-first runs.
