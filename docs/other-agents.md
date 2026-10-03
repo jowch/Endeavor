@@ -6,29 +6,21 @@ Cursor, Codex and Gemini as "Not available yet".
 
 This note covers two things:
 
-- the work that makes Endeavor agent-neutral, which any second agent needs;
+- the work that makes Endeavor agent-neutral, which any second agent needs
+  (items 1 to 4 are done, and item 10 is done for Claude);
 - what has to be found out about each agent before choosing which one to add.
 
-Cursor was tested in a spike on 2026-09-27; its findings are in
-[cursor-agent.md](cursor-agent.md). Codex and Gemini haven't been tested yet.
+Cursor was tested in a spike on 2026-09-27 and again live on 2026-10-02; its
+findings are in [cursor-agent.md](cursor-agent.md). Codex and Gemini haven't
+been tested yet. Other agents are set aside for now.
 
 ## Where Endeavor depends on Claude Code
 
 Each of these works only because of how Claude Code or its adapter behaves.
 
-- **Recognising notebook tool calls.** Done (work item 1): other agents'
-  names for notebook calls are recognised too.
-- **Tool results.** Diffs and run summaries read the tool's JSON result from
-  the ACP `rawOutput` (`celldiff.rs`, `session.rs`). Cursor sends only
-  `{"success": true}` there, so the app asks the runtime for it instead
-  (work item 2).
 - **Skills.** The Pluto skills in `plugin/` reach Claude as a Claude Code
   plugin, set in the session options (`session_options`, `src/agent.rs`).
   Other agents get them from the notebook MCP server (work item 4).
-- **Asking before a run.** The runtime holds a call that runs code until the
-  user answers (work item 3), so it works for any agent. It used to depend on
-  a Claude Code `PreToolUse` hook, and Cursor runs no hooks for MCP calls in
-  ACP mode.
 - **Reads without asking.** `allowedTools` in the session options lets the
   read-only notebook tools through without a prompt. Cursor asks for every
   call.
@@ -60,50 +52,36 @@ Each of these works only because of how Claude Code or its adapter behaves.
 
 In order. Each part is also useful to Claude, or harmless to it.
 
-1. **Recognise tools by name.** Use `rawInput`'s tool name, or match the
-   server name in any form, as well as Claude's title. Needed by every agent
-   whose titles differ from Claude's.
-
-   Done. Every tool call, update and permission request passes through
-   `celldiff::name_notebook_call` as it reaches the session. A notebook call
-   named another way gets Claude's title, `mcp__notebook__<tool>`, and its
-   arguments become its input. It recognises a `rawInput` that wraps the call
-   (Cursor's `{providerIdentifier, toolName, args}`, or `server`/`tool`/
-   `arguments`), and titles that name only the server and a notebook tool
-   ("notebook: edit_cell", "notebook-read_cell: read_cell", "edit_cell
-   (notebook MCP Server)"). The tool must be one the runtime offers
-   (`endeavor_remote::is_tool`). Everything after that, cards, approvals, run
-   previews, diffs, the transcript and the pane following a new notebook,
-   asks `celldiff::notebook_tool`, so Claude's calls work exactly as before.
-   Claude Code's own names stay where they are Claude settings: the
-   `allowedTools` list and permission rule words (`permits::rule_words`).
-
-   The 2026-10-02 live test found two gaps here, both now fixed. A tool
-   name starting with the server's own name plus `_` (`notebook_guide`,
-   `pluto_session_status`) read as naming only the server, so its title
-   went unrecognised; a server name must now end the word there, not just
-   stop being alphanumeric. And Cursor's `session/request_permission`
-   carries no `rawInput` at all, only the arguments as a fenced json block
-   meant for people to read; the session now falls back to the input
-   already recorded on the matching `tool_call_update`, which always
-   arrived first.
-2. **Get tool results from the runtime.** The runtime keeps each notebook
-   call's result, keyed so the app can look it up when the agent's result is
-   missing or only says "success". This touches `endeavor-remote` and the
-   app. It isn't needed for an agent that sends real results.
-
-   Done. The core keeps each agent session's last 64 tool results in memory
+1. **Recognise tools by name.** Done. Every tool call, update and
+   permission request passes through `celldiff::name_notebook_call` as it
+   reaches the session. A notebook call named another way gets Claude's
+   title, `mcp__notebook__<tool>`, and its arguments become its input. It
+   recognises a `rawInput` that wraps the call (Cursor's `{providerIdentifier,
+   toolName, args}`, or `server`/`tool`/`arguments`), and titles that name
+   only the server and a notebook tool ("notebook: edit_cell",
+   "notebook-read_cell: read_cell", "edit_cell (notebook MCP Server)"); a
+   server name must end the word there, so `notebook_guide` isn't read as the
+   server alone. The tool must be one the runtime offers
+   (`endeavor_remote::is_tool`). A permission request with no `rawInput`
+   (Cursor's) takes the input already recorded on the matching
+   `tool_call_update`. Everything after that, cards, approvals, run previews,
+   diffs, the transcript and the pane following a new notebook, asks
+   `celldiff::notebook_tool`. Claude Code's own names stay where they are
+   Claude settings: the `allowedTools` list and permission rule words
+   (`permits::rule_words`).
+2. **Get tool results from the runtime.** Done. The core keeps each agent
+   session's last 64 tool results in memory
    (`crates/endeavor-remote/src/results.rs`), recorded before the reply goes
    out: the call's text content, whether it failed, and its key. The key is
    the session (`X-Endeavor-Session`), the id the agent's client gave the
    call when it sends one, and the tool and its arguments (in one canonical
    form, so `1` and `1.0` match). Claude Code sends
    `_meta["claudecode/toolUseId"]` with every `tools/call`, the same id its
-   ACP adapter gives the tool call (confirmed in a live session); Cursor's
-   `_meta` is unknown. The app asks with the `/call` method
-   `endeavor/tool_result {owner, call_id, tool, arguments}`, which answers
-   `{content, isError}` for the call with that id, else for the oldest one
-   not yet looked up with the same tool and arguments, else null.
+   ACP adapter gives the tool call; Cursor's `_meta` is unknown. The app asks
+   with the `/call` method `endeavor/tool_result {owner, call_id, tool,
+   arguments}`, which answers `{content, isError}` for the call with that id,
+   else for the oldest one not yet looked up with the same tool and
+   arguments, else null.
 
    The app asks only when a finished notebook call's output isn't the tool's
    result (`Effect::FetchResult` in `on_tool_update`). The reply becomes the
@@ -114,30 +92,25 @@ In order. Each part is also useful to Claude, or harmless to it.
    result when a replay brings back only the agent's placeholder. Not asked
    while a reopened session replays: the runtime keys results by the app's
    session key, which a new launch doesn't share.
-3. **Ask before a run without a hook.** Move the run check into the runtime,
-   or into the app's handling of permission requests, so it doesn't need the
-   agent to run Claude hooks. The runtime already knows which calls run code
-   (`gate::runs_code`). How this works depends on what the agent does before
-   a tool call; see the questions below.
-
-   Done, in the runtime. `endeavor_remote::runs_code` is the one list of
-   calls that run code (`execute_cell`, `submit_changes`, `run_all_cells`,
-   `allow_execution`, `delete_cell`, `run_shell`, and `edit_cell` or
-   `add_cell` with `run_after`). The app tells the runtime each session's
-   policy ("ask", "auto" or "plan") with `asks: true`; an app from before
-   this never sends it, so a newer runtime doesn't hold its runs. In "ask",
-   after the plan, host and one-notebook refusals, such a call waits in the
-   runtime (`crates/endeavor-remote/src/asks.rs`) and shows in the event
-   stream's `asks` (`{id, owner, call_id, tool, arguments, since}`). The app
-   shows it as a run card and answers with `endeavor/answer_run {id, allow,
+3. **Ask before a run without a hook.** Done, in the runtime.
+   `endeavor_remote::runs_code` is the one list of calls that run code
+   (`execute_cell`, `submit_changes`, `run_all_cells`, `allow_execution`,
+   `delete_cell`, `run_shell`, and `edit_cell` or `add_cell` with
+   `run_after`). The app tells the runtime each session's policy ("ask",
+   "auto" or "plan") with `asks: true`; an app that doesn't send it doesn't
+   get its runs held. In "ask", after the plan, host and one-notebook
+   refusals, such a call waits in the runtime
+   (`crates/endeavor-remote/src/asks.rs`) and shows in the event stream's
+   `asks` (`{id, owner, call_id, tool, arguments, since}`). The app shows it
+   as a run card and answers with `endeavor/answer_run {id, allow,
    user_ran}`; `user_ran` carries the cells the user's own run reached
-   meanwhile (Run anyway), which replaces `endeavor/run_anyway`. Allowed, the
-   call goes on as before. Denied, an edit that was to run after is made,
-   staged and not run, with a `not_approved` warning in its receipt; any
-   other call fails with `not_approved`. The waiting call holds no lock, and
-   gives up when the agent cancels it (MCP `notifications/cancelled`) or its
-   connection closes (checked every 250 ms). With no app following the
-   event stream, a call that would wait fails at once with `no_app`.
+   meanwhile (Run anyway). Allowed, the call goes on. Denied, an edit that
+   was to run after is made, staged and not run, with a `not_approved`
+   warning in its receipt; any other call fails with `not_approved`. The
+   waiting call holds no lock, and gives up when the agent cancels it (MCP
+   `notifications/cancelled`) or its connection closes (checked every
+   250 ms). With no app following the event stream, a call that would wait
+   fails at once with `no_app`.
 
    In the app, the card is the same run card as before, on the call the ask
    names (else the latest call under way with the same tool and arguments).
@@ -172,51 +145,41 @@ In order. Each part is also useful to Claude, or harmless to it.
    progress notification when the call asked for progress, else an SSE
    comment), and ends with the reply. It also aborts an MCP call with no
    answer for five minutes, so the app starts it with
-   `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0`. Cursor's own timeout is untested. The `PreToolUse` hook, `endeavor hook-pretool` and
-   `ENDEAVOR_BIN` are gone.
+   `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0`. Cursor's own timeout is untested.
 
    A runtime started by an older Endeavor (it outlives the app; see
    [remote-sessions.md](remote-sessions.md)) can't hold runs. Each runtime
-   now reports the build it came from (`build` in its event stream, from
-   the helper's `--build`, the same version `remote::version()` computes),
-   and the app compares it with its own. On another build, or none, each
-   session on that host gets a note to restart Julia, and the host's
-   listener answers the agent's calls that runtime can't carry out safely.
-   It checks every request on a connection, also after one it passed
-   through (Claude Code sends `GET /mcp` first and reuses the connection).
-   The rules are one function, `older_runtime::refusal`; today there is one:
-   in Ask to run, a call that runs code fails with `older_runtime`. In
-   Manual nothing is refused: an older runtime can't hold edits, so the app
-   leaves the agent's own prompt to ask, as before the runtime held them.
-4. **Give the agent the skills through the notebook MCP server.** Either as
-   the server's MCP `instructions`, or as a guide tool the model is told to
-   call first. Keep the plugin for Claude unless the MCP route proves as good.
-
-   Done, as a guide tool (`crates/endeavor-remote/src/guide.rs`). The
-   server's MCP `instructions` are three sentences: what the tools are for,
-   and to call `notebook_guide` once before the first notebook call. With no
-   arguments the tool returns the three skills (`pluto-session`,
-   `pluto-workflow`, `pluto-semantics`, about 15 KB) without their front
-   matter; links to reference files become topics, which the tool returns
-   when called with `topic`. The text is the skill files themselves, built
-   into the helper with `include_str!`, so `plugin/skills` stays the one
-   source (the helper's source key and build scripts now include it).
+   reports the build it came from (`build` in its event stream, from the
+   helper's `--build`, the same version `remote::version()` computes), and
+   the app compares it with its own. On another build, or none, each session
+   on that host gets a note to restart Julia, and the host's listener answers
+   the agent's calls that runtime can't carry out safely. It checks every
+   request on a connection, also after one it passed through (Claude Code
+   sends `GET /mcp` first and reuses the connection). The rules are one
+   function, `older_runtime::refusal`; today there is one: in Ask to run, a
+   call that runs code fails with `older_runtime`. In Manual nothing is
+   refused: an older runtime can't hold edits, so the app leaves the agent's
+   own prompt to ask.
+4. **Give the agent the skills through the notebook MCP server.** Done, as a
+   guide tool (`crates/endeavor-remote/src/guide.rs`). The server's MCP
+   `instructions` are three sentences: what the tools are for, and to call
+   `notebook_guide` once before the first notebook call. With no arguments
+   the tool returns the three skills (`pluto-session`, `pluto-workflow`,
+   `pluto-semantics`, about 15 KB) without their front matter; links to
+   reference files become topics, which the tool returns when called with
+   `topic`. The text is the skill files themselves, built into the helper
+   with `include_str!`, so `plugin/skills` stays the one source.
 
    Why a tool and not the instructions: the skills are about 44 KB with
    their references, too long for instructions, which clients may cut short
    or drop; a tool call works on any client that calls tools, and the
    references load only when needed, as skills do. The tool's own
    description also says to call it first, for agents that ignore
-   instructions.
-
-   The 2026-10-02 live test confirmed this: Cursor's MCP `instructions`
-   never reached the model, and tool descriptions load lazily, so calling
-   `notebook_guide` first depends on the model choosing to. In one fresh
-   session it called the guide second; in another it never called it, and
-   that session went on to write a two-expression cell and hit the error
-   with nothing pointing it back at the guide. A notebook-tool error whose
-   kind means the agent used a tool wrong now appends a line pointing at
-   `notebook_guide`, for a caller without the plugin.
+   instructions. Cursor's MCP `instructions` never reached the model, and
+   tool descriptions load lazily, so calling the guide first depends on the
+   model choosing to (see [cursor-agent.md](cursor-agent.md)). A
+   notebook-tool error whose kind means the agent used a tool wrong appends
+   a line pointing at `notebook_guide`, for a caller without the plugin.
 
    Claude doesn't get it twice: the app sends `X-Endeavor-Skills: plugin`
    with each session's MCP requests (`Tools::mcp_server`), and the server
@@ -234,30 +197,17 @@ In order. Each part is also useful to Claude, or harmless to it.
    message on the "[Endeavor]" and `<attached …>` / `<quote …>` markers.
 9. **An agent choice on the new-session screen**, and each agent's sign-in on
    the sign-in screen.
-10. **A sidebar that doesn't wait for any agent.** Today the sidebar's past
-    sessions come from Claude's `session/list`, and Claude only starts once
-    This Mac's Julia is ready, so the list waits for both. Instead, Endeavor
-    keeps its own record of each session (its agent, place, title and last
-    activity; `sessions.json` already has the place) and draws the sidebar
-    from it at launch. Each agent's listing then updates the record: new
-    titles and times, and sessions deleted elsewhere (sessions an agent made
-    outside Endeavor aren't added). An
-    agent that can't list sessions adds none. The default agent starts at
-    launch, alongside Julia, and others start when one of their sessions is
-    opened or started. A session needs its agent and its host's Julia only
-    when it's opened. With more than one agent in use, rows show which agent
-    each session belongs to. Worth doing first, even with Claude alone.
-
-    Built for Claude: `sessions.json` keeps each session's agent, place,
-    title and last activity (`src/records.rs`; user names stay in
-    `titles.json`, archiving in `archived.json`), and the sidebar draws from
-    it at launch. `Records::merge` takes one agent's listing of a folder (or
-    of a server's whole agent folder) and touches only that agent's
-    sessions; a failed listing changes nothing. Claude starts at launch
-    alongside Julia, except during first-launch setup. A session opened
-    before its host's Julia is up waits with "Starting Julia…". Still to do
-    with a second agent: starting it when one of its sessions is opened, and
-    showing the agent on rows.
+10. **A sidebar that doesn't wait for any agent.** Done for Claude:
+    `sessions.json` keeps each session's agent, place, title and last
+    activity (`src/records.rs`; user names stay in `titles.json`, archiving
+    in `archived.json`), and the sidebar draws from it at launch.
+    `Records::merge` takes one agent's listing of a folder (or of a server's
+    whole agent folder) and touches only that agent's sessions; sessions an
+    agent made outside Endeavor aren't added, and a failed listing changes
+    nothing. Claude starts at launch alongside Julia, except during
+    first-launch setup. A session opened before its host's Julia is up waits
+    with "Starting Julia…". Still to do with a second agent: starting it
+    when one of its sessions is opened, and showing the agent on rows.
 
 After that, each agent needs its own handling of whatever its answers to the
 questions below turn up, such as Cursor's plan request.
@@ -373,31 +323,24 @@ card offers no "In this folder".
 
 ## Endeavor's copy of the transcript
 
-Built (`src/transcript_copy.rs`; docs/ui-spec.md, Layout and Chat). The
-copy is saved when a turn ends and when the session closes, as
-`transcripts/<session id>.json` in Endeavor's support folder, with long
-tool input and output cut short; deleting a session deletes it. Opening a
-session with a copy shows it at once, read-only, with "Loading…" (or the
-usual Julia, server or Claude wait line); the replay gathers aside and then
-replaces it as below, matching messages and tool calls by order and text
-(a tool call also by its id). The floating button shows in any transcript
-scrolled up from its end. Not built: step 2 of "Continue with another
-agent" reading this copy. A session saved before this has no copy, and
-opens on its summary as before.
-
 The agent's copy of a session is still the one that matters. Endeavor also
-keeps a display-only copy of each session's transcript, in its own app
-support folder, so the history can show before the agent (and the host's
-Julia) have loaded the session, including when a session's server is
-offline.
+keeps a display-only copy of each session's transcript
+(`src/transcript_copy.rs`), so the history can show before the agent (and the
+host's Julia) have loaded the session, including when a session's server is
+offline. The look is in [ui-spec.md](ui-spec.md), Layout and Chat.
 
+- **Where.** `transcripts/<session id>.json` in Endeavor's support folder,
+  saved when a turn ends and when the session closes, with long tool input
+  and output cut short. Deleting a session deletes it. A session saved
+  before the copy existed has none, and opens on its summary.
 - **At once, read-only.** Opening a session shows Endeavor's copy right
-  away, read-only, with a faint "Loading…" line. A message can still be
-  typed; it waits and sends once the agent has loaded the session.
-- **The swap.** When the agent's replay finishes, it replaces Endeavor's
+  away, read-only, with a faint "Loading…" line (or the usual Julia, server
+  or Claude wait line). A message can still be typed; it waits and sends
+  once the agent has loaded the session.
+- **The swap.** The agent's replay gathers aside, then replaces Endeavor's
   copy. The replay carries no message ids, so it's matched against
-  Endeavor's copy by order and text. The view keeps its place: the message
-  at the top of the view stays where it was.
+  Endeavor's copy by order and text (a tool call also by its id). The view
+  keeps its place: the message at the top of the view stays where it was.
   - If every message matches, nothing moves.
   - If the replay only adds messages at the end — the session was
     continued outside Endeavor, such as with `claude --resume` — the view
@@ -406,14 +349,14 @@ offline.
   - If earlier messages differ — the session was compacted, or rewound,
     outside Endeavor — the thread updates around the view's place, and the
     button reads "Jump to latest ↓" instead.
-- **Not only after a replay.** The same floating button appears in any long
-  transcript once the user has scrolled up, such as while Claude is still
+- **Not only after a replay.** The same floating button appears in any
+  transcript scrolled up from its end, such as while Claude is still
   streaming a reply.
 - **Display only.** Endeavor's copy is never sent to the agent. The cost is
   disk space in Endeavor's own folder, and a second place the conversation
-  is stored on this Mac. It also helps "Continue with another agent" above:
-  step 2 needs the conversation so far, and Endeavor's own copy already has
-  it.
+  is stored on this Mac.
+- **Not built:** step 2 of "Continue a session with another agent" reading
+  this copy for the conversation so far.
 
 ## Decisions for later
 
