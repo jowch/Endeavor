@@ -48,6 +48,8 @@ chrono = "0.4"
 getrandom = "0.3"
 # Checking downloads (Windows has no shasum).
 sha2 = "0.10"
+# Process creation flags.
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # wry embeds the notebook webview as an X11 child window, so the app runs on X11 (or XWayland).

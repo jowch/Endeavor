@@ -370,6 +370,8 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
     #[cfg(unix)]
     command.process_group(0);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP);
     let mut helper = command.spawn().map_err(|e| format!("Couldn't start Endeavor's runtime helper: {e}"))?;
     let stdin = helper.stdin.take().unwrap();
     let stdout = helper.stdout.take().unwrap();
@@ -390,8 +392,10 @@ pub fn clear_state() -> Result<Vec<PathBuf>, String> {
 fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     let state_dir = app_dir.join("runtime");
     let recorded = std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    if let Some(pid) = recorded.and_then(|v| v["pid"].as_i64()).and_then(|p| i32::try_from(p).ok()).filter(|&p| p > 1) {
-        stop_group(pid);
+    if let Some(recorded) = recorded
+        && let Some(pid) = recorded["pid"].as_i64().and_then(|p| i32::try_from(p).ok()).filter(|&p| p > 1)
+    {
+        stop_group(pid, recorded["started"].as_u64());
     }
     let mut stale: Vec<PathBuf> = ["runtime.json", "runtime.json.tmp", "lock"].iter().map(|f| state_dir.join(f)).collect();
     if let Ok(versions) = std::fs::read_dir(app_dir.join("depot/compiled")) {
@@ -413,7 +417,7 @@ fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
 /// Julia's for a runtime an older helper started) is its group's: end the
 /// group (the core, Julia and its notebook workers), politely first.
 #[cfg(unix)]
-fn stop_group(pid: i32) {
+fn stop_group(pid: i32, _started: Option<u64>) {
     // SAFETY (both): plain syscalls; a group that's gone only returns ESRCH.
     let alive = || unsafe { libc::kill(-pid, 0) } == 0;
     for signal in [libc::SIGTERM, libc::SIGKILL] {
@@ -427,11 +431,11 @@ fn stop_group(pid: i32) {
     }
 }
 
-/// Not ported: the helper can't start a runtime on Windows yet, so none is
-/// recorded to stop (docs/windows.md, process control).
+/// Windows: the core recorded as `pid`, started at `started`, and with it
+/// Julia and its workers (its Job Object).
 #[cfg(windows)]
-fn stop_group(pid: i32) {
-    eprintln!("Endeavor can't stop a runtime on Windows yet (pid {pid}).");
+fn stop_group(pid: i32, started: Option<u64>) {
+    endeavor_remote::end_recorded_runtime(pid, started);
 }
 
 /// Start This Mac's runtime on `channel` (or attach to the one running) and
