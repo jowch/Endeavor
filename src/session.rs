@@ -13,7 +13,7 @@ use agent_client_protocol::Responder;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v1::{
     AvailableCommand, ContentBlock, PermissionOption, PermissionOptionKind, PlanEntry,
-    RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
     SessionConfigValueId, SessionId,
     SessionModeId, SessionModeState, SessionUpdate, StopReason, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
@@ -1278,8 +1278,7 @@ impl Session {
             }
             SessionEvent::Permission(request, responder) => {
                 let fields = &request.tool_call.fields;
-                let (mut title, mut input) = (fields.title.clone().unwrap_or_else(|| "Tool call".into()), fields.raw_input.clone());
-                celldiff::name_notebook_call(&mut title, &mut input);
+                let (title, input) = self.permission_input(&request);
                 // Only runs get the run card ("Always this session"); other notebook
                 // prompts (e.g. Manual asking before an edit) get the agent's options.
                 let input = input.unwrap_or_default();
@@ -1634,6 +1633,25 @@ impl Session {
             // ponytail: modes, usage, available commands not shown yet.
             _ => {}
         }
+    }
+
+    /// The title and input a permission request names. Cursor's request
+    /// carries no `rawInput`, only the arguments as a fenced json block in
+    /// `content`; the tool_call_update for the same id arrived first, with
+    /// `rawInput` already unwrapped by [`celldiff::name_notebook_call`] onto
+    /// its recorded [`Entry::Tool`], so a missing or empty input falls back
+    /// to that.
+    fn permission_input(&self, request: &RequestPermissionRequest) -> (String, Option<serde_json::Value>) {
+        let fields = &request.tool_call.fields;
+        let (mut title, mut input) = (fields.title.clone().unwrap_or_else(|| "Tool call".into()), fields.raw_input.clone());
+        celldiff::name_notebook_call(&mut title, &mut input);
+        if input.as_ref().is_none_or(|i| i.as_object().is_some_and(serde_json::Map::is_empty)) {
+            input = self.entries.iter().rev().find_map(|e| match e {
+                Entry::Tool { id, input: recorded, .. } if *id == request.tool_call.tool_call_id => recorded.clone(),
+                _ => None,
+            });
+        }
+        (title, input)
     }
 
     /// Apply a tool-call update; on a completed pluto call, learn cell code and
@@ -2820,6 +2838,34 @@ more" }"#);
         assert_eq!(title, "mcp__notebook__edit_cell");
         assert_eq!(input.as_ref(), Some(&json!({ "cell_id": A, "code": "rate = 0.2" })));
         assert_eq!(diffs.len(), 1, "diffed against the read");
+    }
+
+    #[test]
+    fn a_permission_request_with_no_rawinput_takes_it_from_the_tool_call_update() {
+        use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, RequestPermissionRequest, ToolCall, ToolCallUpdate, ToolCallUpdateFields};
+        use serde_json::json;
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        const ID: &str = "tool_7c68647e-18a7-4dfb-aa68-b8e51f67e08";
+        let args = json!({ "notebook_id": "a63586b4", "cell_id": "b010b8f2", "code": "using Statistics\ns = mean(x)" });
+        // The real Cursor sequence: a placeholder tool_call, then the update that
+        // carries the wrapped rawInput, then a permission request for the same id
+        // with no rawInput at all (only a json text block in its content).
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(ID, "MCP: tool"))));
+        let wrapped = json!({ "providerIdentifier": "notebook", "toolName": "edit_cell", "args": args });
+        let update = ToolCallUpdateFields::new().title("notebook: edit_cell").raw_input(wrapped);
+        s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(ID, update))));
+
+        let options = vec![
+            PermissionOption::new("allow-once", "Allow once", PermissionOptionKind::AllowOnce),
+            PermissionOption::new("allow-always", "Allow always", PermissionOptionKind::AllowAlways),
+            PermissionOption::new("reject-once", "Reject", PermissionOptionKind::RejectOnce),
+        ];
+        let asking = ToolCallUpdateFields::new().title("notebook-edit_cell: edit_cell");
+        let request = RequestPermissionRequest::new(SessionId::new("abc"), ToolCallUpdate::new(ID, asking), options);
+        let (title, input) = s.permission_input(&request);
+        assert_eq!(title, "mcp__notebook__edit_cell", "the title names the tool, not just the server");
+        assert_eq!(input, Some(args), "the arguments come from the earlier tool_call_update, already unwrapped");
     }
 
     #[test]
