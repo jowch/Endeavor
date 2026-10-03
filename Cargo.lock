@@ -1836,6 +1836,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "webkit2gtk",
+ "windows-sys 0.61.2",
  "wire",
  "x11",
 ]
@@ -1848,6 +1849,7 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
  "serde_json",
+ "windows-sys 0.61.2",
  "wire",
 ]
 
