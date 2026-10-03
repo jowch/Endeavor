@@ -1473,8 +1473,11 @@
     if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
     return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
   }
+  function definedNames(map) {
+    return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
+  }
   function cellName2(nb, id) {
-    const defined = Object.keys(nb.cell_dependencies?.[id]?.downstream_cells_map ?? {});
+    const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
     if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
     const first = (nb.cell_inputs[id]?.code ?? "").split("\n").find((l) => l.trim()) ?? "";
     const line = first.trim();
@@ -2401,7 +2404,7 @@
       target.dispatchEvent(new KeyboardEvent("keydown", init2));
     };
   }
-  var nameOf = (w, deps) => w.name || Object.keys(deps[w.id]?.downstream_cells_map ?? {})[0] || "a cell";
+  var nameOf = (w, deps) => w.name || definedNames(deps[w.id]?.downstream_cells_map)[0] || "a cell";
   function names(list) {
     const code = list.map((n) => `<code>${escape3(n)}</code>`);
     return code.length <= 1 ? code.join("") : `${code.slice(0, -1).join(", ")} and ${code[code.length - 1]}`;

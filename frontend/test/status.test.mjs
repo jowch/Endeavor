@@ -138,3 +138,8 @@ test("run times read like Pluto's", () => {
     "400 ns", "12 µs", "4 ms", "420 ms", "4.2 s", "1 min 12 s",
   ]);
 });
+
+test("a cell's names leave out the ones Pluto makes up for anonymous functions", () => {
+  assert.deepEqual(status.definedNames({ __ExprExpl_anon__7243518869190234: [], c: [] }), ["c"]);
+  assert.deepEqual(status.definedNames(undefined), []);
+});

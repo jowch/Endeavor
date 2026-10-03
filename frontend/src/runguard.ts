@@ -10,6 +10,7 @@ import { byUser, on, send } from "./bridge";
 import { modHeld } from "./keys";
 import { cellCode } from "./reveal";
 import { notebookId } from "./state";
+import { definedNames } from "./status";
 
 /** A cell a waiting card asks to run, and what it defines (from the app). */
 export type Waiting = { id: string; name?: string | null };
@@ -124,7 +125,7 @@ function replayOf(e: Event): () => void {
   };
 }
 
-const nameOf = (w: Waiting, deps: Dependencies): string => w.name || Object.keys(deps[w.id]?.downstream_cells_map ?? {})[0] || "a cell";
+const nameOf = (w: Waiting, deps: Dependencies): string => w.name || definedNames(deps[w.id]?.downstream_cells_map)[0] || "a cell";
 
 function names(list: string[]): string {
   const code = list.map((n) => `<code>${escape(n)}</code>`);

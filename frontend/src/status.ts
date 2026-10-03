@@ -120,8 +120,13 @@ export function prettyTime(ns: number): string {
   return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
 }
 
+/** The names a cell defines, without the ones Pluto makes up for anonymous functions. */
+export function definedNames(map: Record<string, unknown> | undefined): string[] {
+  return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
+}
+
 function cellName(nb: NotebookLike, id: string): string {
-  const defined = Object.keys(nb.cell_dependencies?.[id]?.downstream_cells_map ?? {});
+  const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
   if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", …" : "");
   const first = (nb.cell_inputs[id]?.code ?? "").split("\n").find((l) => l.trim()) ?? "";
   const line = first.trim();
