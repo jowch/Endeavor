@@ -113,6 +113,7 @@ const LIST_NOTEBOOKS: Act = act("Listing", "list", "listed", "the notebooks", "t
 const OPEN_NOTEBOOK: Act = act("Opening", "open", "opened", "a notebook", "{n} notebooks");
 const NEW_NOTEBOOK: Act = act("Creating", "create", "created", "a notebook", "{n} notebooks");
 const ALLOW_RUN: Act = act("Letting", "let", "let", "the notebook run", "the notebook run");
+const GUIDE: Act = act("Reading", "read", "read", "the notebook guide", "the notebook guide {n} times");
 const KEEP_ALIVE: Act = act("Keeping", "keep", "kept", "the notebook running", "the notebook running");
 const SKILL: Act = act("Using", "use", "used", "a skill", "{n} skills");
 const OTHER: Act = act("Using", "use", "used", "a tool", "{n} tools");
@@ -163,6 +164,7 @@ fn act_of(title: &str, kind: ToolKind, input: &Value) -> (Act, usize) {
             "new_notebook" => (NEW_NOTEBOOK, 1),
             "allow_execution" => (ALLOW_RUN, 1),
             "keep_notebook_alive" => (KEEP_ALIVE, 1),
+            "notebook_guide" => (GUIDE, 1),
             "list_folder" => (LIST_FOLDER, 1),
             "read_file" => (READ_FILE, 1),
             "run_shell" => (COMMAND, 1),

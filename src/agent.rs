@@ -261,10 +261,13 @@ pub struct Tools {
 
 impl Tools {
     /// Each session's tool calls carry its key, so the runtime applies its policy.
+    /// Claude Code loads the skills from Endeavor's plugin (`session_options`), so
+    /// the runtime leaves out its own guide to them.
     fn mcp_server(&self, key: u64) -> McpServer {
         let mut headers = vec![
             HttpHeader::new("Authorization", format!("Bearer {}", self.bridge.token)),
             HttpHeader::new("X-Endeavor-Session", key.to_string()),
+            HttpHeader::new("X-Endeavor-Skills", "plugin"),
         ];
         if let Some(server) = &self.server {
             headers.push(HttpHeader::new("X-Endeavor-Host", server.clone()));
@@ -931,7 +934,9 @@ mod tests {
             http.headers.iter().find(|h| h.name == "X-Endeavor-Host").map(|h| h.value.clone())
         };
         assert_eq!(header(super::Tools { bridge: bridge.clone(), server: Some("lab".into()) }), Some("lab".into()));
-        assert_eq!(header(super::Tools { bridge, server: None }), None);
+        assert_eq!(header(super::Tools { bridge: bridge.clone(), server: None }), None);
+        let super::McpServer::Http(http) = (super::Tools { bridge, server: None }).mcp_server(7) else { panic!() };
+        assert!(http.headers.iter().any(|h| h.name == "X-Endeavor-Skills" && h.value == "plugin"), "Claude Code has the skills");
     }
 
     /// A runtime the helper started before the Streamable HTTP switch (its

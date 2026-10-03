@@ -887,7 +887,7 @@ pub(crate) fn answered_line(approval: Approval, clock: &str) -> String {
 fn tool_verb(title: &str) -> String {
     let Some(tool) = celldiff::notebook_tool(title) else { return title.to_string() };
     match tool {
-        "read_cell" | "read_notebook_code" => "Read",
+        "read_cell" | "read_notebook_code" | "notebook_guide" => "Read",
         "edit_cell" | "edit_cells" => "Edited",
         "add_cell" => "Added",
         "delete_cell" => "Deleted",
