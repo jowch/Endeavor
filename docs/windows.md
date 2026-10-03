@@ -1,11 +1,11 @@
 # Endeavor on Windows: what a port would take
 
 _Estimate as of 2026-09-28; status updated 2026-10-03. Step 1 of the
-suggested order is done: the workspace type-checks for Windows, and a Windows
-CI workflow builds it and runs its tests. Step 2 (run a local notebook) is
-written but untried: process control, downloads and paths have Windows code,
-checked only by type-checking on a Mac and by tests that CI runs on
-`windows-latest`. Nothing has run on a real Windows machine yet. The rest
+suggested order is done: the workspace builds for Windows, and a Windows CI
+workflow builds it and runs its tests, which pass. Step 2 (run a local
+notebook) is written but untried: process control, downloads and paths have
+Windows code, checked only by type-checking on a Mac and by tests that CI runs
+on `windows-latest`. Nothing has run on a real Windows machine yet. The rest
 comes from reading the code, the dependencies' sources, and
 [linux.md](linux.md), which records how the Linux port went._
 
@@ -49,9 +49,8 @@ What the check showed about the dependencies:
   token), `windows-sys` 0.61 in both (process control), `sha2` in the app
   (checking downloads) and `dunce` in `wire` (paths without `\\?\`).
 
-The estimate doesn't change. Step 1 took under a day, as sized. Step 2's code
-took about a day too, but it hasn't run, so expect some days of fixes once it
-meets a real machine (see [Try first on a real Windows
+Step 2 hasn't run on a real machine, so expect some days of fixes once it
+does (see [Try first on a real Windows
 machine](#try-first-on-a-real-windows-machine)).
 
 ### What runs on Windows now
@@ -168,8 +167,7 @@ and the server tarball's executable bits (`src/remote.rs`: nothing in
 `.github/workflows/windows.yml` runs on every push and pull request, on
 `windows-latest`: `cargo build --locked --workspace --all-targets`, then
 `cargo test --locked --workspace --no-fail-fast`. It turns off git's CRLF
-conversion before checkout. It hasn't run yet, so its first run may still
-show Windows-only test failures that reading the code missed.
+conversion before checkout. It passes on `main`.
 
 Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 `tar`, symlinks or Unix sockets:
@@ -189,8 +187,7 @@ Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 - `crates/endeavor-remote/src/notebooks/tests.rs`: the `file_info` check in
   `the_apps_notebook_actions_restart_move_file_info_and_new_notebook`.
 
-Step 2 turned back on every test that step 1 ignored on Windows. None of
-them has run on Windows yet; the next CI run is their first:
+These run on Windows too, with paths and folders that follow Windows rules:
 
 - `crates/endeavor-remote/src/notebooks/tests.rs`, notebook paths (their
   paths now use the platform's separator, and the Unix-only checks, such as
@@ -212,7 +209,7 @@ them has run on Windows yet; the next CI run is their first:
   (on Windows it packs a zip with the system's `tar.exe` and fetches it with
   `curl` from a `file:///C:/…` URL).
 
-New tests that run only on Windows:
+Tests that run only on Windows:
 
 - `crates/endeavor-remote/src/winproc.rs`,
   `ending_the_jobs_first_process_ends_everything_it_started`: the test binary
@@ -224,8 +221,8 @@ New tests that run only on Windows:
   exited child isn't alive.
 - `src/install.rs`, `app_data_and_logs_are_in_local_app_data`.
 
-New on every OS: `src/runtime.rs`,
-`the_depot_list_stacks_the_default_depots_behind_ours`.
+On every OS, `src/runtime.rs`'s
+`the_depot_list_stacks_the_default_depots_behind_ours` checks the depot list.
 
 The tests marked `#[ignore]` on every OS (the live and real-Julia ones) stay
 ignored. Nothing in CI starts the real core on Windows: the helper and core
@@ -265,42 +262,12 @@ Sizes: S is under a day, M is 1–3 days, L is more than that.
 
 This is the largest item. Starting, watching and stopping the runtime is
 written (see [How process control works on
-Windows](#how-process-control-works-on-windows)); the handover between
-clients, `wait_readable` and `closed` are not. Before step 2 the code:
+Windows](#how-process-control-works-on-windows)). Left:
 
-- starts the runtime in its own session with `setsid`
-  (`crates/endeavor-remote/src/lib.rs`, `start()`), and stops it with
-  `kill(-pid, SIGTERM/SIGKILL)` (`signal_group`, `stop_workers`);
-- checks whether a pid is alive with `kill(pid, 0)` (`pid_alive`);
-- takes the one-client lock with `flock` (lib.rs:595) and hands a runtime over
-  to a new client with SIGUSR1 (lib.rs:614, 634–655);
-- blocks and forwards signals in the core, and ties Julia's life to the core
-  with `PR_SET_PDEATHSIG` (`core.rs:85`);
-- kills process groups from the app too (`src/runtime.rs`, `src/signin.rs`,
-  `src/remote.rs`).
-
-The Windows equivalents:
-
-- Start the core detached (done, with `CREATE_NO_WINDOW` in place of
-  `DETACHED_PROCESS`: a detached core would have no console, so Julia and
-  each worker would open a console window of its own).
-- The core puts itself, and so Julia, in a Job Object with
-  `KILL_ON_JOB_CLOSE` (done). That replaces both `PDEATHSIG` and the group
-  kill, and Pluto's worker processes join the same job. Joining before Julia
-  starts leaves no moment when Julia runs outside the job.
-- A graceful stop already exists over the bridge (`endeavor/shutdown`). A
-  hard stop becomes `TerminateProcess` on the core, which closes the job
-  (done).
-- `pid_alive` becomes `OpenProcess` plus a zero-timeout wait, and the
-  process's start time must match `runtime.json`'s `started` (done).
-- The lock becomes `std::fs::File::try_lock`, which works on every OS (done
-  on Windows; Unix keeps `flock`).
-- The handover signal becomes a named event, or a "release" call on a
-  loopback port.
-- Smaller items: `/dev/urandom` becomes `getrandom`, `gethostname` becomes
-  `COMPUTERNAME`, `stdout_mux` uses the stdout handle, and Windows skips
-  `arg0` and file modes (all done). The `poll`/`recv(MSG_PEEK)` calls in
-  `http.rs` and `mcp.rs` still need Windows versions (stubs, see above).
+- The handover between clients: the signal (SIGUSR1 on Unix) becomes a named
+  event, or a "release" call on a loopback port.
+- The `poll`/`recv(MSG_PEEK)` calls in `http.rs` and `mcp.rs` need Windows
+  versions (stubs, see above).
 
 ### ssh from Windows (M if askpass works, L if not)
 
@@ -322,35 +289,20 @@ The Windows equivalents:
 ### Paths (M, about 1 week; the local half done)
 
 Done for a local notebook: home and app data, the depot list's separator,
-canonical paths, and notebook paths as Julia's Windows rules give them. Left:
-server paths, PATH joins in code that runs only with servers, and upload
-names.
+canonical paths without `\\?\`, and notebook paths as Julia's Windows rules
+give them (see "Ported for real" above). Left: server paths, PATH joins in
+code that runs only with servers, and upload names.
 
 - **Server paths vs local paths.** Wire messages carry server paths as
   `PathBuf` (`wire/src/files.rs`, `wire/src/notebooks.rs`). On a Windows
   client, `join` would put `\` into Linux paths. Make server paths a `String`
   or a `RemotePath` type, and update the app's call sites.
-- **Home and app data (done).** App data and logs are under
-  `%LOCALAPPDATA%\Endeavor`, and `std::env::home_dir()` gives `.ssh` and
-  Downloads (`src/install.rs`, `src/logs.rs`, `src/hosts.rs`,
-  `src/notebook_pane.rs`, `wire/src/files.rs`).
-- **List separators.** The depot list (`src/runtime.rs`, `depot_list`) and
-  the PATH npm runs with (`src/agent.rs`) use `;` on Windows (done). The
-  remote tests' PATH (`src/remote.rs`) still uses `:`, but those tests are
-  Unix-only.
-- **Canonical paths (done).** `fs::canonicalize` returns `\\?\C:\…` on
-  Windows, which won't match Julia's `realpath`. `wire::files::real_path`
-  uses `dunce` there, for the folder browser and `canonical_path`.
-- **Notebook paths (done).** `notebooks.rs` mirrors Julia's path functions.
-  On Windows `expanduser` leaves paths alone, `abspath` is
-  `std::path::absolute`, `isabspath` takes `C:\`, `C:/` and `\`, and folders
-  come from `Path::parent`.
 - **Upload names** (`files.rs`) must also reject `\`, `:` and reserved names
   such as `CON`.
 
 ### First-run setup and downloads (S–M, 2–3 days; written, untried)
 
-- Pinned (done), the same versions as macOS and Linux:
+- Pinned, the same versions as macOS and Linux:
 
   | Download | SHA-256 | Size |
   |---|---|---|
@@ -371,10 +323,10 @@ names.
 - Windows 10 and later include `curl.exe` and `tar.exe` (bsdtar), and that
   `tar` reads .zip. The app runs `%SystemRoot%\System32\tar.exe` by path,
   since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. There
-  is no `shasum`, so Windows hashes in Rust with `sha2` (done).
+  is no `shasum`, so Windows hashes in Rust with `sha2`.
 - Executable layout differs: `bin\julia.exe`, `node.exe` at the top of the
   Node folder, and npm at `node_modules\npm\bin\npm-cli.js`
-  (`src/install.rs`, `src/agent.rs`, `src/runtime.rs`; done).
+  (`src/install.rs`, `src/agent.rs`, `src/runtime.rs`).
 - The server's own Julia download (`crates/endeavor-remote/src/julia.rs`)
   stays Unix-only: a Windows server is out of scope.
 
@@ -392,8 +344,6 @@ names.
 - **Snapshot (S–M).** Use `CapturePreview` and crop, or the DevTools
   `Page.captureScreenshot` with a clip.
 - **Small items (S).**
-  - Dark mode: `set_theme` (done).
-  - Reveal: `explorer /select,<path>` (done).
   - Reduce motion: `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`.
   - Open a URL: `ShellExecute`.
   - Set a WebView2 data folder: the default, next to the exe, isn't writable
@@ -411,18 +361,12 @@ names.
 - **Network-change watch (S).** Only macOS and Linux versions exist
   (`src/network.rs`). Windows: `NotifyIpInterfaceChange` or
   `INetworkListManager`.
-- **Time zone (S, done).** chrono gives the offset on Windows.
-- **Server install tarball (S, done).** On Windows no `runtime/` file is
-  executable, and the helper is marked by name (`src/remote.rs`).
 - **Title bar (S–M).** The header leaves room for the macOS window buttons.
   Windows needs its own caption buttons, drawn by GPUI or native.
 - **Wording (S).** "This Mac" (about 60 places in `src/`), "Reveal in Finder", and
   `HostId::ThisMac`. This is shared with Linux; see
   [linux.md](linux.md#remaining-work-ranked).
-- **Cargo (S, done).** The `std::os::unix` imports and Unix-only `libc`
-  calls are gated. `windows-sys` 0.61 (already in the tree) is a Windows-only
-  dependency of the app and `endeavor-remote`; the stubs left will need more
-  of its features.
+- **Cargo (S).** The stubs left will need more of `windows-sys`' features.
 
 ### Claude Code on Windows (S–M, uncertain)
 
@@ -446,36 +390,35 @@ Windows or set `CLAUDE_CODE_GIT_BASH_PATH`.
 Many tests use `sh -c`, `kill -9`, `pkill`, `tar`, `shasum` or a fake Julia
 written as a `#!/bin/sh` script (`crates/endeavor-remote/tests/common/mod.rs`),
 and `wire`'s relay tests use `UnixStream::pair`. These are gated with
-`#[cfg(unix)]` now, and a Windows CI workflow runs the rest (see
-[CI](#ci)). Left: replace the fake Julia with a small Rust test binary so the
+`#[cfg(unix)]`, and a Windows CI workflow runs the rest (see [CI](#ci)).
+Left: replace the fake Julia with a small Rust test binary so the
 helper and core tests run on Windows, and give the relay tests a loopback TCP
 pair.
 
 ## Try first on a real Windows machine
 
 In this order, on Windows 11 x64 with Visual Studio's C++ tools (for
-`rc.exe` and `fxc.exe`). Each step needs the ones before it.
+`rc.exe` and `fxc.exe`). Each step needs the ones before it. CI already
+passes on `windows-latest`, including the Job Object test, which runs the
+test binary as its own stand-in core.
 
-1. **CI.** Push and read the Windows workflow's run: the new `winproc` tests
-   and the tests step 2 turned back on (see [CI](#ci)). The Job Object test is
-   the one to trust least: it runs the test binary as its own stand-in core.
-2. **Build and open.** `cargo run`. The window should open with the setup
+1. **Build and open.** `cargo run`. The window should open with the setup
    screen.
-3. **First-run downloads.** Setup downloads Node's zip, checks it, unpacks it
-   with `System32	ar.exe` and runs `npm ci` with `node.exe`; then Julia's
+2. **First-run downloads.** Setup downloads Node's zip, checks it, unpacks it
+   with `System32\tar.exe` and runs `npm ci` with `node.exe`; then Julia's
    275 MB zip into `%LOCALAPPDATA%\Endeavor\julia-1.12.6`. Watch for paths
    over 260 characters while unpacking Julia, and for antivirus holding
    unpacked files so the rename from `….unpacking` fails.
-4. **Start the runtime.** No console window should open, for the core, Julia
-   or later Pluto's workers. `%LOCALAPPDATA%\Endeavoruntimeuntime.json`
+3. **Start the runtime.** No console window should open, for the core, Julia
+   or later Pluto's workers. `%LOCALAPPDATA%\Endeavor\runtime\runtime.json`
    should have `started`, and `runtime.log` should fill. If the app's log says
    "the runtime can't leave the job this helper runs in", note which terminal
    or launcher started the app.
-5. **Run a notebook.** Open one, run its cells, make a new one in a session's
+4. **Run a notebook.** Open one, run its cells, make a new one in a session's
    folder, rename it, and use a folder on another drive and one whose name has
    spaces and non-ASCII letters. The folder browser should show `C:\…`, never
-   `\?\C:\…`.
-6. **The process tree.** In Process Explorer, the core (`endeavor.exe` run as
+   `\\?\C:\…`.
+5. **The process tree.** In Process Explorer, the core (`endeavor.exe` run as
    the helper's `core`), `julia.exe` and each worker `julia.exe` should share
    one job (the Job tab). Then:
    - Quit the app with the runtime set to stop: all of them go.
@@ -484,7 +427,7 @@ In this order, on Windows 11 x64 with Visual Studio's C++ tools (for
    - End the app's process while the runtime is set to keep running: the
      runtime stays, and the next launch reattaches to it (pid and start time).
    - Repair runtime with a runtime running: all of it goes.
-7. **Stop a running cell.** Stop a tight loop and a `sleep(60)`; see
+6. **Stop a running cell.** Stop a tight loop and a `sleep(60)`; see
    [Limits](#limits-we-cant-fix-from-endeavor).
 
 ## Limits we can't fix from Endeavor
@@ -513,11 +456,10 @@ In this order, on Windows 11 x64 with Visual Studio's C++ tools (for
 
 ## Suggested order
 
-1. Make it build: gate the server-only modules with `#[cfg(unix)]` and add
-   Windows stubs to `src/platform.rs`, as the Linux port did. **Done**, with a
-   Windows CI workflow (see [Status](#status-it-builds-with-stubs)).
+1. Make it build, with a Windows CI workflow. **Done** (see
+   [Status](#status-it-builds-with-stubs)).
 2. Run a local notebook: process control, downloads, paths. **Written,
-   untried**: CI's next run, then the list below on a real machine.
+   untried**: the list above on a real machine.
 3. Test ssh askpass on Windows 11. The result sets the size of the ssh work.
 4. Notebook view: shortcuts, menus, snapshot.
 5. Smaller fixes and tests (CI is done).
