@@ -16,6 +16,18 @@ with Julia running Pluto behind it as an adapter
 ([runtime-core.md](runtime-core.md)). The runtime runs on this computer, on a
 server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)).
 
+## Next
+
+- **One port per runtime.** Pluto's page, MCP and the app's calls on one
+  port answered by the core, with one token, instead of two ports. Plan in
+  [one-port.md](one-port.md).
+- **The notebook tools as a standalone product.** After one port: an
+  `endeavor serve` command a user runs on a workstation or inside their own
+  cluster job, which prints one link and one `ssh -L` line, and a stdio form
+  installed as a Claude Code, Codex or Gemini plugin. Login, ssh and the
+  tunnel stay with the user or their agent; approvals are the agent's own
+  prompts. Outline in [one-port.md](one-port.md), "The standalone command".
+
 ## Before sharing the app
 
 - **Signing and notarization.** `scripts/bundle.sh` builds an ad-hoc signed
