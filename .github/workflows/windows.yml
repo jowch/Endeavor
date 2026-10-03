@@ -1,0 +1,33 @@
+# Builds the workspace on Windows and runs the tests that can run there
+# (docs/windows.md). Tests that need Unix (sh, signals, Unix sockets, tar, the
+# #!/bin/sh stand-in Julia) are compiled out with cfg(unix); tests that wait
+# on parts not yet ported to Windows (paths, home and app data folders,
+# downloads) are ignored there with that reason.
+name: Windows
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: windows-x86_64
+    runs-on: windows-latest
+    steps:
+      # Tests compare checked-in text byte for byte, so keep LF line endings.
+      - name: Git
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build
+        run: cargo build --locked --workspace --all-targets
+      - name: Test
+        run: cargo test --locked --workspace --no-fail-fast
