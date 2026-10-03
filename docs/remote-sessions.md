@@ -2,9 +2,9 @@
 
 Design for running notebooks on a remote machine (a lab server, a cloud VM, or
 an HPC cluster) from the Endeavor app on macOS, Linux, or Windows. Plain
-servers (the process launcher) and clusters (Slurm) are built on macOS; the
-Linux and Windows clients are not yet. Settled work moves to
-[roadmap.md](roadmap.md) once scheduled.
+servers (the process launcher) and clusters (Slurm) are built. A Linux client
+reaches servers too ([linux.md](linux.md)); a Windows client can't connect
+yet ([windows.md](windows.md)).
 
 _Drafted 2026-09-26_
 
@@ -32,37 +32,25 @@ plain server, or inside a Slurm job on a cluster.
 - **Claude runs locally.** Credentials never leave the user's computer, and
   nothing Claude-related is installed on the remote.
 
-## What carries over from the local design
+## Loopback on both ends
 
-Today the app starts `julia boot.jl <pluto_port> <mcp_port>` and talks to it
-only through two loopback ports plus Julia's stdio (`src/runtime.rs`,
-`runtime/boot.jl`). Most of that works unchanged when the ports lead to a
-remote machine:
+The webview and Claude connect to `127.0.0.1:<port>` whether the runtime is
+local or remote:
 
-- The webview and Claude still connect to `127.0.0.1:<port>`.
-- The bridge's `Host` check looks at the host name only, not the port
-  (`Server.jl`, `_loopback_host`), so a local port that differs from the remote
-  one is accepted.
-- Pluto's `?secret=` and the bridge's bearer token still protect both ports
-  from other users on a shared machine.
+- The bridge's `Host` check looks at the host name only, not the port, so a
+  local port that differs from the remote one is accepted.
+- Pluto's `?secret=` and the bridge's bearer token protect both ports from
+  other users on a shared machine.
 - Crash reopen, safe preview, and restart go through `/events` and
   `open_notebook`, not local files.
 
 Both ends stay on loopback, so the security rule in
 [pluto-agent-design-doc.md](pluto-agent-design-doc.md) §6 ("never let the
-app's proxying extend beyond loopback") still holds. Its v1 non-goal "not
-supporting remote Pluto servers" would be lifted.
-
-What must change:
-
-- **Lifetime.** Julia exits when its stdin closes (`boot.jl`). Remote runtimes
-  must outlive the connection, so stopping becomes an explicit command.
-- **Token delivery.** The token is passed in `ENDEAVOR_TOKEN`
-  (`runtime.rs`), and plain `ssh` drops environment variables.
-- **The `folder` stdin command** moves to the bridge's `/call` endpoint.
-- **Ports** are chosen by the runtime (bind port 0), not by the app's
-  `free_ports`, which only sees the local machine.
-- **Paths** become host plus path (see Notebook identity).
+app's proxying extend beyond loopback") still holds. The runtime chooses its
+own ports (bind port 0), since the app only sees the local machine; the
+helper makes the bridge token on the host, so it never has to travel in
+ssh's environment, which plain `ssh` drops; and the runtime outlives the
+connection, so stopping it is an explicit command.
 
 ## Architecture
 
@@ -300,9 +288,8 @@ has no Kerberos sign-in, which some clusters use.
 - **Port forwarding with ControlMaster** (`ssh -O forward` after the runtime
   reports its ports). Not available on Windows OpenSSH.
 - **Claude on the remote** (ACP over SSH stdio). Bash and CLAUDE.md would
-  work where the data is, but Node, the adapter, the `endeavor` binary for the
-  pre-tool hook, and a Claude sign-in would all sit on what is often a shared
-  university server.
+  work where the data is, but Node, the adapter and a Claude sign-in would
+  all sit on what is often a shared university server.
 - **Pluto server local, notebook workers remote.** Pluto's Malt workers can't
   run on another machine, so the server and the notebook must share a host.
 
@@ -310,9 +297,6 @@ has no Kerberos sign-in, which some clusters use.
 
 - Does current Windows 11 OpenSSH honor `SSH_ASKPASS_REQUIRE=force` with a
   Duo account? Test before choosing between system `ssh` and `russh`.
-- Idle timeout length for process runtimes, and where the user sees and
-  changes it.
-- Should local runtimes also survive the app quitting?
 
 ## Prior art
 
