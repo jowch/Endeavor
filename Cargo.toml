@@ -46,6 +46,8 @@ objc2-user-notifications = { version = "0.3", default-features = false, features
 chrono = "0.4"
 # The page secret's random bytes (Unix reads /dev/urandom).
 getrandom = "0.3"
+# Checking downloads (Windows has no shasum).
+sha2 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # wry embeds the notebook webview as an X11 child window, so the app runs on X11 (or XWayland).

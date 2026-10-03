@@ -72,6 +72,20 @@ const NODE_TARBALL: (&str, &str, u64, &str) = (
     58_088_022,
     "node-v24.21.0-linux-x64",
 );
+#[cfg(all(windows, target_arch = "x86_64"))]
+const NODE_TARBALL: (&str, &str, u64, &str) = (
+    "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip",
+    "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+    37_618_919,
+    "node-v24.21.0-win-x64",
+);
+#[cfg(all(windows, target_arch = "aarch64"))]
+const NODE_TARBALL: (&str, &str, u64, &str) = (
+    "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-arm64.zip",
+    "8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921",
+    33_679_608,
+    "node-v24.21.0-win-arm64",
+);
 
 /// The adapter version this build of the app pins (adapter/package.json).
 fn pinned_adapter_version() -> Result<String, String> {
@@ -91,7 +105,8 @@ pub fn adapter_status() -> Result<(String, bool), String> {
 fn adapter_paths() -> Result<(PathBuf, PathBuf), String> {
     let app = crate::install::app_dir()?;
     let version = pinned_adapter_version()?;
-    let node = app.join(format!("node-v{NODE_VERSION}/bin/node"));
+    // Windows' Node keeps node.exe at the top of its folder, not in bin/.
+    let node = if cfg!(windows) { app.join(format!("node-v{NODE_VERSION}")).join("node.exe") } else { app.join(format!("node-v{NODE_VERSION}/bin/node")) };
     let entry = app.join(format!("adapter-{version}/node_modules/{ADAPTER_PACKAGE}/dist/index.js"));
     Ok((node, entry))
 }
@@ -163,14 +178,10 @@ fn fake_turn_error() -> Option<Vec<SessionEvent>> {
 fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     let app = crate::install::app_dir()?;
     let (node, entry) = adapter_paths()?;
-    let node_dir = node.parent().and_then(Path::parent).ok_or("bad Node path")?.to_path_buf();
+    let bin = node.parent().ok_or("bad Node path")?.to_path_buf();
+    let node_dir = if cfg!(windows) { bin.clone() } else { bin.parent().ok_or("bad Node path")?.to_path_buf() };
     if !node.exists() {
-        // Not ported: Windows needs Node's win-x64 zip pinned (docs/windows.md).
-        #[cfg(windows)]
-        return Err(format!("Endeavor can't install Node.js {NODE_VERSION} on Windows yet."));
-        #[cfg(not(windows))]
         let (url, sha, size, top) = NODE_TARBALL;
-        #[cfg(not(windows))]
         crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), &|detail, fraction| {
             progress(Progress { fraction, ..Progress::new(Step::Agent, detail) })
         })?;
@@ -188,8 +199,8 @@ fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
         for file in ["package.json", "package-lock.json"] {
             std::fs::copy(pinned.join(file), staging.join(file)).map_err(|e| e.to_string())?;
         }
-        let npm = node_dir.join("lib/node_modules/npm/bin/npm-cli.js");
-        let path = format!("{}:{}", node_dir.join("bin").display(), std::env::var("PATH").unwrap_or_default());
+        let npm = if cfg!(windows) { node_dir.join("node_modules/npm/bin/npm-cli.js") } else { node_dir.join("lib/node_modules/npm/bin/npm-cli.js") };
+        let path = format!("{}{}{}", bin.display(), if cfg!(windows) { ';' } else { ':' }, std::env::var("PATH").unwrap_or_default());
         let out = std::process::Command::new(&node)
             .arg(npm)
             .args(["ci", "--ignore-scripts", "--no-audit", "--no-fund"])

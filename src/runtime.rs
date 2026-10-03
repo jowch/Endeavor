@@ -245,7 +245,7 @@ pub enum Notice {
 }
 
 /// The Julia the app installs on first run (design doc §11), pinned with the
-/// official tarballs' SHA-256 and size (bump all three per release).
+/// official tarballs' (Windows: zip's) SHA-256 and size (bump all three per release).
 pub const JULIA_VERSION: &str = "1.12.6";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const JULIA_TARBALL: (&str, &str, u64) = (
@@ -271,12 +271,19 @@ const JULIA_TARBALL: (&str, &str, u64) = (
     "bbabf3bef19421a9dbd24a767d807606ab85e444323b5a1c73ffe293fa3d079a",
     289_794_236,
 );
+// There is no Windows ARM64 build of Julia 1.12, so Windows on ARM gets the
+// x64 one, which it runs under emulation.
+#[cfg(windows)]
+const JULIA_TARBALL: (&str, &str, u64) = (
+    "https://julialang-s3.julialang.org/bin/winnt/x64/1.12/julia-1.12.6-win64.zip",
+    "a63d991976e6893f508c512e3dc7bca1836c1a1f6ad1f3e4aedec159b6733e89",
+    275_091_967,
+);
 
 
 /// The julia binary to run: the user's (Settings) while it's there and is
 /// Julia, else the app's own, downloaded and verified on first run.
 /// `progress` hears how that's going.
-#[cfg_attr(windows, allow(unused_variables))]
 fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
     if let Some(julia) = crate::settings::Settings::load().julia {
         match check_chosen(&julia) {
@@ -285,12 +292,8 @@ fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String
         }
     }
     let dir = crate::install::app_dir()?.join(format!("julia-{JULIA_VERSION}"));
-    let bin = dir.join("bin/julia");
+    let bin = dir.join("bin").join(format!("julia{}", std::env::consts::EXE_SUFFIX));
     if !bin.exists() {
-        // Not ported: Windows needs Julia's win64 zip pinned, and bin\julia.exe (docs/windows.md).
-        #[cfg(windows)]
-        return Err(format!("Endeavor can't install Julia {JULIA_VERSION} on Windows yet. Choose a Julia in Settings."));
-        #[cfg(not(windows))]
         crate::install::tarball(&dir, &format!("Julia {JULIA_VERSION}"), &format!("julia-{JULIA_VERSION}"), JULIA_TARBALL, progress)?;
     }
     Ok(bin.display().to_string())
@@ -344,8 +347,8 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
     check_version(&julia)?;
     let app_dir = crate::install::app_dir()?;
     let state_dir = app_dir.join("runtime");
-    // Trailing ':' stacks the default depots (~/.julia) read-only behind ours.
-    let depot = format!("{}/depot:", app_dir.display());
+    // The trailing separator stacks the default depots (~/.julia) read-only behind ours.
+    let depot = format!("{}{}", app_dir.join("depot").display(), if cfg!(windows) { ';' } else { ':' });
 
     let mut command = helper_command()?;
     command

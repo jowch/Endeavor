@@ -21,9 +21,13 @@ fn bundle_resources() -> Option<PathBuf> {
     Some(exe.parent()?.parent()?.join("Resources")).filter(|r| r.join("runtime").is_dir())
 }
 
-/// Endeavor's folder in Application Support, or on Linux in XDG_DATA_HOME
-/// (runtimes, Julia depot, app state).
+/// Endeavor's folder in Application Support, on Linux in XDG_DATA_HOME, and on
+/// Windows in %LOCALAPPDATA% (runtimes, Julia depot, app state).
 pub fn app_dir() -> Result<PathBuf, String> {
+    if cfg!(windows) {
+        let local = std::env::var_os("LOCALAPPDATA").filter(|d| !d.is_empty()).ok_or("LOCALAPPDATA isn't set")?;
+        return Ok(PathBuf::from(local).join("Endeavor"));
+    }
     let home = PathBuf::from(std::env::var("HOME").map_err(|e| e.to_string())?);
     if cfg!(target_os = "macos") {
         return Ok(home.join("Library/Application Support/endeavor"));
@@ -32,13 +36,14 @@ pub fn app_dir() -> Result<PathBuf, String> {
     Ok(data.join("endeavor"))
 }
 
-/// Download a pinned tarball (resuming a partial one), check its SHA-256, and
-/// unpack its `top` folder to `dir`. `what` names it in progress and errors.
-#[cfg_attr(windows, allow(dead_code))]
+/// Download a pinned tarball (a zip on Windows), resuming a partial one, check
+/// its SHA-256, and unpack its `top` folder to `dir`. `what` names it in
+/// progress and errors.
 pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
     let parent = dir.parent().unwrap();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let tarball = parent.join(format!("{top}.tar.gz.part"));
+    let kind = if url.ends_with(".zip") { "zip" } else { "tar.gz" };
+    let tarball = parent.join(format!("{top}.{kind}.part"));
 
     // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
     // fails the SHA check and starts over. Kill it on quit if that bites.
@@ -67,8 +72,7 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     }
 
     progress(format!("Checking {what}…"), None);
-    let out = Command::new("shasum").args(["-a", "256"]).arg(&tarball).output().map_err(|e| e.to_string())?;
-    let got = String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned();
+    let got = sha256_of(&tarball)?;
     if got != sha256 {
         let _ = std::fs::remove_file(&tarball);
         return Err(format!("The {what} download was corrupt or tampered with (SHA-256 {got}); it was deleted. Try again to download it afresh."));
@@ -79,7 +83,7 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     let staging = parent.join(format!("{top}.unpacking"));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    let untar = Command::new("tar").arg("-xzf").arg(&tarball).arg("-C").arg(&staging).status().map_err(|e| e.to_string())?;
+    let untar = unpack(&tarball, &staging)?;
     let unpacked = staging.join(top);
     if !untar.success() || !unpacked.is_dir() {
         return Err(format!("Couldn't unpack {what} ({untar})."));
@@ -90,29 +94,71 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     Ok(())
 }
 
+#[cfg(unix)]
+fn sha256_of(file: &Path) -> Result<String, String> {
+    let out = Command::new("shasum").args(["-a", "256"]).arg(file).output().map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned())
+}
+
+/// Windows has no `shasum`.
+#[cfg(windows)]
+fn sha256_of(file: &Path) -> Result<String, String> {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    let mut file = std::fs::File::open(file).map_err(|e| e.to_string())?;
+    std::io::copy(&mut file, &mut hasher).map_err(|e| e.to_string())?;
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(unix)]
+fn unpack(tarball: &Path, into: &Path) -> Result<std::process::ExitStatus, String> {
+    Command::new("tar").arg("-xzf").arg(tarball).arg("-C").arg(into).status().map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn unpack(zip: &Path, into: &Path) -> Result<std::process::ExitStatus, String> {
+    windows_tar().arg("-xf").arg(zip).arg("-C").arg(into).status().map_err(|e| e.to_string())
+}
+
+/// Windows' own bsdtar, which reads zips. A `tar` earlier on PATH may be GNU
+/// tar from Git for Windows, which doesn't, and takes `C:` for a remote host.
+#[cfg(windows)]
+fn windows_tar() -> Command {
+    let system = std::env::var_os("SystemRoot").map(|root| PathBuf::from(root).join("System32").join("tar.exe"));
+    Command::new(system.filter(|tar| tar.exists()).unwrap_or_else(|| PathBuf::from("tar.exe")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg_attr(windows, ignore = "downloads aren't ported to Windows yet (docs/windows.md)")]
     fn installs_a_verified_tarball_and_rejects_a_bad_one() {
         let tmp = std::env::temp_dir().join(format!("endeavor-install-{}", std::process::id()));
         let src = tmp.join("src/thing-1.0/bin");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("thing"), "#!/bin/sh\n").unwrap();
-        let archive = tmp.join("thing.tar.gz");
-        let ok = Command::new("tar").arg("-czf").arg(&archive).arg("-C").arg(tmp.join("src")).arg("thing-1.0").status().unwrap();
-        assert!(ok.success());
-        let out = Command::new("shasum").args(["-a", "256"]).arg(&archive).output().unwrap();
-        let sha = String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap().to_owned();
-        let url = format!("file://{}", archive.display());
+        let kind = if cfg!(windows) { "zip" } else { "tar.gz" };
+        let archive = tmp.join(format!("thing.{kind}"));
+        #[cfg(unix)]
+        let mut pack = Command::new("tar");
+        #[cfg(unix)]
+        pack.arg("-czf");
+        // -a: the format from the file name.
+        #[cfg(windows)]
+        let mut pack = windows_tar();
+        #[cfg(windows)]
+        pack.arg("-a").arg("-cf");
+        assert!(pack.arg(&archive).arg("-C").arg(tmp.join("src")).arg("thing-1.0").status().unwrap().success());
+        let sha = sha256_of(&archive).unwrap();
+        assert_eq!(sha.len(), 64);
+        let url = format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, archive.display().to_string().replace('\\', "/"));
         let size = std::fs::metadata(&archive).unwrap().len();
 
         let bad = tmp.join("app/bad");
         let err = tarball(&bad, "Thing", "thing-1.0", (&url, &"0".repeat(64), size), &|_, _| {}).unwrap_err();
         assert!(err.contains("corrupt"), "{err}");
-        assert!(!bad.exists() && !tmp.join("app/thing-1.0.tar.gz.part").exists());
+        assert!(!bad.exists() && !tmp.join(format!("app/thing-1.0.{kind}.part")).exists());
 
         let good = tmp.join("app/good");
         tarball(&good, "Thing", "thing-1.0", (&url, &sha, size), &|_, _| {}).unwrap();
