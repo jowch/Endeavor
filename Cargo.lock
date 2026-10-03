@@ -1815,7 +1815,7 @@ dependencies = [
  "agent-client-protocol",
  "block2 0.6.2",
  "chrono",
- "endeavor-remote",
+ "endeavor-mcp",
  "futures",
  "gdkx11",
  "getrandom 0.3.4",
@@ -1842,9 +1842,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "endeavor-remote"
+name = "endeavor-mcp"
 version = "0.1.0"
-source = "git+https://github.com/jowch/EndeavorMCP#ebca320f5914ae687949ce5525967c68b4bdbef0"
+source = "git+https://github.com/jowch/EndeavorMCP#2b5a3b02c2e6651bdd8405e4805907914b328b53"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
@@ -9753,7 +9753,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
-source = "git+https://github.com/jowch/EndeavorMCP#ebca320f5914ae687949ce5525967c68b4bdbef0"
+source = "git+https://github.com/jowch/EndeavorMCP#2b5a3b02c2e6651bdd8405e4805907914b328b53"
 dependencies = [
  "base64 0.22.1",
  "dunce",

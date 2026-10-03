@@ -916,7 +916,7 @@ mod tests {
     /// the runtime offers is on one side or the other, so a new tool needs a decision here.
     #[test]
     fn reads_run_without_asking_and_everything_else_asks() {
-        let tools: Vec<String> = serde_json::from_str::<Vec<serde_json::Value>>(endeavor_remote::NOTEBOOK_TOOLS_JSON)
+        let tools: Vec<String> = serde_json::from_str::<Vec<serde_json::Value>>(endeavor_mcp::NOTEBOOK_TOOLS_JSON)
             .unwrap()
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_owned())

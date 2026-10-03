@@ -2392,10 +2392,10 @@ fn main() {
     signin::browser_shim();
     // This Mac's runtime helper (runtime::connect), and ssh's askpass (remote::Askpass).
     if std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG) {
-        endeavor_remote::run_as(&[runtime::HELPER_FLAG], std::env::args().skip(2).collect());
+        endeavor_mcp::run_as(&[runtime::HELPER_FLAG], std::env::args().skip(2).collect());
     }
     if std::env::var_os(wire::askpass::SOCKET_ENV).is_some() {
-        endeavor_remote::run(std::env::args().skip(1).collect());
+        endeavor_mcp::run(std::env::args().skip(1).collect());
     }
     logs::start();
     gpui_platform::application().run(|cx: &mut App| {

@@ -1437,7 +1437,7 @@ impl Workspace {
                 )
                 .when(open, |d| d.child(self.pane_resources_popover(key, host, cx)))
         });
-        let older = reason == endeavor_remote::OLDER_RUNTIME;
+        let older = reason == endeavor_mcp::OLDER_RUNTIME;
         let on = if cluster || *host != HostId::ThisMac { format!(" on {name}") } else { String::new() };
         let start_label = match (older, on.is_empty()) {
             (true, _) => format!("Restart Julia{on}"),

@@ -138,7 +138,7 @@ Are you sure you want to continue connecting (yes/no/[fingerprint])? ")" = yes ]
 /// the app version plus a hash of what gets installed, so edits reinstall.
 pub fn version() -> Result<String, String> {
     let mut hash = wire::tree::Fnv::default();
-    hash.add(endeavor_remote::embedded::RUNTIME_VERSION.as_bytes());
+    hash.add(endeavor_mcp::embedded::RUNTIME_VERSION.as_bytes());
     for helper in bundled_helpers() {
         hash.add(&std::fs::read(&helper).map_err(|e| format!("{}: {e}", helper.display()))?);
     }
@@ -165,11 +165,11 @@ pub fn bootstrap_script(version: &str) -> String {
         &format!("v={version}"),
         r#"c="$HOME/.cache/endeavor""#,
         r#"d="$c/$v""#,
-        r#"if [ -x "$d/endeavor-remote" ] && [ -f "$d/runtime/boot.jl" ]; then s=have; else s=need; fi"#,
+        r#"if [ -x "$d/endeavor" ] && [ -f "$d/runtime/boot.jl" ]; then s=have; else s=need; fi"#,
         r#"echo "ENDEAVOR $(uname -s) $(uname -m) $s""#,
         r#"read -r jf && read -r jv && read -r ln && read -r sd || exit 1"#,
         r#"if [ $s = need ]; then read -r n || exit 1; t="$d.part.$$"; rm -rf "$t"; mkdir -p "$t" && head -c "$n" | (cd "$t" && tar xf -) || { rm -rf "$t"; echo "Endeavor: installing into $d failed" >&2; exit 1; }; rm -rf "$d"; mv "$t" "$d"; fi"#,
-        r#"exec "$d/endeavor-remote" connect --state-dir "$c/$sd" --launcher "$ln" "$jf" "$jv" --runtime "$d/runtime" --depot "$c/depot:" --build "$v""#,
+        r#"exec "$d/endeavor" connect --state-dir "$c/$sd" --launcher "$ln" "$jf" "$jv" --runtime "$d/runtime" --depot "$c/depot:" --build "$v""#,
     ]
     .join("; ")
 }
@@ -177,11 +177,12 @@ pub fn bootstrap_script(version: &str) -> String {
 /// The files of `runtime/`, built into the helper crate, as (path in the tar,
 /// contents, executable), sorted.
 fn runtime_files() -> Vec<(String, Vec<u8>, bool)> {
-    endeavor_remote::embedded::RUNTIME_FILES.iter().map(|(path, contents)| ((*path).to_owned(), contents.to_vec(), false)).collect()
+    endeavor_mcp::embedded::RUNTIME_FILES.iter().map(|(path, contents)| ((*path).to_owned(), contents.to_vec(), false)).collect()
 }
 
-/// Folders holding helpers for other platforms (scripts/helpers.sh):
-/// inside Endeavor.app, or target/helpers in the source tree.
+/// Folders holding helpers for servers, one folder per platform: inside
+/// Endeavor.app (the Linux ones and this Mac's), or target/helpers in the
+/// source tree (the Linux ones, from scripts/helpers.sh).
 fn helper_dirs() -> Vec<PathBuf> {
     let resources = crate::install::resources();
     vec![resources.join("helpers"), resources.join("target/helpers")]
@@ -193,7 +194,7 @@ fn bundled_helpers() -> Vec<PathBuf> {
         .filter_map(|dir| std::fs::read_dir(dir).ok())
         .flatten()
         .flatten()
-        .map(|platform| platform.path().join("endeavor-remote"))
+        .map(|platform| platform.path().join("endeavor"))
         .filter(|p| p.is_file())
         .collect();
     found.extend(crate::runtime::helper_binary());
@@ -205,7 +206,7 @@ fn bundled_helpers() -> Vec<PathBuf> {
 fn helper_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     let arch = if arch == "arm64" { "aarch64" } else { arch };
     let platform = format!("{}-{arch}", os.to_lowercase());
-    if let Some(helper) = helper_dirs().iter().map(|d| d.join(&platform).join("endeavor-remote")).find(|p| p.is_file()) {
+    if let Some(helper) = helper_dirs().iter().map(|d| d.join(&platform).join("endeavor")).find(|p| p.is_file()) {
         return Ok(helper);
     }
     if (os.to_lowercase().as_str(), arch) == HERE
@@ -272,10 +273,10 @@ impl HelperFix {
     }
 }
 
-/// A tar stream (ustar) of the helper as `endeavor-remote` plus `runtime/`.
+/// A tar stream (ustar) of the helper as `endeavor` plus `runtime/`.
 fn install_tar(helper: &Path) -> Result<Vec<u8>, String> {
     let helper_bytes = std::fs::read(helper).map_err(|e| format!("{}: {e}", helper.display()))?;
-    let mut entries = vec![("endeavor-remote".to_owned(), helper_bytes, true)];
+    let mut entries = vec![("endeavor".to_owned(), helper_bytes, true)];
     entries.extend(runtime_files());
     let mut tar = Vec::new();
     let mut dirs: Vec<String> = Vec::new();
@@ -713,7 +714,7 @@ mod tests {
         let mut untar = Command::new("tar").arg("xf").arg("-").current_dir(&tmp).stdin(Stdio::piped()).spawn().unwrap();
         untar.stdin.take().unwrap().write_all(&tar).unwrap();
         assert!(untar.wait().unwrap().success());
-        let unpacked = tmp.join("endeavor-remote");
+        let unpacked = tmp.join("endeavor");
         assert_eq!(std::fs::read_to_string(&unpacked).unwrap(), "#!/bin/sh\necho hi\n");
         assert_eq!(std::fs::metadata(&unpacked).unwrap().permissions().mode() & 0o777, 0o755);
         for (path, contents, _) in runtime_files() {
@@ -849,7 +850,7 @@ mod tests {
         let (channel, hello) = connect(&server, &transport, None, &Cancel::default(), &on).expect("first connect");
         assert_eq!((hello.node.as_str(), hello.home.as_path()), (hostname().as_str(), home.as_path()));
         let installed = home.join(".cache/endeavor").join(version().unwrap());
-        assert!(installed.join("endeavor-remote").is_file() && installed.join("runtime/boot.jl").is_file());
+        assert!(installed.join("endeavor").is_file() && installed.join("runtime/boot.jl").is_file());
 
         // Its files before any runtime: a folder under the (fake) home.
         std::fs::create_dir_all(home.join("decay-fits")).unwrap();

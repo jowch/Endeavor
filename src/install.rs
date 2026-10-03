@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use endeavor_remote::embedded;
+use endeavor_mcp::embedded;
 
 /// The app's own files (`adapter/`): Contents/Resources inside Endeavor.app,
 /// else the source tree (`cargo run`).
@@ -16,13 +16,13 @@ pub fn resources() -> PathBuf {
 /// The Julia side of the runtime (`runtime/`), unpacked from the helper crate
 /// into the app's folder once per version.
 pub fn runtime() -> Result<PathBuf, String> {
-    let dir = endeavor_remote::unpack(&app_dir()?.join("runtime-files"), embedded::RUNTIME_VERSION, embedded::RUNTIME_FILES)?;
+    let dir = endeavor_mcp::unpack(&app_dir()?.join("runtime-files"), embedded::RUNTIME_VERSION, embedded::RUNTIME_FILES)?;
     Ok(dir.join("runtime"))
 }
 
 /// The Pluto skills as the Claude Code plugin the app loads, unpacked the same way.
 pub fn plugin() -> Result<PathBuf, String> {
-    let dir = endeavor_remote::unpack(&app_dir()?.join("plugin"), embedded::PLUGIN_VERSION, embedded::PLUGIN_FILES)?;
+    let dir = endeavor_mcp::unpack(&app_dir()?.join("plugin"), embedded::PLUGIN_VERSION, embedded::PLUGIN_FILES)?;
     Ok(dir.join("plugin"))
 }
 

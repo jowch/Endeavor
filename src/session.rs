@@ -938,7 +938,7 @@ impl Session {
     /// Whether the runtime holds a call to notebook tool `tool` with `input`
     /// for the user's answer, by the session's mode.
     fn runtime_holds(&self, tool: &str, input: &serde_json::Value) -> bool {
-        endeavor_remote::asks_first(tool, input, self.policy(), self.edits_ask())
+        endeavor_mcp::asks_first(tool, input, self.policy(), self.edits_ask())
     }
 
     /// The session's mode as the rules for an older runtime name it
@@ -1362,7 +1362,7 @@ impl Session {
                 let input = input.unwrap_or_default();
                 let kind = fields.kind;
                 let path = fields.locations.as_ref().and_then(|l| l.first()).map(|l| l.path.clone());
-                let runs_code = celldiff::notebook_tool(&title).is_some_and(|tool| endeavor_remote::runs_code(tool, &input));
+                let runs_code = celldiff::notebook_tool(&title).is_some_and(|tool| endeavor_mcp::runs_code(tool, &input));
                 // The adapter's ExitPlanMode prompt: its options carry these ids.
                 let plan = request
                     .options
@@ -2137,7 +2137,7 @@ impl Session {
         let input = ask["arguments"].clone();
         let title = format!("{}{tool}", celldiff::TOOL_PREFIX);
         let call = self.asked_call(id, ask, &tool, &input);
-        let runs_code = endeavor_remote::runs_code(&tool, &input);
+        let runs_code = endeavor_mcp::runs_code(&tool, &input);
         let arrival = self.answer_on_arrival(&Asked { title: &title, kind: None, input: &input, path: None }, runs_code, false);
         if let Some(approval) = arrival {
             self.approve(&call, approval, &title, &input);

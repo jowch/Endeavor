@@ -1,5 +1,5 @@
 #!/bin/sh
-# Put the runtime helpers for Linux servers (endeavor-remote, x86_64 and
+# Put the runtime helpers for Linux servers (endeavor, x86_64 and
 # aarch64) in target/helpers/<platform>/, where the app and scripts/bundle.sh
 # look, for the EndeavorMCP commit that Cargo.lock pins.
 #

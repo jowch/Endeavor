@@ -1,5 +1,5 @@
 //! The Julia runtime (Pluto + EndeavorRuntime, runtime/boot.jl), reached through
-//! the endeavor-remote helper (docs/remote-sessions.md): the app runs it as a
+//! the `endeavor` helper (docs/remote-sessions.md): the app runs it as a
 //! child on This Mac, and over ssh on a server (remote.rs). The helper answers
 //! file requests from the start, and attaches to the runtime in its state
 //! folder or starts one when asked. The webview, the agent and the app reach a
@@ -66,7 +66,7 @@ enum Upstream {
     Up { mux: Arc<Mux>, token: String },
     /// The runtime was up and the app is getting it back. A connection waits
     /// for it up to `HOLD`; then an MCP request is answered with `why`
-    /// (`endeavor_remote::serve_unreachable`), and anything else closed.
+    /// (`endeavor_mcp::serve_unreachable`), and anything else closed.
     Away { token: String, why: String },
 }
 
@@ -101,7 +101,7 @@ impl Listener {
                 drop(upstream);
                 let Ok((ours, theirs)) = loopback_pair() else { return };
                 if mux.open(theirs).is_ok() {
-                    let _ = endeavor_remote::serve_guarded(connection, ours, &|session, tool, arguments| self.refusal(session, tool, arguments));
+                    let _ = endeavor_mcp::serve_guarded(connection, ours, &|session, tool, arguments| self.refusal(session, tool, arguments));
                 }
             }
             Upstream::Up { mux, .. } => {
@@ -113,7 +113,7 @@ impl Listener {
                 let (token, why) = (token.clone(), why.clone());
                 drop(upstream);
                 let _ = connection.set_read_timeout(Some(Duration::from_secs(10)));
-                let _ = endeavor_remote::serve_unreachable(connection, &token, &why);
+                let _ = endeavor_mcp::serve_unreachable(connection, &token, &why);
             }
             Upstream::None => {}
         }
@@ -298,33 +298,35 @@ fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String
     Ok(bin.display().to_string())
 }
 
-/// `endeavor --helper ARGS…` runs `endeavor-remote ARGS…` (see main).
+/// `endeavor --helper ARGS…` runs as the helper, like `endeavor ARGS…` on a server (see main).
 pub const HELPER_FLAG: &str = "--helper";
 
-/// The helper binary next to the app's own executable (`cargo test` runs from
-/// target/*/deps): what a macOS server is sent. This Mac runs the app itself
-/// as its helper instead (`helper_command`).
+/// The helper binary as cargo builds it, next to the app's own executable
+/// (`cargo test` runs from target/*/deps): what a macOS server is sent from a
+/// source checkout. The app has it in `helpers/` with the Linux ones
+/// (`remote::helper_for`). This Mac runs the app itself as its helper instead
+/// (`helper_command`).
 pub fn helper_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("no executable folder")?;
     [Some(dir), dir.parent()]
         .into_iter()
         .flatten()
-        .map(|d| d.join("endeavor-remote"))
+        .map(|d| d.join("endeavor-helper"))
         .find(|p| p.exists())
-        .ok_or_else(|| format!("Endeavor's runtime helper (endeavor-remote) is missing from {}.", dir.display()))
+        .ok_or_else(|| format!("Endeavor's runtime helper (endeavor-helper) is missing from {}.", dir.display()))
 }
 
-/// This Mac's helper: the app itself in helper mode, named `endeavor-remote`
-/// in its argv[0] so `ps` and `pgrep -x endeavor` tell it from the app. A
-/// test binary can't act as the helper, so tests run the built one.
+/// This Mac's helper: the app itself in helper mode, named `endeavor` in its
+/// argv[0] like a server's helper, with `--helper` telling it from the app in
+/// `ps`. A test binary can't act as the helper, so tests run the built one.
 pub fn helper_command() -> Result<Command, String> {
     if cfg!(test) {
         return Ok(Command::new(helper_binary()?));
     }
     let mut command = Command::new(helper_program()?);
     #[cfg(unix)]
-    command.arg0("endeavor-remote");
+    command.arg0("endeavor");
     command.arg(HELPER_FLAG);
     Ok(command)
 }
@@ -439,7 +441,7 @@ fn stop_group(pid: i32, _started: Option<u64>) {
 /// Julia and its workers (its Job Object).
 #[cfg(windows)]
 fn stop_group(pid: i32, started: Option<u64>) {
-    endeavor_remote::end_recorded_runtime(pid, started);
+    endeavor_mcp::end_recorded_runtime(pid, started);
 }
 
 /// Start This Mac's runtime on `channel` (or attach to the one running) and
@@ -524,7 +526,7 @@ impl Channel {
                                 let _ = sink.send(message);
                             }
                         }
-                        Err(e) => eprintln!("endeavor-remote sent an unreadable message: {e}"),
+                        Err(e) => eprintln!("The runtime helper sent an unreadable message: {e}"),
                     },
                 );
                 if let Some(listener) = listener.lock().unwrap().take() {
@@ -534,7 +536,7 @@ impl Channel {
                 sink.lock().unwrap().take();
                 files.lock().unwrap().clear();
                 let status = helper.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
-                eprintln!("endeavor-remote exited ({status}){}", result.err().map(|e| format!(": {e}")).unwrap_or_default());
+                eprintln!("The runtime helper exited ({status}){}", result.err().map(|e| format!(": {e}")).unwrap_or_default());
                 *ended.0.lock().unwrap() = true;
                 ended.1.notify_all();
             }

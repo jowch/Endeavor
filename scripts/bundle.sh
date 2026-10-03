@@ -1,8 +1,9 @@
 #!/bin/sh
-# Build target/release/Endeavor.app: the release binaries (the app and its
-# runtime helper, endeavor-remote) plus the app's own files (adapter/) and
-# any helpers built for Linux servers (target/helpers) in Contents/Resources.
-# runtime/ and the skills are built into the binaries (endeavor_remote::embedded),
+# Build target/release/Endeavor.app: the app (Contents/MacOS/endeavor), its
+# own files (adapter/), and the runtime helpers servers are sent, each named
+# endeavor, in Contents/Resources/helpers/<os>-<arch>/: macOS servers' (the
+# endeavor-helper target) and any built for Linux servers (target/helpers).
+# runtime/ and the skills are built into the binaries (endeavor_mcp::embedded),
 # and the app unpacks them. Julia, Node and the ACP
 # adapter are not bundled; the app installs them on first launch.
 # ponytail: ad-hoc signed; Developer ID signing + notarization come with sharing.
@@ -16,13 +17,21 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app=target/release/Endeavor.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/endeavor target/release/endeavor-remote "$app/Contents/MacOS/"
+cp target/release/endeavor "$app/Contents/MacOS/"
 cp -R adapter "$app/Contents/Resources/"
 cp assets/icon/Endeavor.icns "$app/Contents/Resources/"
-# Helpers for Linux servers (scripts/helpers.sh, above).
-if [ -d target/helpers ]; then
-  cp -R target/helpers "$app/Contents/Resources/"
-fi
+# Helpers for Linux servers (scripts/helpers.sh, above), without anything
+# else in their folders, such as a helper under its old name.
+for helper in target/helpers/*/endeavor; do
+  [ -f "$helper" ] || continue
+  platform=$(basename "$(dirname "$helper")")
+  mkdir -p "$app/Contents/Resources/helpers/$platform"
+  cp "$helper" "$app/Contents/Resources/helpers/$platform/"
+done
+# macOS servers', in the folder remote.rs looks in for `uname -s`-`uname -m`.
+mac="$app/Contents/Resources/helpers/darwin-$(uname -m | sed s/arm64/aarch64/)"
+mkdir -p "$mac"
+cp target/release/endeavor-helper "$mac/endeavor"
 
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

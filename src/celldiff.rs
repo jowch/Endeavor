@@ -159,7 +159,7 @@ fn is_server(name: &str) -> bool {
 /// in the title.
 fn wrapped_call(input: &Value, title: &str) -> Option<(String, Option<Value>)> {
     let field = |keys: &[&str]| keys.iter().find_map(|k| input.get(*k)).filter(|v| !v.is_null());
-    let tool = field(&["toolName", "tool_name", "tool", "name"])?.as_str().filter(|t| endeavor_remote::is_tool(t))?;
+    let tool = field(&["toolName", "tool_name", "tool", "name"])?.as_str().filter(|t| endeavor_mcp::is_tool(t))?;
     let named = match field(&["providerIdentifier", "server", "serverName", "server_name", "mcpServer"]) {
         Some(server) => server.as_str().is_some_and(is_server),
         None => words(title).any(is_server),
@@ -171,7 +171,7 @@ fn wrapped_call(input: &Value, title: &str) -> Option<(String, Option<Value>)> {
 /// The notebook tool a title names along with the server's name, when it names
 /// nothing else, so a sentence such as a subagent's task never matches.
 fn tool_in_title(title: &str) -> Option<String> {
-    let tool = words(title).find(|w| !is_server(w) && endeavor_remote::is_tool(w))?;
+    let tool = words(title).find(|w| !is_server(w) && endeavor_mcp::is_tool(w))?;
     let other = |w: &str| !(w == tool || is_server(w) || ["mcp", "server", "tool"].contains(&w.to_ascii_lowercase().as_str()));
     (words(title).any(is_server) && !words(title).any(other)).then(|| tool.to_owned())
 }

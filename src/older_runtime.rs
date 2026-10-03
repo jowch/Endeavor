@@ -25,7 +25,7 @@ pub fn refusal(mode: &str, tool: &str, arguments: &Value) -> Option<String> {
     match mode {
         // Asking before a run is the runtime's job now, and an older runtime
         // doesn't ask.
-        "ask" if endeavor_remote::runs_code(tool, arguments) => Some(
+        "ask" if endeavor_mcp::runs_code(tool, arguments) => Some(
             "ArgumentError: older_runtime::This notebook's Julia is from an older version of Endeavor, which can't ask the user before a run. \
              Don't run code: tell the user to restart Julia, or to switch to Auto to let runs go ahead without asking."
                 .into(),

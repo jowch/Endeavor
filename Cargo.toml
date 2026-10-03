@@ -22,7 +22,7 @@ libc = "0.2"
 # The runtime, the helper and the skills, pinned to a commit by Cargo.lock.
 # To build against a local checkout, see docs/testing.md.
 wire = { git = "https://github.com/jowch/EndeavorMCP" }
-endeavor-remote = { git = "https://github.com/jowch/EndeavorMCP" }
+endeavor-mcp = { git = "https://github.com/jowch/EndeavorMCP" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Same versions wry uses: the webview's light/dark appearance.

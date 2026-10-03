@@ -1,5 +1,5 @@
 //! The app binary is also This Mac's runtime helper (`endeavor --helper …`)
-//! and ssh's askpass program, so neither needs `endeavor-remote` beside it.
+//! and ssh's askpass program, so neither needs the helper binary (`endeavor-helper`) beside it.
 
 #![cfg(unix)]
 
@@ -16,7 +16,7 @@ fn the_app_runs_as_the_helper() {
     let dir = std::env::temp_dir().join(format!("endeavor-helper-mode-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let mut helper = Command::new(env!("CARGO_BIN_EXE_endeavor"))
-        .arg0("endeavor-remote")
+        .arg0("endeavor")
         .args(["--helper", "connect", "--state-dir"])
         .arg(dir.join("state"))
         .args(["--julia", "/nonexistent/julia", "--runtime"])
@@ -52,7 +52,7 @@ fn the_app_starts_the_runtime_core_as_the_helper() {
     std::fs::write(&julia, script).unwrap();
     std::fs::set_permissions(&julia, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let mut helper = Command::new(env!("CARGO_BIN_EXE_endeavor"))
-        .arg0("endeavor-remote")
+        .arg0("endeavor")
         .args(["--helper", "connect", "--state-dir"])
         .arg(dir.join("state"))
         .arg("--julia")
@@ -77,7 +77,7 @@ fn the_app_starts_the_runtime_core_as_the_helper() {
     unsafe { libc::kill(-pid.parse::<i32>().unwrap(), libc::SIGKILL) };
     let _ = helper.kill();
     let _ = helper.wait();
-    assert!(command.starts_with("endeavor-remote --helper core --state-dir"), "{command}");
+    assert!(command.starts_with("endeavor --helper core --state-dir"), "{command}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
