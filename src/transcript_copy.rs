@@ -257,12 +257,19 @@ fn same(a: &Entry, b: &Entry) -> bool {
 
 /// A matched entry takes what the replay knows better: a call's whole input
 /// and output, a message's chips with their pictures. What only Endeavor
-/// knows stays: when a message was sent, how a prompt was answered, what's open.
+/// knows stays: when a message was sent, how a prompt was answered, what's
+/// open, and a notebook call's result the runtime gave where the agent's
+/// replay has none (Cursor replays `{"success": true}`).
 fn carry(copy: &mut Entry, replay: Entry) {
     match replay {
         Entry::Tool { id, title, kind, path, status, input, output, diffs, approval, .. } => {
             if let Entry::Tool { id: i, title: t, kind: k, path: p, status: s, input: n, output: o, diffs: d, approval: a, .. } = copy {
-                (*i, *t, *k, *p, *s, *n, *o, *d) = (id, title, kind, path, status, input, output, diffs);
+                let result = |output: &Option<serde_json::Value>| output.as_ref().and_then(crate::celldiff::tool_json).is_some();
+                if result(o) && !result(&output) {
+                    (*i, *t, *k, *p, *n) = (id, title, kind, path, input);
+                } else {
+                    (*i, *t, *k, *p, *s, *n, *o, *d) = (id, title, kind, path, status, input, output, diffs);
+                }
                 *a = a.or(approval);
             }
         }
@@ -504,6 +511,22 @@ mod tests {
         merge(&mut copy, vec![user("Run it"), replayed], 0);
         let Entry::Tool { output, approval, expanded, .. } = &copy[1] else { panic!() };
         assert_eq!((output.clone(), *approval, *expanded), (Some(json!("the whole output")), Some(Approval::Allowed), true));
+    }
+
+    #[test]
+    fn a_replay_without_the_result_keeps_the_one_the_runtime_gave() {
+        let result = json!([{ "type": "text", "text": "{\"applied\":true,\"cell_id\":\"a\"}" }]);
+        let mut copy = vec![user("Fix it"), tool("t1", "mcp__notebook__edit_cell")];
+        if let Entry::Tool { output, status, .. } = &mut copy[1] {
+            (*output, *status) = (Some(result.clone()), ToolCallStatus::Failed);
+        }
+        let mut replayed = tool("t1", "mcp__notebook__edit_cell");
+        if let Entry::Tool { output, status, .. } = &mut replayed {
+            (*output, *status) = (Some(json!({ "success": true })), ToolCallStatus::Completed);
+        }
+        merge(&mut copy, vec![user("Fix it"), replayed], 0);
+        let Entry::Tool { output, status, .. } = &copy[1] else { panic!() };
+        assert_eq!((output.clone(), *status), (Some(result), ToolCallStatus::Failed));
     }
 
     #[test]

@@ -1255,6 +1255,22 @@ impl Workspace {
                     })
                     .detach();
                 }
+                Effect::FetchResult { call, tool, input } => {
+                    let Some(bridge) = self.session_bridge(key) else { continue };
+                    let call_id = call.to_string();
+                    let task = cx.background_executor().spawn(async move { pluto::tool_result(&bridge, key, &call_id, &tool, &input) });
+                    cx.spawn(async move |this, cx| match task.await {
+                        Ok(Some(result)) => {
+                            let _ = this.update(cx, |this, cx| {
+                                let effects = this.session_mut(key).map(|s| s.result_fetched(&call, result)).unwrap_or_default();
+                                this.apply_effects(key, effects, cx);
+                            });
+                        }
+                        Ok(None) => {}
+                        Err(e) => eprintln!("tool result: {e}"),
+                    })
+                    .detach();
+                }
                 Effect::SetConfig(id_, value) => {
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
                         let _ = self.agent_tx.unbounded_send(Command::SetConfig(id, id_, value));

@@ -121,6 +121,14 @@ pub fn run_anyway(bridge: &Bridge, notebook_id: &str, cells: &[(String, f64)]) -
     app_call(bridge, "endeavor/run_anyway", json!({ "notebook_id": notebook_id, "cells": cells })).map(|_| ())
 }
 
+/// The result the runtime kept of session `owner`'s notebook call (`call_id`
+/// is the agent's id for it), `{content, isError}`, for an agent that didn't
+/// pass it on; none if the runtime has no such call.
+pub fn tool_result(bridge: &Bridge, owner: u64, call_id: &str, tool: &str, arguments: &Value) -> Result<Option<Value>, String> {
+    let result = app_call(bridge, "endeavor/tool_result", json!({ "owner": owner.to_string(), "call_id": call_id, "tool": tool, "arguments": arguments }))?;
+    Ok((!result.is_null()).then_some(result))
+}
+
 /// Rename or move an open notebook's file; returns its new path.
 pub fn move_notebook(bridge: &Bridge, notebook_id: &str, path: &str) -> Result<String, String> {
     let result = app_call(bridge, "endeavor/move_notebook", json!({ "notebook_id": notebook_id, "path": path }))?;

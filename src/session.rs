@@ -212,6 +212,9 @@ pub enum Effect {
     SetMode(SessionModeId),
     /// Ask the runtime what the pending run at this entry would run.
     PreviewRun { ix: usize, tool: String, input: serde_json::Value },
+    /// Ask the runtime for a notebook call's result, which the agent didn't
+    /// pass on (`Session::result_fetched` takes it).
+    FetchResult { call: ToolCallId, tool: String, input: serde_json::Value },
     /// Tell the runtime this session's policy changed ("plan" | "ask").
     SetPolicy(&'static str),
     /// A turn failed for want of sign-in: Claude is signed out.
@@ -1589,7 +1592,7 @@ impl Session {
                 })
             }
             SessionUpdate::ToolCallUpdate(update) => {
-                if let Some((id, path)) = self.on_tool_update(update) {
+                if let Some((id, path)) = self.on_tool_update(update, effects) {
                     if self.replaying {
                         // History, not a live open: that id belongs to an earlier Julia.
                         // The notebook Endeavor recorded wins over the history's: the
@@ -1654,12 +1657,15 @@ impl Session {
         (title, input)
     }
 
-    /// Apply a tool-call update; on a completed pluto call, learn cell code and
-    /// diff edits. Returns the id (and file path) of a notebook the agent just opened or created.
-    fn on_tool_update(&mut self, update: ToolCallUpdate) -> Option<(String, Option<String>)> {
+    /// Apply a tool-call update; on a completed notebook call, learn cell code
+    /// and diff edits. Returns the id (and file path) of a notebook the agent
+    /// just opened or created. A finished notebook call whose output isn't the
+    /// tool's result (Cursor sends only `{"success": true}`) asks the runtime
+    /// for it instead.
+    fn on_tool_update(&mut self, update: ToolCallUpdate, effects: &mut Vec<Effect>) -> Option<(String, Option<String>)> {
         let ix = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
         self.mark(ix);
-        let Entry::Tool { title, kind, path, status, input, output, diffs, .. } = &mut self.entries[ix] else { return None };
+        let Entry::Tool { id, title, kind, path, status, input, output, .. } = &mut self.entries[ix] else { return None };
         let fields = update.fields;
         if let Some(t) = fields.title {
             *title = t;
@@ -1680,6 +1686,21 @@ impl Session {
             *output = fields.raw_output;
         }
         celldiff::name_notebook_call(title, input);
+        let finished = matches!(*status, ToolCallStatus::Completed | ToolCallStatus::Failed);
+        if let Some(tool) = celldiff::notebook_tool(title).filter(|_| finished && !self.replaying)
+            && output.as_ref().and_then(celldiff::tool_json).is_none()
+            && !runs::denied(output.as_ref())
+        {
+            effects.push(Effect::FetchResult { call: id.clone(), tool: tool.to_owned(), input: input.clone().unwrap_or_default() });
+            return None;
+        }
+        self.result_arrived(ix)
+    }
+
+    /// The result of the notebook call at `ix` is in its output: learn cell
+    /// code, diff its edits, and say which notebook it opened or created.
+    fn result_arrived(&mut self, ix: usize) -> Option<(String, Option<String>)> {
+        let Some(Entry::Tool { title, status, input, output, diffs, .. }) = self.entries.get_mut(ix) else { return None };
         let tool = celldiff::notebook_tool(title).filter(|_| *status == ToolCallStatus::Completed)?;
         let result = output.as_ref().and_then(celldiff::tool_json)?;
         if result.get("error").is_some() {
@@ -1694,6 +1715,23 @@ impl Session {
         }
         let id = result["notebook_id"].as_str()?.to_owned();
         Some((id, result["path"].as_str().map(str::to_owned)))
+    }
+
+    /// The runtime's copy of call `call`'s result (`{content, isError}`), which
+    /// the agent didn't pass on: it becomes the call's output, as if it had.
+    pub fn result_fetched(&mut self, call: &ToolCallId, result: serde_json::Value) -> Vec<Effect> {
+        let Some(ix) = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if id == call)) else { return Vec::new() };
+        if let Entry::Tool { status, output, .. } = &mut self.entries[ix] {
+            *output = Some(result["content"].clone());
+            if result["isError"] == true {
+                *status = ToolCallStatus::Failed;
+            }
+        }
+        self.mark(ix);
+        match self.result_arrived(ix) {
+            Some((id, path)) => vec![Effect::ShowNotebook { id, path }],
+            None => Vec::new(),
+        }
     }
 
     /// Open or fold the run of tool calls starting at `ix`.
@@ -2838,6 +2876,43 @@ more" }"#);
         assert_eq!(title, "mcp__notebook__edit_cell");
         assert_eq!(input.as_ref(), Some(&json!({ "cell_id": A, "code": "rate = 0.2" })));
         assert_eq!(diffs.len(), 1, "diffed against the read");
+    }
+
+    #[test]
+    fn a_call_whose_agent_sends_no_result_gets_it_from_the_runtime() {
+        use agent_client_protocol::schema::v1::{ToolCall, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
+        use serde_json::json;
+        const A: &str = "11111111-2222-4333-8444-555555555555";
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        // Cursor's shape: the call completes with only `{"success": true}`.
+        let call = |s: &mut Session, id: &str, tool: &str, args: serde_json::Value| {
+            s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), "MCP: tool"))));
+            let named = ToolCallUpdateFields::new().title(format!("notebook: {tool}")).raw_input(json!({ "providerIdentifier": "notebook", "toolName": tool, "args": args }));
+            s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_string(), named))));
+            let done = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(json!({ "success": true }));
+            s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_string(), done))))
+        };
+        let text = |result: serde_json::Value| json!({ "content": [{ "type": "text", "text": result.to_string() }], "isError": false });
+
+        let effects = call(&mut s, "t0", "open_notebook", json!({ "path": "/tmp/a.jl" }));
+        let [Effect::FetchResult { call: id, tool, input }] = effects.as_slice() else { panic!("asks the runtime") };
+        assert_eq!((id.to_string(), tool.as_str(), input), ("t0".into(), "open_notebook", &json!({ "path": "/tmp/a.jl" })));
+        let shown = s.result_fetched(&ToolCallId::new("t0"), text(json!({ "notebook_id": "n1", "path": "/tmp/a.jl" })));
+        assert!(matches!(shown.as_slice(), [Effect::ShowNotebook { id, .. }] if id == "n1"), "the pane follows");
+
+        call(&mut s, "t1", "read_cell", json!({ "cell_id": A }));
+        s.result_fetched(&ToolCallId::new("t1"), text(json!({ "cell_id": A, "code": "rate = 0.1" })));
+        call(&mut s, "t2", "edit_cell", json!({ "cell_id": A, "code": "rate = 0.2" }));
+        s.result_fetched(&ToolCallId::new("t2"), text(json!({ "applied": true })));
+        let Some(Entry::Tool { diffs, status, .. }) = s.entries.last() else { panic!("no call") };
+        assert_eq!((diffs.len(), *status), (1, ToolCallStatus::Completed), "diffed against the read");
+
+        call(&mut s, "t3", "execute_cell", json!({ "cell_id": A }));
+        let error = json!({ "content": [{ "type": "text", "text": "{\"error\":\"run_conflict\",\"message\":\"No.\"}" }], "isError": true });
+        s.result_fetched(&ToolCallId::new("t3"), error);
+        let Some(Entry::Tool { status, .. }) = s.entries.last() else { panic!("no call") };
+        assert_eq!(*status, ToolCallStatus::Failed, "the runtime says it failed, though the agent said it completed");
     }
 
     #[test]
