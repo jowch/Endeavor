@@ -294,11 +294,12 @@ impl Workspace {
             shape(name, icon, label, color).track_focus(&session.queue_focus(id, name, cx)).focus_ring_on(row_surface())
         };
         let send = if can_send {
-            // Drawn see-through rather than hidden, so Tab still reaches it, and shown once it has focus.
+            // Drawn see-through rather than hidden, so Tab still reaches it, and
+            // shown with its ring once it has focus (this replaces the ring's own style).
             button("queued-send", Glyph::ArrowUp, "Send now (⌘↩)", theme::text_primary())
                 .opacity(0.)
                 .group_hover(group.clone(), |s| s.opacity(1.))
-                .focus_visible(|s| s.opacity(1.))
+                .focus_visible(|s| s.opacity(1.).shadow(theme::ring(row_surface())))
                 .on_click(cx.listener(move |this, _, _, cx| this.queue_do(key, cx, move |o| o.send_now(ix))))
         } else {
             shape("queued-send", Glyph::ArrowUp, "Send now (⌘↩)", theme::text_section()).cursor_default().invisible().group_hover(group.clone(), |s| s.visible())
