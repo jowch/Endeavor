@@ -397,7 +397,11 @@ fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &
         }
     }
     if let Some(tool) = celldiff::notebook_tool(title) {
-        let nothing_runs = ("Nothing runs. In Manual, every change to the notebook asks.".to_owned(), Tone::Muted);
+        let nothing_runs = match session.mode_name().as_deref() {
+            Some("Manual") => "Nothing runs. In Manual, every change to the notebook asks.",
+            _ => "Nothing runs.",
+        };
+        let nothing_runs = (nothing_runs.to_owned(), Tone::Muted);
         let question = run_question(tool, None, input);
         let what = question.heading.split(" and run").next().unwrap_or("").trim_end_matches('?').to_owned();
         match tool {
@@ -1051,7 +1055,7 @@ mod tests {
     use crate::celldiff::Change;
     use crate::hosts::Place;
     use crate::session::{Entry, Scope, Session};
-    use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, ToolCallId, ToolKind};
+    use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, SessionMode, SessionModeState, ToolCallId, ToolKind};
     use serde_json::{Value, json};
 
     /// Claude Code's options for a Bash call with a suggested rule (the adapter's own labels).
@@ -1128,9 +1132,14 @@ mod tests {
         assert!(mcp.lines.is_empty(), "never the raw tool name");
         assert_eq!(buttons(&mcp)[2].0, "Allow");
 
+        let modes = |current: &str| Some(SessionModeState::new(current.to_owned(), vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]));
+        s.modes = modes("default");
         let manual = prompt(&mut s, "mcp__notebook__add_cell", ToolKind::Other, json!({ "code": "residuals = 1" }), false, claude_options());
         assert_eq!((manual.heading.as_str(), buttons(&manual)[2].0.as_str()), ("Add `residuals`?", "Add"));
         assert_eq!(manual.lines[0].0, "Nothing runs. In Manual, every change to the notebook asks.");
+        s.modes = modes("plan");
+        let plan = prompt(&mut s, "mcp__notebook__edit_cell", ToolKind::Other, json!({ "cell_id": "x", "code": "residuals = 2" }), false, claude_options());
+        assert_eq!(plan.lines[0].0, "Nothing runs.", "only Manual asks before every change");
     }
 
     #[test]
