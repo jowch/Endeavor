@@ -234,11 +234,17 @@ pub fn usage_line(until: Option<SystemTime>, now: SystemTime, offset: i64, waiti
 }
 
 /// The local time zone's offset from UTC now, in seconds.
+#[cfg(unix)]
 pub fn local_offset() -> i64 {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: localtime_r only writes the `tm` it's given.
     if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() { 0 } else { tm.tm_gmtoff as i64 }
+}
+
+#[cfg(windows)]
+pub fn local_offset() -> i64 {
+    chrono::Local::now().offset().local_minus_utc().into()
 }
 
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {

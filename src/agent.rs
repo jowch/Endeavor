@@ -165,7 +165,12 @@ fn adapter_command(progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     let (node, entry) = adapter_paths()?;
     let node_dir = node.parent().and_then(Path::parent).ok_or("bad Node path")?.to_path_buf();
     if !node.exists() {
+        // Not ported: Windows needs Node's win-x64 zip pinned (docs/windows.md).
+        #[cfg(windows)]
+        return Err(format!("Endeavor can't install Node.js {NODE_VERSION} on Windows yet."));
+        #[cfg(not(windows))]
         let (url, sha, size, top) = NODE_TARBALL;
+        #[cfg(not(windows))]
         crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), &|detail, fraction| {
             progress(Progress { fraction, ..Progress::new(Step::Agent, detail) })
         })?;

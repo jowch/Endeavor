@@ -41,6 +41,10 @@ block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSBundle", "NSError"] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "UNNotificationResponse", "UNNotification"] }
 
+[target.'cfg(windows)'.dependencies]
+# The local time zone's offset (Unix uses localtime_r). Already in the tree through GPUI.
+chrono = "0.4"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # wry embeds the notebook webview as an X11 child window, so the app runs on X11 (or XWayland).
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["x11"] }

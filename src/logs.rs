@@ -5,6 +5,7 @@
 //! From a terminal, output stays in the terminal.
 
 use std::io::IsTerminal;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
@@ -26,7 +27,11 @@ pub fn start() {
     let _ = std::fs::rename(&path, path.with_file_name("endeavor.old.log"));
     // ponytail: no rotation within a run; a very long run makes a big file.
     let Ok(file) = std::fs::File::create(&path) else { return };
+    // Not ported: Windows needs SetStdHandle, and a GUI app has no console to inherit.
+    #[cfg(windows)]
+    drop(file);
     // SAFETY: dup2 onto the standard fds; `file` stays open until the calls return.
+    #[cfg(unix)]
     unsafe {
         libc::dup2(file.as_raw_fd(), 1);
         libc::dup2(file.as_raw_fd(), 2);

@@ -166,3 +166,10 @@ pub fn set_webview_appearance(_: &wry::WebView, light: bool) {
     let Some(gtk) = gtk::Settings::default() else { return };
     gtk.set_gtk_application_prefer_dark_theme(!light);
 }
+
+/// WebView2's `prefers-color-scheme` follows the theme set on it.
+#[cfg(windows)]
+pub fn set_webview_appearance(webview: &wry::WebView, light: bool) {
+    use wry::WebViewExtWindows;
+    let _ = webview.set_theme(if light { wry::Theme::Light } else { wry::Theme::Dark });
+}

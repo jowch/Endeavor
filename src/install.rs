@@ -34,6 +34,7 @@ pub fn app_dir() -> Result<PathBuf, String> {
 
 /// Download a pinned tarball (resuming a partial one), check its SHA-256, and
 /// unpack its `top` folder to `dir`. `what` names it in progress and errors.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
     let parent = dir.parent().unwrap();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;

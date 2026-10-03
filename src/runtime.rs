@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -275,6 +276,7 @@ const JULIA_TARBALL: (&str, &str, u64) = (
 /// The julia binary to run: the user's (Settings) while it's there and is
 /// Julia, else the app's own, downloaded and verified on first run.
 /// `progress` hears how that's going.
+#[cfg_attr(windows, allow(unused_variables))]
 fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
     if let Some(julia) = crate::settings::Settings::load().julia {
         match check_chosen(&julia) {
@@ -285,6 +287,10 @@ fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String
     let dir = crate::install::app_dir()?.join(format!("julia-{JULIA_VERSION}"));
     let bin = dir.join("bin/julia");
     if !bin.exists() {
+        // Not ported: Windows needs Julia's win64 zip pinned, and bin\julia.exe (docs/windows.md).
+        #[cfg(windows)]
+        return Err(format!("Endeavor can't install Julia {JULIA_VERSION} on Windows yet. Choose a Julia in Settings."));
+        #[cfg(not(windows))]
         crate::install::tarball(&dir, &format!("Julia {JULIA_VERSION}"), &format!("julia-{JULIA_VERSION}"), JULIA_TARBALL, progress)?;
     }
     Ok(bin.display().to_string())
@@ -315,7 +321,9 @@ pub fn helper_command() -> Result<Command, String> {
         return Ok(Command::new(helper_binary()?));
     }
     let mut command = Command::new(helper_program()?);
-    command.arg0("endeavor-remote").arg(HELPER_FLAG);
+    #[cfg(unix)]
+    command.arg0("endeavor-remote");
+    command.arg(HELPER_FLAG);
     Ok(command)
 }
 
@@ -356,13 +364,10 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
     }
     // Its own process group: a Ctrl-C meant for the app in a terminal must not
     // kill the helper before it can stop Julia.
-    let mut helper = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("Couldn't start Endeavor's runtime helper: {e}"))?;
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut helper = command.spawn().map_err(|e| format!("Couldn't start Endeavor's runtime helper: {e}"))?;
     let stdin = helper.stdin.take().unwrap();
     let stdout = helper.stdout.take().unwrap();
     let channel = Channel::open(helper, stdin, stdout);
@@ -404,6 +409,7 @@ fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
 /// The runtime runs in its own session, so its recorded pid (the core's, or
 /// Julia's for a runtime an older helper started) is its group's: end the
 /// group (the core, Julia and its notebook workers), politely first.
+#[cfg(unix)]
 fn stop_group(pid: i32) {
     // SAFETY (both): plain syscalls; a group that's gone only returns ESRCH.
     let alive = || unsafe { libc::kill(-pid, 0) } == 0;
@@ -416,6 +422,13 @@ fn stop_group(pid: i32) {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+/// Not ported: the helper can't start a runtime on Windows yet, so none is
+/// recorded to stop (docs/windows.md, process control).
+#[cfg(windows)]
+fn stop_group(pid: i32) {
+    eprintln!("Endeavor can't stop a runtime on Windows yet (pid {pid}).");
 }
 
 /// Start This Mac's runtime on `channel` (or attach to the one running) and
@@ -978,7 +991,7 @@ fn live_die_and_restart() {
     channel.stop();
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[test]
 fn repair_clears_stale_state_and_keeps_the_rest() {
     let app = std::env::temp_dir().join(format!("endeavor-repair-{}", std::process::id()));

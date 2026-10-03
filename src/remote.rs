@@ -9,19 +9,26 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::Duration;
 
 use futures::channel::mpsc::UnboundedSender;
 use wire::ToApp;
 use wire::slurm::JobRequest;
-use wire::askpass::{Answer, Ask, SOCKET_ENV};
+use wire::askpass::Ask;
+#[cfg(unix)]
+use wire::askpass::{Answer, SOCKET_ENV};
 
 use crate::hosts::Server;
 use crate::runtime::{Channel, Hello, Listener, Notice, Runtime};
@@ -199,7 +206,12 @@ fn runtime_files() -> Result<Vec<(String, Vec<u8>, bool)>, String> {
                 walk(&entry.path(), &name, out)?;
             } else {
                 let contents = std::fs::read(entry.path()).map_err(|e| e.to_string())?;
-                out.push((name, contents, meta.permissions().mode() & 0o111 != 0));
+                #[cfg(unix)]
+                let executable = meta.permissions().mode() & 0o111 != 0;
+                // No file in runtime/ is executable (git records none); install_tar marks the helper by name.
+                #[cfg(windows)]
+                let executable = false;
+                out.push((name, contents, executable));
             }
         }
         Ok(())
@@ -379,23 +391,25 @@ impl Cancel {
 
 /// ssh runs in its own process group, which ends with it: the askpass it may
 /// be waiting on, or the local test's shells.
+#[cfg(unix)]
 fn kill_group(pid: u32) {
     // SAFETY: plain syscall.
     unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
 }
+
+/// Not ported: `Askpass::start` refuses on Windows, so the app starts no ssh to stop.
+#[cfg(windows)]
+fn kill_group(_pid: u32) {}
 
 /// Run the bootstrap on `server` and wait for the helper's hello. The runtime
 /// starts later, when the channel is asked to (`Channel::start_runtime`).
 pub fn connect(server: &Server, transport: &Transport, askpass: Option<&Askpass>, cancel: &Cancel, on: &dyn Fn(Event)) -> Result<(Channel, Hello), String> {
     let version = version()?;
     let mut command = transport.command(&bootstrap_script(&version), askpass)?;
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("Couldn't run ssh: {e}"))?;
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|e| format!("Couldn't run ssh: {e}"))?;
     if !cancel.started(child.id()) {
         kill_group(child.id());
     }
@@ -610,12 +624,30 @@ impl Question {
 /// A private Unix socket that the helper's askpass mode sends ssh's prompts to,
 /// for one connect. The folder is 0700 and the socket 0600, so only this user
 /// can ask or answer; both go away when this is dropped.
+#[cfg(unix)]
 pub struct Askpass {
     dir: PathBuf,
     socket: PathBuf,
     stop: Arc<AtomicBool>,
 }
 
+/// Not ported: Windows needs loopback TCP with a token, or a named pipe, and
+/// it's unknown whether its ssh honours SSH_ASKPASS_REQUIRE (docs/windows.md).
+#[cfg(windows)]
+pub struct Askpass;
+
+#[cfg(windows)]
+impl Askpass {
+    pub fn start(_host: String, _questions: UnboundedSender<Question>) -> Result<Askpass, String> {
+        Err("Endeavor can't connect to servers from Windows yet.".into())
+    }
+
+    fn set_env(&self, _: &mut Command) -> Result<(), String> {
+        Err("Endeavor can't connect to servers from Windows yet.".into())
+    }
+}
+
+#[cfg(unix)]
 impl Askpass {
     pub fn start(host: String, questions: UnboundedSender<Question>) -> Result<Askpass, String> {
         static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -654,6 +686,7 @@ impl Askpass {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Askpass {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -662,6 +695,7 @@ impl Drop for Askpass {
     }
 }
 
+#[cfg(unix)]
 fn answer_one(connection: UnixStream, host: String, questions: &UnboundedSender<Question>) {
     let mut line = String::new();
     if BufReader::new(&connection).read_line(&mut line).is_err() {
@@ -681,11 +715,15 @@ fn answer_one(connection: UnixStream, host: String, questions: &UnboundedSender<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::net::TcpListener;
+    #[cfg(unix)]
     use wire::askpass::Kind;
+    #[cfg(unix)]
     use wire::files;
 
     #[test]
+    #[cfg(unix)]
     fn the_bootstrap_survives_any_login_shell() {
         let script = bootstrap_script("0.1.0-0123456789abcdef");
         for bad in ['\'', '\\', '!', '\n'] {
@@ -704,6 +742,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn tar_holds_the_helper_and_runtime() {
         let tmp = std::env::temp_dir().join(format!("endeavor-tar-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
@@ -757,10 +796,12 @@ mod tests {
     }
 
     /// A runtime as the helper sees one: a live pid on this node, and a bridge that answers `ping`.
+    #[cfg(unix)]
     struct FakeRuntime {
         process: Arc<Mutex<std::process::Child>>,
     }
 
+    #[cfg(unix)]
     impl FakeRuntime {
         fn start(state_dir: &Path, token: &str) -> FakeRuntime {
             let process = Command::new("sleep").arg("600").process_group(0).spawn().unwrap();
@@ -804,6 +845,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Drop for FakeRuntime {
         fn drop(&mut self) {
             let mut process = self.process.lock().unwrap();
@@ -812,6 +854,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn hostname() -> String {
         let mut buf = [0u8; 256];
         // SAFETY: gethostname writes at most `len` bytes into `buf`.
@@ -820,6 +863,7 @@ mod tests {
         String::from_utf8_lossy(&buf[..end]).into_owned()
     }
 
+    #[cfg(unix)]
     fn temp_home(name: &str) -> PathBuf {
         let home = std::env::temp_dir().join(format!("endeavor-home-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
@@ -827,6 +871,7 @@ mod tests {
         home
     }
 
+    #[cfg(unix)]
     fn events() -> (Arc<Mutex<Vec<Event>>>, impl Fn(Event)) {
         let seen: Arc<Mutex<Vec<Event>>> = Arc::default();
         let s = seen.clone();
@@ -834,6 +879,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn bootstrap_installs_then_reuses_the_helper_and_attaches() {
         let home = temp_home("bootstrap");
         let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -884,6 +930,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_helper_that_ends_with_no_julia_is_a_drop_and_a_detach_is_not() {
         let home = temp_home("closed");
         let transport = Transport::Shell { env: vec![("HOME".into(), home.display().to_string())], ask: None };
@@ -911,6 +958,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_server_without_a_helper_build_is_refused_plainly() {
         let home = temp_home("platform");
         let bin = home.join("bin");
@@ -946,6 +994,7 @@ mod tests {
     }
 
     /// The app's side of askpass, answering from a thread as the modal would.
+    #[cfg(unix)]
     fn answering(answer: Option<&'static str>) -> (Askpass, Arc<Mutex<Vec<Ask>>>) {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<Question>();
         let asked: Arc<Mutex<Vec<Ask>>> = Arc::default();
@@ -961,6 +1010,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn askpass_round_trip() {
         let (askpass, asked) = answering(Some("hunter2"));
         let helper = crate::runtime::helper_binary().unwrap();
@@ -986,6 +1036,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_cancelled_password_prompt_ends_the_connect() {
         let home = temp_home("askpass-cancel");
         let (askpass, asked) = answering(None);

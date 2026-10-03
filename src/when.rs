@@ -55,10 +55,16 @@ pub fn ago(then: SystemTime) -> String {
 }
 
 /// The local time zone's offset from UTC, in seconds.
+#[cfg(unix)]
 fn local_offset() -> i64 {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() { 0 } else { tm.tm_gmtoff as i64 }
+}
+
+#[cfg(windows)]
+fn local_offset() -> i64 {
+    chrono::Local::now().offset().local_minus_utc().into()
 }
 
 /// A moment (Unix seconds) as a local clock time, "18:40", with the weekday

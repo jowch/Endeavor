@@ -280,6 +280,17 @@ mod platform {
     }
 }
 
+/// Not ported: Windows needs NotifyIpInterfaceChange. Until then the app
+/// takes the network to be up.
+#[cfg(windows)]
+mod platform {
+    use futures::channel::mpsc::UnboundedSender;
+
+    pub fn monitor(tx: UnboundedSender<bool>) {
+        let _ = tx.unbounded_send(true);
+    }
+}
+
 /// A default route on an interface other than loopback, in /proc/net/route's
 /// and /proc/net/ipv6_route's formats.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]

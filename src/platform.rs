@@ -1,8 +1,8 @@
-//! What the app does differently on macOS and Linux, outside GPUI and wry:
-//! showing a file, reading system settings, and hosting the notebook's web view.
-//! On Linux the web view is WebKitGTK in an X11 child window, so GTK has to be
-//! started and its events run. `src/linux/` has the Linux versions of the
-//! macOS-only fixes.
+//! What the app does differently on macOS, Linux and Windows, outside GPUI and
+//! wry: showing a file, reading system settings, and hosting the notebook's web
+//! view. On Linux the web view is WebKitGTK in an X11 child window, so GTK has
+//! to be started and its events run. `src/linux/` has the Linux versions of the
+//! macOS-only fixes. Windows has only stubs so far (docs/windows.md).
 
 use std::path::Path;
 
@@ -64,11 +64,15 @@ pub const SHOW_LOGS: (&str, &str) = if cfg!(target_os = "macos") { ("Show in Fin
 /// Settings' Appearance choice that follows the system's light or dark setting.
 pub const MATCH_SYSTEM: &str = if cfg!(target_os = "macos") { "Match macOS" } else { "Match system" };
 
-/// Show `path` in Finder, selected; on Linux, open its folder in the file manager.
+/// Show `path` in Finder, selected; on Linux, open its folder in the file
+/// manager; on Windows, show it selected in Explorer.
 pub fn reveal(path: &Path) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
-    #[cfg(not(target_os = "macos"))]
+    // Explorer reads `/select,` and the quoted path as one argument, which std's quoting would break.
+    #[cfg(windows)]
+    let _ = std::os::windows::process::CommandExt::raw_arg(&mut std::process::Command::new("explorer"), format!("/select,\"{}\"", path.display())).spawn();
+    #[cfg(target_os = "linux")]
     if let Some(folder) = if path.is_dir() { Some(path) } else { path.parent() } {
         let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
     }
@@ -91,6 +95,12 @@ pub fn reduces_motion() -> bool {
 pub fn reduces_motion() -> bool {
     use gtk::prelude::GtkSettingsExt;
     gtk::Settings::default().is_some_and(|s| !s.is_gtk_enable_animations())
+}
+
+/// Not ported: Windows needs SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION).
+#[cfg(windows)]
+pub fn reduces_motion() -> bool {
+    false
 }
 
 /// Run from source (`cargo run`), the app has no bundle to take its Dock icon
@@ -127,13 +137,14 @@ pub fn bring_all_to_front(_: &mut gpui::App) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 pub fn bring_all_to_front(cx: &mut gpui::App) {
     cx.activate(true);
 }
 
 /// On macOS AppKit keeps the web view in step with the window by itself.
-#[cfg(target_os = "macos")]
+/// Windows has nothing to hook yet: WebView2's keys and focus aren't ported.
+#[cfg(not(target_os = "linux"))]
 pub fn web_view_hooks() -> impl gpui::IntoElement {
     gpui::Empty
 }
@@ -151,8 +162,11 @@ pub fn init(cx: &mut gpui::App) {
     crate::linux::gtk_loop::start(cx);
 }
 
+#[cfg(windows)]
+pub fn init(_: &mut gpui::App) {}
+
 /// The window the notebook's web view goes in, as wry wants it.
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "linux"))]
 pub fn webview_parent(window: &gpui::Window) -> raw_window_handle::WindowHandle<'_> {
     raw_window_handle::HasWindowHandle::window_handle(window).expect("window handle")
 }
@@ -215,7 +229,7 @@ pub fn set_open_panel_message(message: &'static str, cx: &mut gpui::App) {
     .detach();
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 pub fn set_open_panel_message(_: &'static str, _: &mut gpui::App) {}
 
 #[cfg(not(target_os = "macos"))]
@@ -234,4 +248,64 @@ pub mod snapshot {
 pub mod dialogs {
     /// The page's alert(), confirm() and prompt(): WebKitGTK's own dialogs, untested (docs/linux.md).
     pub fn show_page_dialogs(_: &wry::WebView) {}
+}
+
+/// Not ported: menus over the notebook need a hole cut in WebView2's window
+/// with SetWindowRgn, or the web view hidden while one is open. Until then they
+/// show under the notebook.
+#[cfg(windows)]
+pub mod overlay {
+    use gpui::{Bounds, Pixels};
+
+    /// What a hole in the web view is for; each has at most one.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Hole {
+        Menu,
+        Tip,
+        Tooltip,
+        /// The Settings panel.
+        Settings,
+        /// The confirm dialog.
+        Confirm,
+        /// A one-off failure's notice.
+        Notice,
+    }
+
+    pub fn set_dismiss_on_click(_: &wry::WebView, _: bool) {}
+
+    pub fn set_dimmed(_: &wry::WebView, _: bool) {}
+
+    pub fn set_hole(_: &wry::WebView, _: Hole, _: Option<Bounds<Pixels>>) {}
+
+    pub fn close_hole_at(_: Hole, _: Bounds<Pixels>) {}
+}
+
+/// WebView2's side of the notebook. Not ported: its process ending
+/// (`ProcessFailed`), find in the page, and whether it has the keyboard.
+#[cfg(windows)]
+pub mod webcontent {
+    use futures::channel::oneshot;
+
+    pub fn on_process_ended(_: &wry::WebView, _: impl Fn() + 'static) {}
+
+    pub fn url(webview: &wry::WebView) -> String {
+        webview.url().unwrap_or_default()
+    }
+
+    /// Nothing is found until find is ported.
+    pub fn find(_: &wry::WebView, _: &str, _: bool) -> oneshot::Receiver<bool> {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(false);
+        rx
+    }
+
+    pub fn clear_find(_: &wry::WebView) {}
+
+    pub fn give_keyboard(webview: &wry::WebView) {
+        let _ = webview.focus();
+    }
+
+    pub fn has_keyboard(_: &wry::WebView) -> bool {
+        false
+    }
 }

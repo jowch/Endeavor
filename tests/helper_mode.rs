@@ -1,6 +1,8 @@
 //! The app binary is also This Mac's runtime helper (`endeavor --helper …`)
 //! and ssh's askpass program, so neither needs `endeavor-remote` beside it.
 
+#![cfg(unix)]
+
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt;

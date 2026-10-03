@@ -82,6 +82,8 @@ mod linux;
 use linux::{overlay, webcontent};
 #[cfg(not(target_os = "macos"))]
 use platform::{dialogs, snapshot};
+#[cfg(windows)]
+use platform::{overlay, webcontent};
 
 use agent::{AgentEvent, Command};
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};

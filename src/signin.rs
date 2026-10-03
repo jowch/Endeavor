@@ -171,6 +171,7 @@ fn open_in_browser(url: &str) -> bool {
 pub struct Login {
     pub method: Method,
     id: u64,
+    #[cfg_attr(windows, allow(dead_code))]
     pid: i32,
     url_file: PathBuf,
 }
@@ -185,12 +186,15 @@ impl Login {
         let mut command = crate::agent::claude_cli(&["auth", "login", method.flag()])?;
         command.env("BROWSER", exe).env(URL_FILE_ENV, &url_file).stdout(Stdio::piped()).stderr(Stdio::piped());
         // Its own process group, so Cancel stops the CLI and whatever it started.
+        #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let child = command.spawn().map_err(|e| format!("Couldn't start the sign-in: {e}"))?;
         Ok((Login { method, id, pid: child.id() as i32, url_file }, child))
     }
 
     fn cancel(&self) {
+        // Not ported: Windows needs a Job Object to stop the CLI and what it started.
+        #[cfg(unix)]
         unsafe { libc::kill(-self.pid, libc::SIGTERM) };
         let _ = std::fs::remove_file(&self.url_file);
     }
