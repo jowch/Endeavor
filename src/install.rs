@@ -133,6 +133,14 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)]
+    fn app_data_and_logs_are_in_local_app_data() {
+        let ours = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("Endeavor");
+        assert_eq!(app_dir().unwrap(), ours);
+        assert_eq!(crate::logs::path().unwrap(), ours.join("Logs").join("endeavor.log"));
+    }
+
+    #[test]
     fn installs_a_verified_tarball_and_rejects_a_bad_one() {
         let tmp = std::env::temp_dir().join(format!("endeavor-install-{}", std::process::id()));
         let src = tmp.join("src/thing-1.0/bin");

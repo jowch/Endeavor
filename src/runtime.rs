@@ -347,8 +347,7 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
     check_version(&julia)?;
     let app_dir = crate::install::app_dir()?;
     let state_dir = app_dir.join("runtime");
-    // The trailing separator stacks the default depots (~/.julia) read-only behind ours.
-    let depot = format!("{}{}", app_dir.join("depot").display(), if cfg!(windows) { ';' } else { ':' });
+    let depot = depot_list(&app_dir);
 
     let mut command = helper_command()?;
     command
@@ -378,6 +377,12 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
     let channel = Channel::open(helper, stdin, stdout);
     let hello = channel.wait_hello(|| "Endeavor's runtime helper stopped unexpectedly. Show logs has the details.".into())?;
     Ok((channel, hello))
+}
+
+/// JULIA_DEPOT_PATH for This Mac's runtime: the app's depot, then an empty
+/// entry, which stacks the default depots (~/.julia) read-only behind ours.
+fn depot_list(app_dir: &Path) -> String {
+    format!("{}{}", app_dir.join("depot").display(), if cfg!(windows) { ';' } else { ':' })
 }
 
 /// Repair runtime: stop the runtime recorded in This Mac's state folder if one
@@ -810,7 +815,15 @@ fn diagnose(tail: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChosenJulia, chosen_from_version, diagnose, died_reason, parse_version};
+    use super::{ChosenJulia, chosen_from_version, depot_list, diagnose, died_reason, parse_version};
+
+    #[test]
+    fn the_depot_list_stacks_the_default_depots_behind_ours() {
+        #[cfg(windows)]
+        assert_eq!(depot_list(std::path::Path::new(r"C:\Users\jc\AppData\Local\Endeavor")), r"C:\Users\jc\AppData\Local\Endeavor\depot;");
+        #[cfg(not(windows))]
+        assert_eq!(depot_list(std::path::Path::new("/Users/jc/Library/Application Support/endeavor")), "/Users/jc/Library/Application Support/endeavor/depot:");
+    }
 
     #[test]
     fn a_chosen_file_is_julia_when_it_says_so() {
