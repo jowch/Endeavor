@@ -23,7 +23,7 @@ pub fn runs_code(tool: &str, input: &Value) -> bool {
 /// The hook's answer for one Claude Code PreToolUse payload: "ask" for notebook
 /// calls that run code, nothing (normal flow) otherwise.
 pub fn pretool_decision(payload: &Value) -> Option<Value> {
-    let tool = payload["tool_name"].as_str()?.strip_prefix(crate::celldiff::TOOL_PREFIX)?;
+    let tool = crate::celldiff::notebook_tool(payload["tool_name"].as_str()?)?;
     runs_code(tool, &payload["tool_input"]).then(|| {
         json!({ "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

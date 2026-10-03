@@ -115,8 +115,68 @@ pub const TOOL_PREFIX: &str = "mcp__notebook__";
 const OLD_TOOL_PREFIX: &str = "mcp__pluto__";
 
 /// `mcp__notebook__edit_cell` (or, in a past session, `mcp__pluto__edit_cell`) -> `edit_cell`.
+/// Every tool call reaches the session through [`name_notebook_call`], so this
+/// recognises other agents' notebook calls too.
 pub fn notebook_tool(title: &str) -> Option<&str> {
     title.strip_prefix(TOOL_PREFIX).or_else(|| title.strip_prefix(OLD_TOOL_PREFIX))
+}
+
+/// Give a notebook call that an agent names its own way Claude Code's title for
+/// it, `mcp__notebook__<tool>`, and its arguments as its input, so the rest of
+/// the app knows it by one name. An agent may name the tool in its `rawInput`
+/// (Cursor: `{providerIdentifier: "notebook", toolName, args}`) or in its title
+/// ("notebook: edit_cell", "notebook-read_cell: read_cell", "edit_cell (notebook
+/// MCP Server)"). Calls already named Claude's way are left as they are.
+pub fn name_notebook_call(title: &mut String, input: &mut Option<Value>) {
+    if notebook_tool(title).is_some() {
+        return;
+    }
+    if let Some((tool, args)) = input.as_ref().and_then(|i| wrapped_call(i, title)) {
+        *title = format!("{TOOL_PREFIX}{tool}");
+        if let Some(args) = args {
+            *input = Some(args);
+        }
+        return;
+    }
+    if let Some(tool) = tool_in_title(title) {
+        *title = format!("{TOOL_PREFIX}{tool}");
+    }
+}
+
+/// The notebook server's name in any form: `notebook`, an older `pluto`, or
+/// either joined to more (`notebook-read_cell`).
+fn is_server(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    [MCP_SERVER, "pluto"].iter().any(|server| {
+        name.strip_prefix(server).is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| !c.is_ascii_alphanumeric()))
+    })
+}
+
+/// A notebook tool named in a `rawInput` that wraps the call: its name, and its
+/// arguments when the wrapper carries them. The server must be named, there or
+/// in the title.
+fn wrapped_call(input: &Value, title: &str) -> Option<(String, Option<Value>)> {
+    let field = |keys: &[&str]| keys.iter().find_map(|k| input.get(*k)).filter(|v| !v.is_null());
+    let tool = field(&["toolName", "tool_name", "tool", "name"])?.as_str().filter(|t| endeavor_remote::is_tool(t))?;
+    let named = match field(&["providerIdentifier", "server", "serverName", "server_name", "mcpServer"]) {
+        Some(server) => server.as_str().is_some_and(is_server),
+        None => words(title).any(is_server),
+    };
+    let args = field(&["args", "arguments", "input"]).filter(|a| a.is_object()).cloned();
+    named.then(|| (tool.to_owned(), args))
+}
+
+/// The notebook tool a title names along with the server's name, when it names
+/// nothing else, so a sentence such as a subagent's task never matches.
+fn tool_in_title(title: &str) -> Option<String> {
+    let tool = words(title).find(|w| !is_server(w) && endeavor_remote::is_tool(w))?;
+    let other = |w: &str| !(w == tool || is_server(w) || ["mcp", "server", "tool"].contains(&w.to_ascii_lowercase().as_str()));
+    (words(title).any(is_server) && !words(title).any(other)).then(|| tool.to_owned())
+}
+
+/// A title's words: runs of letters, digits and `_`, split again at `__`.
+fn words(title: &str) -> impl Iterator<Item = &str> {
+    title.split(|c: char| !(c.is_alphanumeric() || c == '_')).flat_map(|w| w.split("__")).filter(|w| !w.is_empty())
 }
 
 #[derive(Default)]
@@ -324,5 +384,38 @@ mod tests {
         assert_eq!(notebook_tool("mcp__notebook__edit_cell"), Some("edit_cell"));
         assert_eq!(notebook_tool("mcp__pluto__edit_cell"), Some("edit_cell"));
         assert_eq!(notebook_tool("Bash"), None);
+    }
+
+    #[test]
+    fn other_agents_notebook_calls_get_claudes_name_and_their_arguments() {
+        let named = |title: &str, input: Option<Value>| {
+            let (mut title, mut input) = (title.to_owned(), input);
+            name_notebook_call(&mut title, &mut input);
+            (title, input)
+        };
+        let args = json!({ "cell_id": "c", "code": "x = 1" });
+        let cursor = json!({ "providerIdentifier": "notebook", "toolName": "edit_cell", "args": args });
+        assert_eq!(named("notebook: edit_cell", Some(cursor.clone())), ("mcp__notebook__edit_cell".into(), Some(args.clone())));
+        assert_eq!(named("MCP: tool", Some(cursor)), ("mcp__notebook__edit_cell".into(), Some(args.clone())), "the wrapper names the server");
+        let codex = json!({ "server": "notebook", "tool": "execute_cell", "arguments": { "cell_id": "c" } });
+        assert_eq!(named("notebook.execute_cell", Some(codex)), ("mcp__notebook__execute_cell".into(), Some(json!({ "cell_id": "c" }))));
+        for title in ["notebook-read_cell: read_cell", "notebook: read_cell", "read_cell (notebook MCP Server)", "Tool: notebook/read_cell", "pluto: read_cell"] {
+            assert_eq!(named(title, Some(args.clone())), ("mcp__notebook__read_cell".into(), Some(args.clone())), "{title}");
+        }
+
+        // Claude's own names, and anything that isn't a notebook call, stay as they are.
+        for (title, input) in [
+            ("mcp__notebook__edit_cell", Some(args.clone())),
+            ("mcp__pluto__edit_cell", None),
+            ("mcp__github__create_issue", Some(json!({ "name": "read_cell" }))),
+            ("Read ~/notebook/read_file", None),
+            ("Find where notebook edit_cell is handled", None),
+            ("MCP: tool", None),
+            ("notebook: delete_everything", None),
+            ("github: edit_cell", Some(json!({ "providerIdentifier": "github", "toolName": "edit_cell", "args": {} }))),
+            ("notebooks: edit_cell", None),
+        ] {
+            assert_eq!(named(title, input.clone()), (title.to_owned(), input), "{title}");
+        }
     }
 }

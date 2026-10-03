@@ -1064,7 +1064,7 @@ mod tests {
     }
 
     fn prompt(s: &mut Session, title: &str, kind: ToolKind, input: Value, runs_code: bool, options: Vec<PermissionOption>) -> super::ApprovalView {
-        let tool = title.strip_prefix("mcp__notebook__").map(str::to_owned);
+        let tool = crate::celldiff::notebook_tool(title).map(str::to_owned);
         s.entries.push(Entry::Permission {
             call: ToolCallId::new("c"),
             title: title.into(),

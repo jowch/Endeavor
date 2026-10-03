@@ -16,16 +16,14 @@ Cursor was tested in a spike on 2026-09-27; its findings are in
 
 Each of these works only because of how Claude Code or its adapter behaves.
 
-- **Recognising notebook tool calls.** A call is a notebook tool when its title
-  starts with Claude's `mcp__notebook__` (`celldiff::notebook_tool`,
-  `src/celldiff.rs`). Cell diffs, run summaries, tool details and the pane
-  following a new notebook all rely on it (`session.rs`, `runs.rs`,
-  `details.rs`, `transcript.rs`). Cursor titles its calls differently.
+- **Recognising notebook tool calls.** Done (work item 1): other agents'
+  names for notebook calls are recognised too.
 - **Tool results.** Diffs and run summaries read the tool's JSON result from
   the ACP `rawOutput` (`celldiff.rs`, `session.rs`). Cursor sends only
   `{"success": true}` there.
-- **Skills.** The Pluto skills in `plugin/` reach the model as a Claude Code
+- **Skills.** The Pluto skills in `plugin/` reach Claude as a Claude Code
   plugin, set in the session options (`session_options`, `src/agent.rs`).
+  Other agents get them from the notebook MCP server (work item 4).
 - **Asking before a run.** "Ask to run" depends on a Claude Code `PreToolUse`
   hook (`plugin/hooks/hooks.json`) that calls `endeavor hook-pretool`
   (`src/gate.rs`). The hook answers "ask" for calls that run code, and that
@@ -65,6 +63,21 @@ In order. Each part is also useful to Claude, or harmless to it.
 1. **Recognise tools by name.** Use `rawInput`'s tool name, or match the
    server name in any form, as well as Claude's title. Needed by every agent
    whose titles differ from Claude's.
+
+   Done. Every tool call, update and permission request passes through
+   `celldiff::name_notebook_call` as it reaches the session. A notebook call
+   named another way gets Claude's title, `mcp__notebook__<tool>`, and its
+   arguments become its input. It recognises a `rawInput` that wraps the call
+   (Cursor's `{providerIdentifier, toolName, args}`, or `server`/`tool`/
+   `arguments`), and titles that name only the server and a notebook tool
+   ("notebook: edit_cell", "notebook-read_cell: read_cell", "edit_cell
+   (notebook MCP Server)"). The tool must be one the runtime offers
+   (`endeavor_remote::is_tool`). Everything after that, cards, approvals, run
+   previews, diffs, the transcript and the pane following a new notebook,
+   asks `celldiff::notebook_tool`, so Claude's calls work exactly as before.
+   Claude Code's own names stay where they are Claude settings: the
+   `allowedTools` list, the `PreToolUse` hook matcher and permission rule
+   words (`permits::rule_words`).
 2. **Get tool results from the runtime.** The runtime keeps each notebook
    call's result, keyed so the app can look it up when the agent's result is
    missing or only says "success". This touches `endeavor-remote` and the
@@ -77,6 +90,28 @@ In order. Each part is also useful to Claude, or harmless to it.
 4. **Give the agent the skills through the notebook MCP server.** Either as
    the server's MCP `instructions`, or as a guide tool the model is told to
    call first. Keep the plugin for Claude unless the MCP route proves as good.
+
+   Done, as a guide tool (`crates/endeavor-remote/src/guide.rs`). The
+   server's MCP `instructions` are three sentences: what the tools are for,
+   and to call `notebook_guide` once before the first notebook call. With no
+   arguments the tool returns the three skills (`pluto-session`,
+   `pluto-workflow`, `pluto-semantics`, about 15 KB) without their front
+   matter; links to reference files become topics, which the tool returns
+   when called with `topic`. The text is the skill files themselves, built
+   into the helper with `include_str!`, so `plugin/skills` stays the one
+   source (the helper's source key and build scripts now include it).
+
+   Why a tool and not the instructions: the skills are about 44 KB with
+   their references, too long for instructions, which clients may cut short
+   or drop; a tool call works on any client that calls tools, and the
+   references load only when needed, as skills do. The tool's own
+   description also says to call it first, for agents that ignore
+   instructions.
+
+   Claude doesn't get it twice: the app sends `X-Endeavor-Skills: plugin`
+   with each session's MCP requests (`Tools::mcp_server`), and the server
+   then leaves out both the instructions and the tool. An agent that doesn't
+   load the plugin should leave the header out (work item 5's table).
 5. **One table of per-agent facts** in `src/agent.rs`: how to install and
    start it, how to check sign-in, its session options, its modes, and the
    name shown in the app. Run one ACP connection per agent.
@@ -272,6 +307,7 @@ offline.
 ## Decisions for later
 
 - Should Claude move to skills through the MCP server too, or keep the plugin?
+  Dropping the `X-Endeavor-Skills` header and the plugin's skills would try it.
 - Under an agent without hooks, is its own permission prompt an acceptable
   way to ask before a run?
 - Should an agent with many models (Cursor has about 40) offer all of them,

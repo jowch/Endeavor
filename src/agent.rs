@@ -773,7 +773,7 @@ mod tests {
                         let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
                         responder.respond(RequestPermissionResponse::new(outcome)).unwrap();
                     }
-                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ToolCall(c))) if c.title == format!("{}list_notebooks", crate::celldiff::TOOL_PREFIX) => {
+                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ToolCall(c))) if crate::celldiff::notebook_tool(&c.title) == Some("list_notebooks") => {
                         call = Some(c.tool_call_id);
                     }
                     AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ToolCallUpdate(u))) if Some(&u.tool_call_id) == call.as_ref() => {

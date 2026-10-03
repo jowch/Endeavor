@@ -1270,13 +1270,14 @@ impl Session {
             }
             SessionEvent::Permission(request, responder) => {
                 let fields = &request.tool_call.fields;
-                let title = fields.title.clone().unwrap_or_else(|| "Tool call".into());
+                let (mut title, mut input) = (fields.title.clone().unwrap_or_else(|| "Tool call".into()), fields.raw_input.clone());
+                celldiff::name_notebook_call(&mut title, &mut input);
                 // Only runs get the run card ("Always this session"); other notebook
                 // prompts (e.g. Manual asking before an edit) get the agent's options.
-                let input = fields.raw_input.clone().unwrap_or_default();
+                let input = input.unwrap_or_default();
                 let kind = fields.kind;
                 let path = fields.locations.as_ref().and_then(|l| l.first()).map(|l| l.path.clone());
-                let runs_code = title.strip_prefix(celldiff::TOOL_PREFIX).is_some_and(|tool| gate::runs_code(tool, &input));
+                let runs_code = celldiff::notebook_tool(&title).is_some_and(|tool| gate::runs_code(tool, &input));
                 // The adapter's ExitPlanMode prompt: its options carry these ids.
                 let plan = request
                     .options
@@ -1298,7 +1299,7 @@ impl Session {
                 let code = written.or_else(|| {
                     input["code"].as_str().map(str::to_owned).or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned))
                 });
-                let tool = title.strip_prefix(celldiff::TOOL_PREFIX).map(str::to_owned);
+                let tool = celldiff::notebook_tool(&title).map(str::to_owned);
                 if let Some(tool) = tool.clone().filter(|t| runs_code && t != "run_shell") {
                     effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
                 }
@@ -1565,18 +1566,21 @@ impl Session {
                 }
                 None => self.push(Entry::Plan(plan.entries)),
             },
-            SessionUpdate::ToolCall(call) => self.push(Entry::Tool {
-                id: call.tool_call_id,
-                title: call.title,
-                kind: call.kind,
-                path: call.locations.into_iter().next().map(|l| l.path),
-                status: call.status,
-                input: call.raw_input,
-                output: call.raw_output,
-                diffs: Vec::new(),
-                expanded: false,
-                approval: None,
-            }),
+            SessionUpdate::ToolCall(mut call) => {
+                celldiff::name_notebook_call(&mut call.title, &mut call.raw_input);
+                self.push(Entry::Tool {
+                    id: call.tool_call_id,
+                    title: call.title,
+                    kind: call.kind,
+                    path: call.locations.into_iter().next().map(|l| l.path),
+                    status: call.status,
+                    input: call.raw_input,
+                    output: call.raw_output,
+                    diffs: Vec::new(),
+                    expanded: false,
+                    approval: None,
+                })
+            }
             SessionUpdate::ToolCallUpdate(update) => {
                 if let Some((id, path)) = self.on_tool_update(update) {
                     if self.replaying {
@@ -1649,6 +1653,7 @@ impl Session {
         if fields.raw_output.is_some() {
             *output = fields.raw_output;
         }
+        celldiff::name_notebook_call(title, input);
         let tool = celldiff::notebook_tool(title).filter(|_| *status == ToolCallStatus::Completed)?;
         let result = output.as_ref().and_then(celldiff::tool_json)?;
         if result.get("error").is_some() {
@@ -2780,6 +2785,33 @@ more" }"#);
             let effects = s.started(Started::new(SessionId::new("abc"), None, None));
             assert!(matches!(effects.first(), Some(Effect::ReopenNotebook(p)) if p == "/tmp/a.jl"), "{title}");
         }
+    }
+
+    #[test]
+    fn a_notebook_call_named_another_agents_way_gets_its_diff_and_opens_its_notebook() {
+        use agent_client_protocol::schema::v1::{ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
+        use serde_json::json;
+        const A: &str = "11111111-2222-4333-8444-555555555555";
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        // Cursor's shape: a placeholder title, then the real one with a wrapped input.
+        let mut call = |id: &str, tool: &str, args: serde_json::Value, result: serde_json::Value| {
+            s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), "MCP: tool"))));
+            let input = json!({ "providerIdentifier": "notebook", "toolName": tool, "args": args });
+            let named = ToolCallUpdateFields::new().title(format!("notebook: {tool}")).raw_input(input);
+            s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_string(), named))));
+            let output = json!([{ "type": "text", "text": result.to_string() }]);
+            let done = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(output);
+            s.apply(SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_string(), done))))
+        };
+        let opened = call("t0", "open_notebook", json!({ "path": "/tmp/a.jl" }), json!({ "notebook_id": "n1", "path": "/tmp/a.jl" }));
+        assert!(matches!(opened.as_slice(), [Effect::ShowNotebook { id, .. }] if id == "n1"), "the pane follows");
+        call("t1", "read_cell", json!({ "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" }));
+        call("t2", "edit_cell", json!({ "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true }));
+        let Some(Entry::Tool { title, input, diffs, .. }) = s.entries.last() else { panic!("no call") };
+        assert_eq!(title, "mcp__notebook__edit_cell");
+        assert_eq!(input.as_ref(), Some(&json!({ "cell_id": A, "code": "rate = 0.2" })));
+        assert_eq!(diffs.len(), 1, "diffed against the read");
     }
 
     #[test]
