@@ -20,15 +20,15 @@ Each of these works only because of how Claude Code or its adapter behaves.
   names for notebook calls are recognised too.
 - **Tool results.** Diffs and run summaries read the tool's JSON result from
   the ACP `rawOutput` (`celldiff.rs`, `session.rs`). Cursor sends only
-  `{"success": true}` there.
+  `{"success": true}` there, so the app asks the runtime for it instead
+  (work item 2).
 - **Skills.** The Pluto skills in `plugin/` reach Claude as a Claude Code
   plugin, set in the session options (`session_options`, `src/agent.rs`).
   Other agents get them from the notebook MCP server (work item 4).
-- **Asking before a run.** "Ask to run" depends on a Claude Code `PreToolUse`
-  hook (`plugin/hooks/hooks.json`) that calls `endeavor hook-pretool`
-  (`src/gate.rs`). The hook answers "ask" for calls that run code, and that
-  reaches the app as a permission request. Cursor runs no hooks for MCP calls
-  in ACP mode.
+- **Asking before a run.** The runtime holds a call that runs code until the
+  user answers (work item 3), so it works for any agent. It used to depend on
+  a Claude Code `PreToolUse` hook, and Cursor runs no hooks for MCP calls in
+  ACP mode.
 - **Reads without asking.** `allowedTools` in the session options lets the
   read-only notebook tools through without a prompt. Cursor asks for every
   call.
@@ -76,8 +76,7 @@ In order. Each part is also useful to Claude, or harmless to it.
    previews, diffs, the transcript and the pane following a new notebook,
    asks `celldiff::notebook_tool`, so Claude's calls work exactly as before.
    Claude Code's own names stay where they are Claude settings: the
-   `allowedTools` list, the `PreToolUse` hook matcher and permission rule
-   words (`permits::rule_words`).
+   `allowedTools` list and permission rule words (`permits::rule_words`).
 
    The 2026-10-02 live test found two gaps here, both now fixed. A tool
    name starting with the server's own name plus `_` (`notebook_guide`,
@@ -92,11 +91,77 @@ In order. Each part is also useful to Claude, or harmless to it.
    call's result, keyed so the app can look it up when the agent's result is
    missing or only says "success". This touches `endeavor-remote` and the
    app. It isn't needed for an agent that sends real results.
+
+   Done. The core keeps each agent session's last 64 tool results in memory
+   (`crates/endeavor-remote/src/results.rs`), recorded before the reply goes
+   out: the call's text content, whether it failed, and its key. The key is
+   the session (`X-Endeavor-Session`), the id the agent's client gave the
+   call when it sends one, and the tool and its arguments (in one canonical
+   form, so `1` and `1.0` match). Claude Code sends
+   `_meta["claudecode/toolUseId"]` with every `tools/call`, the same id its
+   ACP adapter gives the tool call (confirmed in a live session); Cursor's
+   `_meta` is unknown. The app asks with the `/call` method
+   `endeavor/tool_result {owner, call_id, tool, arguments}`, which answers
+   `{content, isError}` for the call with that id, else for the oldest one
+   not yet looked up with the same tool and arguments, else null.
+
+   The app asks only when a finished notebook call's output isn't the tool's
+   result (`Effect::FetchResult` in `on_tool_update`). The reply becomes the
+   call's output, a failed result marks the call failed, and the rest
+   follows as if the agent had sent it: cell code, diffs, the pane following
+   a new notebook. Claude's results still come from its own replies, which
+   reopened sessions need. Endeavor's transcript copy keeps the runtime's
+   result when a replay brings back only the agent's placeholder. Not asked
+   while a reopened session replays: the runtime keys results by the app's
+   session key, which a new launch doesn't share.
 3. **Ask before a run without a hook.** Move the run check into the runtime,
    or into the app's handling of permission requests, so it doesn't need the
    agent to run Claude hooks. The runtime already knows which calls run code
    (`gate::runs_code`). How this works depends on what the agent does before
    a tool call; see the questions below.
+
+   Done, in the runtime. `endeavor_remote::runs_code` is the one list of
+   calls that run code (`execute_cell`, `submit_changes`, `run_all_cells`,
+   `allow_execution`, `delete_cell`, `run_shell`, and `edit_cell` or
+   `add_cell` with `run_after`). The app tells the runtime each session's
+   policy ("ask", "auto" or "plan") with `asks: true`; an app from before
+   this never sends it, so a newer runtime doesn't hold its runs. In "ask",
+   after the plan, host and one-notebook refusals, such a call waits in the
+   runtime (`crates/endeavor-remote/src/asks.rs`) and shows in the event
+   stream's `asks` (`{id, owner, call_id, tool, arguments, since}`). The app
+   shows it as a run card and answers with `endeavor/answer_run {id, allow,
+   user_ran}`; `user_ran` carries the cells the user's own run reached
+   meanwhile (Run anyway), which replaces `endeavor/run_anyway`. Allowed, the
+   call goes on as before. Denied, an edit that was to run after is made,
+   staged and not run, with a `not_approved` warning in its receipt; any
+   other call fails with `not_approved`. The waiting call holds no lock, and
+   gives up when the agent cancels it (MCP `notifications/cancelled`) or its
+   connection closes (checked every 250 ms). With no app following the
+   event stream, a call that would wait fails at once with `no_app`.
+
+   In the app, the card is the same run card as before, on the call the ask
+   names (else the latest call under way with the same tool and arguments).
+   The agent's own prompt before a run the runtime asks about is answered
+   allow-once at once, with no card and no mark on its row, so nothing is
+   asked twice; in Manual, Claude still asks about edits that don't run.
+   Always this session switches to Auto and tells the runtime "auto".
+   Stopping the turn denies what still waits; a card whose call the agent
+   gave up on goes, with a note. Claude Code aborts an MCP call with no
+   answer for five minutes, so the app starts it with
+   `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0`. Cursor's own timeout is untested;
+   if a live test shows it gives up, the runtime can send progress pings
+   while a call waits. The `PreToolUse` hook, `endeavor hook-pretool` and
+   `ENDEAVOR_BIN` are gone.
+
+   A runtime started by an older Endeavor (it outlives the app; see
+   [remote-sessions.md](remote-sessions.md)) can't hold runs. Each runtime
+   now reports the build it came from (`build` in its event stream, from
+   the helper's `--build`, the same version `remote::version()` computes),
+   and the app compares it with its own. On another build, or none, each
+   session on that host gets a note to restart Julia, and the host's
+   listener answers the agent's calls that runtime can't carry out safely.
+   The rules are one function, `older_runtime::refusal`; today there is one:
+   in Ask to run, a call that runs code fails with `older_runtime`.
 4. **Give the agent the skills through the notebook MCP server.** Either as
    the server's MCP `instructions`, or as a guide tool the model is told to
    call first. Keep the plugin for Claude unless the MCP route proves as good.
@@ -276,8 +341,8 @@ A call that a folder rule allows never reaches Endeavor, so its row has no
 "allowed" mark. The per-agent table (work item 5) records whether an agent's
 lasting rules stay in the folder and whether Endeavor can read them.
 
-Still to test: whether a folder allow rule for a notebook run skips Claude's
-`PreToolUse` hook, which would let it bypass Ask to run.
+A folder allow rule for a notebook run only answers Claude's own prompt:
+the runtime still holds the run in Ask to run.
 
 ## Endeavor's copy of the transcript
 
@@ -327,7 +392,5 @@ offline.
 
 - Should Claude move to skills through the MCP server too, or keep the plugin?
   Dropping the `X-Endeavor-Skills` header and the plugin's skills would try it.
-- Under an agent without hooks, is its own permission prompt an acceptable
-  way to ask before a run?
 - Should an agent with many models (Cursor has about 40) offer all of them,
   or a short list?

@@ -186,9 +186,10 @@ Staged, each step shippable:
    (with the dependents count) pushed to the app; retire the Claude plugin hook.
    Partly done (2026-09-25): per-session policy with Plan enforced in the
    runtime; the approval card (spec) gets its cells and dependents count from
-   the runtime's app-only `endeavor/run_preview`. The ask itself still comes
-   from the Claude hook: holding approvals in the runtime only pays off with a
-   second agent.
+   the runtime's app-only `endeavor/run_preview`. Done (2026-10-02): the
+   runtime holds a run in Ask to run until the app answers (`asks` in the
+   event stream, `endeavor/answer_run`), and the Claude hook is gone; see
+   [other-agents.md](other-agents.md), work item 3.
 6. **Versions and attribution:** code-hash versions (conflict detection when
    user and agent edit the same cell), author per change, and the before-text
    an undo would restore (the spec's open undo decision).
