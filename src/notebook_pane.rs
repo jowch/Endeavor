@@ -1487,7 +1487,7 @@ impl Workspace {
 
 /// Where exports from a server's notebook are suggested: ~/Downloads.
 fn dirs_downloads() -> PathBuf {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Downloads")).unwrap_or_default()
+    wire::files::home().join("Downloads")
 }
 
 #[cfg(test)]

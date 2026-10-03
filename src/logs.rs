@@ -1,6 +1,7 @@
 //! The app's log file. Launched from Finder, stdout and stderr (our messages,
 //! Julia's log we echo, and child processes that inherit them) go to
-//! ~/Library/Logs/Endeavor/endeavor.log (on Linux, $XDG_STATE_HOME/endeavor/endeavor.log);
+//! ~/Library/Logs/Endeavor/endeavor.log (on Linux, $XDG_STATE_HOME/endeavor/endeavor.log;
+//! on Windows, %LOCALAPPDATA%\Endeavor\Logs\endeavor.log);
 //! the previous run's is kept as endeavor.old.log.
 //! From a terminal, output stays in the terminal.
 
@@ -10,6 +11,9 @@ use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 pub fn path() -> Option<PathBuf> {
+    if cfg!(windows) {
+        return crate::install::app_dir().ok().map(|dir| dir.join("Logs").join("endeavor.log"));
+    }
     let home = PathBuf::from(std::env::var("HOME").ok()?);
     if cfg!(target_os = "macos") {
         return Some(home.join("Library/Logs/Endeavor/endeavor.log"));
@@ -22,12 +26,15 @@ pub fn start() {
     if std::io::stderr().is_terminal() {
         return;
     }
+    // Not ported: Windows needs SetStdHandle, and a GUI app has no console to inherit.
+    if cfg!(windows) {
+        return;
+    }
     let Some(path) = path() else { return };
     let _ = std::fs::create_dir_all(path.parent().unwrap());
     let _ = std::fs::rename(&path, path.with_file_name("endeavor.old.log"));
     // ponytail: no rotation within a run; a very long run makes a big file.
     let Ok(file) = std::fs::File::create(&path) else { return };
-    // Not ported: Windows needs SetStdHandle, and a GUI app has no console to inherit.
     #[cfg(windows)]
     drop(file);
     // SAFETY: dup2 onto the standard fds; `file` stays open until the calls return.

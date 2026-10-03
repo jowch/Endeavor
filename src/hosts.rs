@@ -92,7 +92,7 @@ impl HostId {
     pub fn of_agent_cwd(cwd: &Path) -> Option<HostId> {
         let hosts = crate::install::app_dir().ok()?.join("hosts");
         let id = cwd.strip_prefix(&hosts).ok()?.to_str()?;
-        (!id.is_empty() && !id.contains('/')).then(|| HostId::Server(id.to_owned()))
+        (!id.is_empty() && !id.contains(['/', std::path::MAIN_SEPARATOR])).then(|| HostId::Server(id.to_owned()))
     }
 }
 
@@ -229,8 +229,7 @@ impl Server {
 /// `Host` names in `~/.ssh/config` (and the files it `Include`s by plain
 /// path), without patterns, for the SSH host field's suggestions.
 pub fn ssh_config_hosts() -> Vec<String> {
-    let Some(home) = std::env::var_os("HOME") else { return Vec::new() };
-    let ssh = Path::new(&home).join(".ssh");
+    let ssh = wire::files::home().join(".ssh");
     let mut hosts = Vec::new();
     collect_hosts(&ssh.join("config"), &ssh, &mut hosts, 0);
     hosts
@@ -303,7 +302,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "the app data folder isn't ported to Windows yet (docs/windows.md)")]
     fn server_sessions_share_one_agent_folder_per_server() {
         let lab = HostId::Server("server-1".into());
         let cwd = lab.agent_cwd(Path::new("/home/jc/qpcr"));
