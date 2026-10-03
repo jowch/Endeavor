@@ -36,8 +36,8 @@ const css = `
     border: 1px solid var(--e-dialog-edge); background: var(--e-dialog-bg); box-shadow: 0 16px 48px var(--e-dialog-shadow);
     font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
   #endeavor-runguard b { display: block; margin-bottom: 4px; font-weight: 600; font-size: 13.5px; color: var(--e-text-primary); }
-  #endeavor-runguard code { font: 12px JuliaMono, ui-monospace, monospace; padding: 0 3px; border-radius: 3px;
-    background: var(--e-bg-tag); color: var(--e-text-primary); }
+  #endeavor-runguard code { font: 600 12.5px JuliaMono, ui-monospace, monospace; color: var(--e-text-primary); }
+  #endeavor-runguard button.show code { color: inherit; }
   #endeavor-runguard .buttons { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
   #endeavor-runguard .gap { flex: 1; }
   #endeavor-runguard button { padding: 4px 12px; border-radius: 5px; border: 1px solid var(--e-control-edge); background: var(--e-bg-raised);
