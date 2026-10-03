@@ -79,7 +79,7 @@ Today:
 
 | Where | Today | Change |
 | --- | --- | --- |
-| Tool prefix `mcp__pluto__` in `gate.rs`, `celldiff.rs`, `session.rs` | hard-coded | one name for the bridge MCP server (e.g. `notebook`), used by both |
+| Tool prefix `mcp__pluto__` in `celldiff.rs`, `session.rs` | hard-coded | one name for the bridge MCP server (e.g. `notebook`), used by both |
 | Notebook detection, `crates/wire/src/notebooks.rs` | Pluto header, `# ╔═╡` cells | also detect `app = marimo.App` in `.py` files; parse `@app.cell` for the new-session preview |
 | Notebook URL and ID, `main.rs:53` | `/edit?id=` | per backend (marimo's form, believed `/?file=`, to confirm) |
 | Annotation URI, `annotate.rs` | `pluto://notebook/…/cell/…` | `notebook://<backend>/…` |
