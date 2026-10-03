@@ -805,13 +805,31 @@ impl Workspace {
         .detach();
     }
 
-    /// Run anyway, in the page: the user's run reaches `cells`, which cards
-    /// ask to run; those cards are answered as their Run button does.
-    pub fn run_anyway(&mut self, notebook: String, cells: Vec<String>, cx: &mut Context<Self>) {
+    /// Run anyway, in the page: the user's run reaches `cells` (each with its
+    /// `last_run` from before), which cards ask to run. The runtime hears it
+    /// first, so the approved calls don't run them again; then those cards are
+    /// answered as their Run button does.
+    pub fn run_anyway(&mut self, notebook: String, cells: Vec<(String, f64)>, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
-        self.with_session(key, cx, |s| {
-            s.allow_runs_of(&cells);
-        });
+        let ids: Vec<String> = cells.iter().map(|(id, _)| id.clone()).collect();
+        let Some(bridge) = self.session_bridge(key) else {
+            self.with_session(key, cx, |s| {
+                s.allow_runs_of(&ids);
+            });
+            return;
+        };
+        let task = cx.background_executor().spawn(async move { pluto::run_anyway(&bridge, &notebook, &cells) });
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = task.await {
+                eprintln!("Run anyway: the runtime didn't hear which cells the user ran: {e}");
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.with_session(key, cx, |s| {
+                    s.allow_runs_of(&ids);
+                });
+            });
+        })
+        .detach();
     }
 
     pub fn restart_notebook(&mut self, key: u64, cx: &mut Context<Self>) {

@@ -2438,8 +2438,9 @@
     const answer = () => {
       const now = results();
       const under_way = ids.every((id) => now[id]?.queued || now[id]?.running || now[id]?.last_run_timestamp !== before[id]);
-      if (under_way || Date.now() - started > 3e3) send({ type: "run_anyway", notebook: notebookId(), cells: ids });
-      else setTimeout(answer, 50);
+      if (under_way || Date.now() - started > 3e3) {
+        send({ type: "run_anyway", notebook: notebookId(), cells: ids.map((id) => ({ id, last_run: before[id] ?? 0 })) });
+      } else setTimeout(answer, 50);
     };
     answer();
   }

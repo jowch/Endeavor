@@ -152,7 +152,8 @@ function cancel() {
 
 /** Run anyway: the user's action, then, once the asked-about cells are under
  * way, the cards answered. In that order, so Claude's approved call finds them
- * already running and doesn't run them again. */
+ * already running and doesn't run them again; each cell's last run from
+ * before tells the runtime which run is the user's. */
 function runAnyway() {
   if (!shown) return;
   const { hit, replay } = shown;
@@ -170,8 +171,9 @@ function runAnyway() {
   const answer = () => {
     const now = results();
     const under_way = ids.every((id) => now[id]?.queued || now[id]?.running || now[id]?.last_run_timestamp !== before[id]);
-    if (under_way || Date.now() - started > 3000) send({ type: "run_anyway", notebook: notebookId(), cells: ids });
-    else setTimeout(answer, 50);
+    if (under_way || Date.now() - started > 3000) {
+      send({ type: "run_anyway", notebook: notebookId(), cells: ids.map((id) => ({ id, last_run: before[id] ?? 0 })) });
+    } else setTimeout(answer, 50);
   };
   answer();
 }

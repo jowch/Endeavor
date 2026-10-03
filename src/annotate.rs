@@ -73,8 +73,9 @@ pub enum Message {
     /// Whether the cells the chat's card asks to run are on screen.
     AskedVisible(bool),
     /// Run anyway, when the user's own run reaches cells a card asks to run:
-    /// allow the cards asking about `cells`, as their Run button does.
-    RunAnyway { notebook: String, cells: Vec<String> },
+    /// allow the cards asking about `cells`, as their Run button does. Each
+    /// cell comes with Pluto's `last_run_timestamp` from before the user's run.
+    RunAnyway { notebook: String, cells: Vec<(String, f64)> },
     /// Fix with Claude, in Status's box for a package that failed.
     FixPackage { notebook: String, name: String, log: String },
     /// Restart notebook, in the same box.
@@ -225,7 +226,8 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
         "run_notebook" => Some(Message::RunNotebook { notebook: uuid("notebook")? }),
         "asked_visible" => Some(Message::AskedVisible(v.get("visible")?.as_bool()?)),
         "run_anyway" => {
-            let cells: Vec<String> = v.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned)).collect::<Option<_>>()?;
+            let cell = |c: &serde_json::Value| Some((c.get("id")?.as_str().filter(|s| is_uuid(s))?.to_owned(), c.get("last_run").and_then(|t| t.as_f64()).unwrap_or(0.0)));
+            let cells: Vec<(String, f64)> = v.get("cells")?.as_array()?.iter().map(cell).collect::<Option<_>>()?;
             (!cells.is_empty() && cells.len() <= MAX_CELLS).then_some(Message::RunAnyway { notebook: uuid("notebook")?, cells })
         }
         "restart" => Some(Message::Restart { notebook: uuid("notebook")? }),
@@ -298,6 +300,7 @@ mod tests {
 
     const NB: &str = "6a1b2c3d-0000-4000-8000-1234567890ab";
     const C1: &str = "11111111-2222-4333-8444-555555555555";
+    const C2: &str = "66666666-7777-4888-9999-000000000000";
 
     fn cell(code: &str) -> Cell {
         Cell { id: C1.into(), code: code.into() }
@@ -422,10 +425,10 @@ mod tests {
         assert_eq!(parse_with(&format!(r#"{{"type":"run_notebook","notebook":"{NB}"}}"#), ""), Some(Message::RunNotebook { notebook: NB.into() }));
         assert_eq!(parse_with(r#"{"type":"asked_visible","visible":false}"#, ""), Some(Message::AskedVisible(false)));
         assert_eq!(
-            parse_with(&format!(r#"{{"type":"run_anyway","notebook":"{NB}","cells":["{C1}"]}}"#), ""),
-            Some(Message::RunAnyway { notebook: NB.into(), cells: vec![C1.into()] })
+            parse_with(&format!(r#"{{"type":"run_anyway","notebook":"{NB}","cells":[{{"id":"{C1}","last_run":1759400000.5}},{{"id":"{C2}","last_run":null}}]}}"#), ""),
+            Some(Message::RunAnyway { notebook: NB.into(), cells: vec![(C1.into(), 1759400000.5), (C2.into(), 0.0)] })
         );
-        assert_eq!(parse_with(&format!(r#"{{"type":"run_anyway","notebook":"{NB}","cells":["x"]}}"#), ""), None);
+        assert_eq!(parse_with(&format!(r#"{{"type":"run_anyway","notebook":"{NB}","cells":[{{"id":"x","last_run":1}}]}}"#), ""), None);
         assert_eq!(parse_with(&format!(r#"{{"type":"restart","notebook":"{NB}"}}"#), ""), Some(Message::Restart { notebook: NB.into() }));
         assert_eq!(parse_with(&format!(r#"{{"type":"error_ask_show","cell":"{C1}"}}"#), ""), Some(Message::ShowErrorAsk { cell: C1.into() }));
         assert_eq!(parse_with(&format!(r#"{{"type":"error_ask_cancel","cell":"{C1}"}}"#), ""), Some(Message::CancelErrorAsk { cell: C1.into() }));

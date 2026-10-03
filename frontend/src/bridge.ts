@@ -40,7 +40,7 @@ export type ToApp =
   // Run notebook in the safe-preview callout.
   | { type: "run_notebook"; notebook: string }
   // Run anyway: the user's run reaches these cells, which a card asks to run; answer those cards.
-  | { type: "run_anyway"; notebook: string; cells: string[] }
+  | { type: "run_anyway"; notebook: string; cells: { id: string; last_run: number }[] }
   // The Status failure box: Fix with Claude (with the package's log), Restart notebook.
   | { type: "fix_package"; notebook: string; name: string; log: string }
   | { type: "restart"; notebook: string }

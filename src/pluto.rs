@@ -113,6 +113,14 @@ pub fn restart_notebook(bridge: &Bridge, notebook_id: &str) -> Result<(), String
     app_call(bridge, "endeavor/restart_notebook", json!({ "notebook_id": notebook_id })).map(|_| ())
 }
 
+/// The user's run reached `cells` (with each one's `last_run` before it),
+/// which the agent's waiting cards ask to run: the runtime won't run them
+/// again for the approved calls.
+pub fn run_anyway(bridge: &Bridge, notebook_id: &str, cells: &[(String, f64)]) -> Result<(), String> {
+    let cells: Vec<Value> = cells.iter().map(|(id, last_run)| json!({ "cell_id": id, "last_run": last_run })).collect();
+    app_call(bridge, "endeavor/run_anyway", json!({ "notebook_id": notebook_id, "cells": cells })).map(|_| ())
+}
+
 /// Rename or move an open notebook's file; returns its new path.
 pub fn move_notebook(bridge: &Bridge, notebook_id: &str, path: &str) -> Result<String, String> {
     let result = app_call(bridge, "endeavor/move_notebook", json!({ "notebook_id": notebook_id, "path": path }))?;

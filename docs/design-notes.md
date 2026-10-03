@@ -50,10 +50,15 @@ actions aren't reachable from the page, so Run anyway replays the user's event
 on its original target with the guard off. It answers the cards (`run_anyway`
 → `Session::allow_runs_of`) only once the cells are queued or running in
 Pluto's state, so the approved call reaches the runtime after the user's run
-has them; the runtime then sees each target edited by the tools, not run by
-them since, and run (or running, which it waits for) after the edit, and
-answers with the usual receipt and an `already_ran::` warning instead of
-running them a second time (`tool_edits` in `NotebookState`). Runs the page
+has them. Before answering, the app tells the runtime (`endeavor/run_anyway`)
+which cells the user's run reached, with each one's `last_run_timestamp` from
+before it (`user_runs` in `NotebookState`, used once and for a minute at
+most): a cell the tools never edited has no edit time to compare with, and
+without this its approved run would run it, and everything after it, a
+second time. The runtime then sees each target run (or running, which it
+waits for) after the tools' edit or after that timestamp, and answers with
+the usual receipt and an `already_ran::` warning instead of running them
+again (`tool_edits` and `user_runs`). Runs the page
 can't catch (the cell's ⋯ menu, a run started from another window) are covered
 by the app: when every cell of a waiting `execute_cell` / `submit_changes`
 card goes from unrun to run in the `/events` stream, the card is answered as

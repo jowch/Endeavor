@@ -130,7 +130,9 @@ test("a run reaching a cell Claude asks to run asks first: Show, Cancel, Run any
   assert.deepEqual(p.sent.filter((m) => m.type === "run_anyway"), [], "not before b is queued");
   p.results[B] = { queued: true, last_run_timestamp: 1 };
   await new Promise((done) => setTimeout(done, 120));
-  assert.deepEqual(p.sent.filter((m) => m.type === "run_anyway"), [{ type: "run_anyway", notebook: "0f381e2e-b8ca-11f1-b549-49cf0ce82801", cells: [B] }]);
+  assert.deepEqual(p.sent.filter((m) => m.type === "run_anyway"), [
+    { type: "run_anyway", notebook: "0f381e2e-b8ca-11f1-b549-49cf0ce82801", cells: [{ id: B, last_run: 1 }] },
+  ]);
 });
 
 test("the run button and ⇧Enter on a cell ask too, naming every waiting cell they reach", async () => {
