@@ -150,3 +150,42 @@ Test this headless with an ACP client script against a runtime. Don't drive
 the app's folder picker: the macOS open panel doesn't take synthetic
 keystrokes reliably. Don't pass `--model` or change the model through ACP on
 a real machine, because that changes the user's Cursor default.
+
+## 2026-10-02: a second live test
+
+Findings from a live session in the app, after the groundwork above landed.
+
+- Same CLI build, `2026.09.26-dd393fe`. `initialize`'s answer is unchanged.
+  Tool-call ids no longer carry a newline.
+- Model `composer-2.5` tested. Setting it through `session/set_config_option`
+  rewrote both `~/.cursor/cli-config.json` and `acp-config.json` (the user's
+  global default) — confirmed, as expected.
+- MCP `instructions` don't reach the model, and tool descriptions load
+  lazily. In one fresh session the guide was called second; in another it
+  was never called, and that session went on to write a two-expression cell
+  and hit the error. A tool-misuse error now points an agent without the
+  plugin at `notebook_guide`, because of this.
+- The notebook call sequence: a placeholder `tool_call` ("MCP: tool", empty
+  `rawInput`), a `tool_call_update` ("notebook: `<tool>`", `rawInput`
+  `{providerIdentifier, toolName, args}`), `in_progress`, a
+  `request_permission` ("notebook-`<tool>`: `<tool>`", no `rawInput` at
+  all), then `completed`. `rawOutput` is always `{"success": true}`, even
+  when the tool call itself failed.
+- Every notebook call asks for permission, reads included (Allow once,
+  Allow always, Reject). Cursor's own Find, Read and grep don't ask.
+- No hooks fire. The runtime's "ask" policy lets runs through; only
+  Cursor's own prompt stops them, and that depends on the user's global
+  Cursor approval settings. Work item 3 (ask before a run without a hook)
+  is still needed.
+- Plan mode: a `plan` update, a "Create Plan" tool call with `rawInput`
+  `{"_toolName": "createPlan", ...}`, then Cursor's own request,
+  `cursor/create_plan`, carrying `{toolCallId, name, overview, plan,
+  todos}`. Endeavor answers unknown requests with an error (`-32601`);
+  Cursor saved the plan to `~/.cursor/plans/<name>.plan.md` and ended the
+  turn anyway. Its own bundle suggests the expected reply is
+  `{"outcome": {"outcome": "accepted"}}` or `{"outcome": {"outcome":
+  "rejected", "reason"}}` — untested. Plan mode by itself doesn't stop
+  notebook tool calls; the runtime's own plan policy has to.
+- It loads the user's global `~/.cursor/skills-cursor` skills.
+- Each session leaves a folder in `~/.cursor/acp-sessions/` and one in
+  `~/.cursor/projects/`.

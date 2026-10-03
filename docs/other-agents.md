@@ -78,6 +78,16 @@ In order. Each part is also useful to Claude, or harmless to it.
    Claude Code's own names stay where they are Claude settings: the
    `allowedTools` list, the `PreToolUse` hook matcher and permission rule
    words (`permits::rule_words`).
+
+   The 2026-10-02 live test found two gaps here, both now fixed. A tool
+   name starting with the server's own name plus `_` (`notebook_guide`,
+   `pluto_session_status`) read as naming only the server, so its title
+   went unrecognised; a server name must now end the word there, not just
+   stop being alphanumeric. And Cursor's `session/request_permission`
+   carries no `rawInput` at all, only the arguments as a fenced json block
+   meant for people to read; the session now falls back to the input
+   already recorded on the matching `tool_call_update`, which always
+   arrived first.
 2. **Get tool results from the runtime.** The runtime keeps each notebook
    call's result, keyed so the app can look it up when the agent's result is
    missing or only says "success". This touches `endeavor-remote` and the
@@ -107,6 +117,15 @@ In order. Each part is also useful to Claude, or harmless to it.
    references load only when needed, as skills do. The tool's own
    description also says to call it first, for agents that ignore
    instructions.
+
+   The 2026-10-02 live test confirmed this: Cursor's MCP `instructions`
+   never reached the model, and tool descriptions load lazily, so calling
+   `notebook_guide` first depends on the model choosing to. In one fresh
+   session it called the guide second; in another it never called it, and
+   that session went on to write a two-expression cell and hit the error
+   with nothing pointing it back at the guide. A notebook-tool error whose
+   kind means the agent used a tool wrong now appends a line pointing at
+   `notebook_guide`, for a caller without the plugin.
 
    Claude doesn't get it twice: the app sends `X-Endeavor-Skills: plugin`
    with each session's MCP requests (`Tools::mcp_server`), and the server
