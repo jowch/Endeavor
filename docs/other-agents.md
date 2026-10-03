@@ -164,11 +164,15 @@ In order. Each part is also useful to Claude, or harmless to it.
    calls it matches at once. In this folder isn't offered on runtime cards:
    the agent's folder rule only answers the agent's own prompt.
    Stopping the turn denies what still waits; a card whose call the agent
-   gave up on goes, with a note. Claude Code aborts an MCP call with no
+   gave up on goes, with a note. Claude Code's MCP client gives up on a POST
+   whose response hasn't begun within 60 seconds ("The operation timed
+   out."; the larger of 60 s, the server's `timeout` or `MCP_TOOL_TIMEOUT`,
+   and `MCP_TIMEOUT`), so a held call's response begins at once as an event
+   stream that says every 15 seconds that the call is still waiting (a
+   progress notification when the call asked for progress, else an SSE
+   comment), and ends with the reply. It also aborts an MCP call with no
    answer for five minutes, so the app starts it with
-   `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0`. Cursor's own timeout is untested;
-   if a live test shows it gives up, the runtime can send progress pings
-   while a call waits. The `PreToolUse` hook, `endeavor hook-pretool` and
+   `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0`. Cursor's own timeout is untested. The `PreToolUse` hook, `endeavor hook-pretool` and
    `ENDEAVOR_BIN` are gone.
 
    A runtime started by an older Endeavor (it outlives the app; see
