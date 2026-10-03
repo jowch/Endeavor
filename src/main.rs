@@ -28,7 +28,6 @@ mod debug_state;
 mod details;
 mod failure;
 mod find_bar;
-mod gate;
 mod host_list;
 mod hosts;
 mod install;
@@ -2381,10 +2380,6 @@ impl Render for Workspace {
 fn main() {
     // `claude auth login` opens its page through this app (signin::Login).
     signin::browser_shim();
-    // Claude Code runs the plugin's execution-gate hook as `endeavor hook-pretool`.
-    if std::env::args().nth(1).as_deref() == Some("hook-pretool") {
-        gate::run_pretool_hook();
-    }
     // This Mac's runtime helper (runtime::connect), and ssh's askpass (remote::Askpass).
     if std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG) {
         endeavor_remote::run_as(&[runtime::HELPER_FLAG], std::env::args().skip(2).collect());
