@@ -18,7 +18,7 @@ The remaining work is ranked at the end of this page.
 ## What works
 
 - **Build and tests.** `cargo build` and `cargo test --workspace` pass on
-  Linux (the `relay` test that used to fail was fixed in 09a4286).
+  Linux.
 - **Window and frame.** Linux windows use the window manager's frame and title
   bar. That is GPUI's default on X11; its client-side decorations need a
   compositor. Under Openbox the frame looks right, the window moves and
@@ -77,10 +77,10 @@ The remaining work is ranked at the end of this page.
   thread waits in `poll()` on its file descriptors (`src/linux/gtk_loop.rs`).
   Measured in the VM (9 cores, llvmpipe), as a share of one core:
 
-  | Idle state | Before (8 ms poll) | After |
-  |---|---|---|
-  | Notebook open | 4.0%, 945 context switches/s | 1.4%, 330/s |
-  | New-session screen, reduce motion on | 3.4%, 685/s | 1.0%, 114/s |
+  | Idle state | CPU, context switches |
+  |---|---|
+  | Notebook open | 1.4%, 330/s |
+  | New-session screen, reduce motion on | 1.0%, 114/s |
 
   About 60 of the remaining wakeups a second are GPUI's own X11 frame timer.
   With a notebook open, WebKit's display-refresh thread runs at about 90 Hz
@@ -227,7 +227,7 @@ changes.
      `assets/icon/endeavor-256.png` and `endeavor-512.png` (for
      `share/icons/hicolor/{256x256,512x512}/apps/endeavor.png`).
    - The Linux runtime dependencies above need to be declared.
-2. **The notebook page's shortcuts (done, not yet tried on Linux).** The page
+2. **The notebook page's shortcuts (not yet tried on Linux).** The page
    script takes Ctrl off macOS for Ctrl+E (ask Claude about a cell), Ctrl+J
    (Reply to a selection), Ctrl+↩ in its prompt and comment boxes and
    Ctrl+Shift+E (leave Point), and its hints say Ctrl (`frontend/src/keys.ts`).
