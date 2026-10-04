@@ -9,13 +9,15 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::hosts::{HostId, Place};
 use crate::menu::MenuTarget;
-use crate::new_session::{Glyph, NotebookChoice, glyph, glyph_at, menu_row};
+use crate::new_session::{Glyph, NotebookChoice, glyph, menu_row};
 use crate::row_marks::{self, RowFacts, RowMark};
 use crate::session::{Session, folder_name};
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
 use crate::theme::FocusRing as _;
 
-/// A 28px sidebar row (sessions, "New session").
+/// A 28px sidebar row (sessions, "New session"). Its transparent border is
+/// where a focus ring draws; with the padding, content starts 18px in from
+/// the sidebar's edge and ends 18px before its other edge.
 fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
     div()
         .id(id)
@@ -26,6 +28,8 @@ fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
         .items_center()
         .gap_2()
         .px(px(10.))
+        .border_2()
+        .border_color(gpui::transparent_black())
         .rounded(px(4.))
         .cursor_pointer()
         .text_color(if active { theme::text_row_active() } else { theme::text_muted() })
@@ -157,21 +161,26 @@ enum FilterPick {
     Clear,
 }
 
+/// The column every row's leading bullet, "New session"'s + and the status
+/// line's mark sit in, so the words after them all start at one x.
+fn bullet_slot() -> Div {
+    div().flex_shrink_0().w(px(12.)).h(px(12.)).flex().items_center().justify_center()
+}
+
+/// A 24px icon button in the sidebar's right column: drawn 6px into its
+/// row's 18px end inset, so its centre is 24px from the sidebar's right
+/// edge, like the ⋮, the folders' +, the filter button and the gear.
+fn end_button(id: impl Into<ElementId>) -> Stateful<Div> {
+    div().id(id).role(Role::Button).flex_shrink_0().size(px(24.)).mr(px(-6.)).flex().items_center().justify_center().rounded(px(4.))
+}
+
 /// The ⋮ button at a row's end: shown while the pointer is over the row
 /// (`group`), and always on the active row or while its menu is open.
 fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
+    end_button(id)
         .aria_label("Session actions")
         .relative()
-        .flex_shrink_0()
-        .size(px(24.))
-        .mr(px(-6.))
         .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(4.))
         .font_family(theme::MONO)
         .text_size(theme::size_subhead())
         .text_color(if shown { theme::text_muted().into() } else { gpui::transparent_black() })
@@ -180,15 +189,6 @@ fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> St
         .child("⋮")
 }
 
-/// The 20px slot a folder heading's + and a row's end mark (the approval
-/// ring, the archived glyph) share, so their icons sit on one vertical line.
-fn end_slot(id: impl Into<ElementId>) -> Stateful<Div> {
-    div().id(id).flex_shrink_0().size(px(20.)).mr(px(-6.)).flex().items_center().justify_center().rounded(px(4.))
-}
-
-/// A row's end mark: `end_slot`, pulled further right by the row's own
-/// `px(10.)` (`sidebar_row`) that the folder heading's + doesn't have to
-/// cross, so it lands on the same centre line as the +.
 /// The mark before the status line's words.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum StatusMark {
@@ -222,29 +222,21 @@ impl StatusMark {
     }
 }
 
-fn row_end_mark(id: impl Into<ElementId>) -> Stateful<Div> {
-    end_slot(id).mr(px(-16.))
-}
-
-/// A row mark drawn in `slot`, with its words as the tooltip.
-fn mark_slot(slot: Stateful<Div>, mark: RowMark) -> Stateful<Div> {
+/// A row's leading bullet: its mark in `bullet_slot`, with the mark's words
+/// as the tooltip. The waiting count is in the words, so the slot keeps its
+/// width.
+fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
+    let slot = bullet_slot().id(id);
+    let Some(mark) = mark else { return slot };
     let words: SharedString = mark.words().into();
     let icon = match &mark {
-        RowMark::NeedsYou => div().size(px(6.)).flex_shrink_0().rounded_full().border_1().border_color(theme::accent()).into_any_element(),
+        RowMark::NeedsYou => div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element(),
         RowMark::Error => glyph(Glyph::Warning, theme::danger()).into_any_element(),
-        RowMark::NewReply => div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::accent()).into_any_element(),
+        RowMark::NewReply => div().size(px(6.)).rounded_full().bg(theme::accent()).into_any_element(),
         RowMark::ServerDown { .. } => glyph(Glyph::WifiOff, theme::text_muted()).into_any_element(),
-        RowMark::Waiting { count, .. } => div()
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .text_size(theme::size_meta_small())
-            .text_color(theme::text_muted())
-            .child(glyph_at(Glyph::Clock, theme::text_muted(), 11. / 12.))
-            .child(count.to_string())
-            .into_any_element(),
+        RowMark::Waiting { .. } => glyph(Glyph::Clock, theme::text_muted()).into_any_element(),
     };
-    slot.min_w(px(20.)).child(icon).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(words.clone()).build(window, cx))
+    slot.child(icon).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(words.clone()).build(window, cx))
 }
 
 /// `text` with the first case-insensitive match of `query` picked out in
@@ -754,17 +746,14 @@ impl Workspace {
                 let title = self.row_lines(&row, &title_text, query, folder_line.as_deref());
                 let row_mark = self.row_mark(s);
                 let label = row_mark.as_ref().map_or_else(|| title_text.clone(), |m| m.label(&title_text));
-                let mark = row_mark.map(|m| mark_slot(row_end_mark("row-mark"), m));
                 self.session_row(row.clone(), group.clone(), active, cx)
                     .aria_label(label)
-                    .border_2()
-                    .border_color(gpui::transparent_black())
                     .track_focus(&s.focus_handle(cx))
                     .tab_stop(true)
                     .focus_visible(|st| st.border_color(theme::focus_ring()))
+                    .child(bullet("row-bullet", row_mark))
                     .child(title)
                     .child(self.row_more(row.clone(), group, active, cx))
-                    .children(mark)
                     // Double-click renames.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         if e.click_count() >= 2 {
@@ -782,18 +771,16 @@ impl Workspace {
                 let group: SharedString = format!("past-{:?}-{}-{id}", place.host, place.path.display()).into();
                 let archived = self.archived.contains(&id.to_string());
                 let focus = self.past_row_focus(&id, cx);
-                let mark = archived.then(|| row_end_mark("row-mark").child(glyph(Glyph::Archive, theme::text_section())));
+                let label = if archived { format!("{title_text}, archived") } else { title_text };
                 self.session_row(row.clone(), group.clone(), false, cx)
-                    .aria_label(title_text)
-                    .border_2()
-                    .border_color(gpui::transparent_black())
+                    .aria_label(label)
                     .track_focus(&focus)
                     .tab_stop(true)
                     .focus_visible(|d| d.border_color(theme::focus_ring()))
                     .when(archived, |d| d.text_color(theme::text_section()))
+                    .child(bullet_slot().when(archived, |d| d.child(glyph(Glyph::Archive, theme::text_section()))))
                     .child(title)
                     .child(self.row_more(row.clone(), group, false, cx))
-                    .children(mark)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.renaming.as_ref().is_some_and(|r| r.row == row) {
                             this.open_past(id.clone(), place.clone(), cx);
@@ -805,10 +792,11 @@ impl Workspace {
     }
 
     /// A folder's heading: its name (with a collapse chevron via "name ›"
-    /// when collapsed) on the left, and a "New session in <folder>" + always
-    /// visible on the right, sharing the row end marks' vertical line. A
-    /// collapsed folder shows its rows' strongest mark after the "›". Clicking the name collapses or expands; clicking + starts
-    /// a session there. Each is its own Tab stop with the sidebar's focus ring.
+    /// when collapsed) starting at the rows' bullet column, and a "New
+    /// session in <folder>" + always visible in the rows' ⋮ column. A
+    /// collapsed folder shows its rows' strongest mark after the "›".
+    /// Clicking the name collapses or expands; clicking + starts a session
+    /// there. Each is its own Tab stop with the sidebar's focus ring.
     fn render_folder_heading(&self, folder: &Place, collapsed: bool, mark: Option<RowMark>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = self.folder_heading(folder);
         let key = format!("{:?}-{}", folder.host, folder.path.display());
@@ -837,30 +825,24 @@ impl Workspace {
             .focus_visible(|s| s.border_color(theme::focus_ring()))
             .hover(|s| s.bg(theme::row_active()))
             .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(label))
-            .children(mark.filter(|_| collapsed).map(|m| mark_slot(div().id("folder-mark").flex_shrink_0().ml(px(2.)), m)))
+            .children(mark.filter(|_| collapsed).map(|m| bullet("folder-mark", Some(m)).ml(px(2.))))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder_collapsed(toggle_folder.clone(), cx)));
         let plus_folder = folder.clone();
         let plus_label: SharedString = format!("New session in {name}").into();
         let tooltip_label = plus_label.clone();
-        let plus = div()
-            .id(ElementId::Name(format!("folder-plus-{key}").into()))
-            .role(Role::Button)
+        let plus = end_button(ElementId::Name(format!("folder-plus-{key}").into()))
             .aria_label(plus_label)
-            .flex_shrink_0()
             .border_2()
             .border_color(gpui::transparent_black())
             .track_focus(&self.dialog_focus(format!("folder-plus-{key}"), cx))
             .tab_stop(true)
             .focus_visible(|s| s.border_color(theme::focus_ring()))
-            .child(
-                end_slot(ElementId::Name(format!("folder-plus-target-{key}").into()))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme::row_active()))
-                    .child(glyph(Glyph::Plus, theme::text_secondary())),
-            )
+            .cursor_pointer()
+            .hover(|s| s.bg(theme::row_active()))
+            .child(glyph(Glyph::Plus, theme::text_secondary()))
             .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip_label.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, window, cx| this.start_session_in(plus_folder.clone(), window, cx)));
-        div().mt(px(18.)).flex().items_center().child(heading).child(plus)
+        div().mt(px(18.)).pr(px(12.)).flex().items_center().child(heading).child(plus)
     }
 
     pub(crate) fn render_session_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -904,6 +886,7 @@ impl Workspace {
                         sidebar_row(ElementId::Name(format!("more-{:?}-{}", folder.host, folder.path.display()).into()), false)
                             .aria_label(label.clone())
                             .text_color(theme::text_faint())
+                            .child(bullet_slot())
                             .child(label)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if fewer {
@@ -950,14 +933,23 @@ impl Workspace {
                 sidebar_row("new-session".into(), false)
                     .aria_label("New session")
                     .text_color(theme::text_new())
-                    .border_2()
-                    .border_color(gpui::transparent_black())
                     .track_focus(&self.dialog_focus("new-session-row", cx))
                     .tab_stop(true)
                     .focus_visible(|s| s.border_color(theme::focus_ring()))
-                    .child(div().text_color(theme::text_faint()).child("+"))
+                    .child(bullet_slot().child(glyph(Glyph::Plus, theme::text_faint())))
                     .child(div().flex_1().child("New session"))
-                    .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(crate::platform::shortcut!("N")))
+                    // Centred on the right column while it fits its 24px; Ctrl+N grows leftwards.
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .min_w(px(24.))
+                            .mr(px(-6.))
+                            .flex()
+                            .justify_center()
+                            .text_size(theme::size_meta())
+                            .text_color(theme::text_faint())
+                            .child(crate::platform::shortcut!("N")),
+                    )
                     .on_click(cx.listener(|this, _, window, cx| this.new_session(&NewSession, window, cx))),
             )
             .when(self.any_sessions_at_all(), |d| {
@@ -1030,15 +1022,15 @@ impl Workspace {
                     .px_1()
                     .child({
                         let (mark, status) = self.status_line();
-                        let mark = mark.map(|m| m.render(cx));
+                        let mark = mark.map(|m| bullet_slot().child(m.render(cx)));
                         div()
                             .id("status")
                             .flex_1()
                             .min_w_0()
-                            .pl(px(6.))
+                            .pl(px(8.))
                             .flex()
                             .items_center()
-                            .gap(px(7.))
+                            .gap_2()
                             .text_size(theme::size_meta())
                             .text_color(if mark.is_some() { theme::text_new() } else { theme::text_section() })
                             .children(mark)
@@ -1094,21 +1086,14 @@ impl Workspace {
             .flex_shrink_0()
             .flex()
             .items_center()
-            .px(px(10.))
+            .px(px(12.))
             .text_size(theme::size_meta_small())
             .text_color(theme::text_section())
             .child(div().flex_1().child("Sessions"))
             .child(
-                div()
-                    .id("sidebar-search-button")
-                    .role(Role::Button)
+                end_button("sidebar-search-button")
                     .aria_label("Search sessions")
-                    .flex_shrink_0()
-                    .size(px(24.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.))
+                    .mr_0()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::bg_raised()))
                     .child(glyph(Glyph::Search, theme::text_secondary()))
@@ -1127,21 +1112,13 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(6.))
-            .px(px(10.))
+            .px(px(12.))
             .child(glyph(Glyph::Search, theme::text_secondary()))
             .child(div().flex_1().min_w_0().child(Input::new(&input).appearance(false).text_size(theme::size_body())))
             .child(div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("esc"))
             .child(
-                div()
-                    .id("sidebar-search-close")
-                    .role(Role::Button)
+                end_button("sidebar-search-close")
                     .aria_label(if empty { "Close search" } else { "Clear search" })
-                    .flex_shrink_0()
-                    .size(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.))
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::row_active()))
                     .child(glyph(Glyph::Close, theme::text_faint()))
@@ -1250,18 +1227,9 @@ impl Workspace {
         let changed = !self.settings.sidebar_filters.is_default();
         let color = if changed { theme::accent_text() } else { theme::text_secondary() };
         let menu = self.filter_menu.as_ref().map(|menu| self.render_filter_menu(menu, cx));
-        div()
-            .id("sidebar-filter")
-            .role(Role::Button)
+        end_button("sidebar-filter")
             .aria_label("Filter sessions")
             .relative()
-            .flex_shrink_0()
-            .size(px(24.))
-            .mr(px(-6.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(4.))
             .when(self.filter_menu.is_some(), |d| d.bg(theme::bg_raised()))
             .hover(|s| s.bg(theme::bg_raised()))
             .child(glyph(Glyph::Sliders, color))
