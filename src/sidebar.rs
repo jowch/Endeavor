@@ -807,8 +807,10 @@ impl Workspace {
     /// session in <folder>" + always visible in the rows' ⋮ column. A
     /// collapsed folder shows its rows' strongest mark after the "›".
     /// Clicking the name collapses or expands; clicking + starts a session
-    /// there. Each is its own Tab stop with the sidebar's focus ring.
-    fn render_folder_heading(&self, folder: &Place, collapsed: bool, mark: Option<RowMark>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// there. Each is its own Tab stop with the sidebar's focus ring. The
+    /// first folder sits right under "Sessions"; the others are 16px below
+    /// the folder before, so a heading is nearer its own rows.
+    fn render_folder_heading(&self, folder: &Place, first: bool, collapsed: bool, mark: Option<RowMark>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = self.folder_heading(folder);
         let key = format!("{:?}-{}", folder.host, folder.path.display());
         let label = if collapsed { format!("{name} ›") } else { name.clone() };
@@ -853,7 +855,7 @@ impl Workspace {
             .child(glyph(Glyph::Plus, theme::text_secondary()))
             .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip_label.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, window, cx| this.start_session_in(plus_folder.clone(), window, cx)));
-        div().mt(px(18.)).pr(px(12.)).flex().items_center().child(heading).child(plus)
+        div().when(!first, |d| d.mt(px(16.))).pr(px(12.)).flex().items_center().child(heading).child(plus)
     }
 
     pub(crate) fn render_session_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -889,6 +891,7 @@ impl Workspace {
                     if total == 0 && (searching || !show_empty) {
                         return None;
                     }
+                    let first = !any_matched;
                     any_matched = true;
                     let mark = self.folder_mark(&folder);
                     let body: Vec<AnyElement> = rows.into_iter().map(|row| self.render_sidebar_row(row, &query, false, cx)).collect();
@@ -912,7 +915,7 @@ impl Workspace {
                         div()
                             .flex()
                             .flex_col()
-                            .child(self.render_folder_heading(&folder, collapsed, mark, cx))
+                            .child(self.render_folder_heading(&folder, first, collapsed, mark, cx))
                             .children(body)
                             .children(more_row)
                             .into_any_element(),
@@ -964,10 +967,10 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, window, cx| this.new_session(&NewSession, window, cx))),
             )
             .when(self.any_sessions_at_all(), |d| {
-                d.child(match &self.sidebar_search {
+                d.child(div().mt(px(16.)).child(match &self.sidebar_search {
                     Some(input) => self.render_sidebar_search(input, cx).into_any_element(),
                     None => self.render_sessions_heading(cx).into_any_element(),
-                })
+                }))
             })
             .child(
                 // The fade is a sibling of the scrolling list, not a child of
