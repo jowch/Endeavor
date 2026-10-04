@@ -37,6 +37,8 @@ The header shows a **Safe preview** label. At the top of the notebook a box
 says "You're reading and editing this file without running any code.", with
 a **Run notebook** button.
 
+![A notebook in safe preview: the Safe preview label in the header, and the box at the top of the notebook with the Run notebook button](images/safe-preview.png)
+
 You can edit cells in safe preview. Nothing runs while you do.
 
 ## Run the notebook

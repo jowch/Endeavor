@@ -10,6 +10,8 @@ The window has three columns: your sessions on the left, the chat in the
 middle, and the notebook on the right. Drag the lines between them to resize
 them. Press ⌘B to hide or show the sidebar.
 
+![The Endeavor window during a session: the chat shows Claude's reply and the changed-cells card, and the notebook shows a cell with an orange bar at its left edge](images/main-window.png)
+
 ## One notebook per session
 
 Each session has exactly one notebook. Claude can't open or create a second
@@ -77,6 +79,8 @@ In each of these, Return sends your question now as its own message.
 ⌘Return adds it to the message box instead, so you can collect several
 before you send them together. Esc closes the question and keeps what you
 typed for next time.
+
+![Point turned on: a plot is picked, and a bar under it holds the question for Claude](images/point.png)
 
 ## When a cell fails
 

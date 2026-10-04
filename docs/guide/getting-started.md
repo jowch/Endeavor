@@ -33,6 +33,8 @@ Endeavor uses your own Claude account to answer you. During setup, under
 **Sign in to finish setting up**, it first asks you to choose an assistant.
 Claude is the only one available today. Click **Continue**.
 
+![The "Sign in to Claude" screen, with the two kinds of account to choose from](images/sign-in.png)
+
 1. Under **Sign in to Claude**, pick the kind of account you have:
    - **A Claude plan**: Pro, Max, Team or Enterprise, where you chat with
      Claude at claude.ai.
@@ -52,6 +54,8 @@ see [Sign-in problems](./troubleshooting.md#sign-in-problems).
 
 After sign-in, Endeavor shows **Start a session**. A session is one
 conversation with Claude and the notebook it works in.
+
+![The "Start a session" screen, with four example prompts, the chips above the message box, and the empty notebook pane on the right](images/start-session.png)
 
 Under **Try one of these, or ask in your own words** are four examples. Two
 need no data. Two use a file of your own.
