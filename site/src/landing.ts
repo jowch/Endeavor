@@ -29,7 +29,7 @@ export const record = {
 		'The chat is where you talk. The notebook is what you keep. It holds every step of the analysis as code, with the result under it, so you or a colleague can read it, check it and run it again later.',
 		'Endeavor is made for scientists who are taking on their own analysis and are new to code or notebooks. If you already write Julia, you can edit any cell yourself and give Claude more room.',
 	],
-	alt: 'The Endeavor window. On the left, the list of sessions. In the middle, the chat, with a request to simulate 1,000 coin flips and Claude’s reply. On the right, the notebook with three cells and a plot of the share of heads.',
+	alt: 'The Endeavor window. On the left, the list of sessions. In the middle, the chat, with a request to simulate 1,000 coin flips and Claude’s reply. On the right, the notebook with its cells and a plot of the share of heads.',
 	link: { text: 'What Endeavor is', href: '/overview/' },
 };
 
@@ -38,7 +38,7 @@ export const features = [
 		id: 'approvals',
 		heading: 'You decide what runs',
 		paragraphs: [
-			'Claude asks before it changes the notebook or runs code. A card above the message box shows the change and what else will run again, and you answer with one key.',
+			'Before Claude runs code, a card above the message box shows what will run, including the cells that will run again with it. You answer with one key. In Manual, Claude asks before every change to the notebook too.',
 			'Pick a mode for how much Claude may do on its own. Manual asks before every change. Ask to run lets Claude edit and asks before running. Auto runs without asking. Plan only reads, then proposes a plan.',
 		],
 		image: 'approval-card',
