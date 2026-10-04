@@ -1,0 +1,30 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import logoLight from '../../../assets/icon/logo-light.svg';
+import logoDark from '../../../assets/icon/logo-dark.svg';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Endeavor user guide',
+		description: 'How to use Endeavor, a Mac app for data analysis with Claude in a Julia notebook.',
+		template: 'splash',
+		hero: {
+			title: 'User guide',
+			tagline:
+				'Endeavor is a Mac app where Claude writes and runs Julia code in a notebook beside your chat, while you watch, edit and decide what runs.',
+			image: { light: logoLight, dark: logoDark, alt: 'Endeavor' },
+			actions: [
+				{ text: 'What Endeavor is', link: `${base}/overview/`, variant: 'primary' },
+				{ text: 'Get started', link: `${base}/getting-started/`, variant: 'secondary' },
+			],
+		},
+	}}
+>
+	<p>
+		Endeavor isn't available to download yet. It's coming soon. The notebook tools work without the
+		app today. See <a href="https://github.com/jowch/EndeavorMCP#readme">EndeavorMCP's README</a>.
+	</p>
+</StarlightPage>

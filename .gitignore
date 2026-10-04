@@ -34,3 +34,8 @@ frontend/node_modules/
 
 # A local [patch] for building against an EndeavorMCP checkout (docs/testing.md)
 .cargo/config.toml
+
+# Documentation site (site/)
+site/node_modules/
+site/dist/
+site/.astro/

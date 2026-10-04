@@ -1,0 +1,31 @@
+@font-face {
+	font-family: 'JuliaMono';
+	src: url('../fonts/JuliaMono-RegularLatin.woff2') format('woff2');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'JuliaMono';
+	src: url('../fonts/JuliaMono-BoldLatin.woff2') format('woff2');
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+:root {
+	--sl-font: 'Schibsted Grotesk';
+	--sl-font-mono: 'JuliaMono';
+
+	--sl-color-accent-low: #3a1708;
+	--sl-color-accent: #cc3f00;
+	--sl-color-accent-high: #ff8c57;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #ffdfd0;
+	--sl-color-accent: #b23600;
+	--sl-color-accent-high: #7a2500;
+	--sl-color-text-invert: #ffffff;
+}
