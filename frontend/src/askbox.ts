@@ -9,6 +9,7 @@
 
 import { on } from "./bridge";
 import { mac, modHeld } from "./keys";
+import { context } from "./state";
 
 const svg = (body: string, size = 12) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -96,7 +97,7 @@ export function askBox(o: { label: string; placeholder: string; quote?: { text: 
     `<button class="options" aria-label="Send options" aria-haspopup="menu" aria-expanded="false">${DOWN}</button>` +
     `<div role="menu" hidden><button role="menuitem" data-add="false">${UP}<span class="idle">Send now</span><span class="working">Send after this turn</span><span class="key">${KEYS.send}</span></button>` +
     `<button role="menuitem" data-add="true">${QUOTE}<span>Add to message</span><span class="key">${KEYS.add}</span></button></div></div>` +
-    `<div class="note working">Claude is working. This goes after its turn.</div>`;
+    `<div class="note working">${context.agent} is working. This goes after its turn.</div>`;
   const what = root.querySelector<HTMLElement>(".what")!;
   const field = root.querySelector<HTMLElement>(".endeavor-field")!;
   const text = root.querySelector("textarea")!;

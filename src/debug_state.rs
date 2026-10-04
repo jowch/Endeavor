@@ -292,7 +292,7 @@ impl Workspace {
             "failed": s.failed.as_ref().map(|f| json!({
                 "kind": match f.kind { session::OpenFailure::InCli => "in_cli", session::OpenFailure::Other(_) => "other" },
                 "title": f.title(s.id.is_none()),
-                "text": f.body(s.notebook_beside()),
+                "text": f.body(s.notebook_beside(), s.agent),
                 "buttons": match f.kind {
                     session::OpenFailure::InCli => vec!["Open a copy", "Try again"],
                     session::OpenFailure::Other(_) if s.notebook_beside() == session::Beside::Unknown => vec!["Try again", "Open the notebook only"],
@@ -365,7 +365,7 @@ impl Workspace {
                     "kind": "user",
                     "text": text.to_string(),
                     "actions": message_actions(!text.is_empty(), *sent, s.copied == Some(ix)),
-                    "delivery": transcript::delivery_note(*delivery),
+                    "delivery": transcript::delivery_note(*delivery, s.agent),
                     "chips": attachments.iter().map(chip_label).collect::<Vec<_>>(),
                     "quotes": quotes(attachments),
                     "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text(s.agent)),
@@ -393,12 +393,12 @@ impl Workspace {
                 Entry::Failed(f) if f.used && matches!(f.kind, session::FailedKind::NoAnswer { .. }) => None,
                 Entry::Failed(f) if matches!(f.kind, session::FailedKind::CutOff) => Some(json!({
                     "kind": "note",
-                    "text": f.kind.title(),
+                    "text": f.kind.title(s.agent),
                     "button": (!f.used).then(|| f.kind.action()),
                 })),
                 Entry::Failed(f) => Some(json!({
                     "kind": "failed",
-                    "title": f.kind.title(),
+                    "title": f.kind.title(s.agent),
                     "text": f.kind.body(),
                     "button": (!f.used).then(|| f.kind.action()),
                     "details": f.raw.as_ref().map(|raw| json!({ "open": f.details_open, "text": raw })),
@@ -548,7 +548,7 @@ impl Workspace {
             let label = if q.in_flight() { Some("sending now…") } else if q.is_copying() { Some("copying files…") } else if q.editing() { Some("editing") } else { None };
             json!({ "text": q.text.lines().next().unwrap_or(""), "chips": q.attachments.iter().map(chip_label).collect::<Vec<_>>(), "label": label })
         }).collect();
-        let queue_line = session.and_then(|s| s.outbox.heading());
+        let queue_line = session.and_then(|s| s.outbox.heading(s.agent.name()));
         let removed = session.and_then(|s| s.outbox.removed_at(std::time::Instant::now())).map(|r| r.message.text.clone());
         json!({
             "text": text,

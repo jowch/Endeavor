@@ -270,7 +270,7 @@ fn text_panel(text: &str, lines: usize, color: Rgba) -> Div {
 }
 
 /// What a chip carries, for its hover preview and its popover.
-fn preview_body(attachment: &Attachment) -> Div {
+fn preview_body(attachment: &Attachment, agent: crate::agent::Agent) -> Div {
     match attachment {
         Attachment::Cells { cells, .. } => div().flex().flex_col().gap(px(6.)).children(cells.iter().take(3).map(|c| text_panel(&c.code, 6, theme::text_secondary()))),
         Attachment::Error { text, .. } => text_panel(text, 8, theme::danger()),
@@ -280,13 +280,13 @@ fn preview_body(attachment: &Attachment) -> Div {
         },
         Attachment::Image { mime, bytes, .. } => thumbnail(mime, bytes),
         Attachment::Text { text, .. } => text_panel(text, 8, theme::text_secondary()),
-        Attachment::Upload { .. } => note("A copy goes into this session's folder when you send, so Claude and the notebook can use it."),
-        Attachment::Saved { .. } => note("Saved in this session's folder."),
+        Attachment::Upload { .. } => note(format!("A copy goes into this session's folder when you send, so {} and the notebook can use it.", agent.name())),
+        Attachment::Saved { .. } => note("Saved in this session's folder.".to_owned()),
     }
 }
 
-fn note(text: &'static str) -> Div {
-    div().text_size(theme::chat_meta()).text_color(theme::text_secondary()).child(text)
+fn note(text: impl Into<SharedString>) -> Div {
+    div().text_size(theme::chat_meta()).text_color(theme::text_secondary()).child(text.into())
 }
 
 fn thumbnail(mime: &str, bytes: &[u8]) -> Div {
@@ -1013,7 +1013,7 @@ impl Workspace {
             .when(!chips.is_empty(), |d| d.child(div().ml(px(10.)).flex().flex_wrap().gap(px(4.)).children(chips)))
             .child(div().flex().items_end().gap_2().child(div().relative().flex_1().min_w_0().child(text_box).child(token_marks)).child(div().mb(px(6.)).child(send)))
             .children(self.render_list(session, slash, cx))
-            .children(self.render_hover_preview());
+            .children(self.render_hover_preview(session));
         div()
             .key_context(list_context)
             .on_action(cx.listener(Self::list_up))
@@ -1110,7 +1110,7 @@ impl Workspace {
     }
 
     /// The slash list above the box, as wide as it.
-    fn render_slash(&self, view: SlashView, cx: &mut Context<Self>) -> AnyElement {
+    fn render_slash(&self, view: SlashView, agent: crate::agent::Agent, cx: &mut Context<Self>) -> AnyElement {
         let selected = self.composer.selected;
         let heading = |text: String| div().px(px(8.)).pt(px(6.)).pb(px(2.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(text);
         let line = |text: String| div().px(px(8.)).py(px(5.)).text_size(theme::chat_meta()).text_color(theme::text_faint()).child(text);
@@ -1132,7 +1132,7 @@ impl Workspace {
                     Listing::Nothing => (Vec::new(), false),
                 };
                 if found.is_empty() {
-                    after.push(line(format!("No command named /{query}. {} sends “/{query}” to Claude as a message.", slash::ENTER)));
+                    after.push(line(format!("No command named /{query}. {} sends “/{query}” to {} as a message.", slash::ENTER, agent.name())));
                 }
                 // The name column: just wide enough for the longest visible
                 // name and its faint hint, capped so one long one doesn't
@@ -1198,7 +1198,7 @@ impl Workspace {
                     rows.push(div().flex().flex_col().children(head).child(item).into_any_element());
                 }
                 if waiting {
-                    after.push(line("Claude's commands appear once it's connected".into()));
+                    after.push(line(format!("{}'s commands appear once it's connected", agent.name())));
                 }
             }
             SlashView::Choices { own, choices } => {
@@ -1236,7 +1236,7 @@ impl Workspace {
     fn render_list(&self, session: Option<&Session>, slash: Option<SlashView>, cx: &mut Context<Self>) -> Option<AnyElement> {
         let above = |d: Div| d.absolute().bottom(relative(1.)).mb(px(6.)).occlude();
         if let Some(view) = slash {
-            return Some(self.render_slash(view, cx));
+            return Some(self.render_slash(view, self.composer_agent(session), cx));
         }
         if self.composer.typing.is_some() {
             let status = match self.composer_place().and_then(|p| self.composer.files.get(&p)) {
@@ -1345,7 +1345,7 @@ impl Workspace {
     }
 
     /// The hovered chip's preview, above the box.
-    fn render_hover_preview(&self) -> Option<AnyElement> {
+    fn render_hover_preview(&self, session: Option<&Session>) -> Option<AnyElement> {
         let attachment = self.composer.attachments.get(self.composer.hovered?)?;
         Some(
             div()
@@ -1360,7 +1360,7 @@ impl Workspace {
                         .p(px(8.))
                         .gap(px(6.))
                         .child(div().flex().items_center().gap(px(6.)).text_size(theme::chat_meta()).text_color(theme::text_muted()).child(glyph(icon_glyph(attachment.icon()), theme::text_muted())).child(preview_heading(attachment)))
-                        .child(preview_body(attachment)),
+                        .child(preview_body(attachment, self.composer_agent(session))),
                 )
                 .into_any_element(),
         )
@@ -1434,7 +1434,7 @@ impl Workspace {
                     .config
                     .iter()
                     .zip(&self.composer.focus_config)
-                    .map(|(&(id, name), focus)| {
+                    .filter_map(|(&(id, name), focus)| {
                         let label = self.config_label(session, id)?;
                         let short = label.strip_suffix(" (recommended)").unwrap_or(&label).to_owned();
                         Some(
@@ -1451,7 +1451,7 @@ impl Workspace {
                                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(Menu::Config(id), window, cx))),
                         )
                     })
-                    .flatten(),
+                    
             )
             .child(self.render_context_ring(session, window, cx))
     }
@@ -1476,7 +1476,8 @@ impl Workspace {
         if chips.is_empty() {
             return None;
         }
-        let popover = popover.and_then(|p| Some((p, attachments.get(p.chip)?))).map(|(p, a)| self.render_chip_popover(p, a, cx));
+        let agent = self.sessions.iter().find(|s| s.key == key).map_or_else(crate::agent::Agent::default, |s| s.agent);
+        let popover = popover.and_then(|p| Some((p, attachments.get(p.chip)?))).map(|(p, a)| self.render_chip_popover(p, a, agent, cx));
         Some(
             div()
                 .relative()
@@ -1489,7 +1490,7 @@ impl Workspace {
         )
     }
 
-    fn render_chip_popover(&self, popover: &ChipPopover, attachment: &Attachment, cx: &mut Context<Self>) -> AnyElement {
+    fn render_chip_popover(&self, popover: &ChipPopover, attachment: &Attachment, agent: crate::agent::Agent, cx: &mut Context<Self>) -> AnyElement {
         let sent_code = attachment.cells().first().map(|c| c.code.clone());
         let changed = match (&popover.now, &sent_code) {
             (Some(Some(now)), Some(sent)) => now.trim() != sent.trim(),
@@ -1514,7 +1515,7 @@ impl Workspace {
                     .child(preview_heading(attachment))
                     .child(div().text_color(theme::text_faint()).child("· as sent")),
             )
-            .child(preview_body(attachment))
+            .child(preview_body(attachment, agent))
             .when(!cells.is_empty(), |d| {
                 d.child(
                     div()

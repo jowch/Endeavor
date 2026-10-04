@@ -7,6 +7,8 @@
 
 use serde_json::Value;
 
+use crate::agent::Agent;
+
 /// Whether a runtime that reported `reported` came from a build other than
 /// the app's own, `app`.
 pub fn is_older(reported: Option<&str>, app: Option<&str>) -> bool {
@@ -14,8 +16,8 @@ pub fn is_older(reported: Option<&str>, app: Option<&str>) -> bool {
 }
 
 /// The note in each session on a host whose runtime is older.
-pub fn note(host: &str) -> String {
-    format!("Julia on {host} is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let Claude run code.")
+pub fn note(host: &str, agent: Agent) -> String {
+    format!("Julia on {host} is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let {} run code.", agent.name())
 }
 
 /// Why the app refuses an agent's call to `tool` with `arguments` on an older
@@ -48,6 +50,18 @@ mod tests {
         assert!(!is_older(Some("1.0.0-abc"), Some("1.0.0-abc")));
         assert!(is_older(Some("1.0.0-abc"), Some("1.0.0-def")));
         assert!(is_older(None, Some("1.0.0-abc")), "too old to say");
+    }
+
+    #[test]
+    fn the_note_names_the_session_agent() {
+        assert_eq!(
+            note("lab", Agent::Claude),
+            "Julia on lab is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let Claude run code."
+        );
+        assert_eq!(
+            note("lab", Agent::Codex),
+            "Julia on lab is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let Codex run code."
+        );
     }
 
     #[test]

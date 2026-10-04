@@ -27,6 +27,272 @@
     return mac ? `\u2318${key}` : `Ctrl+${key}`;
   }
 
+  // src/cellname.ts
+  function cellName(code) {
+    const markdown = markdownText(code);
+    let label;
+    if (markdown !== null) {
+      const lines = markdown.split("\n").map((l) => l.trim()).filter((l) => l);
+      label = (lines.find((l) => l.startsWith("#")) ?? lines[0] ?? "markdown").replace(/^#+/, "").trim();
+    } else {
+      const first = codeLines(code)[0];
+      label = first === void 0 ? "cell" : definedName(code) ?? inferredName(code) ?? first;
+    }
+    const chars = [...label];
+    return chars.length > 28 ? `${chars.slice(0, 27).join("")}\u2026` : label;
+  }
+  function definedName(code) {
+    const lines = codeLines(code);
+    const line = lines[0] === "begin" ? lines[1] : lines[0];
+    if (line === void 0) return null;
+    const word = (s) => s.trim().match(/^[\p{L}\p{N}_!]+/u)?.[0] ?? null;
+    const block = ["function ", "macro ", "struct ", "mutable struct "].find((k) => line.startsWith(k));
+    if (block) return word(line.slice(block.length));
+    const eq = line.indexOf("=");
+    if (eq < 0) return null;
+    const lhs = line.slice(0, eq);
+    if (line[eq + 1] === "=" || lhs.split("(").length !== lhs.split(")").length) return null;
+    return word(lhs.trim().replace(/^const /, ""));
+  }
+  var PLOTS = ["plot", "scatter", "heatmap", "histogram", "lines", "surface", "contour", "Figure"];
+  function inferredName(code) {
+    const lines = codeLines(code);
+    if (lines.length < 2) return null;
+    const plot = new RegExp(`(^|[^\\p{L}\\p{N}_.])(${PLOTS.join("|")})!*\\(`, "u");
+    if (lines.some((l) => plot.test(l))) return "plot";
+    if (lines.some((l) => l.includes("Markdown.parse(") || l.includes('md"'))) return "text";
+    if (!["let", "begin"].includes(lines[0]) || lines[lines.length - 1] !== "end" || lines.length < 3) return null;
+    const last2 = lines[lines.length - 2];
+    return last2.split(",").every((n) => /^[\p{L}\p{N}_]+$/u.test(n.trim())) ? last2 : null;
+  }
+  function codeLines(code) {
+    let inBlock = false;
+    return code.split("\n").map((l) => l.trim()).filter((line) => {
+      if (inBlock || line.startsWith("#=")) {
+        inBlock = !line.endsWith("=#");
+        return false;
+      }
+      return line !== "" && !line.startsWith("#");
+    });
+  }
+  function markdownText(code) {
+    const first = codeLines(code)[0];
+    if (first === void 0) return null;
+    const rest = code.slice(code.indexOf(first));
+    const m = rest.match(/^md"(?:"")?/);
+    return m ? rest.slice(m[0].length).trimEnd().replace(/"+$/, "") : null;
+  }
+
+  // src/status.ts
+  function phaseOf(entry) {
+    if (!entry) return "waiting";
+    if (entry.success === false) return "failed";
+    if (entry.finished_at != null) return "done";
+    if (entry.started_at != null) return "busy";
+    return "waiting";
+  }
+  var ansi = /\x1b\[[0-9;]*m/g;
+  function parsePkgLog(log) {
+    const precompiled = [];
+    const failed = [];
+    const added = [];
+    let inManifest = false;
+    for (const raw of log.replace(ansi, "").split("\n")) {
+      const line = raw.trimEnd();
+      const mark = line.match(/^\s*(?:[\d.]+\s*ms)?\s*([✓✗])\s+([\w.]+)/);
+      if (mark) (mark[1] === "\u2713" ? precompiled : failed).push(mark[2]);
+      if (/^\s*Updating\s+`.*Manifest\.toml`/.test(line)) {
+        inManifest = true;
+        continue;
+      }
+      const entry = line.match(/\[[0-9a-f]{8}\]\s+(\+)?\s*([\w.]+)/);
+      if (!entry) inManifest = false;
+      else if (inManifest && entry[1]) added.push(entry[2]);
+    }
+    return { precompiled, failed, added };
+  }
+  function importedPackages(codes) {
+    const names2 = [];
+    for (const code of codes) {
+      for (const line of code.split("\n")) {
+        const m = line.match(/^\s*(?:using|import)\s+([^#]+)/);
+        if (!m) continue;
+        const list = m[1].split(":")[0];
+        for (const part of list.split(",")) {
+          const name = part.trim().split(/[.\s]/)[0];
+          if (/^[A-Za-z_]\w*$/.test(name) && !["Base", "Core", "Main"].includes(name) && !names2.includes(name)) names2.push(name);
+        }
+      }
+    }
+    return names2;
+  }
+  function prettyTime(ns) {
+    if (ns < 1e3) return `${Math.round(ns)} ns`;
+    if (ns < 1e6) return `${Math.round(ns / 1e3)} \xB5s`;
+    if (ns < 1e9) return `${Math.round(ns / 1e6)} ms`;
+    const s = ns / 1e9;
+    if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
+    return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+  }
+  function definedNames(map) {
+    return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
+  }
+  function cellName2(nb, id) {
+    const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
+    if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
+    return cellName(nb.cell_inputs[id]?.code ?? "");
+  }
+  function statusModel(nb) {
+    const tree = nb.status_tree?.subtasks ?? {};
+    const pkgTask = tree.pkg;
+    const pkgPhase = phaseOf(pkgTask);
+    const runTask = tree.run;
+    const workspace = phaseOf(tree.workspace);
+    const running = nb.process_status === "ready" || nb.process_status === "starting";
+    const steps = [
+      { name: "Start Julia", phase: tree.workspace ? workspace : running ? "done" : "waiting" },
+      { name: "Packages", phase: pkgTask ? pkgPhase : running ? "done" : "waiting" },
+      { name: "Run cells", phase: phaseOf(runTask) }
+    ];
+    const nbpkg = nb.nbpkg ?? {};
+    const installed2 = nbpkg.installed_versions ?? {};
+    const busy = new Set(nbpkg.busy_packages ?? []);
+    const log = parsePkgLog(nbpkg.terminal_outputs?.nbpkg_sync ?? "");
+    const precompiled = new Set(log.precompiled);
+    const failedSet = new Set(log.failed);
+    const precompiling = phaseOf(pkgTask?.subtasks?.precompile) === "busy";
+    const codes = nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? "");
+    const direct = importedPackages(codes);
+    for (const name of [...Object.keys(installed2), ...busy].sort()) {
+      if (!name.startsWith("__internal") && name !== "nbpkg_sync" && !direct.includes(name)) direct.push(name);
+    }
+    const packages = direct.map((name) => {
+      const version = installed2[name];
+      const detail = version === "stdlib" ? "standard library" : version ?? "";
+      let state2;
+      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state2 = "failed";
+      else if (busy.has(name) && pkgPhase === "busy") state2 = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
+      else if (version != null) state2 = "ready";
+      else if (pkgPhase === "done") state2 = Object.keys(installed2).length ? "failed" : "ready";
+      else state2 = "waiting";
+      const notFound = state2 === "failed" && version == null && pkgPhase === "done";
+      return { name, state: state2, detail: state2 === "ready" ? detail : notFound ? "not found" : "" };
+    });
+    const deps = log.added.filter((n) => !direct.includes(n));
+    const depsRow = deps.length ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length } : null;
+    const cells = nb.cell_order.map((id) => {
+      const r = nb.cell_results[id] ?? {};
+      const state2 = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
+      const time = (state2 === "done" || state2 === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
+      return { id, name: cellName2(nb, id), state: state2, time };
+    });
+    const failedPkg = packages.find((p) => p.state === "failed");
+    const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
+    if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
+    const readyPkgs = packages.filter((p) => p.state === "ready").length;
+    const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
+    const runTotal = Object.keys(evaluate).length;
+    const runDone = Object.values(evaluate).filter((e) => e.finished_at != null).length;
+    let busyText = null;
+    if (steps[0].phase === "busy") busyText = "Starting Julia";
+    else if (pkgPhase === "busy") busyText = packages.length ? `Installing packages \xB7 ${readyPkgs} of ${packages.length}` : "Installing packages";
+    else if (steps[2].phase === "busy") busyText = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
+    const restart = nbpkg.restart_required_msg ? "required" : nbpkg.restart_recommended_msg ? "recommended" : null;
+    let headline;
+    if (nb.process_status === "waiting_for_permission") headline = "Safe preview \xB7 nothing has run";
+    else if (failure) headline = `Package failed \xB7 ${failure.name}`;
+    else if (busyText?.startsWith("Running")) headline = `Running cells \xB7 ${runDone} of ${runTotal}`;
+    else if (busyText) headline = busyText;
+    else if (restart === "required") headline = "Restart needed";
+    else if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") headline = "Julia stopped";
+    else headline = "Ready";
+    return {
+      headline,
+      steps,
+      packages,
+      deps: depsRow,
+      cells,
+      failure,
+      busy: busyText,
+      saveFailed: tree.saving?.success === false,
+      restart
+    };
+  }
+
+  // src/state.ts
+  var listeners = [];
+  var last = null;
+  var model = null;
+  var lastSent = "";
+  var context = { host: "This Mac", agent: "Claude", asking: false, crash: null };
+  var drawerOf = () => null;
+  function onNotebook(listener) {
+    listeners.push(listener);
+    if (last && model) listener(last, model);
+  }
+  function current() {
+    return last && model ? { nb: last, model } : null;
+  }
+  var notebookId = () => new URLSearchParams(location.search).get("id") ?? "";
+  function setDrawerSource(source) {
+    drawerOf = source;
+  }
+  function report() {
+    const editor2 = window.editor_state;
+    if (!last || !model) return;
+    const msg = {
+      type: "state",
+      notebook: notebookId(),
+      safe: last.process_status === "waiting_for_permission",
+      busy: model.busy,
+      restart: model.restart,
+      save_failed: model.saveFailed,
+      package_failed: model.failure?.name ?? null,
+      dead: last.process_status === "no_process",
+      connected: editor2?.connected !== false,
+      drawer: drawerOf()
+    };
+    const json = JSON.stringify(msg);
+    if (json === lastSent) return;
+    lastSent = json;
+    send(msg);
+  }
+  function tick() {
+    const nb = window.editor_state?.notebook;
+    if (!nb?.cell_order || nb === last) return report();
+    last = nb;
+    model = statusModel(nb);
+    for (const listener of listeners) listener(nb, model);
+    report();
+  }
+  var ticks = [];
+  function every(ms, hook) {
+    let lastRun = 0;
+    ticks.push(() => {
+      const now = performance.now();
+      if (now - lastRun >= ms) {
+        lastRun = now;
+        hook();
+      }
+    });
+  }
+  function frame() {
+    ticks.forEach((t) => t());
+    requestAnimationFrame(frame);
+  }
+  function initState() {
+    every(250, tick);
+    if (document.querySelector("pluto-editor")) requestAnimationFrame(frame);
+    on("context", (msg) => {
+      context.host = msg.host;
+      context.agent = msg.agent ?? "Claude";
+      context.asking = msg.asking;
+      context.crash = msg.crash ?? null;
+      if (last && model) listeners.forEach((l) => l(last, model));
+    });
+    lastSent = "";
+  }
+
   // src/actions.ts
   var css = `
   #endeavor-sheet { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
@@ -51,7 +317,7 @@
 `;
   var cmd = mac ? "\u2318" : "Ctrl";
   var alt = mac ? "\u2325" : "Alt";
-  var shortcuts = [
+  var shortcuts = () => [
     ["\u21E7 Enter", "Run cell"],
     [`${cmd} Enter`, "Run cell and add a cell below"],
     [`${cmd} S`, "Submit all changes"],
@@ -67,7 +333,7 @@
     "Select cells by dragging a box from the space between them, then:",
     [`${cmd} C / ${cmd} X / ${cmd} V`, "Copy / cut / paste the selected cells"],
     "Endeavor",
-    [`${cmd} E`, "Ask Claude about the selection, or the cell"],
+    [`${cmd} E`, `Ask ${context.agent} about the selection, or the cell`],
     [`${cmd} \u21E7 E`, "Point: pick cells or draw a box to ask about"]
   ];
   var escape = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -88,7 +354,7 @@
     return el2;
   }
   function showShortcuts() {
-    const rows = shortcuts.map((s) => typeof s === "string" ? `<div class="head">${escape(s)}</div>` : `<kbd>${escape(s[0])}</kbd><span>${escape(s[1])}</span>`).join("");
+    const rows = shortcuts().map((s) => typeof s === "string" ? `<div class="head">${escape(s)}</div>` : `<kbd>${escape(s[0])}</kbd><span>${escape(s[1])}</span>`).join("");
     const el2 = sheet(`<h2>Keyboard shortcuts</h2><div class="keys">${rows}</div><p>The notebook file saves every time you run a cell.</p><div class="buttons"><button class="primary done">Done</button></div>`);
     const done = el2.querySelector(".done");
     done.onclick = () => el2.remove();
@@ -253,7 +519,7 @@
     root.dataset.endeavorUi = "";
     root.setAttribute("role", "dialog");
     root.setAttribute("aria-label", o.label);
-    root.innerHTML = `<div class="head"><span class="what"></span><span class="keys"><span class="idle">${KEYS.send} send</span><span class="working">${KEYS.send} queue</span> \xB7 ${KEYS.add} add to message</span></div><div class="endeavor-field"><textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><button class="send" aria-label="Send">${UP}</button><button class="options" aria-label="Send options" aria-haspopup="menu" aria-expanded="false">${DOWN}</button><div role="menu" hidden><button role="menuitem" data-add="false">${UP}<span class="idle">Send now</span><span class="working">Send after this turn</span><span class="key">${KEYS.send}</span></button><button role="menuitem" data-add="true">${QUOTE}<span>Add to message</span><span class="key">${KEYS.add}</span></button></div></div><div class="note working">Claude is working. This goes after its turn.</div>`;
+    root.innerHTML = `<div class="head"><span class="what"></span><span class="keys"><span class="idle">${KEYS.send} send</span><span class="working">${KEYS.send} queue</span> \xB7 ${KEYS.add} add to message</span></div><div class="endeavor-field"><textarea rows="1" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea><button class="send" aria-label="Send">${UP}</button><button class="options" aria-label="Send options" aria-haspopup="menu" aria-expanded="false">${DOWN}</button><div role="menu" hidden><button role="menuitem" data-add="false">${UP}<span class="idle">Send now</span><span class="working">Send after this turn</span><span class="key">${KEYS.send}</span></button><button role="menuitem" data-add="true">${QUOTE}<span>Add to message</span><span class="key">${KEYS.add}</span></button></div></div><div class="note working">${context.agent} is working. This goes after its turn.</div>`;
     const what = root.querySelector(".what");
     const field = root.querySelector(".endeavor-field");
     const text = root.querySelector("textarea");
@@ -319,62 +585,6 @@
       if (msg.working) document.documentElement.dataset[WORKING] = "";
       else delete document.documentElement.dataset[WORKING];
     });
-  }
-
-  // src/cellname.ts
-  function cellName(code) {
-    const markdown = markdownText(code);
-    let label;
-    if (markdown !== null) {
-      const lines = markdown.split("\n").map((l) => l.trim()).filter((l) => l);
-      label = (lines.find((l) => l.startsWith("#")) ?? lines[0] ?? "markdown").replace(/^#+/, "").trim();
-    } else {
-      const first = codeLines(code)[0];
-      label = first === void 0 ? "cell" : definedName(code) ?? inferredName(code) ?? first;
-    }
-    const chars = [...label];
-    return chars.length > 28 ? `${chars.slice(0, 27).join("")}\u2026` : label;
-  }
-  function definedName(code) {
-    const lines = codeLines(code);
-    const line = lines[0] === "begin" ? lines[1] : lines[0];
-    if (line === void 0) return null;
-    const word = (s) => s.trim().match(/^[\p{L}\p{N}_!]+/u)?.[0] ?? null;
-    const block = ["function ", "macro ", "struct ", "mutable struct "].find((k) => line.startsWith(k));
-    if (block) return word(line.slice(block.length));
-    const eq = line.indexOf("=");
-    if (eq < 0) return null;
-    const lhs = line.slice(0, eq);
-    if (line[eq + 1] === "=" || lhs.split("(").length !== lhs.split(")").length) return null;
-    return word(lhs.trim().replace(/^const /, ""));
-  }
-  var PLOTS = ["plot", "scatter", "heatmap", "histogram", "lines", "surface", "contour", "Figure"];
-  function inferredName(code) {
-    const lines = codeLines(code);
-    if (lines.length < 2) return null;
-    const plot = new RegExp(`(^|[^\\p{L}\\p{N}_.])(${PLOTS.join("|")})!*\\(`, "u");
-    if (lines.some((l) => plot.test(l))) return "plot";
-    if (lines.some((l) => l.includes("Markdown.parse(") || l.includes('md"'))) return "text";
-    if (!["let", "begin"].includes(lines[0]) || lines[lines.length - 1] !== "end" || lines.length < 3) return null;
-    const last2 = lines[lines.length - 2];
-    return last2.split(",").every((n) => /^[\p{L}\p{N}_]+$/u.test(n.trim())) ? last2 : null;
-  }
-  function codeLines(code) {
-    let inBlock = false;
-    return code.split("\n").map((l) => l.trim()).filter((line) => {
-      if (inBlock || line.startsWith("#=")) {
-        inBlock = !line.endsWith("=#");
-        return false;
-      }
-      return line !== "" && !line.startsWith("#");
-    });
-  }
-  function markdownText(code) {
-    const first = codeLines(code)[0];
-    if (first === void 0) return null;
-    const rest = code.slice(code.indexOf(first));
-    const m = rest.match(/^md"(?:"")?/);
-    return m ? rest.slice(m[0].length).trimEnd().replace(/"+$/, "") : null;
   }
 
   // src/quote.ts
@@ -576,12 +786,18 @@
     hint.innerHTML = `<span>Click to pick \xB7 drag over code lines \xB7 drag elsewhere for a box</span><span>\xB7</span><span class="done" role="button">Done</span>`;
     const bar2 = document.createElement("div");
     bar2.id = "annotate-bar";
-    const field = askBox({ label: "Comment for Claude", placeholder: "Comment for Claude\u2026", done: (add, e) => byUser(e) && sendComment(add) });
+    const field = askBox({ label: `Comment for ${context.agent}`, placeholder: `Comment for ${context.agent}\u2026`, done: (add, e) => byUser(e) && sendComment(add) });
     const text = field.text;
     bar2.append(field.root);
     document.head.append(style2);
     document.body.append(frame2, box, tag, hint, bar2);
     state = { picks, status: () => active() ? field.what.textContent ?? "" : "", comment: () => text.value };
+    on("context", () => {
+      const label = `Comment for ${context.agent}`;
+      field.root.setAttribute("aria-label", label);
+      text.placeholder = `${label}\u2026`;
+      text.setAttribute("aria-label", text.placeholder);
+    });
     function drawBox(b) {
       box.classList.toggle("shown", !!b);
       if (!b) return;
@@ -800,12 +1016,12 @@
   }
 
   // src/asking.ts
-  var css5 = `
+  var css5 = () => `
   pluto-cell[data-endeavor-ask] { margin-top: 26px; }
   pluto-cell[data-endeavor-ask]::after {
     position: absolute; left: 0; top: -22px; font: 12px/18px var(--sans-serif-font-stack, system-ui); pointer-events: none;
   }
-  pluto-cell[data-endeavor-ask="asks"]::after { content: "\\25CF  Claude asks to run this."; color: var(--e-accent-text); }
+  pluto-cell[data-endeavor-ask="asks"]::after { content: "\\25CF  ${context.agent} asks to run this."; color: var(--e-accent-text); }
   pluto-cell[data-endeavor-ask="reruns"]::after { content: "Re-runs after it"; color: var(--e-text-muted); }
   pluto-cell[data-endeavor-ask="needed"]::after { content: "Runs first: it hasn't run yet"; color: var(--e-text-muted); }
 `;
@@ -814,7 +1030,7 @@
   var needed = [];
   var observer = null;
   var onScreen = /* @__PURE__ */ new Set();
-  var lastSent = null;
+  var lastSent2 = null;
   function apply() {
     for (const cell of document.querySelectorAll("pluto-cell")) {
       const mark = asked.includes(cell.id) ? "asks" : rerun.includes(cell.id) ? "reruns" : needed.includes(cell.id) ? "needed" : null;
@@ -825,21 +1041,21 @@
       }
     }
   }
-  function report() {
+  function report2() {
     if (!asked.some((id) => document.getElementById(id))) return;
     const visible = asked.some((id) => onScreen.has(id));
-    if (visible === lastSent) return;
-    lastSent = visible;
+    if (visible === lastSent2) return;
+    lastSent2 = visible;
     send({ type: "asked_visible", visible });
   }
   function watch() {
     observer?.disconnect();
     onScreen.clear();
-    lastSent = null;
+    lastSent2 = null;
     if (typeof IntersectionObserver === "undefined") return;
     observer = new IntersectionObserver((entries) => {
       for (const e of entries) e.isIntersecting ? onScreen.add(e.target.id) : onScreen.delete(e.target.id);
-      report();
+      report2();
     });
     for (const id of asked) {
       const cell = document.getElementById(id);
@@ -848,9 +1064,10 @@
   }
   function initAsking() {
     const style2 = document.createElement("style");
-    style2.textContent = css5;
+    style2.textContent = css5();
     document.head.append(style2);
     on("context", (msg) => {
+      style2.textContent = css5();
       const cells = msg.ask_cells ?? [];
       const changed = cells.join() !== asked.join();
       asked = cells;
@@ -860,215 +1077,6 @@
       if (changed) watch();
     });
     onRedraw(apply);
-  }
-
-  // src/status.ts
-  function phaseOf(entry) {
-    if (!entry) return "waiting";
-    if (entry.success === false) return "failed";
-    if (entry.finished_at != null) return "done";
-    if (entry.started_at != null) return "busy";
-    return "waiting";
-  }
-  var ansi = /\x1b\[[0-9;]*m/g;
-  function parsePkgLog(log) {
-    const precompiled = [];
-    const failed = [];
-    const added = [];
-    let inManifest = false;
-    for (const raw of log.replace(ansi, "").split("\n")) {
-      const line = raw.trimEnd();
-      const mark = line.match(/^\s*(?:[\d.]+\s*ms)?\s*([✓✗])\s+([\w.]+)/);
-      if (mark) (mark[1] === "\u2713" ? precompiled : failed).push(mark[2]);
-      if (/^\s*Updating\s+`.*Manifest\.toml`/.test(line)) {
-        inManifest = true;
-        continue;
-      }
-      const entry = line.match(/\[[0-9a-f]{8}\]\s+(\+)?\s*([\w.]+)/);
-      if (!entry) inManifest = false;
-      else if (inManifest && entry[1]) added.push(entry[2]);
-    }
-    return { precompiled, failed, added };
-  }
-  function importedPackages(codes) {
-    const names2 = [];
-    for (const code of codes) {
-      for (const line of code.split("\n")) {
-        const m = line.match(/^\s*(?:using|import)\s+([^#]+)/);
-        if (!m) continue;
-        const list = m[1].split(":")[0];
-        for (const part of list.split(",")) {
-          const name = part.trim().split(/[.\s]/)[0];
-          if (/^[A-Za-z_]\w*$/.test(name) && !["Base", "Core", "Main"].includes(name) && !names2.includes(name)) names2.push(name);
-        }
-      }
-    }
-    return names2;
-  }
-  function prettyTime(ns) {
-    if (ns < 1e3) return `${Math.round(ns)} ns`;
-    if (ns < 1e6) return `${Math.round(ns / 1e3)} \xB5s`;
-    if (ns < 1e9) return `${Math.round(ns / 1e6)} ms`;
-    const s = ns / 1e9;
-    if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
-    return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
-  }
-  function definedNames(map) {
-    return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
-  }
-  function cellName2(nb, id) {
-    const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
-    if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
-    return cellName(nb.cell_inputs[id]?.code ?? "");
-  }
-  function statusModel(nb) {
-    const tree = nb.status_tree?.subtasks ?? {};
-    const pkgTask = tree.pkg;
-    const pkgPhase = phaseOf(pkgTask);
-    const runTask = tree.run;
-    const workspace = phaseOf(tree.workspace);
-    const running = nb.process_status === "ready" || nb.process_status === "starting";
-    const steps = [
-      { name: "Start Julia", phase: tree.workspace ? workspace : running ? "done" : "waiting" },
-      { name: "Packages", phase: pkgTask ? pkgPhase : running ? "done" : "waiting" },
-      { name: "Run cells", phase: phaseOf(runTask) }
-    ];
-    const nbpkg = nb.nbpkg ?? {};
-    const installed2 = nbpkg.installed_versions ?? {};
-    const busy = new Set(nbpkg.busy_packages ?? []);
-    const log = parsePkgLog(nbpkg.terminal_outputs?.nbpkg_sync ?? "");
-    const precompiled = new Set(log.precompiled);
-    const failedSet = new Set(log.failed);
-    const precompiling = phaseOf(pkgTask?.subtasks?.precompile) === "busy";
-    const codes = nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? "");
-    const direct = importedPackages(codes);
-    for (const name of [...Object.keys(installed2), ...busy].sort()) {
-      if (!name.startsWith("__internal") && name !== "nbpkg_sync" && !direct.includes(name)) direct.push(name);
-    }
-    const packages = direct.map((name) => {
-      const version = installed2[name];
-      const detail = version === "stdlib" ? "standard library" : version ?? "";
-      let state2;
-      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state2 = "failed";
-      else if (busy.has(name) && pkgPhase === "busy") state2 = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
-      else if (version != null) state2 = "ready";
-      else if (pkgPhase === "done") state2 = Object.keys(installed2).length ? "failed" : "ready";
-      else state2 = "waiting";
-      const notFound = state2 === "failed" && version == null && pkgPhase === "done";
-      return { name, state: state2, detail: state2 === "ready" ? detail : notFound ? "not found" : "" };
-    });
-    const deps = log.added.filter((n) => !direct.includes(n));
-    const depsRow = deps.length ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length } : null;
-    const cells = nb.cell_order.map((id) => {
-      const r = nb.cell_results[id] ?? {};
-      const state2 = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
-      const time = (state2 === "done" || state2 === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
-      return { id, name: cellName2(nb, id), state: state2, time };
-    });
-    const failedPkg = packages.find((p) => p.state === "failed");
-    const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
-    if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
-    const readyPkgs = packages.filter((p) => p.state === "ready").length;
-    const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
-    const runTotal = Object.keys(evaluate).length;
-    const runDone = Object.values(evaluate).filter((e) => e.finished_at != null).length;
-    let busyText = null;
-    if (steps[0].phase === "busy") busyText = "Starting Julia";
-    else if (pkgPhase === "busy") busyText = packages.length ? `Installing packages \xB7 ${readyPkgs} of ${packages.length}` : "Installing packages";
-    else if (steps[2].phase === "busy") busyText = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
-    const restart = nbpkg.restart_required_msg ? "required" : nbpkg.restart_recommended_msg ? "recommended" : null;
-    let headline;
-    if (nb.process_status === "waiting_for_permission") headline = "Safe preview \xB7 nothing has run";
-    else if (failure) headline = `Package failed \xB7 ${failure.name}`;
-    else if (busyText?.startsWith("Running")) headline = `Running cells \xB7 ${runDone} of ${runTotal}`;
-    else if (busyText) headline = busyText;
-    else if (restart === "required") headline = "Restart needed";
-    else if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") headline = "Julia stopped";
-    else headline = "Ready";
-    return {
-      headline,
-      steps,
-      packages,
-      deps: depsRow,
-      cells,
-      failure,
-      busy: busyText,
-      saveFailed: tree.saving?.success === false,
-      restart
-    };
-  }
-
-  // src/state.ts
-  var listeners = [];
-  var last = null;
-  var model = null;
-  var lastSent2 = "";
-  var context = { host: "This Mac", asking: false, crash: null };
-  var drawerOf = () => null;
-  function onNotebook(listener) {
-    listeners.push(listener);
-    if (last && model) listener(last, model);
-  }
-  function current() {
-    return last && model ? { nb: last, model } : null;
-  }
-  var notebookId = () => new URLSearchParams(location.search).get("id") ?? "";
-  function setDrawerSource(source) {
-    drawerOf = source;
-  }
-  function report2() {
-    const editor2 = window.editor_state;
-    if (!last || !model) return;
-    const msg = {
-      type: "state",
-      notebook: notebookId(),
-      safe: last.process_status === "waiting_for_permission",
-      busy: model.busy,
-      restart: model.restart,
-      save_failed: model.saveFailed,
-      package_failed: model.failure?.name ?? null,
-      dead: last.process_status === "no_process",
-      connected: editor2?.connected !== false,
-      drawer: drawerOf()
-    };
-    const json = JSON.stringify(msg);
-    if (json === lastSent2) return;
-    lastSent2 = json;
-    send(msg);
-  }
-  function tick() {
-    const nb = window.editor_state?.notebook;
-    if (!nb?.cell_order || nb === last) return report2();
-    last = nb;
-    model = statusModel(nb);
-    for (const listener of listeners) listener(nb, model);
-    report2();
-  }
-  var ticks = [];
-  function every(ms, hook) {
-    let lastRun = 0;
-    ticks.push(() => {
-      const now = performance.now();
-      if (now - lastRun >= ms) {
-        lastRun = now;
-        hook();
-      }
-    });
-  }
-  function frame() {
-    ticks.forEach((t) => t());
-    requestAnimationFrame(frame);
-  }
-  function initState() {
-    every(250, tick);
-    if (document.querySelector("pluto-editor")) requestAnimationFrame(frame);
-    on("context", (msg) => {
-      context.host = msg.host;
-      context.asking = msg.asking;
-      context.crash = msg.crash ?? null;
-      if (last && model) listeners.forEach((l) => l(last, model));
-    });
-    lastSent2 = "";
   }
 
   // src/cardkey.ts
@@ -1290,9 +1298,8 @@
   }
 
   // src/prompt.ts
-  var AGENT = "Claude";
   var GAP = 8;
-  var css9 = `
+  var css9 = () => `
   /* Beside Pluto's "+" in the gap above a cell (and below the last one): faint
      while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
@@ -1312,7 +1319,7 @@
   #endeavor-ask-line { position: fixed; z-index: 999; height: 2px; border-radius: 1px; background: var(--e-focus-ring); pointer-events: none; }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
-  pluto-input .cm-placeholder::after { content: "Type code, or ${shortcut("E")} to ask ${AGENT}"; font-size: 13px; }
+  pluto-input .cm-placeholder::after { content: "Type code, or ${shortcut("E")} to ask ${context.agent}"; font-size: 13px; }
 `;
   var open = null;
   var drafts = /* @__PURE__ */ new Map();
@@ -1333,17 +1340,17 @@
       const [name, detail] = pickSource(pick2).split(" \xB7 ");
       if (pick2.part === "lines") {
         const one = pick2.lines[0] === pick2.lines[1];
-        return { icon: "lines", name, detail, placeholder: `Ask ${AGENT} about ${one ? "this line" : "these lines"}`, quote: { text: quote, code: true } };
+        return { icon: "lines", name, detail, placeholder: `Ask ${context.agent} about ${one ? "this line" : "these lines"}`, quote: { text: quote, code: true } };
       }
-      return { icon: "text", name, detail, placeholder: `Ask ${AGENT} about this text`, quote: { text: quote, code: false } };
+      return { icon: "text", name, detail, placeholder: `Ask ${context.agent} about this text`, quote: { text: quote, code: false } };
     }
     const { cell } = t;
     const prev = previous(cell);
     const after = (c) => `after ${cellName(cellCode(c))}`;
-    if (t.kind === "before") return { icon: "add", name: "new cell", detail: prev ? after(prev) : `before ${cellName(cellCode(cell))}`, placeholder: `Ask ${AGENT} to write a cell here` };
-    if (t.kind === "after") return { icon: "add", name: "new cell", detail: after(cell), placeholder: `Ask ${AGENT} to write a cell here` };
-    if (isEmpty(cell)) return { icon: "add", name: "new cell", detail: prev ? after(prev) : "here", placeholder: `Ask ${AGENT} what to write here` };
-    return { icon: "cell", name: cellName(cellCode(cell)), detail: "whole cell", placeholder: `Ask ${AGENT} about this cell` };
+    if (t.kind === "before") return { icon: "add", name: "new cell", detail: prev ? after(prev) : `before ${cellName(cellCode(cell))}`, placeholder: `Ask ${context.agent} to write a cell here` };
+    if (t.kind === "after") return { icon: "add", name: "new cell", detail: after(cell), placeholder: `Ask ${context.agent} to write a cell here` };
+    if (isEmpty(cell)) return { icon: "add", name: "new cell", detail: prev ? after(prev) : "here", placeholder: `Ask ${context.agent} what to write here` };
+    return { icon: "cell", name: cellName(cellCode(cell)), detail: "whole cell", placeholder: `Ask ${context.agent} about this cell` };
   }
   function pickRect(o) {
     const t = o.target;
@@ -1406,7 +1413,7 @@
     closeAsk(false);
     hidePill();
     const about = describe(t);
-    const box = askBox({ label: `Ask ${AGENT}`, placeholder: about.placeholder, quote: about.quote, done: (add, e) => open && sendAsk(open, add, e) });
+    const box = askBox({ label: `Ask ${context.agent}`, placeholder: about.placeholder, quote: about.quote, done: (add, e) => open && sendAsk(open, add, e) });
     box.root.classList.add("popover");
     box.root.id = "endeavor-ask";
     box.root.dataset.kind = t.kind;
@@ -1471,8 +1478,9 @@
   }
   function initPrompt() {
     const style2 = document.createElement("style");
-    style2.textContent = css9;
+    style2.textContent = css9();
     document.head.append(style2);
+    on("context", () => style2.textContent = css9());
     initReply((found) => openAsk({ kind: "selection", found }));
     window.addEventListener("keydown", onKey2, true);
     document.addEventListener("mousedown", (e) => {
@@ -1491,8 +1499,8 @@
           const button = document.createElement("button");
           button.className = `endeavor-add-agent ${where}`;
           button.dataset.endeavorUi = "";
-          button.textContent = `\u2726 ${AGENT}`;
-          button.title = `Ask ${AGENT} to write a cell here`;
+          button.textContent = `\u2726 ${context.agent}`;
+          button.title = `Ask ${context.agent} to write a cell here`;
           button.onclick = () => openAsk({ kind: where, cell });
           add.after(button);
         }
@@ -1817,7 +1825,7 @@
     window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: next === "docs" ? "docs" : null }));
     echoing = false;
     render();
-    report2();
+    report();
   }
   function pick(next) {
     openDrawer(next);
@@ -1851,7 +1859,7 @@
     if (m.failure) {
       const f = m.failure;
       const blocked = f.cells.length ? ` Cells that use it can't run: <code>${f.cells.map(escape2).join("</code>, <code>")}</code>.` : "";
-      failure = `<div class="failure"><code>${escape2(f.name)}</code> ${m.packages.find((p) => p.name === f.name)?.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled."}${blocked}<div class="actions"><button class="fix">\u2726 Fix with Claude</button><button class="restart">\u21BB Restart notebook</button><button class="plain pkglog">Log for ${escape2(f.name)}</button></div></div>`;
+      failure = `<div class="failure"><code>${escape2(f.name)}</code> ${m.packages.find((p) => p.name === f.name)?.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled."}${blocked}<div class="actions"><button class="fix">\u2726 Fix with ${escape2(context.agent)}</button><button class="restart">\u21BB Restart notebook</button><button class="plain pkglog">Log for ${escape2(f.name)}</button></div></div>`;
     }
     const packages = m.packages.length ? group("packages", pkgBusy || !!m.failure, "Packages", m.packages.length ? `${readyCount} of ${m.packages.length} ready` : "", pkgRows + failure + deps) : failure;
     const running = m.steps[2].phase === "busy";
@@ -2000,7 +2008,6 @@
   }
 
   // src/errors.ts
-  var AGENT2 = "Claude";
   var MAX_ERROR = 2e3;
   var PENDING = 3e3;
   var look = `html[data-endeavor-look="endeavor"]`;
@@ -2135,7 +2142,7 @@
         setTimeout(decorate2, PENDING + 50);
       };
       const fix = el("button", "pill fix");
-      fix.append(el("span", "spark", "\u2726"), `Fix with ${AGENT2}`);
+      fix.append(el("span", "spark", "\u2726"), `Fix with ${context.agent}`);
       fix.onclick = (e) => byUser(e) && ask("fix");
       const explain = el("button", "pill explain", "Explain");
       explain.onclick = (e) => byUser(e) && ask("explain");
@@ -2143,7 +2150,7 @@
     } else if (!status.queued) {
       row.append(
         el("span", "spark", "\u2726"),
-        `${AGENT2} is ${status.kind === "fix" ? "fixing" : "explaining"} this`,
+        `${context.agent} is ${status.kind === "fix" ? "fixing" : "explaining"} this`,
         el("span", "dot", "\xB7"),
         link("Show in chat \u203A", "show", () => send({ type: "error_ask_show", cell: cell.id }))
       );
@@ -2152,7 +2159,7 @@
       clock.innerHTML = CLOCK;
       row.append(
         clock,
-        `${status.kind === "fix" ? "Fix" : "Explain"} queued \xB7 sends after ${AGENT2}\u2019s current turn`,
+        `${status.kind === "fix" ? "Fix" : "Explain"} queued \xB7 sends after ${context.agent}\u2019s current turn`,
         el("span", "dot", "\xB7"),
         link("Cancel", "cancel", () => {
           pending.delete(cell.id);
@@ -2518,9 +2525,9 @@
     el2.id = "endeavor-runguard";
     el2.dataset.endeavorUi = "";
     el2.setAttribute("role", "dialog");
-    el2.setAttribute("aria-label", "Claude is waiting for your answer");
+    el2.setAttribute("aria-label", `${context.agent} is waiting for your answer`);
     const what = changes ? "your changes" : "this";
-    el2.innerHTML = `<b>Claude is waiting for your answer on ${names(list)}.</b>Running ${what} now also runs ${one ? "it" : "them"}.<div class="buttons"><button class="show">Show ${one ? names(list) : "them"}</button><span class="gap"></span><button class="cancel">Cancel</button><span class="hint">esc</span><button class="primary run">Run anyway</button></div>`;
+    el2.innerHTML = `<b>${context.agent} is waiting for your answer on ${names(list)}.</b>Running ${what} now also runs ${one ? "it" : "them"}.<div class="buttons"><button class="show">Show ${one ? names(list) : "them"}</button><span class="gap"></span><button class="cancel">Cancel</button><span class="hint">esc</span><button class="primary run">Run anyway</button></div>`;
     el2.querySelector(".show").onclick = () => outline(true);
     el2.querySelector(".cancel").onclick = cancel;
     el2.querySelector(".run").onclick = (e) => byUser(e) && runAnyway();
@@ -2593,7 +2600,7 @@
     const safe = now?.nb.process_status === "waiting_for_permission";
     callout.classList.toggle("shown", !!safe);
     if (!safe) return;
-    const asking = context.asking ? `<div class="asking">Claude is asking to run it. Answer in the chat, or here.</div>` : "";
+    const asking = context.asking ? `<div class="asking">${escape4(context.agent)} is asking to run it. Answer in the chat, or here.</div>` : "";
     const crash = context.crash;
     const title = crash ? escape4(crash.title) : "Safe preview";
     const body3 = crash ? withCode(crash.body) : "You're reading and editing this file without running any code.";
@@ -2935,6 +2942,7 @@ footer form#feedback { display: none !important; }
 
   // src/main.ts
   function init() {
+    initState();
     initTheme();
     initQuote();
     initAskBox();
@@ -2952,7 +2960,6 @@ footer form#feedback { display: none !important; }
     initActions();
     initDrawer();
     initSafe();
-    initState();
     initReadonly();
     initDebug();
     watchRedraws();

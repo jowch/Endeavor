@@ -5,6 +5,8 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::agent::Agent;
+
 /// What stopped a turn, as the chat tells it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Trouble {
@@ -87,12 +89,15 @@ pub fn classify(kind: Option<&str>, message: &str) -> Trouble {
 
 impl Trouble {
     /// The card's reason, for a turn that got no reply.
-    pub fn reason(&self) -> &'static str {
+    pub fn reason(&self, agent: Agent) -> &'static str {
         match self {
-            Trouble::Busy => "Anthropic's servers are busy right now.",
-            Trouble::RateLimited => "Claude got too many requests in a short time.",
-            Trouble::Connection => "The connection to Claude dropped before a reply came.",
-            Trouble::SignIn | Trouble::UsageLimit(_) | Trouble::Server => "Something went wrong on Claude's side.",
+            Trouble::Busy => match agent {
+                Agent::Claude => "Anthropic's servers are busy right now.",
+                Agent::Codex => "OpenAI's servers are busy right now.",
+            },
+            Trouble::RateLimited => crate::agent_text!(agent, "", " got too many requests in a short time."),
+            Trouble::Connection => crate::agent_text!(agent, "The connection to ", " dropped before a reply came."),
+            Trouble::SignIn | Trouble::UsageLimit(_) | Trouble::Server => crate::agent_text!(agent, "Something went wrong on ", "'s side."),
         }
     }
 }
@@ -222,14 +227,15 @@ pub fn when_text(at: SystemTime, now: SystemTime, offset: i64) -> String {
 
 /// The usage-limit line above the composer. `until`: when it resets, if the
 /// message said; `waiting`: a message waits to go then.
-pub fn usage_line(until: Option<SystemTime>, now: SystemTime, offset: i64, waiting: bool) -> String {
-    let then = if waiting { "your message sends then" } else { "Claude can answer again then" };
+pub fn usage_line(until: Option<SystemTime>, now: SystemTime, offset: i64, waiting: bool, agent: Agent) -> String {
+    let name = agent.name();
+    let then = if waiting { "your message sends then".to_owned() } else { format!("{name} can answer again then") };
     match until {
         Some(at) => {
             let left = at.duration_since(now).unwrap_or_default();
-            format!("You've reached your Claude usage limit. It resets in {}, {}, and {then}.", countdown(left), when_text(at, now, offset))
+            format!("You've reached your {name} usage limit. It resets in {}, {}, and {then}.", countdown(left), when_text(at, now, offset))
         }
-        None => format!("You've reached your Claude usage limit. It resets later, and {then}."),
+        None => format!("You've reached your {name} usage limit. It resets later, and {then}."),
     }
 }
 
@@ -291,7 +297,10 @@ mod tests {
         assert_eq!(classify(Some("rate_limit"), r#"API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of requests has exceeded your rate limit"}}"#), Trouble::RateLimited);
         assert_eq!(classify(Some("authentication_failed"), "Invalid API key · Please run /login"), Trouble::SignIn);
         assert_eq!(classify(None, "Internal error: something odd"), Trouble::Server);
-        assert_eq!(Trouble::Busy.reason(), "Anthropic's servers are busy right now.");
+        assert_eq!(Trouble::Busy.reason(Agent::Claude), "Anthropic's servers are busy right now.");
+        assert_eq!(Trouble::RateLimited.reason(Agent::Codex), "Codex got too many requests in a short time.");
+        assert_eq!(Trouble::Connection.reason(Agent::Codex), "The connection to Codex dropped before a reply came.");
+        assert_eq!(Trouble::Server.reason(Agent::Codex), "Something went wrong on Codex's side.");
     }
 
     #[test]
@@ -343,13 +352,14 @@ mod tests {
 
         let now = pacific(2026, 9, 30, 13, 48);
         assert_eq!(
-            usage_line(Some(pacific(2026, 9, 30, 15, 0)), now, PACIFIC, true),
+            usage_line(Some(pacific(2026, 9, 30, 15, 0)), now, PACIFIC, true, Agent::Claude),
             "You've reached your Claude usage limit. It resets in 1 h 12 min, at 3:00 PM, and your message sends then."
         );
         assert_eq!(
-            usage_line(Some(pacific(2026, 10, 3, 9, 5)), now, PACIFIC, true),
+            usage_line(Some(pacific(2026, 10, 3, 9, 5)), now, PACIFIC, true, Agent::Claude),
             "You've reached your Claude usage limit. It resets in 2 d 19 h, on Oct 3 at 9:05 AM, and your message sends then."
         );
-        assert_eq!(usage_line(None, now, PACIFIC, false), "You've reached your Claude usage limit. It resets later, and Claude can answer again then.");
+        assert_eq!(usage_line(None, now, PACIFIC, false, Agent::Claude), "You've reached your Claude usage limit. It resets later, and Claude can answer again then.");
+        assert_eq!(usage_line(None, now, PACIFIC, false, Agent::Codex), "You've reached your Codex usage limit. It resets later, and Codex can answer again then.");
     }
 }

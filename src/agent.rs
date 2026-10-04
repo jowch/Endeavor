@@ -50,6 +50,18 @@ impl Agent {
     }
 }
 
+/// A fixed sentence naming the agent, as a `&'static str`:
+/// `agent_text!(agent, "You stopped ", "")` is "You stopped Claude" or "You stopped Codex".
+#[macro_export]
+macro_rules! agent_text {
+    ($agent:expr, $before:literal, $after:literal) => {
+        match $agent {
+            $crate::agent::Agent::Claude => concat!($before, "Claude", $after),
+            $crate::agent::Agent::Codex => concat!($before, "Codex", $after),
+        }
+    };
+}
+
 /// What Endeavor relies on about an agent, so each can differ.
 pub struct AgentFacts {
     pub name: &'static str,

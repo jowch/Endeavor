@@ -89,11 +89,11 @@ mod mac {
     }
 }
 
-/// Post "Claude is waiting for you" with the question and the session's title.
-pub fn waiting(question: &str, session: &str, key: u64) {
+/// Post "<agent> is waiting for you" with the question and the session's title.
+pub fn waiting(agent: &str, question: &str, session: &str, key: u64) {
     let body = format!("{} · {session}", question.replace('`', ""));
     #[cfg(target_os = "macos")]
-    mac::send("Claude is waiting for you", &body, key);
+    mac::send(&format!("{agent} is waiting for you"), &body, key);
     #[cfg(not(target_os = "macos"))]
-    let _ = (body, key);
+    let _ = (agent, body, key);
 }

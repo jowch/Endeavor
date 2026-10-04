@@ -110,6 +110,8 @@ export type ToPage =
   | {
       type: "context";
       host: string;
+      /** The session's agent ("Claude", "Codex"); absent before it reaches the page defaults to "Claude". */
+      agent?: string;
       asking: boolean;
       readonly: boolean;
       crash?: { title: string; body: string } | null;

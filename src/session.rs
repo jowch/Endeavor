@@ -127,11 +127,11 @@ pub enum FailedKind {
 }
 
 impl FailedKind {
-    pub fn title(&self) -> &'static str {
+    pub fn title(&self, agent: Agent) -> &'static str {
         match self {
-            FailedKind::NoAnswer { .. } => "Claude couldn't answer",
-            FailedKind::Partway { .. } => "Claude stopped before finishing",
-            FailedKind::CutOff => "Claude restarted. This reply was cut off.",
+            FailedKind::NoAnswer { .. } => crate::agent_text!(agent, "", " couldn't answer"),
+            FailedKind::Partway { .. } => crate::agent_text!(agent, "", " stopped before finishing"),
+            FailedKind::CutOff => crate::agent_text!(agent, "", " restarted. This reply was cut off."),
         }
     }
 
@@ -155,11 +155,11 @@ impl FailedKind {
 /// What Continue sends, as a message of its own.
 pub const CONTINUE: &str = "Continue from where you stopped.";
 
-/// Why a reply stopped partway, for a turn that ended at one of Claude Code's limits.
-fn partway_reason(reason: StopReason) -> Option<&'static str> {
+/// Why a reply stopped partway, for a turn that ended at one of the agent's limits.
+fn partway_reason(reason: StopReason, agent: Agent) -> Option<&'static str> {
     match reason {
         StopReason::MaxTokens => Some("The reply reached its length limit."),
-        StopReason::MaxTurnRequests => Some("Claude took too many steps in one go."),
+        StopReason::MaxTurnRequests => Some(crate::agent_text!(agent, "", " took too many steps in one go.")),
         _ => None,
     }
 }
@@ -485,7 +485,7 @@ pub enum OpenFailure {
 
 /// Why a session couldn't open, from the agent's error (which may wrap the
 /// CLI's stderr in JSON).
-pub fn open_failure(error: &str) -> OpenFailure {
+pub fn open_failure(error: &str, agent: Agent) -> OpenFailure {
     if error.contains("running as a background session") || error.contains("claude attach") {
         return OpenFailure::InCli;
     }
@@ -495,9 +495,12 @@ pub fn open_failure(error: &str) -> OpenFailure {
     } else if ["enoent", "no such file or directory", "does not exist"].iter().any(|w| lower.contains(w)) {
         Some("Its folder isn't there any more.")
     } else if ["connection closed", "channel closed", "broken pipe", "agent connection"].iter().any(|w| lower.contains(w)) {
-        Some("Claude isn't running.")
+        Some(crate::agent_text!(agent, "", " isn't running."))
     } else if lower.contains("not found") {
-        Some("Claude Code no longer has its history.")
+        Some(match agent {
+            Agent::Claude => "Claude Code no longer has its history.",
+            Agent::Codex => "Codex no longer has its history.",
+        })
     } else {
         None
     };
@@ -514,13 +517,16 @@ impl Failure {
     }
 
     /// The page's words, which say where the session's notebook stands.
-    pub fn body(&self, notebook: Beside) -> String {
+    pub fn body(&self, notebook: Beside, agent: Agent) -> String {
         match self.kind {
             OpenFailure::InCli => "It's running in a terminal. Close it there, then Try again. Or open a copy here: it has the \
                                    conversation so far, and the two go separate ways after that."
                 .into(),
             OpenFailure::Other(reason) => {
-                let why = reason.unwrap_or("Claude Code couldn't load it.");
+                let why = reason.unwrap_or(match agent {
+                    Agent::Claude => "Claude Code couldn't load it.",
+                    Agent::Codex => "Codex couldn't load it.",
+                });
                 match notebook {
                     Beside::Open => format!("{why} The notebook is open beside it."),
                     Beside::Fine => format!("{why} The notebook and its file are fine."),
@@ -733,7 +739,7 @@ impl Session {
 
     /// Starting or reopening failed: stop looking busy and say why.
     pub fn fail(&mut self, error: &str) {
-        self.failed = Some(Failure { kind: open_failure(error), raw: error.trim().to_owned(), details_open: false });
+        self.failed = Some(Failure { kind: open_failure(error, self.agent), raw: error.trim().to_owned(), details_open: false });
         self.outbox.busy = false;
         self.busy_since = None;
         self.replaying = false;
@@ -977,7 +983,7 @@ impl Session {
         if self.older_note && !self.replaying {
             self.older_note = false;
             let host = self.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());
-            self.note(crate::older_runtime::note(&host));
+            self.note(crate::older_runtime::note(&host, self.agent));
         }
     }
 
@@ -1358,11 +1364,11 @@ impl Session {
             SessionEvent::TurnEnded(reason) => {
                 self.push_changes();
                 let stopped_for_next = reason == StopReason::Cancelled && self.outbox.stopping();
-                if let Some(reason) = partway_reason(reason) {
+                if let Some(reason) = partway_reason(reason, self.agent) {
                     self.push(Entry::Failed(Failed { kind: FailedKind::Partway { reason }, raw: None, details_open: false, used: false }));
                     self.outbox.pause(Paused::Error);
                     self.errored = true;
-                } else if let Some(note) = turn_ended_note(reason).filter(|_| !stopped_for_next) {
+                } else if let Some(note) = turn_ended_note(reason, self.agent).filter(|_| !stopped_for_next) {
                     // Stopped to send the next message: its bubble says so.
                     self.note(note);
                 }
@@ -1482,9 +1488,9 @@ impl Session {
             trouble => {
                 self.push_changes();
                 let kind = if trouble == Trouble::Connection && self.replied() {
-                    FailedKind::Partway { reason: "The connection to Claude dropped partway through this reply." }
+                    FailedKind::Partway { reason: crate::agent_text!(self.agent, "The connection to ", " dropped partway through this reply.") }
                 } else {
-                    FailedKind::NoAnswer { reason: trouble.reason(), message: self.outbox.take_current().map(|blocks| (self.turn_entry, blocks)) }
+                    FailedKind::NoAnswer { reason: trouble.reason(self.agent), message: self.outbox.take_current().map(|blocks| (self.turn_entry, blocks)) }
                 };
                 self.push(Entry::Failed(Failed { kind, raw: Some(said.to_owned()), details_open: false, used: false }));
                 self.outbox.pause(Paused::Error);
@@ -1626,7 +1632,7 @@ impl Session {
                             // the user's words, so replay shows the same note a live stop does.
                             text if attach::is_stopped_marker(&text) => {
                                 self.push_changes();
-                                return self.note("You stopped Claude");
+                                return self.note(turn_ended_note(StopReason::Cancelled, self.agent).unwrap_or_default());
                             }
                             text => (Some(text), None),
                         },
@@ -2302,14 +2308,14 @@ fn compacted_note(before: Option<(u64, u64)>, after: Option<(u64, u64)>) -> Stri
     }
 }
 
-pub(crate) fn turn_ended_note(reason: StopReason) -> Option<&'static str> {
+pub(crate) fn turn_ended_note(reason: StopReason, agent: Agent) -> Option<&'static str> {
     Some(match reason {
         StopReason::EndTurn => return None,
-        StopReason::Cancelled => "You stopped Claude",
-        StopReason::MaxTokens => "Claude stopped: the reply got too long",
-        StopReason::MaxTurnRequests => "Claude stopped: it took too many steps in one go",
-        StopReason::Refusal => "Claude declined to continue",
-        _ => "Claude stopped",
+        StopReason::Cancelled => crate::agent_text!(agent, "You stopped ", ""),
+        StopReason::MaxTokens => crate::agent_text!(agent, "", " stopped: the reply got too long"),
+        StopReason::MaxTurnRequests => crate::agent_text!(agent, "", " stopped: it took too many steps in one go"),
+        StopReason::Refusal => crate::agent_text!(agent, "", " declined to continue"),
+        _ => crate::agent_text!(agent, "", " stopped"),
     })
 }
 
@@ -2706,7 +2712,10 @@ mod tests {
     /// Plays the study's Codex turn (new_notebook, read_cell, add_cell, then
     /// execute_cell left waiting) into `s`: each prompt's tool and the option
     /// it is let through with, and how many results were fetched.
-    fn play_codex_turn(s: &mut Session, dialect: &mut crate::codex::Dialect) -> (Vec<(Option<String>, Option<String>)>, usize) {
+    /// A prompt's tool, and the option it was let through with.
+    type Prompted = (Option<String>, Option<String>);
+
+    fn play_codex_turn(s: &mut Session, dialect: &mut crate::codex::Dialect) -> (Vec<Prompted>, usize) {
         let (mut prompts, mut fetched) = (Vec::new(), 0);
         for line in include_str!("fixtures/codex/write-turn.jsonl").lines() {
             let message: serde_json::Value = serde_json::from_str(line).unwrap();
@@ -2915,11 +2924,13 @@ mod tests {
     #[test]
     fn transcript_notes_say_what_happened_in_plain_words() {
         use super::{Approval, answer_note, turn_ended_note};
-        assert_eq!(turn_ended_note(StopReason::EndTurn), None);
-        assert_eq!(turn_ended_note(StopReason::Cancelled), Some("You stopped Claude"));
-        assert_eq!(turn_ended_note(StopReason::MaxTokens), Some("Claude stopped: the reply got too long"));
-        assert_eq!(turn_ended_note(StopReason::MaxTurnRequests), Some("Claude stopped: it took too many steps in one go"));
-        assert_eq!(turn_ended_note(StopReason::Refusal), Some("Claude declined to continue"));
+        assert_eq!(turn_ended_note(StopReason::EndTurn, Agent::Claude), None);
+        assert_eq!(turn_ended_note(StopReason::Cancelled, Agent::Claude), Some("You stopped Claude"));
+        assert_eq!(turn_ended_note(StopReason::MaxTokens, Agent::Claude), Some("Claude stopped: the reply got too long"));
+        assert_eq!(turn_ended_note(StopReason::MaxTurnRequests, Agent::Claude), Some("Claude stopped: it took too many steps in one go"));
+        assert_eq!(turn_ended_note(StopReason::Refusal, Agent::Claude), Some("Claude declined to continue"));
+        assert_eq!(turn_ended_note(StopReason::Cancelled, Agent::Codex), Some("You stopped Codex"));
+        assert_eq!(turn_ended_note(StopReason::MaxTurnRequests, Agent::Codex), Some("Codex stopped: it took too many steps in one go"));
         assert_eq!(answer_note(Approval::Allowed, "edit a cell"), "Allowed: edit a cell");
         assert_eq!(answer_note(Approval::ForSession, "run 2 cells"), "Allowed for this session: run 2 cells");
         assert_eq!(answer_note(Approval::WithoutAsking, "run a cell"), "Allowed without asking: run a cell");
@@ -3224,7 +3235,7 @@ mod tests {
 
     fn card(s: &Session, ix: usize) -> (&'static str, String, &'static str, bool) {
         match &s.entries[ix] {
-            Entry::Failed(f) => (f.kind.title(), f.kind.body(), f.kind.action(), f.used),
+            Entry::Failed(f) => (f.kind.title(s.agent), f.kind.body(), f.kind.action(), f.used),
             _ => panic!("not a failure"),
         }
     }
@@ -3270,6 +3281,24 @@ mod tests {
     }
 
     #[test]
+    fn a_codex_sessions_cards_and_notes_name_codex() {
+        const OVERLOADED: &str = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        let mut s = Session::new(1, Place::local("/tmp/project"), None);
+        s.agent = Agent::Codex;
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("add bootstrap intervals"), false);
+        s.apply(SessionEvent::TurnFailed { kind: Some("server_error".into()), error: OVERLOADED.into() });
+        assert_eq!(card(&s, 1).0, "Codex couldn't answer");
+
+        s.apply(SessionEvent::TurnEnded(StopReason::MaxTurnRequests));
+        assert_eq!(card(&s, 2), ("Codex stopped before finishing", "Codex took too many steps in one go.".into(), "Continue", false));
+
+        s.submit(text("again"), false);
+        s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(note)) if note.as_ref() == "You stopped Codex"));
+    }
+
+    #[test]
     fn a_usage_limit_holds_the_message_until_it_resets() {
         use crate::trouble::Reset;
         let mut s = Session::new(1, Place::local("/tmp/project"), None);
@@ -3289,7 +3318,7 @@ mod tests {
         s.submit(text("fit it"), false);
         s.submit(text("then plot it"), false);
         assert!(s.apply(SessionEvent::TurnEnded(StopReason::Cancelled)).iter().all(|e| !matches!(e, Effect::Send(_))));
-        assert_eq!(s.outbox.heading().as_deref(), Some("Paused after you stopped Claude"));
+        assert_eq!(s.outbox.heading(s.agent.name()).as_deref(), Some("Paused after you stopped Claude"));
         assert!(!s.unseen);
         assert!(matches!(s.queue_action(crate::outbox::Outbox::send_next).as_slice(), [Effect::Send(Turn::Prompt(_))]));
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
@@ -3500,7 +3529,7 @@ mod tests {
         other.fail(r#"Internal error: { "details": "boom happened
 more" }"#);
         let failure = other.failed.as_ref().unwrap();
-        assert_eq!((failure.title(false), failure.body(super::Beside::Nothing).as_str()), ("Couldn't open this session", "Claude Code couldn't load it."));
+        assert_eq!((failure.title(false), failure.body(super::Beside::Nothing, Agent::Claude).as_str()), ("Couldn't open this session", "Claude Code couldn't load it."));
         assert!(failure.raw.contains("boom happened"), "the raw error is under Details");
         other.retry_open();
         assert!(other.failed.is_none() && other.agent_waiting && other.id.is_some(), "Try again loads it again");
@@ -3509,15 +3538,18 @@ more" }"#);
     #[test]
     fn a_session_that_wont_open_says_why_in_plain_words() {
         use super::{OpenFailure, open_failure};
-        assert_eq!(open_failure("Internal error: Unexpected end of JSON input at line 2214"), OpenFailure::Other(Some("Its history couldn't be read.")));
-        assert_eq!(open_failure("ENOENT: no such file or directory, chdir '/Users/sam/gone'"), OpenFailure::Other(Some("Its folder isn't there any more.")));
-        assert_eq!(open_failure("Internal error: Session abc not found"), OpenFailure::Other(Some("Claude Code no longer has its history.")));
-        assert_eq!(open_failure("Error: Session abc is running as a background session (abc). Run `claude attach abc` to open it"), OpenFailure::InCli);
-        let failure = super::Failure { kind: open_failure("Unexpected token } in JSON"), raw: String::new(), details_open: false };
-        assert_eq!(failure.body(super::Beside::Fine), "Its history couldn't be read. The notebook and its file are fine.");
-        assert_eq!(failure.body(super::Beside::Open), "Its history couldn't be read. The notebook is open beside it.");
-        assert_eq!(failure.body(super::Beside::Unknown), "Its history couldn't be read, so Endeavor doesn't know its notebook yet.");
+        assert_eq!(open_failure("Internal error: Unexpected end of JSON input at line 2214", Agent::Claude), OpenFailure::Other(Some("Its history couldn't be read.")));
+        assert_eq!(open_failure("ENOENT: no such file or directory, chdir '/Users/sam/gone'", Agent::Claude), OpenFailure::Other(Some("Its folder isn't there any more.")));
+        assert_eq!(open_failure("Internal error: Session abc not found", Agent::Claude), OpenFailure::Other(Some("Claude Code no longer has its history.")));
+        assert_eq!(open_failure("Internal error: Session abc not found", Agent::Codex), OpenFailure::Other(Some("Codex no longer has its history.")));
+        assert_eq!(open_failure("Error: Session abc is running as a background session (abc). Run `claude attach abc` to open it", Agent::Claude), OpenFailure::InCli);
+        let failure = super::Failure { kind: open_failure("Unexpected token } in JSON", Agent::Claude), raw: String::new(), details_open: false };
+        assert_eq!(failure.body(super::Beside::Fine, Agent::Claude), "Its history couldn't be read. The notebook and its file are fine.");
+        assert_eq!(failure.body(super::Beside::Open, Agent::Claude), "Its history couldn't be read. The notebook is open beside it.");
+        assert_eq!(failure.body(super::Beside::Unknown, Agent::Claude), "Its history couldn't be read, so Endeavor doesn't know its notebook yet.");
         assert_eq!(failure.title(true), "Couldn't start this session");
+        let codex_failure = super::Failure { kind: open_failure("connection closed", Agent::Codex), raw: String::new(), details_open: false };
+        assert_eq!(codex_failure.body(super::Beside::Nothing, Agent::Codex), "Codex isn't running.");
     }
 
     #[test]
@@ -3931,7 +3963,7 @@ more" }"#);
     fn a_message_sent_now_says_it_joined_or_stopped_the_work() {
         use agent_client_protocol::schema::v1::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
         let delivery = |s: &Session| match s.entries.last() {
-            Some(Entry::User { delivery, .. }) => crate::transcript::delivery_note(*delivery),
+            Some(Entry::User { delivery, .. }) => crate::transcript::delivery_note(*delivery, s.agent),
             _ => panic!("a user message last"),
         };
         let notes = |s: &Session| s.entries.iter().filter(|e| matches!(e, Entry::Note(_))).count();

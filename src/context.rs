@@ -8,6 +8,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+use crate::agent::Agent;
 use crate::session::Session;
 use crate::theme::FocusRing as _;
 use crate::{Workspace, context_ring, theme};
@@ -51,16 +52,17 @@ pub fn tokens(n: u64) -> String {
 
 /// The popover's sentence. `summarized`: the last /compact's clock time and
 /// how full it was before, which replaces the under-50% sentence.
-pub fn sentence(usage: Option<(u64, u64)>, summarized: Option<(&str, Option<u64>)>) -> String {
+pub fn sentence(usage: Option<(u64, u64)>, summarized: Option<(&str, Option<u64>)>, agent: Agent) -> String {
+    let name = agent.name();
     let Some((used, size)) = usage else {
-        return "Context fills as you and Claude talk. This ring shows how full it is.".into();
+        return format!("Context fills as you and {name} talk. This ring shows how full it is.");
     };
     match (level(used, size), summarized) {
-        (Level::Plenty, Some((at, Some(was)))) => format!("Summarized at {at} (was {was}%). Earlier messages are still in the transcript; Claude works from the summary."),
-        (Level::Plenty, Some((at, None))) => format!("Summarized at {at}. Earlier messages are still in the transcript; Claude works from the summary."),
-        (Level::Plenty, None) => "How much of this conversation Claude can still keep in mind. Plenty left.".into(),
-        (Level::Half, _) => "Over half used. Near the end, Claude summarizes the conversation so far on its own, and may drop details.".into(),
-        (Level::Full, _) => "Nearly full. Claude will soon summarize the conversation on its own. To choose what it keeps, summarize now with /compact.".into(),
+        (Level::Plenty, Some((at, Some(was)))) => format!("Summarized at {at} (was {was}%). Earlier messages are still in the transcript; {name} works from the summary."),
+        (Level::Plenty, Some((at, None))) => format!("Summarized at {at}. Earlier messages are still in the transcript; {name} works from the summary."),
+        (Level::Plenty, None) => format!("How much of this conversation {name} can still keep in mind. Plenty left."),
+        (Level::Half, _) => format!("Over half used. Near the end, {name} summarizes the conversation so far on its own, and may drop details."),
+        (Level::Full, _) => format!("Nearly full. {name} will soon summarize the conversation on its own. To choose what it keeps, summarize now with /compact."),
     }
 }
 
@@ -159,7 +161,7 @@ impl Workspace {
 
     fn render_context_popover(&self, session: Option<&Session>, usage: Option<(u64, u64)>, cx: &mut Context<Self>) -> AnyElement {
         let summarized = session.and_then(|s| s.summarized).map(|(at, was)| (crate::when::clock(at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()), was));
-        let text = sentence(usage, summarized.as_ref().map(|(at, was)| (at.as_str(), *was)));
+        let text = sentence(usage, summarized.as_ref().map(|(at, was)| (at.as_str(), *was)), self.composer_agent(session));
         let full = usage.is_some_and(|(used, size)| level(used, size) == Level::Full);
         let tone = if full { theme::accent() } else { theme::text_secondary() };
         let body = div()
@@ -230,6 +232,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::{Level, level, sentence, title, tokens};
+    use crate::agent::Agent;
 
     #[test]
     fn levels_turn_at_50_and_80_percent() {
@@ -252,26 +255,35 @@ mod tests {
 
     #[test]
     fn the_sentence_follows_the_level() {
-        assert_eq!(sentence(None, None), "Context fills as you and Claude talk. This ring shows how full it is.");
-        assert_eq!(sentence(Some((68_000, 200_000)), None), "How much of this conversation Claude can still keep in mind. Plenty left.");
+        assert_eq!(sentence(None, None, Agent::Claude), "Context fills as you and Claude talk. This ring shows how full it is.");
+        assert_eq!(sentence(Some((68_000, 200_000)), None, Agent::Claude), "How much of this conversation Claude can still keep in mind. Plenty left.");
         assert_eq!(
-            sentence(Some((124_000, 200_000)), None),
+            sentence(Some((124_000, 200_000)), None, Agent::Claude),
             "Over half used. Near the end, Claude summarizes the conversation so far on its own, and may drop details."
         );
         assert_eq!(
-            sentence(Some((172_000, 200_000)), None),
+            sentence(Some((172_000, 200_000)), None, Agent::Claude),
             "Nearly full. Claude will soon summarize the conversation on its own. To choose what it keeps, summarize now with /compact."
+        );
+    }
+
+    #[test]
+    fn a_codex_session_names_codex_in_the_sentence() {
+        assert_eq!(sentence(None, None, Agent::Codex), "Context fills as you and Codex talk. This ring shows how full it is.");
+        assert_eq!(
+            sentence(Some((172_000, 200_000)), None, Agent::Codex),
+            "Nearly full. Codex will soon summarize the conversation on its own. To choose what it keeps, summarize now with /compact."
         );
     }
 
     #[test]
     fn after_a_summary_it_says_when() {
         assert_eq!(
-            sentence(Some((22_000, 200_000)), Some(("14:02", Some(86)))),
+            sentence(Some((22_000, 200_000)), Some(("14:02", Some(86))), Agent::Claude),
             "Summarized at 14:02 (was 86%). Earlier messages are still in the transcript; Claude works from the summary."
         );
         assert_eq!(
-            sentence(Some((124_000, 200_000)), Some(("14:02", Some(86)))),
+            sentence(Some((124_000, 200_000)), Some(("14:02", Some(86))), Agent::Claude),
             "Over half used. Near the end, Claude summarizes the conversation so far on its own, and may drop details."
         );
     }

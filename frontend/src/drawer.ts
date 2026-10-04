@@ -9,7 +9,7 @@
 // unless the user opened it.
 
 import { byUser, on, send } from "./bridge";
-import { current, every, notebookId, onNotebook, report, setDrawerSource, type Drawer } from "./state";
+import { context, current, every, notebookId, onNotebook, report, setDrawerSource, type Drawer } from "./state";
 import type { NotebookLike, StatusModel } from "./status";
 
 const HEADER = 36;
@@ -198,7 +198,7 @@ function statusHtml(nb: NotebookLike, m: StatusModel): string {
           ? "isn't a package Pkg can find: a typo, or not in the registry."
           : "couldn't be installed or precompiled."
       }${blocked}` +
-      `<div class="actions"><button class="fix">✦ Fix with Claude</button><button class="restart">↻ Restart notebook</button>` +
+      `<div class="actions"><button class="fix">✦ Fix with ${escape(context.agent)}</button><button class="restart">↻ Restart notebook</button>` +
       `<button class="plain pkglog">Log for ${escape(f.name)}</button></div></div>`;
   }
   const packages = m.packages.length

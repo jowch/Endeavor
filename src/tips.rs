@@ -10,7 +10,9 @@ use crate::{Workspace, overlay, theme};
 
 const ARROW: f32 = 7.;
 
-const POINT_TIP: &str = "Point lets you click a cell, or drag over part of a plot, and ask Claude about just that.";
+fn point_tip_text(agent: &str) -> String {
+    format!("Point lets you click a cell, or drag over part of a plot, and ask {agent} about just that.")
+}
 
 /// The tip's card: a popover, with a pointer.
 fn card() -> Div {
@@ -168,7 +170,7 @@ impl Workspace {
     /// the tip is; the workspace closes it once the tip stops showing.
     /// `trailing`: how far the header's buttons after Point reach past it, so
     /// the tip lines up with the pane's edge as its pointer stays on Point.
-    pub fn render_point_tip(&self, trailing: f32, cx: &mut Context<Self>) -> AnyElement {
+    pub fn render_point_tip(&self, trailing: f32, agent: crate::agent::Agent, cx: &mut Context<Self>) -> AnyElement {
         const WIDTH: f32 = 400.;
         let webview = self.webview.read(cx);
         let (handle, under) = (webview.handle(), webview.bounds());
@@ -204,7 +206,7 @@ impl Workspace {
                             .items_start()
                             .gap(px(8.))
                             .child(div().mt(px(2.)).child(glyph_at(Glyph::Pointer, theme::accent_text(), 13. / 12.)))
-                            .child(div().flex_1().min_w_0().child(StyledText::new(POINT_TIP).with_highlights([(
+                            .child(div().flex_1().min_w_0().child(StyledText::new(point_tip_text(agent.name())).with_highlights([(
                                 0.."Point".len(),
                                 HighlightStyle { color: Some(theme::text_primary().into()), font_weight: Some(FontWeight::MEDIUM), ..Default::default() },
                             )]))),
@@ -217,5 +219,16 @@ impl Workspace {
                     .child(cut),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::point_tip_text;
+
+    #[test]
+    fn the_point_tip_names_the_session_agent() {
+        assert_eq!(point_tip_text("Claude"), "Point lets you click a cell, or drag over part of a plot, and ask Claude about just that.");
+        assert_eq!(point_tip_text("Codex"), "Point lets you click a cell, or drag over part of a plot, and ask Codex about just that.");
     }
 }

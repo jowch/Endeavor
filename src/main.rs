@@ -833,7 +833,7 @@ impl Workspace {
             NotebookChoice::New => None,
             NotebookChoice::Existing(path) => Some(path.display().to_string()),
         };
-        let mut context = Vec::new();
+        let mut context: Vec<String> = agent.facts().session_intro.map(str::to_owned).into_iter().collect();
         if let (Some(server), HostId::Server(id)) = (&server, &host) {
             let ssh = self.hosts.server(id).map(|s| s.ssh_host.clone()).unwrap_or_default();
             context.push(format!(
@@ -1240,7 +1240,7 @@ impl Workspace {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let Some(question) = approval::heading_at(session, ix) else { return };
         self.last_ask_notice = Some(now);
-        notify::waiting(&question, &session.title, key);
+        notify::waiting(session.agent.name(), &question, &session.title, key);
     }
 
     fn apply_effects(&mut self, key: u64, mut effects: Vec<Effect>, cx: &mut Context<Self>) {
@@ -2137,7 +2137,7 @@ impl Workspace {
                 (buttons, Some(details))
             }
         };
-        let body = vec![div().child(failure.body(session.notebook_beside())).into_any_element()];
+        let body = vec![div().child(failure.body(session.notebook_beside(), session.agent)).into_any_element()];
         failure::page(new_session::Glyph::Bubble, failure.title(session.id.is_none()), body, buttons, details).into_any_element()
     }
 
@@ -2311,6 +2311,7 @@ impl Render for Workspace {
                 div().px(px(6.)).rounded(px(3.)).bg(theme::bg_tag()).text_color(theme::text_tag()).font_family(theme::MONO).text_size(theme::size_meta_small()).child(f)
             }))
             .when(active.is_some_and(|ix| self.sessions[ix].showing_copy()), |d| {
+                let agent_name = active.map_or("Claude", |ix| self.sessions[ix].agent.name());
                 d.child(
                     div()
                         .id("read-only")
@@ -2322,7 +2323,7 @@ impl Render for Workspace {
                         .text_color(theme::text_faint())
                         .child(new_session::glyph(new_session::Glyph::Lock, theme::text_faint()))
                         .child("Read-only")
-                        .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("Endeavor's own copy, shown while Claude loads this session").build(window, cx)),
+                        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(format!("Endeavor's own copy, shown while {agent_name} loads this session")).build(window, cx)),
                 )
             });
         let notebook_header = column_header("notebook-header").map(|d| match active {

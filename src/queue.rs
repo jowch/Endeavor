@@ -91,7 +91,7 @@ impl Workspace {
         if let Some(held) = self.render_queue_heading(session) {
             return Some(held);
         }
-        let text = session.outbox.heading()?;
+        let text = session.outbox.heading(session.agent.name())?;
         let key = session.key;
         let paused = session.outbox.paused().is_some();
         Some(

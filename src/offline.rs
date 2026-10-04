@@ -180,8 +180,9 @@ impl Workspace {
     /// The usage-limit line above the composer, as it reads now.
     pub fn usage_line(&self) -> Option<String> {
         let limit = self.usage_limit.as_ref()?;
-        let waiting = self.sessions.iter().any(|s| s.unanswered.is_some() || !s.outbox.items.is_empty());
-        Some(crate::trouble::usage_line(limit.until, SystemTime::now(), crate::trouble::local_offset(), waiting))
+        let held = self.sessions.iter().find(|s| s.unanswered.is_some() || !s.outbox.items.is_empty());
+        let agent = held.map_or_else(crate::agent::Agent::default, |s| s.agent);
+        Some(crate::trouble::usage_line(limit.until, SystemTime::now(), crate::trouble::local_offset(), held.is_some(), agent))
     }
 
     pub fn render_usage_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -262,10 +263,11 @@ impl Workspace {
     pub fn offline_line(&self, session: Option<&Session>) -> Option<&'static str> {
         self.offline_since?;
         let on_server = session.is_some_and(|s| s.place.host != HostId::ThisMac);
+        let agent = session.map_or(crate::agent::Agent::Claude, |s| s.agent);
         Some(if on_server {
-            "You're offline. Claude will continue when you're back."
+            crate::agent_text!(agent, "You're offline. ", " will continue when you're back.")
         } else {
-            "You're offline. The notebook still works. Claude will continue when you're back."
+            crate::agent_text!(agent, "You're offline. The notebook still works. ", " will continue when you're back.")
         })
     }
 

@@ -389,9 +389,10 @@ struct PaneTooltip {
     webview: Entity<gpui_wry::WebView>,
 }
 
-pub fn tooltip(text: &'static str, webview: &Entity<gpui_wry::WebView>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+pub fn tooltip(text: impl Into<SharedString>, webview: &Entity<gpui_wry::WebView>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
     let webview = webview.clone();
-    move |_, cx| cx.new(|_| PaneTooltip { text: text.into(), webview: webview.clone() }).into()
+    move |_, cx| cx.new(|_| PaneTooltip { text: text.clone(), webview: webview.clone() }).into()
 }
 
 impl Render for PaneTooltip {
@@ -665,10 +666,11 @@ impl Workspace {
 
         let open = |target: MenuTarget| self.menu.as_ref().is_some_and(|m| m.target == target);
         let point_tip = self.point_tip_shows(shown);
-        let tip = |d: Stateful<Div>, text: &'static str| d.tooltip(tooltip(text, &self.webview));
-        let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating, compact), concat!("Pick cells or draw a box to ask Claude about  ", crate::platform::shortcut!(shift "E")))
+        let tip = |d: Stateful<Div>, text: SharedString| d.tooltip(tooltip(text, &self.webview));
+        let point_text = format!("Pick cells or draw a box to ask {} about  {}", session.agent.name(), crate::platform::shortcut!(shift "E"));
+        let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating, compact), point_text.into())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
-            .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, cx)));
+            .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());
         let tools = (endeavor && shown).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
@@ -681,10 +683,10 @@ impl Workspace {
                     }))
                     .children(share_menu.map(|menu| self.render_menu(menu, cx)))
                     .into_any_element(),
-                tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs")
+                tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
                     .into_any_element(),
-                tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status")
+                tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status".into())
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
                     .into_any_element(),
             ]
@@ -741,7 +743,7 @@ impl Workspace {
         let error_asks: Vec<_> = session.error_asks().into_iter().map(|(cell, kind, queued)| serde_json::json!({ "cell": cell, "kind": kind, "queued": queued })).collect();
         // Every waiting run card's cells: a run of the user's that reaches one asks first.
         let waiting: Vec<serde_json::Value> = crate::approval::waiting_run_cells(session).into_iter().map(|(id, name)| serde_json::json!({ "id": id, "name": name })).collect();
-        let msg = serde_json::json!({ "type": "context", "host": host, "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix });
+        let msg = serde_json::json!({ "type": "context", "host": host, "agent": session.agent.name(), "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
@@ -1246,7 +1248,7 @@ impl Workspace {
             }
             PaneShows::NoNotebook => new_session::turtle_pane()
                 .child(page_title("No notebook in this session yet"))
-                .child(page_text("Claude makes one when there is code to run. You can also start one yourself."))
+                .child(page_text(format!("{} makes one when there is code to run. You can also start one yourself.", session.agent.name())))
                 .child(
                     div()
                         .mt(px(6.))

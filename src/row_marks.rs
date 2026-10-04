@@ -9,7 +9,7 @@
 pub enum RowMark {
     NeedsYou,
     Error,
-    Working,
+    Working { agent: &'static str },
     NewReply,
     ServerDown { host: String },
     /// Queued messages held because Claude or the server can't be reached;
@@ -22,8 +22,10 @@ pub enum RowMark {
 pub struct RowFacts {
     pub needs_you: bool,
     pub error: bool,
-    /// Claude's turn is running, and not waiting for the network.
+    /// The session's turn is running, and not waiting for the network.
     pub working: bool,
+    /// The agent a working session's mark names.
+    pub agent: &'static str,
     pub new_reply: bool,
     /// The session's server, while it can't be reached.
     pub server_down: Option<String>,
@@ -42,7 +44,7 @@ pub fn row_mark(f: &RowFacts) -> Option<RowMark> {
         return Some(RowMark::Error);
     }
     if f.working {
-        return Some(RowMark::Working);
+        return Some(RowMark::Working { agent: f.agent });
     }
     if f.new_reply {
         return Some(RowMark::NewReply);
@@ -67,7 +69,7 @@ impl RowMark {
         match self {
             RowMark::NeedsYou => "Waiting for your answer".into(),
             RowMark::Error => "Stopped with an error · open to try again".into(),
-            RowMark::Working => "Claude is working".into(),
+            RowMark::Working { agent } => format!("{agent} is working"),
             RowMark::NewReply => "New reply".into(),
             RowMark::ServerDown { host } => format!("{host} isn't reachable"),
             RowMark::Waiting { count: 1, until } => format!("1 message waits to send once {until}"),
@@ -80,7 +82,7 @@ impl RowMark {
         let words = self.words();
         let mut chars = words.chars();
         let words = match (self, chars.next()) {
-            (RowMark::ServerDown { .. } | RowMark::Working, _) | (_, None) => words,
+            (RowMark::ServerDown { .. } | RowMark::Working { .. }, _) | (_, None) => words,
             (_, Some(first)) => first.to_lowercase().chain(chars).collect(),
         };
         format!("{title}, {words}")
@@ -91,7 +93,7 @@ impl RowMark {
         match self {
             RowMark::NeedsYou => "needs_approval",
             RowMark::Error => "error",
-            RowMark::Working => "working",
+            RowMark::Working { .. } => "working",
             RowMark::NewReply => "new_reply",
             RowMark::ServerDown { .. } => "server_down",
             RowMark::Waiting { .. } => "waiting",
@@ -109,12 +111,13 @@ mod tests {
 
     #[test]
     fn one_mark_strongest_first() {
-        let all = RowFacts { needs_you: true, error: true, working: true, new_reply: true, server_down: Some("hoffman2".into()), waiting: waiting(2), mac_offline: false };
+        let all =
+            RowFacts { needs_you: true, error: true, working: true, agent: "Claude", new_reply: true, server_down: Some("hoffman2".into()), waiting: waiting(2), mac_offline: false };
         assert_eq!(row_mark(&all), Some(RowMark::NeedsYou));
         let f = RowFacts { needs_you: false, ..all };
         assert_eq!(row_mark(&f), Some(RowMark::Error));
         let f = RowFacts { error: false, ..f };
-        assert_eq!(row_mark(&f), Some(RowMark::Working));
+        assert_eq!(row_mark(&f), Some(RowMark::Working { agent: "Claude" }));
         let f = RowFacts { working: false, ..f };
         assert_eq!(row_mark(&f), Some(RowMark::NewReply));
         let f = RowFacts { new_reply: false, ..f };
@@ -126,13 +129,20 @@ mod tests {
     }
 
     #[test]
+    fn a_working_codex_session_names_codex() {
+        let f = RowFacts { working: true, agent: "Codex", ..Default::default() };
+        assert_eq!(row_mark(&f), Some(RowMark::Working { agent: "Codex" }));
+        assert_eq!(RowMark::Working { agent: "Codex" }.words(), "Codex is working");
+    }
+
+    #[test]
     fn offline_rows_show_nothing_extra() {
         let f = RowFacts { server_down: Some("hoffman2".into()), waiting: waiting(2), mac_offline: true, ..Default::default() };
         assert_eq!(row_mark(&f), None);
         let f = RowFacts { needs_you: true, mac_offline: true, ..Default::default() };
         assert_eq!(row_mark(&f), Some(RowMark::NeedsYou));
-        let f = RowFacts { working: true, mac_offline: true, ..Default::default() };
-        assert_eq!(row_mark(&f), Some(RowMark::Working));
+        let f = RowFacts { working: true, agent: "Claude", mac_offline: true, ..Default::default() };
+        assert_eq!(row_mark(&f), Some(RowMark::Working { agent: "Claude" }));
     }
 
     #[test]
@@ -140,15 +150,15 @@ mod tests {
         let marks = [RowMark::Waiting { count: 1, until: "Claude is back".into() }, RowMark::NewReply, RowMark::ServerDown { host: "lab".into() }];
         assert_eq!(strongest(marks), Some(RowMark::NewReply));
         assert_eq!(strongest([]), None);
-        assert_eq!(strongest([RowMark::NewReply, RowMark::Working]), Some(RowMark::Working));
+        assert_eq!(strongest([RowMark::NewReply, RowMark::Working { agent: "Claude" }]), Some(RowMark::Working { agent: "Claude" }));
     }
 
     #[test]
     fn each_mark_says_what_it_means() {
         assert_eq!(RowMark::NeedsYou.words(), "Waiting for your answer");
         assert_eq!(RowMark::Error.words(), "Stopped with an error · open to try again");
-        assert_eq!(RowMark::Working.words(), "Claude is working");
-        assert_eq!(RowMark::Working.label("Decay fit"), "Decay fit, Claude is working");
+        assert_eq!(RowMark::Working { agent: "Claude" }.words(), "Claude is working");
+        assert_eq!(RowMark::Working { agent: "Claude" }.label("Decay fit"), "Decay fit, Claude is working");
         assert_eq!(RowMark::NewReply.words(), "New reply");
         assert_eq!(RowMark::ServerDown { host: "hoffman2".into() }.words(), "hoffman2 isn't reachable");
         assert_eq!(RowMark::Waiting { count: 2, until: "hoffman2 is back".into() }.words(), "2 messages wait to send once hoffman2 is back");

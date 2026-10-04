@@ -201,6 +201,22 @@ test("while Claude works, ↩ queues", async () => {
   assert.ok(!window.document.documentElement.hasAttribute("data-endeavor-working"));
 });
 
+test("a Codex session's prompts and add-agent button say Codex", async () => {
+  const { window, $, key, mod, inCell, frame } = await page();
+  window.__endeavor.receive({ type: "context", host: "This Mac", agent: "Codex", asking: false, readonly: false });
+  inCell(A);
+  key("e", mod);
+  assert.equal($("#endeavor-ask textarea").placeholder, "Ask Codex about this cell");
+  key("Escape");
+
+  const plus = window.document.createElement("button");
+  plus.className = "add_cell before";
+  window.document.getElementById(B).append(plus);
+  await frame();
+  await new Promise((done) => setTimeout(done, 50));
+  assert.equal(window.document.querySelector(`[id="${B}"] > .endeavor-add-agent.before`).textContent, "✦ Codex");
+});
+
 test("off macOS: Ctrl+E, and the keys spelled out", async () => {
   const { $, key, inCell } = await page("Linux x86_64");
   inCell(A);

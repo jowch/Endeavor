@@ -25,6 +25,9 @@ import { initTheme } from "./theme";
 import { watchRedraws } from "./redraw";
 
 function init() {
+  // First: other features read `context.agent` from their own "context"
+  // handlers, registered after this one so it has already updated it.
+  initState();
   initTheme();
   initQuote();
   initAskBox();
@@ -42,7 +45,6 @@ function init() {
   initActions();
   initDrawer();
   initSafe();
-  initState();
   initReadonly();
   initDebug();
   watchRedraws();

@@ -362,7 +362,7 @@ fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &
                 heading: "Fetch a web page?".into(),
                 verb: "Fetch",
                 code: Some(CardCode::Plain(url.to_owned())),
-                lines: vec![(format!("Claude reads the page. Nothing on {here} changes."), Tone::Muted)],
+                lines: vec![(format!("{} reads the page. Nothing on {here} changes.", session.agent.name()), Tone::Muted)],
                 ..Default::default()
             };
         }
@@ -429,7 +429,7 @@ fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &
             _ => {}
         }
         if let Some(what) = runs::asked(title, input) {
-            return Prompt { heading: format!("Let Claude {what}?"), verb: "Allow", code: None, lines: vec![], ..Default::default() };
+            return Prompt { heading: format!("Let {} {what}?", session.agent.name()), verb: "Allow", code: None, lines: vec![], ..Default::default() };
         }
     }
     let short = cut_line(&plain_title(title), 60);
@@ -1167,6 +1167,16 @@ mod tests {
         s.modes = modes("plan");
         let plan = prompt(&mut s, "mcp__notebook__edit_cell", ToolKind::Other, json!({ "cell_id": "x", "code": "residuals = 2" }), false, claude_options());
         assert_eq!(plan.lines[0].0, "Nothing runs.", "only Manual asks before every change");
+    }
+
+    #[test]
+    fn a_codex_sessions_prompts_name_codex() {
+        let mut s = Session::new(1, Place::local("/Users/jc/projects/decay-fits"), None);
+        s.agent = crate::agent::Agent::Codex;
+        let fetch = prompt(&mut s, "Fetch", ToolKind::Fetch, json!({ "url": "https://juliastats.org/Bootstrap.jl/stable/" }), false, claude_options());
+        assert_eq!(fetch.lines[0].0, format!("Codex reads the page. Nothing on {} changes.", crate::platform::this_computer!()));
+        let read = prompt(&mut s, "mcp__notebook__read_cell", ToolKind::Other, json!({}), false, claude_options());
+        assert_eq!(read.heading, "Let Codex read a cell?");
     }
 
     #[test]

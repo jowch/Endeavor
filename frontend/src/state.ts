@@ -11,6 +11,8 @@ export type Drawer = "docs" | "status" | null;
 export interface Context {
   /** Where the notebook runs ("This Mac", a server's name). */
   host: string;
+  /** The session's agent ("Claude", "Codex"), for page text that names it. */
+  agent: string;
   /** The agent is asking to run the notebook (the chat's card is up). */
   asking: boolean;
   /** Julia stopped again while the notebook ran after a restart: the safe-preview callout's words. */
@@ -23,7 +25,7 @@ const listeners: Listener[] = [];
 let last: NotebookLike | null = null;
 let model: StatusModel | null = null;
 let lastSent = "";
-export const context: Context = { host: "This Mac", asking: false, crash: null };
+export const context: Context = { host: "This Mac", agent: "Claude", asking: false, crash: null };
 let drawerOf: () => Drawer = () => null;
 
 export function onNotebook(listener: Listener): void {
@@ -97,6 +99,7 @@ export function initState(): void {
   if (document.querySelector("pluto-editor")) requestAnimationFrame(frame);
   on("context", (msg) => {
     context.host = msg.host;
+    context.agent = msg.agent ?? "Claude";
     context.asking = msg.asking;
     context.crash = msg.crash ?? null;
     if (last && model) listeners.forEach((l) => l(last!, model!));

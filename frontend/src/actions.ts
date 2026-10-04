@@ -6,6 +6,7 @@
 
 import { on } from "./bridge";
 import { mac } from "./keys";
+import { context } from "./state";
 
 const css = `
   #endeavor-sheet { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
@@ -31,7 +32,7 @@ const css = `
 
 const cmd = mac ? "⌘" : "Ctrl";
 const alt = mac ? "⌥" : "Alt";
-const shortcuts: Array<[string, string] | string> = [
+const shortcuts = (): Array<[string, string] | string> => [
   ["⇧ Enter", "Run cell"],
   [`${cmd} Enter`, "Run cell and add a cell below"],
   [`${cmd} S`, "Submit all changes"],
@@ -47,7 +48,7 @@ const shortcuts: Array<[string, string] | string> = [
   "Select cells by dragging a box from the space between them, then:",
   [`${cmd} C / ${cmd} X / ${cmd} V`, "Copy / cut / paste the selected cells"],
   "Endeavor",
-  [`${cmd} E`, "Ask Claude about the selection, or the cell"],
+  [`${cmd} E`, `Ask ${context.agent} about the selection, or the cell`],
   [`${cmd} ⇧ E`, "Point: pick cells or draw a box to ask about"],
 ];
 
@@ -71,7 +72,7 @@ function sheet(html: string): HTMLElement {
 }
 
 export function showShortcuts(): void {
-  const rows = shortcuts
+  const rows = shortcuts()
     .map((s) => (typeof s === "string" ? `<div class="head">${escape(s)}</div>` : `<kbd>${escape(s[0])}</kbd><span>${escape(s[1])}</span>`))
     .join("");
   const el = sheet(`<h2>Keyboard shortcuts</h2><div class="keys">${rows}</div><p>The notebook file saves every time you run a cell.</p><div class="buttons"><button class="primary done">Done</button></div>`);

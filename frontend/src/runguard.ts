@@ -9,7 +9,7 @@
 import { byUser, on, send } from "./bridge";
 import { modHeld } from "./keys";
 import { cellCode } from "./reveal";
-import { notebookId } from "./state";
+import { context, notebookId } from "./state";
 import { definedNames } from "./status";
 
 /** A cell a waiting card asks to run, and what it defines (from the app). */
@@ -187,10 +187,10 @@ function show(hit: Waiting[], changes: boolean, replay: () => void, deps: Depend
   el.id = "endeavor-runguard";
   el.dataset.endeavorUi = "";
   el.setAttribute("role", "dialog");
-  el.setAttribute("aria-label", "Claude is waiting for your answer");
+  el.setAttribute("aria-label", `${context.agent} is waiting for your answer`);
   const what = changes ? "your changes" : "this";
   el.innerHTML =
-    `<b>Claude is waiting for your answer on ${names(list)}.</b>` +
+    `<b>${context.agent} is waiting for your answer on ${names(list)}.</b>` +
     `Running ${what} now also runs ${one ? "it" : "them"}.` +
     `<div class="buttons"><button class="show">Show ${one ? names(list) : "them"}</button><span class="gap"></span>` +
     `<button class="cancel">Cancel</button><span class="hint">esc</span><button class="primary run">Run anyway</button></div>`;

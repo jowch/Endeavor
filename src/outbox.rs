@@ -387,16 +387,17 @@ impl Outbox {
         Some(if self.busy { self.steer(q) } else { self.start(q) })
     }
 
-    /// The line over the queue (when Claude can be reached): paused, waiting
-    /// for the message being edited, or how the messages go.
-    pub fn heading(&self) -> Option<String> {
+    /// The line over the queue (when the agent can be reached): paused, waiting
+    /// for the message being edited, or how the messages go. `agent`: its name,
+    /// for "Paused after you stopped Claude".
+    pub fn heading(&self, agent: &str) -> Option<String> {
         let n = self.items.len();
         if n == 0 {
             return None;
         }
         Some(match self.paused() {
             Some(Paused::Error) => "Paused after an error".into(),
-            Some(Paused::Stopped) => "Paused after you stopped Claude".into(),
+            Some(Paused::Stopped) => format!("Paused after you stopped {agent}"),
             None if !self.busy && self.items.front().is_some_and(|q| q.editing) => "Waiting for the message you're editing".into(),
             None if n == 1 => "Sends after this turn".into(),
             None => format!("{n} queued · one goes after each turn, in this order"),
@@ -638,7 +639,7 @@ mod tests {
         o.submit(msg("b"), false);
         o.begin_edit(0);
         assert!(o.turn_ended().is_none());
-        assert_eq!(o.heading().as_deref(), Some("Waiting for the message you're editing"));
+        assert_eq!(o.heading("Claude").as_deref(), Some("Waiting for the message you're editing"));
         assert_eq!(prompt_label(o.cancel_edit()).as_deref(), Some("a"));
         assert_eq!(texts(&o), ["b"]);
     }
@@ -664,7 +665,7 @@ mod tests {
         assert!(o.remove(1, t0).is_none());
         assert_eq!(texts(&o), ["a", "c"]);
         assert_eq!(o.removed_slot(), Some(1));
-        assert_eq!(o.heading().as_deref(), Some("2 queued · one goes after each turn, in this order"));
+        assert_eq!(o.heading("Claude").as_deref(), Some("2 queued · one goes after each turn, in this order"));
         assert!(o.removed_at(t0 + Duration::from_millis(4900)).is_some());
         assert!(o.removed_at(t0 + Duration::from_secs(5)).is_none());
         o.undo_remove();
@@ -699,7 +700,7 @@ mod tests {
         o.submit(msg("b"), false);
         o.pause(Paused::Error);
         assert!(o.turn_ended().is_none());
-        assert_eq!(o.heading().as_deref(), Some("Paused after an error"));
+        assert_eq!(o.heading("Claude").as_deref(), Some("Paused after an error"));
         assert!(o.submit(msg("c"), false).is_none());
         assert_eq!(texts(&o), ["a", "b", "c"]);
         assert_eq!(prompt_label(o.send_next()).as_deref(), Some("a"));
@@ -707,7 +708,8 @@ mod tests {
 
         o.pause(Paused::Stopped);
         assert!(o.turn_ended().is_none());
-        assert_eq!(o.heading().as_deref(), Some("Paused after you stopped Claude"));
+        assert_eq!(o.heading("Claude").as_deref(), Some("Paused after you stopped Claude"));
+        assert_eq!(o.heading("Codex").as_deref(), Some("Paused after you stopped Codex"));
     }
 
     #[test]
@@ -743,12 +745,12 @@ mod tests {
     #[test]
     fn the_heading_says_how_the_queue_goes() {
         let mut o = Outbox::default();
-        assert_eq!(o.heading(), None);
+        assert_eq!(o.heading("Claude"), None);
         o.submit(msg("running"), false);
         o.submit(msg("a"), false);
-        assert_eq!(o.heading().as_deref(), Some("Sends after this turn"));
+        assert_eq!(o.heading("Claude").as_deref(), Some("Sends after this turn"));
         o.submit(msg("b"), false);
         o.submit(msg("c"), false);
-        assert_eq!(o.heading().as_deref(), Some("3 queued · one goes after each turn, in this order"));
+        assert_eq!(o.heading("Claude").as_deref(), Some("3 queued · one goes after each turn, in this order"));
     }
 }

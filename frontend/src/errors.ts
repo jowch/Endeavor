@@ -13,9 +13,8 @@ import { byUser, on, send, type ErrorAsk } from "./bridge";
 import { shortcut } from "./keys";
 import { onRedraw } from "./redraw";
 import { cellCode } from "./reveal";
+import { context } from "./state";
 
-// ponytail: "Claude" until the agent's name reaches the page (ACP agent info).
-const AGENT = "Claude";
 /** At most this much of the error goes with the message. */
 const MAX_ERROR = 2000;
 /** A click shows its status line at once; the app's word replaces it, or it goes after this long. */
@@ -179,7 +178,7 @@ function fillActions(row: HTMLElement, cell: HTMLElement, error: HTMLElement) {
       setTimeout(decorate, PENDING + 50);
     };
     const fix = el("button", "pill fix");
-    fix.append(el("span", "spark", "✦"), `Fix with ${AGENT}`);
+    fix.append(el("span", "spark", "✦"), `Fix with ${context.agent}`);
     fix.onclick = (e) => byUser(e) && ask("fix");
     const explain = el("button", "pill explain", "Explain");
     explain.onclick = (e) => byUser(e) && ask("explain");
@@ -187,7 +186,7 @@ function fillActions(row: HTMLElement, cell: HTMLElement, error: HTMLElement) {
   } else if (!status.queued) {
     row.append(
       el("span", "spark", "✦"),
-      `${AGENT} is ${status.kind === "fix" ? "fixing" : "explaining"} this`,
+      `${context.agent} is ${status.kind === "fix" ? "fixing" : "explaining"} this`,
       el("span", "dot", "·"),
       link("Show in chat ›", "show", () => send({ type: "error_ask_show", cell: cell.id })),
     );
@@ -196,7 +195,7 @@ function fillActions(row: HTMLElement, cell: HTMLElement, error: HTMLElement) {
     clock.innerHTML = CLOCK;
     row.append(
       clock,
-      `${status.kind === "fix" ? "Fix" : "Explain"} queued · sends after ${AGENT}’s current turn`,
+      `${status.kind === "fix" ? "Fix" : "Explain"} queued · sends after ${context.agent}’s current turn`,
       el("span", "dot", "·"),
       link("Cancel", "cancel", () => {
         pending.delete(cell.id);

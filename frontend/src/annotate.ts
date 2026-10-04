@@ -14,6 +14,7 @@ import { askBox } from "./askbox";
 import { cellName } from "./cellname";
 import { type Box, type Pick, SHOOTING, pickSource, sendQuote, shoot } from "./quote";
 import { cellCode } from "./reveal";
+import { context } from "./state";
 
 const css = `
   /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
@@ -161,12 +162,20 @@ export function initAnnotate(): void {
   hint.innerHTML = `<span>Click to pick · drag over code lines · drag elsewhere for a box</span><span>·</span><span class="done" role="button">Done</span>`;
   const bar = document.createElement("div");
   bar.id = "annotate-bar";
-  const field = askBox({ label: "Comment for Claude", placeholder: "Comment for Claude…", done: (add, e) => byUser(e) && sendComment(add) });
+  const field = askBox({ label: `Comment for ${context.agent}`, placeholder: `Comment for ${context.agent}…`, done: (add, e) => byUser(e) && sendComment(add) });
   const text = field.text;
   bar.append(field.root);
   document.head.append(style);
   document.body.append(frame, box, tag, hint, bar);
   state = { picks, status: () => (active() ? field.what.textContent ?? "" : ""), comment: () => text.value };
+  // The field is built once, before the session's actual agent reaches the
+  // page, so its label and placeholder need redoing once it does.
+  on("context", () => {
+    const label = `Comment for ${context.agent}`;
+    field.root.setAttribute("aria-label", label);
+    text.placeholder = `${label}…`;
+    text.setAttribute("aria-label", text.placeholder);
+  });
 
   function drawBox(b: Box | null) {
     box.classList.toggle("shown", !!b);

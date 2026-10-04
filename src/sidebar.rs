@@ -7,6 +7,7 @@ use gpui::*;
 use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
 
+use crate::agent::Agent;
 use crate::hosts::{HostId, Place};
 use crate::menu::MenuTarget;
 use crate::new_session::{Glyph, NotebookChoice, glyph, glyph_at, menu_row};
@@ -237,7 +238,7 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
     let icon = match &mark {
         RowMark::NeedsYou => dot(6.).bg(theme::accent()).into_any_element(),
         RowMark::Error => glyph_at(Glyph::Warning, theme::danger(), MARK_GLYPH).into_any_element(),
-        RowMark::Working => {
+        RowMark::Working { .. } => {
             let fill = dot(6.).bg(theme::text_muted());
             let breath = theme::motion_pulse();
             if breath.is_zero() {
@@ -463,9 +464,18 @@ impl Workspace {
             }
             RowAction::Delete => {
                 let Some(title) = self.row_title(&row) else { return };
+                let agent = match &row {
+                    Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.agent),
+                    Row::Past(id, _) => self.records.get(&id.to_string()).map(|r| r.agent),
+                }
+                .unwrap_or_default();
+                let history = match agent {
+                    Agent::Claude => "Claude Code",
+                    Agent::Codex => "Codex",
+                };
                 self.open_confirm(
                     format!("Delete “{title}”?"),
-                    "This permanently deletes the conversation, including its Claude Code history. Notebooks and other files it made stay on disk.",
+                    format!("This permanently deletes the conversation, including its {history} history. Notebooks and other files it made stay on disk."),
                     "Delete",
                     window,
                     cx,
@@ -701,6 +711,7 @@ impl Workspace {
             needs_you: s.needs_approval(),
             error: s.errored || s.failed.is_some(),
             working: crate::transcript::activity(s, self.offline_since).is_some_and(|a| !a.waiting),
+            agent: s.agent.name(),
             new_reply: s.unseen && self.active != Some(s.key),
             server_down: host_down.then(|| self.hosts.name(&s.place.host).to_string()),
             waiting: held.then(|| (s.outbox.items.len(), format!("{} is back", s.agent.name()))),

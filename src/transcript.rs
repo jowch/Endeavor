@@ -230,7 +230,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
         Entry::User { text, expanded, attachments, delivery, sent } => {
             let chips = this.render_sent_chips(key, ix, attachments, cx);
             let column = div().group(MESSAGE).flex().flex_col().items_end().gap(px(4.)).children(chips);
-            let delivered = delivery_note(*delivery).map(|note| div().text_size(theme::chat_meta()).text_color(muted).child(note));
+            let delivered = delivery_note(*delivery, session.agent).map(|note| div().text_size(theme::chat_meta()).text_color(muted).child(note));
             let actions = message_actions(session, ix, text.to_string(), *sent, cx);
             let mut quotes = this.render_sent_quotes(key, ix, attachments, cx);
             if text.is_empty() && quotes.is_empty() {
@@ -328,13 +328,13 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .into_any_element(),
         // Pending: shown as the approval card above the composer (render_approval).
         Entry::Permission { .. } => return None,
-        Entry::Failed(failed) => return render_failed(key, ix, failed, cx),
+        Entry::Failed(failed) => return render_failed(key, ix, failed, session.agent, cx),
     })
 }
 
 /// A turn that didn't finish: its card (Try again, Continue, Details), or
 /// the quiet note after a restart. A card whose Try again was pressed goes.
-fn render_failed(key: u64, ix: usize, failed: &Failed, cx: &mut Context<Workspace>) -> Option<AnyElement> {
+fn render_failed(key: u64, ix: usize, failed: &Failed, agent: crate::agent::Agent, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     let run = move |this: &mut Workspace, cx: &mut Context<Workspace>| {
         let Some(session) = this.session_mut(key) else { return };
@@ -356,7 +356,7 @@ fn render_failed(key: u64, ix: usize, failed: &Failed, cx: &mut Context<Workspac
                 .flex_col()
                 .items_start()
                 .gap(px(8.))
-                .child(div().text_size(theme::chat_meta()).text_color(theme::text_faint()).child(failed.kind.title()))
+                .child(div().text_size(theme::chat_meta()).text_color(theme::text_faint()).child(failed.kind.title(agent)))
                 .when(!failed.used, |d| d.child(button(Look::Secondary)))
                 .into_any_element(),
         ),
@@ -368,17 +368,17 @@ fn render_failed(key: u64, ix: usize, failed: &Failed, cx: &mut Context<Workspac
                 })
             });
             let buttons = (!failed.used).then(|| button(Look::Primary).into_any_element()).into_iter().collect();
-            Some(failure::card(kind.title(), kind.body(), buttons, details).into_any_element())
+            Some(failure::card(kind.title(agent), kind.body(), buttons, details).into_any_element())
         }
     }
 }
 
-/// The line under a message sent with Cmd+Enter while Claude worked.
-pub(crate) fn delivery_note(delivery: Delivery) -> Option<&'static str> {
+/// The line under a message sent with Cmd+Enter while the agent worked.
+pub(crate) fn delivery_note(delivery: Delivery, agent: crate::agent::Agent) -> Option<&'static str> {
     match delivery {
         Delivery::Turn => None,
-        Delivery::Joined => Some("Claude got this while working"),
-        Delivery::AfterStop => Some("Stopped Claude's work to send this"),
+        Delivery::Joined => Some(crate::agent_text!(agent, "", " got this while working")),
+        Delivery::AfterStop => Some(crate::agent_text!(agent, "Stopped ", "'s work to send this")),
     }
 }
 
@@ -1122,9 +1122,18 @@ fn file_diff(kind: ToolKind, title: &str, path: Option<&Path>, input: &serde_jso
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
-    use super::{RowState, run_summary, tool_row};
+    use super::{RowState, delivery_note, run_summary, tool_row};
+    use crate::agent::Agent;
     use crate::hosts::Place;
+    use crate::outbox::Delivery;
     use crate::session::{Entry, Session};
+
+    #[test]
+    fn a_codex_delivery_note_names_codex() {
+        assert_eq!(delivery_note(Delivery::Turn, Agent::Codex), None);
+        assert_eq!(delivery_note(Delivery::Joined, Agent::Codex), Some("Codex got this while working"));
+        assert_eq!(delivery_note(Delivery::AfterStop, Agent::Codex), Some("Stopped Codex's work to send this"));
+    }
 
     #[test]
     fn a_replayed_denial_is_told_apart_from_a_failure() {

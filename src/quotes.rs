@@ -104,8 +104,9 @@ impl Workspace {
             self.check_reply_selection(window.mouse_position(), cx);
         }
         let Some(Reply::Pill(selected)) = self.reply.take() else { return };
+        let agent = self.sessions.iter().find(|s| s.key == selected.key).map_or_else(crate::agent::Agent::default, |s| s.agent);
         // ↩ sends, ⌘↩ adds to the message, ⇧↩ is a new line; six lines, then it scrolls.
-        let input = cx.new(|cx| TextareaState::new(window, cx).placeholder("Reply to Claude").submit_on_enter(true).auto_grow(1, 6));
+        let input = cx.new(|cx| TextareaState::new(window, cx).placeholder(format!("Reply to {}", agent.name())).submit_on_enter(true).auto_grow(1, 6));
         cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
             match event {
                 InputEvent::PressEnter { secondary, shift: false } => this.finish_reply(*secondary, window, cx),
@@ -181,6 +182,7 @@ impl Workspace {
         let (Reply::Pill(selected) | Reply::Prompt { selected, .. }) = reply;
         // The notebook's web view covers anything drawn over its pane, so
         // these stay inside the reply's column.
+        let agent = self.sessions.iter().find(|s| s.key == selected.key).map_or_else(crate::agent::Agent::default, |s| s.agent);
         let column = self.sessions.iter().find(|s| s.key == selected.key).and_then(|s| s.reply_bounds(selected.entry, cx));
         let prompt_width = column.map_or(px(PROMPT_WIDTH), |c| c.size.width.min(px(PROMPT_WIDTH)));
         let place = |width: Pixels, element: AnyElement| {
@@ -291,7 +293,7 @@ impl Workspace {
                     .line_height(px(17.))
                     .text_color(theme::text_faint())
                     .whitespace_nowrap()
-                    .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.)).overflow_hidden().child(glyph(Glyph::Lines, theme::text_faint())).child("Claude's reply"))
+                    .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.)).overflow_hidden().child(glyph(Glyph::Lines, theme::text_faint())).child(format!("{}'s reply", agent.name())))
                     .child(div().flex_shrink_0().text_size(px(11.)).child(format!("{SEND_KEY} {} · {ADD_KEY} add to message", if working { "queue" } else { "send" })));
                 place(
                     prompt_width,
@@ -342,12 +344,12 @@ impl Workspace {
                                         .flex_1()
                                         .min_w_0()
                                         .my(px(-2.5))
-                                        .child(Textarea::new(input).appearance(false).aria_label("Reply to Claude").text_size(theme::chat_body()).line_height(px(21.))),
+                                        .child(Textarea::new(input).appearance(false).aria_label(format!("Reply to {}", agent.name())).text_size(theme::chat_body()).line_height(px(21.))),
                                 )
                                 .child(send)
                                 .child(options),
                         )
-                        .when(working, |d| d.child(div().px(px(4.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child("Claude is working. This goes after its turn.")))
+                        .when(working, |d| d.child(div().px(px(4.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(format!("{} is working. This goes after its turn.", agent.name()))))
                         .children(menu)
                         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                             this.close_reply(cx);

@@ -8,7 +8,7 @@
 // click elsewhere closes it and keeps the words as a draft for that cell or
 // selection; opening it there again brings them back, selected.
 
-import { byUser, send } from "./bridge";
+import { byUser, on, send } from "./bridge";
 import { type AskBox, type Icon, askBox } from "./askbox";
 import { onRedraw } from "./redraw";
 import { cellCode } from "./reveal";
@@ -17,11 +17,11 @@ import { barPlace, type Rect } from "./place";
 import { cellName } from "./cellname";
 import { pickSource, sendQuote } from "./quote";
 import { type Found, hidePill, initReply, rangeRects, selectedInCell } from "./reply";
+import { context } from "./state";
 
-const AGENT = "Claude";
 const GAP = 8;
 
-const css = `
+const css = () => `
   /* Beside Pluto's "+" in the gap above a cell (and below the last one): faint
      while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
@@ -41,7 +41,7 @@ const css = `
   #endeavor-ask-line { position: fixed; z-index: 999; height: 2px; border-radius: 1px; background: var(--e-focus-ring); pointer-events: none; }
   /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
-  pluto-input .cm-placeholder::after { content: "Type code, or ${shortcut("E")} to ask ${AGENT}"; font-size: 13px; }
+  pluto-input .cm-placeholder::after { content: "Type code, or ${shortcut("E")} to ask ${context.agent}"; font-size: 13px; }
 `;
 
 /** What a prompt is about: a cell (or, empty, what to write in it), a new cell before or after one, or a selection. */
@@ -81,17 +81,17 @@ function describe(t: Target): { icon: Icon; name: string; detail: string; placeh
     const [name, detail] = pickSource(pick).split(" · ");
     if (pick.part === "lines") {
       const one = pick.lines[0] === pick.lines[1];
-      return { icon: "lines", name, detail, placeholder: `Ask ${AGENT} about ${one ? "this line" : "these lines"}`, quote: { text: quote, code: true } };
+      return { icon: "lines", name, detail, placeholder: `Ask ${context.agent} about ${one ? "this line" : "these lines"}`, quote: { text: quote, code: true } };
     }
-    return { icon: "text", name, detail, placeholder: `Ask ${AGENT} about this text`, quote: { text: quote, code: false } };
+    return { icon: "text", name, detail, placeholder: `Ask ${context.agent} about this text`, quote: { text: quote, code: false } };
   }
   const { cell } = t;
   const prev = previous(cell);
   const after = (c: HTMLElement) => `after ${cellName(cellCode(c))}`;
-  if (t.kind === "before") return { icon: "add", name: "new cell", detail: prev ? after(prev) : `before ${cellName(cellCode(cell))}`, placeholder: `Ask ${AGENT} to write a cell here` };
-  if (t.kind === "after") return { icon: "add", name: "new cell", detail: after(cell), placeholder: `Ask ${AGENT} to write a cell here` };
-  if (isEmpty(cell)) return { icon: "add", name: "new cell", detail: prev ? after(prev) : "here", placeholder: `Ask ${AGENT} what to write here` };
-  return { icon: "cell", name: cellName(cellCode(cell)), detail: "whole cell", placeholder: `Ask ${AGENT} about this cell` };
+  if (t.kind === "before") return { icon: "add", name: "new cell", detail: prev ? after(prev) : `before ${cellName(cellCode(cell))}`, placeholder: `Ask ${context.agent} to write a cell here` };
+  if (t.kind === "after") return { icon: "add", name: "new cell", detail: after(cell), placeholder: `Ask ${context.agent} to write a cell here` };
+  if (isEmpty(cell)) return { icon: "add", name: "new cell", detail: prev ? after(prev) : "here", placeholder: `Ask ${context.agent} what to write here` };
+  return { icon: "cell", name: cellName(cellCode(cell)), detail: "whole cell", placeholder: `Ask ${context.agent} about this cell` };
 }
 
 /** Where what the prompt asks about is, in the viewport. */
@@ -165,7 +165,7 @@ export function openAsk(t: Target): void {
   closeAsk(false);
   hidePill();
   const about = describe(t);
-  const box = askBox({ label: `Ask ${AGENT}`, placeholder: about.placeholder, quote: about.quote, done: (add, e) => open && sendAsk(open, add, e) });
+  const box = askBox({ label: `Ask ${context.agent}`, placeholder: about.placeholder, quote: about.quote, done: (add, e) => open && sendAsk(open, add, e) });
   box.root.classList.add("popover");
   box.root.id = "endeavor-ask";
   box.root.dataset.kind = t.kind;
@@ -237,8 +237,11 @@ function onKey(e: KeyboardEvent) {
 
 export function initPrompt(): void {
   const style = document.createElement("style");
-  style.textContent = css;
+  style.textContent = css();
   document.head.append(style);
+  // The empty-cell hint is baked into this style tag, so it needs redoing
+  // once the session's actual agent reaches the page.
+  on("context", () => (style.textContent = css()));
   initReply((found) => openAsk({ kind: "selection", found }));
 
   // Window capture: before CodeMirror and Pluto handle the key.
@@ -262,8 +265,8 @@ export function initPrompt(): void {
         const button = document.createElement("button");
         button.className = `endeavor-add-agent ${where}`;
         button.dataset.endeavorUi = "";
-        button.textContent = `✦ ${AGENT}`;
-        button.title = `Ask ${AGENT} to write a cell here`;
+        button.textContent = `✦ ${context.agent}`;
+        button.title = `Ask ${context.agent} to write a cell here`;
         button.onclick = () => openAsk({ kind: where, cell });
         add.after(button);
       }

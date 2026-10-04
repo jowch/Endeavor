@@ -43,7 +43,7 @@ function render() {
   const safe = now?.nb.process_status === "waiting_for_permission";
   callout.classList.toggle("shown", !!safe);
   if (!safe) return;
-  const asking = context.asking ? `<div class="asking">Claude is asking to run it. Answer in the chat, or here.</div>` : "";
+  const asking = context.asking ? `<div class="asking">${escape(context.agent)} is asking to run it. Answer in the chat, or here.</div>` : "";
   const crash = context.crash;
   const title = crash ? escape(crash.title) : "Safe preview";
   const body = crash ? withCode(crash.body) : "You're reading and editing this file without running any code.";

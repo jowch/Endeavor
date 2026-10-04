@@ -7,13 +7,14 @@
 
 import { on, send } from "./bridge";
 import { onRedraw } from "./redraw";
+import { context } from "./state";
 
-const css = `
+const css = () => `
   pluto-cell[data-endeavor-ask] { margin-top: 26px; }
   pluto-cell[data-endeavor-ask]::after {
     position: absolute; left: 0; top: -22px; font: 12px/18px var(--sans-serif-font-stack, system-ui); pointer-events: none;
   }
-  pluto-cell[data-endeavor-ask="asks"]::after { content: "\\25CF  Claude asks to run this."; color: var(--e-accent-text); }
+  pluto-cell[data-endeavor-ask="asks"]::after { content: "\\25CF  ${context.agent} asks to run this."; color: var(--e-accent-text); }
   pluto-cell[data-endeavor-ask="reruns"]::after { content: "Re-runs after it"; color: var(--e-text-muted); }
   pluto-cell[data-endeavor-ask="needed"]::after { content: "Runs first: it hasn't run yet"; color: var(--e-text-muted); }
 `;
@@ -61,9 +62,10 @@ function watch() {
 
 export function initAsking(): void {
   const style = document.createElement("style");
-  style.textContent = css;
+  style.textContent = css();
   document.head.append(style);
   on("context", (msg) => {
+    style.textContent = css();
     const cells = msg.ask_cells ?? [];
     const changed = cells.join() !== asked.join();
     asked = cells;
