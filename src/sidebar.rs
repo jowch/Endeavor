@@ -1377,7 +1377,7 @@ impl Workspace {
                 )
             })
             .children(menu.submenu.map(|submenu| self.render_filter_submenu(submenu, menu, cx)));
-        div().absolute().top(px(26.)).right_0().child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(1))
+        div().absolute().top(px(26.)).right_0().child(deferred(anchored().anchor(Anchor::TopRight).child(crate::motion::arriving(body, "filter-menu-in", true))).with_priority(1))
     }
 
     /// A filter row's flyout submenu: Status, Group by and Sort by are

@@ -367,6 +367,8 @@ impl Workspace {
         };
         let wrapper = div().absolute().top(px(28.));
         let wrapper = if from_left { wrapper.left_0() } else { wrapper.right_0() };
+        // Over the notebook it shows at once: its hole in the web view can't fade with it.
+        let body = if notebook_menu { body.into_any_element() } else { crate::motion::arriving(body, "popup-menu-in", true).into_any_element() };
         wrapper.child(deferred(placed.child(body)).with_priority(1))
     }
 

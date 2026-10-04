@@ -1335,7 +1335,7 @@ impl Workspace {
             Menu::Config(_) => (div().right_0(), Anchor::BottomRight),
             _ => (div().left(px(-11.)), Anchor::BottomLeft),
         };
-        Some(place.absolute().top(px(-6.)).child(deferred(anchored().anchor(anchor).child(div().occlude().child(body))).with_priority(1)).into_any_element())
+        Some(place.absolute().top(px(-6.)).child(deferred(anchored().anchor(anchor).child(crate::motion::arriving(div().occlude().child(body), "composer-menu-in", false))).with_priority(1)).into_any_element())
     }
 
     /// The hovered chip's preview, above the box.
