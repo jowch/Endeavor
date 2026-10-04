@@ -8,10 +8,10 @@ All seven screenshots below are in this folder, and their lines are in the
 pages listed under **Where it goes**. Each entry stays here as the spec for
 a retake, with a **Taken** note on how the current picture differs from it.
 
-The current set was taken on 3 October 2026 from a release build, except
-`sign-in.png` (see its entry). The Mac they were taken on had no Retina
-display, so they are 1× (1440×900 pixels for the full window), not 2×.
-Retake them at 2× when a Retina display is at hand.
+The current set was taken on 3 October 2026 from a release build at 2×
+(2880×1800 pixels for the full window), except `cluster-resources.png`,
+which is still the earlier 1× picture. Retake it at 2× when a cluster is at
+hand.
 
 To retake a shot, take it from a release build (`scripts/bundle.sh`), so
 there are no debug-only marks, and save it here under the same file name.
@@ -32,9 +32,11 @@ For every shot:
 
 ## main-window.png
 
-**Taken.** The notebook has five cells: a title cell, `using`, `flips`,
-`n_heads` and the plot. The first turn's changed-cells card lists all five;
-cells without a name show as "cell" and an id.
+**Taken.** The notebook has three cells: `using`, `flips` and the plot,
+which has no name and shows as `let`. The first turn's changed-cells card
+lists all three, two tagged **new**. In the second turn Claude edited both
+`flips` and the plot cell, and its run was denied, so both have the orange
+bar and the reply says the run was declined.
 
 **Where it goes.** Each line sits where it says, with a blank line before
 and after it:
@@ -68,10 +70,9 @@ and after it:
 
 ## sign-in.png
 
-**Taken.** From a debug build, because only a debug build reads
-`ENDEAVOR_CLAUDE_CLI`. It pointed at a stand-in `claude` that reports
-"signed out", with setup not yet finished, so nobody was signed out. Cropped
-to the middle 720 points of the window.
+**Taken.** From a release build started with `HOME` set to an empty
+folder, so Claude Code found no sign-in and setup wasn't finished; nobody
+was signed out. Cropped to the middle 720 points of the window.
 
 **Where it goes.** The line sits where it says, with a blank line before
 and after it:
@@ -118,8 +119,9 @@ and after it:
 
 ## approval-card.png
 
-**Taken.** The diff has one line removed and one added, and the card says
-"Also re-runs 1 cell that depends on it."
+**Taken.** The diff has one line removed and one added (a lower bound
+added to `curve_fit`), and the card says "Also re-runs 2 cells that depend
+on it." The chat column above the card shows the previous turn's reply.
 
 **Where it goes.** The line sits where it says, with a blank line before
 and after it:
@@ -143,7 +145,7 @@ and after it:
 
 ## safe-preview.png
 
-**Taken.** As specified, with five cells.
+**Taken.** As specified: `decay.jl`, a copy of the "Decay fit" notebook, with six cells.
 
 **Where it goes.** The line sits where it says, with a blank line before
 and after it:
@@ -167,7 +169,9 @@ and after it:
 ## point.png
 
 **Taken.** After the second turn's edits ran, so the plot shows 10,000
-flips. The bar reads "Figure in cell", because the plot cell has no name.
+flips. The bar reads "Figure in let", because the plot cell has no name.
+The notebook column is narrower than in the earlier set, from a wider chat
+column.
 
 **Where it goes.** The line sits where it says, with a blank line before
 and after it:
