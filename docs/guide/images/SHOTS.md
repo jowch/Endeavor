@@ -4,9 +4,12 @@ description: The screenshots the user guide needs, and what must be on screen in
 draft: true
 ---
 
-The guide references these images before they exist. Take each one from a
-release build (`scripts/bundle.sh`), so there are no debug-only marks, and
-save it here under the file name given.
+None of these screenshots exist yet, so the pages don't show them: the
+documentation site's build fails on an image that is missing. Take each one
+from a release build (`scripts/bundle.sh`), so there are no debug-only marks,
+and save it here under the file name given. Then put its line back into each
+page listed under **Where it goes**, and commit the picture and the pages
+together.
 
 For every shot:
 
@@ -22,8 +25,22 @@ For every shot:
 
 ## main-window.png
 
-Used on [What Endeavor is](../overview.md) and [Sessions, the chat and the
-notebook](../sessions.md).
+**Where it goes.** Put each line back where it says, with a blank line
+before and after it:
+
+- [What Endeavor is](../overview.md), after the first paragraph, before **The words this guide uses**:
+
+  ```markdown
+  ![The Endeavor window: the list of sessions on the left, the chat in the middle, and the notebook on the right](images/main-window.png)
+  ```
+
+- [Sessions, the chat and the notebook](../sessions.md), after the first paragraph, before **One notebook per session**:
+
+  ```markdown
+  ![The Endeavor window during a session: the chat shows Claude's reply and the changed-cells card, and the notebook shows a cell with an orange bar at its left edge](images/main-window.png)
+  ```
+
+**On screen:**
 
 - A This Mac session titled "Coin flips", in **Ask to run**.
 - The chat: the user's message "Simulate 1,000 coin flips and plot how often
@@ -40,7 +57,16 @@ notebook](../sessions.md).
 
 ## sign-in.png
 
-Used on [Get started](../getting-started.md).
+**Where it goes.** Put the line back where it says, with a blank line
+before and after it:
+
+- [Get started](../getting-started.md), under **Sign in to Claude**, after the paragraph that ends "Click **Continue**.", before the numbered list:
+
+  ```markdown
+  ![The "Sign in to Claude" screen, with the two kinds of account to choose from](images/sign-in.png)
+  ```
+
+**On screen:**
 
 - The first-launch setup window, at the **Sign in to Claude** step: the two
   choices **A Claude plan** and **An Anthropic Console account**, each with
@@ -52,7 +78,16 @@ Used on [Get started](../getting-started.md).
 
 ## start-session.png
 
-Used on [Get started](../getting-started.md).
+**Where it goes.** Put the line back where it says, with a blank line
+before and after it:
+
+- [Get started](../getting-started.md), under **Start your first session**, after the first paragraph, before "Under **Try one of these, or ask in your own words**":
+
+  ```markdown
+  ![The "Start a session" screen, with four example prompts, the chips above the message box, and the empty notebook pane on the right](images/start-session.png)
+  ```
+
+**On screen:**
 
 - The **Start a session** screen with no past sessions, so the four example
   prompts show under **Try one of these, or ask in your own words**.
@@ -64,7 +99,16 @@ Used on [Get started](../getting-started.md).
 
 ## approval-card.png
 
-Used on [Modes and approvals](../modes-and-approvals.md).
+**Where it goes.** Put the line back where it says, with a blank line
+before and after it:
+
+- [Modes and approvals](../modes-and-approvals.md), first under **Answer a card**, before "A card asks one question":
+
+  ```markdown
+  ![An approval card above the message box asking "Edit `fit` and run it?", with the change shown as a diff and the Deny, Always this session and Edit and run buttons](images/approval-card.png)
+  ```
+
+**On screen:**
 
 - A This Mac session in **Ask to run**, titled "Decay fit".
 - Card waiting above the empty message box: "Edit `fit` and run it?", with a
@@ -77,7 +121,16 @@ Used on [Modes and approvals](../modes-and-approvals.md).
 
 ## safe-preview.png
 
-Used on [Safe preview](../safe-preview.md).
+**Where it goes.** Put the line back where it says, with a blank line
+before and after it:
+
+- [Safe preview](../safe-preview.md), under **What you see**, after the paragraph that ends "a **Run notebook** button.", before "You can edit cells in safe preview.":
+
+  ```markdown
+  ![A notebook in safe preview: the Safe preview label in the header, and the box at the top of the notebook with the Run notebook button](images/safe-preview.png)
+  ```
+
+**On screen:**
 
 - A session opened on an existing notebook from disk, such as `decay.jl`
   with four or five cells and no outputs.
@@ -89,7 +142,16 @@ Used on [Safe preview](../safe-preview.md).
 
 ## point.png
 
-Used on [Sessions, the chat and the notebook](../sessions.md).
+**Where it goes.** Put the line back where it says, with a blank line
+before and after it:
+
+- [Sessions, the chat and the notebook](../sessions.md), at the end of **Ask about one part of the notebook**, after the paragraph that ends "keeps what you typed for next time.", before **When a cell fails**:
+
+  ```markdown
+  ![Point turned on: a plot is picked, and a bar under it holds the question for Claude](images/point.png)
+  ```
+
+**On screen:**
 
 - The "Coin flips" session with its plot.
 - Point is on: the notebook is dimmed, the hint pill shows at the top, and
@@ -100,7 +162,16 @@ Used on [Sessions, the chat and the notebook](../sessions.md).
 
 ## cluster-resources.png
 
-Used on [Clusters](../clusters.md).
+**Where it goes.** Put the line back where it says, with a blank line
+before and after it:
+
+- [Clusters](../clusters.md), under **Choose the job's resources**, after the line that ends "Click it to set this session's job:", before the list of presets:
+
+  ```markdown
+  ![The resources popover for a cluster session, with the Small, Medium and Large presets, the partition, and CPUs, memory and time limit](images/cluster-resources.png)
+  ```
+
+**On screen:**
 
 - The **Start a session** screen with a cluster picked in the **Where** chip
   (named, for example, "hpc").

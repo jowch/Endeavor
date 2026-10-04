@@ -42,8 +42,6 @@ Claude and Endeavor stay on your Mac, as with a [server](./servers.md).
 On the **Start a session** screen, a cluster session has a resources chip,
 for example "8 CPUs · 32 GB · 8 h". Click it to set this session's job:
 
-![The resources popover for a cluster session, with the Small, Medium and Large presets, the partition, and CPUs, memory and time limit](images/cluster-resources.png)
-
 - a preset: **Small** (2 CPUs, 8 GB, 2 hours), **Medium** (8 CPUs, 32 GB,
   8 hours) or **Large** (32 CPUs, 128 GB, 24 hours);
 - the partition;

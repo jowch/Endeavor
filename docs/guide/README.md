@@ -72,8 +72,10 @@ they need without wading through basics.
 - Images go in `images/` and are referenced relatively:
   `![Alt text that says what the picture shows](images/approval-card.png)`.
 - [images/SHOTS.md](images/SHOTS.md) lists every screenshot the guide uses,
-  with what must be on screen. An image may be referenced before it exists.
-  Take it from that list.
+  with what must be on screen and where each one goes in the pages.
+- Reference an image only once its file is in `images/`. The documentation
+  site's build fails on a missing image. Until then, keep its line in
+  SHOTS.md.
 - Keep the number of screenshots small. Add one only where a reader would be
   lost without it.
 

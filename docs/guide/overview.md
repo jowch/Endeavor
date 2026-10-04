@@ -10,8 +10,6 @@ assistant made by Anthropic. You describe what you want in a chat. Claude
 writes the code and runs it in a notebook next to the chat, and you watch each
 step, change what you like, and decide what runs.
 
-![The Endeavor window: the list of sessions on the left, the chat in the middle, and the notebook on the right](images/main-window.png)
-
 ## The words this guide uses
 
 - **Julia** is the programming language the code is written in. You don't

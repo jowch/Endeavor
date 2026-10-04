@@ -45,8 +45,6 @@ Which mode to use:
 
 ## Answer a card
 
-![An approval card above the message box asking "Edit `fit` and run it?", with the change shown as a diff and the Deny, Always this session and Edit and run buttons](images/approval-card.png)
-
 A card asks one question, such as "Run `rates`?", "Edit `data` and run it?"
 or "Delete `old_fit`?". Under it is the code or the change. A grey line says
 what else will happen, for example "Also re-runs 2 cells that depend on it."
