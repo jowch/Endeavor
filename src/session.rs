@@ -2305,8 +2305,9 @@ pub(crate) fn option_of_kind(options: &[PermissionOption], kind: PermissionOptio
 }
 
 /// A cell's name wherever the user sees one: what it defines (`model(S, p) = …`
-/// → `model`), a markdown cell's first heading or words, else its first line
-/// of code; cut to `LABEL_MAX` characters.
+/// → `model`), a markdown cell's first heading or words, "plot" for a cell that
+/// draws one, "text" for one that builds Markdown, a `let` or `begin` block's last value, else its first line of
+/// code; cut to `LABEL_MAX` characters.
 pub(crate) fn cell_label(code: &str) -> String {
     let label = match markdown_text(code) {
         Some(text) => {
@@ -2315,7 +2316,7 @@ pub(crate) fn cell_label(code: &str) -> String {
             heading.or_else(|| lines.next()).map_or("markdown", |l| l.trim_start_matches('#').trim()).to_owned()
         }
         None => match code_lines(code).next() {
-            Some(first) => defined_name(code).unwrap_or_else(|| first.to_owned()),
+            Some(first) => defined_name(code).or_else(|| inferred_name(code)).unwrap_or_else(|| first.to_owned()),
             None => "cell".to_owned(),
         },
     };
@@ -2345,6 +2346,39 @@ fn defined_name(code: &str) -> Option<String> {
     let lhs = lhs.trim().trim_start_matches("const ");
     let name: String = lhs.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '!').collect();
     (!name.is_empty()).then_some(name)
+}
+
+/// A name for code of more than one line that defines nothing (a single line
+/// names itself): "plot" when it calls a plotting
+/// function, "text" when it builds Markdown, else a `let` or `begin` block's
+/// last value when that's a name or a tuple of names (`t, y`).
+fn inferred_name(code: &str) -> Option<String> {
+    if code_lines(code).nth(1).is_none() {
+        return None;
+    }
+    const PLOTS: [&str; 8] = ["plot", "scatter", "heatmap", "histogram", "lines", "surface", "contour", "Figure"];
+    let calls_plot = code_lines(code).any(|line| {
+        PLOTS.iter().any(|f| {
+            line.match_indices(f).any(|(i, _)| {
+                let before = line[..i].chars().next_back();
+                let after = line[i + f.len()..].trim_start_matches('!');
+                !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') && after.starts_with('(')
+            })
+        })
+    });
+    if calls_plot {
+        return Some("plot".to_owned());
+    }
+    if code_lines(code).any(|line| line.contains("Markdown.parse(") || line.contains("md\"")) {
+        return Some("text".to_owned());
+    }
+    let lines: Vec<&str> = code_lines(code).collect();
+    if !matches!(lines.first(), Some(&("let" | "begin"))) || lines.last() != Some(&"end") || lines.len() < 3 {
+        return None;
+    }
+    let last = lines[lines.len() - 2];
+    let names = last.split(',').map(str::trim).all(|n| !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_'));
+    names.then(|| last.to_owned())
 }
 
 /// Code's lines, trimmed, without blank lines, `#` comments and `#= … =#` blocks.
@@ -3659,6 +3693,11 @@ more" }"#);
             ("md\"\"\"\nWe flip a fair coin a hundred times.\n\"\"\"", "We flip a fair coin a hundr…"),
             ("md\"## Results\"", "Results"),
             ("scatter(t, counts, label = \"data\")", "scatter(t, counts, label = …"),
+            ("let\n  n = 1:length(flips)\n  p = plot(n, share)\n  hline!(p, [0.5])\n  p\nend", "plot"),
+            ("let\n  A, k = coef(fit)\n  Markdown.parse(\"k = $k\")\nend", "text"),
+            ("let\n  a = sum(xs)\n  b = length(xs)\n  a, b\nend", "a, b"),
+            ("let\n  a = sum(xs)\n  a / 2\nend", "let"),
+            ("splot(x)", "splot(x)"),
             ("x == 1", "x == 1"),
             ("using Plots", "using Plots"),
             ("# just a note", "cell"),
