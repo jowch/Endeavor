@@ -132,19 +132,20 @@ impl Workspace {
         let mut rows: Vec<AnyElement> = Vec::new();
         for (i, q) in outbox.items.iter().enumerate().take(shown) {
             if let Some((text, _)) = removed.as_ref().filter(|(_, at)| *at == i) {
-                rows.push(self.render_removed_row(session, text, cx));
+                rows.push(arriving("queue-removed", self.render_removed_row(session, text, cx)));
             }
             let n = numbered.then_some(i + 1);
-            rows.push(if q.editing() {
+            let row = if q.editing() {
                 editing_row(n)
             } else if session.queue_open == Some(q.id) {
                 self.render_open_row(session, i, n, cx)
             } else {
                 self.render_queued_row(session, i, n, cx)
-            });
+            };
+            rows.push(crate::motion::arriving(div().child(row), ElementId::NamedInteger("queue-row".into(), q.id), false).into_any_element());
         }
         if let Some((text, _)) = removed.as_ref().filter(|(_, at)| *at >= shown) {
-            rows.push(self.render_removed_row(session, text, cx));
+            rows.push(arriving("queue-removed", self.render_removed_row(session, text, cx)));
         }
         if folded {
             rows.push(
@@ -162,7 +163,7 @@ impl Workspace {
                     .into_any_element(),
             );
         }
-        div().flex().flex_col().gap(px(6.)).children(self.render_queue_heading_line(session, cx)).children(rows)
+        div().flex().flex_col().gap(px(6.)).children(self.render_queue_heading_line(session, cx).map(|line| arriving("queue-heading", line))).children(rows)
     }
 
     /// One closed row: its number, its first chips, its words cut to fit, and
@@ -394,4 +395,9 @@ fn editing_row(n: Option<usize>) -> AnyElement {
         .child(div().flex_shrink_0().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("esc"))
         .child(div().flex_shrink_0().text_size(px(11.5)).text_color(theme::text_faint()).child("puts it back"))
         .into_any_element()
+}
+
+/// Rising in from the composer as it appears.
+fn arriving(name: &'static str, element: AnyElement) -> AnyElement {
+    crate::motion::arriving(div().child(element), name, false).into_any_element()
 }

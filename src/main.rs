@@ -2137,6 +2137,9 @@ impl Workspace {
                 .bg(linear_gradient(180., linear_color_stop(theme::bg_page().opacity(0.), 0.), linear_color_stop(theme::bg_page(), 1.)))
         });
         let summary = self.render_opening_summary(session);
+        // What shows above the composer rises from it as it appears.
+        let key = session.key;
+        let card = |name: &'static str, card: Option<_>| card.map(|card| motion::arriving(div().child(card), ElementId::NamedInteger(name.into(), key), false));
         div()
             .relative()
             .flex_1()
@@ -2175,13 +2178,13 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .children(approval::render_pinned_plan(session, cx))
-                    .children(self.render_offline_line(Some(session), cx))
-                    .children(self.render_usage_line(cx))
-                    .children(self.render_runtime_wait(session, cx))
-                    .children(self.render_claude_trouble(cx))
-                    .children(self.render_sign_in_card(cx))
-                    .children(approval::render_approval(session, notebook_open && session.notebook.as_deref() == Some(self.page.notebook.as_str()), window, cx))
+                    .children(card("pinned-plan", approval::render_pinned_plan(session, cx)))
+                    .children(card("offline-line", self.render_offline_line(Some(session), cx)))
+                    .children(card("usage-line", self.render_usage_line(cx)))
+                    .children(card("runtime-wait", self.render_runtime_wait(session, cx)))
+                    .children(card("claude-trouble", self.render_claude_trouble(cx)))
+                    .children(card("sign-in-card", self.render_sign_in_card(cx)))
+                    .children(card("approval-card", approval::render_approval(session, notebook_open && session.notebook.as_deref() == Some(self.page.notebook.as_str()), window, cx)))
                     .child(self.render_queue(session, cx))
                     .child(self.render_composer(Some(session), notebook_open, window, cx)),
             )
