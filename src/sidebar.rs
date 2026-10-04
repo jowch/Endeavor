@@ -229,13 +229,13 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
     let id = id.into();
     let slot = bullet_slot().id(id.clone());
     let dot = |d: f32| div().size(px(d)).rounded_full();
-    let Some(mark) = mark else { return slot.child(dot(7.).border_1().border_color(theme::text_faint())) };
+    let Some(mark) = mark else { return slot.child(dot(6.).border_1().border_color(theme::text_faint())) };
     let words: SharedString = mark.words().into();
     let icon = match &mark {
-        RowMark::NeedsYou => dot(11.).border_1().border_color(theme::accent()).flex().items_center().justify_center().child(dot(7.).bg(theme::accent())).into_any_element(),
+        RowMark::NeedsYou => dot(6.).bg(theme::accent()).into_any_element(),
         RowMark::Error => glyph(Glyph::Warning, theme::danger()).into_any_element(),
         RowMark::Working => {
-            let fill = dot(7.).bg(theme::text_muted());
+            let fill = dot(6.).bg(theme::text_muted());
             let breath = theme::motion_pulse();
             if breath.is_zero() {
                 fill.into_any_element()
@@ -243,7 +243,7 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
                 fill.with_animation(id, Animation::new(breath).repeat(), |d, t| d.opacity(0.65 - 0.35 * (std::f32::consts::TAU * t).cos())).into_any_element()
             }
         }
-        RowMark::NewReply => dot(6.).bg(theme::accent()).into_any_element(),
+        RowMark::NewReply => dot(6.).border_1().border_color(theme::accent()).flex().items_center().justify_center().child(dot(2.).bg(theme::accent())).into_any_element(),
         RowMark::ServerDown { .. } => glyph(Glyph::WifiOff, theme::text_muted()).into_any_element(),
         RowMark::Waiting { .. } => glyph(Glyph::Clock, theme::text_muted()).into_any_element(),
     };
@@ -574,7 +574,7 @@ impl Workspace {
                 .map(|n| highlighted_span(&n, query)),
         };
         if !searching && second.is_none() {
-            return div().flex_1().overflow_hidden().whitespace_nowrap().child(title.to_string());
+            return div().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis().child(title.to_string());
         }
         let title_el = if searching { highlighted_span(title, query) } else { div().overflow_hidden().whitespace_nowrap().child(title.to_string()).into_any_element() };
         div()
@@ -789,7 +789,7 @@ impl Workspace {
                     .tab_stop(true)
                     .focus_visible(|d| d.border_color(theme::focus_ring()))
                     .when(archived, |d| d.text_color(theme::text_section()))
-                    .child(bullet_slot().when(archived, |d| d.child(glyph(Glyph::Archive, theme::text_section()))))
+                    .child(if archived { bullet_slot().child(glyph(Glyph::Archive, theme::text_section())).into_any_element() } else { bullet("row-bullet", None).into_any_element() })
                     .child(title)
                     .child(self.row_more(row.clone(), group, false, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
