@@ -108,6 +108,10 @@ When your sign-in runs out later, a card says **Sign in to Claude again**.
 Click **Sign in**, or **Use another account**. Your notebooks keep working
 meanwhile, and a message you sent is kept and goes after you sign in.
 
+For Codex, the card says **Sign in to Codex**. Click **Sign in** to sign in
+with ChatGPT in your browser, or run `codex login` in a terminal and click
+**Check again**.
+
 ## Claude doesn't answer
 
 - **"Claude couldn't answer"**, with a reason such as "Anthropic's servers are

@@ -1,19 +1,21 @@
 # Other agents: Cursor, Codex and Gemini
 
-Endeavor runs one agent today: Claude Code, through the
-`@agentclientprotocol/claude-agent-acp` adapter. The sign-in screen lists
-Cursor, Codex and Gemini as "Not available yet".
+Endeavor runs two agents: Claude Code, through the
+`@agentclientprotocol/claude-agent-acp` adapter, and Codex, through
+`@agentclientprotocol/codex-acp` (This Mac only; see
+[codex-agent.md](codex-agent.md)). Cursor and Gemini are listed as "Not
+available yet".
 
 This note covers two things:
 
 - the work that makes Endeavor agent-neutral, which any second agent needs
-  (items 1 to 4 are done, and item 10 is done for Claude);
+  (items 1 to 7, 9 and 10 are done; item 8 is still needed for Cursor);
 - what has to be found out about each agent before choosing which one to add.
 
 Cursor was tested in a spike on 2026-09-27 and again live on 2026-10-02; its
 findings are in [cursor-agent.md](cursor-agent.md). Codex was tested on
-2026-10-04 and is being added; its findings are in
-[codex-agent.md](codex-agent.md). Gemini hasn't been tested yet.
+2026-10-04 and added the same day; its findings and what changed for it are
+in [codex-agent.md](codex-agent.md). Gemini hasn't been tested yet.
 
 ## Where Endeavor depends on Claude Code
 
@@ -186,18 +188,25 @@ In order. Each part is also useful to Claude, or harmless to it.
    with each session's MCP requests (`Tools::mcp_server`), and the server
    then leaves out both the instructions and the tool. An agent that doesn't
    load the plugin should leave the header out (work item 5's table).
-5. **One table of per-agent facts** in `src/agent.rs`: how to install and
-   start it, how to check sign-in, its session options, its modes, and the
-   name shown in the app. Run one ACP connection per agent.
-6. **Name the agent in the app from that table.** Replace the fixed "Claude"
-   strings. The page script already names the agent through one `AGENT`
-   constant (`frontend/src/prompt.ts`); set it from the table.
-7. **A per-agent saved model**, and never re-apply a model to an agent where
-   that changes the user's own default.
+5. **One table of per-agent facts.** Done: `agent::Agent` and `AgentFacts`
+   in `src/agent.rs` hold how to install and start each agent, how its
+   sign-in is checked, whether it loads Endeavor's plugin, its folder rules,
+   whether it runs on servers, its config options and its name. Each agent
+   has one ACP connection (`agent_process::Links`); an agent whose sessions
+   differ from Claude's at the ACP boundary has a dialect there
+   (`codex::Dialect`), so the rest of the app needs no per-agent branches.
+6. **Name the agent in the app from that table.** Done for what a session
+   shows. The page script's `AGENT` follows the session's agent. Claude's
+   own sign-in, Settings and About pages keep its name.
+7. **A per-agent saved model.** Done: each agent's last options and picks
+   are kept apart. Never re-apply a model to an agent where that changes the
+   user's own default (Cursor); Codex's changes only the session.
 8. **Replay that doesn't depend on block boundaries.** Split a joined user
    message on the "[Endeavor]" and `<attached …>` / `<quote …>` markers.
-9. **An agent choice on the new-session screen**, and each agent's sign-in on
-   the sign-in screen.
+   Still needed for Cursor; Codex keeps blocks apart.
+9. **An agent choice on the new-session screen**, and each agent's sign-in.
+   Done: the agent chip, and each agent's own sign-in card. First launch
+   still signs in to Claude.
 10. **A sidebar that doesn't wait for any agent.** Done for Claude:
     `sessions.json` keeps each session's agent, place, title and last
     activity (`src/records.rs`; user names stay in `titles.json`, archiving
@@ -207,8 +216,9 @@ In order. Each part is also useful to Claude, or harmless to it.
     agent made outside Endeavor aren't added, and a failed listing changes
     nothing. Claude starts at launch alongside Julia, except during
     first-launch setup. A session opened before its host's Julia is up waits
-    with "Starting Julia…". Still to do with a second agent: starting it
-    when one of its sessions is opened, and showing the agent on rows.
+    with "Starting Julia…". An agent that starts on demand (Codex) starts
+    when it is picked or one of its sessions opens. Still to do: showing the
+    agent on rows.
 
 After that, each agent needs its own handling of whatever its answers to the
 questions below turn up, such as Cursor's plan request.
@@ -247,9 +257,9 @@ agent is cheapest to add.
 What is known already:
 
 - **Gemini CLI** speaks ACP itself. Installed here at `/opt/homebrew/bin/gemini`.
-- **Codex** is answered in [codex-agent.md](codex-agent.md). Its adapter is
-  `@agentclientprotocol/codex-acp`; the older `@zed-industries/codex-acp`
-  is deprecated.
+- **Codex** is answered in [codex-agent.md](codex-agent.md), and added. Its
+  adapter is `@agentclientprotocol/codex-acp`; the older
+  `@zed-industries/codex-acp` is deprecated.
 
 ## How to investigate
 
@@ -308,8 +318,8 @@ nothing has to be kept in sync:
   and only for agents whose lasting rules stay inside the session folder.
   Claude Code writes them to `.claude/settings.local.json`, which Endeavor's
   session options load (`settingSources` always includes `local`). Cursor's
-  "always" changes the user's global config, so Cursor gets only "This
-  session". Endeavor keeps no copy; it reads the agent's settings to list the
+  and Codex's "always" options change the user's own config, so they get
+  only "This session". Endeavor keeps no copy; it reads the agent's settings to list the
   folder's rules ("Allowed in this folder" in the session menu, each with
   Remove).
 

@@ -1,5 +1,9 @@
 # Codex as a second agent
 
+Endeavor runs Codex as a second agent, on This Mac. What changed for it is
+in "Changes Endeavor needs for Codex" below; what's left is under "Left
+open". The rest of this note is the study it was built from.
+
 Findings from a headless test on 2026-10-04. Codex can run Endeavor's
 notebook loop through an ACP adapter, with the notebook MCP server passed in
 `session/new` the way Endeavor passes it to Claude Code. Two things need
@@ -368,64 +372,138 @@ and `notes.txt` from the shell test. `endeavor serve` unpacked its runtime to
 ## Changes Endeavor needs for Codex
 
 In order. Items 1 to 6 are [other-agents.md](other-agents.md)'s work items
-5 to 10, as Codex needs them.
+5 to 10, as Codex needs them. Status as of the `codex-support` branch
+(2026-10-04).
 
-1. **The per-agent table (item 5).** Codex's row:
-   - Adapter `@agentclientprotocol/codex-acp`, pinned like Claude's. It
-     brings its own `codex`; pass `CODEX_PATH` only if Endeavor decides to
-     follow the user's CLI.
-   - Sign-in from `codex login status`, or from `_auth/status_update` once the
-     adapter runs.
-   - `INITIAL_AGENT_MODE=workspace-write`, and the mode set again per session
-     (item 8 below).
-   - The notebook MCP server without `X-Endeavor-Skills`.
-   - Stop the adapter by its process group. The Zed package showed a wrapper
-     that doesn't pass signals on; the ACP adapter's `codex app-server` is a
-     child process too.
-2. **Name the agent in the app (item 6).** "Codex".
-3. **A per-agent saved model (item 7).** Re-applying is safe for Codex: it
-   writes nothing global. Effort values differ from Claude's (`low` to
-   `ultra`), and there is a `fast-mode` option.
-4. **Replay (item 8).** ACP 2.1.1 keeps blocks apart, so Codex needs nothing
-   here. Cursor still does.
-5. **Agent choice and sign-in screen (item 9).** Codex's sign-in is
-   `codex login` in a terminal, or `authenticate` with `chat-gpt`.
-6. **Starting Codex when one of its sessions opens (item 10).** `session/list`
-   returns sessions the user's own Codex made in the same folder.
-   `Records::merge` already leaves those out.
-7. **Runs that outlive the turn.** Codex stops waiting for a held run after
-   about two minutes (120 seconds with the old engine) and ends the turn with
-   the call still open. It never cancels the MCP request. Treat a turn that
-   ends while one of its runs waits like Stop: deny the ask, and say on the
-   card that Codex stopped waiting. Otherwise the run can happen after the
-   turn, and Codex learns of it only as a late `tool_call_update`.
-8. **Modes.** Map Endeavor's modes onto Codex's, never using
-   `agent-full-access`:
-   - Manual: `workspace-write`, runtime policy "ask" with `edits: true`.
-   - Ask to run: `workspace-write`, runtime "ask".
-   - Auto: `workspace-write`, runtime "auto", and Endeavor answers Codex's
-     notebook-tool prompts allow-once itself. Codex's `agent` mode would
-     let its AI reviewer decide instead, which can refuse a run the user
-     wanted.
-   - Plan: `collaboration_mode: plan`, runtime "plan".
-9. **Codex's permission prompt.** For a request with only a `toolCallId`
-   (`_meta.is_mcp_tool_approval`), take the tool and arguments from the
-   matching `tool_call`. The Cursor path takes them from a
-   `tool_call_update`, so check that it covers a `tool_call` too. Answer only
-   `allow_once`; never `allow_always` or `accept_execpolicy_amendment`, which
-   save rules in the user's Codex setup.
-10. **Tool results.** Read `rawOutput.result.content` (ACP 2.1.1) in
-    `celldiff::tool_json`. Then live calls need no runtime lookup, and
-    reopened sessions show results.
-11. **Plan approval.** Show the `switch_mode` request titled "Implement
-    this plan?" as the plan card, with the plan from `rawInput.plan`.
-    `implement_plan` approves; `revise_plan` keeps planning.
+1. **The per-agent table (item 5).** Done. `agent::Agent` names the agents
+   and `AgentFacts` (`src/agent.rs`) holds what differs. Codex's row:
+   - Adapter `@agentclientprotocol/codex-acp` 2.1.1, pinned in
+     `adapter-codex/` (package.json and lockfile) and installed with the
+     app's own Node and `npm ci`, like Claude's. It installs into
+     `codex-adapter-<version>` in the app's folder, about 334 MB, when Codex
+     first starts. It uses the `codex` it bundles (0.159.3); no `CODEX_PATH`.
+   - Sign-in from `codex login status`, run through the adapter's bundled
+     `codex` (`codex-acp cli login status`) before connecting.
+   - `INITIAL_AGENT_MODE=workspace-write`. A session that starts in another
+     mode is set to `workspace-write` once it is up.
+   - The notebook MCP server without `X-Endeavor-Skills`, so Codex gets the
+     guide tool.
+   - Stopping: the ACP library already stops the adapter's whole process
+     group when the connection drops, and the adapter stops its
+     `codex app-server` when its stdin closes.
+2. **Name the agent in the app (item 6).** Done for the session's own text
+   (notes, cards, the queue, row marks, notifications, the context ring,
+   Reply, the page script's "Ask …"). Claude's sign-in, Settings and About
+   pages stay Claude's.
+3. **A per-agent saved model (item 7).** Done. Each agent keeps its last
+   config options (`agent-options.json`, `codex-options.json`) and its
+   last picks (`agent_config`, `codex_config` in settings.json), applied to
+   each new session. The composer shows the agent's own chips: Codex's are
+   Model, Effort (`low` to `ultra`) and Speed (fast mode, "Standard"
+   or "Fast").
+4. **Replay (item 8).** Nothing to do for Codex: ACP 2.1.1 keeps blocks
+   apart.
+5. **Agent choice and sign-in screen (item 9).** Done. The new-session
+   screen has an agent chip, kept from the last pick (also Settings →
+   Assistants, where Codex has its own row). Codex starts when it is picked,
+   so its sign-in and options are known before the first message. Signed
+   out, a card offers **Sign in** (the adapter's own `codex-acp login`,
+   which opens ChatGPT's sign-in page) and **Check again** (after
+   `codex login` in a terminal). Codex's sessions wait, with a line that
+   says so, while it installs, connects or is signed out. Not tested
+   signed out, since signing out was off limits.
+6. **Starting Codex when one of its sessions opens (item 10).** Done. A
+   reopened session starts on the agent its record names; each agent's
+   listing touches only its own records.
+7. **Runs that outlive the turn.** Done. A turn that ends while one of its
+   runs waits in the runtime denies the ask, as Stop does, and the
+   transcript says "Codex stopped waiting for your answer to …".
+8. **Modes.** Done, in `codex::Dialect` (`src/codex.rs`), which turns
+   Codex's sessions into the shape the app knows from Claude's: the mode ids
+   `default`, `auto` and `plan` in place of Codex's sandbox presets.
+   - Manual and Ask to run: `workspace-write`; the runtime's gate differs
+     (`edits: true` in Manual).
+   - Auto: the same, and Endeavor answers Codex's notebook prompts.
+   - Plan: `collaboration_mode: plan`, runtime "plan". Approving the plan
+     goes on in Ask to run, as Claude's Start does.
+   `agent` and `agent-full-access` are never used.
+9. **Codex's permission prompt.** Done. A prompt with only a `toolCallId`
+   takes the tool and arguments from the recorded `tool_call`. Because
+   Codex asks before every notebook write in `workspace-write`, whatever
+   Endeavor's mode, Endeavor answers its notebook prompts `allow_once` and
+   leaves the decision to the runtime, which holds what the mode asks
+   about (`AgentFacts::asks_every_write`). This covers Ask to run's edits
+   too, not only Auto: otherwise Ask to run would ask before every edit. On
+   a runtime from an older build, which can't hold calls, Codex's prompts
+   are the cards. Endeavor only ever answers `allow_once`, reject or
+   cancel; Codex gets no "In this folder".
+10. **Tool results.** Done, in the dialect: Codex's `rawOutput`
+    (`{result: {content}, error}`) is handed on as the MCP content, so live
+    calls need no runtime lookup and reopened sessions show results. The
+    guide tool's text result isn't looked up either.
+11. **Plan approval.** Done. `implement_plan` is a plan option, so the
+    request titled "Implement this plan?" is the plan card, with the plan
+    from `rawInput.plan`.
 12. **Smaller things.**
-    - Ignore `session_info_update` that carries only `_meta.codex.threadStatus`.
-    - If `agent` mode is ever used, show or hide its "Guardian Review" calls
-      (`kind: "think"`).
-    - The personal-setup switch can't apply: Codex always loads the user's
-      skills, plugins and AGENTS.md.
+    - `session_info_update` with only `_meta.codex.threadStatus` changes
+      nothing: the session only takes a title.
+    - `agent` mode isn't used, so "Guardian Review" calls don't appear.
+    - The personal-setup switch doesn't apply: Codex always loads the
+      user's skills, plugins and AGENTS.md.
+
+13. **Telling Codex the notebook is Pluto's.** Done. Without Endeavor's
+    plugin, Codex answered "make a new notebook" in the app by writing a
+    Jupyter notebook with its shell; the runtime's MCP instructions only
+    reach it once it looks at the notebook tools. A new Codex session's
+    first message now carries an "[Endeavor]" note
+    (`AgentFacts::session_intro`): the notebook is a Pluto notebook, use the
+    notebook tools and call `notebook_guide` first, don't make Jupyter
+    notebooks or start Julia from the shell. With it, Codex read the guide
+    and worked in Pluto.
+
+### Live check in the app
+
+2026-10-04, a debug build in a private HOME with `CODEX_HOME` at the
+user's own Codex login, model `gpt-6-luna` set per session (the saved pick,
+applied over ACP). Three Codex turns and one Claude turn.
+
+- Picking Codex on the new-session screen installed nothing new (the
+  adapter was already in that HOME), checked the sign-in (signed in, no
+  card) and connected.
+- In Ask to run, Codex read the guide, made the notebook and edited the cell
+  with no card, then the runtime held the run: one run card, "Edit y and run
+  it?". Approved, the cell ran (`y = 42`) and the notebook showed beside the
+  chat with "Codex asks to run this" while it waited.
+- Stop while a second run card waited denied the run. Codex got
+  `not_approved` and finished its turn itself ("the run wasn't approved, so
+  the cell is staged") before the cancel reached it, so the transcript
+  shows its reply rather than "You stopped Codex".
+- Reopening after a restart replayed the session, with the "[Endeavor]"
+  note hidden, the tool results and changed-cells cards, Ask to run and the
+  saved model.
+- A Claude session answered as before, with Claude's own model and effort.
+
+### Left open
+
+- **Server sessions.** Codex is offered on This Mac only. The agent runs
+  on this computer for every session, and Claude's own file and shell tools
+  are turned off for a server session (`disallowedTools`). Codex has no
+  per-session way to turn off its shell and file tools, so on a server
+  session they would act on this computer. Making Codex work there needs
+  that switch (perhaps a `CODEX_CONFIG` key, untested) or a Codex started
+  on the server.
+- **First launch** still signs in to Claude: setup finishes once Claude is
+  connected and signed in. Codex can be picked after that.
+- **Manual mode's reach.** In `workspace-write`, Codex edits files in the
+  session folder and runs sandboxed commands without asking; Manual asks
+  only before notebook edits and runs. `read-only` would make it ask, at
+  the cost of a prompt for every shell write.
+- **Usage limit.** A turn that hits a usage limit holds every session's
+  messages, Claude's and Codex's, as it did with one agent. Codex's limit
+  errors haven't been seen, so whether they are recognised is unknown.
+- **The sidebar** doesn't show which agent a session is on.
+- **Codex's model list** comes from its first session; the new-session
+  screen shows Codex's chips only after Codex has started once.
 
 ## Not found out
 

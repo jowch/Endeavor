@@ -11,8 +11,9 @@ Settings.
 
 ## Assistants
 
-**New sessions use** shows **Claude** and whether you're signed in. Click
-**Settings** next to Claude for these:
+**New sessions use** shows the assistants new sessions can use, and whether
+you're signed in to each. The one picked is the one the new-session screen
+starts with. Click **Settings** next to Claude for these:
 
 - **Use my Claude Code setup**. Off by default. When on, new sessions also
   load your own Claude Code settings and the tools you connected to it. Leave
@@ -22,7 +23,12 @@ Settings.
 - **Sign out**. Claude stops answering in every session until you sign in
   again.
 
-Cursor, Codex and Gemini are listed as **Not available yet**.
+**Codex**, by OpenAI, works in sessions on your Mac. It uses your ChatGPT
+sign-in, the same one as the `codex` command. When you're not signed in, its
+row has **Sign in**, which opens ChatGPT's sign-in page in your browser, and
+**Check again**, for after you sign in with `codex login` in a terminal.
+
+Cursor and Gemini are listed as **Not available yet**.
 
 ## Notebooks
 

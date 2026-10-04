@@ -49,8 +49,9 @@ reasoning stays with the code.
   talk to Claude. Notebooks on your Mac keep working offline.
 
 Endeavor runs only on macOS for now. There is no Windows or Linux version.
-Claude is the only assistant it works with today. Other assistants are listed
-in Settings as **Not available yet**.
+Besides Claude, a session on your Mac can use Codex, OpenAI's assistant,
+with a ChatGPT account. Pick it on the new-session screen. Other assistants
+are listed in Settings as **Not available yet**.
 
 There is no signed download yet. For now, Endeavor is
 [built from its source code](https://github.com/jowch/Endeavor#build-it). The

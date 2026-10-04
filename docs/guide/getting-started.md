@@ -67,6 +67,9 @@ need no data. Two use a file of your own.
 
 The chips above the message box say where the session works:
 
+- **The assistant**: **Claude**, or **Codex** for a session on your Mac. The
+  first time you pick Codex, Endeavor installs it, and asks you to sign in
+  with ChatGPT if you aren't already.
 - **Where** the notebook runs. **This Mac** is your computer. You can also
   pick a server or a cluster you have added.
 - **The folder** the session works in. A new session on your Mac starts in
