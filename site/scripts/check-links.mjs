@@ -40,27 +40,34 @@ for (const file of htmlFiles(dist)) {
 	const page = '/' + relative(dist, file).split('\\').join('/').replace(/index\.html$/, '');
 	const pageUrl = new URL(base.slice(0, -1) + page, site);
 	const html = readFileSync(file, 'utf8');
-	for (const [tag, attr, raw] of html.matchAll(/<(?:a|link|script|img|source)\b[^>]*?\s(href|src|srcset)="([^"]*)"[^>]*>/g)) {
+	for (const [tag] of html.matchAll(/<(?:a|link|script|img|source|meta)\b[^>]*>/g)) {
 		// GitHub Pages serves 404.html for any missing path, so its canonical URL has no file.
 		if (page === '/404.html' && tag.includes('rel="canonical"')) continue;
-		const value = raw.replaceAll('&amp;', '&').split(/\s/)[0];
-		if (!value || /^(mailto|tel|data|javascript):/.test(value)) continue;
-		const url = new URL(value, pageUrl);
-		if (url.origin !== site) continue;
-		checked++;
-		const where = `${relative(dist, file)}: ${attr}="${raw}"`;
-		if (!url.pathname.startsWith(base)) {
-			problems.push(`${where} is outside ${base}`);
-			continue;
-		}
-		const target = targetFile(url.pathname);
-		if (!existsSync(target)) {
-			problems.push(`${where} points to a missing file`);
-			continue;
-		}
-		const hash = decodeURIComponent(url.hash.slice(1));
-		if (hash && target.endsWith('.html') && !ids(target).has(hash)) {
-			problems.push(`${where} points to a missing #${hash}`);
+		const isImageMeta = /\s(?:property|name)="(?:og:image|twitter:image)"/.test(tag);
+		for (const [, attr, raw] of tag.matchAll(/\s(href|src|srcset|content)="([^"]*)"/g)) {
+			if (attr === 'content' && !isImageMeta) continue;
+			const decoded = raw.replaceAll('&amp;', '&');
+			const values = attr === 'srcset' ? decoded.split(',').map((c) => c.trim().split(/\s/)[0]) : [decoded.trim()];
+			for (const value of values) {
+				if (!value || /^(mailto|tel|data|javascript):/.test(value)) continue;
+				const url = new URL(value, pageUrl);
+				if (url.origin !== site) continue;
+				checked++;
+				const where = `${relative(dist, file)}: ${attr}="${value}"`;
+				if (!url.pathname.startsWith(base)) {
+					problems.push(`${where} is outside ${base}`);
+					continue;
+				}
+				const target = targetFile(url.pathname);
+				if (!existsSync(target)) {
+					problems.push(`${where} points to a missing file`);
+					continue;
+				}
+				const hash = decodeURIComponent(url.hash.slice(1));
+				if (hash && target.endsWith('.html') && !ids(target).has(hash)) {
+					problems.push(`${where} points to a missing #${hash}`);
+				}
+			}
 		}
 	}
 }
