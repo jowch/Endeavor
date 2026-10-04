@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use endeavor_mcp::embedded;
@@ -20,9 +21,13 @@ pub fn runtime() -> Result<PathBuf, String> {
     Ok(dir.join("runtime"))
 }
 
-/// The Pluto skills as the Claude Code plugin the app loads, unpacked the same way.
+/// The Pluto skills as the Claude Code plugin the app loads, unpacked the same
+/// way. The app holds the folder while it runs: Claude sessions read it for
+/// as long as they last, and another version's unpack removes unheld folders.
 pub fn plugin() -> Result<PathBuf, String> {
+    static LEASE: OnceLock<Option<endeavor_mcp::Lease>> = OnceLock::new();
     let dir = endeavor_mcp::unpack(&app_dir()?.join("plugin"), embedded::PLUGIN_VERSION, embedded::PLUGIN_FILES)?;
+    LEASE.get_or_init(|| endeavor_mcp::lease(&dir));
     Ok(dir.join("plugin"))
 }
 
