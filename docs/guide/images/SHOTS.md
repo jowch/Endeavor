@@ -4,12 +4,19 @@ description: The screenshots the user guide needs, and what must be on screen in
 draft: true
 ---
 
-None of these screenshots exist yet, so the pages don't show them: the
-documentation site's build fails on an image that is missing. Take each one
-from a release build (`scripts/bundle.sh`), so there are no debug-only marks,
-and save it here under the file name given. Then put its line back into each
-page listed under **Where it goes**, and commit the picture and the pages
-together.
+All seven screenshots below are in this folder, and their lines are in the
+pages listed under **Where it goes**. Each entry stays here as the spec for
+a retake, with a **Taken** note on how the current picture differs from it.
+
+The current set was taken on 3 October 2026 from a release build, except
+`sign-in.png` (see its entry). The Mac they were taken on had no Retina
+display, so they are 1× (1440×900 pixels for the full window), not 2×.
+Retake them at 2× when a Retina display is at hand.
+
+To retake a shot, take it from a release build (`scripts/bundle.sh`), so
+there are no debug-only marks, and save it here under the same file name.
+The documentation site's build fails on an image that is missing, so
+don't delete a picture while a page still uses it.
 
 For every shot:
 
@@ -25,8 +32,12 @@ For every shot:
 
 ## main-window.png
 
-**Where it goes.** Put each line back where it says, with a blank line
-before and after it:
+**Taken.** The notebook has five cells: a title cell, `using`, `flips`,
+`n_heads` and the plot. The first turn's changed-cells card lists all five;
+cells without a name show as "cell" and an id.
+
+**Where it goes.** Each line sits where it says, with a blank line before
+and after it:
 
 - [What Endeavor is](../overview.md), after the first paragraph, before **The words this guide uses**:
 
@@ -57,8 +68,13 @@ before and after it:
 
 ## sign-in.png
 
-**Where it goes.** Put the line back where it says, with a blank line
-before and after it:
+**Taken.** From a debug build, because only a debug build reads
+`ENDEAVOR_CLAUDE_CLI`. It pointed at a stand-in `claude` that reports
+"signed out", with setup not yet finished, so nobody was signed out. Cropped
+to the middle 720 points of the window.
+
+**Where it goes.** The line sits where it says, with a blank line before
+and after it:
 
 - [Get started](../getting-started.md), under **Sign in to Claude**, after the paragraph that ends "Click **Continue**.", before the numbered list:
 
@@ -78,8 +94,11 @@ before and after it:
 
 ## start-session.png
 
-**Where it goes.** Put the line back where it says, with a blank line
-before and after it:
+**Taken.** As specified. The mode shows in the row under the message box,
+not among the chips.
+
+**Where it goes.** The line sits where it says, with a blank line before
+and after it:
 
 - [Get started](../getting-started.md), under **Start your first session**, after the first paragraph, before "Under **Try one of these, or ask in your own words**":
 
@@ -99,8 +118,11 @@ before and after it:
 
 ## approval-card.png
 
-**Where it goes.** Put the line back where it says, with a blank line
-before and after it:
+**Taken.** The diff has one line removed and one added, and the card says
+"Also re-runs 1 cell that depends on it."
+
+**Where it goes.** The line sits where it says, with a blank line before
+and after it:
 
 - [Modes and approvals](../modes-and-approvals.md), first under **Answer a card**, before "A card asks one question":
 
@@ -121,8 +143,10 @@ before and after it:
 
 ## safe-preview.png
 
-**Where it goes.** Put the line back where it says, with a blank line
-before and after it:
+**Taken.** As specified, with five cells.
+
+**Where it goes.** The line sits where it says, with a blank line before
+and after it:
 
 - [Safe preview](../safe-preview.md), under **What you see**, after the paragraph that ends "a **Run notebook** button.", before "You can edit cells in safe preview.":
 
@@ -142,8 +166,11 @@ before and after it:
 
 ## point.png
 
-**Where it goes.** Put the line back where it says, with a blank line
-before and after it:
+**Taken.** After the second turn's edits ran, so the plot shows 10,000
+flips. The bar reads "Figure in cell", because the plot cell has no name.
+
+**Where it goes.** The line sits where it says, with a blank line before
+and after it:
 
 - [Sessions, the chat and the notebook](../sessions.md), at the end of **Ask about one part of the notebook**, after the paragraph that ends "keeps what you typed for next time.", before **When a cell fails**:
 
@@ -162,8 +189,12 @@ before and after it:
 
 ## cluster-resources.png
 
-**Where it goes.** Put the line back where it says, with a blank line
-before and after it:
+**Taken.** The cluster "hpc" was a test VM. Its partitions were set in the
+app's `hosts.json` (`standard`, 64 CPUs, 256 GB, 48 h) so that **Medium**
+fits.
+
+**Where it goes.** The line sits where it says, with a blank line before
+and after it:
 
 - [Clusters](../clusters.md), under **Choose the job's resources**, after the line that ends "Click it to set this session's job:", before the list of presets:
 
