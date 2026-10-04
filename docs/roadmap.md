@@ -18,23 +18,15 @@ server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)
 
 ## Next
 
-- **One port per runtime.** Pluto's page, MCP and the app's calls on one
-  port answered by the core, with one token, instead of two ports. Built and
-  checked live on This Mac, a server and Slurm. Plan in [one-port.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/one-port.md).
-- **The notebook tools as a standalone product.** Built: `endeavor
-  serve`, which a user runs on a workstation or inside their own cluster job
-  and which prints the browser link, agent configs and the `ssh -L` line; the
-  stdio form `endeavor mcp`; a Claude Code plugin in EndeavorMCP's `claude-plugin/`.
-  Guide in [EndeavorMCP's README](https://github.com/jowch/EndeavorMCP#readme), design in
-  [one-port.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/one-port.md), "The standalone command". Left: try the plugin
-  and Codex and Gemini for real, adapt the skills where they describe the
-  app, a tagged release, and an update command (`endeavor update`,
-  maybe `endeavor update` after a rename). Its open questions: where it gets
-  new versions (the Helpers release assets that `scripts/helpers.sh`
-  downloads, or a tagged release), how it checks the download (checksum or
-  signature), replacing its own binary while it runs, what happens to a
-  runtime already running from the older build (the build check and Restart
-  Julia exist for the app), and how a `cargo install` user updates instead.
+- **Ember (R notebooks).** In development in its own repository. It joins
+  EndeavorMCP as another adapter behind the core; on this side it needs the
+  pane, header and logo for an R notebook and the notebook chip listing R
+  files. Start once Ember's interface is settled.
+- **README, landing page and documentation website.**
+
+The notebook tools (runtime, MCP server, `endeavor serve`) live in
+[EndeavorMCP](https://github.com/jowch/EndeavorMCP); their open work is in its
+[docs/status.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/status.md).
 
 ## Before sharing the app
 
