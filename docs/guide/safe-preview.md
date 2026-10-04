@@ -1,7 +1,8 @@
 ---
 title: Safe preview
 description: Why a notebook from disk opens without running, and how to run it.
-order: 50
+sidebar:
+  order: 50
 ---
 
 A notebook you open from disk doesn't run when it opens. It opens in safe

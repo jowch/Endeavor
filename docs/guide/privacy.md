@@ -1,7 +1,8 @@
 ---
 title: Privacy and what stays on your computer
 description: What Endeavor sends to Anthropic, what runs where, and what it keeps on your Mac.
-order: 120
+sidebar:
+  order: 120
 ---
 
 Endeavor and Claude Code run on your Mac. Your notebooks run on your Mac or on

@@ -1,7 +1,8 @@
 ---
 title: What Endeavor is
 description: What Endeavor does, what you need to use it, and what it installs on your Mac.
-order: 10
+sidebar:
+  order: 10
 ---
 
 Endeavor is a Mac app for doing your own data analysis with Claude, an AI

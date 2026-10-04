@@ -1,7 +1,8 @@
 ---
 title: Settings
 description: Every setting in Endeavor, what it does, and its default.
-order: 100
+sidebar:
+  order: 100
 ---
 
 To open Settings, press ⌘, or click the gear at the bottom of the sidebar.

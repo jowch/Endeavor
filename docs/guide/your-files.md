@@ -1,7 +1,8 @@
 ---
 title: Your files
 description: Give Claude your own data, and find the notebooks and files a session makes.
-order: 60
+sidebar:
+  order: 60
 ---
 
 Every session works in one folder. Your notebook is saved there, and files

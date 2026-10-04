@@ -1,7 +1,8 @@
 ---
 title: Servers
 description: Run your notebook on a lab server or another computer you reach over SSH.
-order: 70
+sidebar:
+  order: 70
 ---
 
 A session can run its notebook on another computer, such as a lab server

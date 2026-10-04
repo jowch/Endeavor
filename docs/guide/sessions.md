@@ -1,7 +1,8 @@
 ---
 title: Sessions, the chat and the notebook
 description: How the chat and the notebook work together, and how to ask Claude about one part of your work.
-order: 30
+sidebar:
+  order: 30
 ---
 
 A session is one conversation with Claude and the one notebook it works in.

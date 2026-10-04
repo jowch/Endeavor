@@ -1,7 +1,8 @@
 ---
 title: Clusters
 description: Run your notebook as a Slurm job on a shared computing cluster.
-order: 80
+sidebar:
+  order: 80
 ---
 
 A cluster is a group of shared computers. You sign in to a login node, and

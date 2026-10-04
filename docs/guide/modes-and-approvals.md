@@ -1,7 +1,8 @@
 ---
 title: Modes and approvals
 description: Choose how much Claude may do without asking, and answer its requests.
-order: 40
+sidebar:
+  order: 40
 ---
 
 The mode decides what Claude may do in the notebook without asking you

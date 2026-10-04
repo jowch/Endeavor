@@ -51,12 +51,13 @@ they need without wading through basics.
   ---
   title: Servers
   description: One sentence on what the page covers.
-  order: 70
+  sidebar:
+    order: 70
   ---
   ```
 
-  `order` is an integer that sets the page's place in the site's menu. Leave
-  gaps of 10 so a page can go between two others.
+  `sidebar.order` is an integer that sets the page's place in the site's
+  menu. Leave gaps of 10 so a page can go between two others.
 - No H1 in the body. The site shows the title. Start sections at `##`.
 - Link to other guide pages with relative paths: `[Servers](./servers.md)`.
 - Don't link to the internal docs in `docs/` (the UI spec, design notes,

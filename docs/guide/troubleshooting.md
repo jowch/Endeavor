@@ -1,7 +1,8 @@
 ---
 title: Troubleshooting
 description: What to do when Julia, a notebook, a server or Claude doesn't work.
-order: 110
+sidebar:
+  order: 110
 ---
 
 Most problems have a button where they show up. This page explains each one,

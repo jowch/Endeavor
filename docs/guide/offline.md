@@ -1,7 +1,8 @@
 ---
 title: Working offline
 description: What still works without an internet connection, and what waits until you're back.
-order: 90
+sidebar:
+  order: 90
 ---
 
 After the first setup, only Claude needs the internet. Notebooks on your Mac

@@ -1,7 +1,8 @@
 ---
 title: Get started
 description: Open Endeavor for the first time, sign in to Claude, and run your first analysis.
-order: 20
+sidebar:
+  order: 20
 ---
 
 This page takes you from opening Endeavor for the first time to a working
