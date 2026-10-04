@@ -61,6 +61,25 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 
 **Radius** — cards, composer, bubbles 8px; buttons, menus 4–5px; chips, inline code 3px; gutter bars 2px; circles stay round. *(Open: Pluto's 4px everywhere in the chat panel.)*
 
+## Motion
+
+Quiet motion only: short fades and small slides for what appears, no springs, bounce or staggered lists. Tokens in `src/theme.rs`, helpers in `src/motion.rs`.
+
+| Token | Value | Use |
+|---|---|---|
+| `motion_fast` | 120 ms | Something appearing; a line whose words change |
+| `motion_standard` | 160 ms | The transcript easing to its end as content arrives |
+| `motion_rise` | 4 px | How far an appearing thing moves into place |
+| `ease_out` | cubic | Everything above |
+
+- **Transcript.** While it follows its end, a growing reply or a new entry no longer jumps the view: the content lands below and the view eases to the new end, starting again from where it is when more arrives. Scrolled up, nothing moves. A live entry (a reply starting, a tool row, the changed-cells card) fades in; replayed history shows at once. A step line's words ("Read 3 cells", "Edited a cell, ran 2 commands, 1 denied") crossfade as calls arrive; while a run is folded and live, its latest call crossfades over the one before; the run's header fades in when a second call joins the first. Opening a step's details fades them in; closing is at once.
+- **Above the composer.** The pinned plan, the waiting lines, the sign-in card and the approval card fade in and rise from the composer. Queued rows, the queue's heading and a removed row's Undo line do the same.
+- **Menus.** The ⋮ / session menus, the sidebar's filter menu, the toolbar's menus and the new-session chips' menus fade in, moving 4 px from their button. Menus over the notebook show at once: their hole in the web view can't fade with them.
+- **Not animated.** Exits (a closing menu or card goes at once: GPUI can't make a leaving element let clicks through, so a fading menu could take a second click), the confirm dialog and Settings (the web view's dimming is instant, so a fading scrim would not match it), tooltips, the sidebar, the notebook pane's states, the find bar and the page's own overlays.
+- **Never in the way.** Nothing delays input: what appears takes clicks and keys from its first frame, and focus moves at once. Nothing animates in the first frame after launch or in the frame that shows another session.
+- **Reduce motion** (macOS's Accessibility setting, read at launch and on its change notification; GTK's `gtk-enable-animations` on Linux; Windows not yet) makes every duration zero, and GPUI stills the orbit.
+- **Checking it.** In a debug build, `ENDEAVOR_MOTION_SCALE=10` plays every animation ten times slower; `0` turns motion off.
+
 ## Layout
 
 - Three columns: sidebar · chat · notebook. **All resizable** by dragging dividers; sidebar within min/max and collapsible (⌘B). No full-width toolbar and no "focus" mode — full-width notebook comes from collapsing panes.
