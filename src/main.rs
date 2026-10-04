@@ -564,14 +564,14 @@ impl Workspace {
                 if input.read(cx).value().trim().is_empty() && this.sign_in_again(cx) {
                     return;
                 }
-                // An empty box answers a pending approval: ⏎ allow, ⌘⏎ always this session.
+                // An empty box answers a pending approval: ⏎ allow, ⌘⏎ always this session where the card offers it.
                 // With words in it, ⏎ queues them as it does while Claude works.
                 if input.read(cx).value().trim().is_empty()
                     && let Some(key) = this.active
                     && this.session_mut(key).is_some_and(|s| s.pending_permission().is_some())
                 {
-                    let scope = if *secondary { session::Scope::Session } else { session::Scope::Once };
                     this.with_session(key, cx, |s| {
+                        let scope = if *secondary { crate::approval::command_enter_scope(s) } else { session::Scope::Once };
                         s.answer_pending(PermissionOptionKind::AllowOnce, scope);
                     });
                     return;

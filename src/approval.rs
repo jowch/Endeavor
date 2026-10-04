@@ -136,6 +136,13 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
     Some(view)
 }
 
+/// How far ⌘⏎ in an empty message box answers the card shown: this session
+/// only when the card offers Always this session, else once, as ⏎ does.
+pub(crate) fn command_enter_scope(session: &Session) -> Scope {
+    let always = approval_view(session).is_some_and(|view| view.buttons.iter().any(|b| b.scope == Scope::Session));
+    if always { Scope::Session } else { Scope::Once }
+}
+
 /// The notebook cells prompt `ix` asks to run (none for any other prompt).
 pub(crate) fn run_cells_at(session: &Session, ix: usize) -> Vec<String> {
     view_at(session, ix).map(|v| v.cells).unwrap_or_default()
@@ -1084,6 +1091,22 @@ mod tests {
             plan: None,
         });
         super::view_at(s, s.entries.len() - 1).expect("a card")
+    }
+
+    #[test]
+    fn command_enter_reaches_this_session_only_on_a_card_that_offers_it() {
+        let waiting = |title: &str, input: Value| {
+            let mut s = Session::new(1, Place::local("/Users/jc/projects/decay-fits"), None);
+            prompt(&mut s, title, ToolKind::Execute, input, true, claude_options());
+            if let Some(Entry::Permission { responder, .. }) = s.entries.last_mut() {
+                *responder = Some(crate::session::Asker::Runtime(1));
+            }
+            s
+        };
+        let safe = waiting("mcp__notebook__allow_execution", json!({ "notebook_id": "n" }));
+        assert_eq!(super::command_enter_scope(&safe), Scope::Once, "Let this notebook run? has no Always");
+        let run = waiting("mcp__notebook__execute_cell", json!({ "notebook_id": "n", "cell_id": "c1" }));
+        assert_eq!(super::command_enter_scope(&run), Scope::Session);
     }
 
     fn buttons(view: &super::ApprovalView) -> Vec<(String, &'static str, Scope, String)> {
