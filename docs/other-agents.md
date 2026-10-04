@@ -11,8 +11,9 @@ This note covers two things:
 - what has to be found out about each agent before choosing which one to add.
 
 Cursor was tested in a spike on 2026-09-27 and again live on 2026-10-02; its
-findings are in [cursor-agent.md](cursor-agent.md). Codex and Gemini haven't
-been tested yet. Other agents are set aside for now.
+findings are in [cursor-agent.md](cursor-agent.md). Codex was tested on
+2026-10-04 and is being added; its findings are in
+[codex-agent.md](codex-agent.md). Gemini hasn't been tested yet.
 
 ## Where Endeavor depends on Claude Code
 
@@ -246,10 +247,9 @@ agent is cheapest to add.
 What is known already:
 
 - **Gemini CLI** speaks ACP itself. Installed here at `/opt/homebrew/bin/gemini`.
-- **Codex** needs an adapter, `@zed-industries/codex-acp`, which isn't
-  installed. The Codex CLI is, at `/opt/homebrew/bin/codex`. It has a skills
-  folder of its own (`~/.codex/skills`), so it might load Endeavor's skills
-  directly; that is untested.
+- **Codex** is answered in [codex-agent.md](codex-agent.md). Its adapter is
+  `@agentclientprotocol/codex-acp`; the older `@zed-industries/codex-acp`
+  is deprecated.
 
 ## How to investigate
 
