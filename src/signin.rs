@@ -406,10 +406,15 @@ impl Workspace {
         }
     }
 
-    /// The window came to the front: the sign-in may have run out meanwhile.
-    /// Only a sign-out is taken from this check; signing in again is the card's.
+    /// The window came to the front: Claude's sign-in may have run out
+    /// meanwhile (only a sign-out is taken from this check; signing in again
+    /// is the card's), or Codex's may have been made in a terminal.
     pub fn recheck_sign_in(&mut self, cx: &mut Context<Self>) {
         const MIN_GAP: Duration = Duration::from_secs(10);
+        // Back from signing in to Codex in a terminal: its card goes by itself.
+        if matches!(self.codex_account, crate::codex::Account::SignedOut | crate::codex::Account::Failed) {
+            self.recheck_codex(cx);
+        }
         if !matches!(self.account, Account::SignedIn) || self.sign_in_checked.is_some_and(|at| at.elapsed() < MIN_GAP) {
             return;
         }
