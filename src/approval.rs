@@ -924,13 +924,13 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
                 .flex()
                 .flex_wrap()
                 .items_start()
-                .gap(px(6.))
-                .px(px(10.))
+                .gap(px(4.))
+                .px(px(8.))
                 .py(px(8.))
                 .border_t_1()
                 .border_color(theme::accent().opacity(0.25))
                 .children(left.into_iter().map(|(_, b)| b.into_any_element()))
-                .child(div().flex_1().flex().justify_end().gap(px(6.)).children(right.into_iter().map(|(_, b)| b))),
+                .child(div().flex_1().flex().justify_end().gap(px(4.)).children(right.into_iter().map(|(_, b)| b))),
         )
         .into_any_element()
 }
@@ -960,9 +960,13 @@ fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus
         .aria_label(label)
         .flex()
         .items_center()
-        .gap(px(6.))
+        .gap(px(4.))
         .h(px(30.))
-        .px(px(if weight == Weight::Primary { 14. } else { 10. }))
+        .px(px(match weight {
+            Weight::Primary => 10.,
+            Weight::Outlined => 8.,
+            Weight::Quiet => 6.,
+        }))
         .rounded(px(5.))
         .cursor_pointer()
         .text_size(theme::chat_meta())
