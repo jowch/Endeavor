@@ -116,12 +116,19 @@ To search the notebook's text, press ⌘F.
 
 ## Your sessions in the sidebar
 
-The sidebar lists your sessions, grouped by folder. A mark at the end of a
-row tells you when a session needs you:
+The sidebar lists your sessions, grouped by folder. Each row starts with a
+small bullet that shows the session's state:
 
-- a hollow orange ring: Claude is waiting for your answer;
-- a red warning sign: the session stopped with an error;
-- an orange dot: there is a new reply you haven't seen.
+- a grey ring: nothing is happening;
+- a grey dot that pulses: Claude is working (with Reduce motion on, the dot
+  stays still);
+- an orange dot: Claude is waiting for your answer;
+- an orange ring with a dot inside: there is a new reply you haven't seen;
+- a red warning sign: the session stopped with an error.
+
+Hold the pointer over a bullet to read its state in words. When a folder is
+collapsed, the bullet that matters most in it shows next to the folder's
+name.
 
 When Claude asks you something while Endeavor isn't the app in front, macOS
 shows a notification, "Claude is waiting for you". Click it to go to that
