@@ -9,15 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::hosts::{HostId, Place};
 
-/// The agent a session belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Agent {
-    Claude,
-    /// A second agent, for checking that one agent's listing leaves another's sessions alone.
-    #[cfg(test)]
-    Other,
-}
+pub use crate::agent::Agent;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
@@ -60,8 +52,8 @@ pub struct Listed {
 #[derive(Debug, Default, PartialEq)]
 pub struct Records {
     records: HashMap<String, Record>,
-    /// Scopes some agent has listed this launch (not saved).
-    listed: HashSet<Scope>,
+    /// Scopes each agent has listed this launch (not saved).
+    listed: HashSet<(Agent, Scope)>,
 }
 
 impl Records {
@@ -111,9 +103,9 @@ impl Records {
         self.placed().into_iter().filter(|(_, r)| r.place.as_ref() == Some(folder)).collect()
     }
 
-    /// Whether an agent has listed the sessions at `place` this launch.
-    pub fn was_listed(&self, place: &Place) -> bool {
-        self.listed.iter().any(|scope| scope.covers(place))
+    /// Whether `agent` has listed the sessions at `place` this launch.
+    pub fn was_listed(&self, agent: Agent, place: &Place) -> bool {
+        self.listed.iter().any(|(by, scope)| *by == agent && scope.covers(place))
     }
 
     /// A session started (or a copy made) in `place`: recorded if it's new,
@@ -173,7 +165,7 @@ impl Records {
                 record.updated = updated;
             }
         }
-        self.listed.insert(scope);
+        self.listed.insert((agent, scope));
         self.records != before
     }
 }
@@ -262,8 +254,8 @@ mod tests {
         assert_eq!(records.get("open"), Some(&record(f.clone(), None, None)));
         assert_eq!(records.get("other_folder"), Some(&record(Some(Place::local("/g")), None, None)));
         assert_eq!(records.get("deleted"), None);
-        assert!(records.was_listed(&Place::local("/f")));
-        assert!(!records.was_listed(&Place::local("/g")));
+        assert!(records.was_listed(Agent::Claude, &Place::local("/f")));
+        assert!(!records.was_listed(Agent::Claude, &Place::local("/g")));
     }
 
     #[test]
@@ -278,15 +270,15 @@ mod tests {
         assert_eq!(records.get("b"), None);
         assert_eq!(records.get("c"), Some(&record(Some(server("hpc", "/x")), None, None)));
         assert_eq!(records.get("stranger"), None);
-        assert!(records.was_listed(&server("lab", "/anything")));
+        assert!(records.was_listed(Agent::Claude, &server("lab", "/anything")));
     }
 
     #[test]
     fn merge_leaves_other_agents_sessions_alone() {
-        let mut records = Records::parse(r#"{"mine": {"agent": "claude", "place": "/f"}, "theirs": {"agent": "other", "place": "/f", "title": "T"}}"#);
+        let mut records = Records::parse(r#"{"mine": {"agent": "claude", "place": "/f"}, "theirs": {"agent": "codex", "place": "/f", "title": "T"}}"#);
         records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("theirs", Some("Renamed"), Some(5))], &HashSet::new());
         assert_eq!(records.get("mine"), None);
-        assert_eq!(records.get("theirs"), Some(&Record { agent: Agent::Other, place: Some(Place::local("/f")), title: Some("T".into()), updated: None }));
+        assert_eq!(records.get("theirs"), Some(&Record { agent: Agent::Codex, place: Some(Place::local("/f")), title: Some("T".into()), updated: None }));
     }
 
     #[test]

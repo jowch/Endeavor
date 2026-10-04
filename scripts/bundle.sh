@@ -1,11 +1,11 @@
 #!/bin/sh
 # Build target/release/Endeavor.app: the app (Contents/MacOS/endeavor), its
-# own files (adapter/), and the runtime helpers servers are sent, each named
+# own files (adapter/ and adapter-codex/, the agents' pinned adapters), and the runtime helpers servers are sent, each named
 # endeavor, in Contents/Resources/helpers/<os>-<arch>/: macOS servers' (the
 # endeavor-helper target) and any built for Linux servers (target/helpers).
 # runtime/ and the skills are built into the binaries (endeavor_mcp::embedded),
 # and the app unpacks them. Julia, Node and the ACP
-# adapter are not bundled; the app installs them on first launch.
+# adapters are not bundled; the app installs them on first use.
 # ponytail: ad-hoc signed; Developer ID signing + notarization come with sharing.
 set -eu
 cd "$(dirname "$0")/.."
@@ -18,7 +18,7 @@ app=target/release/Endeavor.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/endeavor "$app/Contents/MacOS/"
-cp -R adapter "$app/Contents/Resources/"
+cp -R adapter adapter-codex "$app/Contents/Resources/"
 cp assets/icon/Endeavor.icns "$app/Contents/Resources/"
 # Helpers for Linux servers (scripts/helpers.sh, above), without anything
 # else in their folders, such as a helper under its old name.

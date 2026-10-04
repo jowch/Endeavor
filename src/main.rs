@@ -18,6 +18,7 @@ mod approval;
 mod attach;
 mod celldiff;
 mod claude_process;
+mod codex;
 mod composer;
 mod confirm;
 mod context;
@@ -805,7 +806,7 @@ impl Workspace {
         self.recent.retain(|p| p != &place);
         self.recent.insert(0, place.clone());
         save_json("recent.json", &self.recent);
-        if !self.records.was_listed(&place) {
+        if !self.records.was_listed(agent::Agent::Claude, &place) {
             let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: host.agent_cwd(&folder) });
         }
         let mut session = Session::new(key, place, server.clone());
@@ -1650,6 +1651,7 @@ impl Workspace {
             }
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
+            AgentEvent::CodexSignedIn(_) => {}
             AgentEvent::Listed { cwd, sessions: Ok(sessions) } => self.on_listed(records::Agent::Claude, &cwd, sessions),
             // The sidebar keeps what the record has.
             AgentEvent::Listed { cwd, sessions: Err(e) } => eprintln!("Couldn't list the sessions in {}: {e}", cwd.display()),
@@ -1950,7 +1952,7 @@ impl Workspace {
 
     /// What About Endeavor shows in its update strip.
     pub fn updates(&self) -> about::Updates {
-        let adapter = match agent::adapter_status() {
+        let adapter = match agent::adapter_status(agent::Agent::Claude) {
             Ok((version, false)) if self.agent_failed => about::Adapter::Available(version),
             Ok((version, false)) => about::Adapter::Installing(version),
             _ => about::Adapter::Current,
@@ -1991,7 +1993,7 @@ impl Workspace {
     }
 
     pub fn start_agent(&mut self, commands: UnboundedReceiver<Command>, cx: &mut Context<Self>) {
-        let mut events = agent::start(commands);
+        let mut events = agent::start(agent::Agent::Claude, commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
                 if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {

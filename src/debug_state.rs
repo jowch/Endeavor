@@ -191,7 +191,7 @@ impl Workspace {
         let mark = row_mark.as_ref().map(|m| m.name()).or(archived.then_some("archived"));
         let source = match row {
             Row::Open(_) => None,
-            Row::Past(_, place) if self.records.was_listed(place) => Some("listed"),
+            Row::Past(_, place) if self.records.was_listed(crate::agent::Agent::Claude, place) => Some("listed"),
             Row::Past(..) => Some("record"),
         };
         json!({ "title": title, "open": open, "active": active, "mark": mark, "tooltip": tooltip, "failed": failed, "source": source })

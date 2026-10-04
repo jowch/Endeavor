@@ -1,0 +1,8 @@
+{
+  "name": "endeavor-codex-adapter",
+  "private": true,
+  "description": "Codex's ACP adapter, which Endeavor installs when Codex first starts (npm ci against package-lock.json). It bundles its own codex.",
+  "dependencies": {
+    "@agentclientprotocol/codex-acp": "2.1.1"
+  }
+}
