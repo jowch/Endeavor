@@ -101,8 +101,7 @@ impl Workspace {
                 let mut actions = self.row_actions(&row);
                 // The session menu lists the agent's folder rules, for This Mac's folders.
                 if let MenuTarget::Session(key) = target
-                    && crate::agent::CLAUDE_CODE.folder_rules.is_some()
-                    && self.sessions.iter().any(|s| s.key == *key && s.place.host == HostId::ThisMac)
+                    && self.sessions.iter().any(|s| s.key == *key && s.place.host == HostId::ThisMac && s.agent.facts().folder_rules.is_some())
                 {
                     let at = actions.iter().position(|a| *a == RowAction::Rename).map_or(0, |i| i + 1);
                     actions.insert(at, RowAction::FolderRules);

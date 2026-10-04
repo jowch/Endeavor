@@ -255,7 +255,7 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
     } else {
         buttons = option_buttons(options);
     }
-    let folder = (!*runs_code && crate::agent::CLAUDE_CODE.folder_rules.is_some() && session.place.host == HostId::ThisMac)
+    let folder = (!*runs_code && session.agent.facts().folder_rules.is_some() && session.place.host == HostId::ThisMac)
         .then(|| crate::permits::folder_rule_option(options).cloned())
         .flatten();
     let primary = buttons.iter().rposition(|(_, _, o, _)| matches!(o.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways));

@@ -21,7 +21,7 @@ use gpui::*;
 use gpui_component::text::TextViewState;
 
 use crate::attach::{self, Attachment, Part, Quote, Quoted};
-use crate::agent::{SessionEvent, Started, Turn};
+use crate::agent::{Agent, SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
 use crate::hosts::Place;
 use crate::permits::{Asked, Asks, Rule};
@@ -302,6 +302,8 @@ pub struct Session {
     /// App-local identity, stable before and after the agent assigns `id`.
     pub key: u64,
     pub id: Option<SessionId>,
+    /// The agent it runs on, for good.
+    pub agent: Agent,
     /// The host it runs on, and its working folder there.
     pub place: Place,
     /// The server's name, for a session on a server.
@@ -580,6 +582,7 @@ impl Session {
         Self {
             key,
             id: None,
+            agent: Agent::Claude,
             place,
             server,
             agent_waiting: true,
@@ -1405,14 +1408,8 @@ impl Session {
                 let kind = fields.kind;
                 let path = fields.locations.as_ref().and_then(|l| l.first()).map(|l| l.path.clone());
                 let runs_code = celldiff::notebook_tool(&title).is_some_and(|tool| endeavor_mcp::runs_code(tool, &input));
-                // The adapter's ExitPlanMode prompt: its options carry these ids.
-                let plan = request
-                    .options
-                    .iter()
-                    .any(|o| o.option_id.to_string().starts_with("exit-plan-"))
-                    .then(|| input["plan"].as_str().unwrap_or("").to_owned());
-                let held = plan.is_none() && celldiff::notebook_tool(&title).is_some_and(|tool| self.runtime_holds(tool, &input));
-                if let Some(allow) = self.runtime_asks_instead(held, &request.options) {
+                let plan = is_plan_approval(&request.options).then(|| input["plan"].as_str().unwrap_or("").to_owned());
+                if let Some(allow) = self.runtime_asks_instead(&title, &input, plan.is_some(), &request.options) {
                     let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(allow.option_id.clone()));
                     let _ = responder.respond(RequestPermissionResponse::new(outcome));
                     return effects;
@@ -1762,19 +1759,24 @@ impl Session {
 
     /// The title and input a permission request names. Cursor's request
     /// carries no `rawInput`, only the arguments as a fenced json block in
-    /// `content`; the tool_call_update for the same id arrived first, with
-    /// `rawInput` already unwrapped by [`celldiff::name_notebook_call`] onto
-    /// its recorded [`Entry::Tool`], so a missing or empty input falls back
-    /// to that.
+    /// `content`, and Codex's carries only the call's id; the call itself
+    /// arrived first (Cursor's tool_call_update, Codex's tool_call), named
+    /// by [`celldiff::name_notebook_call`] onto its recorded [`Entry::Tool`],
+    /// so a request that doesn't name a notebook tool, or has no input,
+    /// takes those.
     fn permission_input(&self, request: &RequestPermissionRequest) -> (String, Option<serde_json::Value>) {
         let fields = &request.tool_call.fields;
         let (mut title, mut input) = (fields.title.clone().unwrap_or_else(|| "Tool call".into()), fields.raw_input.clone());
         celldiff::name_notebook_call(&mut title, &mut input);
+        let recorded = self.entries.iter().rev().find_map(|e| match e {
+            Entry::Tool { id, title, input, .. } if *id == request.tool_call.tool_call_id => Some((title, input)),
+            _ => None,
+        });
+        if let Some((recorded, _)) = recorded.filter(|(recorded, _)| celldiff::notebook_tool(&title).is_none() && celldiff::notebook_tool(recorded).is_some()) {
+            title = recorded.clone();
+        }
         if input.as_ref().is_none_or(|i| i.as_object().is_some_and(serde_json::Map::is_empty)) {
-            input = self.entries.iter().rev().find_map(|e| match e {
-                Entry::Tool { id, input: recorded, .. } if *id == request.tool_call.tool_call_id => recorded.clone(),
-                _ => None,
-            });
+            input = recorded.and_then(|(_, input)| input.clone());
         }
         (title, input)
     }
@@ -1783,7 +1785,7 @@ impl Session {
     /// and diff edits. Returns the id (and file path) of a notebook the agent
     /// just opened or created. A finished notebook call whose output isn't the
     /// tool's result (Cursor sends only `{"success": true}`) asks the runtime
-    /// for it instead.
+    /// for it instead. The guide's result is text, not JSON.
     fn on_tool_update(&mut self, update: ToolCallUpdate, effects: &mut Vec<Effect>) -> Option<(String, Option<String>)> {
         let ix = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
         self.mark(ix);
@@ -1810,6 +1812,7 @@ impl Session {
         celldiff::name_notebook_call(title, input);
         let finished = matches!(*status, ToolCallStatus::Completed | ToolCallStatus::Failed);
         if let Some(tool) = celldiff::notebook_tool(title).filter(|_| finished && !self.replaying)
+            && tool != "notebook_guide"
             && output.as_ref().and_then(celldiff::tool_json).is_none()
             && !runs::denied(output.as_ref())
         {
@@ -1932,24 +1935,32 @@ impl Session {
     }
 
     /// Prompts the agent no longer waits on (its turn ended, its process
-    /// stopped): their cards go, and a note says which went unanswered.
+    /// stopped): their cards go, and a note says which went unanswered. A
+    /// run the runtime still holds is denied, so it can't happen after the
+    /// turn: an agent that gives up waiting and ends its turn (Codex, after
+    /// about two minutes) never cancels the call itself.
     fn drop_prompts(&mut self) {
-        let waiting = self.waiting_prompts();
-        let headings: Vec<String> = waiting.iter().filter_map(|ix| crate::approval::heading_at(self, *ix)).collect();
-        for ix in waiting {
+        let agent = self.agent.name();
+        let mut notes = Vec::new();
+        for ix in self.waiting_prompts() {
+            let heading = crate::approval::heading_at(self, ix).map(|h| h.replace('`', ""));
             if let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix) {
                 match responder.take() {
                     Some(Asker::Agent(responder)) => {
                         let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
+                        notes.extend(heading.map(|h| format!("{agent} stopped before you answered “{h}”")));
                     }
-                    Some(Asker::Runtime(ask)) => self.later.push(Effect::AnswerRun { ask, allow: false, user_ran: Vec::new() }),
+                    Some(Asker::Runtime(ask)) => {
+                        self.later.push(Effect::AnswerRun { ask, allow: false, user_ran: Vec::new() });
+                        notes.extend(heading.map(|h| format!("{agent} stopped waiting for your answer to “{h}”")));
+                    }
                     None => {}
                 }
             }
             self.mark(ix);
         }
-        for heading in headings {
-            self.note(format!("Claude stopped before you answered “{}”", heading.replace('`', "")));
+        for note in notes {
+            self.note(note);
         }
         self.asks.forget_batch();
     }
@@ -2125,13 +2136,16 @@ impl Session {
         std::mem::take(&mut self.later)
     }
 
-    /// The option that lets the agent's own prompt through at once, with no
-    /// card and no mark on its row, for a call the runtime holds (`held`,
-    /// `runtime_holds`): the runtime asks about it itself (it's from the
-    /// app's build), and its card is the one the user sees.
-    fn runtime_asks_instead<'a>(&self, held: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
-        let asks = held && self.runtime_older == Some(false);
-        option_of_kind(options, PermissionOptionKind::AllowOnce).filter(|_| asks)
+    /// The option that lets the agent's own prompt for notebook call `title`
+    /// through at once, with no card and no mark on its row, when the runtime
+    /// (from the app's build) decides instead. A call it holds by the
+    /// session's mode (`runtime_holds`) gets the runtime's card. For an agent
+    /// that asks before every notebook write (Codex), a call the runtime
+    /// doesn't hold goes through too: the mode doesn't ask about it.
+    fn runtime_asks_instead<'a>(&self, title: &str, input: &serde_json::Value, plan: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
+        let tool = celldiff::notebook_tool(title).filter(|_| !plan && self.runtime_older == Some(false))?;
+        let decides = self.agent.facts().asks_every_write || self.runtime_holds(tool, input);
+        option_of_kind(options, PermissionOptionKind::AllowOnce).filter(|_| decides)
     }
 
     /// The runtime's calls waiting for an answer (its event's `asks`): each
@@ -2155,7 +2169,7 @@ impl Session {
             }
             self.mark(ix);
             if let Some(heading) = heading {
-                self.note(format!("Claude stopped waiting for your answer to “{}”", heading.replace('`', "")));
+                self.note(format!("{} stopped waiting for your answer to “{}”", self.agent.name(), heading.replace('`', "")));
             }
         }
         let mut effects = Vec::new();
@@ -2333,10 +2347,16 @@ fn config_value<'a>(config: &'a [SessionConfigOption], id: &str) -> Option<&'a S
     })
 }
 
-/// The adapter's plan-approval option ids (claude-agent-acp permissions/options),
-/// best first. Starting means the agent's auto mode; whether runs ask is ours
+/// The adapters' plan-approval option ids, best first: claude-agent-acp's
+/// (permissions/options), then codex-acp's. Starting means the agent's auto
+/// mode (Codex: out of its plan collaboration mode); whether runs ask is ours
 /// (Start: Ask to run; Start in Auto: runs without asking).
-const PLAN_START: [&str; 3] = ["exit-plan-auto", "exit-plan-accept-edits", "exit-plan-default"];
+const PLAN_START: [&str; 4] = ["exit-plan-auto", "exit-plan-accept-edits", "exit-plan-default", "implement_plan"];
+
+/// Plan mode's end, by its options.
+fn is_plan_approval(options: &[PermissionOption]) -> bool {
+    options.iter().any(|o| o.option_id.to_string().starts_with("exit-plan-")) || plan_option(options).is_some()
+}
 
 pub(crate) fn plan_option(options: &[PermissionOption]) -> Option<&PermissionOption> {
     PLAN_START.iter().find_map(|id| options.iter().find(|o| o.option_id.to_string() == *id))
@@ -2456,7 +2476,9 @@ pub(crate) fn file_name(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
-    use super::{Approval, Effect, Entry, Mode, Scope, Session, SessionEvent, Started, Turn, app_modes};
+    use super::{Agent, Approval, Effect, Entry, Mode, Scope, Session, SessionEvent, Started, Turn, app_modes, is_plan_approval, plan_option};
+    use crate::celldiff;
+    use agent_client_protocol::schema::v1::RequestPermissionRequest;
     use crate::attach::Attachment;
     use crate::hosts::Place;
     use crate::outbox::Queued;
@@ -2650,7 +2672,10 @@ mod tests {
     fn the_agents_own_run_prompt_isnt_asked_twice() {
         use agent_client_protocol::schema::v1::PermissionOption;
         let options = [PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce), PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce)];
-        let allowed = |s: &Session, run: bool| s.runtime_asks_instead(run, &options).map(|o| o.option_id.to_string());
+        let allowed = |s: &Session, run: bool| {
+            let (title, input) = if run { ("mcp__notebook__execute_cell", serde_json::json!({ "cell_id": "a" })) } else { ("mcp__notebook__edit_cell", serde_json::json!({ "cell_id": "a", "code": "b" })) };
+            s.runtime_asks_instead(title, &input, false, &options).map(|o| o.option_id.to_string())
+        };
         // The runtime holds the run and asks: the agent's own prompt is let through.
         let mut s = asking_session();
         assert_eq!(allowed(&s, true).as_deref(), Some("allow"));
@@ -2661,6 +2686,89 @@ mod tests {
         let mut s = asking_session();
         s.runtime_older = None;
         assert_eq!(allowed(&s, true), None);
+    }
+
+    /// A Codex session from the study's real `session/new` reply, through
+    /// the dialect, in `mode`, on a runtime from the app's build.
+    fn codex_session(mode: &str, dialect: &mut crate::codex::Dialect) -> Session {
+        let reply: serde_json::Value = serde_json::from_str(include_str!("fixtures/codex/session-new.json")).unwrap();
+        let config = serde_json::from_value(reply["configOptions"].clone()).unwrap();
+        let started = Started::new(SessionId::new(reply["sessionId"].as_str().unwrap()), serde_json::from_value(reply["modes"].clone()).unwrap(), Some(config));
+        let (started, _) = dialect.started(started);
+        let mut s = Session::new(7, Place::local("/tmp"), None);
+        s.agent = Agent::Codex;
+        s.start_mode = Some(Mode { agent: mode.into(), run_without_asking: false });
+        s.started(started);
+        s.runtime_build(false);
+        s
+    }
+
+    /// Plays the study's Codex turn (new_notebook, read_cell, add_cell, then
+    /// execute_cell left waiting) into `s`: each prompt's tool and the option
+    /// it is let through with, and how many results were fetched.
+    fn play_codex_turn(s: &mut Session, dialect: &mut crate::codex::Dialect) -> (Vec<(Option<String>, Option<String>)>, usize) {
+        let (mut prompts, mut fetched) = (Vec::new(), 0);
+        for line in include_str!("fixtures/codex/write-turn.jsonl").lines() {
+            let message: serde_json::Value = serde_json::from_str(line).unwrap();
+            if message["method"] == "session/request_permission" {
+                let request: RequestPermissionRequest = serde_json::from_value(message["params"].clone()).unwrap();
+                let (title, input) = s.permission_input(&request);
+                let through = s.runtime_asks_instead(&title, &input.unwrap_or_default(), false, &request.options).map(|o| o.option_id.to_string());
+                prompts.push((celldiff::notebook_tool(&title).map(str::to_owned), through));
+            } else {
+                let n: agent_client_protocol::schema::v1::SessionNotification = serde_json::from_value(message["params"].clone()).unwrap();
+                for update in dialect.update(&n.session_id, n.update) {
+                    fetched += s.apply(SessionEvent::Update(update)).iter().filter(|e| matches!(e, Effect::FetchResult { .. })).count();
+                }
+            }
+        }
+        (prompts, fetched)
+    }
+
+    #[test]
+    fn codex_asks_before_every_notebook_write_and_the_runtime_decides_by_the_mode() {
+        let through = |tool: &str| (Some(tool.to_owned()), Some("allow_once".to_owned()));
+        for mode in ["default", "auto"] {
+            let mut dialect = crate::codex::Dialect::default();
+            let mut s = codex_session(mode, &mut dialect);
+            let (prompts, fetched) = play_codex_turn(&mut s, &mut dialect);
+            assert_eq!(prompts, [through("new_notebook"), through("add_cell"), through("execute_cell")], "{mode}: no card from Codex's own prompts");
+            assert_eq!(fetched, 0, "the results came with the calls");
+            assert_eq!(s.cell_codes.get("3480556e-c042-11f1-9ded-6bc930221abf"), Some("y = 6 * 7"), "add_cell's result was read");
+            let held = s.entries.iter().find_map(|e| match e {
+                Entry::Tool { title, status, .. } if title == "mcp__notebook__execute_cell" => Some(*status),
+                _ => None,
+            });
+            assert_eq!(held, Some(ToolCallStatus::InProgress), "the run waits in the runtime");
+        }
+
+        // A runtime from an older build can't hold anything: Codex's own prompts are the cards.
+        let mut dialect = crate::codex::Dialect::default();
+        let mut s = codex_session("auto", &mut dialect);
+        s.runtime_build(true);
+        let (prompts, _) = play_codex_turn(&mut s, &mut dialect);
+        assert!(prompts.iter().all(|(tool, through)| tool.is_some() && through.is_none()), "{prompts:?}");
+    }
+
+    #[test]
+    fn codexs_plan_is_the_plan_card() {
+        let request: RequestPermissionRequest = serde_json::from_str(include_str!("fixtures/codex/plan-request.json")).unwrap();
+        assert!(is_plan_approval(&request.options));
+        assert_eq!(plan_option(&request.options).map(|o| o.option_id.to_string()).as_deref(), Some("implement_plan"));
+        let s = Session::new(7, Place::local("/tmp"), None);
+        let (title, input) = s.permission_input(&request);
+        assert_eq!(title, "Implement this plan?");
+        assert!(input.unwrap()["plan"].as_str().unwrap().starts_with("1. Open `notebook_tool_test.jl`"));
+    }
+
+    #[test]
+    fn a_turn_that_ends_while_its_run_waits_denies_it_and_says_so() {
+        let mut s = asking_session();
+        s.agent = Agent::Codex;
+        s.runtime_asks_now(&[ask(41, Some("t1"))]);
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert_eq!(answers(&s.take_later()), [(41, false, &[][..])], "it can't run after the turn");
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with("Codex stopped waiting for your answer to")));
     }
 
     /// A session in Manual on a runtime from the app's build, with a notebook
@@ -2698,7 +2806,7 @@ mod tests {
         ];
         assert!(s.runtime_holds("edit_cell", &edit_input("a = 2")) && s.runtime_holds("move_cell", &serde_json::json!({})));
         assert!(!s.runtime_holds("read_cell", &serde_json::json!({ "cell_id": "a" })), "reads never wait");
-        assert_eq!(s.runtime_asks_instead(true, &options).map(|o| o.option_id.to_string()).as_deref(), Some("allow"));
+        assert_eq!(s.runtime_asks_instead("mcp__notebook__edit_cell", &edit_input("a = 2"), false, &options).map(|o| o.option_id.to_string()).as_deref(), Some("allow"));
 
         // The runtime's ask is the one card: the edit card, with the change as a diff.
         let effects = s.runtime_asks_now(&[held(41, "edit_cell", edit_input("a = 2"))]);
@@ -2758,7 +2866,7 @@ mod tests {
         let mut s = manual_session();
         s.runtime_build(true);
         let options = [agent_client_protocol::schema::v1::PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce)];
-        assert_eq!(s.runtime_asks_instead(s.runtime_holds("edit_cell", &edit_input("a = 2")), &options), None);
+        assert_eq!(s.runtime_asks_instead("mcp__notebook__edit_cell", &edit_input("a = 2"), false, &options), None);
     }
 
     #[test]

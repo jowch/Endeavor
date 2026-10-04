@@ -89,10 +89,19 @@ impl Dialect {
     /// An update from Codex, as the app takes it. Its own mode updates name
     /// sandbox presets, which the app never shows; a change of collaboration
     /// mode is a mode update. Leaving plan by approving the plan goes on in
-    /// Ask to run, as Claude's Start does.
+    /// Ask to run, as Claude's Start does. A tool's result is the MCP content,
+    /// as Claude's adapter gives it.
     pub fn update(&mut self, session: &SessionId, update: SessionUpdate) -> Vec<SessionUpdate> {
         match update {
             SessionUpdate::CurrentModeUpdate(_) => Vec::new(),
+            SessionUpdate::ToolCall(mut call) => {
+                call.raw_output = call.raw_output.map(tool_output);
+                vec![SessionUpdate::ToolCall(call)]
+            }
+            SessionUpdate::ToolCallUpdate(mut update) => {
+                update.fields.raw_output = update.fields.raw_output.map(tool_output);
+                vec![SessionUpdate::ToolCallUpdate(update)]
+            }
             SessionUpdate::ConfigOptionUpdate(update) => {
                 let planning = current(&update.config_options, PLANNING_OPTION).map(|mode| mode == "plan");
                 let mut updates = vec![SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(app_options(update.config_options)))];
@@ -167,6 +176,19 @@ fn app_options(options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
             o
         })
         .collect()
+}
+
+/// Codex puts an MCP tool's reply in `rawOutput` as `{result: {content,
+/// …}, error}`. The app reads the content (`celldiff::tool_json`), or, for a
+/// call that failed before the tool replied, the error's text. Any other
+/// output (a shell command's) stays as it is.
+fn tool_output(raw: serde_json::Value) -> serde_json::Value {
+    match (raw.pointer("/result/content"), raw.get("error")) {
+        (Some(content), _) => content.clone(),
+        (None, Some(serde_json::Value::String(error))) => serde_json::Value::String(error.clone()),
+        (None, Some(error)) if !error.is_null() => error.get("message").cloned().unwrap_or_else(|| error.clone()),
+        _ => raw,
+    }
 }
 
 fn current(options: &[SessionConfigOption], id: &str) -> Option<String> {
