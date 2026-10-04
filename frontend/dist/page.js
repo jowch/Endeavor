@@ -330,7 +330,7 @@
       label = (lines.find((l) => l.startsWith("#")) ?? lines[0] ?? "markdown").replace(/^#+/, "").trim();
     } else {
       const first = codeLines(code)[0];
-      label = first === void 0 ? "cell" : definedName(code) ?? first;
+      label = first === void 0 ? "cell" : definedName(code) ?? inferredName(code) ?? first;
     }
     const chars = [...label];
     return chars.length > 28 ? `${chars.slice(0, 27).join("")}\u2026` : label;
@@ -347,6 +347,17 @@
     const lhs = line.slice(0, eq);
     if (line[eq + 1] === "=" || lhs.split("(").length !== lhs.split(")").length) return null;
     return word(lhs.trim().replace(/^const /, ""));
+  }
+  var PLOTS = ["plot", "scatter", "heatmap", "histogram", "lines", "surface", "contour", "Figure"];
+  function inferredName(code) {
+    const lines = codeLines(code);
+    if (lines.length < 2) return null;
+    const plot = new RegExp(`(^|[^\\p{L}\\p{N}_.])(${PLOTS.join("|")})!*\\(`, "u");
+    if (lines.some((l) => plot.test(l))) return "plot";
+    if (lines.some((l) => l.includes("Markdown.parse(") || l.includes('md"'))) return "text";
+    if (!["let", "begin"].includes(lines[0]) || lines[lines.length - 1] !== "end" || lines.length < 3) return null;
+    const last2 = lines[lines.length - 2];
+    return last2.split(",").every((n) => /^[\p{L}\p{N}_]+$/u.test(n.trim())) ? last2 : null;
   }
   function codeLines(code) {
     let inBlock = false;
@@ -454,12 +465,10 @@
   body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
   body.annotating.annotate-drawing .annotate-hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
-  body.annotate-numbers pluto-input .cm-content { counter-reset: endeavor-line; padding-left: 2.6em !important; }
-  body.annotate-numbers pluto-input .cm-line { counter-increment: endeavor-line; position: relative; }
-  body.annotate-numbers pluto-input .cm-line::before { content: counter(endeavor-line); position: absolute; left: -2.6em; width: 2em;
-    text-align: right; color: var(--e-text-faint); font-size: 0.85em; }
+  /* Pluto's own gutter numbers, which it shows as dots until hovered. */
+  body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
+  body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
   body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
-  body.annotating pluto-input .cm-line.annotate-line::before { color: var(--e-accent-text); }
   #annotate-tag { position: absolute; z-index: 9999; display: none; pointer-events: none; padding: 0 6px; border-radius: 4px;
     background: var(--e-accent); color: #fff; font: 11px/18px system-ui; }
   body.annotating #annotate-tag.shown { display: block; }

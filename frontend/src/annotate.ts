@@ -24,12 +24,10 @@ const css = `
   body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
   body.annotating.annotate-drawing .annotate-hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
-  body.annotate-numbers pluto-input .cm-content { counter-reset: endeavor-line; padding-left: 2.6em !important; }
-  body.annotate-numbers pluto-input .cm-line { counter-increment: endeavor-line; position: relative; }
-  body.annotate-numbers pluto-input .cm-line::before { content: counter(endeavor-line); position: absolute; left: -2.6em; width: 2em;
-    text-align: right; color: var(--e-text-faint); font-size: 0.85em; }
+  /* Pluto's own gutter numbers, which it shows as dots until hovered. */
+  body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
+  body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
   body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
-  body.annotating pluto-input .cm-line.annotate-line::before { color: var(--e-accent-text); }
   #annotate-tag { position: absolute; z-index: 9999; display: none; pointer-events: none; padding: 0 6px; border-radius: 4px;
     background: var(--e-accent); color: #fff; font: 11px/18px system-ui; }
   body.annotating #annotate-tag.shown { display: block; }

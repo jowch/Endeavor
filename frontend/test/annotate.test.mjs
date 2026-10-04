@@ -121,7 +121,8 @@ test("a drag that starts on code picks lines; ⌥ or anywhere else draws a box",
 test("line numbers show while Point is on, and Esc turns it off", async () => {
   const { window, $ } = await page();
   const css = [...window.document.querySelectorAll("style")].map((s) => s.textContent).join("");
-  assert.match(css, /body\.annotate-numbers pluto-input \.cm-line::before \{ content: counter\(endeavor-line\)/);
+  assert.match(css, /body\.annotate-numbers pluto-input \.cm-lineNumbers \.cm-gutterElement \{ color: var\(--cm-color-line-numbers\)/);
+  assert.doesNotMatch(css, /counter\(endeavor-line\)/, "the numbers are Pluto's own, in the gutter, not drawn beside each line");
   const afterFrame = () => new Promise((done) => window.requestAnimationFrame(() => setTimeout(() => setTimeout(done))));
   await afterFrame();
   assert.ok(window.document.body.classList.contains("annotate-numbers"));
