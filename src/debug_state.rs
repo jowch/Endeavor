@@ -23,6 +23,7 @@ use crate::notebook_pane::PaneShows;
 use crate::session::{self, Entry, Session};
 use crate::signin::{Account, Stage};
 use crate::transcript;
+use crate::agent::Agent;
 use crate::{Row, Workspace, runs};
 
 /// Wraps the page's `alert` to record what it showed, then shows it as before.
@@ -95,14 +96,16 @@ impl Workspace {
             "window": self.window_state(),
             "offline": self.offline_since.map(|since| json!({ "for_secs": since.elapsed().as_secs(), "trying": self.probing })),
             "claude": {
-                "state": match self.claude.state {
-                    crate::claude_process::State::Up => "up",
-                    crate::claude_process::State::Restarting => "restarting",
-                    crate::claude_process::State::Down => "down",
-                },
-                "connected": self.agent_ready,
-                "error": (!self.claude.up()).then(|| self.claude.error.clone()),
-                "details_open": self.claude_details_open,
+                "state": state_name(&self.links.get(Agent::Claude).process.state),
+                "connected": self.links.get(Agent::Claude).ready,
+                "error": (!self.links.get(Agent::Claude).process.up()).then(|| self.links.get(Agent::Claude).process.error.clone()),
+                "details_open": self.links.get(Agent::Claude).details_open,
+            },
+            "codex": {
+                "started": self.links.get(Agent::Codex).rx.is_none(),
+                "state": state_name(&self.links.get(Agent::Codex).process.state),
+                "connected": self.links.get(Agent::Codex).ready,
+                "account": format!("{:?}", self.codex_account),
             },
             "usage_limit": self.usage_limit.as_ref().map(|l| json!({
                 "resets_in_secs": l.until.map(|at| at.duration_since(std::time::SystemTime::now()).unwrap_or_default().as_secs()),
@@ -365,7 +368,7 @@ impl Workspace {
                     "delivery": transcript::delivery_note(*delivery),
                     "chips": attachments.iter().map(chip_label).collect::<Vec<_>>(),
                     "quotes": quotes(attachments),
-                    "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text()),
+                    "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text(s.agent)),
                 })),
                 Entry::Agent { text, at } => Some(json!({ "kind": "reply", "text": text, "actions": message_actions(true, *at, s.copied == Some(ix)) })),
                 Entry::Note(text) => Some(json!({ "kind": "note", "text": text.to_string() })),
@@ -516,10 +519,10 @@ impl Workspace {
                 if let Some(line) = self.usage_line() {
                     notice("usage_limit", line);
                 }
-                match self.claude.state {
-                    crate::claude_process::State::Restarting => notice("claude_restarting", crate::claude_process::RESTARTING.into()),
-                    crate::claude_process::State::Down => notice("claude_down", format!("{} · {}", crate::claude_process::DOWN_TITLE, crate::claude_process::DOWN_BODY)),
-                    crate::claude_process::State::Up => {}
+                match self.links.get(s.agent).process.state {
+                    crate::agent_process::State::Restarting => notice("agent_restarting", crate::agent_process::restarting(s.agent)),
+                    crate::agent_process::State::Down => notice("agent_down", format!("{} · {}", crate::agent_process::down_title(s.agent), crate::agent_process::DOWN_BODY)),
+                    crate::agent_process::State::Up => {}
                 }
                 if let Some(heading) = self.queue_heading(s) {
                     notice("queue_heading", heading);
@@ -571,6 +574,14 @@ impl Workspace {
 }
 
 /// A tool call or a stretch of thinking, as its row reads.
+fn state_name(state: &crate::agent_process::State) -> &'static str {
+    match state {
+        crate::agent_process::State::Up => "up",
+        crate::agent_process::State::Restarting => "restarting",
+        crate::agent_process::State::Down => "down",
+    }
+}
+
 fn row(s: &Session, ix: usize, in_run: bool) -> Value {
     match &s.entries[ix] {
         Entry::Thought { started, took, expanded, .. } => json!({ "kind": "thought", "text": transcript::thought_label(in_run, *started, *took), "open": expanded }),

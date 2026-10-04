@@ -19,6 +19,7 @@ use wire::notebooks::{Found, Preview};
 
 use wire::slurm::{Resources, duration_text};
 
+use crate::agent::Agent;
 use crate::connection::Status;
 use crate::hosts::{Cluster, HostId, Place, Server};
 use crate::resources::Target;
@@ -36,6 +37,8 @@ pub enum NotebookChoice {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Chip {
+    /// The agent the session runs on.
+    Agent,
     Where,
     Folder,
     Notebook,
@@ -71,6 +74,9 @@ pub struct Draft {
     pub salloc_error: Option<String>,
     /// The mode to start in: an index into `session::app_modes()`.
     pub mode: usize,
+    /// The agent picked (Settings keeps the last pick). A server session
+    /// runs on Claude whatever this says, when the agent can't (`draft_agent`).
+    pub agent: Agent,
 }
 
 /// The server folder browser: the folder shown, and its folders and notebooks once listed.
@@ -209,6 +215,7 @@ impl Draft {
             salloc: None,
             salloc_error: None,
             mode: 0,
+            agent: Agent::Claude,
         }
     }
 }
@@ -387,9 +394,44 @@ impl Workspace {
                 self.draft.salloc = None;
                 self.draft.salloc_error = None;
             }
-            Chip::Where | Chip::Browse => {}
+            Chip::Agent | Chip::Where | Chip::Browse => {}
         }
         cx.notify();
+    }
+
+    /// The agent the new session runs on: the one picked, unless it can't
+    /// run sessions where the session would run.
+    pub fn draft_agent(&self) -> Agent {
+        let agent = self.draft.agent;
+        if self.draft.host == HostId::ThisMac || agent.facts().on_servers { agent } else { Agent::Claude }
+    }
+
+    /// Pick the new session's agent. It starts now (installing on first use),
+    /// so its sign-in and options are known before the first message.
+    pub fn set_draft_agent(&mut self, agent: Agent, window: &mut Window, cx: &mut Context<Self>) {
+        self.draft.agent = agent;
+        if self.settings.agent != agent {
+            self.settings.agent = agent;
+            self.settings.save();
+        }
+        self.ensure_agent(agent, cx);
+        self.close_popover(window, cx);
+        cx.notify();
+    }
+
+    fn agent_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let current = self.draft_agent();
+        div().flex().flex_col().children(Agent::ALL.into_iter().map(|agent| {
+            let facts = agent.facts();
+            let here = self.draft.host == HostId::ThisMac || facts.on_servers;
+            let row = menu_row(SharedString::from(format!("agent-{}", facts.name.to_lowercase())), agent == current, false)
+                .child(glyph(Glyph::Spark, theme::text_muted()))
+                .child(div().text_color(if here { theme::text_primary() } else { theme::text_faint() }).child(facts.name))
+                .child(div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(facts.maker))
+                .child(div().flex_1())
+                .children((!here).then(|| div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(concat!(crate::platform::this_computer!(), " only"))));
+            if here { row.on_click(cx.listener(move |this, _, window, cx| this.set_draft_agent(agent, window, cx))) } else { row.cursor_default() }
+        }))
     }
 
     /// Close the open chip menu; the composer gets the keyboard back.
@@ -588,7 +630,7 @@ impl Workspace {
                     .flex_col()
                     .gap(px(10.))
                     .children(self.render_offline_line(None, cx))
-                    .children(self.render_sign_in_card(cx))
+                    .children(self.render_agent_sign_in(self.draft_agent(), cx))
                     .child(self.render_chips(cx))
                     .child(self.render_composer(None, false, window, cx))
                     .children(self.render_file_tip(cx)),
@@ -708,10 +750,11 @@ impl Workspace {
             (None, Some(Status::Failed(_) | Status::Replaced)) => "Not connected".into(),
             (None, _) => format!("Connecting to {where_label}…"),
         };
-        std::iter::once((Chip::Where, "where", where_icon, where_label, false))
+        std::iter::once((Chip::Agent, "agent", Glyph::Spark, self.draft_agent().name().to_owned(), false))
+            .chain(std::iter::once((Chip::Where, "where", where_icon, where_label, false)))
             .chain(resources)
             .chain([(Chip::Folder, "folder", Glyph::Folder, folder_label, false), (Chip::Notebook, "notebook", Glyph::File, notebook_label, mono)])
-            .map(|(chip, id, icon, label, mono)| DraftChip { chip, id, icon, label, mono, waiting: connecting && !matches!(chip, Chip::Where | Chip::Resources) })
+            .map(|(chip, id, icon, label, mono)| DraftChip { chip, id, icon, label, mono, waiting: connecting && !matches!(chip, Chip::Agent | Chip::Where | Chip::Resources) })
             .collect()
     }
 
@@ -762,6 +805,7 @@ impl Workspace {
     /// A chip's menu, opening upward from the chip's top-left corner.
     fn render_popover(&self, chip: Chip, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (width, body) = match chip {
+            Chip::Agent => (240., self.agent_menu(cx).into_any_element()),
             Chip::Where => (240., self.where_menu(cx).into_any_element()),
             Chip::Folder => (360., self.folder_menu(cx).into_any_element()),
             Chip::Notebook => (320., self.notebook_menu(cx).into_any_element()),
@@ -1470,6 +1514,8 @@ pub(crate) enum Glyph {
     Finder,
     /// Undo: an arrow turning back.
     Undo,
+    /// An agent: a four-pointed spark.
+    Spark,
 }
 
 /// A 12px line icon (the app ships no icon set).
@@ -1782,6 +1828,7 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&[(6., 5.4), (6., 8.6)]);
                     polyline(&[(6., 3.6), (6., 4.3)]);
                 }
+                Glyph::Spark => polyline(&[(6., 0.5), (7.1, 4.9), (11.5, 6.), (7.1, 7.1), (6., 11.5), (4.9, 7.1), (0.5, 6.), (4.9, 4.9), (6., 0.5)]),
                 Glyph::Undo => {
                     let mut turn = vec![(3.4, 4.9)];
                     turn.extend((0..=12).map(|i| {

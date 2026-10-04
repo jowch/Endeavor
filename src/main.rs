@@ -17,7 +17,7 @@ mod annotate;
 mod approval;
 mod attach;
 mod celldiff;
-mod claude_process;
+mod agent_process;
 mod codex;
 mod composer;
 mod confirm;
@@ -321,6 +321,24 @@ fn load_records() -> records::Records {
     records::Records::parse(&app_file("sessions.json").and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default())
 }
 
+/// Where each agent's last config options are kept.
+fn agent_options_file(agent: agent::Agent) -> &'static str {
+    match agent {
+        agent::Agent::Claude => "agent-options.json",
+        agent::Agent::Codex => "codex-options.json",
+    }
+}
+
+fn load_agent_options() -> HashMap<agent::Agent, Vec<agent_client_protocol::schema::v1::SessionConfigOption>> {
+    agent::Agent::ALL.into_iter().map(|agent| (agent, load_json(agent_options_file(agent)))).collect()
+}
+
+fn save_agent_options(options: &HashMap<agent::Agent, Vec<agent_client_protocol::schema::v1::SessionConfigOption>>) {
+    for (agent, options) in options {
+        save_json(agent_options_file(*agent), options);
+    }
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
@@ -374,9 +392,9 @@ pub struct Workspace {
     reply: Option<quotes::Reply>,
     /// Words left in Reply's prompt by Esc or a click elsewhere, per selection.
     reply_drafts: quotes::Drafts,
-    /// The agent's config options (model, effort) as the last session offered
+    /// Each agent's config options (model, effort) as its last session offered
     /// them (persisted), so the new-session screen can offer them too.
-    agent_options: Vec<agent_client_protocol::schema::v1::SessionConfigOption>,
+    agent_options: HashMap<agent::Agent, Vec<agent_client_protocol::schema::v1::SessionConfigOption>>,
     /// The Settings panel, while open.
     settings_panel: Option<settings_panel::Panel>,
     /// Where Settings was last left, to open there again.
@@ -385,10 +403,6 @@ pub struct Workspace {
     settings_checks: settings_panel::Checks,
     /// First launch: the setup screen covers the window until setup finishes.
     setup: Option<Setup>,
-    /// The agent connected (setup's last step).
-    agent_ready: bool,
-    /// The agent stopped with an error (often a failed adapter install); About offers Update.
-    agent_failed: bool,
     /// Claude Code's sign-in: checked when the agent starts and when the window
     /// comes back to the front, and lost when a turn fails for want of it.
     account: signin::Account,
@@ -398,10 +412,10 @@ pub struct Workspace {
     offline_since: Option<std::time::Instant>,
     /// Try now is looking at the network.
     probing: bool,
-    agent_tx: UnboundedSender<Command>,
-    /// The agent thread's commands, until it starts: at launch, or on first
-    /// launch once This Mac's Julia is up (setup's order).
-    agent_rx: Option<UnboundedReceiver<Command>>,
+    /// Each agent's connection and process.
+    links: agent_process::Links,
+    /// Codex's sign-in, once Codex has been started.
+    codex_account: codex::Account,
     /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
     annotating: bool,
@@ -417,10 +431,6 @@ pub struct Workspace {
     listeners: HashMap<HostId, Arc<runtime::Listener>>,
     /// The composer's placeholder as last set (it changes while Claude works).
     placeholder: SharedString,
-    /// Claude Code's adapter process: up, restarting by itself, or left stopped.
-    claude: claude_process::Process,
-    /// The "Claude isn't running" card's Details are open.
-    claude_details_open: bool,
     /// The account's usage limit was reached: messages wait until it resets.
     usage_limit: Option<offline::UsageLimit>,
     /// Notebooks whose Julia stopped by itself, and the runs after Restart Julia.
@@ -636,9 +646,10 @@ impl Workspace {
         })
         .detach();
 
-        let (agent_tx, agent_rx) = futures::channel::mpsc::unbounded();
         let recent = load_recent();
-        let draft = Draft::new(new_session::default_folder(&recent), window, cx);
+        let mut draft = Draft::new(new_session::default_folder(&recent), window, cx);
+        let settings = Settings::load();
+        draft.agent = settings.agent;
         let mut this = Self {
             webview,
             input,
@@ -661,7 +672,7 @@ impl Workspace {
             renaming: None,
             menu: None,
             expanded: HashSet::new(),
-            settings: Settings::load(),
+            settings,
             settings_panel: None,
             settings_page: settings_panel::Page::Section(settings_panel::Section::Assistants),
             settings_checks: settings_panel::Checks::default(),
@@ -670,16 +681,14 @@ impl Workspace {
             chip_popover: None,
             reply: None,
             reply_drafts: Default::default(),
-            agent_options: load_json("agent-options.json"),
+            agent_options: load_agent_options(),
             setup: Setup::needed().then(Setup::default),
-            agent_ready: false,
-            agent_failed: false,
             account: signin::Account::Unknown,
             sign_in_checked: None,
             offline_since: None,
             probing: false,
-            agent_tx,
-            agent_rx: Some(agent_rx),
+            links: agent_process::Links::default(),
+            codex_account: codex::Account::Unknown,
             status: "".into(),
             annotating: false,
             shots: HashMap::new(),
@@ -688,8 +697,6 @@ impl Workspace {
             listeners: HashMap::new(),
             placeholder: "Type / for commands".into(),
             drawn: None,
-            claude: claude_process::Process::default(),
-            claude_details_open: false,
             usage_limit: None,
             crashes: crash::Crashes::default(),
             notice: None,
@@ -734,10 +741,10 @@ impl Workspace {
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
         // Claude starts alongside it, except on first launch, whose setup screen goes step by step.
-        if this.setup.is_none()
-            && let Some(commands) = this.agent_rx.take()
-        {
-            this.start_agent(commands, cx);
+        if this.setup.is_none() {
+            this.ensure_agent(agent::Agent::Claude, cx);
+            // The new-session screen shows the last agent picked: its sign-in and options.
+            this.ensure_agent(this.draft_agent(), cx);
         }
         this.scan_notebooks(cx);
         this.watch_network(cx);
@@ -806,10 +813,12 @@ impl Workspace {
         self.recent.retain(|p| p != &place);
         self.recent.insert(0, place.clone());
         save_json("recent.json", &self.recent);
-        if !self.records.was_listed(agent::Agent::Claude, &place) {
-            let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: host.agent_cwd(&folder) });
+        let agent = self.draft_agent();
+        if !self.records.was_listed(agent, &place) {
+            self.links.send(agent, Command::ListSessions { cwd: host.agent_cwd(&folder) });
         }
         let mut session = Session::new(key, place, server.clone());
+        session.agent = agent;
         session.resources = self.draft.resources.clone().filter(|_| self.is_cluster(&host));
         session.start_mode = session::app_modes().get(self.draft.mode).map(|choice| session::Mode {
             // Settings' "Run notebook code without asking" is Manual's "Always this session".
@@ -869,8 +878,10 @@ impl Workspace {
     /// host's runtime is ready, since its tools go to that runtime's bridge.
     /// Until then it waits, and the host connects and starts Julia.
     pub fn request_agent(&mut self, key: u64, cx: &mut Context<Self>) {
-        // Claude is restarting or down: it opens once Claude is back (`claude_ready`).
-        if !self.claude.up() {
+        let Some(agent) = self.sessions.iter().find(|s| s.key == key).map(|s| s.agent) else { return };
+        // The agent isn't running yet, or is restarting or down: the session
+        // opens once it is (`agent_ready`).
+        if self.ensure_agent(agent, cx) || !self.links.get(agent).ready || !self.links.get(agent).process.up() || self.signed_out_of_agent(agent) {
             return;
         }
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
@@ -888,7 +899,7 @@ impl Workspace {
             Some(id) => Command::LoadSession { key, id, cwd, tools },
             None => Command::NewSession { key, cwd, tools },
         };
-        let _ = self.agent_tx.unbounded_send(command);
+        self.links.send(agent, command);
         if let Some(session) = self.session_mut(key) {
             session.agent_waiting = false;
             if let Some(older) = older {
@@ -926,7 +937,9 @@ impl Workspace {
         // The row keeps its handle as it turns from past to open, so keyboard focus stays on it.
         let row_focus = self.past_row_focus.get_mut().remove(&id);
         let copy = transcript_copy::load(&id.to_string());
+        let agent = self.records.get(&id.to_string()).map_or(agent::Agent::Claude, |r| r.agent);
         let mut session = Session::loading(key, id, place, server, title);
+        session.agent = agent;
         if let Some(copy) = copy {
             session.show_copy(copy);
         }
@@ -972,9 +985,9 @@ impl Workspace {
         self.keep_transcript(key);
         let session = self.sessions.remove(ix);
         if let Some(id) = session.id {
-            let _ = self.agent_tx.unbounded_send(Command::CloseSession(id));
+            self.links.send(session.agent, Command::CloseSession(id));
         }
-        let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd: session.place.host.agent_cwd(&session.place.path) });
+        self.links.send(session.agent, Command::ListSessions { cwd: session.place.host.agent_cwd(&session.place.path) });
         if self.renaming.as_ref().is_some_and(|r| r.row == Row::Open(key)) {
             self.renaming = None;
         }
@@ -999,7 +1012,9 @@ impl Workspace {
             Row::Past(id, _) => Some(id),
         };
         let Some(id) = id else { return };
-        let _ = self.agent_tx.unbounded_send(Command::DeleteSession(id.clone()));
+        let agent = self.records.get(&id.to_string()).map_or(agent::Agent::Claude, |r| r.agent);
+        // Deleting reaches an agent that isn't running once it starts.
+        self.links.send(agent, Command::DeleteSession(id.clone()));
         if self.renaming.as_ref().is_some_and(|r| matches!(&r.row, Row::Past(p, _) if *p == id)) {
             self.renaming = None;
         }
@@ -1089,8 +1104,9 @@ impl Workspace {
         let Some(session) = self.session_mut(key) else { return };
         let cwd = session.place.host.agent_cwd(&session.place.path);
         let tools = agent::Tools { bridge, server: session.server.clone() };
+        let agent = session.agent;
         if let Some(source) = session.reopen_as_copy() {
-            let _ = self.agent_tx.unbounded_send(Command::ForkSession { key, source, cwd, tools });
+            self.links.send(agent, Command::ForkSession { key, source, cwd, tools });
         }
         cx.notify();
     }
@@ -1229,11 +1245,12 @@ impl Workspace {
 
     fn apply_effects(&mut self, key: u64, mut effects: Vec<Effect>, cx: &mut Context<Self>) {
         effects.extend(self.session_mut(key).map(Session::take_later).unwrap_or_default());
+        let agent = self.session_mut(key).map_or(agent::Agent::Claude, |s| s.agent);
         for effect in effects {
             match effect {
                 Effect::Send(turn) => {
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
-                        let _ = self.agent_tx.unbounded_send(Command::Turn(id, turn));
+                        self.links.send(agent, Command::Turn(id, turn));
                     }
                 }
                 Effect::ShowNotebook { id, path } => {
@@ -1254,7 +1271,7 @@ impl Workspace {
                     self.check_run_state(key, cx)
                 }
                 Effect::SetPolicy(policy, edits) => self.send_policy(key, policy, edits, cx),
-                Effect::SignedOut => self.signed_out(cx),
+                Effect::SignedOut => self.signed_out_of(agent, cx),
                 Effect::Asked(ix) => self.prompt_arrived(key, ix),
                 Effect::UsageLimit(reset) => self.hit_usage_limit(reset, cx),
                 Effect::PreviewRun { ix, tool, input } => {
@@ -1298,12 +1315,12 @@ impl Workspace {
                 }
                 Effect::SetConfig(id_, value) => {
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
-                        let _ = self.agent_tx.unbounded_send(Command::SetConfig(id, id_, value));
+                        self.links.send(agent, Command::SetConfig(id, id_, value));
                     }
                 }
                 Effect::SetMode(mode) => {
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
-                        let _ = self.agent_tx.unbounded_send(Command::SetMode(id, mode));
+                        self.links.send(agent, Command::SetMode(id, mode));
                     }
                 }
                 Effect::ReopenNotebook(path) => {
@@ -1633,26 +1650,27 @@ impl Workspace {
         }
     }
 
-    fn on_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
+    fn on_event(&mut self, agent: agent::Agent, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::Ready => {
-                self.status = "Claude connected.".into();
-                self.agent_ready = true;
-                self.agent_failed = false;
-                self.claude_ready(cx);
+                self.status = format!("{} connected.", agent.name()).into();
+                let link = self.links.get_mut(agent);
+                link.ready = true;
+                link.failed = false;
+                self.agent_ready(agent, cx);
                 self.finish_setup(cx);
                 let mut listed = HashSet::new();
-                for place in &self.recent {
+                for place in self.recent.iter().filter(|p| agent.facts().on_servers || p.host == HostId::ThisMac) {
                     let cwd = place.host.agent_cwd(&place.path);
                     if listed.insert(cwd.clone()) {
-                        let _ = self.agent_tx.unbounded_send(Command::ListSessions { cwd });
+                        self.links.send(agent, Command::ListSessions { cwd });
                     }
                 }
             }
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
-            AgentEvent::CodexSignedIn(_) => {}
-            AgentEvent::Listed { cwd, sessions: Ok(sessions) } => self.on_listed(records::Agent::Claude, &cwd, sessions),
+            AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
+            AgentEvent::Listed { cwd, sessions: Ok(sessions) } => self.on_listed(agent, &cwd, sessions),
             // The sidebar keeps what the record has.
             AgentEvent::Listed { cwd, sessions: Err(e) } => eprintln!("Couldn't list the sessions in {}: {e}", cwd.display()),
             AgentEvent::Forked { key, id } => {
@@ -1661,20 +1679,20 @@ impl Workspace {
                 }
             }
             // First launch: the setup screen says why, with Retry.
-            AgentEvent::Failed(e) if self.setup.is_some() => {
-                self.agent_failed = true;
+            AgentEvent::Failed(e) if self.setup.is_some() && agent == agent::Agent::Claude => {
+                self.links.get_mut(agent).failed = true;
                 if let Some(setup) = &mut self.setup {
                     setup.fail(e);
                 }
             }
-            AgentEvent::Failed(e) => self.claude_stopped(e, cx),
+            AgentEvent::Failed(e) => self.agent_stopped(agent, e, cx),
             AgentEvent::Started { key, result } => {
                 let Some(session) = self.session_mut(key) else { return };
                 match result {
                     Ok(started) => {
                         let id = started.id.clone();
                         let place = session.place.clone();
-                        if self.records.started(&id.to_string(), records::Agent::Claude, &place, unix_now()) {
+                        if self.records.started(&id.to_string(), agent, &place, unix_now()) {
                             self.save_records();
                         }
                         if let Some(resources) = self.session_mut(key).and_then(|s| s.resources.clone())
@@ -1687,17 +1705,17 @@ impl Workspace {
                             self.titles.insert(id.to_string(), name);
                             save_json("titles.json", &self.titles);
                         }
-                        if !started.config.is_empty() && started.config != self.agent_options {
-                            self.agent_options = started.config.clone();
-                            save_json("agent-options.json", &self.agent_options);
+                        if !started.config.is_empty() && self.agent_options.get(&agent) != Some(&started.config) {
+                            self.agent_options.insert(agent, started.config.clone());
+                            save_agent_options(&self.agent_options);
                         }
-                        let picked = self.settings.agent_config.clone();
+                        let picked = self.settings.config_picks(agent).clone();
                         let Some(session) = self.session_mut(key) else { return };
                         let queued = session.started(started);
                         // The user's last picks, ahead of a queued first message; the model
                         // first, since effort's choices depend on it.
                         let mut effects = Vec::new();
-                        for id in ["model", "effort"] {
+                        for &(id, _) in agent.facts().config {
                             let Some(value) = picked.get(id) else { continue };
                             let offered = session.config_choices(id).filter(|(current, options)| {
                                 current.to_string() != *value && options.iter().any(|o| o.value.to_string() == *value)
@@ -1936,7 +1954,7 @@ impl Workspace {
 
     /// Setup is done once the agent is up and Claude is signed in.
     fn finish_setup(&mut self, cx: &mut Context<Self>) {
-        if self.setup.is_some() && self.agent_ready && !self.account.signed_out() {
+        if self.setup.is_some() && self.links.get(agent::Agent::Claude).ready && !self.account.signed_out() {
             self.setup = None;
             Setup::finish();
             cx.notify();
@@ -1947,13 +1965,13 @@ impl Workspace {
     pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
-        self.restart_agent(cx);
+        self.restart_agent(agent::Agent::Claude, cx);
     }
 
     /// What About Endeavor shows in its update strip.
     pub fn updates(&self) -> about::Updates {
         let adapter = match agent::adapter_status(agent::Agent::Claude) {
-            Ok((version, false)) if self.agent_failed => about::Adapter::Available(version),
+            Ok((version, false)) if self.links.get(agent::Agent::Claude).failed => about::Adapter::Available(version),
             Ok((version, false)) => about::Adapter::Installing(version),
             _ => about::Adapter::Current,
         };
@@ -1966,37 +1984,47 @@ impl Workspace {
         about::Updates { app: None, adapter }
     }
 
-    /// About's Update: start the agent again, which installs the pinned adapter.
+    /// About's Update: start Claude again, which installs the pinned adapter.
     pub fn update_adapter(&mut self, cx: &mut Context<Self>) {
-        if !self.agent_failed {
+        let link = self.links.get_mut(agent::Agent::Claude);
+        if !link.failed {
             return;
         }
-        self.agent_failed = false;
+        link.failed = false;
         if let Some(setup) = &mut self.setup {
             setup.clear_error();
         }
-        self.restart_agent(cx);
+        self.restart_agent(agent::Agent::Claude, cx);
     }
 
-    fn restart_agent(&mut self, cx: &mut Context<Self>) {
+    fn restart_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) {
         // The failed agent thread dropped its command channel; start with a new one.
-        let (tx, rx) = futures::channel::mpsc::unbounded();
-        self.agent_tx = tx;
-        if self.setup.is_none() || self.bridge(&HostId::ThisMac).is_some() {
-            self.start_agent(rx, cx);
+        let link = self.links.get_mut(agent);
+        let commands = link.renew();
+        link.ready = false;
+        if agent != agent::Agent::Claude || self.setup.is_none() || self.bridge(&HostId::ThisMac).is_some() {
+            self.start_agent(agent, commands, cx);
         } else {
             // First launch: started once This Mac's Julia is up (`on_ready`).
-            self.agent_rx = Some(rx);
+            self.links.get_mut(agent).rx = Some(commands);
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
     }
 
-    pub fn start_agent(&mut self, commands: UnboundedReceiver<Command>, cx: &mut Context<Self>) {
-        let mut events = agent::start(agent::Agent::Claude, commands);
+    /// Start an agent that isn't running yet. True if it starts now: its
+    /// sessions open once it's connected (`agent_ready`).
+    pub fn ensure_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) -> bool {
+        let Some(commands) = self.links.get_mut(agent).rx.take() else { return false };
+        self.start_agent(agent, commands, cx);
+        true
+    }
+
+    pub fn start_agent(&mut self, agent: agent::Agent, commands: UnboundedReceiver<Command>, cx: &mut Context<Self>) {
+        let mut events = agent::start(agent, commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
-                if this.update(cx, |this, cx| this.on_event(event, cx)).is_err() {
+                if this.update(cx, |this, cx| this.on_event(agent, event, cx)).is_err() {
                     break;
                 }
             }
@@ -2184,8 +2212,8 @@ impl Workspace {
                     .children(card("offline-line", self.render_offline_line(Some(session), cx)))
                     .children(card("usage-line", self.render_usage_line(cx)))
                     .children(card("runtime-wait", self.render_runtime_wait(session, cx)))
-                    .children(card("claude-trouble", self.render_claude_trouble(cx)))
-                    .children(card("sign-in-card", self.render_sign_in_card(cx)))
+                    .children(card("agent-trouble", self.render_agent_trouble(session.agent, cx)))
+                    .children(card("sign-in-card", self.render_agent_sign_in(session.agent, cx)))
                     .children(card("approval-card", approval::render_approval(session, notebook_open && session.notebook.as_deref() == Some(self.page.notebook.as_str()), window, cx)))
                     .child(self.render_queue(session, cx))
                     .child(self.render_composer(Some(session), notebook_open, window, cx)),
@@ -2254,14 +2282,14 @@ impl Render for Workspace {
                 .into_any_element();
         }
         let working = active.is_some_and(|ix| self.sessions[ix].outbox.busy && !self.sessions[ix].agent_waiting);
-        let opening_wait = active.and_then(|ix| self.session_wait(&self.sessions[ix])).filter(|w| !matches!(w, opening::Waiting::Claude { .. }));
+        let opening_wait = active.and_then(|ix| self.session_wait(&self.sessions[ix])).filter(|w| !matches!(w, opening::Waiting::Agent { .. } | opening::Waiting::SignIn(_)));
         let placeholder: SharedString = match active {
             None => "What do you want to work on?".into(),
             Some(_) if opening_wait.is_some() => opening_wait.as_ref().map(opening::Waiting::placeholder).unwrap_or_default().into(),
             Some(ix) if self.sessions[ix].pending_permission().is_some() => "Queue a message".into(),
-            Some(_) if working && self.claude.up() => concat!("Queue a message, or ", crate::platform::shortcut!("⏎"), " to steer").into(),
+            Some(ix) if working && self.links.get(self.sessions[ix].agent).process.up() => concat!("Queue a message, or ", crate::platform::shortcut!("⏎"), " to steer").into(),
             Some(_) if self.offline_since.is_some() => "Write a message. It sends when you're back online.".into(),
-            Some(_) => self.waiting_placeholder().unwrap_or_else(|| "Type / for commands".into()),
+            Some(ix) => self.waiting_placeholder(self.sessions[ix].agent).unwrap_or_else(|| "Type / for commands".into()),
         };
         if self.placeholder != placeholder {
             self.placeholder = placeholder.clone();

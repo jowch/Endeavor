@@ -14,6 +14,7 @@ use gpui::*;
 use serde::{Deserialize, Serialize};
 
 use crate::Workspace;
+use crate::agent::{Agent, SignIn};
 use crate::new_session::{Glyph, glyph, glyph_at};
 use crate::theme;
 use crate::theme::FocusRing as _;
@@ -832,8 +833,58 @@ impl Workspace {
         )
     }
 
-    /// Under a message Claude couldn't answer.
-    pub fn render_unanswered(&self) -> AnyElement {
+    /// The sign-in card for `agent`, above the composer while signed out.
+    pub fn render_agent_sign_in(&self, agent: Agent, cx: &mut Context<Self>) -> Option<AnyElement> {
+        match agent.facts().sign_in {
+            SignIn::ClaudeAuth => self.render_sign_in_card(cx),
+            SignIn::CodexLogin => self.render_codex_sign_in(cx),
+        }
+    }
+
+    /// Codex's sign-in card: Codex uses the ChatGPT sign-in its own command
+    /// keeps, so signing in from a terminal (`codex login`) works too.
+    fn render_codex_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::codex::Account as Codex;
+        if !self.codex_account.signed_out() || self.offline_since().is_some() {
+            return None;
+        }
+        let heading = div().flex().items_center().gap(px(8.)).text_size(px(14.)).line_height(px(20.)).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary());
+        let lines = |lines: &[&str]| div().flex().flex_col().gap(px(2.)).text_size(theme::size_meta()).line_height(px(17.)).text_color(theme::text_new()).children(lines.iter().map(|l| l.to_string()));
+        let row = div().flex().justify_end().items_center().gap(px(6.));
+        let check = button("codex-check", "Check again", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.recheck_codex(cx)));
+        let sign_in = |label: &'static str| button("codex-sign-in", label, Look::Primary).on_click(cx.listener(|this, _, _, cx| this.sign_in_to_codex(cx)));
+        let body = match self.codex_account {
+            Codex::SigningIn => div()
+                .child(heading.child(crate::orbit::orbit("codex-sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
+                .child(lines(&["We opened ChatGPT's sign-in page. Sign in there; this card goes away by itself and your message sends."])),
+            Codex::Failed => div()
+                .child(heading.child("Codex sign-in didn't finish"))
+                .child(lines(&["Try again, or run codex login in a terminal and then check again."]))
+                .child(row.child(check).child(sign_in("Try again"))),
+            _ => div()
+                .child(heading.child("Sign in to Codex"))
+                .child(lines(&[
+                    "Codex uses your ChatGPT account. Sign in opens ChatGPT in your browser.",
+                    "Already use the codex command? Run codex login in a terminal, then check again.",
+                ]))
+                .child(row.child(check).child(sign_in("Sign in"))),
+        };
+        Some(
+            body.flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(12.))
+                .py(px(10.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme::composer_edge())
+                .bg(theme::bg_card())
+                .into_any_element(),
+        )
+    }
+
+    /// Under a message the agent couldn't answer.
+    pub fn render_unanswered(&self, agent: Agent) -> AnyElement {
         div()
             .flex()
             .items_center()
@@ -842,31 +893,99 @@ impl Workspace {
             .line_height(px(17.))
             .text_color(theme::text_muted())
             .child(glyph(Glyph::Clock, theme::text_muted()))
-            .child(self.unanswered_text())
+            .child(self.unanswered_text(agent))
             .into_any_element()
     }
 
-    pub fn unanswered_text(&self) -> &'static str {
-        if self.account.signed_out() {
-            "Not answered yet. It sends again once you sign in."
+    pub fn unanswered_text(&self, agent: Agent) -> String {
+        if self.signed_out_of_agent(agent) {
+            "Not answered yet. It sends again once you sign in.".into()
         } else if self.offline_since().is_some() {
-            "Not answered yet. It sends again when you're back."
-        } else if !self.claude.up() {
-            "Not answered yet. It sends again once Claude is back."
+            "Not answered yet. It sends again when you're back.".into()
+        } else if !self.links.get(agent).process.up() {
+            format!("Not answered yet. It sends again once {} is back.", agent.name())
         } else {
-            "Not answered yet"
+            "Not answered yet".into()
         }
     }
 
-    /// Claude can't answer now: messages wait.
-    pub fn out_of_reach(&self) -> bool {
-        self.account.signed_out() || self.offline_since().is_some() || self.usage_limit.is_some() || !self.claude.up()
+    /// Whether the user is signed out of `agent`.
+    pub fn signed_out_of_agent(&self, agent: Agent) -> bool {
+        match agent.facts().sign_in {
+            SignIn::ClaudeAuth => self.account.signed_out(),
+            SignIn::CodexLogin => self.codex_account.signed_out(),
+        }
     }
 
-    /// A session's messages wait: Claude can't be reached, or its server is
-    /// reconnecting (its tools would fail).
+    /// `agent` can't answer now: messages wait.
+    pub fn out_of_reach(&self, agent: Agent) -> bool {
+        self.signed_out_of_agent(agent) || self.offline_since().is_some() || self.usage_limit.is_some() || !self.links.get(agent).process.up()
+    }
+
+    /// A session's messages wait: its agent can't be reached, or its server
+    /// is reconnecting (its tools would fail).
     pub fn holds(&self, session: &crate::session::Session) -> bool {
-        self.out_of_reach() || self.read_only(session)
+        self.out_of_reach(session.agent) || self.read_only(session)
+    }
+
+    /// A turn failed for want of sign-in.
+    pub fn signed_out_of(&mut self, agent: Agent, cx: &mut Context<Self>) {
+        match agent.facts().sign_in {
+            SignIn::ClaudeAuth => self.signed_out(cx),
+            SignIn::CodexLogin => {
+                self.codex_account = crate::codex::Account::SignedOut;
+                self.sync_holds(cx);
+                cx.notify();
+            }
+        }
+    }
+
+    /// What a check of Codex's sign-in found. Signed in, its sessions
+    /// waiting for that open.
+    pub fn on_codex_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
+        self.codex_account = if signed_in { crate::codex::Account::SignedIn } else { crate::codex::Account::SignedOut };
+        self.open_waiting(Agent::Codex, cx);
+        cx.notify();
+    }
+
+    /// Codex's browser sign-in (`codex-acp login`), from its card. It ends
+    /// by itself once the browser page is done; then the sign-in is checked.
+    pub fn sign_in_to_codex(&mut self, cx: &mut Context<Self>) {
+        if self.codex_account == crate::codex::Account::SigningIn {
+            return;
+        }
+        self.codex_account = crate::codex::Account::SigningIn;
+        cx.notify();
+        let done = cx.background_executor().spawn(async { crate::codex::log_in().and_then(|()| crate::codex::signed_in()) });
+        cx.spawn(async move |this, cx| {
+            let signed_in = done.await;
+            let _ = this.update(cx, |this, cx| {
+                match signed_in {
+                    Ok(true) => this.on_codex_signed_in(true, cx),
+                    Ok(false) | Err(_) => this.codex_account = crate::codex::Account::Failed,
+                }
+                if let Err(e) = signed_in {
+                    eprintln!("Codex sign-in: {e}");
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Check Codex's sign-in again (signed in from a terminal meanwhile).
+    pub fn recheck_codex(&mut self, cx: &mut Context<Self>) {
+        let check = cx.background_executor().spawn(async { crate::codex::signed_in() });
+        cx.spawn(async move |this, cx| {
+            if let Ok(signed_in) = check.await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.codex_account != crate::codex::Account::SigningIn {
+                        this.on_codex_signed_in(signed_in, cx);
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     /// Hold each session's messages while they can't go; send what waited once

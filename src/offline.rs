@@ -193,13 +193,13 @@ impl Workspace {
         Some(failure::wait_line(Lead::Clock, text, try_now, cx).into_any_element())
     }
 
-    /// The composer's placeholder while messages wait for Claude: until the
-    /// usage limit resets, or until Claude's process is back.
-    pub fn waiting_placeholder(&self) -> Option<SharedString> {
-        use crate::claude_process::State;
-        match self.claude.state {
-            State::Restarting => return Some("Write a message. It sends once Claude is back.".into()),
-            State::Down => return Some("Write a message. It sends once Claude is running.".into()),
+    /// The composer's placeholder while messages wait for the agent: until
+    /// the usage limit resets, or until the agent's process is back.
+    pub fn waiting_placeholder(&self, agent: crate::agent::Agent) -> Option<SharedString> {
+        use crate::agent_process::State;
+        match self.links.get(agent).process.state {
+            State::Restarting => return Some(format!("Write a message. It sends once {} is back.", agent.name()).into()),
+            State::Down => return Some(format!("Write a message. It sends once {} is running.", agent.name()).into()),
             State::Up => {}
         }
         let limit = self.usage_limit.as_ref()?;
@@ -361,10 +361,10 @@ impl Workspace {
         }
         Some(if self.offline_since.is_some() {
             "These send in order when you're back.".to_owned()
-        } else if self.account.signed_out() {
+        } else if self.signed_out_of_agent(session.agent) {
             "These send in order once you sign in.".to_owned()
-        } else if !self.claude.up() {
-            "These send in order once Claude is back.".to_owned()
+        } else if !self.links.get(session.agent).process.up() {
+            format!("These send in order once {} is back.", session.agent.name())
         } else if self.usage_limit.is_some() {
             "These send in order once your limit resets.".to_owned()
         } else {

@@ -24,11 +24,15 @@ pub enum Waiting {
     Connecting(String),
     /// Julia is starting: on This Mac, or on the named server.
     Julia(Option<String>),
-    /// Claude's process is restarting or stopped (its own line says so); `julia`: Julia is still starting too.
-    Claude { julia: bool },
-    /// Claude is loading the history.
+    /// The agent's process is restarting or stopped (its own line says so); `julia`: Julia is still starting too.
+    Agent { name: &'static str, julia: bool },
+    /// The agent is installing or connecting.
+    Starting(&'static str),
+    /// The user isn't signed in to the agent (its sign-in card says so).
+    SignIn(&'static str),
+    /// The agent is loading the history.
     Conversation,
-    /// Claude is loading the history, and Endeavor's copy of it shows meanwhile.
+    /// The agent is loading the history, and Endeavor's copy of it shows meanwhile.
     Copy,
 }
 
@@ -37,14 +41,15 @@ const SHOW_TIME_AFTER: Duration = Duration::from_secs(5);
 
 impl Waiting {
     /// The line above the composer, with the time so far once it's been a few
-    /// seconds; None where another line says it (Claude's).
+    /// seconds; None where another line says it (the agent's own).
     pub fn line(&self, waited: Option<Duration>) -> Option<String> {
         let text = match self {
             Waiting::Unreachable(server) => return Some(format!("Can't reach {server}. Endeavor keeps trying.")),
             Waiting::Connecting(server) => format!("Connecting to {server}…"),
             Waiting::Julia(None) => "Starting Julia…".to_owned(),
             Waiting::Julia(Some(server)) => format!("Starting Julia on {server}…"),
-            Waiting::Claude { .. } => return None,
+            Waiting::Agent { .. } | Waiting::SignIn(_) => return None,
+            Waiting::Starting(agent) => format!("Starting {agent}…"),
             Waiting::Conversation => return Some("Loading the conversation…".to_owned()),
             Waiting::Copy => return Some("Loading…".to_owned()),
         };
@@ -59,8 +64,9 @@ impl Waiting {
         match self {
             Waiting::Unreachable(server) => format!("The conversation is kept on {server}, so it shows once Endeavor can reach it."),
             Waiting::Connecting(_) | Waiting::Julia(_) => "The conversation shows once Julia is running.".to_owned(),
-            Waiting::Claude { julia: true } => "The conversation shows once Claude and Julia are running.".to_owned(),
-            Waiting::Claude { julia: false } => "The conversation shows once Claude is running.".to_owned(),
+            Waiting::Agent { name, julia: true } => format!("The conversation shows once {name} and Julia are running."),
+            Waiting::Agent { name, julia: false } | Waiting::Starting(name) => format!("The conversation shows once {name} is running."),
+            Waiting::SignIn(name) => format!("The conversation shows once you sign in to {name}."),
             Waiting::Conversation | Waiting::Copy => "The conversation appears once all of it has loaded.".to_owned(),
         }
     }
@@ -102,8 +108,17 @@ impl Workspace {
             return None;
         }
         let julia_ready = self.bridge(host).is_some();
-        if !self.claude.up() {
-            return Some(Waiting::Claude { julia: !julia_ready });
+        let agent = self.links.get(session.agent);
+        if !agent.process.up() {
+            return Some(Waiting::Agent { name: session.agent.name(), julia: !julia_ready });
+        }
+        if session.agent.facts().on_demand {
+            if self.signed_out_of_agent(session.agent) {
+                return Some(Waiting::SignIn(session.agent.name()));
+            }
+            if julia_ready && !agent.ready {
+                return Some(Waiting::Starting(session.agent.name()));
+            }
         }
         if julia_ready {
             return session.opening().then_some(if session.showing_copy() { Waiting::Copy } else { Waiting::Conversation });
@@ -211,7 +226,7 @@ mod tests {
         assert_eq!(Waiting::Conversation.line(Some(Duration::from_secs(30))).as_deref(), Some("Loading the conversation…"));
         assert_eq!(Waiting::Copy.line(Some(Duration::from_secs(30))).as_deref(), Some("Loading…"), "Endeavor's copy shows meanwhile");
         assert_eq!(Waiting::Unreachable("lab-server".into()).line(None).as_deref(), Some("Can't reach lab-server. Endeavor keeps trying."));
-        assert_eq!(Waiting::Claude { julia: true }.line(None), None, "Claude's own line says it");
+        assert_eq!(Waiting::Agent { name: "Claude", julia: true }.line(None), None, "Claude's own line says it");
     }
 
     #[test]

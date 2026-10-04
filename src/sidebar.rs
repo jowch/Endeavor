@@ -525,10 +525,12 @@ impl Workspace {
         if self.account.signed_out() {
             return (Some(StatusMark::SignedOut), "Signed out of Claude.".into());
         }
-        match self.claude.state {
-            crate::claude_process::State::Restarting => return (Some(StatusMark::Waiting), "Restarting Claude…".into()),
-            crate::claude_process::State::Down => return (Some(StatusMark::NeedsYou), crate::claude_process::DOWN_TITLE.into()),
-            crate::claude_process::State::Up => {}
+        for agent in crate::agent::Agent::ALL {
+            match self.links.get(agent).process.state {
+                crate::agent_process::State::Restarting => return (Some(StatusMark::Waiting), format!("Restarting {}…", agent.name()).into()),
+                crate::agent_process::State::Down => return (Some(StatusMark::NeedsYou), crate::agent_process::down_title(agent).into()),
+                crate::agent_process::State::Up => {}
+            }
         }
         if let Some(host) = self.crashed_host() {
             return (Some(StatusMark::NeedsYou), format!("Julia on {host} stopped").into());
@@ -694,14 +696,14 @@ impl Workspace {
     /// composer's orbit shows, not its grey "Waiting for the connection".
     pub(crate) fn row_mark(&self, s: &Session) -> Option<RowMark> {
         let host_down = s.place.host != HostId::ThisMac && self.connections.get(&s.place.host).is_some_and(|c| c.lost.is_some());
-        let held = s.outbox.held && !s.outbox.items.is_empty() && !self.claude.up();
+        let held = s.outbox.held && !s.outbox.items.is_empty() && !self.links.get(s.agent).process.up();
         row_marks::row_mark(&RowFacts {
             needs_you: s.needs_approval(),
             error: s.errored || s.failed.is_some(),
             working: crate::transcript::activity(s, self.offline_since).is_some_and(|a| !a.waiting),
             new_reply: s.unseen && self.active != Some(s.key),
             server_down: host_down.then(|| self.hosts.name(&s.place.host).to_string()),
-            waiting: held.then(|| (s.outbox.items.len(), "Claude is back".to_string())),
+            waiting: held.then(|| (s.outbox.items.len(), format!("{} is back", s.agent.name()))),
             mac_offline: self.offline_since.is_some(),
         })
     }

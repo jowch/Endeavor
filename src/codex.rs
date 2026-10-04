@@ -45,6 +45,25 @@ pub fn log_in() -> Result<(), String> {
     if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()) }
 }
 
+/// Codex's sign-in, as the app knows it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Account {
+    /// Not checked yet: Codex hasn't started.
+    Unknown,
+    SignedIn,
+    SignedOut,
+    /// Its browser sign-in is under way.
+    SigningIn,
+    /// The browser sign-in didn't finish.
+    Failed,
+}
+
+impl Account {
+    pub fn signed_out(self) -> bool {
+        matches!(self, Account::SignedOut | Account::SigningIn | Account::Failed)
+    }
+}
+
 /// One session's mode, as Endeavor's ids name it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct View {

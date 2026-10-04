@@ -25,9 +25,13 @@ pub struct Settings {
     pub notebook_theme: NotebookTheme,
     /// The panes as the user left them.
     pub layout: Layout,
-    /// The agent config values last picked (e.g. "model", "effort"), applied to
+    /// Claude's config values last picked (e.g. "model", "effort"), applied to
     /// each session as it starts: the adapter only sets them per session.
     pub agent_config: std::collections::BTreeMap<String, String>,
+    /// Codex's, the same way (its effort values and fast mode differ).
+    pub codex_config: std::collections::BTreeMap<String, String>,
+    /// The agent new sessions start with: the last one picked.
+    pub agent: crate::agent::Agent,
     /// The sidebar's Status / Where / Group by / Sort by / Show empty folders
     /// filter menu (src/sidebar_filter.rs). Replaces the old `show_archived`
     /// bool; `Settings::load` migrates a saved `show_archived: true` to
@@ -126,6 +130,21 @@ impl NotebookTheme {
 }
 
 impl Settings {
+    /// An agent's config values last picked.
+    pub fn config_picks(&self, agent: crate::agent::Agent) -> &std::collections::BTreeMap<String, String> {
+        match agent {
+            crate::agent::Agent::Claude => &self.agent_config,
+            crate::agent::Agent::Codex => &self.codex_config,
+        }
+    }
+
+    pub fn config_picks_mut(&mut self, agent: crate::agent::Agent) -> &mut std::collections::BTreeMap<String, String> {
+        match agent {
+            crate::agent::Agent::Claude => &mut self.agent_config,
+            crate::agent::Agent::Codex => &mut self.codex_config,
+        }
+    }
+
     pub fn load() -> Self {
         let text = crate::install::app_dir().ok().and_then(|d| std::fs::read_to_string(d.join(FILE)).ok());
         let mut settings: Settings = text.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();

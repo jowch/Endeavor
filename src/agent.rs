@@ -83,6 +83,10 @@ pub struct AgentFacts {
     pub config: &'static [(&'static str, &'static str)],
     /// How its sign-in is checked.
     pub sign_in: SignIn,
+    /// It starts when one of its sessions first needs it, not with the app,
+    /// so its sessions say when they wait for it to install, connect or be
+    /// signed in to. (Claude starts at launch, and its sign-in has its own screens.)
+    pub on_demand: bool,
 }
 
 /// How an agent's sign-in is checked and made.
@@ -110,6 +114,7 @@ pub const CLAUDE_CODE: AgentFacts = AgentFacts {
     asks_every_write: false,
     config: &[("model", "Model"), ("effort", "Effort")],
     sign_in: SignIn::ClaudeAuth,
+    on_demand: false,
 };
 
 /// Codex through `@agentclientprotocol/codex-acp`, with the `codex` it bundles
@@ -130,6 +135,7 @@ pub const CODEX: AgentFacts = AgentFacts {
     asks_every_write: true,
     config: &[("model", "Model"), ("effort", "Effort"), ("fast-mode", "Speed")],
     sign_in: SignIn::CodexLogin,
+    on_demand: true,
 };
 
 /// The Node.js the adapter runs on, installed on first launch like Julia.

@@ -137,8 +137,8 @@ pub struct Composer {
     focus_plus: FocusHandle,
     focus_point: FocusHandle,
     focus_mode: FocusHandle,
-    focus_model: FocusHandle,
-    focus_effort: FocusHandle,
+    /// The config chips' (model, effort, speed), in the agent's order.
+    focus_config: [FocusHandle; 3],
     focus_send: FocusHandle,
     pub(crate) focus_context: FocusHandle,
     /// The context ring's popover.
@@ -166,8 +166,7 @@ impl Composer {
             focus_plus: cx.focus_handle().tab_stop(true),
             focus_point: cx.focus_handle().tab_stop(true),
             focus_mode: cx.focus_handle().tab_stop(true),
-            focus_model: cx.focus_handle().tab_stop(true),
-            focus_effort: cx.focus_handle().tab_stop(true),
+            focus_config: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             focus_send: cx.focus_handle().tab_stop(true),
             focus_context: cx.focus_handle().tab_stop(true),
             context: Default::default(),
@@ -743,10 +742,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Pick a model or effort: for this session, and for sessions after it.
+    /// Pick a model or effort: for this session, and for the agent's sessions after it.
     fn pick_config(&mut self, id: &'static str, value: SessionConfigValueId, cx: &mut Context<Self>) {
         self.composer.menu = None;
-        self.settings.agent_config.insert(id.to_string(), value.to_string());
+        let agent = self.composer_agent(self.active_session());
+        self.settings.config_picks_mut(agent).insert(id.to_string(), value.to_string());
         self.settings.save();
         if let Some(key) = self.active {
             let effects = self.session_mut(key).map(|s| s.set_config(id, value)).unwrap_or_default();
@@ -761,9 +761,15 @@ impl Workspace {
         if let Some(session) = session {
             return session.config_choices(id);
         }
-        let (current, options) = session::config_choices(&self.agent_options, id)?;
-        let picked = self.settings.agent_config.get(id).and_then(|v| options.iter().find(|o| o.value.to_string() == *v)).map(|o| o.value.clone());
+        let agent = self.draft_agent();
+        let (current, options) = session::config_choices(self.agent_options.get(&agent)?, id)?;
+        let picked = self.settings.config_picks(agent).get(id).and_then(|v| options.iter().find(|o| o.value.to_string() == *v)).map(|o| o.value.clone());
         Some((picked.unwrap_or(current), options))
+    }
+
+    /// The agent the composer is for: the session's, or the new session's.
+    pub fn composer_agent(&self, session: Option<&Session>) -> crate::agent::Agent {
+        session.map_or_else(|| self.draft_agent(), |s| s.agent)
     }
 
     /// The toolbar's mode ("Ask to run", "Plan"…).
@@ -933,7 +939,7 @@ impl Workspace {
             window.defer(cx, move |_, cx| input.update(cx, |s, cx| s.set_auto_grow(rows.0, rows.1, cx)));
         }
         let empty = self.composer_empty(cx);
-        let busy = self.claude.up() && session.is_some_and(|s| s.outbox.busy && s.id.is_some() && !s.agent_waiting && !s.opening());
+        let busy = session.is_some_and(|s| self.links.get(s.agent).process.up() && s.outbox.busy && s.id.is_some() && !s.agent_waiting && !s.opening());
         let slash = self.slash_view(cx);
         let list_context = if slash.is_some() {
             "SlashList"
@@ -1423,12 +1429,14 @@ impl Workspace {
             }))
             .child(div().flex_1())
             .children(
-                ["model", "effort"]
-                    .map(|id| {
+                self.composer_agent(session)
+                    .facts()
+                    .config
+                    .iter()
+                    .zip(&self.composer.focus_config)
+                    .map(|(&(id, name), focus)| {
                         let label = self.config_label(session, id)?;
                         let short = label.strip_suffix(" (recommended)").unwrap_or(&label).to_owned();
-                        let focus = if id == "model" { &self.composer.focus_model } else { &self.composer.focus_effort };
-                        let name = if id == "model" { "Model" } else { "Effort" };
                         Some(
                             tool_button(id)
                                 .role(Role::Button)
@@ -1443,7 +1451,6 @@ impl Workspace {
                                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(Menu::Config(id), window, cx))),
                         )
                     })
-                    .into_iter()
                     .flatten(),
             )
             .child(self.render_context_ring(session, window, cx))

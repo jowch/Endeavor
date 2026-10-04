@@ -252,7 +252,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .flex_col()
                 .gap(px(8.))
                 .children(quotes);
-            let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered());
+            let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered(session.agent));
             let line_height = theme::chat_line_body();
             if text.is_empty() || bubble_lines(text, bubble_width(this.settings.layout.chat_width), window) <= FOLD_AFTER {
                 let bubble = bubble.when(!text.is_empty(), |d| d.child(user_text(session, text)));

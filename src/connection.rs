@@ -790,9 +790,9 @@ impl Workspace {
         let Some(bridge) = self.bridge(host) else { return };
         let reattached = self.connections.get(host).and_then(|c| c.runtime.as_ref()).is_some_and(|r| r.reattached);
         if *host == HostId::ThisMac {
-            if let Some(commands) = self.agent_rx.take() {
+            if let Some(commands) = self.links.get_mut(crate::agent::Agent::Claude).rx.take() {
                 self.on_progress(Progress::new(Step::Agent, "Pluto ready · starting Claude…"), cx);
-                self.start_agent(commands, cx);
+                self.start_agent(crate::agent::Agent::Claude, commands, cx);
             } else if self.this_mac_was_ready {
                 self.status = if reattached { "Reconnected to Julia." } else { "Julia restarted." }.into();
             } else {
