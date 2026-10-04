@@ -1250,7 +1250,7 @@ impl Workspace {
                             .text_center()
                             .text_color(theme::text_muted())
                             .child(div().text_size(theme::size_subhead()).line_height(px(22.)).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child("Your notebook will appear here"))
-                            .child("Claude writes the code in it and runs it. You can read and change every cell yourself.")
+                            .child(crate::agent_text!(self.draft_agent(), "", " writes the code in it and runs it. You can read and change every cell yourself."))
                             .child(saved_in),
                     )
                     .into_any_element()
