@@ -574,8 +574,6 @@ impl Workspace {
                                     .role(Role::Link)
                                     .aria_label("Open Settings at Assistants")
                                     .line_height(px(17.))
-                                    .border_2()
-                                    .border_color(gpui::transparent_black())
                                     .track_focus(&self.dialog_focus("sign-in-settings", cx))
                                     .tab_stop(true)
                                     .focus_ring()
