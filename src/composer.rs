@@ -1432,6 +1432,7 @@ impl Workspace {
                 ["model", "effort"]
                     .map(|id| {
                         let label = self.config_label(session, id)?;
+                        let short = label.strip_suffix(" (recommended)").unwrap_or(&label).to_owned();
                         let focus = if id == "model" { &self.composer.focus_model } else { &self.composer.focus_effort };
                         let name = if id == "model" { "Model" } else { "Effort" };
                         Some(
@@ -1446,7 +1447,7 @@ impl Workspace {
                                 .track_focus(focus)
                                 .tab_stop(true)
                                 .focus_ring()
-                                .child(div().min_w_0().truncate().child(label))
+                                .child(div().min_w_0().truncate().child(short))
                                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(Menu::Config(id), window, cx))),
                         )
                     })
