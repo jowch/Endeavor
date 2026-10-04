@@ -24,10 +24,12 @@ The rest of this page is for people who write the guide.
 
 ## How the site uses this folder
 
-The Endeavor website fetches `docs/guide/**` from this repo when it builds,
-and publishes every page here except the pages for contributors. Those pages (this one and
+The documentation site in `site/` reads this folder when it builds, and
+publishes every page here at <https://jowch.github.io/Endeavor/>, except the
+pages for contributors. Those pages (this one and
 [images/SHOTS.md](images/SHOTS.md)) have `draft: true` in their front matter,
-and the site must skip any page marked that way. Keep that marker on them.
+and the site leaves out any page marked that way. Keep that marker on them.
+How to run the site locally is in `docs/development.md`.
 
 ## Who the guide is for
 
@@ -65,7 +67,8 @@ they need without wading through basics.
   the app, and they change without notice.
 - Link to [EndeavorMCP's README](https://github.com/jowch/EndeavorMCP#readme)
   for the notebook tools used without the app, rather than repeating it.
-- Pages must also read well on GitHub, so use only standard Markdown.
+- Pages must also read well on GitHub, so use only standard Markdown. No
+  site-only syntax, such as Starlight's `:::note` asides or MDX components.
 
 ## Images
 

@@ -12,7 +12,8 @@ code and results, is the record of the analysis that you keep and can check.
 
 ## Use it
 
-Read the [user guide](docs/guide/overview.md). It will also be on the Endeavor website.
+Read the [user guide](docs/guide/overview.md), also published at
+<https://jowch.github.io/Endeavor/>.
 
 The notebook tools also work without the app: run `endeavor serve` on a
 workstation or cluster node and connect any MCP agent and a browser. See

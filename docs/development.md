@@ -41,7 +41,35 @@ the Linux helpers inside. It runs `scripts/helpers.sh` itself.
   That builds `dist/page.js`, which is committed so `cargo build` needs no
   Node.
 - The user guide is in [guide/](guide/). Its conventions are in
-  [guide/README.md](guide/README.md).
+  [guide/README.md](guide/README.md). The documentation site publishes it;
+  see below.
+
+## Documentation site
+
+`site/` builds the user guide into a website with Astro and Starlight, and
+publishes it at <https://jowch.github.io/Endeavor/>. The pages stay in
+`docs/guide/`, and the site reads them from there, so edit them in place.
+The site's own files are the home page (`site/src/pages/index.astro`), the
+theme (`site/src/styles/theme.css`) and its config (`site/astro.config.mjs`).
+
+To run it locally, with Node.js 22 or later:
+
+```
+cd site && npm ci && npm run dev
+```
+
+Then open <http://localhost:4321/Endeavor/>. The dev server also shows pages
+marked `draft: true`, with a notice; the published site leaves them out.
+
+`npm run build` builds the site into `site/dist` and then checks every link
+between pages, including `#` anchors. A broken link fails the build.
+
+`.github/workflows/docs.yml` builds the site on pull requests that touch the
+guide, the site or the icons, and builds and publishes it on pushes to main.
+
+GitHub Pages has to be turned on once, by someone with admin rights on the
+repo: in the repo's **Settings**, **Pages**, under **Build and deployment**,
+set **Source** to **GitHub Actions**. Until then the publish step fails.
 
 ## What the app installs
 
