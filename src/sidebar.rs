@@ -246,7 +246,7 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
                 fill.with_animation(id, Animation::new(breath).repeat(), |d, t| d.opacity(0.65 - 0.35 * (std::f32::consts::TAU * t).cos())).into_any_element()
             }
         }
-        RowMark::NewReply => dot(6.).border_1().border_color(theme::accent()).flex().items_center().justify_center().child(dot(2.).bg(theme::accent())).into_any_element(),
+        RowMark::NewReply => dot(6.).border_1().border_color(theme::accent()).into_any_element(),
         RowMark::ServerDown { .. } => glyph_at(Glyph::WifiOff, theme::text_muted(), MARK_GLYPH).into_any_element(),
         RowMark::Waiting { .. } => glyph_at(Glyph::Clock, theme::text_muted(), MARK_GLYPH).into_any_element(),
     };

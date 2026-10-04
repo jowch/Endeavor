@@ -123,7 +123,7 @@ small bullet that shows the session's state:
 - a grey dot that pulses: Claude is working (with Reduce motion on, the dot
   stays still);
 - an orange dot: Claude is waiting for your answer;
-- an orange ring with a dot inside: there is a new reply you haven't seen;
+- an orange ring: there is a new reply you haven't seen;
 - a red warning sign: the session stopped with an error.
 
 Hold the pointer over a bullet to read its state in words. When a folder is
