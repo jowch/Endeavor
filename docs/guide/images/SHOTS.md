@@ -33,8 +33,8 @@ For every shot:
 ## main-window.png
 
 **Taken.** The notebook has three cells: `using`, `flips` and the plot,
-which has no name and shows as `let`. The first turn's changed-cells card
-lists all three, two tagged **new**. In the second turn Claude edited both
+which defines nothing and shows as `plot`. The first turn's changed-cells
+card lists all three, two tagged **new**. In the second turn Claude edited both
 `flips` and the plot cell, and its run was denied, so both have the orange
 bar and the reply says the run was declined.
 
@@ -119,9 +119,13 @@ and after it:
 
 ## approval-card.png
 
-**Taken.** The diff has one line removed and one added (a lower bound
-added to `curve_fit`), and the card says "Also re-runs 2 cells that depend
-on it." The chat column above the card shows the previous turn's reply.
+**Taken.** In `decay.jl`, which already has the lower bound. The diff has
+one line removed and one added (the starting guess `p0` changed from
+`[9.0, 0.25]` to `[8.0, 0.2]`), and the card says "Also re-runs 2 cells that
+depend on it." The chat column above the card shows earlier turns, in which
+run-only cards were denied. Claude asks with the combined card only when it
+edits and runs in one call; the message asked for that ("editing and
+running it in a single step").
 
 **Where it goes.** The line sits where it says, with a blank line before
 and after it:
@@ -169,9 +173,8 @@ and after it:
 ## point.png
 
 **Taken.** After the second turn's edits ran, so the plot shows 10,000
-flips. The bar reads "Figure in let", because the plot cell has no name.
-The notebook column is narrower than in the earlier set, from a wider chat
-column.
+flips. The bar reads "Figure in plot". The notebook column is narrower
+than in the earlier set, from a wider chat column.
 
 **Where it goes.** The line sits where it says, with a blank line before
 and after it:
