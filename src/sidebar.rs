@@ -9,7 +9,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::hosts::{HostId, Place};
 use crate::menu::MenuTarget;
-use crate::new_session::{Glyph, NotebookChoice, glyph, menu_row};
+use crate::new_session::{Glyph, NotebookChoice, glyph, glyph_at, menu_row};
 use crate::row_marks::{self, RowFacts, RowMark};
 use crate::session::{Session, folder_name};
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
@@ -222,6 +222,9 @@ impl StatusMark {
     }
 }
 
+/// The marks drawn as icons, 9px: as small as they stay legible, near the dots' 6px.
+const MARK_GLYPH: f32 = 0.75;
+
 /// A row's leading bullet: its mark in `bullet_slot`, with the mark's words
 /// as the tooltip, or a faint ring when it has none. The waiting count is in
 /// the words, so the slot keeps its width.
@@ -233,7 +236,7 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
     let words: SharedString = mark.words().into();
     let icon = match &mark {
         RowMark::NeedsYou => dot(6.).bg(theme::accent()).into_any_element(),
-        RowMark::Error => glyph(Glyph::Warning, theme::danger()).into_any_element(),
+        RowMark::Error => glyph_at(Glyph::Warning, theme::danger(), MARK_GLYPH).into_any_element(),
         RowMark::Working => {
             let fill = dot(6.).bg(theme::text_muted());
             let breath = theme::motion_pulse();
@@ -244,8 +247,8 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
             }
         }
         RowMark::NewReply => dot(6.).border_1().border_color(theme::accent()).flex().items_center().justify_center().child(dot(2.).bg(theme::accent())).into_any_element(),
-        RowMark::ServerDown { .. } => glyph(Glyph::WifiOff, theme::text_muted()).into_any_element(),
-        RowMark::Waiting { .. } => glyph(Glyph::Clock, theme::text_muted()).into_any_element(),
+        RowMark::ServerDown { .. } => glyph_at(Glyph::WifiOff, theme::text_muted(), MARK_GLYPH).into_any_element(),
+        RowMark::Waiting { .. } => glyph_at(Glyph::Clock, theme::text_muted(), MARK_GLYPH).into_any_element(),
     };
     slot.child(icon).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(words.clone()).build(window, cx))
 }
@@ -789,7 +792,7 @@ impl Workspace {
                     .tab_stop(true)
                     .focus_visible(|d| d.border_color(theme::focus_ring()))
                     .when(archived, |d| d.text_color(theme::text_section()))
-                    .child(if archived { bullet_slot().child(glyph(Glyph::Archive, theme::text_section())).into_any_element() } else { bullet("row-bullet", None).into_any_element() })
+                    .child(if archived { bullet_slot().child(glyph_at(Glyph::Archive, theme::text_section(), MARK_GLYPH)).into_any_element() } else { bullet("row-bullet", None).into_any_element() })
                     .child(title)
                     .child(self.row_more(row.clone(), group, false, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
