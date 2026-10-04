@@ -61,7 +61,7 @@ on them.
 You can point Claude at one cell, a few lines, or part of a plot, instead of
 describing it in words.
 
-- **Point** (⌘⇧E, or **Point** under the message box). The notebook dims.
+- **Point** (⌘⇧E, View ▸ Point, or **Point** under the message box). The notebook dims.
   Click a cell, a plot or a paragraph to pick it. Drag over code to pick
   lines, or drag anywhere else to draw a box. Hold Shift to pick more than
   one thing. Type your question in the bar that opens and press Return.

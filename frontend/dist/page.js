@@ -759,10 +759,6 @@
     window.addEventListener(
       "keydown",
       (e) => {
-        if (e.key.toLowerCase() === "e" && modHeld(e) && e.shiftKey) {
-          e.preventDefault();
-          return set(!active());
-        }
         if (e.key === "Escape" && active()) {
           e.preventDefault();
           e.stopPropagation();

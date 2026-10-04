@@ -14,7 +14,6 @@ import { askBox } from "./askbox";
 import { cellName } from "./cellname";
 import { type Box, type Pick, SHOOTING, pickSource, sendQuote, shoot } from "./quote";
 import { cellCode } from "./reveal";
-import { modHeld } from "./keys";
 
 const css = `
   /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
@@ -377,14 +376,10 @@ export function initAnnotate(): void {
   window.addEventListener("scroll", () => active() && place(), true);
   window.addEventListener("resize", () => active() && place());
 
-  // Window capture runs before Pluto's own shortcuts (e.g. Shift+Enter runs a cell).
+  // Window capture runs before Pluto's own Escape. ⌘⇧E is the app's alone: a menu item, it never reaches the page.
   window.addEventListener(
     "keydown",
     (e) => {
-      if (e.key.toLowerCase() === "e" && modHeld(e) && e.shiftKey) {
-        e.preventDefault();
-        return set(!active());
-      }
       if (e.key === "Escape" && active()) {
         e.preventDefault();
         e.stopPropagation();

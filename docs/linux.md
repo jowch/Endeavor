@@ -229,8 +229,8 @@ changes.
    - The Linux runtime dependencies above need to be declared.
 2. **The notebook page's shortcuts (not yet tried on Linux).** The page
    script takes Ctrl off macOS for Ctrl+E (ask Claude about a cell), Ctrl+J
-   (Reply to a selection), Ctrl+↩ in its prompt and comment boxes and
-   Ctrl+Shift+E (leave Point), and its hints say Ctrl (`frontend/src/keys.ts`).
+   (Reply to a selection) and Ctrl+↩ in its prompt and comment boxes, and
+   its hints say Ctrl (`frontend/src/keys.ts`).
    Pluto has no Ctrl+E or Ctrl+J of its own.
 3. **The menu bar's items (S).** GPUI shows no menu bar on Linux, so the
    About window, Help ▸ Endeavor Help, Report an Issue and Window ▸ Zoom have

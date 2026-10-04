@@ -11,7 +11,7 @@ use gtk::glib::Propagation;
 use gtk::prelude::*;
 
 /// On macOS these are menu items, which take their keys before the page does.
-const APP_FIRST: [&str; 6] = ["secondary-q", "secondary-,", "secondary-b", "secondary-=", "secondary--", "secondary-0"];
+const APP_FIRST: [&str; 7] = ["secondary-q", "secondary-,", "secondary-b", "secondary-=", "secondary--", "secondary-0", "secondary-shift-e"];
 
 fn keystroke(event: &gdk::EventKey) -> Option<Keystroke> {
     let key = event.keyval().to_lower().to_unicode().filter(|c| !c.is_control())?;

@@ -338,7 +338,7 @@ code that runs only with servers, and upload names.
   GPUI's DirectComposition surface shows through that hole. The fallback is
   to hide the web view while a menu is open.
 - **App shortcuts while the notebook has focus (M).** Use WebView2's
-  `AcceleratorKeyPressed` to send Ctrl+B, Ctrl+Q, Ctrl+, and the zoom keys to
+  `AcceleratorKeyPressed` to send Ctrl+B, Ctrl+Q, Ctrl+, Ctrl+Shift+E (Point) and the zoom keys to
   GPUI actions (the macOS version is `webkeys.rs`). Turn off browser
   accelerator keys so F5, Ctrl+P and Ctrl+F don't act on Pluto.
 - **Snapshot (S–M).** Use `CapturePreview` and crop, or the DevTools

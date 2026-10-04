@@ -132,6 +132,18 @@ test("line numbers show while Point is on, and Esc turns it off", async () => {
   assert.equal($("#annotate-hint").textContent, "Click to pick · drag over code lines · drag elsewhere for a box·Done");
 });
 
+test("⌘⇧E is the app's: the page neither turns Point off nor keeps the key from the app", async () => {
+  const { window, sent } = await page();
+  const before = sent.length;
+  const key = new window.KeyboardEvent("keydown", { key: "E", metaKey: true, shiftKey: true, bubbles: true, cancelable: true });
+  window.document.body.dispatchEvent(key);
+  assert.ok(window.document.body.classList.contains("annotating"), "still on: only the app's message turns it off");
+  assert.equal(key.defaultPrevented, false);
+  assert.deepEqual(sent.slice(before), []);
+  window.__endeavor.receive({ type: "annotate", on: false });
+  assert.ok(!window.document.body.classList.contains("annotating"));
+});
+
 const { outputFiles } = buildSync({ entryPoints: [new URL("../src/place.ts", import.meta.url).pathname], bundle: true, format: "esm", write: false });
 const place = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString("base64")}`);
 

@@ -1774,6 +1774,7 @@ impl Workspace {
             Some(annotate::Message::Ready) => {
                 // A fresh page: it gets its context again, and reports its own state.
                 self.page = annotate::PageState::default();
+                self.annotating = false;
                 self.page_context.clear();
                 self.push_cells(cx);
                 self.apply_look(cx);
@@ -1895,7 +1896,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Cmd+Shift+E from the panel (the page handles it when the notebook has focus).
+    /// ⌘⇧E, wherever the keyboard is, and the Point buttons.
     fn toggle_annotation(&mut self, _: &ToggleAnnotation, _: &mut Window, cx: &mut Context<Self>) {
         let enable = !self.annotating;
         if enable {
@@ -2489,6 +2490,8 @@ fn main() {
                 "View",
                 vec![
                     MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                    // A menu item, so ⌘⇧E reaches the app while the notebook has the keyboard.
+                    MenuItem::action("Point", ToggleAnnotation),
                     MenuItem::separator(),
                     MenuItem::action("Zoom In", ZoomIn),
                     MenuItem::action("Zoom Out", ZoomOut),
