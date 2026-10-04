@@ -5,10 +5,8 @@
 //! (Pluto)"). In the Pluto classic look the header keeps only the logo, file,
 //! host, Point and ⋮, since Pluto's own page has the rest.
 
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
@@ -363,11 +361,25 @@ fn chip(icon: Option<Glyph>, text: impl Into<SharedString>, color: Rgba) -> Div 
         .child(text.into())
 }
 
-/// Header buttons' tooltips showing now; while one is, the web view keeps its hole.
-static TOOLTIPS: AtomicUsize = AtomicUsize::new(0);
+/// A header button's tooltip was laid out in the frame being drawn.
+static TOOLTIP_DRAWN: AtomicBool = AtomicBool::new(false);
 
-pub fn tooltip_over_notebook() -> bool {
-    TOOLTIPS.load(Ordering::Relaxed) > 0
+/// Closes the tooltips' hole in a frame that draws no tooltip. The hole can't
+/// close when the tooltip's view goes: GPUI hides a tooltip while drawing a
+/// frame and keeps its view until it draws the next one, which may be much later.
+/// The root view draws this in every frame, after every tooltip is laid out.
+pub fn tooltip_hole_keeper(webview: &Entity<gpui_wry::WebView>) -> impl IntoElement {
+    let webview = webview.clone();
+    canvas(
+        |_, _, _| (),
+        move |_, _, _, cx| {
+            if !TOOLTIP_DRAWN.swap(false, Ordering::Relaxed) {
+                overlay::set_hole(webview.read(cx).raw(), overlay::Hole::Tooltip, None);
+            }
+        },
+    )
+    .absolute()
+    .size_0()
 }
 
 /// A header button's tooltip. It hangs over the notebook, whose web view (a
@@ -375,26 +387,22 @@ pub fn tooltip_over_notebook() -> bool {
 struct PaneTooltip {
     text: SharedString,
     webview: Entity<gpui_wry::WebView>,
-    hole: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 pub fn tooltip(text: &'static str, webview: &Entity<gpui_wry::WebView>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let webview = webview.clone();
-    move |_, cx| {
-        TOOLTIPS.fetch_add(1, Ordering::Relaxed);
-        cx.new(|_| PaneTooltip { text: text.into(), webview: webview.clone(), hole: Rc::default() }).into()
-    }
+    move |_, cx| cx.new(|_| PaneTooltip { text: text.into(), webview: webview.clone() }).into()
 }
 
 impl Render for PaneTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let (webview, hole) = (self.webview.clone(), self.hole.clone());
+        let webview = self.webview.clone();
         let cut = canvas(
             move |bounds, _, cx| {
                 let webview = webview.read(cx);
                 let rect = Bounds { origin: bounds.origin - webview.bounds().origin, size: bounds.size };
+                TOOLTIP_DRAWN.store(true, Ordering::Relaxed);
                 overlay::set_hole(webview.raw(), overlay::Hole::Tooltip, Some(rect));
-                hole.set(Some(rect));
             },
             |_, _, _, _| (),
         )
@@ -417,15 +425,6 @@ impl Render for PaneTooltip {
                 .child(self.text.clone())
                 .child(cut),
         )
-    }
-}
-
-impl Drop for PaneTooltip {
-    fn drop(&mut self) {
-        TOOLTIPS.fetch_sub(1, Ordering::Relaxed);
-        if let Some(rect) = self.hole.get() {
-            overlay::close_hole_at(overlay::Hole::Tooltip, rect);
-        }
     }
 }
 

@@ -348,21 +348,6 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
     unsafe { mask(view as *mut AnyObject, &rects) }
 }
 
-/// Close `owner`'s hole if it's still the one at `hole` (a tooltip's that
-/// another tooltip hasn't replaced since).
-pub fn close_hole_at(owner: Hole, hole: Bounds<Pixels>) {
-    let (view, rects) = {
-        let mut holes = HOLES.lock().unwrap();
-        let open = (owner, cg_rect(hole));
-        if !holes.rects.contains(&open) {
-            return;
-        }
-        holes.rects.retain(|r| *r != open);
-        (holes.view, holes.rects.iter().map(|(owner, rect)| (*rect, owner.radius())).collect::<Vec<_>>())
-    };
-    unsafe { mask(view as *mut AnyObject, &rects) }
-}
-
 /// Mask the web view's layer around `holes`, or not at all when there are none.
 unsafe fn mask(view: *mut AnyObject, holes: &[(CGRect, f64)]) {
     unsafe {

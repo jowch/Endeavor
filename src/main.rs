@@ -2208,7 +2208,6 @@ impl Render for Workspace {
         for (hole, open) in [
             (overlay::Hole::Menu, menu_over_notebook),
             (overlay::Hole::Tip, point_tip),
-            (overlay::Hole::Tooltip, notebook_pane::tooltip_over_notebook()),
             (overlay::Hole::Settings, settings_over_notebook),
             (overlay::Hole::Confirm, confirm_over_notebook),
             (overlay::Hole::Notice, show_webview && self.notice.as_ref().is_some_and(|n| n.spot != notice::Spot::Settings)),
@@ -2328,6 +2327,7 @@ impl Render for Workspace {
             .line_height(theme::line_body())
             .child(div().track_focus(&self.keyboard_home))
             .child(platform::web_view_hooks())
+            .child(notebook_pane::tooltip_hole_keeper(&self.webview))
             .when(self.settings.layout.sidebar_open, |d| d.child(self.render_session_bar(window, cx)).child(self.divider(Divider::Sidebar, theme::sidebar_edge(), cx)))
             .child(
                 div()

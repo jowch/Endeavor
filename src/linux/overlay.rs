@@ -135,13 +135,3 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
         holes.open != before
     });
 }
-
-/// Close `owner`'s hole if it's still the one at `hole` (a tooltip's that
-/// another tooltip hasn't replaced since).
-pub fn close_hole_at(owner: Hole, hole: Bounds<Pixels>) {
-    update(None, |holes| {
-        let before = holes.open.len();
-        holes.open.retain(|open| *open != (owner, hole));
-        holes.open.len() != before
-    });
-}

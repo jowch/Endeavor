@@ -276,8 +276,6 @@ pub mod overlay {
     pub fn set_dimmed(_: &wry::WebView, _: bool) {}
 
     pub fn set_hole(_: &wry::WebView, _: Hole, _: Option<Bounds<Pixels>>) {}
-
-    pub fn close_hole_at(_: Hole, _: Bounds<Pixels>) {}
 }
 
 /// WebView2's side of the notebook. Not ported: its process ending
