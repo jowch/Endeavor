@@ -338,6 +338,11 @@ pub enum Act {
     Found(Page, SharedString),
     /// The Assistants row's Sign in: the way it was done last, else Claude's page.
     SignInAgain,
+    /// New sessions use this agent.
+    UseAgent(crate::agent::Agent),
+    /// Codex's browser sign-in, or checking it again.
+    SignInCodex,
+    CheckCodex,
     SignIn(Method),
     CancelSignIn,
     ReopenSignIn,
@@ -492,10 +497,11 @@ impl Workspace {
     }
 
     fn assistants_groups(&self) -> Vec<Group> {
+        use crate::agent::Agent;
         let signed_out = self.account.signed_out();
         let mut claude = row("claude", "Claude");
         claude.aside = Some("by Anthropic".into());
-        claude.lead = Lead::Radio { checked: true, act: Some(Act::Go(Page::Claude)) };
+        claude.lead = Lead::Radio { checked: self.settings.agent == Agent::Claude, act: Some(Act::UseAgent(Agent::Claude)) };
         claude.search = Some("Claude assistant sign in account".into());
         claude.status = Some(match (&self.account, &self.settings_checks.profile) {
             (Account::SignedOut(Stage::Waiting(_)), _) => Status2::new("Finish signing in in your browser.", Tone::Plain),
@@ -508,6 +514,21 @@ impl Workspace {
             claude.controls.push(button("Sign in", Look::Primary, Act::SignInAgain, "Sign in to Claude"));
         }
         claude.controls.push(Control::Button { label: "Settings", look: Look::Secondary, icon: Some(Glyph::Gear), act: Some(Act::Go(Page::Claude)), aria: "Claude settings".into() });
+        let mut codex = row("codex", "Codex");
+        codex.aside = Some("by OpenAI".into());
+        codex.lead = Lead::Radio { checked: self.settings.agent == Agent::Codex, act: Some(Act::UseAgent(Agent::Codex)) };
+        codex.search = Some("Codex OpenAI ChatGPT assistant sign in".into());
+        codex.desc = Some("Sessions on this computer only. Uses your ChatGPT sign-in, the same one as the codex command.".into());
+        codex.status = Some(match self.codex_account {
+            crate::codex::Account::Unknown => Status2::new("Starts when you pick it", Tone::Quiet),
+            crate::codex::Account::SignedIn => Status2::new("Signed in", Tone::Plain),
+            crate::codex::Account::SigningIn => Status2::new("Finish signing in in your browser.", Tone::Plain),
+            crate::codex::Account::SignedOut | crate::codex::Account::Failed => Status2::new("Not signed in. Codex can't answer until you sign in.", Tone::Attention),
+        });
+        if matches!(self.codex_account, crate::codex::Account::SignedOut | crate::codex::Account::Failed) {
+            codex.controls.push(button("Check again", Look::Secondary, Act::CheckCodex, "Check Codex's sign-in again"));
+            codex.controls.push(button("Sign in", Look::Primary, Act::SignInCodex, "Sign in to Codex"));
+        }
         let later = |key: &'static str, name: &'static str, by: &'static str| {
             let mut r = row(key, name);
             r.aside = Some(by.into());
@@ -520,7 +541,7 @@ impl Workspace {
         vec![
             group(
                 Some("New sessions use"),
-                vec![Item::Row(claude), later("cursor", "Cursor", "by Anysphere"), later("codex", "Codex", "by OpenAI"), later("gemini", "Gemini", "by Google")],
+                vec![Item::Row(claude), Item::Row(codex), later("cursor", "Cursor", "by Anysphere"), later("gemini", "Gemini", "by Google")],
             )
             .foot("Pick one for new sessions. Settings opens that assistant's sign-in and options."),
         ]
@@ -1197,6 +1218,13 @@ impl Workspace {
             Act::ReopenSignIn => self.open_sign_in_again(cx),
             Act::SignOut => self.sign_out_of_claude(window, cx),
             Act::OpenClaudeAi => cx.open_url("https://claude.ai/settings/usage"),
+            Act::UseAgent(agent) => {
+                self.update_settings(cx, |s| s.agent = agent);
+                self.draft.agent = agent;
+                self.ensure_agent(agent, cx);
+            }
+            Act::SignInCodex => self.sign_in_to_codex(cx),
+            Act::CheckCodex => self.recheck_codex(cx),
             Act::PersonalClaude => self.update_settings(cx, |s| s.personal_claude = !s.personal_claude),
             Act::KeepRunning => self.update_settings(cx, |s| s.keep_running = !s.keep_running),
             Act::RunWithoutAsking => self.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking),

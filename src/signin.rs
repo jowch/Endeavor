@@ -350,8 +350,8 @@ fn choice(name: impl IntoElement, detail: &'static str, first: bool, action: Sta
         .child(action)
 }
 
-/// A listed assistant that doesn't work yet.
-fn unavailable(name: &'static str, by: &'static str) -> Div {
+/// A listed assistant that can't be chosen here: why, in a few words.
+fn unavailable(name: &'static str, by: &'static str, why: &'static str) -> Div {
     div()
         .flex()
         .items_center()
@@ -363,7 +363,7 @@ fn unavailable(name: &'static str, by: &'static str) -> Div {
         .border_1()
         .border_color(theme::bg_tag())
         .child(div().flex_1().flex().gap(px(4.)).text_color(theme::text_faint()).child(name).child(div().text_color(theme::text_section()).child(by)))
-        .child(div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("Not available yet"))
+        .child(div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(why))
 }
 
 impl Workspace {
@@ -560,9 +560,9 @@ impl Workspace {
                         .flex()
                         .flex_col()
                         .gap(px(6.))
-                        .child(unavailable("Cursor", "by Anysphere"))
-                        .child(unavailable("Codex", "by OpenAI"))
-                        .child(unavailable("Gemini", "by Google")),
+                        .child(unavailable("Codex", "by OpenAI", "For a session, after setup"))
+                        .child(unavailable("Cursor", "by Anysphere", "Not available yet"))
+                        .child(unavailable("Gemini", "by Google", "Not available yet")),
                 )
                 .child(
                     div()
