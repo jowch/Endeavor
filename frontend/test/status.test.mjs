@@ -98,7 +98,7 @@ test("a package that fails to precompile: its row, the blocked cells, the headli
   assert.equal(m.headline, "Package failed · Colors");
   assert.deepEqual(m.steps.map((s) => s.phase), ["done", "failed", "done"]);
   assert.deepEqual(m.packages.map((p) => [p.name, p.state]), [["Colors", "failed"], ["Statistics", "ready"]]);
-  assert.deepEqual(m.failure, { name: "Colors", cells: ["using Colors, Statistics", "c = colorant\"red\""] });
+  assert.deepEqual(m.failure, { name: "Colors", cells: ["using Colors, Statistics", "c"] });
   assert.equal(m.busy, null);
 });
 

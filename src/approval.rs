@@ -14,7 +14,7 @@ use crate::hosts::HostId;
 use crate::new_session::{Glyph, glyph, tilde};
 use crate::pluto;
 use crate::runs;
-use crate::session::{Entry, Scope, Session, defined_name, file_name, folder_name, option_of_kind, plan_option};
+use crate::session::{Entry, Scope, Session, cell_label, file_name, folder_name, option_of_kind, plan_option};
 use crate::theme;
 use crate::theme::FocusRing as _;
 use crate::transcript::markdown_style;
@@ -169,7 +169,7 @@ pub(crate) fn waiting_run_cells(session: &Session) -> Vec<(String, Option<String
             let name = preview
                 .and_then(|p| p.cells.iter().find(|c| c.id.as_deref() == Some(id.as_str())))
                 .and_then(|c| c.name.clone())
-                .or_else(|| session.cell_codes.get(&id).and_then(defined_name));
+                .or_else(|| session.cell_codes.get(&id).map(cell_label));
             cells.push((id, name));
         }
     }
@@ -873,11 +873,11 @@ pub(crate) struct RunQuestion {
 fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_json::Value) -> RunQuestion {
     // The runtime can't say what a cell that doesn't exist yet would run.
     let preview = preview.filter(|_| tool != "add_cell");
-    let first_line = |code: &str| cut_line(code, 60);
     let new_code = input["code"].as_str().filter(|_| matches!(tool, "edit_cell" | "add_cell"));
+    let label = |code: &str| if code.trim().is_empty() { String::new() } else { cell_label(code) };
     let names: Vec<String> = match (preview, new_code) {
-        (_, Some(code)) => vec![defined_name(code).unwrap_or_else(|| first_line(code))],
-        (Some(p), None) => p.cells.iter().map(|c| c.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| first_line(&c.code))).collect(),
+        (_, Some(code)) => vec![label(code)],
+        (Some(p), None) => p.cells.iter().map(|c| c.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| label(&c.code))).collect(),
         (None, None) => Vec::new(),
     };
     let listed = |field: &str| input[field].as_array().map(Vec::len);
@@ -1217,7 +1217,7 @@ mod tests {
         assert_eq!(heading("execute_cell", &one(Some(""), "  \n"), json!({})), "Run a cell?");
         assert_eq!(heading("delete_cell", &one(None, ""), json!({})), "Delete a cell?");
         assert_eq!(heading("execute_cell", &one(Some("fit, model"), "fit = 1"), json!({})), "Run `fit, model`?");
-        assert_eq!(heading("execute_cell", &one(None, "md\"# Intro\""), json!({})), "Run `md\"# Intro\"`?");
+        assert_eq!(heading("execute_cell", &one(None, "md\"# Intro\""), json!({})), "Run `Intro`?");
     }
 
     #[test]

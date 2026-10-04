@@ -17,7 +17,7 @@ use crate::new_session::Glyph;
 use crate::outbox::Delivery;
 use crate::pluto;
 use crate::runs;
-use crate::session::{Approval, Entry, Failed, FailedKind, Session, defined_name, file_name, file_path};
+use crate::session::{Approval, Entry, Failed, FailedKind, Session, cell_label, file_name, file_path};
 use crate::signin::Look;
 use crate::theme;
 
@@ -618,7 +618,7 @@ pub(crate) fn tool_row(session: &Session, entry: &Entry) -> Option<ToolRow> {
         celldiff::Change::Removed => (a, r + 1),
         celldiff::Change::Same => (a, r),
     });
-    let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
+    let name = |id: &str| session.cell_codes.get(id).map(cell_label);
     let running = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
     let line = if pluto { pluto_line(title, diffs, args, output.as_ref(), running, &name) } else { running_line(tool_line(title, *kind, path.as_deref(), args), title, *kind, args, running) };
     let failed = runs::failed(*status, title, output.as_ref());
@@ -735,7 +735,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 if *expanded { "expanded" } else { "collapsed" }
             );
             let all_diffs: Vec<&celldiff::CellDiff> = diffs.iter().chain(&file_diff).collect();
-            let name = |id: &str| session.cell_codes.get(id).and_then(defined_name);
+            let name = |id: &str| session.cell_codes.get(id).map(cell_label);
             let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::chat_meta_small()).text_color(color).child(text);
             let state = state.map(|state| match state {
                 RowState::Running => div().flex_none().child(state.label()),
@@ -947,8 +947,8 @@ fn pluto_object(
     let field = |name: &str| input[name].as_str().map(str::trim).filter(|s| !s.is_empty());
     let answer = output.and_then(celldiff::tool_json);
     let cell = || {
-        let read = answer.as_ref().filter(|a| a["cell_id"] == input["cell_id"]).and_then(|a| a["code"].as_str()).and_then(defined_name);
-        read.or_else(|| field("code").and_then(defined_name)).or_else(|| field("cell_id").and_then(name))
+        let read = answer.as_ref().filter(|a| a["cell_id"] == input["cell_id"]).and_then(|a| a["code"].as_str()).map(cell_label);
+        read.or_else(|| field("code").map(cell_label)).or_else(|| field("cell_id").and_then(name))
     };
     let names_a_cell = matches!(runs::doing(title, ToolKind::Other, input), Some((_, _, runs::Names::Cell)));
     match (celldiff::notebook_tool(title), field("path"), field("command")) {
@@ -963,11 +963,12 @@ fn pluto_object(
     }
 }
 
-/// A cell's name for the transcript: what it defines (`model(S, p) = …` → `model`,
-/// `x = …` → `x`), else its label.
+/// A cell's name for the transcript, from its code after the edit (before, if deleted).
 fn cell_name(diff: &celldiff::CellDiff) -> String {
-    let first = diff.lines.iter().find(|(c, l)| !matches!(c, celldiff::Change::Removed) && !l.trim().is_empty());
-    first.and_then(|(_, line)| defined_name(line)).unwrap_or_else(|| diff.label.clone())
+    match &diff.edit {
+        Some(edit) => cell_label(edit.after.as_deref().or(edit.before.as_deref()).unwrap_or("")),
+        None => cell_label(&diff.lines.iter().filter(|(c, _)| *c != celldiff::Change::Removed).map(|(_, l)| l.as_str()).collect::<Vec<_>>().join("\n")),
+    }
 }
 
 /// A tool call's collapsed line.
@@ -1150,7 +1151,8 @@ mod tests {
         assert_eq!(super::cell_name(&diff(&[(Change::Added, "x = 5 + 5")])), "x");
         assert_eq!(super::cell_name(&diff(&[(Change::Removed, "old = 1"), (Change::Added, "model(S, p) = p[1] * S")])), "model");
         assert_eq!(super::cell_name(&diff(&[(Change::Added, "function fit!(p) = 1")])), "fit!");
-        assert_eq!(super::cell_name(&diff(&[(Change::Added, "scatter(data.S, r)")])), "cell 47ce3f7e");
+        assert_eq!(super::cell_name(&diff(&[(Change::Added, "scatter(data.S, r)")])), "scatter(data.S, r)");
+        assert_eq!(super::cell_name(&diff(&[(Change::Added, "# true = heads"), (Change::Added, "flips = rand(Bool, 100)")])), "flips");
     }
 
     #[test]
@@ -1169,7 +1171,7 @@ mod tests {
         assert_eq!(line("add_cell", null.clone(), None, false), ("Added a cell".into(), None));
         assert_eq!(line("read_cell", json!({"cell_id": "c-9"}), out(json!({"cell_id": "c-9", "code": "model(S, p) = p[1] * S"})), false), ("Read".into(), Some("model".into())));
         assert_eq!(line("read_cell", json!({"cell_id": "c-fit"}), None, true), ("Reading".into(), Some("fit".into())));
-        assert_eq!(line("read_cell", json!({"cell_id": "c-9"}), out(json!({"cell_id": "c-9", "code": "scatter(x)"})), false), ("Read a cell".into(), None));
+        assert_eq!(line("read_cell", json!({"cell_id": "c-9"}), out(json!({"cell_id": "c-9", "code": "scatter(x)"})), false), ("Read".into(), Some("scatter(x)".into())));
         assert_eq!(line("read_notebook_code", json!({"notebook_id": "n"}), out(json!({"path": "/w/fit.jl", "code": ""})), false), ("Read".into(), Some("fit.jl".into())));
         assert_eq!(line("read_notebook_code", json!({"notebook_id": "n"}), None, true), ("Reading the notebook".into(), None));
         assert_eq!(line("list_notebooks", null.clone(), None, false), ("Listed notebooks".into(), None));

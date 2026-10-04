@@ -321,6 +321,51 @@
     });
   }
 
+  // src/cellname.ts
+  function cellName(code) {
+    const markdown = markdownText(code);
+    let label;
+    if (markdown !== null) {
+      const lines = markdown.split("\n").map((l) => l.trim()).filter((l) => l);
+      label = (lines.find((l) => l.startsWith("#")) ?? lines[0] ?? "markdown").replace(/^#+/, "").trim();
+    } else {
+      const first = codeLines(code)[0];
+      label = first === void 0 ? "cell" : definedName(code) ?? first;
+    }
+    const chars = [...label];
+    return chars.length > 28 ? `${chars.slice(0, 27).join("")}\u2026` : label;
+  }
+  function definedName(code) {
+    const lines = codeLines(code);
+    const line = lines[0] === "begin" ? lines[1] : lines[0];
+    if (line === void 0) return null;
+    const word = (s) => s.trim().match(/^[\p{L}\p{N}_!]+/u)?.[0] ?? null;
+    const block = ["function ", "macro ", "struct ", "mutable struct "].find((k) => line.startsWith(k));
+    if (block) return word(line.slice(block.length));
+    const eq = line.indexOf("=");
+    if (eq < 0) return null;
+    const lhs = line.slice(0, eq);
+    if (line[eq + 1] === "=" || lhs.split("(").length !== lhs.split(")").length) return null;
+    return word(lhs.trim().replace(/^const /, ""));
+  }
+  function codeLines(code) {
+    let inBlock = false;
+    return code.split("\n").map((l) => l.trim()).filter((line) => {
+      if (inBlock || line.startsWith("#=")) {
+        inBlock = !line.endsWith("=#");
+        return false;
+      }
+      return line !== "" && !line.startsWith("#");
+    });
+  }
+  function markdownText(code) {
+    const first = codeLines(code)[0];
+    if (first === void 0) return null;
+    const rest = code.slice(code.indexOf(first));
+    const m = rest.match(/^md"(?:"")?/);
+    return m ? rest.slice(m[0].length).trimEnd().replace(/"+$/, "") : null;
+  }
+
   // src/quote.ts
   var SHOOTING = "endeavor-shooting";
   var waiting = /* @__PURE__ */ new Map();
@@ -350,12 +395,6 @@
     waiting.delete(id);
     document.body.classList.remove(SHOOTING);
     return id;
-  }
-  function cellName(code) {
-    const line = code.split("\n").find((l) => l.trim()) ?? "";
-    if (!line.includes("=")) return "cell";
-    const lhs = line.split("=")[0].trim().replace(/^function /, "").replace(/^const /, "");
-    return lhs.match(/^[\p{L}\p{N}_!]+/u)?.[0] ?? "cell";
   }
   function pickSource(pick2) {
     if (pick2.part === "box") return `Box \xB7 ${pick2.cells.length} cell${pick2.cells.length === 1 ? "" : "s"}`;
@@ -875,9 +914,7 @@
   function cellName2(nb, id) {
     const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
     if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
-    const first = (nb.cell_inputs[id]?.code ?? "").split("\n").find((l) => l.trim()) ?? "";
-    const line = first.trim();
-    return line.length > 28 ? `${line.slice(0, 27)}\u2026` : line;
+    return cellName(nb.cell_inputs[id]?.code ?? "");
   }
   function statusModel(nb) {
     const tree = nb.status_tree?.subtasks ?? {};
@@ -2827,7 +2864,7 @@ pluto-editor > main { padding-top: 16px; }
 pluto-editor main { margin-left: 48px !important; margin-right: auto !important; width: calc(100% - 48px - 16px) !important; max-width: 731px !important; }
 pluto-runarea > span { font-size: 10px; }
 /* The web view draws over native views, so the notebook header can't blur
-   what's under it (docs/design-gaps.md, "Translucent headers with blur").
+   what's under it (docs/ui-spec.md, "Fades, not blur").
    Instead, the top of the page fades into the page background, so a cell
    scrolled toward the top softens instead of cutting off hard. Fixed to the
    viewport, not the scroller, and never over the first cell at rest: the

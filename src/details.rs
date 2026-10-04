@@ -308,7 +308,7 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
         return vec![Part::Error(message.to_string())];
     }
     // A cell's name from the answer's own code, else from what the transcript has seen.
-    let named = |id: &str| match (json["cell_id"].as_str() == Some(id)).then(|| json["code"].as_str()).flatten().and_then(crate::session::defined_name) {
+    let named = |id: &str| match (json["cell_id"].as_str() == Some(id)).then(|| json["code"].as_str()).flatten().map(crate::session::cell_label) {
         Some(n) => format!("`{n}`"),
         None => cell_label(id, name),
     };

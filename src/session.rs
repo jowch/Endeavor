@@ -1542,7 +1542,7 @@ impl Session {
                 _ => &[],
             })
             .filter_map(|d| d.edit.as_ref());
-        let cells = celldiff::net_changes(edits, defined_name);
+        let cells = celldiff::net_changes(edits);
         if !cells.is_empty() {
             self.push(Entry::Changes(cells));
         }
@@ -1852,10 +1852,7 @@ impl Session {
         let Some((verb, phrase, names)) = runs::doing(title, kind, input) else { return ("Working".into(), None) };
         let name = match names {
             runs::Names::File => file_path(path.as_deref(), input).map(|p| file_name(&p)),
-            runs::Names::Cell => input["code"]
-                .as_str()
-                .and_then(defined_name)
-                .or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).and_then(defined_name)),
+            runs::Names::Cell => input["code"].as_str().or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id))).map(cell_label),
             runs::Names::Nothing => None,
         };
         match name {
@@ -2307,13 +2304,67 @@ pub(crate) fn option_of_kind(options: &[PermissionOption], kind: PermissionOptio
     options.iter().find(|o| o.kind == kind)
 }
 
-/// What code defines, from its first line: `model(S, p) = …` → `model`, `x = …` → `x`.
-pub(crate) fn defined_name(code: &str) -> Option<String> {
-    let line = code.lines().find(|l| !l.trim().is_empty())?;
-    let lhs = line.split_once('=').map(|(lhs, _)| lhs).unwrap_or(line);
-    let lhs = lhs.trim().trim_start_matches("function ").trim_start_matches("const ");
+/// A cell's name wherever the user sees one: what it defines (`model(S, p) = …`
+/// → `model`), a markdown cell's first heading or words, else its first line
+/// of code; cut to `LABEL_MAX` characters.
+pub(crate) fn cell_label(code: &str) -> String {
+    let label = match markdown_text(code) {
+        Some(text) => {
+            let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+            let heading = lines.clone().find(|l| l.starts_with('#'));
+            heading.or_else(|| lines.next()).map_or("markdown", |l| l.trim_start_matches('#').trim()).to_owned()
+        }
+        None => match code_lines(code).next() {
+            Some(first) => defined_name(code).unwrap_or_else(|| first.to_owned()),
+            None => "cell".to_owned(),
+        },
+    };
+    if label.chars().count() > LABEL_MAX {
+        format!("{}…", label.chars().take(LABEL_MAX - 1).collect::<String>())
+    } else {
+        label
+    }
+}
+
+const LABEL_MAX: usize = 28;
+
+/// What code defines, from its first line of code: `x = …` → `x`. A Pluto
+/// `begin` block is named by its first line inside.
+fn defined_name(code: &str) -> Option<String> {
+    let mut lines = code_lines(code);
+    let line = lines.next().filter(|l| *l != "begin").or_else(|| lines.next())?;
+    if let Some(rest) = ["function ", "macro ", "struct ", "mutable struct "].iter().find_map(|k| line.strip_prefix(k)) {
+        let name: String = rest.trim().chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '!').collect();
+        return (!name.is_empty()).then_some(name);
+    }
+    let (lhs, rhs) = line.split_once('=')?;
+    // `f(x, k=1)` and `a == b` assign nothing.
+    if rhs.starts_with('=') || lhs.matches('(').count() != lhs.matches(')').count() {
+        return None;
+    }
+    let lhs = lhs.trim().trim_start_matches("const ");
     let name: String = lhs.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '!').collect();
-    (!name.is_empty() && line.contains('=')).then_some(name)
+    (!name.is_empty()).then_some(name)
+}
+
+/// Code's lines, trimmed, without blank lines, `#` comments and `#= … =#` blocks.
+fn code_lines(code: &str) -> impl Iterator<Item = &str> {
+    let mut in_block = false;
+    code.lines().map(str::trim).filter(move |line| {
+        if in_block || line.starts_with("#=") {
+            in_block = !line.ends_with("=#");
+            return false;
+        }
+        !line.is_empty() && !line.starts_with('#')
+    })
+}
+
+/// A markdown cell's text: `md"""…"""` or `md"…"` without its quotes.
+fn markdown_text(code: &str) -> Option<&str> {
+    let first = code_lines(code).next()?;
+    let rest = &code[first.as_ptr() as usize - code.as_ptr() as usize..];
+    let text = rest.strip_prefix("md\"\"\"").or_else(|| rest.strip_prefix("md\""))?;
+    Some(text.trim_end().trim_end_matches('"'))
 }
 
 /// The file a call touches: its first location, else a path in its input.
@@ -3593,6 +3644,32 @@ more" }"#);
     }
 
     #[test]
+    fn a_cell_is_named_by_what_it_defines_its_heading_or_its_first_line() {
+        use super::cell_label;
+        let cases = [
+            ("flips = rand(Bool, 100)", "flips"),
+            ("# true = heads, false = tails\n\nflips = rand(Bool, 100)", "flips"),
+            ("#= Draws\n  x = 1 =#\nn_heads = count(flips)", "n_heads"),
+            ("model(S, p) = p[1] * S", "model"),
+            ("function fit!(p)\n  p\nend", "fit!"),
+            ("const K = 3", "K"),
+            ("struct Fit\n  k::Float64\nend", "Fit"),
+            ("begin\n  x = 1\n  y = 2\nend", "x"),
+            ("md\"\"\"\n# Coin flips\nWe flip a coin.\n\"\"\"", "Coin flips"),
+            ("md\"\"\"\nWe flip a fair coin a hundred times.\n\"\"\"", "We flip a fair coin a hundr…"),
+            ("md\"## Results\"", "Results"),
+            ("scatter(t, counts, label = \"data\")", "scatter(t, counts, label = …"),
+            ("x == 1", "x == 1"),
+            ("using Plots", "using Plots"),
+            ("# just a note", "cell"),
+            ("a_rather_long_variable_name_for_tests = 1", "a_rather_long_variable_name…"),
+        ];
+        for (code, label) in cases {
+            assert_eq!(cell_label(code), label, "{code:?}");
+        }
+    }
+
+    #[test]
     fn the_working_line_says_what_the_running_call_does() {
         use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind};
         use serde_json::json;
@@ -3610,7 +3687,7 @@ more" }"#);
         s.apply(call("t2", "mcp__notebook__add_cell", ToolKind::Other, json!({"code": "residuals = y .- ŷ"})));
         assert_eq!(s.activity(), ("Adding".into(), Some("residuals".into())));
         s.apply(call("t3", "mcp__notebook__add_cell", ToolKind::Other, json!({"code": "md\"# Fit\""})));
-        assert_eq!(s.activity(), ("Adding a cell".into(), None));
+        assert_eq!(s.activity(), ("Adding".into(), Some("Fit".into())));
         s.apply(call("t4", "ls", ToolKind::Execute, json!({"command": "ls"})));
         assert_eq!(s.activity(), ("Running a command".into(), None));
         s.apply(call("t5", "ToolSearch", ToolKind::Other, json!({"query": "fetch"})));
@@ -3618,7 +3695,7 @@ more" }"#);
         let done = |id: &str| SessionEvent::Update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_string(), ToolCallUpdateFields::new().status(ToolCallStatus::Completed))));
         s.apply(done("t5"));
         s.apply(done("t4"));
-        assert_eq!(s.activity(), ("Adding a cell".into(), None), "the latest call still running");
+        assert_eq!(s.activity(), ("Adding".into(), Some("Fit".into())), "the latest call still running");
         assert_eq!(crate::transcript::elapsed(12), "12s");
         assert_eq!(crate::transcript::elapsed(65), "1m 05s");
     }

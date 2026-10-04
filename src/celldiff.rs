@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::session::cell_label;
+
 const MARKER: &str = "# ╔═╡ ";
 /// Unchanged lines kept around each change when a diff is long.
 const CONTEXT: usize = 2;
@@ -37,11 +39,10 @@ pub struct CellEdit {
 
 impl CellEdit {
     fn diff(self) -> CellDiff {
-        let short = &self.cell[..self.cell.len().min(8)];
         let label = match (&self.before, &self.after) {
-            (None, _) => "new cell".to_owned(),
-            (_, None) => format!("cell {short} (deleted)"),
-            _ => format!("cell {short}"),
+            (None, Some(after)) => format!("{} (new)", cell_label(after)),
+            (Some(before), None) => format!("{} (deleted)", cell_label(before)),
+            (_, after) => cell_label(after.as_deref().unwrap_or("")),
         };
         let lines = line_diff(self.before.as_deref().unwrap_or(""), self.after.as_deref().unwrap_or(""));
         CellDiff { label, lines, edit: Some(self) }
@@ -60,7 +61,7 @@ pub enum CellChange {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChangedCell {
     pub cell: String,
-    /// What the cell defines, else "cell" and its id's first characters.
+    /// The cell's label (`cell_label`).
     pub name: String,
     pub change: CellChange,
     pub added: usize,
@@ -69,8 +70,8 @@ pub struct ChangedCell {
 
 /// The cells a turn's edits changed, in the order first touched, each by its
 /// net change: a cell edited twice is one row, and one put back as it was, or
-/// added and then deleted, is none. `name` says what a cell's code defines.
-pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>, name: impl Fn(&str) -> Option<String>) -> Vec<ChangedCell> {
+/// added and then deleted, is none.
+pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>) -> Vec<ChangedCell> {
     let mut cells: Vec<CellEdit> = Vec::new();
     for edit in edits {
         match cells.iter_mut().find(|c| c.cell == edit.cell) {
@@ -94,7 +95,7 @@ pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>, name: impl
                 Change::Removed => (a, r + 1),
                 Change::Same => (a, r),
             });
-            let name = name(after.as_deref().unwrap_or(old)).unwrap_or_else(|| format!("cell {}", &cell[..cell.len().min(8)]));
+            let name = cell_label(after.as_deref().unwrap_or(old));
             Some(ChangedCell { cell, name, change, added, removed })
         })
         .collect()
@@ -231,7 +232,7 @@ impl CellCodes {
                 .collect(),
             "add_cell" => match (input["code"].as_str(), result["cell_id"].as_str()) {
                 (Some(code), Some(id)) => vec![CellEdit { cell: id.to_owned(), before: None, after: Some(code.to_owned()) }.diff()],
-                (Some(code), None) => vec![CellDiff { label: "new cell".into(), lines: line_diff("", code), edit: None }],
+                (Some(code), None) => vec![CellDiff { label: format!("{} (new)", cell_label(code)), lines: line_diff("", code), edit: None }],
                 (None, _) => vec![],
             },
             "delete_cell" => input["cell_id"]
@@ -329,7 +330,7 @@ mod tests {
         let reply = json!({ "cell_id": C1, "code": "x = 1" });
         codes.observe("add_cell", &reply);
         let d = codes.diff("add_cell", &json!({ "code": "x = 1" }), &reply);
-        assert_eq!((d[0].label.as_str(), &d[0].lines), ("new cell", &vec![(Added, "x = 1".into())]));
+        assert_eq!((d[0].label.as_str(), &d[0].lines), ("x (new)", &vec![(Added, "x = 1".into())]));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
         assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())], "not the whole cell again");
     }
@@ -369,11 +370,11 @@ mod tests {
         call("delete_cell", json!({ "cell_id": C3 }), json!({}));
         call("add_cell", json!({ "code": "tmp = 0" }), json!({ "cell_id": C5, "code": "tmp = 0" }));
         call("delete_cell", json!({ "cell_id": C5 }), json!({}));
-        let cells = net_changes(diffs.iter().filter_map(|d| d.edit.as_ref()), crate::session::defined_name);
+        let cells = net_changes(diffs.iter().filter_map(|d| d.edit.as_ref()));
         let row = |cell: &str, name: &str, change, added, removed| ChangedCell { cell: cell.into(), name: name.into(), change, added, removed };
         assert_eq!(
             cells,
-            [row(C1, "rate", CellChange::Edited, 2, 1), row(C2, "fit", CellChange::New, 2, 0), row(C3, "cell bbbbbbbb", CellChange::Deleted, 0, 1)],
+            [row(C1, "rate", CellChange::Edited, 2, 1), row(C2, "fit", CellChange::New, 2, 0), row(C3, "plot(rate)", CellChange::Deleted, 0, 1)],
             "C4 is back as it was; C5 was added and deleted again"
         );
     }

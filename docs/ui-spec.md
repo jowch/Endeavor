@@ -176,7 +176,7 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 | "also re-runs N" | the runtime's `endeavor/run_preview` |
 | "You edited `x`" | bundle observes user edits/runs/moves → app → agent context |
 | Agent names | ACP agent info |
-| Cell labels | defined symbol (`find_symbol_definitions`) or first line — cells have only UUIDs |
+| Cell labels | `cell_label` (`src/session.rs`; the page's `frontend/src/cellname.ts`): what the cell defines, skipping comments; a markdown cell's first heading or words; else its first line of code; at most 28 characters with "…" — never its id |
 
 ## Failure states
 

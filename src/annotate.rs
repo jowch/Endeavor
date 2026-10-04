@@ -2,7 +2,7 @@
 //! asking about cells), turned into chat messages with their attachments.
 
 use crate::attach::{Attachment, Cell, CellAsk, Part, Quoted};
-use crate::session::defined_name;
+use crate::session::cell_label;
 use wire::backend::Backend;
 
 /// The page script (frontend/, built with `npm run build`; the bundle is committed
@@ -177,7 +177,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             };
             let cell = Cell { id, code: capped(v.get("code"), MAX_CODE) };
             if add && ask == CellAsk::About {
-                let name = defined_name(&cell.code).unwrap_or_else(|| "cell".into());
+                let name = cell_label(&cell.code);
                 let from = Quoted::Cell { notebook, cell: cell.id, name, part: Part::Whole(cell.code) };
                 return Some(Message::Quote(Picks { quotes: vec![(from, None)], comment: text, add }));
             }
@@ -284,7 +284,7 @@ fn pick_quote(pick: &serde_json::Value, notebook: &str) -> Option<(Quoted, Optio
         "figure" => Part::Figure(png()),
         _ => return None,
     };
-    let name = defined_name(&code).unwrap_or_else(|| "cell".into());
+    let name = cell_label(&code);
     Some((Quoted::Cell { notebook, cell, name, part }, shot))
 }
 
@@ -377,7 +377,7 @@ mod tests {
             Some(Message::Quote(Picks {
                 quotes: vec![
                     (in_c1("s", Part::Lines { first: 1, last: 1, text: "s = sum(xs)".into() }), None),
-                    (in_c1("cell", Part::Figure(png())), Some(3)),
+                    (in_c1("plot(xs)", Part::Figure(png())), Some(3)),
                     (in_c1("cell", Part::Output("0.42".into())), None),
                     (in_c1("y", Part::Whole("y = 2".into())), None),
                     (Quoted::Box { notebook: NB.into(), cells: vec![C1.into()], png: png() }, Some(4)),

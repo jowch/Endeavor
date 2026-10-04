@@ -14,7 +14,8 @@ import { onRedraw } from "./redraw";
 import { cellCode } from "./reveal";
 import { modHeld, shortcut } from "./keys";
 import { barPlace, type Rect } from "./place";
-import { cellName, pickSource, sendQuote } from "./quote";
+import { cellName } from "./cellname";
+import { pickSource, sendQuote } from "./quote";
 import { type Found, hidePill, initReply, rangeRects, selectedInCell } from "./reply";
 
 const AGENT = "Claude";

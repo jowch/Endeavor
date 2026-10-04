@@ -11,7 +11,8 @@
 import { byUser, on, send } from "./bridge";
 import { barPlace } from "./place";
 import { askBox } from "./askbox";
-import { type Box, type Pick, SHOOTING, cellName, pickSource, sendQuote, shoot } from "./quote";
+import { cellName } from "./cellname";
+import { type Box, type Pick, SHOOTING, pickSource, sendQuote, shoot } from "./quote";
 import { cellCode } from "./reveal";
 import { modHeld } from "./keys";
 

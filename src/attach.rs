@@ -20,7 +20,7 @@ use wire::backend::Backend;
 
 /// The backend whose page notebook attachments come from.
 const BACKEND: Backend = Backend::Pluto;
-use crate::session::defined_name;
+use crate::session::cell_label;
 
 /// A notebook cell as it was when attached.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,9 +30,8 @@ pub struct Cell {
 }
 
 impl Cell {
-    /// What the cell defines (`rates = …` → `rates`), else "cell".
     pub fn name(&self) -> String {
-        defined_name(&self.code).unwrap_or_else(|| "cell".into())
+        cell_label(&self.code)
     }
 }
 
@@ -1016,7 +1015,7 @@ mod tests {
         assert_eq!(one.label(), Label { plain: "".into(), mono: "rates".into() });
         let three = Attachment::Cells { notebook: NB.into(), cells: vec![rates.clone(), plot.clone(), rates.clone()], ask: CellAsk::About };
         assert_eq!(three.label(), Label { plain: "3 cells".into(), mono: "".into() });
-        assert_eq!(Attachment::Cells { notebook: NB.into(), cells: vec![plot.clone()], ask: CellAsk::About }.label().mono, "cell");
+        assert_eq!(Attachment::Cells { notebook: NB.into(), cells: vec![plot.clone()], ask: CellAsk::About }.label().mono, "scatter(data.t, data.co…");
         let error = Attachment::Error { notebook: NB.into(), cell: rates, text: "BoundsError".into() };
         assert_eq!(error.label(), Label { plain: "error in ".into(), mono: "rates".into() });
         assert_eq!(error.icon(), Icon::Error);

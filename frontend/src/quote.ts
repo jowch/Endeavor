@@ -5,6 +5,7 @@
 // overlay, and waits for the app's "shot".
 
 import { on, send } from "./bridge";
+import { cellName } from "./cellname";
 
 /** A box in page coordinates (scrolls with the notebook). */
 export type Box = { left: number; top: number; right: number; bottom: number };
@@ -51,14 +52,6 @@ export async function shoot(b: Box): Promise<number> {
   waiting.delete(id);
   document.body.classList.remove(SHOOTING);
   return id;
-}
-
-/** What a cell defines (`rates = …` → `rates`), else "cell", as the app names it (`defined_name`). */
-export function cellName(code: string): string {
-  const line = code.split("\n").find((l) => l.trim()) ?? "";
-  if (!line.includes("=")) return "cell";
-  const lhs = line.split("=")[0].trim().replace(/^function /, "").replace(/^const /, "");
-  return lhs.match(/^[\p{L}\p{N}_!]+/u)?.[0] ?? "cell";
 }
 
 /** Where a pick is from: "rates · lines 3–5", "plot_fit · figure", "Box · 2 cells". */
