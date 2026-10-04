@@ -1,30 +1,466 @@
 ---
-import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import '@fontsource/schibsted-grotesk/400.css';
+import '@fontsource/schibsted-grotesk/600.css';
+import '@fontsource/schibsted-grotesk/700.css';
+import '../styles/fonts.css';
+import { Image, getImage } from 'astro:assets';
+import Splash from '../components/Splash.astro';
+import { meta, nav, hero, record, features, withoutApp, footer } from '../landing';
 import logoLight from '../../../assets/icon/logo-light.svg';
 import logoDark from '../../../assets/icon/logo-dark.svg';
+import mainWindow from '../../../docs/guide/images/main-window.png';
+import approvalCard from '../../../docs/guide/images/approval-card.png';
+import safePreview from '../../../docs/guide/images/safe-preview.png';
+import point from '../../../docs/guide/images/point.png';
+import clusterResources from '../../../docs/guide/images/cluster-resources.png';
+
+const shots = {
+	'approval-card': approvalCard,
+	'safe-preview': safePreview,
+	point,
+	'cluster-resources': clusterResources,
+};
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const href = (h: string) => (h.startsWith('/') ? base + h : h);
+
+const social = await getImage({ src: mainWindow, width: 1200, format: 'jpg' });
+const socialUrl = new URL(social.src, Astro.site).href;
+const pageUrl = new URL(base + '/', Astro.site).href;
+const logoWidth = (height: number) => Math.round((height * logoDark.width) / logoDark.height);
 ---
 
-<StarlightPage
-	frontmatter={{
-		title: 'Endeavor user guide',
-		description: 'How to use Endeavor, a Mac app for data analysis with Claude in a Julia notebook.',
-		template: 'splash',
-		hero: {
-			title: 'User guide',
-			tagline:
-				'Endeavor is a Mac app where Claude writes and runs Julia code in a notebook beside your chat, while you watch, edit and decide what runs.',
-			image: { light: logoLight, dark: logoDark, alt: 'Endeavor' },
-			actions: [
-				{ text: 'What Endeavor is', link: `${base}/overview/`, variant: 'primary' },
-				{ text: 'Get started', link: `${base}/getting-started/`, variant: 'secondary' },
-			],
-		},
-	}}
->
-	<p>
-		Endeavor isn't available to download yet. It's coming soon. The notebook tools work without the
-		app today. See <a href="https://github.com/jowch/EndeavorMCP#readme">EndeavorMCP's README</a>.
-	</p>
-</StarlightPage>
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="theme-color" content="#151517" />
+		<title>{meta.title}</title>
+		<meta name="description" content={meta.description} />
+		<link rel="canonical" href={pageUrl} />
+		<link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+		<meta property="og:type" content="website" />
+		<meta property="og:site_name" content="Endeavor" />
+		<meta property="og:title" content={meta.title} />
+		<meta property="og:description" content={meta.description} />
+		<meta property="og:url" content={pageUrl} />
+		<meta property="og:image" content={socialUrl} />
+		<meta property="og:image:width" content={String(social.attributes.width)} />
+		<meta property="og:image:height" content={String(social.attributes.height)} />
+		<meta property="og:image:alt" content={meta.imageAlt} />
+		<meta name="twitter:card" content="summary_large_image" />
+	</head>
+	<body>
+		<a class="skip" href="#content">Skip to content</a>
+
+		<div class="sky splash-scope">
+			<script is:inline>
+				if (!matchMedia('(prefers-reduced-motion: reduce)').matches) document.currentScript.parentElement.classList.add('playing');
+			</script>
+			<header class="bar wrap">
+				<a class="logo" href={`${base}/`}>
+					<Image src={logoDark} alt="Endeavor home" height={30} width={logoWidth(30)} loading="eager" />
+				</a>
+				<nav aria-label="Main">
+					<a href={href(nav.docs.href)}>{nav.docs.text}</a>
+					<a href={nav.github.href}>{nav.github.text}</a>
+				</nav>
+			</header>
+
+			<Splash />
+			<div class="hero wrap">
+				<h1 class="splash-name">{hero.name}</h1>
+				<p class="tagline splash-tagline">{hero.tagline}</p>
+				<p class="lead">{hero.lead}</p>
+				<p class="status">{hero.status}</p>
+				<div class="actions">
+					<a class="button primary" href={href(hero.primary.href)}>{hero.primary.text}</a>
+					<a class="button secondary" href={hero.secondary.href}>{hero.secondary.text}</a>
+				</div>
+			</div>
+		</div>
+
+		<main id="content">
+			<section class="record" aria-labelledby="record">
+				<div class="shot-main wrap">
+					<Image
+						src={mainWindow}
+						alt={record.alt}
+						widths={[720, 1080, 1440, 2160, 2880]}
+						sizes="(min-width: 1200px) 1152px, calc(100vw - 32px)"
+						loading="eager"
+						fetchpriority="high"
+						class="frame"
+					/>
+				</div>
+				<div class="text narrow">
+					<h2 id="record">{record.heading}</h2>
+					{record.paragraphs.map((p) => <p>{p}</p>)}
+					<p><a class="more" href={href(record.link.href)}>{record.link.text}</a></p>
+				</div>
+			</section>
+
+			{
+				features.map((f, i) => (
+					<section class:list={['feature', 'wrap', { flip: i % 2 === 1 }]} aria-labelledby={f.id}>
+						<div class="text">
+							<h2 id={f.id}>{f.heading}</h2>
+							{f.paragraphs.map((p) => <p>{p}</p>)}
+							<p class="links">
+								{f.links.map((l) => <a class="more" href={href(l.href)}>{l.text}</a>)}
+							</p>
+						</div>
+						<div class="picture">
+							<Image
+								src={shots[f.image]}
+								alt={f.alt}
+								widths={[480, 720, 960, 1440]}
+								sizes="(min-width: 960px) 560px, calc(100vw - 32px)"
+								class="frame"
+							/>
+						</div>
+					</section>
+				))
+			}
+
+			<section class="without" aria-labelledby="without-the-app">
+				<div class="text narrow">
+					<h2 id="without-the-app">{withoutApp.heading}</h2>
+					{withoutApp.paragraphs.map((p) => <p>{p}</p>)}
+					<pre tabindex="0" aria-label={withoutApp.codeLabel}><code>{withoutApp.code.join('\n')}</code></pre>
+					<p><a class="more" href={withoutApp.link.href}>{withoutApp.link.text}</a></p>
+				</div>
+			</section>
+		</main>
+
+		<footer class="foot">
+			<div class="wrap foot-row">
+				<a class="logo" href={`${base}/`}>
+					<Image src={logoLight} alt="Endeavor home" height={26} width={logoWidth(26)} class="on-light" />
+					<Image src={logoDark} alt="Endeavor home" height={26} width={logoWidth(26)} class="on-dark" />
+				</a>
+				<nav aria-label="Footer">
+					{footer.links.map((l) => <a href={href(l.href)}>{l.text}</a>)}
+				</nav>
+			</div>
+		</footer>
+	</body>
+</html>
+
+<style is:global>
+	:root {
+		--page: #ffffff;
+		--band: #f4f2ee;
+		--text: #1a1a1c;
+		--muted: #56565c;
+		--link: #b23600;
+		--line: #dedbd4;
+		--focus: #cc3f00;
+		--shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 12px 32px rgb(0 0 0 / 0.1);
+		--sky: #151517;
+		--sky-text: #ececec;
+		--sky-muted: #a3a3a3;
+		--accent: #cc3f00;
+		--font: 'Schibsted Grotesk', system-ui, sans-serif;
+		--mono: 'JuliaMono', ui-monospace, monospace;
+		color-scheme: light dark;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--page: #151517;
+			--band: #1c1c1f;
+			--text: #ececec;
+			--muted: #a3a3a3;
+			--link: #ff8c57;
+			--line: #2e2e33;
+			--focus: #e08a5e;
+			--shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.4);
+		}
+	}
+
+	*,
+	*::before,
+	*::after {
+		box-sizing: border-box;
+	}
+
+	html {
+		-webkit-text-size-adjust: 100%;
+	}
+
+	body {
+		margin: 0;
+		background: var(--page);
+		color: var(--text);
+		font: 400 1.0625rem/1.6 var(--font);
+		-webkit-font-smoothing: antialiased;
+	}
+
+	img {
+		max-width: 100%;
+		height: auto;
+	}
+
+	a {
+		color: var(--link);
+		text-underline-offset: 0.18em;
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--focus);
+		outline-offset: 3px;
+		border-radius: 4px;
+	}
+
+	.wrap {
+		width: 100%;
+		max-width: 1184px;
+		margin-inline: auto;
+		padding-inline: 16px;
+	}
+
+	.narrow {
+		max-width: 712px;
+		margin-inline: auto;
+		padding-inline: 16px;
+	}
+
+	.skip {
+		position: absolute;
+		left: 16px;
+		top: -100px;
+		z-index: 10;
+		padding: 8px 12px;
+		background: var(--page);
+		color: var(--text);
+		border-radius: 6px;
+	}
+	.skip:focus {
+		top: 12px;
+	}
+
+	/* The night sky stays dark in both appearances, as in the app's setup window. */
+	.sky {
+		--link: #ff8c57;
+		--focus: #e08a5e;
+		background: var(--sky);
+		color: var(--sky-text);
+		padding-bottom: clamp(96px, 16vw, 200px);
+	}
+
+	.bar {
+		display: flex;
+		margin-bottom: clamp(8px, 3vw, 32px);
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		padding-block: 16px;
+	}
+	.bar .logo {
+		display: block;
+		line-height: 0;
+	}
+	.bar nav {
+		display: flex;
+		gap: 4px;
+	}
+	.bar nav a {
+		color: var(--sky-text);
+		text-decoration: none;
+		font-weight: 600;
+		padding: 6px 10px;
+		border-radius: 6px;
+	}
+	.bar nav a:hover {
+		background: rgb(255 255 255 / 0.08);
+	}
+
+	.hero {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+	}
+	.hero h1 {
+		margin: 20px 0 0;
+		font-size: clamp(2.5rem, 6vw, 3.5rem);
+		font-weight: 600;
+		line-height: 1.1;
+		letter-spacing: -0.01em;
+	}
+	.tagline {
+		margin: 6px 0 0;
+		color: var(--sky-muted);
+		font-size: 1.25rem;
+	}
+	.lead {
+		max-width: 36rem;
+		margin: 32px 0 0;
+		font-size: 1.1875rem;
+	}
+	.status {
+		margin: 16px 0 0;
+		color: var(--sky-muted);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		font-size: 0.8125rem;
+	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 12px;
+		margin-top: 28px;
+	}
+	.button {
+		display: inline-block;
+		padding: 11px 20px;
+		border-radius: 8px;
+		font-weight: 600;
+		text-decoration: none;
+		line-height: 1.3;
+	}
+	.button.primary {
+		background: var(--accent);
+		color: #ffffff;
+	}
+	.button.primary:hover {
+		background: #b23600;
+	}
+	.button.secondary {
+		color: var(--sky-text);
+		box-shadow: inset 0 0 0 1px #4a4a50;
+	}
+	.button.secondary:hover {
+		background: rgb(255 255 255 / 0.08);
+	}
+
+	.frame {
+		display: block;
+		border-radius: 12px;
+		border: 1px solid var(--line);
+		box-shadow: var(--shadow);
+		background: var(--band);
+	}
+
+	.shot-main {
+		margin-top: calc(-1 * clamp(80px, 14vw, 184px));
+	}
+	.shot-main .frame {
+		width: 100%;
+	}
+
+	h2 {
+		margin: 0 0 16px;
+		font-size: clamp(1.625rem, 3.2vw, 2.125rem);
+		font-weight: 600;
+		line-height: 1.2;
+		letter-spacing: -0.005em;
+	}
+	.text p {
+		margin: 0 0 14px;
+	}
+	.more {
+		font-weight: 600;
+	}
+	.more::after {
+		content: ' →';
+	}
+	.links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 20px;
+	}
+
+	.record .text {
+		margin-top: clamp(48px, 7vw, 88px);
+	}
+
+	.feature {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+		gap: clamp(32px, 5vw, 72px);
+		align-items: center;
+		margin-top: clamp(72px, 9vw, 112px);
+	}
+	.feature.flip .text {
+		order: 2;
+	}
+	.picture {
+		display: flex;
+		justify-content: center;
+		min-width: 0;
+	}
+	.picture .frame {
+		max-height: 560px;
+		width: auto;
+	}
+
+	.without {
+		margin-top: clamp(80px, 11vw, 144px);
+		padding-block: clamp(56px, 8vw, 96px);
+		background: var(--band);
+	}
+	pre {
+		margin: 8px 0 20px;
+		padding: 16px 18px;
+		overflow-x: auto;
+		background: var(--sky);
+		color: var(--sky-text);
+		border-radius: 10px;
+		font: 400 0.875rem/1.7 var(--mono);
+	}
+
+	.foot {
+		border-top: 1px solid var(--line);
+		padding-block: 28px;
+	}
+	.foot-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+	}
+	.foot .logo {
+		line-height: 0;
+	}
+	.foot nav {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 24px;
+	}
+	.foot nav a {
+		color: var(--muted);
+	}
+	.foot nav a:hover {
+		color: var(--text);
+	}
+	.on-dark {
+		display: none;
+	}
+	@media (prefers-color-scheme: dark) {
+		.on-light {
+			display: none;
+		}
+		.on-dark {
+			display: block;
+		}
+	}
+
+	@media (max-width: 860px) {
+		.feature {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.feature.flip .text {
+			order: 0;
+		}
+		.picture .frame {
+			max-height: 480px;
+		}
+	}
+</style>

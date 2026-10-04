@@ -1,0 +1,251 @@
+---
+// The setup window's splash from the app (src/splash.rs and src/turtle.rs), drawn on a canvas.
+// The name and tagline are page text; give them the classes `splash-name` and `splash-tagline`
+// inside the same `.splash-scope` element and they fade up in step with the turtle.
+---
+
+<canvas class="splash" aria-hidden="true"></canvas>
+
+<style>
+	.splash {
+		display: block;
+		width: 100%;
+		height: clamp(170px, 24vw, 230px);
+	}
+
+	:global(.splash-scope.playing .splash-name),
+	:global(.splash-scope.playing .splash-tagline) {
+		animation: splash-fade-up 0.6s cubic-bezier(0.45, 0, 0.55, 1) both;
+		animation-play-state: var(--splash-play, running);
+	}
+	:global(.splash-scope.playing .splash-name) {
+		--rise: 10px;
+		animation-delay: 1.8s;
+	}
+	:global(.splash-scope.playing .splash-tagline) {
+		--rise: 8px;
+		animation-delay: 2.3s;
+	}
+	:global(.splash-scope.paused) {
+		--splash-play: paused;
+	}
+
+	@keyframes splash-fade-up {
+		from {
+			opacity: 0;
+			transform: translateY(var(--rise));
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+</style>
+
+<script>
+	const TAU = Math.PI * 2;
+	const COLORS = { shell: '#CC3F00', skin: '#E08A5E', eye: '#151517', star: '#F2E6D0' };
+
+	// Turtle geometry in shell radii (src/turtle.rs).
+	const HEAD_R = 0.36;
+	const HEAD_X = 1.02;
+	const HEAD_Y = -0.14;
+	const FOOT_R = 0.21;
+	const FEET_X = [-0.6, 0.4];
+
+	// Timeline in seconds (src/splash.rs).
+	const WALK = 1.6;
+	const GAZE_START = 3.7;
+	const GAZE_MOVE = 0.45;
+	const STILL = 6;
+
+	/** eyeX 1 looks ahead, 0 at the viewer, -1 back; look raises the eye; dx/dy move the head. */
+	type Gaze = { eyeX: number; look: number; dx: number; dy: number };
+
+	const AHEAD: Gaze = { eyeX: 1, look: 0, dx: 0, dy: 0 };
+	const STARS_GAZE: Gaze = { eyeX: 1, look: 1, dx: 0.06, dy: -0.28 };
+	const HIGH: Gaze = { eyeX: 0.55, look: 1.25, dx: 0.02, dy: -0.34 };
+	const YOU: Gaze = { eyeX: 0, look: 0.1, dx: 0, dy: -0.04 };
+	const BACK: Gaze = { eyeX: -1.3, look: 0.35, dx: -0.07, dy: -0.08 };
+	const DOWN: Gaze = { eyeX: 1, look: -0.7, dx: 0.05, dy: 0.07 };
+
+	/** (gaze, seconds held), hand-ordered so it doesn't feel like a metronome. */
+	const GAZES: [Gaze, number][] = [
+		[STARS_GAZE, 4],
+		[AHEAD, 1.6],
+		[YOU, 2.2],
+		[AHEAD, 1.2],
+		[HIGH, 3.2],
+		[STARS_GAZE, 1.8],
+		[AHEAD, 1.4],
+		[BACK, 1.8],
+		[AHEAD, 2],
+		[DOWN, 1.4],
+		[AHEAD, 1.8],
+		[YOU, 1.6],
+		[STARS_GAZE, 3.6],
+		[AHEAD, 2.4],
+	];
+	const GAZE_TOTAL = GAZES.reduce((sum, [, hold]) => sum + GAZE_MOVE + hold, 0);
+
+	/** (x, y) from where the turtle stops, in shell radii, and the radius in px at a 60 px shell radius. */
+	const STARS: [number, number, number][] = [
+		[1.5, -2.7, 3.7],
+		[2.4, -2.1, 2.8],
+		[0.8, -3.2, 3],
+		[3, -3, 4.6],
+		[2, -3.6, 2.5],
+		[-0.3, -2.9, 2.3],
+		[3.6, -2.3, 2.5],
+	];
+
+	const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+	const ease = (k: number) => {
+		k = Math.min(1, Math.max(0, k));
+		return k * k * (3 - 2 * k);
+	};
+	const lerpGaze = (a: Gaze, b: Gaze, k: number): Gaze => ({
+		eyeX: lerp(a.eyeX, b.eyeX, k),
+		look: lerp(a.look, b.look, k),
+		dx: lerp(a.dx, b.dx, k),
+		dy: lerp(a.dy, b.dy, k),
+	});
+
+	function gazeAt(t: number): Gaze {
+		if (t < GAZE_START) return AHEAD;
+		let u = (t - GAZE_START) % GAZE_TOTAL;
+		let from = GAZES[GAZES.length - 1][0];
+		for (const [to, hold] of GAZES) {
+			if (u < GAZE_MOVE) return lerpGaze(from, to, ease(u / GAZE_MOVE));
+			u -= GAZE_MOVE;
+			if (u < hold) return to;
+			u -= hold;
+			from = to;
+		}
+		return AHEAD;
+	}
+
+	function blinkAt(t: number, period: number, offset: number) {
+		const SHUT = 0.16;
+		const u = (((t + offset) % period) + period) % period;
+		return u < SHUT ? Math.abs(1 - (2 * u) / SHUT) : 1;
+	}
+
+	type Pose = { breathe: number; bob: number; blink: number; gaze: Gaze; feet: [number, number][] };
+
+	function disc(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number, color: string) {
+		ctx.fillStyle = color;
+		ctx.beginPath();
+		ctx.ellipse(x, y, rx, ry, 0, 0, TAU);
+		ctx.fill();
+	}
+
+	/** Half an ellipse from angle `from` to `from + PI`; y points down, so PI draws the top half. */
+	function halfDisc(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number, from: number, color: string) {
+		ctx.fillStyle = color;
+		ctx.beginPath();
+		ctx.ellipse(x, y, rx, ry, 0, from, from + Math.PI);
+		ctx.closePath();
+		ctx.fill();
+	}
+
+	/** The turtle standing with its feet on the ground at (gx, gy), facing right, shell radius r. */
+	function paintTurtle(ctx: CanvasRenderingContext2D, gx: number, gy: number, r: number, p: Pose) {
+		FEET_X.forEach((fx, i) => {
+			const [dx, dy] = p.feet[i];
+			halfDisc(ctx, gx + (fx + dx) * r, gy + (-FOOT_R + dy) * r, FOOT_R * r, FOOT_R * r, 0, COLORS.skin);
+		});
+		const base = -FOOT_R + p.bob;
+		const hr = HEAD_R * r;
+		const hx = gx + (HEAD_X + p.gaze.dx) * r;
+		const hy = gy + (base + HEAD_Y + p.gaze.dy) * r;
+		halfDisc(ctx, gx, gy + base * r, r, r * (1 + p.breathe), Math.PI, COLORS.shell);
+		disc(ctx, hx, hy, hr, hr, COLORS.skin);
+		const er = hr * 0.13;
+		disc(ctx, hx + hr * 0.36 * p.gaze.eyeX, hy - hr * (0.16 + 0.22 * p.gaze.look), er, er * Math.max(p.blink, 0.12), COLORS.eye);
+	}
+
+	function drawScene(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
+		ctx.clearRect(0, 0, w, h);
+		const R = (h - 2) / 3.7;
+		const groundY = h - 1;
+		const endX = w / 2 - 0.2 * R;
+		STARS.forEach(([dx, dy, size], i) => {
+			const on = ease((t - 3 - i * 0.18) / 0.4);
+			if (on <= 0) return;
+			ctx.globalAlpha = on * (0.7 + 0.3 * Math.sin(t * 2.2 + i * 1.7));
+			const r = (size * R) / 60;
+			disc(ctx, endX + dx * R, groundY + dy * R, r, r, COLORS.star);
+		});
+		ctx.globalAlpha = 1;
+		const walked = Math.min(1, Math.max(0, t / WALK));
+		const x = lerp(-2 * R, endX, 1 - (1 - walked) ** 2);
+		const stepping = 1 - ease(walked);
+		const phase = (t * TAU) / 0.8;
+		const stride = 0.1 * stepping;
+		const lift = 0.14 * stepping;
+		paintTurtle(ctx, x, groundY, R, {
+			bob: t < WALK ? -0.035 * Math.abs(Math.sin(phase)) * stepping : 0,
+			blink: blinkAt(t, 3.3, 0.9),
+			breathe: 0.018 * Math.sin((t * TAU) / 3.4),
+			gaze: gazeAt(t),
+			feet: [0, Math.PI].map((o) => [-Math.cos(phase + o) * stride, -Math.max(0, Math.sin(phase + o)) * lift]),
+		});
+	}
+
+	function start(canvas: HTMLCanvasElement) {
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+		const scope = canvas.closest('.splash-scope');
+		const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+		let w = 0;
+		let h = 0;
+		let t = 0;
+		let last = 0;
+		let frame = 0;
+		let onScreen = true;
+
+		const draw = () => drawScene(ctx, w, h, reduce.matches ? STILL : t);
+		const fit = () => {
+			const rect = canvas.getBoundingClientRect();
+			const dpr = window.devicePixelRatio || 1;
+			w = rect.width;
+			h = rect.height;
+			canvas.width = Math.round(w * dpr);
+			canvas.height = Math.round(h * dpr);
+			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+			draw();
+		};
+		const tick = (now: number) => {
+			// A long gap means the frame callbacks were held back; carry on from where it stopped.
+			t += Math.min(0.1, (now - last) / 1000);
+			last = now;
+			draw();
+			frame = requestAnimationFrame(tick);
+		};
+		const update = () => {
+			const play = !reduce.matches && onScreen && !document.hidden;
+			scope?.classList.toggle('playing', !reduce.matches);
+			scope?.classList.toggle('paused', !play);
+			cancelAnimationFrame(frame);
+			frame = 0;
+			if (play) {
+				last = performance.now();
+				frame = requestAnimationFrame(tick);
+			} else {
+				draw();
+			}
+		};
+
+		new ResizeObserver(fit).observe(canvas);
+		new IntersectionObserver(([entry]) => {
+			onScreen = entry.isIntersecting;
+			update();
+		}).observe(canvas);
+		document.addEventListener('visibilitychange', update);
+		reduce.addEventListener('change', update);
+		update();
+	}
+
+	document.querySelectorAll<HTMLCanvasElement>('canvas.splash').forEach(start);
+</script>
