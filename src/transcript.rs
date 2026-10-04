@@ -13,6 +13,7 @@ use crate::Workspace;
 use crate::celldiff;
 use crate::details;
 use crate::failure;
+use crate::motion;
 use crate::new_session::Glyph;
 use crate::outbox::Delivery;
 use crate::pluto;
@@ -26,10 +27,17 @@ pub(crate) fn run_state_line(warning: &pluto::RunWarning) -> String {
     format!("⚠ {warning}")
 }
 
+/// The space above the transcript's first entry.
+const LIST_TOP: Pixels = px(12.);
+
 /// `margin`: the chat column's side margin (main.rs's `chat_margin`), so the
 /// transcript lines up with the composer area in one centred column.
-pub fn render_transcript(session: &Session, margin: Pixels, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
+pub fn render_transcript(session: &Session, margin: Pixels, window: &Window, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     session.sync_list();
+    if motion::quiet() {
+        session.settle_arrivals();
+    }
+    motion::follow(&session.glide, &session.list, LIST_TOP, window);
     // Every reply starts parsing now, so it has its height before it is first measured.
     for (ix, entry) in session.entries.iter().enumerate() {
         if let Entry::Agent { text, .. } = entry {
@@ -53,15 +61,22 @@ pub fn render_transcript(session: &Session, margin: Pixels, cx: &mut Context<Wor
                 };
                 // A message's own row of actions (Copy, its time) makes most of the gap below it.
                 let message = matches!(entry, Entry::User { .. } | Entry::Agent { .. });
+                let fade = session.arrival(ix).map(|at| motion::eased(at, theme::motion_fast(), window));
                 match element {
-                    Some(element) => div().px(margin).when(!message, |d| d.pb_4()).when(message, |d| d.pb(px(2.))).child(element).into_any_element(),
+                    Some(element) => div()
+                        .px(margin)
+                        .when(!message, |d| d.pb_4())
+                        .when(message, |d| d.pb(px(2.)))
+                        .when_some(fade, |d, p| d.opacity(p))
+                        .child(element)
+                        .into_any_element(),
                     None => div().into_any_element(),
                 }
             })
             .unwrap_or_else(|_| div().into_any_element())
     })
     .flex_1()
-    .pt_3()
+    .pt(LIST_TOP)
 }
 
 /// The floating button above the composer while the view has left the end
@@ -72,7 +87,7 @@ pub fn render_jump(session: &Session, cx: &mut Context<Workspace>) -> Option<Any
         session.below.set(None);
         session.list.set_follow_mode(FollowMode::Tail);
     }
-    let label = crate::transcript_copy::pill(session.list.is_following_tail(), session.list.is_scrolled_to_end(), session.below.get())?;
+    let label = crate::transcript_copy::pill(session.following(), session.list.is_scrolled_to_end(), session.below.get())?;
     let key = session.key;
     Some(
         div()
@@ -491,13 +506,19 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
     let open = run_open(session, &run);
     let live = session.busy_since.is_some() && run.end == session.entries.len();
     let start = run.start;
+    let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | start as u64);
     // One run of text, so a long summary wraps with the failures and the chevron in line.
     let (mut text, counts) = run_summary(session, run.clone());
     let aria_label = format!("{text}, {}", if open { "expanded" } else { "collapsed" });
-    let highlights: Vec<_> = counts.into_iter().map(|range| (range, HighlightStyle { color: Some(theme::danger().into()), ..Default::default() })).collect();
     text.push_str(if open { " ⌄" } else { " ›" });
+    // As calls arrive the summary is rewritten: the old words fade out over the new.
+    let words = |(text, counts): (String, Vec<std::ops::Range<usize>>)| {
+        let highlights: Vec<_> = counts.into_iter().map(|range| (range, HighlightStyle { color: Some(theme::danger().into()), ..Default::default() })).collect();
+        StyledText::new(text).with_highlights(highlights)
+    };
+    let rewritten = motion::changed(id("run-words"), &(text.clone(), counts.clone()), window, cx);
     let header = div()
-        .id(ElementId::NamedInteger("run".into(), key << 32 | start as u64))
+        .id(id("run"))
         .role(Role::Button)
         .aria_label(aria_label)
         .cursor_pointer()
@@ -509,22 +530,34 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
         .track_focus(&session.run_focus(start, cx))
         .tab_stop(true)
         .focus_visible(|s| s.border_color(theme::focus_ring()))
-        .child(StyledText::new(text).with_highlights(highlights))
+        .relative()
+        .child(div().when_some(rewritten.as_ref(), |d, (_, p)| d.opacity(*p)).child(words((text, counts))))
+        .children(rewritten.map(|(was, p)| div().absolute().top_0().left_0().right_0().opacity(1. - p).child(words(was))))
         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle_run(start))));
     let shown: Vec<usize> = match (open, live) {
         (true, _) => rows,
         (false, true) => calls.last().copied().into_iter().collect(),
         (false, false) => Vec::new(),
     };
+    // Folded while it runs, the run shows its latest call: the one it replaces fades out over it.
+    let latest = (!open && live).then(|| shown.first().copied()).flatten();
+    let replaced = latest.and_then(|ix| motion::changed(id("run-latest"), &ix, window, cx)).filter(|(was, _)| *was < session.entries.len());
+    let opened = motion::changed(id("run-open"), &open, window, cx).filter(|(was, _)| !was).map(|(_, p)| p);
     let list = (!shown.is_empty()).then(|| {
-        div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).children(shown.into_iter().enumerate().map(|(n, i)| {
-            div()
-                .px(px(8.))
-                .py(px(4.))
-                .when(n > 0, |d| d.border_t_1().border_color(theme::border()))
-                .child(render_row(session, i, true, window, cx))
+        div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).when_some(opened, |d, p| d.opacity(p)).children(shown.into_iter().enumerate().map(|(n, i)| {
+            let row = div().px(px(8.)).py(px(4.)).when(n > 0, |d| d.border_t_1().border_color(theme::border()));
+            match replaced {
+                Some((was, p)) => row
+                    .relative()
+                    // Under the new row, which takes the clicks.
+                    .child(div().absolute().top(px(4.)).left(px(8.)).right(px(8.)).opacity(1. - p).child(render_row(session, was, true, window, cx)))
+                    .child(div().opacity(p).child(render_row(session, i, true, window, cx))),
+                None => row.child(render_row(session, i, true, window, cx)),
+            }
         }))
     });
+    // The header appears when a second call joins the first.
+    let header = if live { motion::arriving(header, id("run-header"), false).into_any_element() } else { header.into_any_element() };
     div().flex().flex_col().gap(px(6.)).child(header).children(list).into_any_element()
 }
 
@@ -679,6 +712,9 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
     let (key, entry) = (session.key, &session.entries[ix]);
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     let toggle = cx.listener(move |this: &mut Workspace, _: &ClickEvent, _: &mut Window, cx: &mut Context<Workspace>| this.with_session(key, cx, |s| s.toggle(ix)));
+    // Opened, its details fade in; closing is at once.
+    let expanded_now = matches!(entry, Entry::Thought { expanded: true, .. } | Entry::Tool { expanded: true, .. });
+    let opening = motion::changed(id("open"), &expanded_now, window, cx).filter(|(was, _)| !was).map(|(_, p)| p);
     let line = |name: &'static str| {
         div()
             .id(id(name))
@@ -710,7 +746,9 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             )
             .when(*expanded, |d| {
                 d.child(
-                    scroll_y(div().id(id("thought-text")).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE))
+                    scroll_y(div().id(id("thought-text")).max_h(px(DETAIL_MAX_H)), window, cx)
+                        .when_some(opening, |d, p| d.opacity(p))
+                        .line_height(px(DETAIL_LINE))
                         .pl(px(10.))
                         .border_l_1()
                         .border_color(theme::border())
@@ -777,7 +815,19 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                         .child(div().flex_none().child(if *expanded { "⌄" } else { "›" }))
                         .on_click(toggle),
                 )
-                .when(*expanded, |d| d.children(all_diffs.into_iter().map(render_diff)).children(input_panel).children(output_panel).children(answered))
+                .when(*expanded, |d| {
+                    d.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .when_some(opening, |d, p| d.opacity(p))
+                            .children(all_diffs.into_iter().map(render_diff))
+                            .children(input_panel)
+                            .children(output_panel)
+                            .children(answered),
+                    )
+                })
                 .into_any_element()
         }
         _ => div().into_any_element(),

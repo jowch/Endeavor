@@ -26,6 +26,7 @@ use crate::celldiff::{self, CellCodes};
 use crate::hosts::Place;
 use crate::permits::{Asked, Asks, Rule};
 use crate::pluto;
+use crate::motion;
 use crate::runs;
 use crate::transcript_copy::{self, Below, Swap};
 use crate::outbox::{Copying, Delivery, Dispatch, Outbox, Paused, Queued, Shown};
@@ -379,6 +380,11 @@ pub struct Session {
     pub below: Cell<Option<transcript_copy::Below>>,
     /// The user has scrolled the list's last entry into view.
     pub reached_end: Rc<Cell<bool>>,
+    /// Eases the list to its end as content arrives (`motion::Glide`).
+    pub glide: RefCell<motion::Glide>,
+    /// Entries that arrived live in the last moments, by index, so they fade
+    /// in; replayed history shows at once.
+    arrivals: RefCell<Vec<(usize, Instant)>>,
     /// When reopening began, for the wait line's time.
     pub opening_since: Option<Instant>,
     /// Loading the session again after Claude's process restarted: its history
@@ -610,6 +616,8 @@ impl Session {
             replay: None,
             below: Cell::new(None),
             reached_end,
+            glide: RefCell::new(motion::Glide::default()),
+            arrivals: RefCell::new(Vec::new()),
             opening_since: None,
             reloading: false,
             cut_off: false,
@@ -1024,7 +1032,28 @@ impl Session {
     fn push(&mut self, entry: Entry) {
         self.end_thought();
         self.mark(self.entries.len());
+        if !self.replaying {
+            self.arrivals.borrow_mut().push((self.entries.len(), Instant::now()));
+        }
         self.entries.push(entry);
+    }
+
+    /// When entry `ix` arrived, while it is still fading in.
+    pub fn arrival(&self, ix: usize) -> Option<Instant> {
+        let mut arrivals = self.arrivals.borrow_mut();
+        let fade = crate::theme::motion_fast();
+        arrivals.retain(|(_, at)| at.elapsed() < fade);
+        arrivals.iter().find(|(i, _)| *i == ix).map(|(_, at)| *at)
+    }
+
+    /// Show what has arrived in place, as when the session is shown again.
+    pub fn settle_arrivals(&self) {
+        self.arrivals.borrow_mut().clear();
+    }
+
+    /// The list follows its end: by itself, or held by its glide.
+    pub fn following(&self) -> bool {
+        self.list.is_following_tail() || self.glide.borrow().holding()
     }
 
     /// Thinking ends when anything follows it, or the turn ends.
@@ -1045,12 +1074,22 @@ impl Session {
     }
 
     /// Bring the virtual list up to date with `entries` (called before rendering).
+    /// Entries that changed in place are measured again, which keeps the
+    /// view's place in them; a splice over the view's first entry would put
+    /// the view back to that entry's top.
     pub fn sync_list(&self) {
         let Some(from) = self.dirty_from.take() else { return };
-        let old = self.list_len.get();
+        let (old, new) = (self.list_len.get(), self.entries.len());
         let from = from.min(old);
-        self.list.splice(from..old, self.entries.len() - from);
-        self.list_len.set(self.entries.len());
+        if new >= old {
+            if from < old {
+                self.list.remeasure_items(from..old);
+            }
+            self.list.splice(old..old, new - old);
+        } else {
+            self.list.splice(from..old, new - from);
+        }
+        self.list_len.set(new);
     }
 
     /// Where the session stands with its notebook, for the page when it couldn't open.
@@ -1254,8 +1293,11 @@ impl Session {
             self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery, sent: Some(SystemTime::now()) });
             self.turn_entry = Some(self.entries.len() - 1);
             self.busy_since.get_or_insert_with(Instant::now);
-            // Sending jumps back to the bottom even if the user had scrolled up.
-            self.list.set_follow_mode(FollowMode::Tail);
+            // Sending jumps back to the bottom even if the user had scrolled up;
+            // while following, the view eases there.
+            if !self.following() {
+                self.list.set_follow_mode(FollowMode::Tail);
+            }
         } else if again {
             // The unanswered message went again: its bubble is already there.
             self.turn_entry = self.unanswered.take();
@@ -2422,6 +2464,18 @@ mod tests {
         AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate, PermissionOptionKind, SessionId, SessionMode, SessionModeState, SessionUpdate,
         StopReason, ToolCallStatus, UsageUpdate,
     };
+
+    #[test]
+    fn live_entries_fade_in_and_replayed_history_shows_at_once() {
+        let mut live = Session::new(1, Place::local("/p"), None);
+        live.note("You stopped Claude");
+        assert!(live.arrival(0).is_some(), "a live entry fades in");
+        std::thread::sleep(crate::theme::motion_fast() + std::time::Duration::from_millis(10));
+        assert_eq!(live.arrival(0), None, "and is dropped once its fade is over");
+        let mut replayed = Session::loading(2, SessionId::new("s"), Place::local("/p"), None, "Old".into());
+        replayed.note("You stopped Claude");
+        assert_eq!(replayed.arrival(0), None);
+    }
 
     #[test]
     fn always_this_session_answers_only_the_prompt_shown() {

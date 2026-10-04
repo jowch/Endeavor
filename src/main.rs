@@ -2117,7 +2117,7 @@ impl Workspace {
         let margin = px(chat_margin(self.settings.layout.chat_width));
         let scroll_top = session.list.logical_scroll_top();
         let at_top = scroll_top.item_ix == 0 && scroll_top.offset_in_item <= px(0.);
-        let at_end = session.list.is_scrolled_to_end().unwrap_or(true);
+        let at_end = session.list.is_scrolled_to_end().unwrap_or(true) || session.following();
         let top_fade = (!at_top).then(|| {
             div()
                 .absolute()
@@ -2160,7 +2160,7 @@ impl Workspace {
                             let at = event.position;
                             cx.defer_in(window, move |this, _, cx| this.check_reply_selection(at, cx));
                         }))
-                        .child(transcript::render_transcript(session, margin, cx))
+                        .child(transcript::render_transcript(session, margin, window, cx))
                         .children(top_fade)
                         .children(bottom_fade)
                         .children(transcript::render_jump(session, cx))

@@ -614,7 +614,7 @@ fn scroll_state(s: &Session) -> Value {
         "item": top.item_ix,
         "offset": f32::from(top.offset_in_item).round(),
         "px": f32::from(-s.list.scroll_px_offset_for_scrollbar().y).round(),
-        "following": s.list.is_following_tail(),
+        "following": s.following(),
         "at_end": s.list.is_scrolled_to_end(),
         "rows": rows,
     })
