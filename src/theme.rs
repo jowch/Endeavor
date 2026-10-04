@@ -1,5 +1,6 @@
 //! Colour and type tokens from docs/ui-spec.md, and the bundled fonts. Every
-//! colour, font and text size in the native UI comes from here.
+//! colour, font and text size in the native UI comes from here, and every
+//! animation's duration and easing.
 //!
 //! Each colour has a dark and a light value. Which one the functions return is
 //! one process-wide switch, set by `set_light` from Settings → Appearance (and
@@ -8,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use gpui::{App, BoxShadow, InteractiveElement, Pixels, Rgba, Styled, point, px, rgb, rgba};
 
@@ -258,6 +260,55 @@ pub fn chat_subhead() -> Pixels { px(16.) }
 /// JuliaMono inside chat text: a size smaller than `chat_body`, as `size_code`
 /// is for `size_body`.
 pub fn chat_code() -> Pixels { px(13.) }
+
+// Motion: short fades and small slides, nothing at all with Reduce motion.
+// Like the appearance, one process-wide switch (`set_reduce_motion`), so a
+// view reads a duration without being handed the setting.
+
+static REDUCE_MOTION: AtomicBool = AtomicBool::new(false);
+
+/// Reduce motion on: every duration below is zero. `motion::set_reduced` also
+/// tells GPUI, which stills the orbit and the component library's popovers.
+pub fn set_reduce_motion(reduce: bool) {
+    REDUCE_MOTION.store(reduce, Ordering::Relaxed);
+}
+
+/// Debug builds: `ENDEAVOR_MOTION_SCALE=10` plays every animation ten times
+/// slower, to check it by eye or in screenshots; 0 turns motion off.
+#[cfg(debug_assertions)]
+fn motion_scale() -> f32 {
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| std::env::var("ENDEAVOR_MOTION_SCALE").ok().and_then(|s| s.parse().ok()).filter(|s: &f32| *s >= 0.).unwrap_or(1.))
+}
+
+#[cfg(not(debug_assertions))]
+fn motion_scale() -> f32 {
+    1.
+}
+
+fn motion(ms: f32) -> Duration {
+    scaled(ms, REDUCE_MOTION.load(Ordering::Relaxed), motion_scale())
+}
+
+pub(crate) fn scaled(ms: f32, reduce: bool, scale: f32) -> Duration {
+    if reduce {
+        return Duration::ZERO;
+    }
+    Duration::from_micros((ms * scale * 1000.).round() as u64)
+}
+
+/// Something appearing (a card, a menu, a new transcript entry), and a line
+/// whose words change.
+pub fn motion_fast() -> Duration { motion(120.) }
+/// The transcript catching up with its end as content arrives.
+pub fn motion_standard() -> Duration { motion(160.) }
+/// How far something that appears moves into place.
+pub fn motion_rise() -> Pixels { px(4.) }
+
+/// Fast at first, settling at the end: for anything arriving.
+pub fn ease_out(t: f32) -> f32 {
+    1. - (1. - t.clamp(0., 1.)).powi(3)
+}
 
 #[cfg(test)]
 mod tests {

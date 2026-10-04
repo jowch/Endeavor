@@ -103,6 +103,48 @@ pub fn reduces_motion() -> bool {
     false
 }
 
+/// `reduces_motion` again each time the setting changes, for the life of the app.
+#[cfg(target_os = "macos")]
+pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> {
+    use block2::RcBlock;
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    #[link(name = "AppKit", kind = "framework")]
+    unsafe extern "C" {
+        static NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification: *mut AnyObject;
+    }
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let changed = RcBlock::new(move |_: *mut AnyObject| {
+        let _ = tx.unbounded_send(reduces_motion());
+    });
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let center: *mut AnyObject = msg_send![workspace, notificationCenter];
+        let main: *mut AnyObject = msg_send![class!(NSOperationQueue), mainQueue];
+        // The center keeps the observer for as long as the app runs.
+        let _: *mut AnyObject = msg_send![center, addObserverForName: NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification, object: std::ptr::null_mut::<AnyObject>(), queue: main, usingBlock: &*changed];
+    }
+    rx
+}
+
+#[cfg(target_os = "linux")]
+pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> {
+    use gtk::prelude::GtkSettingsExt;
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    if let Some(settings) = gtk::Settings::default() {
+        settings.connect_gtk_enable_animations_notify(move |s| {
+            let _ = tx.unbounded_send(!s.is_gtk_enable_animations());
+        });
+    }
+    rx
+}
+
+/// Not ported: Windows needs WM_SETTINGCHANGE for SPI_SETCLIENTAREAANIMATION.
+#[cfg(windows)]
+pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> {
+    futures::channel::mpsc::unbounded().1
+}
+
 /// Run from source (`cargo run`), the app has no bundle to take its Dock icon
 /// from, so it sets the icon itself.
 #[cfg(target_os = "macos")]

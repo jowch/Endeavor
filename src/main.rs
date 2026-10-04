@@ -57,6 +57,7 @@ mod runs;
 mod runtime;
 mod server_dialog;
 mod menu;
+mod motion;
 mod session;
 mod settings;
 mod sidebar;
@@ -487,6 +488,9 @@ pub struct Workspace {
     /// ENDEAVOR_TEST_STUCK_OPENING's file was there at the last check.
     #[cfg(debug_assertions)]
     test_blanked: bool,
+    /// The session the last frame showed (None: the new-session screen); None
+    /// before the first frame. Showing another one draws it without motion.
+    drawn: Option<Option<u64>>,
 }
 
 impl Workspace {
@@ -682,6 +686,7 @@ impl Workspace {
             connections: HashMap::new(),
             listeners: HashMap::new(),
             placeholder: "Type / for commands".into(),
+            drawn: None,
             claude: claude_process::Process::default(),
             claude_details_open: false,
             usage_limit: None,
@@ -2185,6 +2190,10 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.drawn != Some(self.active) {
+            self.drawn = Some(self.active);
+            motion::hush(window);
+        }
         // Another session was opened while one's queued message was in the box.
         if self.queue_edit.as_ref().is_some_and(|e| Some(e.key) != self.active) {
             self.cancel_queue_edit(window, cx);
@@ -2404,7 +2413,15 @@ fn main() {
         gpui_component::init(cx);
         theme::load_fonts(cx);
         apply_appearance(Settings::load().appearance, cx);
-        cx.set_reduce_motion(platform::reduces_motion());
+        motion::set_reduced(platform::reduces_motion(), cx);
+        let mut reduce_motion = platform::watch_reduce_motion();
+        cx.spawn(async move |cx| {
+            use futures::StreamExt;
+            while let Some(reduce) = reduce_motion.next().await {
+                cx.update(|cx| motion::set_reduced(reduce, cx));
+            }
+        })
+        .detach();
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
