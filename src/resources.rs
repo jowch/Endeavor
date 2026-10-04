@@ -165,18 +165,20 @@ impl Workspace {
         let shown = r.partition.clone().or_else(|| default_name.clone().map(|n| format!("{n} (default)"))).unwrap_or_else(|| "Cluster default".into());
         let partition = div()
             .id(("partition-select", target.index()))
-            .w(px(136.))
+            .min_w(px(136.))
+            .max_w(px(200.))
             .h(px(26.))
             .px(px(10.))
             .flex()
             .items_center()
             .justify_between()
+            .gap(px(6.))
             .rounded(px(5.))
             .border_1()
             .border_color(theme::control_edge())
             .cursor_pointer()
-            .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().child(shown))
-            .child(glyph(Glyph::Chevron, theme::text_faint()))
+            .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(shown))
+            .child(div().flex_none().child(glyph(Glyph::Chevron, theme::text_faint())))
             .on_click(cx.listener(on(Change::TogglePartitions)));
         rows.push(row("Partition", partition).into_any_element());
         if menu_open {
