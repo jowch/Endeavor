@@ -1119,6 +1119,52 @@ mod tests {
         });
     }
 
+    /// Codex's session through the dialect, with no model turn: Endeavor's
+    /// modes and Codex's options, and Plan as its collaboration mode. Run in a
+    /// private HOME (the adapter installs into the app's folder there) with
+    /// `CODEX_HOME` at a signed-in Codex: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:9/mcp
+    /// cargo test -- --ignored live_codex_session_and_plan_mode --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_codex_session_and_plan_mode() {
+        use super::*;
+        let tools = test_tools();
+        let (tx, rx) = unbounded();
+        let mut events = start(Agent::Codex, rx);
+        let cwd = std::env::temp_dir().join(format!("endeavor-codex-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        tx.unbounded_send(Command::NewSession { key: 1, cwd: cwd.canonicalize().unwrap(), tools }).unwrap();
+        futures::executor::block_on(async {
+            let mut signed_in = None;
+            while let Some(event) = events.next().await {
+                match event {
+                    AgentEvent::CodexSignedIn(yes) => signed_in = Some(yes),
+                    AgentEvent::Started { key: 1, result } => {
+                        let started = result.expect("started");
+                        let modes = started.modes.expect("modes");
+                        println!("modes {:?} current {}", modes.available_modes.iter().map(|m| m.id.to_string()).collect::<Vec<_>>(), modes.current_mode_id);
+                        println!("config {:?}", started.config.iter().map(|c| c.id.to_string()).collect::<Vec<_>>());
+                        assert_eq!(modes.current_mode_id.to_string(), "default");
+                        assert!(started.config.iter().any(|c| c.id.to_string() == "effort"));
+                        assert!(!started.config.iter().any(|c| c.id.to_string() == "mode" || c.id.to_string() == "collaboration_mode"));
+                        tx.unbounded_send(Command::SetMode(started.id, "plan".into())).unwrap();
+                    }
+                    AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::CurrentModeUpdate(m))) => {
+                        println!("mode {}", m.current_mode_id);
+                        assert_eq!(m.current_mode_id.to_string(), "plan");
+                    }
+                    AgentEvent::Session(_, SessionEvent::Config(options)) => {
+                        println!("confirmed {:?}", options.iter().map(|c| c.id.to_string()).collect::<Vec<_>>());
+                        break;
+                    }
+                    AgentEvent::Session(_, SessionEvent::ConfigFailed(e)) | AgentEvent::Failed(e) => panic!("{e}"),
+                    _ => {}
+                }
+            }
+            assert_eq!(signed_in, Some(true), "checked before connecting");
+        });
+    }
+
     #[test]
     fn personal_setup_is_opt_in_and_the_app_plugin_always_loads() {
         let default = &session_options(false, "/p", false)["claudeCode"]["options"];
