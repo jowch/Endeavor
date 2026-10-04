@@ -1382,7 +1382,7 @@ pub(crate) enum Glyph {
     /// A chevron pointing up (find's previous match).
     ChevronUp,
     Search,
-    /// Filters: two vertical tracks, each with a knob at its current value.
+    /// Filters: two horizontal tracks, each with a ring knob at its value.
     Sliders,
     Archive,
     Server,
@@ -1477,14 +1477,15 @@ pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
     glyph_at(glyph, color, 1.)
 }
 
-/// A line icon drawn `scale` times its 12px size (the stroke stays 1px).
+/// A line icon drawn `scale` times its 12px size (the stroke stays 1px, or
+/// 1.5px for the sliders, whose short tracks and knobs vanish at 1px).
 pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElement {
     const SIZE: f32 = 12.;
     canvas(
         |_, _, _| (),
         move |b, _, window, _| {
             let at = |x: f32, y: f32| point(b.left() + px(x * scale), b.top() + px(y * scale));
-            let mut path = PathBuilder::stroke(px(1.));
+            let mut path = PathBuilder::stroke(px(if matches!(glyph, Glyph::Sliders) { 1.5 } else { 1. }));
             let mut polyline = |points: &[(f32, f32)]| {
                 for (i, &(x, y)) in points.iter().enumerate() {
                     if i == 0 { path.move_to(at(x, y)) } else { path.line_to(at(x, y)) }
@@ -1512,10 +1513,19 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&[(7.6, 7.6), (11., 11.)]);
                 }
                 Glyph::Sliders => {
-                    polyline(&[(5.5, 1.5), (5.5, 10.5)]);
-                    polyline(&[(4.2, 5.5), (6.8, 5.5)]);
-                    polyline(&[(10.5, 1.5), (10.5, 10.5)]);
-                    polyline(&[(9.2, 10.), (11.5, 10.)]);
+                    // Each 1.5px track's edges fall on whole pixels at 2x.
+                    for (y, knob) in [(3.25, 4.), (8.75, 8.)] {
+                        let r = 1.75;
+                        polyline(&[(0.75, y), (knob - r, y)]);
+                        polyline(&[(knob + r, y), (11.25, y)]);
+                        let ring: Vec<(f32, f32)> = (0..=16)
+                            .map(|i| {
+                                let a = std::f32::consts::TAU * i as f32 / 16.;
+                                (knob + r * a.cos(), y + r * a.sin())
+                            })
+                            .collect();
+                        polyline(&ring);
+                    }
                 }
                 Glyph::Archive => {
                     polyline(&[(1., 2.), (11., 2.), (11., 4.5), (1., 4.5), (1., 2.)]);
