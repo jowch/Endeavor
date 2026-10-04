@@ -1007,4 +1007,67 @@ mod tests {
         assert_eq!(asked.lock().unwrap()[0].prompt, "local-test's password:");
         let _ = std::fs::remove_dir_all(&home);
     }
+
+    fn sha256(command: &mut Command) -> String {
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned()
+    }
+
+    /// A real server over real ssh: ENDEAVOR_TEST_SSH_HOST names it, and
+    /// ENDEAVOR_TEST_SSH_JULIA, if set, is its julia. Copied into an app's
+    /// layout (X.app/Contents/MacOS/<test binary>, Contents/Resources/adapter/,
+    /// Contents/Resources/helpers/darwin-aarch64/endeavor) and run from there,
+    /// it checks the bundled helper is the one sent. It leaves the install in
+    /// ~/.cache/endeavor on the server.
+    #[test]
+    #[ignore]
+    #[cfg(unix)]
+    fn a_real_server_gets_its_helper_and_runs_julia() {
+        let Ok(host) = std::env::var("ENDEAVOR_TEST_SSH_HOST") else {
+            return eprintln!("ENDEAVOR_TEST_SSH_HOST isn't set; skipped");
+        };
+        let server = Server { ssh_host: host.clone(), julia: std::env::var("ENDEAVOR_TEST_SSH_JULIA").ok(), ..Default::default() };
+        let transport = Transport::for_server(&server);
+        let (seen, on) = events();
+        let (channel, hello) = connect(&server, &transport, None, &Cancel::default(), &on).expect("connect");
+        let (os, arch) = match &seen.lock().unwrap()[0] {
+            Event::Connected { os, arch } => (os.clone(), arch.clone()),
+            other => panic!("{other:?}"),
+        };
+        let helper = helper_for(&os, &arch).unwrap();
+        eprintln!("{host}: {os} {arch}, home {}, sent {}, {:?}", hello.home.display(), helper.display(), seen.lock().unwrap()[1]);
+        if crate::install::bundled() {
+            let platform = format!("helpers/{}-{}/endeavor", os.to_lowercase(), arch.replace("arm64", "aarch64"));
+            assert!(helper.ends_with(&platform), "{} isn't the bundled {platform}", helper.display());
+        }
+        let installed = format!(".cache/endeavor/{}/endeavor", version().unwrap());
+        let there = sha256(Command::new("ssh").args(["-T", "--", &host, "shasum", "-a", "256", &installed]));
+        assert_eq!(there, sha256(Command::new("shasum").args(["-a", "256"]).arg(&helper)), "the server's {installed} is the helper sent");
+
+        let listener = Listener::start("test").unwrap();
+        let runtime = start(&channel, &listener, None, &on, |_| {}).expect("start");
+        assert!(!runtime.reattached, "a runtime was already running there; stop it first");
+        bridge_ping(listener.port(), &runtime.bridge.token).expect("ping through the listener");
+
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notebooks","arguments":{}}}"#;
+        let mut socket = TcpStream::connect(("127.0.0.1", listener.port())).unwrap();
+        socket.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+        write!(
+            socket,
+            "POST /mcp HTTP/1.0\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nX-Endeavor-Session: 1\r\nContent-Length: {}\r\n\r\n{body}",
+            listener.port(),
+            runtime.bridge.token,
+            body.len()
+        )
+        .unwrap();
+        let mut reply = String::new();
+        socket.read_to_string(&mut reply).unwrap();
+        let json: serde_json::Value = serde_json::from_str(reply.split_once("\r\n\r\n").map_or("", |(_, b)| b)).expect(&reply);
+        eprintln!("list_notebooks: {}", json["result"]);
+        assert!(json["result"]["content"].is_array() && json["result"]["isError"] != true, "{reply}");
+
+        channel.stop();
+        channel.detach();
+    }
 }
