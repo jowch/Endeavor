@@ -302,6 +302,8 @@ pub(crate) fn scaled(ms: f32, reduce: bool, scale: f32) -> Duration {
 pub fn motion_fast() -> Duration { motion(120.) }
 /// The transcript catching up with its end as content arrives.
 pub fn motion_standard() -> Duration { motion(160.) }
+/// One breath of a working sidebar bullet, faint to full and back.
+pub fn motion_pulse() -> Duration { motion(1400.) }
 /// How far something that appears moves into place.
 pub fn motion_rise() -> Pixels { px(4.) }
 

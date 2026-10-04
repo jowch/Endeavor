@@ -223,16 +223,27 @@ impl StatusMark {
 }
 
 /// A row's leading bullet: its mark in `bullet_slot`, with the mark's words
-/// as the tooltip. The waiting count is in the words, so the slot keeps its
-/// width.
+/// as the tooltip, or a faint ring when it has none. The waiting count is in
+/// the words, so the slot keeps its width.
 fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
-    let slot = bullet_slot().id(id);
-    let Some(mark) = mark else { return slot };
+    let id = id.into();
+    let slot = bullet_slot().id(id.clone());
+    let dot = |d: f32| div().size(px(d)).rounded_full();
+    let Some(mark) = mark else { return slot.child(dot(7.).border_1().border_color(theme::text_faint())) };
     let words: SharedString = mark.words().into();
     let icon = match &mark {
-        RowMark::NeedsYou => div().size(px(6.)).rounded_full().border_1().border_color(theme::accent()).into_any_element(),
+        RowMark::NeedsYou => dot(11.).border_1().border_color(theme::accent()).flex().items_center().justify_center().child(dot(7.).bg(theme::accent())).into_any_element(),
         RowMark::Error => glyph(Glyph::Warning, theme::danger()).into_any_element(),
-        RowMark::NewReply => div().size(px(6.)).rounded_full().bg(theme::accent()).into_any_element(),
+        RowMark::Working => {
+            let fill = dot(7.).bg(theme::text_muted());
+            let breath = theme::motion_pulse();
+            if breath.is_zero() {
+                fill.into_any_element()
+            } else {
+                fill.with_animation(id, Animation::new(breath).repeat(), |d, t| d.opacity(0.65 - 0.35 * (std::f32::consts::TAU * t).cos())).into_any_element()
+            }
+        }
+        RowMark::NewReply => dot(6.).bg(theme::accent()).into_any_element(),
         RowMark::ServerDown { .. } => glyph(Glyph::WifiOff, theme::text_muted()).into_any_element(),
         RowMark::Waiting { .. } => glyph(Glyph::Clock, theme::text_muted()).into_any_element(),
     };
@@ -676,15 +687,15 @@ impl Workspace {
         }
     }
 
-    /// An open session's row mark (see `row_marks`). The orbiting "working"
-    /// indicator doesn't show on sidebar rows (it does in the composer and
-    /// the offline card).
+    /// An open session's row mark (see `row_marks`). Working is what the
+    /// composer's orbit shows, not its grey "Waiting for the connection".
     pub(crate) fn row_mark(&self, s: &Session) -> Option<RowMark> {
         let host_down = s.place.host != HostId::ThisMac && self.connections.get(&s.place.host).is_some_and(|c| c.lost.is_some());
         let held = s.outbox.held && !s.outbox.items.is_empty() && !self.claude.up();
         row_marks::row_mark(&RowFacts {
             needs_you: s.needs_approval(),
             error: s.errored || s.failed.is_some(),
+            working: crate::transcript::activity(s, self.offline_since).is_some_and(|a| !a.waiting),
             new_reply: s.unseen && self.active != Some(s.key),
             server_down: host_down.then(|| self.hosts.name(&s.place.host).to_string()),
             waiting: held.then(|| (s.outbox.items.len(), "Claude is back".to_string())),
@@ -751,7 +762,7 @@ impl Workspace {
                     .track_focus(&s.focus_handle(cx))
                     .tab_stop(true)
                     .focus_visible(|st| st.border_color(theme::focus_ring()))
-                    .child(bullet("row-bullet", row_mark))
+                    .child(bullet(ElementId::NamedInteger("row-bullet".into(), key), row_mark))
                     .child(title)
                     .child(self.row_more(row.clone(), group, active, cx))
                     // Double-click renames.
@@ -825,7 +836,7 @@ impl Workspace {
             .focus_visible(|s| s.border_color(theme::focus_ring()))
             .hover(|s| s.bg(theme::row_active()))
             .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(label))
-            .children(mark.filter(|_| collapsed).map(|m| bullet("folder-mark", Some(m)).ml(px(2.))))
+            .children(mark.filter(|_| collapsed).map(|m| bullet(ElementId::Name(format!("folder-mark-{key}").into()), Some(m)).ml(px(2.))))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder_collapsed(toggle_folder.clone(), cx)));
         let plus_folder = folder.clone();
         let plus_label: SharedString = format!("New session in {name}").into();
