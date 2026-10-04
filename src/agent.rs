@@ -83,6 +83,9 @@ pub struct AgentFacts {
     pub config: &'static [(&'static str, &'static str)],
     /// How its sign-in is checked.
     pub sign_in: SignIn,
+    /// Sent ahead of a new session's first message, for an agent that doesn't
+    /// load Endeavor's skills: what the notebook is and where its tools are.
+    pub session_intro: Option<&'static str>,
     /// It starts when one of its sessions first needs it, not with the app,
     /// so its sessions say when they wait for it to install, connect or be
     /// signed in to. (Claude starts at launch, and its sign-in has its own screens.)
@@ -114,6 +117,7 @@ pub const CLAUDE_CODE: AgentFacts = AgentFacts {
     asks_every_write: false,
     config: &[("model", "Model"), ("effort", "Effort")],
     sign_in: SignIn::ClaudeAuth,
+    session_intro: None,
     on_demand: false,
 };
 
@@ -135,6 +139,13 @@ pub const CODEX: AgentFacts = AgentFacts {
     asks_every_write: true,
     config: &[("model", "Model"), ("effort", "Effort"), ("fast-mode", "Speed")],
     sign_in: SignIn::CodexLogin,
+    // Without it Codex made a Jupyter notebook with its shell for "make a new notebook".
+    session_intro: Some(
+        "[Endeavor] This session works in Endeavor, where the user's notebook is a Pluto.jl notebook (Julia), \
+         shown beside this chat. Do all notebook work with the notebook MCP server's tools, and call its \
+         notebook_guide tool once before the first notebook call. Don't create Jupyter or other notebooks, \
+         and don't start Julia or Pluto yourself from the shell.",
+    ),
     on_demand: true,
 };
 

@@ -169,7 +169,7 @@ impl Dialect {
 
 /// Codex's options as the app shows them: no sandbox or collaboration mode
 /// (Endeavor's modes stand in for them), effort under Claude's id, and fast
-/// mode named as a speed.
+/// mode named as a speed ("Standard" or "Fast").
 fn app_options(options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
     options
         .into_iter()
@@ -183,7 +183,7 @@ fn app_options(options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
                     {
                         for choice in choices {
                             match choice.value.to_string().as_str() {
-                                "off" => choice.name = "Standard speed".into(),
+                                "off" => choice.name = "Standard".into(),
                                 "on" => choice.name = "Fast".into(),
                                 _ => {}
                             }
@@ -261,7 +261,7 @@ mod tests {
         let effort = crate::session::config_choices(&started.config, "effort").unwrap();
         assert_eq!(effort.1.iter().map(|o| o.value.to_string()).collect::<Vec<_>>(), ["low", "medium", "high", "xhigh", "max", "ultra"]);
         let speed = crate::session::config_choices(&started.config, "fast-mode").unwrap();
-        assert_eq!(speed.1.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["Standard speed", "Fast"]);
+        assert_eq!(speed.1.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["Standard", "Fast"]);
         // The capture's session was in Codex's default `agent` mode: Endeavor moves it.
         assert_eq!(fix, Some(("mode".to_owned(), "workspace-write".into())));
     }
