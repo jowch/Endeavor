@@ -252,23 +252,31 @@ const endeavorLook = `
 }
 header#pluto-nav, footer { display: none !important; }
 /* Not display: none — Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
+/* Pluto shows the panel only from 500px wide; a narrower notebook pane would alert on every panel it opens. */
+#helpbox-wrapper { display: block !important; }
 html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
   position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
 pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
 pluto-editor > main { padding-top: 16px; }
-/* Left-aligned, not centred (Pluto classic stays centred): a floated
-   PlutoUI TableOfContents sits at the right, and centring put it over the
-   notebook rather than beside it. 731px keeps the same reading width Pluto
-   centred at; 48px on the left leaves room for Pluto's shoulder (the
-   show/hide-code eye) and its status bar, 4px past the cell's left edge.
-   Pluto's own rule sizes main at width: 100%, so the 48px margin has to come
-   out of that width too (a plain margin-left would push it 48px past the
-   pane's right edge instead); the 16px on the right is a small gap, the same
-   floor as the chat column's own narrow-width margin (main.rs, CHAT_MIN).
+/* The cells' side gap is the chat column's margin (main.rs, chat_margin): 50px,
+   shrinking with the pane's width (50 per 860) at narrow widths, but never under
+   28px, which Pluto's shoulder (the show/hide-code eye, the status bar) needs
+   left of a cell. main's own padding (25px left, 6px right) is part of that gap,
+   less the 5px a cell's box reaches left of its edge.
+   Left-aligned, not centred (Pluto classic stays centred): a floated PlutoUI
+   TableOfContents sits at the right, and centring put it over the notebook
+   rather than beside it. 731px keeps the reading width Pluto centred at; while
+   the pane is narrower than that, the gaps on both sides are equal. Pluto's own
+   rule sizes main at width: 100%, so the margins come out of that width.
    The overview rail (rail.ts) is fixed to the right of the viewport, not the
    notebook, so it isn't affected either way. */
-pluto-editor main { margin-left: 48px !important; margin-right: auto !important; width: calc(100% - 48px - 16px) !important; max-width: 731px !important; }
+pluto-editor { --e-side: clamp(28px, calc(100vw * 50 / 860), 50px); }
+pluto-editor main { margin-left: calc(var(--e-side) - 20px) !important; margin-right: auto !important;
+  width: calc(100% - 2 * var(--e-side) + 20px + 6px) !important; max-width: 731px !important; }
+/* The preamble only holds Pluto's sticky "Save all changes" button; its 25px
+   strip above the first cell is gone, and the button floats over the top. */
+pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; overflow: visible; }
 pluto-runarea > span { font-size: 10px; }
 /* The web view draws over native views, so the notebook header can't blur
    what's under it (docs/ui-spec.md, "Fades, not blur").

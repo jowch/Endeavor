@@ -11,7 +11,7 @@ import { context, current, notebookId, onNotebook } from "./state";
 const css = `
   #endeavor-safe { display: none; }
   html[data-endeavor-look="endeavor"] #endeavor-safe.shown { display: flex; }
-  #endeavor-safe { gap: 10px; align-items: flex-start; margin: 0 0 20px 0; padding: 12px 14px;
+  #endeavor-safe { gap: 10px; align-items: flex-start; margin: 0 0 20px -4px; padding: 12px 14px;
     border: 1px solid var(--e-border); border-radius: 8px; background: var(--e-bg-card);
     font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
   #endeavor-safe svg { flex: none; margin-top: 3px; color: var(--e-accent-text); }
