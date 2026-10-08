@@ -32,6 +32,9 @@ To change EndeavorMCP and the app together, see
 `scripts/bundle.sh` builds `target/release/Endeavor.app`: ad-hoc signed, with
 the Linux helpers inside. It runs `scripts/helpers.sh` itself.
 
+Working in a Claude Code cloud session (no display, Linux) is in
+[cloud.md](cloud.md).
+
 ## Other parts of the repo
 
 - App icon and logo: `python3 assets/icon/build.py` regenerates them from the
