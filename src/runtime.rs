@@ -1056,3 +1056,15 @@ fn a_missing_julia_points_to_settings() {
     println!("{err}");
     assert!(err.contains("wasn't found") && err.contains("Settings"));
 }
+
+/// The cloud VMs' setup script installs this Julia and the pinned Rust too (docs/cloud.md).
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn the_cloud_setup_script_pins_the_same_julia() {
+    let script = include_str!("../scripts/cloud-setup.sh");
+    let (url, sha, _) = JULIA_TARBALL;
+    let rust = include_str!("../rust-toolchain.toml").lines().find_map(|l| l.strip_prefix("channel = ")).unwrap().trim_matches('"');
+    for line in [format!("JULIA_VERSION={JULIA_VERSION}"), format!("JULIA_URL={url}"), format!("JULIA_SHA256={sha}"), format!("RUST_TOOLCHAIN={rust}")] {
+        assert!(script.lines().any(|l| l == line), "scripts/cloud-setup.sh should have `{line}`");
+    }
+}
