@@ -396,7 +396,7 @@ const READ_ONLY_TOOLS: [&str; 15] = [
 fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
     let disallowed: &[&str] = if on_server { &LOCAL_TOOLS } else { &[] };
-    let allowed: Vec<String> = READ_ONLY_TOOLS.iter().map(|t| t.to_string()).chain([format!("Read({}/**)", rule_path(plugin_dir))]).collect();
+    let allowed: Vec<String> = READ_ONLY_TOOLS.iter().map(|t| t.to_string()).chain(plugin_rules(plugin_dir)).collect();
     serde_json::json!({
         "claudeCode": { "options": {
             "settingSources": sources,
@@ -408,9 +408,26 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_j
     })
 }
 
+/// The Read rules for the plugin folder. When its path goes through a symlink
+/// (a symlinked home, XDG folder or AppData), Claude Code only reads without
+/// asking with a rule for the path as given and one for the resolved path, so
+/// both go in.
+fn plugin_rules(plugin_dir: &str) -> Vec<String> {
+    let mut rules = vec![format!("Read({}/**)", rule_path(plugin_dir))];
+    if let Some(real) = std::fs::canonicalize(plugin_dir).ok().and_then(|p| p.to_str().map(rule_path))
+        && real != rule_path(plugin_dir)
+    {
+        rules.push(format!("Read({real}/**)"));
+    }
+    rules
+}
+
 /// An absolute path as a Claude Code permission rule writes it: `//` and the
 /// path with forward slashes. Claude Code compares a Windows path in POSIX
 /// form, `C:\Users\me` as `/c/Users/me`, so its rule is `//c/Users/me`.
+/// The rule is a gitignore-style pattern, so a folder name with `[`, `*` or
+/// `?` in it would still ask; and a UNC path (`\\server\share`) isn't
+/// handled, since the app's folder is never on one in practice.
 fn rule_path(path: &str) -> String {
     let path = path.strip_prefix(r"\\?\").unwrap_or(path).replace('\\', "/");
     let path = path.trim_end_matches('/');
@@ -1227,6 +1244,23 @@ mod tests {
         assert_eq!(rule("/Users/me/Library/Application Support/endeavor/plugin/0.1.0/plugin").as_deref(), Some("Read(//Users/me/Library/Application Support/endeavor/plugin/0.1.0/plugin/**)"));
         assert_eq!(rule(r"C:\Users\me\AppData\Local\Endeavor\plugin\0.1.0\plugin").as_deref(), Some("Read(//c/Users/me/AppData/Local/Endeavor/plugin/0.1.0/plugin/**)"));
         assert_eq!(rule(r"\\?\D:\Endeavor\plugin\").as_deref(), Some("Read(//d/Endeavor/plugin/**)"));
+    }
+
+    /// Through a symlink, the plugin folder gets a rule for each form of its path.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_folder_through_a_symlink_gets_both_rules() {
+        let dir = std::env::temp_dir().join(format!("endeavor-test-plugin-link-{}", std::process::id()));
+        let real = dir.join("real/plugin");
+        std::fs::create_dir_all(&real).unwrap();
+        let _ = std::fs::remove_file(dir.join("alias"));
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("alias")).unwrap();
+        let given = dir.join("alias/plugin");
+        let rules = super::plugin_rules(given.to_str().unwrap());
+        let resolved = std::fs::canonicalize(&real).unwrap();
+        assert_eq!(rules, [format!("Read(/{}/**)", given.display()), format!("Read(/{}/**)", resolved.display())]);
+        assert_eq!(super::plugin_rules(resolved.to_str().unwrap()).len(), 1, "no second rule without a symlink");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Reads run without asking; edits, runs and commands still ask. Every tool
