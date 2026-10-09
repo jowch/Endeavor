@@ -77,7 +77,9 @@ pub fn reveal(path: &Path) {
     let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
     // Explorer reads `/select,` and the quoted path as one argument, which std's quoting would break.
     #[cfg(windows)]
-    let _ = std::os::windows::process::CommandExt::raw_arg(&mut std::process::Command::new("explorer"), format!("/select,\"{}\"", path.display())).spawn();
+    if let Err(e) = std::os::windows::process::CommandExt::raw_arg(&mut std::process::Command::new("explorer"), format!("/select,\"{}\"", path.display())).spawn() {
+        eprintln!("Couldn't show {} in File Explorer: {e}", path.display());
+    }
     #[cfg(target_os = "linux")]
     if let Some(folder) = if path.is_dir() { Some(path) } else { path.parent() } {
         let _ = std::process::Command::new("xdg-open").arg(folder).spawn();

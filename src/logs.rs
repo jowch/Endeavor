@@ -71,8 +71,13 @@ impl log::Log for Stderr {
     }
 
     fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            eprintln!("{} {}: {}", record.level(), record.target(), record.args());
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        // GPUI's `log_err` leaves the target empty outside Zed's own tree; its file and line say where.
+        match (record.target(), record.file(), record.line()) {
+            ("", Some(file), Some(line)) => eprintln!("{} {file}:{line}: {}", record.level(), record.args()),
+            (target, ..) => eprintln!("{} {target}: {}", record.level(), record.args()),
         }
     }
 
