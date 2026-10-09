@@ -929,10 +929,12 @@ impl Workspace {
                     self.warn_before_job_ends(&host, cx);
                 }
                 // A page let go meanwhile (another session was shown) loads as any switch does.
+                // So does one still waiting to reconnect: after a long drop Pluto's page backs off
+                // and may not try again for minutes, and with nothing to reopen a load can't race.
                 let shown = self.active_session().filter(|s| s.place.host == host).and_then(|s| s.notebook.clone());
                 let origin = self.connection(&host).and_then(|c| c.runtime.as_ref()).and_then(|r| Some(r.page_url.split_once('?')?.0.to_owned()));
                 if let (Some(id), Some(origin)) = (shown, origin)
-                    && !crate::webcontent::url(self.webview.read(cx).raw()).starts_with(&origin)
+                    && (!crate::webcontent::url(self.webview.read(cx).raw()).starts_with(&origin) || (self.page.notebook == id && !self.page.connected))
                 {
                     self.load_notebook(&host, &id, cx);
                 }
