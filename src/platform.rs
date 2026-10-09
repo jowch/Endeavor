@@ -191,14 +191,15 @@ pub fn web_view_hooks() -> impl gpui::IntoElement {
     gpui::Empty
 }
 
+/// Whether GPUI's window had the pointer in the last frame `web_view_hooks` drew.
+#[cfg(windows)]
+static WAS_HOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Drawn in the workspace every frame. A click GPUI gets was outside the web
 /// view (or in a hole cut in it), so the keyboard goes to GPUI's window, as on
 /// Linux. gpui-wry does this only outside the web view's bounds, so without it
 /// a click in Settings over the notebook left the keyboard in the notebook.
 /// WebView2's own keys aren't ported (docs/windows.md).
-#[cfg(windows)]
-static WAS_HOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 #[cfg(windows)]
 pub fn web_view_hooks() -> impl gpui::IntoElement {
     use gpui::Styled;
