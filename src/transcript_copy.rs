@@ -6,7 +6,7 @@
 //! When the agent's replay finishes, it replaces the copy (`merge`). The
 //! replay carries no message ids, so the two are matched by order and text.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, EmbeddedResourceResource, PlanEntry, SessionId, SessionUpdate, TextContent, ToolCallId, ToolCallStatus, ToolKind};
@@ -223,14 +223,7 @@ pub fn load(id: &str) -> Option<Vec<Entry>> {
 pub fn save(id: &str, entries: &[Entry]) {
     let (Some(path), Some(json)) = (file(id), to_json(entries)) else { return };
     // ponytail: best effort; without a copy the session opens on its summary as before.
-    let _ = write(&path, &json);
-}
-
-fn write(path: &Path, json: &str) -> std::io::Result<()> {
-    std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
-    let partial = path.with_extension("json.partial");
-    std::fs::write(&partial, json)?;
-    std::fs::rename(partial, path)
+    let _ = crate::write_atomic(&path, json.as_bytes());
 }
 
 pub fn delete(id: &str) {
