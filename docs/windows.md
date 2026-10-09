@@ -57,13 +57,13 @@ machine](#try-first-on-a-real-windows-machine)).
 
 On Windows the app should open, install Node, the agent and Julia on first
 run, start the local runtime and run a notebook. None of that has been tried
-yet. It can't reach a server. These refuse with a plain error rather than
-half-work:
+yet. Servers go through EndeavorMCP's ssh client (`client::Session`), whose
+password and two-factor prompts reach the app over loopback TCP, as on the
+Mac; the app hasn't tried a server from Windows yet. These refuse with a plain
+error rather than half-work:
 
 | Where | What it says | What it needs |
 |---|---|---|
-| `src/remote.rs`, `Askpass` | "Endeavor can't connect to servers from Windows yet." | The askpass transport (loopback TCP or a named pipe), and an answer on `SSH_ASKPASS_REQUIRE`. |
-| `crates/endeavor-mcp/src/askpass.rs`, `ask_app` | ssh prompts aren't supported on Windows yet | The same transport, on the helper's side. |
 | `crates/endeavor-mcp/src/core.rs`, `main` | "Couldn't keep Julia's processes together with this one (Job Object): …" | Nothing, if Windows 8 or later: refuses rather than start a Julia whose workers could outlive it. |
 | `crates/endeavor-mcp/src/lib.rs`, `Runtime::kill` | logs "the runtime (pid …) is gone or isn't the one recorded; not stopping it" | Nothing: it won't end a process whose start time doesn't match the record. |
 
@@ -148,8 +148,6 @@ under the user's own `%LOCALAPPDATA%`.
 - `src/logs.rs`, `start`: no redirection to the log file. Needs
   `SetStdHandle`. `logs::path` is `%LOCALAPPDATA%\Endeavor\Logs\endeavor.log`,
   but nothing writes there yet.
-- `src/remote.rs`, `kill_group`: does nothing. No ssh runs, since `Askpass`
-  refuses.
 - `src/signin.rs`, `Login::cancel`: doesn't stop the sign-in's CLI. Needs a
   Job Object (`endeavor_mcp`'s `winproc` has the pieces).
 
@@ -161,7 +159,7 @@ Ported for real: the app data folder (`%LOCALAPPDATA%\Endeavor`,
 (`wire::files::real_path`), the time zone offset (`src/when.rs`,
 `src/trouble.rs`, through chrono), Reveal (`explorer /select,`), the
 notebook's light and dark theme (WebView2's `set_theme`), Bring All to Front,
-and the server tarball's executable bits (`src/remote.rs`: nothing in
+and the server tarball's executable bits (EndeavorMCP's bootstrap: nothing in
 `runtime/` is executable, and the helper is marked by name).
 
 ### CI
@@ -179,12 +177,6 @@ Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 - `tests/helper_mode.rs` (whole file).
 - `crates/wire/src/relay.rs`: all its tests (`UnixStream::pair`).
 - `crates/wire/src/files.rs`: `uploads_stay_inside_the_session_folder`.
-- `src/remote.rs`: `the_bootstrap_survives_any_login_shell`,
-  `tar_holds_the_helper_and_runtime`,
-  `bootstrap_installs_then_reuses_the_helper_and_attaches`,
-  `a_helper_that_ends_with_no_julia_is_a_drop_and_a_detach_is_not`,
-  `a_server_without_a_helper_build_is_refused_plainly`, `askpass_round_trip`,
-  `a_cancelled_password_prompt_ends_the_connect`.
 - `src/runtime.rs`: `repair_clears_stale_state_and_keeps_the_rest`.
 - `crates/endeavor-mcp/src/notebooks/tests.rs`: the `file_info` check in
   `the_apps_notebook_actions_restart_move_file_info_and_new_notebook`.
@@ -279,15 +271,12 @@ Windows](#how-process-control-works-on-windows)). Left:
 
 ### ssh from Windows (M if askpass works, L if not)
 
-- **Askpass transport (S).** The password and 2FA prompts reach the app over a
-  Unix socket (`src/remote.rs:619`, `crates/endeavor-mcp/src/askpass.rs:34`).
-  Rust's standard library has no Unix sockets on Windows. Use loopback TCP
-  plus a per-launch token in an environment variable, or a named pipe with a
-  user-only ACL.
-- **Connection sharing.** Windows OpenSSH has no ControlMaster. The app
-  doesn't use it, but a user's `~/.ssh/config` might turn it on. Pass
-  `-o ControlMaster=no -o ControlPath=none` to the ssh command
-  (`Transport::command` in `src/remote.rs`).
+- **Askpass transport. Done.** The password and 2FA prompts reach the app over
+  loopback TCP with a per-connect token in an environment variable
+  (EndeavorMCP's `client::Asker`, `wire::askpass`), on every platform.
+- **Connection sharing. Done.** Windows OpenSSH has no ControlMaster, and a
+  user's `~/.ssh/config` might turn it on, so EndeavorMCP's ssh command passes
+  `-o ControlMaster=no -o ControlPath=none` there.
 - **Open question:** whether the ssh in Windows 10 and 11 honours
   `SSH_ASKPASS_REQUIRE=force`, including for Duo prompts (the same question
   as in remote-sessions.md). If it doesn't, the fallbacks are running ssh

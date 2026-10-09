@@ -41,6 +41,18 @@ impl Version {
         }
     }
 
+    /// Of a server's runtime, which the library's helper started: the
+    /// library's own build is the one this app runs there.
+    pub fn of_server(runtime: &endeavor_mcp::client::RuntimeInfo) -> Version {
+        if runtime.usable_as_is() {
+            Version::Usable
+        } else if runtime.build.is_none() && runtime.interface.is_none() {
+            Version::NoRunGate
+        } else {
+            Version::Other(runtime.interface)
+        }
+    }
+
     pub fn usable(self) -> bool {
         self == Version::Usable
     }
@@ -85,11 +97,19 @@ pub fn restarted(host: &str) -> String {
 /// runtime of `version`, as the tool error the agent reads: a runtime that
 /// may not ask before a run runs no code, in any mode.
 pub fn refusal(version: Version, tool: &str, arguments: &Value) -> Option<String> {
-    (version == Version::NoRunGate && endeavor_mcp::runs_code(tool, arguments)).then(|| {
-        "ArgumentError: older_runtime::This notebook's Julia was started by a version of Endeavor too old to ask the user before a run, so Endeavor doesn't let it run code. \
+    (version == Version::NoRunGate && endeavor_mcp::runs_code(tool, arguments)).then(|| refused("This notebook's Julia"))
+}
+
+/// The same refusal on `host`'s listener (`client::Messages::no_run_gate`), where the library makes it.
+pub fn no_run_gate(host: &str) -> String {
+    refused(&format!("Julia on {host}"))
+}
+
+fn refused(whose: &str) -> String {
+    format!(
+        "ArgumentError: older_runtime::{whose} was started by a version of Endeavor too old to ask the user before a run, so Endeavor doesn't let it run code. \
          Don't run code: tell the user to restart Julia. Reading and editing cells still work."
-            .into()
-    })
+    )
 }
 
 #[cfg(test)]

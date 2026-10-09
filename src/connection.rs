@@ -6,9 +6,10 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use endeavor_mcp::client::{self, SessionEvent, State as LineState, Status as LineStatus};
 use futures::StreamExt;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -17,9 +18,9 @@ use wire::files::{Reply, Request, RuntimeState};
 use wire::slurm::JobRequest;
 
 use crate::host_list::HostState;
-use crate::hosts::HostId;
+use crate::hosts::{HostId, Server};
 use crate::pluto::{self, Bridge};
-use crate::remote::{self, Askpass, Cancel, Event};
+use crate::remote::{self, Event};
 use crate::runtime::{self, Channel, Hello, Listener, Notice, Runtime};
 use crate::session::{Session, Stopped};
 use crate::splash::{Progress, Step};
@@ -47,7 +48,10 @@ pub struct Connection {
     pub status: Status,
     /// Which connect this is: a thread still reporting on an older one is ignored.
     id: u64,
+    /// This Mac's helper. A server's is its `Line`'s.
     pub channel: Option<Arc<Channel>>,
+    /// A server's line is connected (its helper is up).
+    linked: bool,
     pub hello: Option<Hello>,
     pub runtime: Option<Runtime>,
     /// Start Julia once connected (a session is waiting for it).
@@ -70,9 +74,6 @@ pub struct Connection {
     pub found: Option<Result<RuntimeState, String>>,
     /// On a cluster, the job Julia is starting in.
     pub job: Option<String>,
-    /// ssh may ask again (a reconnect inside it, a key's passphrase), so it lives as long as the connection.
-    _askpass: Option<Askpass>,
-    cancel: Arc<Cancel>,
     pub steps: Steps,
     /// Open notebooks (id, path) as last seen, to reopen after a restart.
     pub last_notebooks: Vec<(String, String)>,
@@ -195,7 +196,8 @@ enum Update {
     Event(Event),
     /// This Mac's setup progress.
     Local(Progress),
-    Connected(Result<(Arc<Channel>, Hello, Option<Askpass>), String>),
+    /// The helper is up: This Mac's channel (a server's goes through its `Line`), and its hello.
+    Connected(Result<(Option<Arc<Channel>>, Hello), String>),
     Started(Result<Runtime, String>),
     Notice(Notice),
 }
@@ -206,6 +208,7 @@ impl Connection {
             status,
             id,
             channel: None,
+            linked: false,
             hello: None,
             runtime: None,
             start_when_connected: false,
@@ -217,8 +220,6 @@ impl Connection {
             stopping: false,
             found: None,
             job: None,
-            _askpass: None,
-            cancel: Arc::default(),
             steps,
             last_notebooks: Vec::new(),
             resume: Vec::new(),
@@ -236,6 +237,17 @@ impl Connection {
 
     pub fn bridge(&self) -> Option<Bridge> {
         self.runtime.as_ref().map(|r| r.bridge.clone())
+    }
+
+    /// The helper is up: This Mac's channel, or a server's line.
+    fn connected(&self) -> bool {
+        self.channel.is_some() || self.linked
+    }
+
+    /// The helper went: there is nothing to talk to until the next connect.
+    fn unlink(&mut self) {
+        self.channel = None;
+        self.linked = false;
     }
 
     /// Dropped, and between tries to reconnect.
@@ -321,6 +333,16 @@ impl Workspace {
         crate::webcontent::url(self.webview.read(cx).raw()).starts_with(origin)
     }
 
+    /// What answers for `host`'s runtime while it's connected: This Mac's helper, or a server's line.
+    pub fn helper(&self, host: &HostId) -> Option<Helper> {
+        let connection = self.connections.get(host)?;
+        if let Some(channel) = &connection.channel {
+            return Some(Helper::Local(channel.clone()));
+        }
+        let line = self.lines.get(host).filter(|_| connection.linked)?;
+        Some(Helper::Line(line.session.clone()))
+    }
+
     fn listener(&mut self, host: &HostId) -> Result<Arc<Listener>, String> {
         if let Some(listener) = self.listeners.get(host) {
             return Ok(listener.clone());
@@ -361,49 +383,167 @@ impl Workspace {
             connection.failures = old.failures;
             connection.lost = old.lost;
         }
-        let cancel = connection.cancel.clone();
         self.connections.insert(host.clone(), connection);
-        let (tx, rx) = futures::channel::mpsc::unbounded::<Update>();
         match host {
             HostId::ThisMac => {
+                let (tx, rx) = futures::channel::mpsc::unbounded::<Update>();
                 let keep_running = self.settings.keep_running;
                 // The helper runs this Julia for as long as it lives (runtime::connect).
                 self.settings_checks.local_julia = Some(self.settings.julia.clone());
                 std::thread::spawn(move || {
                     let progress = |p: Progress| drop(tx.unbounded_send(Update::Local(p)));
-                    let result = runtime::connect(keep_running, &progress).map(|(channel, hello)| (Arc::new(channel), hello, None));
+                    let result = runtime::connect(keep_running, &progress).map(|(channel, hello)| (Arc::new(channel), hello));
                     report_until_closed(&tx, result);
                 });
+                self.follow(host.clone(), id, rx, cx);
             }
             HostId::Server(server_id) => {
                 let Some(server) = self.hosts.server(server_id).cloned() else {
                     return self.on_update(host.clone(), id, Update::Connected(Err("This server was removed.".into())), cx);
                 };
-                let questions = self.questions_tx.clone();
-                std::thread::spawn(move || {
-                    let on = |event| drop(tx.unbounded_send(Update::Event(event)));
-                    let result = Askpass::start(server.name.clone(), questions).and_then(|askpass| {
-                        let transport = remote::Transport::for_server(&server);
-                        remote::connect(&server, &transport, Some(&askpass), &cancel, &on).map(|(channel, hello)| (Arc::new(channel), hello, Some(askpass)))
-                    });
-                    report_until_closed(&tx, result);
-                });
+                if let Err(e) = self.open_line(host, &server, cx) {
+                    return self.on_update(host.clone(), id, Update::Connected(Err(e)), cx);
+                }
             }
         }
-        self.follow(host.clone(), id, rx, cx);
         cx.notify();
+    }
+
+    /// `host`'s line, opened unless one for `server` as it is now is open and
+    /// still trying: one that gave up, or was made from the server's old
+    /// connection settings, is closed and a new one opened. A line that is
+    /// connected already reports it again, to the connection just made.
+    fn open_line(&mut self, host: &HostId, server: &Server, cx: &mut Context<Self>) -> Result<(), String> {
+        if let Some(line) = self.lines.get(host) {
+            let status = line.session.status();
+            let gave_up = matches!(status.state, LineState::Failed(_)) && !signed_in(&status);
+            if !gave_up && same_connection(&line.server, server) {
+                // What it already reported is told again, to the connection just made.
+                let id = self.connections.get(host).map_or(0, |c| c.id);
+                for change in changes(&LineStatus { state: LineState::Connecting, hello: None, ..status.clone() }, &status) {
+                    self.on_change(host, id, change, cx);
+                }
+                return Ok(());
+            }
+            self.close_line(host);
+        }
+        let (tx, rx) = futures::channel::mpsc::unbounded::<LineUpdate>();
+        let (asker, auth) = remote::asker(server, self.questions_tx.clone())?;
+        let events = tx.clone();
+        let session = Arc::new(remote::open(server, auth, Box::new(move |event| drop(events.unbounded_send(LineUpdate::Event(event)))))?);
+        let closed: Arc<AtomicBool> = Arc::default();
+        // Every change of the session's state, in order; it says few of them with an event.
+        std::thread::spawn({
+            let (session, closed) = (session.clone(), closed.clone());
+            move || {
+                let mut last = session.status();
+                let _ = tx.unbounded_send(LineUpdate::Status(Box::new(last.clone())));
+                while !closed.load(Ordering::SeqCst) {
+                    let now = session.wait_for(Duration::from_secs(1), |now| *now != last);
+                    if now != last && !closed.load(Ordering::SeqCst) {
+                        if tx.unbounded_send(LineUpdate::Status(Box::new(now.clone()))).is_err() {
+                            break;
+                        }
+                        last = now;
+                    }
+                }
+            }
+        });
+        let generation = next_connect_id();
+        self.lines.insert(host.clone(), Line { session, _asker: asker, server: server.clone(), closed, last: None, generation });
+        let host = host.clone();
+        cx.spawn(async move |this, cx| {
+            let mut rx = rx;
+            while let Some(update) = rx.next().await {
+                let applied = this.update(cx, |this, cx| {
+                    this.on_line(&host, generation, update, cx);
+                    this.sync_holds(cx);
+                });
+                if applied.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        Ok(())
+    }
+
+    /// Close `host`'s line, if it has one: the helper is let go, and Julia keeps running there.
+    fn close_line(&mut self, host: &HostId) {
+        if let Some(line) = self.lines.remove(host) {
+            drop(line.close());
+        }
+    }
+
+    /// What `host`'s line (of `generation`) heard, applied to its connection of the moment.
+    fn on_line(&mut self, host: &HostId, generation: u64, update: LineUpdate, cx: &mut Context<Self>) {
+        if !self.lines.get(host).is_some_and(|l| l.generation == generation) {
+            return;
+        }
+        let Some(id) = self.connections.get(host).map(|c| c.id) else { return };
+        match update {
+            LineUpdate::Event(SessionEvent::Step(event)) => self.on_update(host.clone(), id, Update::Event(event), cx),
+            LineUpdate::Event(SessionEvent::Trouble(text)) => eprintln!("{}: {text}", self.hosts.name(host)),
+            LineUpdate::Event(_) => {}
+            LineUpdate::Status(now) => {
+                let Some(line) = self.lines.get_mut(host) else { return };
+                let now = *now;
+                let last = line.last.replace(now.clone()).unwrap_or(LineStatus { state: LineState::Connecting, hello: None, ..now.clone() });
+                for change in changes(&last, &now) {
+                    self.on_change(host, id, change, cx);
+                }
+            }
+        }
+    }
+
+    /// One change of a server's line, as the connection's update it stands for.
+    fn on_change(&mut self, host: &HostId, id: u64, change: Change, cx: &mut Context<Self>) {
+        let update = match change {
+            Change::Connected(hello) => Update::Connected(Ok((None, hello_of(&hello)))),
+            Change::ConnectFailed(why) => Update::Connected(Err(why)),
+            Change::Lost(why) => Update::Notice(Notice::Lost(why)),
+            Change::Started(runtime) => Update::Started(Ok(runtime_of(runtime))),
+            Change::StartFailed(why) => Update::Started(Err(why)),
+            Change::Died(why) => Update::Notice(Notice::Died(why)),
+            Change::Replaced => Update::Notice(Notice::Replaced),
+            // The app's own stop, or Cancel: a start that it cut short ends as cancelled.
+            Change::Stopped => match self.connections.get(host) {
+                Some(c) if c.status == Status::Starting => Update::Started(Err(String::new())),
+                _ => return,
+            },
+            // The line went on with Julia by itself, as after a reconnect.
+            Change::Starting => {
+                let name = self.hosts.name(host);
+                let Some(connection) = self.connections.get_mut(host).filter(|c| c.id == id && matches!(c.status, Status::Browsing | Status::Died(_))) else { return };
+                connection.status = Status::Starting;
+                connection.crashed = false;
+                connection.steps = Steps { done: vec![format!("Connected to {name}")], ..Steps::new("Finding Julia") };
+                return cx.notify();
+            }
+        };
+        self.on_update(host.clone(), id, update, cx);
     }
 
     /// Start Julia on a connected host (or attach to the one running there).
     pub fn start_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
-        let Ok(listener) = self.listener(host) else { return };
         // A cluster restarted from its pane runs the shown session's resources.
         let shown = self.active_session().filter(|s| s.place.host == *host).and_then(|s| s.resources.clone());
+        let line = self.lines.get(host).map(|l| l.session.clone());
+        let listener = match host {
+            HostId::ThisMac => match self.listener(host) {
+                Ok(listener) => Some(listener),
+                Err(_) => return,
+            },
+            HostId::Server(_) => None,
+        };
         let Some(connection) = self.connections.get_mut(host) else { return };
         if !matches!(connection.status, Status::Browsing | Status::Died(_)) || connection.stopping {
             return;
         }
-        let Some(channel) = connection.channel.clone() else { return };
+        let channel = connection.channel.clone();
+        if channel.is_none() && line.is_none() {
+            return;
+        }
         connection.status = Status::Starting;
         connection.crashed = false;
         connection.cancelling = false;
@@ -418,21 +558,22 @@ impl Workspace {
             HostId::ThisMac => None,
         };
         let id = connection.id;
-        let (tx, rx) = futures::channel::mpsc::unbounded::<Update>();
-        let notices = tx.clone();
-        let local = *host == HostId::ThisMac;
-        std::thread::spawn(move || {
-            let notice = move |notice| drop(notices.unbounded_send(Update::Notice(notice)));
-            let result = if local {
-                let progress = |p: Progress| drop(tx.unbounded_send(Update::Local(p)));
-                runtime::start_local(&channel, &listener, &progress, notice)
-            } else {
-                let on = |event| drop(tx.unbounded_send(Update::Event(event)));
-                remote::start(&channel, &listener, job, &on, notice)
-            };
-            let _ = tx.unbounded_send(Update::Started(result));
-        });
-        self.follow(host.clone(), id, rx, cx);
+        match (channel, listener, line) {
+            (Some(channel), Some(listener), _) => {
+                let (tx, rx) = futures::channel::mpsc::unbounded::<Update>();
+                let notices = tx.clone();
+                std::thread::spawn(move || {
+                    let notice = move |notice| drop(notices.unbounded_send(Update::Notice(notice)));
+                    let progress = |p: Progress| drop(tx.unbounded_send(Update::Local(p)));
+                    let result = runtime::start_local(&channel, &listener, &progress, notice);
+                    let _ = tx.unbounded_send(Update::Started(result));
+                });
+                self.follow(host.clone(), id, rx, cx);
+            }
+            // The line says how it goes (`on_line`). Julia is installed without asking, as it always was.
+            (_, _, Some(session)) => session.request(&client::Want::Start { job, install: true }),
+            _ => {}
+        }
         cx.notify();
     }
 
@@ -612,7 +753,7 @@ impl Workspace {
             Update::Event(Event::Helper { installed }) => {
                 connection.steps.now(if installed { "Installed Endeavor's helper" } else { "Connecting" });
             }
-            Update::Event(Event::FoundJulia { version, .. }) => {
+            Update::Event(Event::Found { version, .. }) => {
                 connection.steps.found_julia = true;
                 connection.steps.advance(format!("Julia {version}"), if cluster { "Submitting a job" } else { "Starting Julia" });
             }
@@ -621,10 +762,13 @@ impl Workspace {
                 connection.steps.found_julia = true;
                 connection.steps.advance(format!("Submitted job {job} ({summary})"), "Waiting for a node");
             }
-            Update::Event(Event::Queued { state, reason }) if state == "RUNNING" => {
+            Update::Event(Event::Queued { job, state, reason }) if state == "RUNNING" => {
+                connection.job.get_or_insert(job);
                 connection.steps.advance(format!("Got a node: {reason}"), "Starting Julia");
             }
-            Update::Event(Event::Queued { reason, .. }) => {
+            Update::Event(Event::Queued { job, reason, .. }) => {
+                // A job this start found waiting, not one it submitted.
+                connection.job.get_or_insert(job);
                 connection.steps.now("Waiting for a node");
                 connection.steps.detail = wire::slurm::reason_text(&reason).map(|r| format!("Slurm: {r}"));
             }
@@ -639,10 +783,10 @@ impl Workspace {
                     self.on_progress(p, cx);
                 }
             }
-            Update::Connected(Ok((channel, hello, askpass))) => {
-                connection.channel = Some(channel);
+            Update::Connected(Ok((channel, hello))) => {
+                connection.linked = channel.is_none();
+                connection.channel = channel;
                 connection.hello = Some(hello);
-                connection._askpass = askpass;
                 connection.status = Status::Browsing;
                 if !local && connection.steps.done.is_empty() {
                     connection.steps.advance(format!("Connected to {name}"), "Finding Julia");
@@ -691,7 +835,7 @@ impl Workspace {
                 self.warn_before_job_ends(&host, cx);
             }
             // The connection dropped under the start: it reconnects as lost.
-            Update::Started(Err(_)) if connection.lost.is_some() && connection.channel.is_none() => {}
+            Update::Started(Err(_)) if connection.lost.is_some() && !connection.connected() => {}
             Update::Started(Err(_)) if connection.cancelling => {
                 connection.cancelling = false;
                 connection.job = None;
@@ -717,13 +861,13 @@ impl Workspace {
                 }
             }
             // Heard already, from the runtime or the helper's end.
-            Update::Notice(Notice::Lost(_)) if connection.channel.is_none() => {}
+            Update::Notice(Notice::Lost(_)) if !connection.connected() => {}
             // A server that drops reconnects by itself; its notebook, if showing, stays up read-only meanwhile.
             Update::Notice(Notice::Lost(reason)) if !local => {
                 let was = connection.status.clone();
                 let gone = connection.forget_runtime();
                 let page = gone.as_ref().and_then(|r| r.page_url.split_once('?')).map(|(origin, _)| origin.to_owned()).filter(|_| shown);
-                connection.channel = None;
+                connection.unlink();
                 connection.status = Status::Failed(reason);
                 connection.lost = Some(Lost { page, was });
                 // A blip often passes: the first try comes soon.
@@ -741,11 +885,11 @@ impl Workspace {
                         Status::Died(reason)
                     }
                     Notice::Replaced => {
-                        connection.channel = None;
+                        connection.unlink();
                         Status::Replaced
                     }
                     Notice::Lost(reason) => {
-                        connection.channel = None;
+                        connection.unlink();
                         Status::Failed(reason)
                     }
                 };
@@ -1084,11 +1228,11 @@ impl Workspace {
 
     /// Cancel starting Julia on a cluster: the queued job is cancelled.
     pub fn cancel_start(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let Some(helper) = self.helper(host) else { return };
         let Some(connection) = self.connections.get_mut(host).filter(|c| c.status == Status::Starting) else { return };
-        let Some(channel) = connection.channel.clone() else { return };
         connection.cancelling = true;
         connection.steps.now("Cancelling the job");
-        cx.background_executor().spawn(async move { channel.stop().map_err(|e| eprintln!("Cancelling the start: {e}")) }).detach();
+        cx.background_executor().spawn(async move { helper.stop().map_err(|e| eprintln!("Cancelling the start: {e}")) }).detach();
         cx.notify();
     }
 
@@ -1096,17 +1240,18 @@ impl Workspace {
     /// one), without taking it over. A host that isn't connected connects,
     /// which then asks.
     pub fn check_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let helper = self.helper(host);
         let Some(connection) = self.connections.get_mut(host).filter(|c| matches!(c.status, Status::Browsing | Status::Died(_))) else {
             if matches!(self.status(host), None | Some(Status::Failed(_) | Status::Replaced)) {
                 self.connect_host(host, false, cx);
             }
             return;
         };
-        let Some(channel) = connection.channel.clone().filter(|_| !connection.stopping) else { return };
+        let Some(helper) = helper.filter(|_| !connection.stopping) else { return };
         connection.found = None;
         connection.check += 1;
         let (id, check) = (connection.id, connection.check);
-        let ask = cx.background_executor().spawn(async move { channel.files(Request::Runtime) });
+        let ask = cx.background_executor().spawn(async move { helper.files(Request::Runtime) });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             let reply = ask.await;
@@ -1145,8 +1290,9 @@ impl Workspace {
                 return;
             }
         }
+        let helper = self.helper(host);
         let Some(connection) = self.connections.get_mut(host) else { return };
-        let Some(channel) = connection.channel.clone().filter(|_| !connection.stopping) else { return };
+        let Some(helper) = helper.filter(|_| !connection.stopping) else { return };
         let gone = if connection.status == Status::Starting {
             // The start under way ends as cancelled (Update::Started).
             connection.cancelling = true;
@@ -1167,7 +1313,7 @@ impl Workspace {
         if *host == HostId::ThisMac {
             self.status = "Stopping Julia…".into();
         }
-        let stop = cx.background_executor().spawn(async move { channel.stop() });
+        let stop = cx.background_executor().spawn(async move { helper.stop() });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             let stopped = stop.await;
@@ -1283,16 +1429,24 @@ impl Workspace {
         if let Some(channel) = connection.channel.take() {
             cx.background_executor().spawn(async move { channel.detach() }).detach();
         }
+        self.close_line(host);
         cx.notify();
     }
 
     /// The app is quitting: servers' runtimes keep running (their idle stop
     /// covers them); This Mac's as Settings says. The helpers do the rest.
-    pub fn quit_runtimes(&self) {
+    pub fn quit_runtimes(&mut self) {
         for (host, connection) in &self.connections {
             if let Some(channel) = &connection.channel {
                 channel.quit(*host != HostId::ThisMac || self.settings.keep_running);
             }
+        }
+        // Each server's helper is let go, and Julia keeps running there; a
+        // server slow to answer isn't waited for long.
+        let closing: Vec<_> = self.lines.drain().map(|(_, line)| line.close()).collect();
+        let until = Instant::now() + Duration::from_secs(2);
+        while closing.iter().any(|c| !c.is_finished()) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -1436,8 +1590,192 @@ pub enum HostPane {
 
 /// Send how the connect went, then, if it got through, wait for the helper's
 /// end: a drop is heard as `Notice::Lost` whether or not Julia runs.
-fn report_until_closed(tx: &futures::channel::mpsc::UnboundedSender<Update>, result: Result<(Arc<Channel>, Hello, Option<Askpass>), String>) {
-    let channel = result.as_ref().ok().map(|(channel, ..)| channel.clone());
+/// A server's `client::Session`, with what the app keeps of it.
+pub(crate) struct Line {
+    session: Arc<client::Session>,
+    /// ssh's prompts come through it while the session lives.
+    _asker: client::Asker,
+    /// The server as the line was opened for it.
+    server: Server,
+    /// Set once the line is closed: its watcher stops.
+    closed: Arc<AtomicBool>,
+    /// The status last applied (`on_line`).
+    last: Option<LineStatus>,
+    /// Tells this line's updates from a line opened after it for the same host.
+    generation: u64,
+}
+
+impl Line {
+    /// Let the helper go, end the connection and stop watching, in a thread:
+    /// a close waits for a connect under way to be cut short.
+    fn close(self) -> std::thread::JoinHandle<()> {
+        self.closed.store(true, Ordering::SeqCst);
+        let Line { session, _asker, .. } = self;
+        std::thread::spawn(move || {
+            session.close();
+            drop(_asker);
+        })
+    }
+}
+
+/// What a server's line tells the app.
+enum LineUpdate {
+    Event(SessionEvent),
+    Status(Box<LineStatus>),
+}
+
+/// One change of a server's line, in the app's terms (`changes`).
+#[derive(Clone, Debug, PartialEq)]
+enum Change {
+    Connected(client::HelloInfo),
+    ConnectFailed(String),
+    /// The connection dropped; the line gets it back by itself.
+    Lost(String),
+    /// Julia went on starting by itself (as a reconnect does), or the app's start began.
+    Starting,
+    Started(client::RuntimeInfo),
+    StartFailed(String),
+    /// Julia stopped by itself; the reason, without the line's "Julia on X stopped."
+    Died(String),
+    Replaced,
+    /// The app's stop or cancel ended Julia, or the start under way.
+    Stopped,
+}
+
+/// Signed in and the helper up: the line is connected, whatever its runtime does.
+fn signed_in(status: &LineStatus) -> bool {
+    status.state != LineState::Connecting && status.hello.as_ref().is_some_and(|h| !h.node.is_empty())
+}
+
+/// What the runtime does, as far as `changes` tells states apart.
+#[derive(PartialEq)]
+enum Phase<'a> {
+    Idle,
+    Starting,
+    Ready(&'a client::RuntimeInfo),
+    Failed(&'a str),
+}
+
+fn phase(status: &LineStatus) -> Phase<'_> {
+    match &status.state {
+        LineState::Connecting | LineState::Connected => Phase::Idle,
+        LineState::NothingRunning => Phase::Failed(status.step.as_deref().unwrap_or("")),
+        LineState::Starting { .. } | LineState::Queued(_) => Phase::Starting,
+        LineState::Ready(runtime) => Phase::Ready(runtime),
+        LineState::NeedsInstall(_) => Phase::Failed(status.step.as_deref().unwrap_or("")),
+        LineState::Failed(why) => Phase::Failed(why),
+    }
+}
+
+/// How a server's line went from `last` to `now`, as the updates the app has
+/// always had from its connects and starts. Between two looks the line may
+/// pass through states unseen; what it ends in decides.
+fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
+    let mut out = Vec::new();
+    let (was_in, is_in) = (signed_in(last), signed_in(now));
+    match (was_in, is_in) {
+        (false, false) => {
+            if let LineState::Failed(why) = &now.state
+                && last.state != now.state
+            {
+                out.push(Change::ConnectFailed(why.clone()));
+            }
+            return out;
+        }
+        (true, false) => {
+            let why = now.state.error().map(str::to_owned).or_else(|| now.step.clone()).unwrap_or_default();
+            out.push(Change::Lost(why));
+            return out;
+        }
+        (false, true) => out.push(Change::Connected(now.hello.clone().unwrap_or_default())),
+        (true, true) => {}
+    }
+    let before = if was_in { phase(last) } else { Phase::Idle };
+    let after = phase(now);
+    if before == after {
+        return out;
+    }
+    match (before, after) {
+        (_, Phase::Ready(runtime)) => {
+            if !matches!(last.state, LineState::Starting { .. } | LineState::Queued(_)) {
+                out.push(Change::Starting);
+            }
+            out.push(Change::Started(runtime.clone()));
+        }
+        (Phase::Idle | Phase::Failed(_), Phase::Starting) => out.push(Change::Starting),
+        (Phase::Ready(_), Phase::Starting) => {}
+        (Phase::Ready(_), Phase::Failed(why)) if why == format!("Another connection took Julia on {} over.", now.name) => out.push(Change::Replaced),
+        (Phase::Ready(_), Phase::Failed(why)) => {
+            let prefix = format!("Julia on {} stopped.", now.name);
+            out.push(Change::Died(why.strip_prefix(&prefix).unwrap_or(why).trim().to_owned()));
+        }
+        (Phase::Starting | Phase::Ready(_), Phase::Idle) => out.push(Change::Stopped),
+        (Phase::Starting, Phase::Failed(why)) => out.push(Change::StartFailed(why.to_owned())),
+        // A start that ended before it was seen to begin.
+        (Phase::Idle, Phase::Failed(why)) => out.push(Change::StartFailed(why.to_owned())),
+        (Phase::Failed(_), Phase::Failed(_) | Phase::Idle) | (Phase::Idle, Phase::Idle) | (Phase::Starting, Phase::Starting) => {}
+    }
+    out
+}
+
+/// The helper's hello, as the app's connections keep it.
+fn hello_of(hello: &client::HelloInfo) -> Hello {
+    let launcher = match hello.launcher.as_deref() {
+        Some("slurm") => Some(client::Launcher::Slurm),
+        Some("process") => Some(client::Launcher::Process),
+        _ => None,
+    };
+    Hello { protocol: wire::PROTOCOL, node: hello.node.clone(), home: hello.home.clone().into(), slurm: hello.slurm, uploads: hello.uploads, launcher }
+}
+
+/// A server's runtime, as the app follows it.
+fn runtime_of(runtime: client::RuntimeInfo) -> Runtime {
+    let version = crate::older_runtime::Version::of_server(&runtime);
+    Runtime {
+        page_url: runtime.page_url,
+        bridge: Bridge { url: runtime.mcp_url, token: runtime.token },
+        pid: runtime.pid,
+        reattached: runtime.reattached,
+        node: runtime.node,
+        job: runtime.job,
+        version,
+    }
+}
+
+/// The same connection to a server: a change in anything else (its name, its
+/// idle stop) keeps the line open.
+fn same_connection(a: &Server, b: &Server) -> bool {
+    (&a.ssh_host, a.port, &a.julia, &a.cluster) == (&b.ssh_host, b.port, &b.julia, &b.cluster)
+}
+
+/// What answers for a host's runtime: This Mac's helper, or a server's line.
+#[derive(Clone)]
+pub enum Helper {
+    Local(Arc<Channel>),
+    Line(Arc<client::Session>),
+}
+
+impl Helper {
+    /// Ask about the host's files. Blocks: call it off the main thread.
+    pub fn files(&self, request: Request) -> Result<Reply, String> {
+        match self {
+            Helper::Local(channel) => channel.files(request),
+            Helper::Line(session) => session.files(request, Duration::ZERO).unwrap_or_else(|| Err(session.status().state.error().map_or_else(|| "Endeavor isn't connected to this server yet.".to_owned(), str::to_owned))),
+        }
+    }
+
+    /// Stop Julia there, or the start under way. Blocks.
+    pub fn stop(&self) -> Result<(), String> {
+        match self {
+            Helper::Local(channel) => channel.stop(),
+            Helper::Line(session) => session.stop(),
+        }
+    }
+}
+
+fn report_until_closed(tx: &futures::channel::mpsc::UnboundedSender<Update>, result: Result<(Arc<Channel>, Hello), String>) {
+    let channel = result.as_ref().ok().map(|(channel, _)| channel.clone());
+    let result = result.map(|(channel, hello)| (Some(channel), hello));
     let _ = tx.unbounded_send(Update::Connected(result));
     if let Some(notice) = channel.and_then(|channel| channel.closed()) {
         let _ = tx.unbounded_send(Update::Notice(notice));
@@ -1598,7 +1936,63 @@ fn stop_reason(why: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Connection, Status, Steps, elapsed, not_restarted, not_stopped, percent};
+    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, not_restarted, not_stopped, percent};
+
+    fn line(state: LineState, node: &str) -> LineStatus {
+        let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
+        LineStatus { machine: "lab".into(), name: "lab".into(), state, step: None, hello, job: None }
+    }
+
+    fn runtime(pid: u32) -> client::RuntimeInfo {
+        client::RuntimeInfo {
+            port: 1,
+            token: "t".into(),
+            mcp_url: "http://127.0.0.1:1/mcp".into(),
+            page_url: "http://127.0.0.1:1/?token=t".into(),
+            node: "lab".into(),
+            pid,
+            reattached: false,
+            job: None,
+            remote_port: None,
+            build: None,
+            interface: None,
+        }
+    }
+
+    #[test]
+    fn a_servers_line_says_what_its_connects_and_starts_always_said() {
+        let connecting = line(LineState::Connecting, "");
+        let connected = line(LineState::Connected, "lab");
+        let starting = line(LineState::Starting { queue: None }, "lab");
+        let ready = line(LineState::Ready(runtime(7)), "lab");
+        assert!(changes(&connecting, &line(LineState::Connecting, "")).is_empty());
+        assert!(matches!(&changes(&connecting, &connected)[..], [Change::Connected(h)] if h.node == "lab"));
+        assert_eq!(changes(&connecting, &line(LineState::Failed("no route".into()), "")), [Change::ConnectFailed("no route".into())]);
+        assert_eq!(changes(&connected, &starting), [Change::Starting]);
+        assert_eq!(changes(&starting, &ready), [Change::Started(runtime(7))]);
+        assert_eq!(changes(&connected, &ready), [Change::Starting, Change::Started(runtime(7))], "a start seen only once it was ready");
+        assert_eq!(changes(&starting, &line(LineState::Failed("no Julia".into()), "lab")), [Change::StartFailed("no Julia".into())]);
+        assert_eq!(changes(&starting, &connected), [Change::Stopped], "the app's cancel");
+        assert_eq!(changes(&ready, &connected), [Change::Stopped], "the app's stop");
+    }
+
+    #[test]
+    fn a_servers_julia_that_goes_by_itself_is_told_apart_from_a_takeover_and_a_drop() {
+        let ready = line(LineState::Ready(runtime(7)), "lab");
+        let mut died = line(LineState::NothingRunning, "lab");
+        died.step = Some("Julia on lab stopped. It ran out of memory.".into());
+        assert_eq!(changes(&ready, &died), [Change::Died("It ran out of memory.".into())]);
+        let taken = line(LineState::Failed("Another connection took Julia on lab over.".into()), "lab");
+        assert_eq!(changes(&ready, &taken), [Change::Replaced]);
+        // A drop keeps the hello until the next connect begins.
+        let mut dropped = line(LineState::Connecting, "lab");
+        dropped.step = Some("Lost the connection to lab; connecting again".into());
+        assert_eq!(changes(&ready, &dropped), [Change::Lost("Lost the connection to lab; connecting again".into())]);
+        assert!(changes(&dropped, &line(LineState::Connecting, "")).is_empty(), "nor while it tries again");
+        // Back, it goes on with Julia by itself.
+        let back = changes(&line(LineState::Connecting, ""), &line(LineState::Ready(runtime(7)), "lab"));
+        assert!(matches!(&back[..], [Change::Connected(_), Change::Starting, Change::Started(r)] if r.pid == 7));
+    }
 
     #[test]
     fn a_stop_that_fails_says_what_still_runs() {

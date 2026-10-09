@@ -232,8 +232,8 @@ impl Workspace {
                 }
             })),
             HostId::Server(_) => {
-                let channel = self.connection(host)?.channel.clone()?;
-                Some(cx.background_spawn(async move { channel.files(request) }))
+                let helper = self.helper(host)?;
+                Some(cx.background_spawn(async move { helper.files(request) }))
             }
         }
     }

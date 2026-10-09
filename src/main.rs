@@ -498,6 +498,8 @@ pub struct Workspace {
     /// Each host's loopback ports for the webview and the agent, relayed to its
     /// runtime of the moment; kept for the whole launch.
     listeners: HashMap<HostId, Arc<runtime::Listener>>,
+    /// Each server's line to its helper and runtime (`client::Session`), while connected or connecting.
+    lines: HashMap<HostId, connection::Line>,
     /// The composer's placeholder as last set (it changes while Claude works).
     placeholder: SharedString,
     /// The account's usage limit was reached: messages wait until it resets.
@@ -764,6 +766,7 @@ impl Workspace {
             file_tip: false,
             connections: HashMap::new(),
             listeners: HashMap::new(),
+            lines: HashMap::new(),
             placeholder: "Type / for commands".into(),
             drawn: None,
             usage_limit: None,
@@ -1469,12 +1472,12 @@ impl Workspace {
         let effects = self.submit_for(key, queued.as_edit(edit), now);
         self.apply_effects(key, effects, cx);
         let (progress, mut progressed) = futures::channel::mpsc::unbounded::<attach::Progress>();
-        let channel = self.connection(&place.host).and_then(|c| c.channel.clone());
-        let (dest, fallback) = match (&place.host, channel) {
+        let helper = self.helper(&place.host);
+        let (dest, fallback) = match (&place.host, helper) {
             (HostId::ThisMac, _) => (attach::Dest::Here(place.path), None),
             (host, _) if !self.helper_saves_files(host) => (attach::Dest::Message, Some(attach::UNWRITABLE)),
-            (_, Some(channel)) => {
-                let ask = Box::new(move |request| channel.files(request));
+            (_, Some(helper)) => {
+                let ask = Box::new(move |request| helper.files(request));
                 let progress = Box::new(move |p| drop(progress.unbounded_send(p)));
                 (attach::Dest::Server { folder: place.path, ask, progress }, None)
             }
@@ -2492,11 +2495,11 @@ impl Render for Workspace {
 fn main() {
     // `claude auth login` opens its page through this app (signin::Login).
     signin::browser_shim();
-    // This Mac's runtime helper (runtime::connect), and ssh's askpass (remote::Askpass).
+    // This Mac's runtime helper (runtime::connect), and ssh's askpass (remote::asker).
     if std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG) {
         endeavor_mcp::run_as(&[runtime::HELPER_FLAG], std::env::args().skip(2).collect());
     }
-    if std::env::var_os(wire::askpass::SOCKET_ENV).is_some() {
+    if [wire::askpass::ADDRESS_ENV, wire::askpass::SOCKET_ENV].iter().any(|v| std::env::var_os(v).is_some()) {
         endeavor_mcp::run(std::env::args().skip(1).collect());
     }
     logs::start();

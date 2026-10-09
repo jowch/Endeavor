@@ -88,10 +88,6 @@ impl Listener {
     pub fn disconnected(&self) {
         self.relay.disconnected();
     }
-
-    pub fn port(&self) -> u16 {
-        self.relay.port()
-    }
 }
 
 /// A runtime the app is attached to, as its host's listener serves it.

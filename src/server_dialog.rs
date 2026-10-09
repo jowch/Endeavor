@@ -16,7 +16,7 @@ use wire::slurm::{Partition, Resources};
 use crate::hosts::{Cluster, HostId, Server};
 use crate::resources::Target;
 use crate::new_session::{Glyph, glyph, menu_row};
-use crate::remote::{self, Askpass, Cancel, Event, Question};
+use crate::remote::{self, Cancel, Event, Question};
 use crate::settings::IdleStop;
 use crate::{Workspace, theme};
 use crate::theme::FocusRing as _;
@@ -241,7 +241,7 @@ impl Workspace {
         let questions = self.questions_tx.clone();
         std::thread::spawn(move || {
             let on = |event| drop(tx.unbounded_send(TestUpdate::Event(event)));
-            let result = Askpass::start(server.name.clone(), questions).and_then(|askpass| remote::test(&server, Some(&askpass), &cancel, &on));
+            let result = remote::asker(&server, questions).and_then(|(_asker, auth)| remote::test(&server, auth, &cancel, &on));
             let _ = tx.unbounded_send(TestUpdate::Done(result));
         });
         cx.spawn(async move |this, cx| {
@@ -292,7 +292,7 @@ impl Workspace {
                 }
             }
             TestUpdate::Event(Event::Submitted { .. } | Event::Queued { .. }) => {}
-            TestUpdate::Event(Event::FoundJulia { path, version }) => step(test, format!("Found Julia {version} at {path}"), Some("Starting the runtime…".into())),
+            TestUpdate::Event(Event::Found { name, path, version }) => step(test, format!("Found {name} {version} at {path}"), Some("Starting the runtime…".into())),
             TestUpdate::Event(Event::Progress(line)) => {
                 let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
                 if !text.is_empty() {
