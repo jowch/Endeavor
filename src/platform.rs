@@ -207,6 +207,31 @@ pub fn init(cx: &mut gpui::App) {
 #[cfg(windows)]
 pub fn init(_: &mut gpui::App) {}
 
+/// GPUI's application. On Windows it draws without DirectComposition: GPUI
+/// makes its composition target topmost, which covers child windows, so the
+/// notebook's WebView2 window would be there but never seen.
+#[cfg(not(windows))]
+pub fn application() -> gpui::Application {
+    gpui_platform::application()
+}
+
+#[cfg(windows)]
+pub fn application() -> gpui::Application {
+    // Read once, while GPUI's Windows platform starts; set only for that, so
+    // Julia, Node and the agent don't inherit it. A value already set wins.
+    const VAR: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
+    let ours = std::env::var_os(VAR).is_none();
+    // SAFETY: no other thread runs yet; GPUI starts its threads in application().
+    if ours {
+        unsafe { std::env::set_var(VAR, "1") };
+    }
+    let app = gpui_platform::application();
+    if ours {
+        unsafe { std::env::remove_var(VAR) };
+    }
+    app
+}
+
 /// The window the notebook's web view goes in, as wry wants it.
 #[cfg(not(target_os = "linux"))]
 pub fn webview_parent(window: &gpui::Window) -> raw_window_handle::WindowHandle<'_> {
