@@ -409,15 +409,23 @@ impl Workspace {
         cx.notify();
     }
 
-    /// `host`'s line, opened unless one for `server` as it is now is open and
-    /// still trying: one that gave up, or was made from the server's old
-    /// connection settings, is closed and a new one opened. A line that is
-    /// connected already reports it again, to the connection just made.
+    /// `host`'s line, opened unless one for `server` as it is now is open: one
+    /// made from the server's old connection settings is closed and a new one
+    /// opened. A line is kept otherwise, since its listener's port is in the
+    /// MCP URL of the agents on the host; one that gave up is asked to try
+    /// again. A line that is connected already reports it again, to the
+    /// connection just made.
     fn open_line(&mut self, host: &HostId, server: &Server, cx: &mut Context<Self>) -> Result<(), String> {
         if let Some(line) = self.lines.get(host) {
-            let status = line.session.status();
-            let gave_up = matches!(status.state, LineState::Failed(_)) && !signed_in(&status);
-            if !gave_up && same_connection(&line.server, server) {
+            if same_connection(&line.server, server) {
+                let session = line.session.clone();
+                let status = session.status();
+                // ponytail: a line in its pause between tries isn't hurried (Session has no "try now"), so Reconnect waits for its next try.
+                if matches!(status.state, LineState::Failed(_)) && !signed_in(&status) {
+                    // An attach starts nothing; a start the connection wants follows once connected.
+                    session.request(&client::Want::Attach { install: true });
+                }
+                let status = session.status();
                 // What it already reported is told again, to the connection just made.
                 let id = self.connections.get(host).map_or(0, |c| c.id);
                 for change in changes(&LineStatus { state: LineState::Connecting, hello: None, ..status.clone() }, &status) {
@@ -450,7 +458,7 @@ impl Workspace {
             }
         });
         let generation = next_connect_id();
-        self.lines.insert(host.clone(), Line { session, _asker: asker, server: server.clone(), closed, last: None, generation });
+        self.lines.insert(host.clone(), Line { session, _asker: asker, server: server.clone(), closed, last: None, generation, held: None });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             let mut rx = rx;
@@ -490,9 +498,59 @@ impl Workspace {
                 let now = *now;
                 let last = line.last.replace(now.clone()).unwrap_or(LineStatus { state: LineState::Connecting, hello: None, ..now.clone() });
                 for change in changes(&last, &now) {
+                    if self.hold(host, generation, &change, cx) {
+                        continue;
+                    }
                     self.on_change(host, id, change, cx);
                 }
             }
+        }
+    }
+
+    /// Hold `change` back while a drop may pass (`LOST_GRACE`): true when it is
+    /// held or was the blip's end. A change that ends the wait otherwise first
+    /// tells the drop and what came since.
+    fn hold(&mut self, host: &HostId, generation: u64, change: &Change, cx: &mut Context<Self>) -> bool {
+        let ready_pid = self.connections.get(host).filter(|c| c.status == Status::Ready).and_then(|c| c.runtime.as_ref()).map(|r| r.pid);
+        let Some(line) = self.lines.get_mut(host) else { return false };
+        match (&mut line.held, change) {
+            // Back to the same Julia: nothing happened, as far as the app goes.
+            (Some(held), Change::Started(runtime)) if runtime.pid == held.pid => {
+                line.held = None;
+                true
+            }
+            (Some(held), Change::Connected(_) | Change::Starting) => {
+                held.since.push(change.clone());
+                true
+            }
+            (Some(_), _) => {
+                self.release(host, generation, cx);
+                false
+            }
+            (None, Change::Lost(why)) => {
+                let Some(pid) = ready_pid else { return false };
+                line.held = Some(Held { pid, why: why.clone(), since: Vec::new() });
+                let host = host.clone();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(LOST_GRACE).await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.release(&host, generation, cx);
+                        this.sync_holds(cx);
+                    });
+                })
+                .detach();
+                true
+            }
+            (None, _) => false,
+        }
+    }
+
+    /// Tell the connection about a held drop, and what the line heard since.
+    fn release(&mut self, host: &HostId, generation: u64, cx: &mut Context<Self>) {
+        let Some(held) = self.lines.get_mut(host).filter(|l| l.generation == generation).and_then(|l| l.held.take()) else { return };
+        let Some(id) = self.connections.get(host).map(|c| c.id) else { return };
+        for change in std::iter::once(Change::Lost(held.why)).chain(held.since) {
+            self.on_change(host, id, change, cx);
         }
     }
 
@@ -1603,7 +1661,23 @@ pub(crate) struct Line {
     last: Option<LineStatus>,
     /// Tells this line's updates from a line opened after it for the same host.
     generation: u64,
+    /// A drop under a ready runtime, not yet told to the connection (`LOST_GRACE`).
+    held: Option<Held>,
 }
+
+/// A drop the line may get over by itself: told only if it doesn't come back
+/// to the same runtime within `LOST_GRACE`, with what it heard meanwhile.
+struct Held {
+    pid: u32,
+    why: String,
+    since: Vec<Change>,
+}
+
+/// How long a server's dropped connection may take to come back to the same
+/// Julia before the app shows it lost. The line usually gets it back in well
+/// under a second, and Pluto's page reconnects by itself; tearing the runtime
+/// down and opening it again meanwhile breaks the page's reconnect.
+const LOST_GRACE: Duration = Duration::from_secs(2);
 
 impl Line {
     /// Let the helper go, end the connection and stop watching, in a thread:
@@ -1651,6 +1725,8 @@ fn signed_in(status: &LineStatus) -> bool {
 #[derive(PartialEq)]
 enum Phase<'a> {
     Idle,
+    /// Nothing runs any more, for the reason given; after an attach that found nothing, nothing to tell.
+    Gone(&'a str),
     Starting,
     Ready(&'a client::RuntimeInfo),
     Failed(&'a str),
@@ -1659,7 +1735,7 @@ enum Phase<'a> {
 fn phase(status: &LineStatus) -> Phase<'_> {
     match &status.state {
         LineState::Connecting | LineState::Connected => Phase::Idle,
-        LineState::NothingRunning => Phase::Failed(status.step.as_deref().unwrap_or("")),
+        LineState::NothingRunning => Phase::Gone(status.step.as_deref().unwrap_or("")),
         LineState::Starting { .. } | LineState::Queued(_) => Phase::Starting,
         LineState::Ready(runtime) => Phase::Ready(runtime),
         LineState::NeedsInstall(_) => Phase::Failed(status.step.as_deref().unwrap_or("")),
@@ -1702,18 +1778,18 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
             }
             out.push(Change::Started(runtime.clone()));
         }
-        (Phase::Idle | Phase::Failed(_), Phase::Starting) => out.push(Change::Starting),
+        (Phase::Idle | Phase::Gone(_) | Phase::Failed(_), Phase::Starting) => out.push(Change::Starting),
         (Phase::Ready(_), Phase::Starting) => {}
         (Phase::Ready(_), Phase::Failed(why)) if why == format!("Another connection took Julia on {} over.", now.name) => out.push(Change::Replaced),
-        (Phase::Ready(_), Phase::Failed(why)) => {
+        (Phase::Ready(_), Phase::Failed(why) | Phase::Gone(why)) => {
             let prefix = format!("Julia on {} stopped.", now.name);
             out.push(Change::Died(why.strip_prefix(&prefix).unwrap_or(why).trim().to_owned()));
         }
         (Phase::Starting | Phase::Ready(_), Phase::Idle) => out.push(Change::Stopped),
-        (Phase::Starting, Phase::Failed(why)) => out.push(Change::StartFailed(why.to_owned())),
+        (Phase::Starting, Phase::Failed(why) | Phase::Gone(why)) => out.push(Change::StartFailed(why.to_owned())),
         // A start that ended before it was seen to begin.
-        (Phase::Idle, Phase::Failed(why)) => out.push(Change::StartFailed(why.to_owned())),
-        (Phase::Failed(_), Phase::Failed(_) | Phase::Idle) | (Phase::Idle, Phase::Idle) | (Phase::Starting, Phase::Starting) => {}
+        (Phase::Idle | Phase::Gone(_), Phase::Failed(why)) => out.push(Change::StartFailed(why.to_owned())),
+        (Phase::Idle | Phase::Gone(_) | Phase::Failed(_), Phase::Idle | Phase::Gone(_)) | (Phase::Failed(_), Phase::Failed(_)) | (Phase::Starting, Phase::Starting) => {}
     }
     out
 }
@@ -1974,6 +2050,9 @@ mod tests {
         assert_eq!(changes(&starting, &line(LineState::Failed("no Julia".into()), "lab")), [Change::StartFailed("no Julia".into())]);
         assert_eq!(changes(&starting, &connected), [Change::Stopped], "the app's cancel");
         assert_eq!(changes(&ready, &connected), [Change::Stopped], "the app's stop");
+        // An attach (a line asked to try again after it gave up) that finds nothing running.
+        assert!(changes(&connected, &line(LineState::NothingRunning, "lab")).is_empty());
+        assert_eq!(changes(&line(LineState::NothingRunning, "lab"), &starting), [Change::Starting]);
     }
 
     #[test]

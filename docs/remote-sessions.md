@@ -119,7 +119,12 @@ on a runtime too old to ask before one, in the app's words
 (`src/runtime.rs`) does the same. The app keeps one connection per host
 (`src/connection.rs`): its status (connecting, browsing, starting, ready,
 died, replaced, failed) and what it follows of the runtime. A server's comes
-from its session's state, read as it changes (`changes`). On quit, servers detach; their idle stop
+from its session's state, read as it changes (`changes`). A drop that gets
+back to the same Julia within 2 s isn't shown at all (`LOST_GRACE`): the
+session usually has it back in well under a second, and Pluto's page
+reconnects by itself. The session is kept for the whole launch unless the
+server's connection settings change, since its listener's port is in the MCP
+URL of the agents there; one that gave up is asked to try again. On quit, servers detach; their idle stop
 (the server's own setting, else Settings') covers forgotten notebooks.
 
 **Local sessions use the same path.** The app can run the helper as a child
