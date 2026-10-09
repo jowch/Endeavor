@@ -99,6 +99,10 @@ text, so it doesn't fit edits that already landed.
   Start / Start in Auto both pick the adapter's `exit-plan-auto` and set the
   gate. Claude Code asks before any MCP tool without an allow rule, so the
   read-only notebook tools are let through by `allowedTools` in every mode.
+  So are reads of the plugin's own files (a `Read(//…/plugin/**)` rule, with
+  the path in Claude Code's form: `//c/Users/…` on Windows): Claude Code
+  doesn't allow a plugin's files by itself, and the skills point the agent at
+  reference files beside them.
 - Claude Code's plan mode restricts its own write tools, but notebook edits go
   through our MCP tools, so the runtime enforces read-only too: in Plan, the
   runtime refuses edits and runs. Same for Ask to run vs Auto, and for

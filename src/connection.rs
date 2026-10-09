@@ -104,9 +104,9 @@ pub struct Connection {
     /// Julia exited by itself (not a Stop, a restart or a quit), and hasn't
     /// been started since.
     pub crashed: bool,
-    /// Whether its runtime is from another Endeavor build (`older_runtime`);
-    /// none until the runtime says which.
-    pub older: Option<bool>,
+    /// How the app can use its runtime (`older_runtime`); none until a
+    /// runtime is ready.
+    pub older: Option<crate::older_runtime::Version>,
 }
 
 /// A dropped server connection.
@@ -816,7 +816,12 @@ impl Workspace {
             self.follow_folder(cx);
         }
         if let Some(connection) = self.connections.get_mut(host) {
-            connection.older = None;
+            connection.older = connection.runtime.as_ref().map(|r| r.version);
+            if let Some(version) = connection.older {
+                for session in self.sessions.iter_mut().filter(|s| s.place.host == *host && !s.agent_waiting) {
+                    session.runtime_build(version);
+                }
+            }
         }
         // A new runtime knows no session's notebook or policy.
         let on_host: Vec<&Session> = self.sessions.iter().filter(|s| s.place.host == *host).collect();
@@ -879,18 +884,6 @@ impl Workspace {
     }
 
     fn on_notebooks_event(&mut self, host: &HostId, mut event: serde_json::Value, cx: &mut Context<Self>) {
-        let Some(connection) = self.connections.get_mut(host) else { return };
-        let older = crate::older_runtime::is_older(event["build"].as_str(), crate::remote::build());
-        if connection.older != Some(older) {
-            connection.older = Some(older);
-            if let Some(listener) = self.listeners.get(host) {
-                listener.runtime_build(older);
-            }
-            for session in self.sessions.iter_mut().filter(|s| s.place.host == *host && !s.agent_waiting) {
-                session.runtime_build(older);
-            }
-            cx.notify();
-        }
         let Some(connection) = self.connections.get_mut(host) else { return };
         // A notebook the runtime just stopped for being idle shows stopped, with
         // Start, in every session on it. Only new entries count: a stale one must

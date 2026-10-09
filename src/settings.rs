@@ -146,11 +146,24 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        let text = crate::install::app_dir().ok().and_then(|d| std::fs::read_to_string(d.join(FILE)).ok());
-        let mut settings: Settings = text.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();
+        let file = crate::install::app_dir().ok().map(|d| d.join(FILE));
+        // Bytes, as in `load_json_at`: a file cut mid-character doesn't parse.
+        let bytes = file.as_ref().and_then(|f| std::fs::read(f).ok());
+        let text = bytes.as_deref().and_then(|b| std::str::from_utf8(b).ok());
+        let mut settings: Settings = match bytes.as_deref().map(serde_json::from_slice) {
+            Some(Ok(settings)) => settings,
+            Some(Err(e)) => {
+                // Keep the file that doesn't parse, rather than saving defaults over it.
+                if let Some(f) = &file {
+                    crate::set_aside(f, &e);
+                }
+                Settings::default()
+            }
+            None => Settings::default(),
+        };
         // `show_archived: true` ("All, including archived") is now `StatusFilter::All`;
         // `false` needs no migration, since `StatusFilter::Active` is still the default.
-        let showed_archived = text.as_deref().and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok()).and_then(|v| v.get("show_archived").and_then(serde_json::Value::as_bool));
+        let showed_archived = text.and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok()).and_then(|v| v.get("show_archived").and_then(serde_json::Value::as_bool));
         if showed_archived == Some(true) {
             settings.sidebar_filters.status = crate::sidebar_filter::StatusFilter::All;
         }
@@ -159,9 +172,11 @@ impl Settings {
 
     pub fn save(&self) {
         // ponytail: best effort, like the app's other small files; a failed save
-        // only loses the change on the next launch.
-        if let (Ok(dir), Ok(json)) = (crate::install::app_dir(), serde_json::to_string_pretty(self)) {
-            let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(FILE), json));
+        // keeps the last good file, so it only loses this change.
+        if let (Ok(dir), Ok(json)) = (crate::install::app_dir(), serde_json::to_string_pretty(self))
+            && let Err(e) = crate::write_atomic(&dir.join(FILE), json.as_bytes())
+        {
+            eprintln!("Couldn't save the settings: {e}");
         }
     }
 }
