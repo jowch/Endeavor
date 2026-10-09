@@ -156,17 +156,86 @@ fn save_json(name: &str, value: &impl serde::Serialize) {
 }
 
 /// `load_json`'s read, by path (split out so the round trip is unit-testable
-/// without the real Application Support folder).
+/// without the real Application Support folder). A file that's there but
+/// doesn't parse reads as the default, and is first set aside (see `set_aside`)
+/// so the next save can't overwrite what's left of it.
 fn load_json_at<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    serde_json::from_str(&text).unwrap_or_default()
+    // Bytes, not a string: a file cut inside a multi-byte character must count
+    // as one that doesn't parse, not as no file.
+    let Ok(bytes) = std::fs::read(path) else { return T::default() };
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+        set_aside(path, &e);
+        T::default()
+    })
 }
 
 /// `save_json`'s write, by path.
 fn save_json_at(path: &Path, value: &impl serde::Serialize) {
-    // ponytail: best effort; losing these lists only costs a folder pick or a filter.
-    if let (Some(parent), Ok(json)) = (path.parent(), serde_json::to_string_pretty(value)) {
-        let _ = std::fs::create_dir_all(parent).and_then(|_| std::fs::write(path, json));
+    // ponytail: best effort. A failed save leaves the last good file in place
+    // (`write_atomic`), so it costs only the change since then.
+    if let Ok(json) = serde_json::to_string_pretty(value)
+        && let Err(e) = write_atomic(path, json.as_bytes())
+    {
+        eprintln!("Couldn't save {}: {e}", path.display());
+    }
+}
+
+/// Replace `path` with `bytes` so that a crash or a full disk leaves either
+/// the old file or the new one, never half of one: write a file beside it,
+/// flush it to disk, then rename it over the old one.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    // One write at a time in this whole process (not per file, on purpose:
+    // these files are small), so two saves of one file can't share its
+    // `.partial`. ponytail: `sync_all` runs on the caller's thread, the UI
+    // thread for most saves; fine for user actions and turn ends, not for a
+    // hot path.
+    static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(".partial");
+    let partial = PathBuf::from(partial);
+    let written = std::fs::File::create(&partial).and_then(|mut f| {
+        f.write_all(bytes)?;
+        f.sync_all()
+    });
+    let renamed = written.and_then(|_| rename_over(&partial, path));
+    if renamed.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    renamed
+}
+
+/// `std::fs::rename`, which replaces an existing file on every platform. On
+/// Windows it fails while another program (a virus scanner, the search
+/// indexer) has either file open without sharing it, most often the scanner
+/// checking the `.partial` just closed, so try a few more times.
+fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
+    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+    const HELD: [i32; 3] = [5, 32, 33];
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if cfg!(windows) && e.raw_os_error().is_some_and(|code| HELD.contains(&code)) && tries < 5 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(20 * tries));
+            }
+            done => return done,
+        }
+    }
+}
+
+/// Move a file that doesn't parse to `<name>.bad` (replacing an older one),
+/// so a person can still look at it, and say so on stderr.
+pub fn set_aside(path: &Path, why: &dyn std::fmt::Display) {
+    let mut bad = path.as_os_str().to_owned();
+    bad.push(".bad");
+    match std::fs::rename(path, &bad) {
+        Ok(()) => eprintln!("Couldn't read {} ({why}); kept it as {}.", path.display(), Path::new(&bad).display()),
+        Err(e) => eprintln!("Couldn't read {} ({why}) or set it aside ({e}).", path.display()),
     }
 }
 
@@ -2665,7 +2734,7 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_json_at, save_json_at, viewed_notebook_id};
+    use super::{load_json_at, save_json_at, viewed_notebook_id, write_atomic};
     use std::collections::HashMap;
 
     #[test]
@@ -2700,6 +2769,53 @@ mod tests {
         let reloaded: HashMap<String, String> = load_json_at(&file);
         assert!(reloaded.is_empty(), "sent and saved: nothing left to resend after another restart");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A save replaces the file whole and leaves nothing beside it.
+    #[test]
+    fn a_save_replaces_the_file_and_leaves_no_partial() {
+        let dir = std::env::temp_dir().join(format!("endeavor-test-atomic-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let file = dir.join("titles.json");
+        write_atomic(&file, b"{\"a\": \"first, and longer than the second\"}").unwrap();
+        write_atomic(&file, b"{\"a\": \"second\"}").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"a\": \"second\"}");
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["titles.json"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file torn by an old crash reads as empty, but is kept as `.bad`, so
+    /// the next save doesn't overwrite what's left of it.
+    #[test]
+    fn a_file_that_doesnt_parse_is_set_aside_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("endeavor-test-torn-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let file = dir.join("sessions.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&file, "{\"session-1\": \"a.j").unwrap();
+
+        let loaded: HashMap<String, String> = load_json_at(&file);
+        assert!(loaded.is_empty());
+        assert!(!file.exists());
+        assert_eq!(std::fs::read_to_string(dir.join("sessions.json.bad")).unwrap(), "{\"session-1\": \"a.j");
+
+        save_json_at(&file, &HashMap::from([("session-2".to_string(), "b.jl".to_string())]));
+        assert_eq!(std::fs::read_to_string(dir.join("sessions.json.bad")).unwrap(), "{\"session-1\": \"a.j");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cut inside a multi-byte character (an é in a title) leaves bytes that
+    /// aren't UTF-8; that file is set aside too, not read as missing.
+    #[test]
+    fn a_file_cut_mid_character_is_set_aside_too() {
+        let dir = std::env::temp_dir().join(format!("endeavor-test-torn-utf8-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let file = dir.join("titles.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&file, b"{\"session-1\": \"Caf\xC3").unwrap();
+
+        let loaded: HashMap<String, String> = load_json_at(&file);
+        assert!(loaded.is_empty());
+        assert_eq!(std::fs::read(dir.join("titles.json.bad")).unwrap(), b"{\"session-1\": \"Caf\xC3");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
