@@ -158,6 +158,9 @@ pub const CONTINUE: &str = "Continue from where you stopped.";
 /// What the transcript shows for the message Allow sends on a card kept past the turn.
 pub const GO_AHEAD: &str = "Go ahead";
 
+/// The note when Allow on a card kept past the turn finds a message of the user's already waiting.
+pub const ALLOWED_FOR_NEXT: &str = "Allowed. Claude goes ahead when your next message is sent";
+
 /// The message Allow sends on a card kept past the turn: the agent stopped waiting on its call, and
 /// the runtime holds the approval for the same call made again.
 fn go_ahead(tool: &str) -> String {
@@ -2137,8 +2140,9 @@ impl Session {
     /// `answer`, telling the runtime which cells the user's own run reached
     /// meanwhile (`user_ran`), for a run it holds.
     fn answer_with(&mut self, ix: usize, option: &PermissionOption, scope: Scope, user_ran: Vec<(String, f64)>) {
-        let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix) else { return };
+        let Some(Entry::Permission { responder, tool, .. }) = self.entries.get_mut(ix) else { return };
         let Some(asker) = responder.take() else { return };
+        let tool = tool.clone().unwrap_or_default();
         match asker {
             Asker::Agent(responder) => {
                 let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
@@ -2148,14 +2152,16 @@ impl Session {
                 let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
                 self.later.push(Effect::AnswerRun { ask, allow, user_ran });
                 // A card kept past the turn: nothing runs until the agent makes the call again, so
-                // "Go ahead" starts a turn for it, unless a message of the user's is already waiting to.
+                // "Go ahead" asks it to (queued while Claude restarts). A message of the user's
+                // already waiting goes instead, and may wait on Send next, so a note says so.
                 if allow && self.left_up.contains(&ask) && self.busy_since.is_none() {
-                    let tool = self.entries.get(ix).and_then(|e| if let Entry::Permission { tool, .. } = e { tool.clone() } else { None }).unwrap_or_default();
                     self.record_answer(ix, option, scope);
-                    if self.outbox.items.is_empty() && !self.outbox.busy {
+                    if self.outbox.items.is_empty() {
                         let blocks = vec![ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(go_ahead(&tool)))];
                         let effects = self.submit(Queued::new(GO_AHEAD.into(), Vec::new(), blocks), false);
                         self.later.extend(effects);
+                    } else {
+                        self.note(ALLOWED_FOR_NEXT);
                     }
                     return;
                 }
@@ -2708,15 +2714,58 @@ mod tests {
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
         let later = s.take_later();
         assert_eq!(answers(&later), [(41, true, &[][..])]);
-        let sent: Vec<String> = later.iter().filter_map(|e| match e {
-            Effect::Send(Turn::Prompt(blocks)) => Some(blocks.iter().filter_map(|b| if let agent_client_protocol::schema::v1::ContentBlock::Text(t) = b { Some(t.text.clone()) } else { None }).collect::<String>()),
-            _ => None,
-        }).collect();
+        let sent = prompts_sent(&later);
         assert!(matches!(sent.as_slice(), [one] if one.contains("Call `execute_cell` again with the same arguments")), "{sent:?}");
 
         s.runtime_asks_now(&[left_up(42)]);
         s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
         assert_eq!(answers(&s.take_later()), [(42, false, &[][..])], "stopping the turn denies it");
+    }
+
+    /// The text of each prompt in `effects` that goes to Claude.
+    fn prompts_sent(effects: &[Effect]) -> Vec<String> {
+        effects.iter().filter_map(|e| match e {
+            Effect::Send(Turn::Prompt(blocks)) => Some(blocks.iter().filter_map(|b| if let agent_client_protocol::schema::v1::ContentBlock::Text(t) = b { Some(t.text.clone()) } else { None }).collect::<String>()),
+            _ => None,
+        }).collect()
+    }
+
+    #[test]
+    fn allowing_a_kept_card_with_a_message_waiting_sends_only_that_message() {
+        let left_up = serde_json::json!({ "id": 41, "owner": "7", "call_id": "t1", "tool": "execute_cell", "arguments": { "cell_id": "a" }, "since": 1.0, "waiting": false });
+        let mut s = asking_session();
+        s.submit(text("first"), false);
+        s.runtime_asks_now(&[ask(41, Some("t1"))]);
+        s.submit(text("and then this"), false);
+        s.runtime_asks_now(&[left_up]);
+        // The turn ends partway: the queue pauses with the user's message in it, and the card stays.
+        s.apply(SessionEvent::TurnEnded(StopReason::MaxTokens));
+        assert!(s.outbox.paused().is_some());
+        s.take_later();
+        assert!(s.pending_permission().is_some());
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
+        let later = s.take_later();
+        assert_eq!(answers(&later), [(41, true, &[][..])]);
+        assert!(prompts_sent(&later).is_empty(), "no second message");
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n == super::ALLOWED_FOR_NEXT));
+    }
+
+    #[test]
+    fn allowing_a_kept_card_while_claude_restarts_sends_go_ahead_once_it_is_back() {
+        let left_up = serde_json::json!({ "id": 41, "owner": "7", "call_id": "t1", "tool": "execute_cell", "arguments": { "cell_id": "a" }, "since": 1.0, "waiting": false });
+        let mut s = asking_session();
+        s.runtime_asks_now(&[ask(41, Some("t1"))]);
+        s.runtime_asks_now(&[left_up]);
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        s.agent_stopped();
+        assert!(s.pending_permission().is_some(), "the card outlasts the process");
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
+        let later = s.take_later();
+        assert_eq!(answers(&later), [(41, true, &[][..])]);
+        assert!(prompts_sent(&later).is_empty(), "nothing goes while Claude is down");
+        let id = s.id.clone().unwrap();
+        let effects = s.started(Started::new(id, None, None));
+        assert!(matches!(prompts_sent(&effects).as_slice(), [one] if one.contains("Call `execute_cell` again")), "\"Go ahead\" goes once Claude is back");
     }
 
     #[test]
