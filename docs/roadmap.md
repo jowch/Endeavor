@@ -5,7 +5,7 @@ Living plan; update it as items land. Design rationale lives in
 [design-notes.md](design-notes.md). Open design gaps are in
 [design-gaps.md](design-gaps.md).
 
-_Last updated: 2026-10-03_
+_Last updated: 2026-10-09_
 
 ## Where things stand
 
@@ -21,7 +21,8 @@ server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)
 - **Ember (R notebooks).** In development in its own repository. It joins
   EndeavorMCP as another adapter behind the core; on this side it needs the
   pane, header and logo for an R notebook and the notebook chip listing R
-  files. Start once Ember's interface is settled.
+  files. Starts after the agent-loop eval, so the eval is built to cover
+  more than one engine from the start.
 - **README, landing page and documentation website.**
 
 The notebook tools (runtime, MCP server, `endeavor serve`) live in
@@ -41,8 +42,6 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   agent, is in [other-agents.md](other-agents.md). Steering is only
   available where the agent advertises it. Cursor was tried and parked: see
   [cursor-agent.md](cursor-agent.md).
-- **Jupyter.** Design the notebook boundary against Jupyter's kernel and
-  `.ipynb` model before writing a second backend.
 - **Freeform annotation strokes** (arrows between cells), once there's a way
   for the agent to make sense of them (e.g. a screenshot alongside).
 - **Windows.** It builds and its tests pass in CI. Running a local notebook
