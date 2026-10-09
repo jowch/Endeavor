@@ -39,7 +39,8 @@ UsePreviousAppDir=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-; Close a running Endeavor before replacing its files, and don't reopen it.
+; PrepareToInstall asks to quit a running Endeavor; this is the fallback for
+; one opened after that. Don't reopen it.
 CloseApplications=yes
 RestartApplications=no
 SetupIconFile=..\assets\icon\endeavor.ico
@@ -100,10 +101,24 @@ begin
     Exec(Exe, '--stop-runtime', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
+{ The app holds this mutex while it's open (platform::init). Wait for it to
+  quit before stopping its runtime: an app set to keep its runtime starts a
+  new one when the old one stops, and Restart Manager then can't close that
+  one (it has no window) and says so. }
+function AppQuit(const Action: String): Boolean;
+begin
+  Result := True;
+  while Result and CheckForMutexes('{#AppMutex}') do
+    Result := SuppressibleMsgBox('Endeavor is open. Quit it, then click OK to ' + Action + '.', mbError, MB_OKCANCEL, IDCANCEL) = IDOK;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  StopRuntime;
   Result := '';
+  if not AppQuit('install the new version') then
+    Result := 'Quit Endeavor, then run Setup again.'
+  else
+    StopRuntime;
 end;
 
 procedure InstallWebView2;
@@ -124,21 +139,18 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  { Again, after a running Endeavor was closed: one set to keep its runtime
-    running leaves it behind when it quits. }
+  { Again, in case Restart Manager closed an Endeavor that started between
+    PrepareToInstall and now, and it left its runtime running. }
   if CurStep = ssInstall then
     StopRuntime;
   if (CurStep = ssPostInstall) and not HasWebView2 then
     InstallWebView2;
 end;
 
-{ The app holds this mutex while it's open (platform::init). An open exe
-  can't be removed, so ask to quit it first. }
+{ An open exe can't be removed. }
 function InitializeUninstall: Boolean;
 begin
-  Result := True;
-  while Result and CheckForMutexes('{#AppMutex}') do
-    Result := SuppressibleMsgBox('Endeavor is open. Quit it, then click OK to uninstall it.', mbError, MB_OKCANCEL, IDCANCEL) = IDOK;
+  Result := AppQuit('uninstall it');
 end;
 
 { Once the user has confirmed: the "Are you sure?" question comes after

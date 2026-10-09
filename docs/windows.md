@@ -420,11 +420,10 @@ for this user if it's missing.
    "Windows protected your PC"; choose More info, then Run anyway.
 3. Click Install, then Finish. Endeavor opens and sets itself up.
 
-Installing a newer build over an older one closes Endeavor if it's open and
-stops a runtime kept running after Endeavor quit (`endeavor.exe
+Installing a newer build over an older one asks you to quit Endeavor if it's
+open, then stops a runtime kept running after Endeavor quit (`endeavor.exe
 --stop-runtime`), since that runtime runs from the installed `endeavor.exe`.
-Its notebooks are already saved. Uninstalling stops it too, and asks you to
-quit Endeavor first if it's open. Uninstalling leaves
+Its notebooks are already saved. Uninstalling does the same. Uninstalling leaves
 `%LOCALAPPDATA%\Endeavor` (Julia, the agents, sessions and settings).
 
 ## Try a build from CI
