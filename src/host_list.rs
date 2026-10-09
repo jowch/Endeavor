@@ -37,6 +37,7 @@ impl From<&RuntimeState> for HostState {
                 HostState::Running { notebooks: notebooks.map(|n| n as usize), job: job.as_ref().map(|j| (j.id.clone(), j.ends_at)) }
             }
             RuntimeState::Queued { job, state, .. } => HostState::Queued { job: job.clone(), starting: state == "RUNNING" },
+            RuntimeState::Starting => HostState::Starting,
         }
     }
 }
@@ -163,5 +164,6 @@ mod tests {
         let local = RuntimeState::Running { node: "mac".into(), notebooks: Some(3), job: None };
         assert_eq!(HostState::from(&local).text(), "Running · 3 notebooks open");
         assert_eq!(HostState::from(&RuntimeState::NotRunning), HostState::NotRunning);
+        assert_eq!(HostState::from(&RuntimeState::Starting), HostState::Starting, "another client is starting it");
     }
 }

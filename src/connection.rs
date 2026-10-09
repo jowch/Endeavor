@@ -84,6 +84,8 @@ pub struct Connection {
     pub resume: Vec<(String, Option<f64>)>,
     /// Connects and starts that failed in a row, across reconnects.
     pub failures: u32,
+    /// Why Restart Julia's stop failed, said once the start that follows it is ready.
+    pub not_restarted: Option<String>,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
     pub notebooks: serde_json::Value,
     /// Per-notebook cell states as last pushed ({notebook_id: [state]}).
@@ -221,6 +223,7 @@ impl Connection {
             last_notebooks: Vec::new(),
             resume: Vec::new(),
             failures: 0,
+            not_restarted: None,
             notebooks: serde_json::Value::Null,
             cells: serde_json::Value::Null,
             idle_stopped: HashSet::new(),
@@ -454,15 +457,16 @@ impl Workspace {
         self.status = "Restarting Julia…".into();
         let stop = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
-            channel.stop();
-            resume
+            (resume, channel.stop())
         });
         cx.spawn(async move |this, cx| {
-            let resume = stop.await;
+            let (resume, stopped) = stop.await;
             let _ = this.update(cx, |this, cx| {
                 if let Some(connection) = this.connections.get_mut(&host) {
                     connection.status = Status::Died(String::new());
                     connection.resume = resume;
+                    // Julia that didn't stop is still running: the start attaches to it again, and says why.
+                    connection.not_restarted = stopped.err();
                 }
                 this.start_host(&host, cx);
             });
@@ -543,7 +547,10 @@ impl Workspace {
         let work = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(channel) = channel {
-                channel.stop();
+                // A Julia that doesn't stop here is stopped by its recorded group below, on a repair.
+                if let Err(e) = channel.stop() {
+                    eprintln!("Stopping Julia: {e}");
+                }
                 channel.detach();
             }
             (if clear { runtime::clear_state() } else { Ok(Vec::new()) }, resume)
@@ -696,6 +703,7 @@ impl Workspace {
                 }
                 let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
                 connection.job = None;
+                connection.not_restarted = None;
                 connection.status = Status::Died(e.clone());
                 connection.failures += 1;
                 if local {
@@ -793,6 +801,9 @@ impl Workspace {
             if let Some(commands) = self.links.get_mut(crate::agent::Agent::Claude).rx.take() {
                 self.on_progress(Progress::new(Step::Agent, "Pluto ready · starting Claude…"), cx);
                 self.start_agent(crate::agent::Agent::Claude, commands, cx);
+            } else if let Some(e) = self.connections.get_mut(host).and_then(|c| c.not_restarted.take()) {
+                eprintln!("Restart Julia: {e}");
+                self.status = not_restarted(&e).into();
             } else if self.this_mac_was_ready {
                 self.status = if reattached { "Reconnected to Julia." } else { "Julia restarted." }.into();
             } else {
@@ -1084,7 +1095,7 @@ impl Workspace {
         let Some(channel) = connection.channel.clone() else { return };
         connection.cancelling = true;
         connection.steps.now("Cancelling the job");
-        cx.background_executor().spawn(async move { channel.stop() }).detach();
+        cx.background_executor().spawn(async move { channel.stop().map_err(|e| eprintln!("Cancelling the start: {e}")) }).detach();
         cx.notify();
     }
 
@@ -1166,11 +1177,17 @@ impl Workspace {
         let stop = cx.background_executor().spawn(async move { channel.stop() });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
-            stop.await;
+            let stopped = stop.await;
             let _ = this.update(cx, |this, cx| {
                 let mut restart = false;
                 if let Some(connection) = this.connections.get_mut(&host).filter(|c| c.id == id) {
                     connection.stopping = false;
+                    if let Err(e) = stopped {
+                        // It may still run: ask what does.
+                        connection.start_after_stop = false;
+                        this.status = not_stopped(&this.hosts.name(&host), &e).into();
+                        return this.check_host(&host, cx);
+                    }
                     connection.found = Some(Ok(RuntimeState::NotRunning));
                     restart = std::mem::take(&mut connection.start_after_stop);
                 }
@@ -1214,7 +1231,7 @@ impl Workspace {
             },
             // Started since by another app, as a check found.
             Status::Died(_) => match &c.found {
-                Some(Ok(found @ (RuntimeState::Running { .. } | RuntimeState::Queued { .. }))) => HostState::from(found),
+                Some(Ok(found @ (RuntimeState::Running { .. } | RuntimeState::Queued { .. } | RuntimeState::Starting))) => HostState::from(found),
                 _ => HostState::NotRunning,
             },
             Status::Starting => match &c.job {
@@ -1566,9 +1583,43 @@ fn walker() -> Canvas<()> {
     )
 }
 
+/// The status line once Julia is back after Restart Julia's stop failed with `why`.
+fn not_restarted(why: &str) -> String {
+    format!("Julia didn't restart, so Endeavor is still using the Julia that was running. {}", stop_reason(why))
+}
+
+/// The status line when Stop failed on `host` with `why`.
+fn not_stopped(host: &str, why: &str) -> String {
+    match why.strip_prefix("Julia was not stopped: ") {
+        Some(rest) => format!("Julia on {host} was not stopped: {rest}"),
+        None => format!("Couldn't stop Julia on {host}: {why}"),
+    }
+}
+
+/// The helper's "Julia was not stopped: <why>" as just the why, with a capital.
+fn stop_reason(why: &str) -> String {
+    let rest = why.strip_prefix("Julia was not stopped: ").unwrap_or(why);
+    let mut chars = rest.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Connection, Status, Steps, elapsed, percent};
+    use super::{Connection, Status, Steps, elapsed, not_restarted, not_stopped, percent};
+
+    #[test]
+    fn a_stop_that_fails_says_what_still_runs() {
+        assert_eq!(
+            not_restarted("Julia was not stopped: it is still running."),
+            "Julia didn't restart, so Endeavor is still using the Julia that was running. It is still running."
+        );
+        assert_eq!(
+            not_restarted("Endeavor's helper didn't answer in 60 s, so Julia may not have stopped."),
+            "Julia didn't restart, so Endeavor is still using the Julia that was running. Endeavor's helper didn't answer in 60 s, so Julia may not have stopped."
+        );
+        assert_eq!(not_stopped("lab", "Julia was not stopped: it is still running."), "Julia on lab was not stopped: it is still running.");
+        assert_eq!(not_stopped("lab", "The connection to Endeavor's helper closed."), "Couldn't stop Julia on lab: The connection to Endeavor's helper closed.");
+    }
     use std::time::{Duration, Instant};
 
     #[test]

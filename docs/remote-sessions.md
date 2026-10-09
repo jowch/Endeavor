@@ -110,7 +110,9 @@ agent's MCP config (`/mcp`, `agent.rs`), and the `/endeavor/events` watcher
 use `127.0.0.1` URLs on it. Each host
 has its own listener for the whole launch, so a session's MCP URL (and the
 token, kept in the host's state folder) survive reconnects and restarts. The
-app keeps one connection per host (`src/connection.rs`): its status
+channel and the listener are EndeavorMCP's (`endeavor_mcp::client::Channel`
+and `Listener`); the app adds its older-runtime guard to the listener
+(`src/runtime.rs`). The app keeps one connection per host (`src/connection.rs`): its status
 (connecting, browsing, starting, ready, died, replaced, failed), its askpass,
 and what it follows of the runtime. On quit, servers detach; their idle stop
 (the server's own setting, else Settings') covers forgotten notebooks.
