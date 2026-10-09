@@ -52,9 +52,10 @@ ED25519 key fingerprint is SHA256:q0dTLnd9XJbDBwu3vYQfZkLr0oTqPqJ8Ne2yTnA3o1E.
 This key is not known by any other names.
 Are you sure you want to continue connecting (yes/no/[fingerprint])? ")" = yes ] || { echo "Host key verification failed." >&2; exit 255; }"#;
 
-/// The library's record of `server`: the same JSON as the app's `hosts.json` entry.
-pub fn client_server(server: &Server) -> client::Server {
-    serde_json::to_value(server).ok().and_then(|value| serde_json::from_value(value).ok()).unwrap_or_default()
+/// The library's record of `server`: the same JSON as the app's `hosts.json`
+/// entry. An entry the library can't read is an error, not a blank server.
+pub fn client_server(server: &Server) -> Result<client::Server, String> {
+    serde_json::to_value(server).and_then(serde_json::from_value).map_err(|e| format!("Couldn't read the settings of {}: {e}", server.name))
 }
 
 /// The askpass for `server`'s ssh: each prompt goes to the app's modal as a
@@ -83,7 +84,7 @@ fn messages() -> client::Messages {
 /// state folder is the one this app has always used there, so a runtime that
 /// already runs is found. `on_event` hears its steps and trouble.
 pub fn open(server: &Server, auth: Auth, on_event: client::OnEvent) -> Result<Session, String> {
-    let mut config = client::Config::new(client_server(server), |os: &str, arch: &str| helper_for(os, arch));
+    let mut config = client::Config::new(client_server(server)?, |os: &str, arch: &str| helper_for(os, arch));
     config.transport = transport(server);
     let [_, state] = server.launcher();
     config.state = state;
@@ -102,7 +103,7 @@ pub fn test(server: &Server, auth: Auth, cancel: &Cancel, on: &dyn Fn(Event)) ->
     let [_, state] = server.launcher();
     let helper = |os: &str, arch: &str| helper_for(os, arch);
     let options = client::Options { auth, root: String::new(), state, depot: String::new(), exit_idle: false, allow_install: true, launcher: None, helper: &helper };
-    client::test(&client_server(server), &transport(server), &options, cancel, on)
+    client::test(&client_server(server)?, &transport(server), &options, cancel, on)
 }
 
 /// This app's helper and runtime, as the name of their folder on a server:
@@ -238,7 +239,7 @@ mod tests {
     #[test]
     fn a_server_record_reads_the_same_to_the_library() {
         let server = Server { id: "lab".into(), name: "Lab".into(), ssh_host: "jc@lab".into(), port: Some(2222), julia: Some("module load julia".into()), ..Server::default() };
-        let theirs = client_server(&server);
+        let theirs = client_server(&server).unwrap();
         assert_eq!((theirs.id.as_str(), theirs.name.as_str(), theirs.ssh_host.as_str(), theirs.port, theirs.julia.as_deref()), ("lab", "Lab", "jc@lab", Some(2222), Some("module load julia")));
         assert_eq!(theirs.julia_args(), server.julia_args(), "the helper gets the same Julia");
     }

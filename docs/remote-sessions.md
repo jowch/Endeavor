@@ -122,7 +122,12 @@ died, replaced, failed) and what it follows of the runtime. A server's comes
 from its session's state, read as it changes (`changes`). A drop that gets
 back to the same Julia within 2 s isn't shown at all (`LOST_GRACE`): the
 session usually has it back in well under a second, and Pluto's page
-reconnects by itself. The session is kept for the whole launch unless the
+reconnects by itself. A longer drop shows "Can't reach" with the page kept
+read-only, and once the session is back on the same Julia (same pid and node),
+however long it took, the page and its notebooks carry on: nothing is reopened
+or reloaded, since that would cut across the page's own reconnect. The
+app's Stop, Cancel and Restart force the stop, so a start the session resumed
+by itself after a drop is cancelled too. The session is kept for the whole launch unless the
 server's connection settings change, since its listener's port is in the MCP
 URL of the agents there; one that gave up is asked to try again. On quit, servers detach; their idle stop
 (the server's own setting, else Settings') covers forgotten notebooks.

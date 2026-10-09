@@ -102,6 +102,10 @@ pub struct Connection {
     /// got through (a bad host name while adding it, a wrong password): that
     /// stays "Not connected", with Reconnect.
     pub lost: Option<Lost>,
+    /// The Julia (pid, node) a server's dropped connection left running: a
+    /// line that gets back to it, however long the drop, carries on with the
+    /// page and notebooks as they were.
+    dropped: Option<(u32, String)>,
     /// Julia exited by itself (not a Stop, a restart or a quit), and hasn't
     /// been started since.
     pub crashed: bool,
@@ -231,6 +235,7 @@ impl Connection {
             watching: Arc::default(),
             older: None,
             lost: None,
+            dropped: None,
             crashed: false,
         }
     }
@@ -267,6 +272,14 @@ impl Connection {
         self.lost.get_or_insert(Lost { page: None, was });
         self.status = Status::Failed(error.to_owned());
         true
+    }
+
+    /// `runtime` is the Julia this server connection was on, still ready or
+    /// left by a drop: the line got back to it.
+    fn same_julia(&self, runtime: &Runtime) -> bool {
+        let ready = self.runtime.as_ref().filter(|_| self.status == Status::Ready).map(|r| (r.pid, &r.node));
+        let was = ready.or(self.dropped.as_ref().map(|(pid, node)| (*pid, node)));
+        was.is_some_and(|(pid, node)| pid == runtime.pid && *node == runtime.node)
     }
 
     /// Stop following the runtime that's going; `last_notebooks` stays for the reopen.
@@ -382,6 +395,7 @@ impl Workspace {
             connection.resume = old.resume;
             connection.failures = old.failures;
             connection.lost = old.lost;
+            connection.dropped = old.dropped;
         }
         self.connections.insert(host.clone(), connection);
         match host {
@@ -529,12 +543,16 @@ impl Workspace {
             }
             (None, Change::Lost(why)) => {
                 let Some(pid) = ready_pid else { return false };
-                line.held = Some(Held { pid, why: why.clone(), since: Vec::new() });
+                let id = next_connect_id();
+                line.held = Some(Held { id, pid, why: why.clone(), since: Vec::new() });
                 let host = host.clone();
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(LOST_GRACE).await;
                     let _ = this.update(cx, |this, cx| {
-                        this.release(&host, generation, cx);
+                        // This drop's hold only: a later one waits its own time.
+                        if this.lines.get(&host).and_then(|l| l.held.as_ref()).is_some_and(|h| h.id == id) {
+                            this.release(&host, generation, cx);
+                        }
                         this.sync_holds(cx);
                     });
                 })
@@ -879,9 +897,38 @@ impl Workspace {
                     }
                 }
             }
+            // Back on the same Julia, after a drop however long or a look that
+            // missed one: the page and its notebooks carry on, nothing reopens.
+            Update::Started(Ok(runtime)) if !local && connection.same_julia(&runtime) => {
+                let watched = connection.runtime.is_some();
+                connection.lost = None;
+                connection.dropped = None;
+                connection.job = None;
+                connection.failures = 0;
+                connection.steps.found_julia = true;
+                connection.status = Status::Ready;
+                connection.runtime = Some(runtime);
+                if !watched {
+                    self.watch_notebooks(&host, cx);
+                    self.warn_before_job_ends(&host, cx);
+                }
+                // A page let go meanwhile (another session was shown) loads as any switch does.
+                let shown = self.active_session().filter(|s| s.place.host == host).and_then(|s| s.notebook.clone());
+                let origin = self.connection(&host).and_then(|c| c.runtime.as_ref()).and_then(|r| Some(r.page_url.split_once('?')?.0.to_owned()));
+                if let (Some(id), Some(origin)) = (shown, origin)
+                    && !crate::webcontent::url(self.webview.read(cx).raw()).starts_with(&origin)
+                {
+                    self.load_notebook(&host, &id, cx);
+                }
+                let waiting: Vec<u64> = self.sessions.iter().filter(|s| s.place.host == host && s.agent_waiting).map(|s| s.key).collect();
+                for key in waiting {
+                    self.request_agent(key, cx);
+                }
+            }
             Update::Started(Ok(runtime)) => {
                 // The kept page gives way to the notebook reopened on the new connection.
                 connection.lost = None;
+                connection.dropped = None;
                 connection.job = None;
                 connection.failures = 0;
                 connection.steps.found_julia = true;
@@ -925,6 +972,7 @@ impl Workspace {
                 let was = connection.status.clone();
                 let gone = connection.forget_runtime();
                 let page = gone.as_ref().and_then(|r| r.page_url.split_once('?')).map(|(origin, _)| origin.to_owned()).filter(|_| shown);
+                connection.dropped = gone.filter(|_| was == Status::Ready).map(|r| (r.pid, r.node));
                 connection.unlink();
                 connection.status = Status::Failed(reason);
                 connection.lost = Some(Lost { page, was });
@@ -936,6 +984,7 @@ impl Workspace {
             Update::Notice(notice) => {
                 // Heard only when Julia went by itself: the app's own stops leave first.
                 let crashed = matches!(notice, Notice::Died(_)).then(|| crate::crash::running_notebooks(&connection.notebooks));
+                connection.dropped = None;
                 let gone = connection.forget_runtime();
                 connection.status = match notice {
                     Notice::Died(reason) => {
@@ -1363,6 +1412,7 @@ impl Workspace {
             connection.forget_runtime()
         };
         connection.stop_when_connected = false;
+        connection.dropped = None;
         connection.stopping = true;
         connection.found = None;
         connection.check += 1;
@@ -1668,6 +1718,8 @@ pub(crate) struct Line {
 /// A drop the line may get over by itself: told only if it doesn't come back
 /// to the same runtime within `LOST_GRACE`, with what it heard meanwhile.
 struct Held {
+    /// Tells this hold from a later one, for its timer.
+    id: u64,
     pid: u32,
     why: String,
     since: Vec<Change>,
@@ -1772,6 +1824,8 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
         return out;
     }
     match (before, after) {
+        // The same Julia, seen again (attached anew after a drop the looks missed).
+        (Phase::Ready(was), Phase::Ready(runtime)) if (was.pid, &was.node) == (runtime.pid, &runtime.node) => {}
         (_, Phase::Ready(runtime)) => {
             if !matches!(last.state, LineState::Starting { .. } | LineState::Queued(_)) {
                 out.push(Change::Starting);
@@ -1840,11 +1894,12 @@ impl Helper {
         }
     }
 
-    /// Stop Julia there, or the start under way. Blocks.
+    /// Stop Julia there, or the start under way, even one another connection
+    /// began (a start the line resumed after a drop, or the plugin's). Blocks.
     pub fn stop(&self) -> Result<(), String> {
         match self {
-            Helper::Local(channel) => channel.stop(),
-            Helper::Line(session) => session.stop(),
+            Helper::Local(channel) => channel.force_stop(),
+            Helper::Line(session) => session.force_stop(),
         }
     }
 }
@@ -2012,7 +2067,7 @@ fn stop_reason(why: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, not_restarted, not_stopped, percent};
+    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, not_restarted, not_stopped, percent, runtime_of};
 
     fn line(state: LineState, node: &str) -> LineStatus {
         let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
@@ -2053,6 +2108,26 @@ mod tests {
         // An attach (a line asked to try again after it gave up) that finds nothing running.
         assert!(changes(&connected, &line(LineState::NothingRunning, "lab")).is_empty());
         assert_eq!(changes(&line(LineState::NothingRunning, "lab"), &starting), [Change::Starting]);
+        // A stop refused while a start goes on (a helper that can't force it) ends that start's wait.
+        let refused = "Julia was not stopped: it is still starting. Try again once it is up, or force the stop to cancel the start.";
+        assert_eq!(changes(&starting, &line(LineState::Failed(refused.into()), "lab")), [Change::StartFailed(refused.into())]);
+        // The same Julia seen again, attached anew: nothing to tell.
+        assert!(changes(&ready, &line(LineState::Ready(client::RuntimeInfo { reattached: true, ..runtime(7) }), "lab")).is_empty());
+        assert_eq!(changes(&ready, &line(LineState::Ready(runtime(8)), "lab")), [Change::Starting, Change::Started(runtime(8))], "another Julia");
+    }
+
+    #[test]
+    fn a_server_connection_that_gets_back_to_its_julia_carries_on() {
+        let mut c = Connection::new(1, Status::Failed("Can't reach lab".into()), Steps::new("Connecting to lab"));
+        c.dropped = Some((7, "lab".into()));
+        assert!(c.same_julia(&runtime_of(runtime(7))), "however long the drop");
+        assert!(!c.same_julia(&runtime_of(runtime(8))), "a new Julia reopens its notebooks");
+        assert!(!c.same_julia(&runtime_of(client::RuntimeInfo { node: "node2".into(), ..runtime(7) })), "a pid on another node is another Julia");
+        c.dropped = None;
+        assert!(!c.same_julia(&runtime_of(runtime(7))), "nothing dropped, nothing to carry on");
+        c.status = Status::Ready;
+        c.runtime = Some(runtime_of(runtime(7)));
+        assert!(c.same_julia(&runtime_of(client::RuntimeInfo { reattached: true, ..runtime(7) })), "seen again while ready");
     }
 
     #[test]
