@@ -127,16 +127,18 @@ under the user's own `%LOCALAPPDATA%`.
 
 **The app:**
 
-- `src/platform.rs`, `overlay`: no holes in the web view, so menus, tips,
-  Settings and dialogs show under the notebook. Needs `SetWindowRgn`, or
-  hiding the web view while one is open.
+- `src/overlay_windows.rs`: menus, tips, Settings and dialogs over the
+  notebook get a hole cut in the web view's window with `SetWindowRgn`, and
+  the window is disabled while a menu or popover is open, so a click on the
+  notebook reaches GPUI and closes it. Not yet tried on a Windows machine.
+  As on Linux, the web view isn't dimmed behind Settings.
 - `src/platform.rs`, `webcontent`: a crashed WebView2 process isn't noticed
   (`ProcessFailed`), find in the notebook always says "Not found", and
   `has_keyboard` is always false. `url` and `give_keyboard` (wry's `focus`)
   are real.
-- `src/platform.rs`, `web_view_hooks` and `init`: nothing, so app shortcuts
-  don't reach GPUI while the notebook has the keyboard. Needs WebView2's
-  `AcceleratorKeyPressed`.
+- `src/platform.rs`, `web_view_hooks` and `init`: a click in GPUI gives
+  GPUI's window the keyboard, but app shortcuts still don't reach GPUI while
+  the notebook has the keyboard. Needs WebView2's `AcceleratorKeyPressed`.
 - `src/platform.rs`, `reduces_motion`: always false. Needs
   `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`.
 - `src/platform.rs`, `set_open_panel_message`, `snapshot`, `dialogs`: the
@@ -338,13 +340,11 @@ code that runs only with servers, and upload names.
 
 ### Notebook view (M–L, about 1–1.5 weeks)
 
-- **Menus over the notebook (M).** WebView2 is a child window, so it draws
-  above GPUI's content, as on Linux, so today GPUI's tips and menus draw
-  under the notebook. Port `overlay::set_hole` by cutting a hole in the web
-  view window with `SetWindowRgn`. With DirectComposition off, GPUI draws
-  as ordinary parent-window content, which should show through the hole;
-  that is still untested. The fallback is to hide the web view while a menu
-  is open.
+- **Menus over the notebook (M).** Written, untried: WebView2 is a child
+  window, so it draws above GPUI's content, as on Linux. `overlay::set_hole`
+  cuts a hole in the web view's window with `SetWindowRgn`; with
+  DirectComposition off, GPUI's own drawing should show through it. If it
+  doesn't, the fallback is to hide the web view while a menu is open.
 - **App shortcuts while the notebook has focus (M).** Use WebView2's
   `AcceleratorKeyPressed` to send Ctrl+B, Ctrl+Q, Ctrl+, Ctrl+Shift+E (Point) and the zoom keys to
   GPUI actions (the macOS version is `webkeys.rs`). Turn off browser
