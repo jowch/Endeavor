@@ -221,7 +221,8 @@ pub fn application() -> gpui::Application {
     // Julia, Node and the agent don't inherit it. A value already set wins.
     const VAR: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
     let ours = std::env::var_os(VAR).is_none();
-    // SAFETY: no other thread runs yet; GPUI starts its threads in application().
+    // SAFETY: on Windows, std's set_var and remove_var are safe even with other
+    // threads running (GPUI may have started some by the time we remove it).
     if ours {
         unsafe { std::env::set_var(VAR, "1") };
     }
