@@ -2,7 +2,8 @@
 # (docs/windows.md). Tests that need Unix (sh, signals, Unix sockets, tar, the
 # #!/bin/sh stand-in Julia) are compiled out with cfg(unix); tests that wait
 # on parts not yet ported to Windows (paths, home and app data folders,
-# downloads) are ignored there with that reason.
+# downloads) are ignored there with that reason. On main and on pull requests
+# it also keeps a release build a tester can unzip and run (docs/windows.md).
 name: Windows
 
 on:
@@ -13,6 +14,9 @@ on:
 concurrency:
   group: windows-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -31,3 +35,54 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: Test
         run: cargo test --locked --workspace --no-fail-fast
+
+  # A release build: debug builds compile their shaders at launch from the
+  # crate's source folder, so they run only where they were built. The
+  # artifact holds Endeavor\bin\endeavor.exe and Endeavor\Resources\, the
+  # layout install::resources() looks for (the exe's folder's parent). Julia,
+  # Node and the agents are installed on first run, as on macOS.
+  # ponytail: no installer, no signing and no server helpers (#12; Windows
+  # can't connect to servers yet).
+  package:
+    name: windows-x86_64 build
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    steps:
+      - name: Git
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      # The C runtime linked in, so the exe doesn't need the Visual C++
+      # Redistributable. WebView2's loader is linked in on MSVC already
+      # (webview2-com-sys links WebView2LoaderStatic).
+      - name: Build
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --locked --release -p endeavor --bin endeavor
+      # Fails if the exe needs a DLL that a fresh Windows doesn't have.
+      - name: Check the DLLs it needs
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          $dlls = & $dumpbin.FullName /nologo /dependents target\release\endeavor.exe | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '\.dll$' }
+          $dlls
+          if (-not ($dlls -match '^kernel32\.dll$')) { Write-Error "Couldn't read endeavor.exe's imports"; exit 1 }
+          $extra = $dlls | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vccorlib|ucrtbased|webview2loader)' }
+          if ($extra) { Write-Error "endeavor.exe needs DLLs Windows doesn't ship: $extra"; exit 1 }
+      - name: Lay out
+        id: layout
+        shell: bash
+        run: |
+          mkdir -p dist/Endeavor/bin dist/Endeavor/Resources
+          cp target/release/endeavor.exe dist/Endeavor/bin/
+          cp -R adapter adapter-codex dist/Endeavor/Resources/
+          echo "build=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Endeavor-windows-x86_64-${{ steps.layout.outputs.build }}
+          path: dist/
+          retention-days: 30
