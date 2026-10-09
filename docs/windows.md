@@ -356,7 +356,10 @@ code that runs only with servers, and upload names.
   (Julia's `--version`, curl, tar, Node, npm, the sign-in CLI) with
   `CREATE_NO_WINDOW`; the core does the same for Julia. `logs.rs` makes the
   log file the app's stdout and stderr (`SetStdHandle`), so on Windows the
-  app's output goes there even when it is started from a terminal.
+  app's output goes there even when it is started from a terminal. Run by
+  hand in cmd or PowerShell (for example with `--helper` while debugging),
+  `endeavor.exe` returns to the prompt at once and prints nothing there; pipe
+  its output (`2>&1 | Out-Host`) to see it.
 - **Network-change watch (S).** Only macOS and Linux versions exist
   (`src/network.rs`). Windows: `NotifyIpInterfaceChange` or
   `INetworkListManager`.
