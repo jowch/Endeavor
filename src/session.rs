@@ -419,6 +419,9 @@ pub struct Session {
     older_note: bool,
     /// The runtime's asks this session has shown or answered, so none shows twice.
     seen_asks: HashSet<u64>,
+    /// This session's asks no call waits on now (the agent stopped waiting
+    /// and was told to make the same call again later): their cards outlast the turn.
+    left_up: HashSet<u64>,
     /// Work for the workspace from an answer given outside `apply` (a click,
     /// a key, the user's own run): taken with `take_later`.
     later: Vec<Effect>,
@@ -641,6 +644,7 @@ impl Session {
             runtime_older: None,
             older_note: false,
             seen_asks: HashSet::new(),
+            left_up: HashSet::new(),
             later: Vec::new(),
             resources: None,
             start_mode: None,
@@ -1383,7 +1387,7 @@ impl Session {
                     let percent = before.filter(|(_, size)| *size > 0).map(|(used, size)| used * 100 / size);
                     self.summarized = Some((SystemTime::now(), percent));
                 }
-                self.drop_prompts();
+                self.drop_prompts(reason != StopReason::Cancelled);
                 self.turn_ended(&mut effects);
             }
             SessionEvent::AuthRequired => {
@@ -1557,7 +1561,7 @@ impl Session {
             self.cut_off = true;
             self.errored = true;
         }
-        self.drop_prompts();
+        self.drop_prompts(true);
         self.mark(0);
         self.turn_entry = None;
         self.busy_since = None;
@@ -1944,14 +1948,20 @@ impl Session {
     /// stopped): their cards go, and a note says which went unanswered. A
     /// run the runtime still holds is denied, so it can't happen after the
     /// turn: an agent that gives up waiting and ends its turn (Codex, after
-    /// about two minutes) never cancels the call itself.
-    fn drop_prompts(&mut self) {
+    /// about two minutes) never cancels the call itself. A runtime ask no
+    /// call waits on stays up (`keep_left_up`, unless the user stopped the
+    /// turn): the runtime keeps the answer for the agent's same call later.
+    fn drop_prompts(&mut self, keep_left_up: bool) {
         let agent = self.agent.name();
         let mut notes = Vec::new();
         for ix in self.waiting_prompts() {
             let heading = crate::approval::heading_at(self, ix).map(|h| h.replace('`', ""));
             if let Some(Entry::Permission { responder, .. }) = self.entries.get_mut(ix) {
                 match responder.take() {
+                    Some(Asker::Runtime(ask)) if keep_left_up && self.left_up.contains(&ask) => {
+                        *responder = Some(Asker::Runtime(ask));
+                        continue;
+                    }
                     Some(Asker::Agent(responder)) => {
                         let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
                         notes.extend(heading.map(|h| format!("{agent} stopped before you answered “{h}”")));
@@ -2132,6 +2142,12 @@ impl Session {
             Asker::Runtime(ask) => {
                 let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
                 self.later.push(Effect::AnswerRun { ask, allow, user_ran });
+                // A card kept past the turn: nothing runs until the agent makes the call again.
+                if allow && self.left_up.contains(&ask) && self.busy_since.is_none() {
+                    self.record_answer(ix, option, scope);
+                    self.note(format!("Allowed. {} goes ahead when you reply", self.agent.name()));
+                    return;
+                }
             }
         }
         self.record_answer(ix, option, scope);
@@ -2162,6 +2178,8 @@ impl Session {
         let key = self.key.to_string();
         let mine: Vec<&serde_json::Value> = asks.iter().filter(|a| a["owner"] == key.as_str()).collect();
         let waiting: HashSet<u64> = mine.iter().filter_map(|a| a["id"].as_u64()).collect();
+        // An older runtime doesn't say, and its asks always have a call waiting.
+        self.left_up = mine.iter().filter(|a| a["waiting"] == false).filter_map(|a| a["id"].as_u64()).collect();
         let gone: Vec<usize> = self
             .entries
             .iter()
@@ -2662,6 +2680,25 @@ mod tests {
         assert!(s.take_later().is_empty(), "nothing to answer");
 
         s.runtime_asks_now(&[ask(42, Some("t1"))]);
+        s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
+        assert_eq!(answers(&s.take_later()), [(42, false, &[][..])], "stopping the turn denies it");
+    }
+
+    #[test]
+    fn a_card_no_call_waits_on_outlasts_the_turn_unless_the_user_stopped_it() {
+        let left_up = |id| serde_json::json!({ "id": id, "owner": "7", "call_id": "t1", "tool": "execute_cell", "arguments": { "cell_id": "a" }, "since": 1.0, "waiting": false });
+        let mut s = asking_session();
+        s.runtime_asks_now(&[ask(41, Some("t1"))]);
+        s.runtime_asks_now(&[left_up(41)]);
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        assert!(s.pending_permission().is_some() && s.take_later().is_empty(), "kept, not refused");
+        assert!(!matches!(s.entries.last(), Some(Entry::Note(n)) if n.contains("stopped")));
+        // Answered after the turn: the runtime keeps it for the agent's same call, and a note says when it runs.
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
+        assert_eq!(answers(&s.take_later()), [(41, true, &[][..])]);
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n == "Allowed. Claude goes ahead when you reply"));
+
+        s.runtime_asks_now(&[left_up(42)]);
         s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
         assert_eq!(answers(&s.take_later()), [(42, false, &[][..])], "stopping the turn denies it");
     }
