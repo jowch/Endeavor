@@ -1,6 +1,6 @@
 //! Endeavor ▸ About Endeavor: a small window with the icon, version and build,
-//! credits, Website and Licences links, and a strip of update notices at the
-//! bottom. Licences opens a second window listing the parts Endeavor ships or
+//! credits, Website and Licences links, and, when there is an update to
+//! act on, a strip of update notices at the bottom. Licences opens a second window listing the parts Endeavor ships or
 //! installs and their licences.
 
 use std::sync::Arc;
@@ -18,8 +18,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD: &str = env!("ENDEAVOR_BUILD");
 const ICON: &[u8] = include_bytes!("../assets/icon/endeavor-256.png");
 
-/// What the app knows about updates. The app can't update itself yet, so
-/// `app` is always `None` for now; the notice for it is drawn by the same code.
+/// What the app knows about updates. The app can't update itself or check for
+/// a newer version yet, so `app` is always `None` for now, and nothing claims
+/// it is up to date; the notice for an update is drawn by the same code.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Updates {
     /// A newer Endeavor, downloaded and ready once the app restarts.
@@ -40,7 +41,6 @@ pub enum Adapter {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    CheckNow,
     Restart,
     UpdateAdapter,
 }
@@ -50,29 +50,24 @@ pub enum Action {
 pub struct Notice {
     pub text: String,
     pub button: Option<(&'static str, Action, bool)>,
-    /// The quiet "everything is up to date" row: a check mark instead of a dot.
-    pub ok: bool,
 }
 
-/// The strip's rows, top to bottom. The app update comes first and gets the
-/// orange button because it needs a restart; the adapter's button is then secondary.
+/// The strip's rows, top to bottom; none when there's nothing to act on. The
+/// app update comes first and gets the orange button because it needs a
+/// restart; the adapter's button is then secondary.
 pub fn notices(updates: &Updates) -> Vec<Notice> {
     let mut rows = Vec::new();
     if let Some(version) = &updates.app {
-        rows.push(Notice { text: format!("Endeavor {version} is ready to install."), button: Some(("Restart", Action::Restart, true)), ok: false });
+        rows.push(Notice { text: format!("Endeavor {version} is ready to install."), button: Some(("Restart", Action::Restart, true)) });
     }
     let primary = updates.app.is_none();
     match &updates.adapter {
         Adapter::Current => {}
-        Adapter::Installing(version) => rows.push(Notice { text: format!("Installing Claude Code adapter {version}…"), button: None, ok: false }),
+        Adapter::Installing(version) => rows.push(Notice { text: format!("Installing Claude Code adapter {version}…"), button: None }),
         Adapter::Available(version) => rows.push(Notice {
             text: format!("Claude Code adapter {version} is available."),
             button: Some(("Update", Action::UpdateAdapter, primary)),
-            ok: false,
         }),
-    }
-    if rows.is_empty() {
-        rows.push(Notice { text: "Everything is up to date.".into(), button: Some(("Check now", Action::CheckNow, false)), ok: true });
     }
     rows
 }
@@ -93,7 +88,8 @@ pub struct UpdateRow {
 pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
     let app = match &updates.app {
         Some(version) => UpdateRow { key: "update-endeavor", name: "Endeavor", state: format!("Version {version} is ready. It installs when Endeavor restarts."), button: Some(("Restart", Action::Restart, true)), attention: true },
-        None => UpdateRow { key: "update-endeavor", name: "Endeavor", state: "Up to date".into(), button: Some(("Check now", Action::CheckNow, false)), attention: false },
+        // No "Up to date" or Check now: the app can't check yet (see `Updates`).
+        None => UpdateRow { key: "update-endeavor", name: "Endeavor", state: format!("Version {VERSION}"), button: None, attention: false },
     };
     let primary = updates.app.is_none();
     let (state, button, attention) = match &updates.adapter {
@@ -168,19 +164,13 @@ struct About {
 impl About {
     fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         match action {
-            // The notices are read afresh on every render.
-            Action::CheckNow => cx.notify(),
             Action::Restart => cx.restart(),
             Action::UpdateAdapter => drop(self.workspace.update(cx, |ws, cx| ws.update_adapter(cx))),
         }
     }
 
     fn notice_row(&self, i: usize, notice: Notice, cx: &mut Context<Self>) -> Div {
-        let marker = if notice.ok {
-            div().text_color(theme::diff_add()).child("✓")
-        } else {
-            div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::accent())
-        };
+        let marker = div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::accent());
         let button = notice.button.map(|(label, action, primary)| {
             let b = div()
                 .id(("notice", i))
@@ -188,19 +178,15 @@ impl About {
                 .flex_shrink_0()
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| this.act(action, cx)));
-            if action == Action::CheckNow {
-                b.text_color(theme::text_muted()).hover(|s| s.text_color(theme::text_secondary())).child(label)
-            } else {
-                b.h(px(24.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(6.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .when(primary, |b| b.bg(theme::accent()).text_color(gpui::white()))
-                    .when(!primary, |b| b.bg(theme::bg_raised()).text_color(theme::text_primary()))
-                    .child(label)
-            }
+            b.h(px(24.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .font_weight(FontWeight::MEDIUM)
+                .when(primary, |b| b.bg(theme::accent()).text_color(gpui::white()))
+                .when(!primary, |b| b.bg(theme::bg_raised()).text_color(theme::text_primary()))
+                .child(label)
         });
         div()
             .min_h(px(24.))
@@ -270,20 +256,22 @@ impl Render for About {
             .font_family(theme::SANS)
             .text_size(theme::size_body())
             .child(body)
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .border_t_1()
-                    .border_color(theme::border())
-                    .bg(theme::about_footer())
-                    .px(px(16.))
-                    .py(px(10.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .text_size(theme::size_meta())
-                    .children(rows),
-            )
+            .when(!rows.is_empty(), |d| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .border_t_1()
+                        .border_color(theme::border())
+                        .bg(theme::about_footer())
+                        .px(px(16.))
+                        .py(px(10.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .text_size(theme::size_meta())
+                        .children(rows),
+                )
+            })
     }
 }
 
@@ -433,26 +421,24 @@ impl Render for Licences {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Adapter, BUILD, Notice, Updates, notices, parts};
+    use super::{Action, Adapter, BUILD, Notice, Updates, VERSION, notices, parts};
 
     #[test]
     fn settings_lists_each_part_with_its_own_button() {
         let current = parts(&Updates { app: None, adapter: Adapter::Current });
-        let rows: Vec<_> = current.iter().map(|p| (p.name, p.state.as_str(), p.button.map(|b| b.0))).collect();
-        assert_eq!(rows, [("Endeavor", "Up to date", Some("Check now")), ("Claude Code adapter", "Up to date", None)]);
+        let rows: Vec<_> = current.iter().map(|p| (p.name, p.state.clone(), p.button.map(|b| b.0))).collect();
+        assert_eq!(rows, [("Endeavor", format!("Version {VERSION}"), None), ("Claude Code adapter", "Up to date".into(), None)]);
         let adapter = parts(&Updates { app: None, adapter: Adapter::Available("0.4".into()) });
         assert_eq!((adapter[1].state.as_str(), adapter[1].button, adapter[1].attention), ("Version 0.4 is available", Some(("Update", Action::UpdateAdapter, true)), true));
         let both = parts(&Updates { app: Some("0.2.0".into()), adapter: Adapter::Available("0.4".into()) });
         assert_eq!((both[0].button, both[1].button), (Some(("Restart", Action::Restart, true)), Some(("Update", Action::UpdateAdapter, false))));
     }
 
+    /// The app can't check for a newer version yet, so with nothing to act on
+    /// the strip is empty rather than claiming the app is up to date.
     #[test]
-    fn up_to_date_offers_check_now() {
-        let rows = notices(&Updates { app: None, adapter: Adapter::Current });
-        assert_eq!(
-            rows,
-            vec![Notice { text: "Everything is up to date.".into(), button: Some(("Check now", Action::CheckNow, false)), ok: true }]
-        );
+    fn nothing_to_act_on_shows_no_notice() {
+        assert_eq!(notices(&Updates { app: None, adapter: Adapter::Current }), vec![]);
     }
 
     #[test]
@@ -463,7 +449,6 @@ mod tests {
             vec![Notice {
                 text: "Claude Code adapter 0.82.0 is available.".into(),
                 button: Some(("Update", Action::UpdateAdapter, true)),
-                ok: false
             }]
         );
     }
@@ -484,7 +469,7 @@ mod tests {
     #[test]
     fn installing_adapter_has_no_button() {
         let rows = notices(&Updates { app: None, adapter: Adapter::Installing("0.82.0".into()) });
-        assert_eq!(rows, vec![Notice { text: "Installing Claude Code adapter 0.82.0…".into(), button: None, ok: false }]);
+        assert_eq!(rows, vec![Notice { text: "Installing Claude Code adapter 0.82.0…".into(), button: None }]);
     }
 
     #[test]

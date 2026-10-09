@@ -79,5 +79,6 @@ See [Troubleshooting](./troubleshooting.md).
 ## About
 
 The version of Endeavor, and of the Claude Code adapter it uses to talk to
-Claude. The app can't update itself yet, so its row says "Up to date" even
-when a newer Endeavor exists.
+Claude. Endeavor can't check for a newer version or update itself yet, so
+its row shows only the version you have; a new version comes as a new
+download from the website.

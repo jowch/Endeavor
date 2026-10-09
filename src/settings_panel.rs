@@ -891,7 +891,7 @@ impl Workspace {
             .collect();
         vec![
             group(None, vec![Item::Brand]),
-            group(Some("Updates"), rows).foot("The adapter is how Endeavor talks to Claude. The About window shows the same updates."),
+            group(Some("Updates"), rows).foot("Endeavor doesn't check for a newer version yet. The adapter is how Endeavor talks to Claude; a new Endeavor brings a new one. The About window shows the same updates."),
             group(
                 None,
                 vec![Item::Links(vec![
@@ -1259,7 +1259,6 @@ impl Workspace {
             Act::ShowLogs => crate::logs::reveal(),
             Act::Report => cx.open_url(about::REPORT_ISSUE),
             Act::Update(action) => match action {
-                about::Action::CheckNow => {}
                 about::Action::Restart => cx.restart(),
                 about::Action::UpdateAdapter => self.update_adapter(cx),
             },
