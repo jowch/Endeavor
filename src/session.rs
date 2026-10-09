@@ -155,6 +155,15 @@ impl FailedKind {
 /// What Continue sends, as a message of its own.
 pub const CONTINUE: &str = "Continue from where you stopped.";
 
+/// What the transcript shows for the message Allow sends on a card kept past the turn.
+pub const GO_AHEAD: &str = "Go ahead";
+
+/// The message Allow sends on a card kept past the turn: the agent stopped waiting on its call, and
+/// the runtime holds the approval for the same call made again.
+fn go_ahead(tool: &str) -> String {
+    format!("[Endeavor] The user allowed your request to call `{tool}`. Call `{tool}` again with the same arguments now: it goes ahead without asking again.")
+}
+
 /// Why a reply stopped partway, for a turn that ended at one of the agent's limits.
 fn partway_reason(reason: StopReason, agent: Agent) -> Option<&'static str> {
     match reason {
@@ -2138,10 +2147,16 @@ impl Session {
             Asker::Runtime(ask) => {
                 let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
                 self.later.push(Effect::AnswerRun { ask, allow, user_ran });
-                // A card kept past the turn: nothing runs until the agent makes the call again.
+                // A card kept past the turn: nothing runs until the agent makes the call again, so
+                // "Go ahead" starts a turn for it, unless a message of the user's is already waiting to.
                 if allow && self.left_up.contains(&ask) && self.busy_since.is_none() {
+                    let tool = self.entries.get(ix).and_then(|e| if let Entry::Permission { tool, .. } = e { tool.clone() } else { None }).unwrap_or_default();
                     self.record_answer(ix, option, scope);
-                    self.note(format!("Allowed. {} goes ahead when you reply", self.agent.name()));
+                    if self.outbox.items.is_empty() && !self.outbox.busy {
+                        let blocks = vec![ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(go_ahead(&tool)))];
+                        let effects = self.submit(Queued::new(GO_AHEAD.into(), Vec::new(), blocks), false);
+                        self.later.extend(effects);
+                    }
                     return;
                 }
             }
@@ -2689,10 +2704,15 @@ mod tests {
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(s.pending_permission().is_some() && s.take_later().is_empty(), "kept, not refused");
         assert!(!matches!(s.entries.last(), Some(Entry::Note(n)) if n.contains("stopped")));
-        // Answered after the turn: the runtime keeps it for the agent's same call, and a note says when it runs.
+        // Allowed after the turn: the runtime keeps it for the agent's same call, and "Go ahead" starts a turn for it.
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
-        assert_eq!(answers(&s.take_later()), [(41, true, &[][..])]);
-        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n == "Allowed. Claude goes ahead when you reply"));
+        let later = s.take_later();
+        assert_eq!(answers(&later), [(41, true, &[][..])]);
+        let sent: Vec<String> = later.iter().filter_map(|e| match e {
+            Effect::Send(Turn::Prompt(blocks)) => Some(blocks.iter().filter_map(|b| if let agent_client_protocol::schema::v1::ContentBlock::Text(t) = b { Some(t.text.clone()) } else { None }).collect::<String>()),
+            _ => None,
+        }).collect();
+        assert!(matches!(sent.as_slice(), [one] if one.contains("Call `execute_cell` again with the same arguments")), "{sent:?}");
 
         s.runtime_asks_now(&[left_up(42)]);
         s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
