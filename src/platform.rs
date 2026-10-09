@@ -2,7 +2,8 @@
 //! wry: showing a file, reading system settings, and hosting the notebook's web
 //! view. On Linux the web view is WebKitGTK in an X11 child window, so GTK has
 //! to be started and its events run. `src/linux/` has the Linux versions of the
-//! macOS-only fixes. Windows has only stubs so far (docs/windows.md).
+//! macOS-only fixes. Windows has some of them; the rest are stubs
+//! (docs/windows.md).
 
 use std::path::Path;
 
@@ -185,10 +186,34 @@ pub fn bring_all_to_front(cx: &mut gpui::App) {
 }
 
 /// On macOS AppKit keeps the web view in step with the window by itself.
-/// Windows has nothing to hook yet: WebView2's keys and focus aren't ported.
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 pub fn web_view_hooks() -> impl gpui::IntoElement {
     gpui::Empty
+}
+
+/// Drawn in the workspace every frame. A click GPUI gets was outside the web
+/// view (or in a hole cut in it), so the keyboard goes to GPUI's window, as on
+/// Linux. gpui-wry does this only outside the web view's bounds, so without it
+/// a click in Settings over the notebook left the keyboard in the notebook.
+/// WebView2's own keys aren't ported (docs/windows.md).
+#[cfg(windows)]
+pub fn web_view_hooks() -> impl gpui::IntoElement {
+    use gpui::Styled;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    gpui::canvas(
+        |_, _, _| (),
+        |_, _, window, _| {
+            let Ok(handle) = window.window_handle() else { return };
+            let RawWindowHandle::Win32(handle) = handle.as_raw() else { return };
+            let hwnd = handle.hwnd.get() as usize;
+            window.on_mouse_event(move |_: &gpui::MouseDownEvent, phase, _, _| {
+                if phase.capture() {
+                    unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(hwnd as _) };
+                }
+            });
+        },
+    )
+    .absolute()
 }
 
 #[cfg(target_os = "linux")]
@@ -318,33 +343,9 @@ pub mod dialogs {
     pub fn show_page_dialogs(_: &wry::WebView) {}
 }
 
-/// Not ported: menus over the notebook need a hole cut in WebView2's window
-/// with SetWindowRgn, or the web view hidden while one is open. Until then they
-/// show under the notebook.
 #[cfg(windows)]
-pub mod overlay {
-    use gpui::{Bounds, Pixels};
-
-    /// What a hole in the web view is for; each has at most one.
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    pub enum Hole {
-        Menu,
-        Tip,
-        Tooltip,
-        /// The Settings panel.
-        Settings,
-        /// The confirm dialog.
-        Confirm,
-        /// A one-off failure's notice.
-        Notice,
-    }
-
-    pub fn set_dismiss_on_click(_: &wry::WebView, _: bool) {}
-
-    pub fn set_dimmed(_: &wry::WebView, _: bool) {}
-
-    pub fn set_hole(_: &wry::WebView, _: Hole, _: Option<Bounds<Pixels>>) {}
-}
+#[path = "overlay_windows.rs"]
+pub mod overlay;
 
 /// WebView2's side of the notebook. Not ported: its process ending
 /// (`ProcessFailed`), find in the page, and whether it has the keyboard.
