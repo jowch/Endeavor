@@ -160,8 +160,10 @@ fn save_json(name: &str, value: &impl serde::Serialize) {
 /// doesn't parse reads as the default, and is first set aside (see `set_aside`)
 /// so the next save can't overwrite what's left of it.
 fn load_json_at<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
-    let Ok(text) = std::fs::read_to_string(path) else { return T::default() };
-    serde_json::from_str(&text).unwrap_or_else(|e| {
+    // Bytes, not a string: a file cut inside a multi-byte character must count
+    // as one that doesn't parse, not as no file.
+    let Ok(bytes) = std::fs::read(path) else { return T::default() };
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
         set_aside(path, &e);
         T::default()
     })
@@ -183,8 +185,11 @@ fn save_json_at(path: &Path, value: &impl serde::Serialize) {
 /// flush it to disk, then rename it over the old one.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    // One write at a time in this process, so two saves of the same file
-    // can't share the temporary file.
+    // One write at a time in this whole process (not per file, on purpose:
+    // these files are small), so two saves of one file can't share its
+    // `.partial`. ponytail: `sync_all` runs on the caller's thread, the UI
+    // thread for most saves; fine for user actions and turn ends, not for a
+    // hot path.
     static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(parent) = path.parent() {
@@ -206,12 +211,15 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// `std::fs::rename`, which replaces an existing file on every platform. On
 /// Windows it fails while another program (a virus scanner, the search
-/// indexer) has the old file open without sharing it, so try a few more times.
+/// indexer) has either file open without sharing it, most often the scanner
+/// checking the `.partial` just closed, so try a few more times.
 fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
+    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+    const HELD: [i32; 3] = [5, 32, 33];
     let mut tries = 0;
     loop {
         match std::fs::rename(from, to) {
-            Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied && tries < 5 => {
+            Err(e) if cfg!(windows) && e.raw_os_error().is_some_and(|code| HELD.contains(&code)) && tries < 5 => {
                 tries += 1;
                 std::thread::sleep(Duration::from_millis(20 * tries));
             }
@@ -2804,6 +2812,21 @@ mod tests {
 
         save_json_at(&file, &HashMap::from([("session-2".to_string(), "b.jl".to_string())]));
         assert_eq!(std::fs::read_to_string(dir.join("sessions.json.bad")).unwrap(), "{\"session-1\": \"a.j");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cut inside a multi-byte character (an é in a title) leaves bytes that
+    /// aren't UTF-8; that file is set aside too, not read as missing.
+    #[test]
+    fn a_file_cut_mid_character_is_set_aside_too() {
+        let dir = std::env::temp_dir().join(format!("endeavor-test-torn-utf8-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let file = dir.join("titles.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&file, b"{\"session-1\": \"Caf\xC3").unwrap();
+
+        let loaded: HashMap<String, String> = load_json_at(&file);
+        assert!(loaded.is_empty());
+        assert_eq!(std::fs::read(dir.join("titles.json.bad")).unwrap(), b"{\"session-1\": \"Caf\xC3");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
