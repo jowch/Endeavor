@@ -2,7 +2,8 @@
 //! wry: showing a file, reading system settings, and hosting the notebook's web
 //! view. On Linux the web view is WebKitGTK in an X11 child window, so GTK has
 //! to be started and its events run. `src/linux/` has the Linux versions of the
-//! macOS-only fixes. Windows has only stubs so far (docs/windows.md).
+//! macOS-only fixes. Windows has some of them; the rest are stubs
+//! (docs/windows.md).
 
 use std::path::Path;
 
@@ -185,10 +186,50 @@ pub fn bring_all_to_front(cx: &mut gpui::App) {
 }
 
 /// On macOS AppKit keeps the web view in step with the window by itself.
-/// Windows has nothing to hook yet: WebView2's keys and focus aren't ported.
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 pub fn web_view_hooks() -> impl gpui::IntoElement {
     gpui::Empty
+}
+
+/// Whether GPUI's window had the pointer in the last frame `web_view_hooks` drew.
+#[cfg(windows)]
+static WAS_HOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Drawn in the workspace every frame. A click GPUI gets was outside the web
+/// view (or in a hole cut in it), so the keyboard goes to GPUI's window, as on
+/// Linux. gpui-wry does this only outside the web view's bounds, so without it
+/// a click in Settings over the notebook left the keyboard in the notebook.
+/// WebView2's own keys aren't ported (docs/windows.md).
+#[cfg(windows)]
+pub fn web_view_hooks() -> impl gpui::IntoElement {
+    use gpui::Styled;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    gpui::canvas(
+        |_, _, _| (),
+        |_, _, window, cx| {
+            let Ok(handle) = window.window_handle() else { return };
+            let RawWindowHandle::Win32(handle) = handle.as_raw() else { return };
+            let hwnd = handle.hwnd.get() as usize;
+            window.on_mouse_event(move |_: &gpui::MouseDownEvent, phase, _, _| {
+                if phase.capture() {
+                    unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(hwnd as _) };
+                }
+            });
+            // The pointer moving from GPUI onto the web view (a child window)
+            // leaves GPUI's window, but GPUI gets no last mouse move, so a
+            // tooltip stayed up until the pointer came back. Send it one from
+            // outside the window, which closes tooltips and clears hovers.
+            let hovered = window.is_window_hovered();
+            if !hovered && WAS_HOVERED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                window.defer(cx, |window, cx| {
+                    let away = gpui::MouseMoveEvent { position: gpui::point(gpui::px(-1.), gpui::px(-1.)), pressed_button: None, modifiers: window.modifiers() };
+                    window.dispatch_event(gpui::PlatformInput::MouseMove(away), cx);
+                });
+            }
+            WAS_HOVERED.store(hovered, std::sync::atomic::Ordering::Relaxed);
+        },
+    )
+    .absolute()
 }
 
 #[cfg(target_os = "linux")]
@@ -212,6 +253,32 @@ pub fn init(_: &mut gpui::App) {
     let name: Vec<u16> = "EndeavorApp\0".encode_utf16().collect();
     // SAFETY: a null-terminated wide name; the handle stays open for the app's life.
     unsafe { windows_sys::Win32::System::Threading::CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+}
+
+/// GPUI's application. On Windows it draws without DirectComposition: GPUI
+/// makes its composition target topmost, which covers child windows, so the
+/// notebook's WebView2 window would be there but never seen.
+#[cfg(not(windows))]
+pub fn application() -> gpui::Application {
+    gpui_platform::application()
+}
+
+#[cfg(windows)]
+pub fn application() -> gpui::Application {
+    // Read once, while GPUI's Windows platform starts; set only for that, so
+    // Julia, Node and the agent don't inherit it. A value already set wins.
+    const VAR: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
+    let ours = std::env::var_os(VAR).is_none();
+    // SAFETY: on Windows, std's set_var and remove_var are safe even with other
+    // threads running (GPUI may have started some by the time we remove it).
+    if ours {
+        unsafe { std::env::set_var(VAR, "1") };
+    }
+    let app = gpui_platform::application();
+    if ours {
+        unsafe { std::env::remove_var(VAR) };
+    }
+    app
 }
 
 /// The window the notebook's web view goes in, as wry wants it.
@@ -299,33 +366,9 @@ pub mod dialogs {
     pub fn show_page_dialogs(_: &wry::WebView) {}
 }
 
-/// Not ported: menus over the notebook need a hole cut in WebView2's window
-/// with SetWindowRgn, or the web view hidden while one is open. Until then they
-/// show under the notebook.
 #[cfg(windows)]
-pub mod overlay {
-    use gpui::{Bounds, Pixels};
-
-    /// What a hole in the web view is for; each has at most one.
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    pub enum Hole {
-        Menu,
-        Tip,
-        Tooltip,
-        /// The Settings panel.
-        Settings,
-        /// The confirm dialog.
-        Confirm,
-        /// A one-off failure's notice.
-        Notice,
-    }
-
-    pub fn set_dismiss_on_click(_: &wry::WebView, _: bool) {}
-
-    pub fn set_dimmed(_: &wry::WebView, _: bool) {}
-
-    pub fn set_hole(_: &wry::WebView, _: Hole, _: Option<Bounds<Pixels>>) {}
-}
+#[path = "overlay_windows.rs"]
+pub mod overlay;
 
 /// WebView2's side of the notebook. Not ported: its process ending
 /// (`ProcessFailed`), find in the page, and whether it has the keyboard.

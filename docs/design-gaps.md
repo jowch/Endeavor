@@ -9,7 +9,8 @@ _Listed 2026-10-03._
 
 ## Whole-app screens
 
-- [ ] App updates — missing. The app can't update itself yet. About's
+- [ ] App updates — missing. The app can't update itself or check for a
+  newer version yet, so Check now and "up to date" are hidden. About's
   update row for a new Endeavor (Restart) is drawn but can't show until it
   can.
 
