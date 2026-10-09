@@ -84,6 +84,8 @@ pub struct Connection {
     pub resume: Vec<(String, Option<f64>)>,
     /// Connects and starts that failed in a row, across reconnects.
     pub failures: u32,
+    /// Why Restart Julia's stop failed, said once the start that follows it is ready.
+    pub not_restarted: Option<String>,
     /// The runtime's notebook list as last pushed (`list_notebooks` shape).
     pub notebooks: serde_json::Value,
     /// Per-notebook cell states as last pushed ({notebook_id: [state]}).
@@ -221,6 +223,7 @@ impl Connection {
             last_notebooks: Vec::new(),
             resume: Vec::new(),
             failures: 0,
+            not_restarted: None,
             notebooks: serde_json::Value::Null,
             cells: serde_json::Value::Null,
             idle_stopped: HashSet::new(),
@@ -462,13 +465,10 @@ impl Workspace {
                 if let Some(connection) = this.connections.get_mut(&host) {
                     connection.status = Status::Died(String::new());
                     connection.resume = resume;
+                    // Julia that didn't stop is still running: the start attaches to it again, and says why.
+                    connection.not_restarted = stopped.err();
                 }
-                // Julia that didn't stop is still running: the start attaches to it again.
                 this.start_host(&host, cx);
-                if let Err(e) = stopped {
-                    eprintln!("Restart Julia: {e}");
-                    this.status = format!("Couldn't restart Julia: {e}").into();
-                }
             });
         })
         .detach();
@@ -703,6 +703,7 @@ impl Workspace {
                 }
                 let Some(connection) = self.connections.get_mut(&host).filter(|c| c.id == id) else { return };
                 connection.job = None;
+                connection.not_restarted = None;
                 connection.status = Status::Died(e.clone());
                 connection.failures += 1;
                 if local {
@@ -800,6 +801,9 @@ impl Workspace {
             if let Some(commands) = self.links.get_mut(crate::agent::Agent::Claude).rx.take() {
                 self.on_progress(Progress::new(Step::Agent, "Pluto ready · starting Claude…"), cx);
                 self.start_agent(crate::agent::Agent::Claude, commands, cx);
+            } else if let Some(e) = self.connections.get_mut(host).and_then(|c| c.not_restarted.take()) {
+                eprintln!("Restart Julia: {e}");
+                self.status = format!("Couldn't restart Julia, so Endeavor reconnected to the Julia that was running. {e}").into();
             } else if self.this_mac_was_ready {
                 self.status = if reattached { "Reconnected to Julia." } else { "Julia restarted." }.into();
             } else {
