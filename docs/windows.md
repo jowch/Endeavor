@@ -127,16 +127,18 @@ under the user's own `%LOCALAPPDATA%`.
 
 **The app:**
 
-- `src/platform.rs`, `overlay`: no holes in the web view, so menus, tips,
-  Settings and dialogs show under the notebook. Needs `SetWindowRgn`, or
-  hiding the web view while one is open.
+- `src/overlay_windows.rs`: menus, tips, Settings and dialogs over the
+  notebook get a hole cut in the web view's window with `SetWindowRgn`, and
+  the window is disabled while a menu or popover is open, so a click on the
+  notebook reaches GPUI and closes it. Not yet tried on a Windows machine.
+  As on Linux, the web view isn't dimmed behind Settings.
 - `src/platform.rs`, `webcontent`: a crashed WebView2 process isn't noticed
   (`ProcessFailed`), find in the notebook always says "Not found", and
   `has_keyboard` is always false. `url` and `give_keyboard` (wry's `focus`)
   are real.
-- `src/platform.rs`, `web_view_hooks` and `init`: nothing, so app shortcuts
-  don't reach GPUI while the notebook has the keyboard. Needs WebView2's
-  `AcceleratorKeyPressed`.
+- `src/platform.rs`, `web_view_hooks` and `init`: a click in GPUI gives
+  GPUI's window the keyboard, but app shortcuts still don't reach GPUI while
+  the notebook has the keyboard. Needs WebView2's `AcceleratorKeyPressed`.
 - `src/platform.rs`, `reduces_motion`: always false. Needs
   `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`.
 - `src/platform.rs`, `set_open_panel_message`, `snapshot`, `dialogs`: the
@@ -232,12 +234,18 @@ tests still need the fake Julia rewritten in Rust (see Tests below).
 
 - **GPUI** has a Windows backend: `gpui-pre-platform` 0.3.6 depends on
   `gpui-pre-windows` 0.3.6, a snapshot of Zed's `gpui_windows` (about 12,800
-  lines). It draws with DirectX through DirectComposition, and it handles IME
+  lines). It draws with DirectX, and it handles IME
   input and the native file and folder picker. Only two functions are left
   unimplemented, both macOS ideas that Endeavor doesn't call
   (`hide_other_apps`, `unhide_other_apps`). Zed's Windows support is new, so
   this backend has had much less use than the macOS one. Expect bugs that
   Zed hasn't met yet, particularly around child windows such as the web view.
+  One already met: GPUI's DirectComposition target is topmost, so it covers
+  the web view's child window and the notebook pane stays blank. The app
+  turns DirectComposition off (`GPUI_DISABLE_DIRECT_COMPOSITION`, set only
+  while GPUI starts, in `platform::application`), so GPUI draws into a plain
+  window swap chain instead. That loses only per-pixel window transparency,
+  which the app doesn't use.
 - **The web view.** lb-wry 0.53.3 embeds WebView2 as a child window of the
   app's window (`build_as_child` takes a Win32 handle). gpui-wry's
   `focus_parent` gives keyboard focus back to that window, so the worst Linux
@@ -332,11 +340,11 @@ code that runs only with servers, and upload names.
 
 ### Notebook view (M–L, about 1–1.5 weeks)
 
-- **Menus over the notebook (M).** WebView2 is a child window, so it draws
-  above GPUI's content, as on Linux. Port `overlay::set_hole` by cutting a
-  hole in the web view window with `SetWindowRgn`. It's unknown whether
-  GPUI's DirectComposition surface shows through that hole. The fallback is
-  to hide the web view while a menu is open.
+- **Menus over the notebook (M).** Written, untried: WebView2 is a child
+  window, so it draws above GPUI's content, as on Linux. `overlay::set_hole`
+  cuts a hole in the web view's window with `SetWindowRgn`; with
+  DirectComposition off, GPUI's own drawing should show through it. If it
+  doesn't, the fallback is to hide the web view while a menu is open.
 - **App shortcuts while the notebook has focus (M).** Use WebView2's
   `AcceleratorKeyPressed` to send Ctrl+B, Ctrl+Q, Ctrl+, Ctrl+Shift+E (Point) and the zoom keys to
   GPUI actions (the macOS version is `webkeys.rs`). Turn off browser
@@ -448,8 +456,9 @@ test binary as its own stand-in core.
    machine, against a server with Duo.
 2. **Process control.** Getting the Job Object and detaching right so that
    Pluto workers never leak, and handling pid reuse.
-3. **Menus over the notebook.** The `SetWindowRgn` hole may not work with how
-   GPUI draws. Hiding the web view is the fallback.
+3. **Menus over the notebook.** The `SetWindowRgn` hole is untested with how
+   GPUI draws (a plain window swap chain, since DirectComposition is off).
+   Hiding the web view is the fallback.
 4. **GPUI's Windows backend is new.** It looks complete, but it has had
    little use, and Zed doesn't embed a child window the way Endeavor does.
 5. **Claude Code's shell requirements** on Windows.

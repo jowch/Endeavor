@@ -430,7 +430,7 @@ pub fn connect(server: &Server, transport: &Transport, askpass: Option<&Askpass>
 /// Start the runtime on a connected server's channel (on a cluster, `job` is
 /// what to submit); `on` hears Julia being found, the job queueing, and its
 /// log. `notice` hears if the runtime goes away later.
-pub fn start(channel: &Channel, listener: &Listener, job: Option<JobRequest>, on: &dyn Fn(Event), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
+pub fn start(channel: &Channel, listener: &Arc<Listener>, job: Option<JobRequest>, on: &dyn Fn(Event), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     let runtime = crate::runtime::start_runtime(
         channel,
         listener,

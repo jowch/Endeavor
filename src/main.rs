@@ -1399,17 +1399,7 @@ impl Workspace {
             }
         }
         self.save_mode(key);
-        self.tell_listener(key);
         cx.notify();
-    }
-
-    /// The session's host's listener holds back what an older runtime can't
-    /// do by the session's mode, so it hears each mode.
-    fn tell_listener(&self, key: u64) {
-        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
-        if let Some(listener) = self.listeners.get(&session.place.host) {
-            listener.set_mode(key, session.guard_mode());
-        }
     }
 
     /// Save a session's mode when it changed, for its reopening.
@@ -1555,7 +1545,6 @@ impl Workspace {
     }
 
     pub fn send_policy(&self, key: u64, policy: &'static str, edits: bool, cx: &mut Context<Self>) {
-        self.tell_listener(key);
         let Some(bridge) = self.session_bridge(key) else { return };
         // ponytail: a failed send leaves the runtime's policy stale until the next change.
         cx.background_executor().spawn(async move { pluto::set_policy(&bridge, key, policy, edits) }).detach();
@@ -2511,7 +2500,7 @@ fn main() {
         endeavor_mcp::run(std::env::args().skip(1).collect());
     }
     logs::start();
-    gpui_platform::application().run(|cx: &mut App| {
+    platform::application().run(|cx: &mut App| {
         platform::init(cx);
         gpui_component::init(cx);
         theme::load_fonts(cx);
