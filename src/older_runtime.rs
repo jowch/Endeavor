@@ -1,80 +1,138 @@
-//! A runtime from another Endeavor build than the app: one started before
-//! the app was updated, still running on its host (docs/remote-sessions.md).
-//! The runtime reports the build it came from (`build` in its event stream;
-//! a runtime too old to report one counts as older). Such a runtime gets a
-//! note in each session on its host, and until it restarts the app holds
-//! back what it can't do safely. Each such limit is one rule in `refusal`.
+//! A runtime that another Endeavor started: one started before the app was
+//! updated, still running on its host (docs/remote-sessions.md). The app uses
+//! it as it is when its core offers the app's interface
+//! (`endeavor_mcp::CORE_INTERFACE`), the rule EndeavorMCP's own clients use,
+//! or when the app's own build started it. Any other runtime gets a note in
+//! each session on its host until it restarts. One kind is held back further:
+//! a runtime too old to ask the user before a run runs no code (`refusal`).
 
 use serde_json::Value;
 
 use crate::agent::Agent;
 
-/// Whether a runtime that reported `reported` came from a build other than
-/// the app's own, `app`.
-pub fn is_older(reported: Option<&str>, app: Option<&str>) -> bool {
-    reported.is_none() || reported != app
+/// How the app can use a runtime, from what its `Ready` says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Version {
+    /// It offers the app's interface, or the app's own build started it.
+    Usable,
+    /// Another Endeavor started it, whose core offers this interface (none
+    /// from a core too old to say). It holds runs for the user's answer.
+    Other(Option<u32>),
+    /// It says neither its build nor its interface: a build from before the
+    /// core recorded its build (EndeavorMCP 808662c, 2026-10-03), which may
+    /// be from before the runtime held runs for the user's answer (b0cab29,
+    /// 2026-10-02). Runtimes started between the two count too, to be safe.
+    NoRunGate,
 }
 
-/// The note in each session on a host whose runtime is older.
-pub fn note(host: &str, agent: Agent) -> String {
-    format!("Julia on {host} is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let {} run code.", agent.name())
-}
-
-/// Why the app refuses an agent's call to `tool` with `arguments` on an older
-/// runtime, in a session whose mode is `mode` (`Session::guard_mode`:
-/// "manual", "ask", "auto" or "plan"), as the tool error the agent reads.
-pub fn refusal(mode: &str, tool: &str, arguments: &Value) -> Option<String> {
-    match mode {
-        // Asking before a run is the runtime's job now, and an older runtime
-        // doesn't ask.
-        "ask" if endeavor_mcp::runs_code(tool, arguments) => Some(
-            "ArgumentError: older_runtime::This notebook's Julia is from an older version of Endeavor, which can't ask the user before a run. \
-             Don't run code: tell the user to restart Julia, or to switch to Auto to let runs go ahead without asking."
-                .into(),
-        ),
-        // Nor before an edit in Manual: the agent's own prompt asks instead,
-        // as it did before the runtime held edits, so the agent's own
-        // settings decide what asks.
-        "manual" => None,
-        _ => None,
+impl Version {
+    /// Of a runtime that build `build` started and whose core offers
+    /// `interface`; `app` is the app's own build. This is
+    /// `endeavor_mcp::usable_as_is` with the app's build in place of the
+    /// library's: the app names a build by `remote::version()`, which the
+    /// app's runtimes report, not by the library's `BUILD_VERSION`.
+    pub fn of(build: Option<&str>, interface: Option<u32>, app: Option<&str>) -> Version {
+        if interface == Some(endeavor_mcp::CORE_INTERFACE) || (build.is_some() && build == app) {
+            Version::Usable
+        } else if build.is_none() && interface.is_none() {
+            Version::NoRunGate
+        } else {
+            Version::Other(interface)
+        }
     }
+
+    pub fn usable(self) -> bool {
+        self == Version::Usable
+    }
+}
+
+/// How a core that offers `interface` compares with the app's: "an older",
+/// "a newer" or "another". A core that says no interface is from before the
+/// number existed.
+fn which_version(interface: Option<u32>) -> &'static str {
+    match interface {
+        None => "an older",
+        Some(theirs) if theirs < endeavor_mcp::CORE_INTERFACE => "an older",
+        Some(theirs) if theirs > endeavor_mcp::CORE_INTERFACE => "a newer",
+        Some(_) => "another",
+    }
+}
+
+/// The note in each session on a host whose runtime the app can't use as it
+/// is; none for one it can.
+pub fn note(host: &str, agent: Agent, version: Version) -> Option<String> {
+    match version {
+        Version::Usable => None,
+        Version::Other(interface) => Some(format!(
+            "Julia on {host} was started by {} version of Endeavor. Restart Julia to use this one. Until then, some of {}'s notebook tools may not work as described.",
+            which_version(interface),
+            agent.name()
+        )),
+        Version::NoRunGate => Some(format!(
+            "Julia on {host} was started by a version of Endeavor too old to ask before a run. Restart Julia to run code. Until then, {} can read and edit the notebook but not run it.",
+            agent.name()
+        )),
+    }
+}
+
+/// The note when the host's runtime, which had one of `note`'s, is replaced
+/// by one the app uses as it is.
+pub fn restarted(host: &str) -> String {
+    format!("Julia on {host} now runs this version of Endeavor. Ask to run asks before each run again.")
+}
+
+/// Why the app refuses an agent's call to `tool` with `arguments` on a
+/// runtime of `version`, as the tool error the agent reads: a runtime that
+/// may not ask before a run runs no code, in any mode.
+pub fn refusal(version: Version, tool: &str, arguments: &Value) -> Option<String> {
+    (version == Version::NoRunGate && endeavor_mcp::runs_code(tool, arguments)).then(|| {
+        "ArgumentError: older_runtime::This notebook's Julia was started by a version of Endeavor too old to ask the user before a run, so Endeavor doesn't let it run code. \
+         Don't run code: tell the user to restart Julia. Reading and editing cells still work."
+            .into()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use endeavor_mcp::CORE_INTERFACE;
     use serde_json::json;
 
     #[test]
-    fn a_runtime_is_older_unless_it_reports_the_apps_build() {
-        assert!(!is_older(Some("1.0.0-abc"), Some("1.0.0-abc")));
-        assert!(is_older(Some("1.0.0-abc"), Some("1.0.0-def")));
-        assert!(is_older(None, Some("1.0.0-abc")), "too old to say");
+    fn a_runtime_is_used_as_it_is_when_it_offers_the_apps_interface_or_is_the_apps_build() {
+        let app = Some("1.0.0-def");
+        assert_eq!(Version::of(Some("1.0.0-abc"), Some(CORE_INTERFACE), app), Version::Usable, "another build, the same interface");
+        assert_eq!(Version::of(Some("1.0.0-def"), None, app), Version::Usable, "the app's own build");
+        assert_eq!(Version::of(Some("1.0.0-abc"), None, app), Version::Other(None), "a build that recorded itself but not its interface");
+        assert_eq!(Version::of(None, Some(CORE_INTERFACE + 1), app), Version::Other(Some(CORE_INTERFACE + 1)));
+        assert_eq!(Version::of(None, None, app), Version::NoRunGate, "too old to say either");
+        assert_eq!(Version::of(None, None, None), Version::NoRunGate, "neither known, even when the app's own build isn't");
     }
 
     #[test]
-    fn the_note_names_the_session_agent() {
+    fn the_note_says_which_version_and_names_the_session_agent() {
+        assert_eq!(note("lab", Agent::Claude, Version::Usable), None);
         assert_eq!(
-            note("lab", Agent::Claude),
-            "Julia on lab is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let Claude run code."
+            note("lab", Agent::Claude, Version::Other(None)).unwrap(),
+            "Julia on lab was started by an older version of Endeavor. Restart Julia to use this one. Until then, some of Claude's notebook tools may not work as described."
         );
+        assert!(note("lab", Agent::Codex, Version::Other(Some(CORE_INTERFACE + 1))).unwrap().starts_with("Julia on lab was started by a newer version"));
         assert_eq!(
-            note("lab", Agent::Codex),
-            "Julia on lab is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let Codex run code."
+            note("lab", Agent::Codex, Version::NoRunGate).unwrap(),
+            "Julia on lab was started by a version of Endeavor too old to ask before a run. Restart Julia to run code. Until then, Codex can read and edit the notebook but not run it."
         );
     }
 
     #[test]
-    fn an_older_runtime_runs_nothing_in_ask_to_run() {
-        let refused = |policy: &str, tool: &str, arguments: Value| refusal(policy, tool, &arguments).is_some();
-        assert!(refused("ask", "execute_cell", json!({ "cell_id": "a" })));
-        assert!(refused("ask", "edit_cell", json!({ "cell_id": "a", "code": "1", "run_after": true })));
-        assert!(refused("ask", "run_shell", json!({ "command": "ls" })));
-        assert!(!refused("ask", "edit_cell", json!({ "cell_id": "a", "code": "1" })), "edits still go through");
-        assert!(!refused("ask", "read_cell", json!({ "cell_id": "a" })));
-        assert!(!refused("auto", "execute_cell", json!({ "cell_id": "a" })), "Auto runs without asking anyway");
-        assert!(!refused("manual", "execute_cell", json!({ "cell_id": "a" })), "in Manual the agent asks first itself");
-        assert!(!refused("manual", "edit_cell", json!({ "cell_id": "a", "code": "1" })), "and before an edit");
-        assert!(!refused("plan", "execute_cell", json!({ "cell_id": "a" })), "the runtime refuses runs in Plan itself");
+    fn a_runtime_with_no_run_gate_runs_no_code_in_any_mode() {
+        let refused = |version: Version, tool: &str, arguments: Value| refusal(version, tool, &arguments).is_some();
+        assert!(refused(Version::NoRunGate, "execute_cell", json!({ "cell_id": "a" })));
+        assert!(refused(Version::NoRunGate, "edit_cell", json!({ "cell_id": "a", "code": "1", "run_after": true })));
+        assert!(refused(Version::NoRunGate, "run_shell", json!({ "command": "ls" })));
+        assert!(!refused(Version::NoRunGate, "read_cell", json!({ "cell_id": "a" })));
+        assert!(!refused(Version::NoRunGate, "edit_cell", json!({ "cell_id": "a", "code": "1" })), "edits still go through");
+        assert!(!refused(Version::Other(None), "execute_cell", json!({ "cell_id": "a" })), "it holds runs itself");
+        assert!(!refused(Version::Other(Some(CORE_INTERFACE + 1)), "execute_cell", json!({ "cell_id": "a" })));
+        assert!(!refused(Version::Usable, "execute_cell", json!({ "cell_id": "a" })));
     }
 }

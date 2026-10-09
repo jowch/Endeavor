@@ -434,8 +434,8 @@ In order. Items 1 to 6 are [other-agents.md](other-agents.md)'s work items
    leaves the decision to the runtime, which holds what the mode asks
    about (`AgentFacts::asks_every_write`). This covers Ask to run's edits
    too, not only Auto: otherwise Ask to run would ask before every edit. On
-   a runtime from an older build, which can't hold calls, Codex's prompts
-   are the cards. Endeavor only ever answers `allow_once`, reject or
+   a runtime from another Endeavor that the app can't use as it is
+   (`older_runtime`), Codex's prompts are the cards. Endeavor only ever answers `allow_once`, reject or
    cancel; Codex gets no "In this folder".
 10. **Tool results.** Done, in the dialect: Codex's `rawOutput`
     (`{result: {content}, error}`) is handed on as the MCP content, so live

@@ -33,19 +33,27 @@ again during that run, the notebook opens in
 [safe preview](./safe-preview.md) instead, so you can look at that cell
 before you run it again. **Show log** shows Julia's own log.
 
-## "Julia is from an older Endeavor"
+## "Julia was started by an older version of Endeavor"
 
 Julia can keep running after Endeavor quits: always on a server, and on your
 Mac when **Keep notebooks running after Endeavor quits** is on. After you
 install a newer Endeavor, that Julia is still the one the older version
-started. Each session that uses it then says:
+started. Most updates can keep using it. When one can't, each session that
+uses it says:
 
-"Julia on lab-server is from an older Endeavor. Restart Julia to get the
-latest changes. Until then, Ask to run doesn't let Claude run code."
+"Julia on lab-server was started by an older version of Endeavor. Restart
+Julia to use this one. Until then, some of Claude's notebook tools may not
+work as described."
 
-Until you restart it, Claude can still read and edit the notebook. In **Ask
-to run**, it can't run code, because that Julia can't ask you first. To
-restart it:
+Until you restart it, Claude keeps working with the notebook, but some tools
+may fail or behave differently.
+
+A Julia that a very early Endeavor started may not be able to ask you before
+a run. Then the note says "too old to ask before a run", and
+Claude can read and edit the notebook but can't run code until you restart
+it.
+
+To restart it:
 
 - On your Mac, use **Restart Julia** in Settings, under **Troubleshooting**.
 - On a server, click **Stop** next to the server in Settings, under **Where
