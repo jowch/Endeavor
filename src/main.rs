@@ -2442,7 +2442,7 @@ fn main() {
         endeavor_mcp::run(std::env::args().skip(1).collect());
     }
     logs::start();
-    gpui_platform::application().run(|cx: &mut App| {
+    platform::application().run(|cx: &mut App| {
         platform::init(cx);
         gpui_component::init(cx);
         theme::load_fonts(cx);
