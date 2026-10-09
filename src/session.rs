@@ -2142,6 +2142,12 @@ impl Session {
             Asker::Runtime(ask) => {
                 let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
                 self.later.push(Effect::AnswerRun { ask, allow, user_ran });
+                // A card kept past the turn: nothing runs until the agent makes the call again.
+                if allow && self.left_up.contains(&ask) && self.busy_since.is_none() {
+                    self.record_answer(ix, option, scope);
+                    self.note(format!("Allowed. {} goes ahead when you reply", self.agent.name()));
+                    return;
+                }
             }
         }
         self.record_answer(ix, option, scope);
@@ -2687,9 +2693,10 @@ mod tests {
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(s.pending_permission().is_some() && s.take_later().is_empty(), "kept, not refused");
         assert!(!matches!(s.entries.last(), Some(Entry::Note(n)) if n.contains("stopped")));
-        // Answered after the turn: the runtime keeps it for the agent's same call.
+        // Answered after the turn: the runtime keeps it for the agent's same call, and a note says when it runs.
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
         assert_eq!(answers(&s.take_later()), [(41, true, &[][..])]);
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n == "Allowed. Claude goes ahead when you reply"));
 
         s.runtime_asks_now(&[left_up(42)]);
         s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
