@@ -5,10 +5,12 @@ Writes, next to this script:
   icon.svg, icon-small.svg     the icon (1024 grid); the small art is for 16 and 32 px
   Endeavor.icns                the macOS icon (scripts/bundle.sh copies it into the app)
   endeavor-256.png, -512.png   for Linux desktop files
+  endeavor.ico                 the Windows installer's and Start menu's icon
   logo-dark.svg, logo-light.svg  the sky badge + "Endeavor", text as outlines
 
 Needs Chrome or Chromium (set CHROME to its binary if it isn't found),
-macOS's sips and iconutil, and fonttools + uharfbuzz (fonts/requirements.txt).
+macOS's sips and iconutil, fonttools + uharfbuzz (fonts/requirements.txt), and
+Pillow for the .ico. With NO_MAC set it writes only the .ico.
 """
 import glob
 import os
@@ -185,6 +187,14 @@ def resize(src, dst, px):
     subprocess.run(["sips", "-z", str(px), str(px), dst], check=True, capture_output=True)
 
 
+def write_ico(little, mid, big, path):
+    """The Windows icon: the small art at 16 to 32 px, as in the .icns."""
+    from PIL import Image
+    sizes = (16, 24, 32, 48, 64, 128, 256)
+    images = [Image.open(little if px <= 32 else mid if px < 128 else big).convert("RGBA").resize((px, px), Image.LANCZOS) for px in sizes]
+    images[-1].save(path, format="ICO", sizes=[(px, px) for px in sizes], append_images=images[:-1])
+
+
 def main():
     for small in (False, True):
         with open(os.path.join(HERE, "icon-small.svg" if small else "icon.svg"), "w") as f:
@@ -202,6 +212,9 @@ def main():
         with open(mid_svg, "w") as f:
             f.write(icon_svg(False, with_stars=False))
         render(mid_svg, mid)
+        write_ico(little, mid, big, os.path.join(HERE, "endeavor.ico"))
+        if os.environ.get("NO_MAC"):
+            return
         iconset = os.path.join(tmp, "Endeavor.iconset")
         os.mkdir(iconset)
         for pt in (16, 32, 128, 256, 512):

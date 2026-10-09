@@ -48,9 +48,9 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 - **Freeform annotation strokes** (arrows between cells), once there's a way
   for the agent to make sense of them (e.g. a screenshot alongside).
 - **Windows.** It builds and its tests pass in CI, which also keeps a
-  build to try ([windows.md](windows.md#try-a-build-from-ci)). Running a local notebook
-  is written but untried on a real machine; ssh, the notebook view and
-  packaging are left. See [windows.md](windows.md), and [linux.md](linux.md)
+  build to try and a per-user installer ([windows.md](windows.md#install)).
+  Running a local notebook is written but untried on a real machine; ssh,
+  the notebook view and signing are left. See [windows.md](windows.md), and [linux.md](linux.md)
   for the Linux port's remaining work.
 - **Upstream to mthelm85/PlutoMCP.jl.** The runtime started from a fork of
   PlutoMCP that carried several general improvements (`new_notebook`, run

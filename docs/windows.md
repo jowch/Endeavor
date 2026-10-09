@@ -381,13 +381,15 @@ Windows or set `CLAUDE_CODE_GIT_BASH_PATH`.
 
 ### Packaging (M–L, about 1 week)
 
-- `scripts/bundle.sh` builds only a macOS .app. Windows needs an installer
-  (MSI, MSIX or Inno Setup) and an icon resource from `build.rs`.
-- Sign the app with Authenticode, or SmartScreen warns every user.
-- Windows 11 includes WebView2. Windows 10 may not, so bundle Microsoft's
-  Evergreen bootstrapper.
-- `install::resources()` looks for `../Resources` next to the executable.
-  Windows needs its own layout.
+- Done: CI builds a per-user installer with Inno Setup
+  (`scripts/installer.iss`, see [Install](#install)). It uses the layout
+  `install::resources()` already looks for (`bin\endeavor.exe`, `Resources\`
+  beside `bin`) and runs Microsoft's Evergreen WebView2 bootstrapper when the
+  runtime is missing. Untried on a real machine.
+- The exe has no icon resource yet (`build.rs`); the Start menu entry uses
+  `assets/icon/endeavor.ico`.
+- Sign the app and the installer with Authenticode, or SmartScreen warns
+  every user.
 - The installer must carry the Linux and macOS server helpers. The macOS
   helper can't be cross-built from Windows, so the release build needs a Mac.
 
@@ -400,6 +402,26 @@ and `wire`'s relay tests use `UnixStream::pair`. These are gated with
 Left: replace the fake Julia with a small Rust test binary so the
 helper and core tests run on Windows, and give the relay tests a loopback TCP
 pair.
+
+## Install
+
+The installer needs no administrator. It puts Endeavor in
+`%LOCALAPPDATA%\Programs\Endeavor`, adds it to the Start menu and to
+Settings → Apps for uninstalling, and installs Microsoft's WebView2 Runtime
+for this user if it's missing.
+
+1. Open the repository's Actions tab, then the latest **Windows** run on
+   `main`, or the one on a pull request. Under Artifacts, download
+   `Endeavor-windows-x86_64-setup-<build>` and unzip it.
+2. Run `Endeavor-setup-<build>.exe`. It isn't signed, so SmartScreen may say
+   "Windows protected your PC"; choose More info, then Run anyway.
+3. Click Install, then Finish. Endeavor opens and sets itself up.
+
+Installing a newer build over an older one asks you to quit Endeavor if it's
+open, then stops a runtime kept running after Endeavor quit (`endeavor.exe
+--stop-runtime`), since that runtime runs from the installed `endeavor.exe`.
+Its notebooks are already saved. Uninstalling does the same. Uninstalling leaves
+`%LOCALAPPDATA%\Endeavor` (Julia, the agents, sessions and settings).
 
 ## Try a build from CI
 
@@ -425,7 +447,8 @@ What the machine needs:
   [Limits](#limits-we-cant-fix-from-endeavor)).
 - The WebView2 Runtime. Windows 11 has it, and so does Windows 10 once
   Microsoft Edge's updates have installed it. If it's missing, install
-  Microsoft's Evergreen WebView2 Runtime. The installer (#12) will do this.
+  Microsoft's Evergreen WebView2 Runtime, or use the [installer](#install),
+  which does.
 - An internet connection on first run: the app downloads Node, the agent
   and Julia into `%LOCALAPPDATA%\Endeavor`.
 

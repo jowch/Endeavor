@@ -245,8 +245,15 @@ pub fn init(cx: &mut gpui::App) {
     crate::linux::gtk_loop::start(cx);
 }
 
+/// Hold the named mutex the Windows uninstaller checks for (`APP_MUTEX` in
+/// scripts/installer.iss), so it asks to quit Endeavor first instead of
+/// leaving the open exe behind. Windows frees it when the app exits.
 #[cfg(windows)]
-pub fn init(_: &mut gpui::App) {}
+pub fn init(_: &mut gpui::App) {
+    let name: Vec<u16> = "EndeavorApp\0".encode_utf16().collect();
+    // SAFETY: a null-terminated wide name; the handle stays open for the app's life.
+    unsafe { windows_sys::Win32::System::Threading::CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+}
 
 /// GPUI's application. On Windows it draws without DirectComposition: GPUI
 /// makes its composition target topmost, which covers child windows, so the
