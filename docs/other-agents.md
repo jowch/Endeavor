@@ -151,19 +151,20 @@ In order. Each part is also useful to Claude, or harmless to it.
    answer for five minutes, so the app starts it with
    `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0`. Cursor's own timeout is untested.
 
-   A runtime started by an older Endeavor (it outlives the app; see
-   [remote-sessions.md](remote-sessions.md)) can't hold runs. Each runtime
-   reports the build it came from (`build` in its event stream, from the
-   helper's `--build`, the same version `remote::version()` computes), and
-   the app compares it with its own. On another build, or none, each session
-   on that host gets a note to restart Julia, and the host's listener answers
-   the agent's calls that runtime can't carry out safely. It checks every
-   request on a connection, also after one it passed through (Claude Code
-   sends `GET /mcp` first and reuses the connection). The rules are one
-   function, `older_runtime::refusal`; today there is one: in Ask to run, a
-   call that runs code fails with `older_runtime`. In Manual nothing is
-   refused: an older runtime can't hold edits, so the app leaves the agent's
-   own prompt to ask.
+   A runtime started by another Endeavor (it outlives the app; see
+   [remote-sessions.md](remote-sessions.md)) is used as it is when its core
+   offers the app's interface (`endeavor_mcp::CORE_INTERFACE`), or when the
+   app's own build started it (`remote::version()`). Each runtime reports
+   both in the helper's `Ready`, from its `runtime.json`. This is the rule
+   EndeavorMCP's own clients use (`older_runtime::usable_as_is`). Any other
+   runtime gets a note in each session on that host to restart Julia. For
+   such a runtime the app doesn't treat the runtime as the one holding calls,
+   so the agent's own prompts are the cards. A runtime whose `Ready` says
+   neither its build nor its interface may be from before the runtime held
+   runs (EndeavorMCP b0cab29; the build has been recorded since 808662c), so
+   the host's listener refuses its calls that run code, in every mode
+   (`older_runtime::refusal`). PR 3 (servers through `client::Session`)
+   has to keep this rule.
 4. **Give the agent the skills through the notebook MCP server.** Done, as a
    guide tool (`crates/endeavor-mcp/src/guide.rs`). The server's MCP
    `instructions` are three sentences: what the tools are for, and to call
