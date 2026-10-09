@@ -25,7 +25,8 @@ Each of these works only because of how Claude Code or its adapter behaves.
   plugin, set in the session options (`session_options`, `src/agent.rs`).
   Other agents get them from the notebook MCP server (work item 4).
 - **Reads without asking.** `allowedTools` in the session options lets the
-  read-only notebook tools through without a prompt. Cursor asks for every
+  read-only notebook tools, and reads of the skills' own files, through
+  without a prompt. Cursor asks for every
   call.
 - **Personal setup.** "Load your personal Claude Code setup" works through the
   `settingSources` and `strictMcpConfig` options.

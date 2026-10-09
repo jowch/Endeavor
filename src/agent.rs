@@ -390,18 +390,34 @@ const READ_ONLY_TOOLS: [&str; 15] = [
 /// skills and guards) always; the project's settings and CLAUDE.md (from the
 /// working directory) always; the user's personal setup (user settings, their MCP
 /// servers) only when they opt in (Settings). On a server, no local file tools.
+/// The skills point the agent at reference files beside them, outside the
+/// working folder, which Claude Code would ask about (it doesn't allow reading
+/// a plugin's own files by itself), so they get a Read rule.
 fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
     let disallowed: &[&str] = if on_server { &LOCAL_TOOLS } else { &[] };
+    let allowed: Vec<String> = READ_ONLY_TOOLS.iter().map(|t| t.to_string()).chain([format!("Read({}/**)", rule_path(plugin_dir))]).collect();
     serde_json::json!({
         "claudeCode": { "options": {
             "settingSources": sources,
             "strictMcpConfig": !personal,
             "plugins": [{ "type": "local", "path": plugin_dir }],
             "disallowedTools": disallowed,
-            "allowedTools": READ_ONLY_TOOLS,
+            "allowedTools": allowed,
         } }
     })
+}
+
+/// An absolute path as a Claude Code permission rule writes it: `//` and the
+/// path with forward slashes. Claude Code compares a Windows path in POSIX
+/// form, `C:\Users\me` as `/c/Users/me`, so its rule is `//c/Users/me`.
+fn rule_path(path: &str) -> String {
+    let path = path.strip_prefix(r"\\?\").unwrap_or(path).replace('\\', "/");
+    let path = path.trim_end_matches('/');
+    match path.as_bytes() {
+        [drive, b':', b'/', ..] if drive.is_ascii_alphabetic() => format!("//{}{}", drive.to_ascii_lowercase() as char, &path[2..]),
+        _ => format!("/{path}"),
+    }
 }
 
 /// Where a session's notebook tools are: its host's runtime bridge, and the
@@ -1202,6 +1218,17 @@ mod tests {
         assert_eq!(personal["plugins"][0]["path"], "/p");
     }
 
+    /// The plugin's reference files are read without asking, wherever the app's
+    /// folder is: a rule Claude Code matches, in its own form of the path.
+    #[test]
+    fn the_plugins_own_files_are_read_without_asking() {
+        let allowed = |dir: &str| session_options(false, dir, false)["claudeCode"]["options"]["allowedTools"].clone();
+        let rule = |dir: &str| allowed(dir).as_array().unwrap().iter().filter_map(|t| t.as_str()).find(|t| t.starts_with("Read(")).map(str::to_owned);
+        assert_eq!(rule("/Users/me/Library/Application Support/endeavor/plugin/0.1.0/plugin").as_deref(), Some("Read(//Users/me/Library/Application Support/endeavor/plugin/0.1.0/plugin/**)"));
+        assert_eq!(rule(r"C:\Users\me\AppData\Local\Endeavor\plugin\0.1.0\plugin").as_deref(), Some("Read(//c/Users/me/AppData/Local/Endeavor/plugin/0.1.0/plugin/**)"));
+        assert_eq!(rule(r"\\?\D:\Endeavor\plugin\").as_deref(), Some("Read(//d/Endeavor/plugin/**)"));
+    }
+
     /// Reads run without asking; edits, runs and commands still ask. Every tool
     /// the runtime offers is on one side or the other, so a new tool needs a decision here.
     #[test]
@@ -1218,7 +1245,7 @@ mod tests {
         ];
         for mode in [false, true] {
             let allowed = session_options(false, "/p", mode)["claudeCode"]["options"]["allowedTools"].clone();
-            let allowed: Vec<String> = serde_json::from_value(allowed).unwrap();
+            let allowed: Vec<String> = serde_json::from_value::<Vec<String>>(allowed).unwrap().into_iter().filter(|t| t.starts_with("mcp__")).collect();
             for tool in &tools {
                 let full = format!("mcp__notebook__{tool}");
                 assert_ne!(allowed.contains(&full), asks.contains(&tool.as_str()), "{tool}: decide whether it asks");
