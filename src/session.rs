@@ -412,9 +412,11 @@ pub struct Session {
     compacting: Option<Option<(u64, u64)>>,
     /// The policy last sent to the runtime, and whether edits ask.
     policy_sent: (&'static str, bool),
-    /// Whether its host's runtime is from another Endeavor build
-    /// (`older_runtime`); none until the runtime says which.
+    /// Whether its host's runtime is one another Endeavor started that the
+    /// app can't use as it is (`older_runtime`); none until it is known.
     pub runtime_older: Option<bool>,
+    /// That runtime's interface, for its note.
+    older_interface: Option<u32>,
     /// The older runtime's note is still to show (after the history, for a reopened session).
     older_note: bool,
     /// The runtime's asks this session has shown or answered, so none shows twice.
@@ -640,6 +642,7 @@ impl Session {
             policy_sent: ("ask", false),
             runtime_older: None,
             older_note: false,
+            older_interface: None,
             seen_asks: HashSet::new(),
             later: Vec::new(),
             resources: None,
@@ -958,23 +961,14 @@ impl Session {
         endeavor_mcp::asks_first(tool, input, self.policy(), self.edits_ask())
     }
 
-    /// The session's mode as the rules for an older runtime name it
-    /// (`older_runtime::refusal`): "manual" when the agent asks before each
-    /// change itself (Claude's own default mode), else the runtime policy.
-    pub fn guard_mode(&self) -> &'static str {
-        match (&self.modes, self.policy()) {
-            (Some(m), "ask") if m.current_mode_id.to_string() == "default" => "manual",
-            (_, policy) => policy,
-        }
-    }
-
-    /// Its host's runtime said which build it is: from another build than
-    /// the app's (`older`) or not. An older one gets a note, once.
-    pub fn runtime_build(&mut self, older: bool) {
+    /// Its host's runtime is known: one the app can't use as it is (`older`,
+    /// whose core offers `interface`) or not. Such a runtime gets a note, once.
+    pub fn runtime_build(&mut self, older: bool, interface: Option<u32>) {
         if self.runtime_older == Some(older) {
             return;
         }
         self.runtime_older = Some(older);
+        self.older_interface = interface;
         self.older_note = older;
         self.note_older_runtime();
     }
@@ -983,7 +977,7 @@ impl Session {
         if self.older_note && !self.replaying {
             self.older_note = false;
             let host = self.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());
-            self.note(crate::older_runtime::note(&host, self.agent));
+            self.note(crate::older_runtime::note(&host, self.agent, self.older_interface));
         }
     }
 
@@ -2606,7 +2600,7 @@ mod tests {
         let modes = SessionModeState::new("auto", vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
         let mut s = Session::new(7, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("s1"), Some(modes), None));
-        s.runtime_build(false);
+        s.runtime_build(false, Some(endeavor_mcp::CORE_INTERFACE));
         let call = ToolCall::new("t1", "mcp__notebook__execute_cell").raw_input(serde_json::json!({ "cell_id": "a" })).status(ToolCallStatus::InProgress);
         s.apply(SessionEvent::Update(SessionUpdate::ToolCall(call)));
         s
@@ -2687,7 +2681,7 @@ mod tests {
         assert_eq!(allowed(&s, true).as_deref(), Some("allow"));
         assert_eq!(allowed(&s, false), None, "an edit that doesn't run is still the agent's card");
         // A runtime from an older build, or one that hasn't said, doesn't ask: the agent's prompt is the card.
-        s.runtime_build(true);
+        s.runtime_build(true, None);
         assert_eq!(allowed(&s, true), None);
         let mut s = asking_session();
         s.runtime_older = None;
@@ -2705,7 +2699,7 @@ mod tests {
         s.agent = Agent::Codex;
         s.start_mode = Some(Mode { agent: mode.into(), run_without_asking: false });
         s.started(started);
-        s.runtime_build(false);
+        s.runtime_build(false, Some(endeavor_mcp::CORE_INTERFACE));
         s
     }
 
@@ -2754,7 +2748,7 @@ mod tests {
         // A runtime from an older build can't hold anything: Codex's own prompts are the cards.
         let mut dialect = crate::codex::Dialect::default();
         let mut s = codex_session("auto", &mut dialect);
-        s.runtime_build(true);
+        s.runtime_build(true, None);
         let (prompts, _) = play_codex_turn(&mut s, &mut dialect);
         assert!(prompts.iter().all(|(tool, through)| tool.is_some() && through.is_none()), "{prompts:?}");
     }
@@ -2788,7 +2782,7 @@ mod tests {
         let mut s = Session::new(7, Place::local("/tmp"), None);
         let effects = s.started(Started::new(SessionId::new("s1"), Some(modes), None));
         assert!(matches!(effects.as_slice(), [Effect::SetPolicy("ask", true)]), "the runtime hears that edits ask");
-        s.runtime_build(false);
+        s.runtime_build(false, Some(endeavor_mcp::CORE_INTERFACE));
         s.cell_codes.observe("read_cell", &serde_json::json!({ "cell_id": "a", "code": "a = 1" }));
         let call = ToolCall::new("e1", "mcp__notebook__edit_cell").raw_input(edit_input("a = 2")).status(ToolCallStatus::InProgress);
         s.apply(SessionEvent::Update(SessionUpdate::ToolCall(call)));
@@ -2873,7 +2867,7 @@ mod tests {
         assert!(!s.edits_ask() && !s.runtime_holds("edit_cell", &edit_input("a = 2")));
         // An older runtime in Manual can't hold edits: the agent's own prompt asks.
         let mut s = manual_session();
-        s.runtime_build(true);
+        s.runtime_build(true, None);
         let options = [agent_client_protocol::schema::v1::PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce)];
         assert_eq!(s.runtime_asks_instead("mcp__notebook__edit_cell", &edit_input("a = 2"), false, &options), None);
     }
@@ -3039,7 +3033,7 @@ mod tests {
         let (s, effects) = start("auto", 0);
         assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("ask", true)] if m.to_string() == "default"), "edits ask too");
         assert_eq!(s.mode_name().as_deref(), Some("Manual"));
-        assert_eq!((s.policy(), s.guard_mode()), ("ask", "manual"), "the runtime asks before runs; so does the agent");
+        assert_eq!(s.policy(), "ask", "the runtime asks before runs");
 
         // A reopened session in Plan: the agent is asked and the runtime told.
         let (s, effects) = start("default", 3);
@@ -3050,29 +3044,29 @@ mod tests {
         let (s, effects) = start("auto", 1);
         assert!(effects.is_empty());
         assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
-        assert_eq!((s.policy(), s.guard_mode()), ("ask", "ask"));
+        assert_eq!(s.policy(), "ask");
     }
 
     #[test]
     fn a_runtime_from_an_older_build_gets_a_note_once() {
         let mut s = Session::new(1, Place::local("/tmp"), Some("gpu-box".into()));
         s.started(Started::new(SessionId::new("abc"), None, None));
-        s.runtime_build(false);
+        s.runtime_build(false, Some(endeavor_mcp::CORE_INTERFACE));
         assert!(s.entries.is_empty(), "the app's own build: nothing to say");
-        s.runtime_build(true);
-        s.runtime_build(true);
+        s.runtime_build(true, None);
+        s.runtime_build(true, None);
         let notes: Vec<String> = s.entries.iter().filter_map(|e| if let Entry::Note(n) = e { Some(n.to_string()) } else { None }).collect();
         assert_eq!(
             notes,
-            ["Julia on gpu-box is from an older Endeavor. Restart Julia to get the latest changes. Until then, Ask to run doesn't let Claude run code."]
+            ["Julia on gpu-box was started by an older version of Endeavor. Restart Julia to use this one. Until then, some of Claude's notebook tools may not work as described, and Ask to run may not ask before a run."]
         );
 
         // A reopened session says so after its history.
         let mut s = Session::loading(2, SessionId::new("old"), Place::local("/tmp"), None, "Fit".into());
-        s.runtime_build(true);
+        s.runtime_build(true, None);
         assert!(s.entries.is_empty(), "not while the history loads");
         s.started(Started::new(SessionId::new("old"), None, None));
-        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with(&format!("Julia on {} is from an older Endeavor.", crate::platform::this_computer!()))));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with(&format!("Julia on {} was started by an older version of Endeavor.", crate::platform::this_computer!()))));
     }
 
     #[test]

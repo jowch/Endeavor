@@ -6,114 +6,28 @@
 //! host's runtime through that host's local listener, whose one loopback port
 //! stays the same for the whole launch.
 
-use std::collections::HashMap;
 use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use endeavor_mcp::client::{self, StartError, StartOptions};
 use wire::ToApp;
 use wire::slurm::JobRequest;
 
-pub use endeavor_mcp::client::{Channel, Hello, Notice};
+/// A host's listener: the app's loopback port for its runtime, for Pluto's
+/// page, the agent's MCP and the app's calls. Each connection is relayed to
+/// the runtime of the moment.
+pub use endeavor_mcp::client::{Channel, Hello, Listener, Notice};
 
 use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
 
 /// Julia needed by runtime/Project.toml's `[sources]` section.
 const MIN_JULIA: (u32, u32) = (1, 11);
-
-/// A host's listener (`endeavor_mcp::client::Listener`): the app's loopback
-/// port for its runtime, for Pluto's page, the agent's MCP and the app's
-/// calls. Each connection is relayed to the runtime of the moment. It also
-/// holds back what a runtime from an older build can't do (`older_runtime`).
-pub struct Listener {
-    pub relay: Arc<client::Listener>,
-    guard: Arc<Guard>,
-}
-
-/// What the app knows of the runtime and its sessions, to hold back what a
-/// runtime from an older build can't do.
-#[derive(Default)]
-struct Guard {
-    watch: Mutex<Watch>,
-    /// Said when the runtime's build is known.
-    known: Condvar,
-}
-
-#[derive(Default)]
-struct Watch {
-    /// Whether the runtime is from another build than the app; none until it says.
-    older: Option<bool>,
-    /// Each session's mode (`Session::guard_mode`), by its key.
-    policies: HashMap<String, &'static str>,
-}
-
-/// How long a call that an older runtime couldn't carry out waits for the
-/// runtime to say which build it is, after the app attaches to it.
-const BUILD_WAIT: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 2 });
-
-impl Guard {
-    /// Why the agent's call to `tool` from session `session` is refused here:
-    /// something the runtime, from an older build, can't do safely. A runtime
-    /// that hasn't said which build it is yet counts as older once it has had
-    /// time to say.
-    fn refusal(&self, session: &str, tool: &str, arguments: &serde_json::Value) -> Option<String> {
-        let watch = self.watch.lock().unwrap();
-        let why = crate::older_runtime::refusal(watch.policies.get(session).copied().unwrap_or("ask"), tool, arguments)?;
-        let (watch, _) = self.known.wait_timeout_while(watch, BUILD_WAIT, |w| w.older.is_none()).unwrap();
-        (watch.older != Some(false)).then_some(why)
-    }
-}
-
-impl Listener {
-    pub fn start(name: &str) -> Result<Arc<Listener>, String> {
-        let guard = Arc::new(Guard::default());
-        let refuse = guard.clone();
-        let relay = client::Listener::with_refuse(name, Box::new(move |session, tool, arguments| refuse.refusal(session, tool, arguments)))?;
-        Ok(Arc::new(Listener { relay, guard }))
-    }
-
-    /// A runtime is about to attach: its build isn't known until it says.
-    fn attaching(&self) {
-        self.guard.watch.lock().unwrap().older = None;
-    }
-
-    /// The runtime said which build it came from: whether that's another than the app's.
-    pub fn runtime_build(&self, older: bool) {
-        self.guard.watch.lock().unwrap().older = Some(older);
-        self.guard.known.notify_all();
-    }
-
-    /// Session `key`'s mode, as `Session::guard_mode` names it.
-    pub fn set_mode(&self, key: u64, mode: &'static str) {
-        self.guard.watch.lock().unwrap().policies.insert(key.to_string(), mode);
-    }
-
-    /// This Mac's Julia is restarting (Settings → Restart Julia).
-    pub fn restarting(&self) {
-        self.relay.restarting();
-    }
-
-    /// The restart `restarting` announced didn't work out: Julia didn't come back.
-    pub fn restart_failed(&self) {
-        self.relay.restart_failed();
-    }
-
-    /// The user stopped or disconnected `self`'s host on purpose: nothing
-    /// will reconnect it by itself, unlike a drop.
-    pub fn disconnected(&self) {
-        self.relay.disconnected();
-    }
-
-    pub fn port(&self) -> u16 {
-        self.relay.port()
-    }
-}
 
 /// A runtime the app is attached to, as its host's listener serves it.
 #[derive(Clone, Debug)]
@@ -131,12 +45,19 @@ pub struct Runtime {
     pub node: String,
     /// The cluster job it runs in.
     pub job: Option<wire::slurm::Job>,
+    /// The number for what its core offers callers (`endeavor_mcp::CORE_INTERFACE`),
+    /// as its record says; none from a core too old to say.
+    pub interface: Option<u32>,
+    /// Another Endeavor started it, and its core doesn't offer this app's
+    /// interface (`older_runtime::usable_as_is`).
+    pub other_version: bool,
 }
 
 impl From<client::Runtime> for Runtime {
     fn from(runtime: client::Runtime) -> Runtime {
         let bridge = Bridge { url: runtime.mcp_url, token: runtime.token };
-        Runtime { page_url: runtime.page_url, bridge, pid: runtime.pid, reattached: runtime.reattached, node: runtime.node, job: runtime.job }
+        let other_version = !crate::older_runtime::usable_as_is(runtime.build.as_deref(), runtime.interface, crate::remote::build());
+        Runtime { page_url: runtime.page_url, bridge, pid: runtime.pid, reattached: runtime.reattached, node: runtime.node, job: runtime.job, interface: runtime.interface, other_version }
     }
 }
 
@@ -146,10 +67,9 @@ impl From<client::Runtime> for Runtime {
 /// `Submitted` and `Queued` meanwhile, and `notice` the first word of the
 /// runtime going away later, unless the app is the one stopping it. The helper
 /// installs what the start needs without asking, as it always has.
-pub fn start_runtime(channel: &Channel, listener: &Listener, job: Option<JobRequest>, on_message: &mut dyn FnMut(ToApp), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
-    listener.attaching();
+pub fn start_runtime(channel: &Channel, listener: &Arc<Listener>, job: Option<JobRequest>, on_message: &mut dyn FnMut(ToApp), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     let options = StartOptions { job, install: true, ..StartOptions::default() };
-    channel.start_runtime(&listener.relay, &options, on_message, notice).map(Runtime::from).map_err(StartError::message)
+    channel.start_runtime(listener, &options, on_message, notice).map(Runtime::from).map_err(StartError::message)
 }
 
 /// The Julia the app installs on first run (design doc §11), pinned with the
@@ -356,7 +276,7 @@ fn stop_group(pid: i32, started: Option<u64>) {
 /// Start This Mac's runtime on `channel` (or attach to the one running) and
 /// relay `listener` to it. `progress` hears Julia's log while it starts;
 /// `notice` hears if it goes away later.
-pub fn start_local(channel: &Channel, listener: &Listener, progress: &dyn Fn(Progress), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
+pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn Fn(Progress), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     progress(Progress::new(Step::Packages, "Starting Julia…"));
     let runtime = start_runtime(channel, listener, None, &mut |message| {
         if let ToApp::Progress { line } = message {
@@ -467,23 +387,6 @@ mod tests {
         assert_eq!(parse_version("julia version 1.10.0-rc1"), Some((1, 10)));
         assert!(parse_version("julia version 1.10.0").unwrap() < (1, 11));
         assert_eq!(parse_version("garbage"), None);
-    }
-
-    #[test]
-    fn a_runtime_from_an_older_build_runs_nothing_in_ask_to_run() {
-        let listener = super::Listener::start("lab-server").unwrap();
-        let refused = |session: &str| listener.guard.refusal(session, "execute_cell", &serde_json::json!({ "cell_id": "a" }));
-        listener.set_mode(7, "ask");
-        listener.set_mode(8, "auto");
-        assert!(refused("7").is_some_and(|why| why.contains("older_runtime")), "a runtime that hasn't said its build counts as older");
-        listener.runtime_build(false);
-        assert_eq!(refused("7"), None, "the app's own build");
-        listener.runtime_build(true);
-        assert!(refused("7").is_some());
-        assert_eq!(refused("8"), None, "Auto runs without asking anyway");
-        listener.attaching();
-        listener.runtime_build(false);
-        assert_eq!(refused("7"), None);
     }
 }
 

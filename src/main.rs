@@ -892,7 +892,7 @@ impl Workspace {
         let (policy, edits) = (session.policy(), session.edits_ask());
         cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
         self.send_policy(key, policy, edits, cx);
-        let older = self.connections.get(&host).and_then(|c| c.older);
+        let older = self.connections.get(&host).and_then(|c| Some((c.older?, c.runtime.as_ref()?.interface)));
         let cwd = host.agent_cwd(&session.place.path);
         let _ = std::fs::create_dir_all(&cwd);
         let command = match session.id.clone() {
@@ -902,8 +902,8 @@ impl Workspace {
         self.links.send(agent, command);
         if let Some(session) = self.session_mut(key) {
             session.agent_waiting = false;
-            if let Some(older) = older {
-                session.runtime_build(older);
+            if let Some((older, interface)) = older {
+                session.runtime_build(older, interface);
             }
         }
     }
@@ -1330,17 +1330,7 @@ impl Workspace {
             }
         }
         self.save_mode(key);
-        self.tell_listener(key);
         cx.notify();
-    }
-
-    /// The session's host's listener holds back what an older runtime can't
-    /// do by the session's mode, so it hears each mode.
-    fn tell_listener(&self, key: u64) {
-        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
-        if let Some(listener) = self.listeners.get(&session.place.host) {
-            listener.set_mode(key, session.guard_mode());
-        }
     }
 
     /// Save a session's mode when it changed, for its reopening.
@@ -1486,7 +1476,6 @@ impl Workspace {
     }
 
     pub fn send_policy(&self, key: u64, policy: &'static str, edits: bool, cx: &mut Context<Self>) {
-        self.tell_listener(key);
         let Some(bridge) = self.session_bridge(key) else { return };
         // ponytail: a failed send leaves the runtime's policy stale until the next change.
         cx.background_executor().spawn(async move { pluto::set_policy(&bridge, key, policy, edits) }).detach();
