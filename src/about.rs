@@ -1,7 +1,7 @@
 //! Endeavor ▸ About Endeavor: a small window with the icon, version and build,
-//! credits, Website and Licences links, and, when there is an update to
-//! act on, a strip of update notices at the bottom. Licences opens a second window listing the parts Endeavor ships or
-//! installs and their licences.
+//! credits, Website and Licences links, and, when there is an update to act
+//! on, a strip of update notices at the bottom. Licences opens a second window
+//! listing the parts Endeavor ships or installs and their licences.
 
 use std::sync::Arc;
 

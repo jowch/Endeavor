@@ -80,5 +80,5 @@ See [Troubleshooting](./troubleshooting.md).
 
 The version of Endeavor, and of the Claude Code adapter it uses to talk to
 Claude. Endeavor can't check for a newer version or update itself yet, so
-its row shows only the version you have; a new version comes as a new
-download from the website.
+its row shows only the version you have. To get a newer one, build it again
+from the source code (see [Overview](./overview.md)).

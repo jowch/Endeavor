@@ -891,7 +891,7 @@ impl Workspace {
             .collect();
         vec![
             group(None, vec![Item::Brand]),
-            group(Some("Updates"), rows).foot("Endeavor doesn't check for a newer version yet. The adapter is how Endeavor talks to Claude; a new Endeavor brings a new one. The About window shows the same updates."),
+            group(Some("Updates"), rows).foot("Endeavor doesn't check for a newer version of itself yet. The adapter is how it talks to Claude, and each Endeavor version pins its own. The About window shows the same updates."),
             group(
                 None,
                 vec![Item::Links(vec![
