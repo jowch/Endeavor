@@ -11,23 +11,88 @@ use std::io::ErrorKind;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use endeavor_mcp::client::{self, StartError, StartOptions};
 use wire::ToApp;
 use wire::slurm::JobRequest;
 
-/// A host's listener: the app's loopback port for its runtime, for Pluto's
-/// page, the agent's MCP and the app's calls. Each connection is relayed to
-/// the runtime of the moment.
-pub use endeavor_mcp::client::{Channel, Hello, Listener, Notice};
+pub use endeavor_mcp::client::{Channel, Hello, Notice};
 
+use crate::older_runtime::Version;
 use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
 
 /// Julia needed by runtime/Project.toml's `[sources]` section.
 const MIN_JULIA: (u32, u32) = (1, 11);
+
+/// A host's listener (`endeavor_mcp::client::Listener`): the app's loopback
+/// port for its runtime, for Pluto's page, the agent's MCP and the app's
+/// calls. Each connection is relayed to the runtime of the moment. It refuses
+/// the code runs of a runtime too old to ask before a run
+/// (`older_runtime::refusal`).
+pub struct Listener {
+    relay: Arc<client::Listener>,
+    version: Arc<Known>,
+}
+
+/// The attached runtime's version (`older_runtime::Version`); none while a
+/// start is under way.
+#[derive(Default)]
+struct Known {
+    version: Mutex<Option<Version>>,
+    changed: Condvar,
+}
+
+/// How long a call waits for the version of a runtime being attached: only
+/// from when the listener relays to it until `start_runtime` returns.
+const VERSION_WAIT: Duration = Duration::from_secs(2);
+
+impl Known {
+    fn set(&self, version: Option<Version>) {
+        *self.version.lock().unwrap() = version;
+        self.changed.notify_all();
+    }
+
+    fn refusal(&self, tool: &str, arguments: &serde_json::Value) -> Option<String> {
+        if !endeavor_mcp::runs_code(tool, arguments) {
+            return None;
+        }
+        let version = self.version.lock().unwrap();
+        let (version, _) = self.changed.wait_timeout_while(version, VERSION_WAIT, |v| v.is_none()).unwrap();
+        crate::older_runtime::refusal((*version)?, tool, arguments)
+    }
+}
+
+impl Listener {
+    pub fn start(name: &str) -> Result<Arc<Listener>, String> {
+        let version = Arc::new(Known::default());
+        let known = version.clone();
+        let relay = client::Listener::with_refuse(name, Box::new(move |_session, tool, arguments| known.refusal(tool, arguments)))?;
+        Ok(Arc::new(Listener { relay, version }))
+    }
+
+    /// This Mac's Julia is restarting (Settings → Restart Julia).
+    pub fn restarting(&self) {
+        self.relay.restarting();
+    }
+
+    /// The restart `restarting` announced didn't work out: Julia didn't come back.
+    pub fn restart_failed(&self) {
+        self.relay.restart_failed();
+    }
+
+    /// The user stopped or disconnected `self`'s host on purpose: nothing
+    /// will reconnect it by itself, unlike a drop.
+    pub fn disconnected(&self) {
+        self.relay.disconnected();
+    }
+
+    pub fn port(&self) -> u16 {
+        self.relay.port()
+    }
+}
 
 /// A runtime the app is attached to, as its host's listener serves it.
 #[derive(Clone, Debug)]
@@ -45,19 +110,15 @@ pub struct Runtime {
     pub node: String,
     /// The cluster job it runs in.
     pub job: Option<wire::slurm::Job>,
-    /// The number for what its core offers callers (`endeavor_mcp::CORE_INTERFACE`),
-    /// as its record says; none from a core too old to say.
-    pub interface: Option<u32>,
-    /// Another Endeavor started it, and its core doesn't offer this app's
-    /// interface (`older_runtime::usable_as_is`).
-    pub other_version: bool,
+    /// How the app can use it: as it is, or with a note (`older_runtime`).
+    pub version: Version,
 }
 
 impl From<client::Runtime> for Runtime {
     fn from(runtime: client::Runtime) -> Runtime {
         let bridge = Bridge { url: runtime.mcp_url, token: runtime.token };
-        let other_version = !crate::older_runtime::usable_as_is(runtime.build.as_deref(), runtime.interface, crate::remote::build());
-        Runtime { page_url: runtime.page_url, bridge, pid: runtime.pid, reattached: runtime.reattached, node: runtime.node, job: runtime.job, interface: runtime.interface, other_version }
+        let version = Version::of(runtime.build.as_deref(), runtime.interface, crate::remote::build());
+        Runtime { page_url: runtime.page_url, bridge, pid: runtime.pid, reattached: runtime.reattached, node: runtime.node, job: runtime.job, version }
     }
 }
 
@@ -69,7 +130,12 @@ impl From<client::Runtime> for Runtime {
 /// installs what the start needs without asking, as it always has.
 pub fn start_runtime(channel: &Channel, listener: &Arc<Listener>, job: Option<JobRequest>, on_message: &mut dyn FnMut(ToApp), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     let options = StartOptions { job, install: true, ..StartOptions::default() };
-    channel.start_runtime(listener, &options, on_message, notice).map(Runtime::from).map_err(StartError::message)
+    // A call that reaches the new runtime before this returns waits for its version.
+    let before = listener.version.version.lock().unwrap().take();
+    let started = channel.start_runtime(&listener.relay, &options, on_message, notice).map(Runtime::from).map_err(StartError::message);
+    // A start that failed left the runtime before it attached, if any.
+    listener.version.set(started.as_ref().map_or(before, |runtime| Some(runtime.version)));
+    started
 }
 
 /// The Julia the app installs on first run (design doc §11), pinned with the
@@ -387,6 +453,46 @@ mod tests {
         assert_eq!(parse_version("julia version 1.10.0-rc1"), Some((1, 10)));
         assert!(parse_version("julia version 1.10.0").unwrap() < (1, 11));
         assert_eq!(parse_version("garbage"), None);
+    }
+
+    fn ready(build: Option<&str>, interface: Option<u32>) -> super::Runtime {
+        let runtime = endeavor_mcp::client::Runtime {
+            port: 1,
+            token: "t".into(),
+            mcp_url: "http://127.0.0.1:1/mcp".into(),
+            page_url: "http://127.0.0.1:1/".into(),
+            pid: 2,
+            reattached: true,
+            node: "lab".into(),
+            job: None,
+            remote_port: None,
+            build: build.map(str::to_owned),
+            interface,
+        };
+        runtime.into()
+    }
+
+    #[test]
+    fn a_ready_runtime_says_how_the_app_can_use_it() {
+        use crate::older_runtime::Version;
+        use endeavor_mcp::CORE_INTERFACE;
+        assert_eq!(ready(Some("0.1.0-0000000000000000"), Some(CORE_INTERFACE)).version, Version::Usable);
+        assert_eq!(ready(Some("0.1.0-0000000000000000"), None).version, Version::Other(None));
+        assert_eq!(ready(None, Some(CORE_INTERFACE + 1)).version, Version::Other(Some(CORE_INTERFACE + 1)));
+        assert_eq!(ready(None, None).version, Version::NoRunGate);
+    }
+
+    #[test]
+    fn the_listener_refuses_code_runs_only_on_a_runtime_with_no_run_gate() {
+        use crate::older_runtime::Version;
+        let listener = super::Listener::start("lab-server").unwrap();
+        let refused = |tool: &str| listener.version.refusal(tool, &serde_json::json!({ "cell_id": "a" })).is_some();
+        for (build, interface) in [(None, None), (Some("0.1.0-0000000000000000"), None), (None, Some(endeavor_mcp::CORE_INTERFACE + 1))] {
+            let version = ready(build, interface).version;
+            listener.version.set(Some(version));
+            assert_eq!(refused("execute_cell"), version == Version::NoRunGate, "{build:?} {interface:?}");
+            assert!(!refused("read_cell"));
+        }
     }
 }
 

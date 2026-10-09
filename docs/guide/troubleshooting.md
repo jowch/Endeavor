@@ -43,11 +43,17 @@ uses it says:
 
 "Julia on lab-server was started by an older version of Endeavor. Restart
 Julia to use this one. Until then, some of Claude's notebook tools may not
-work as described, and Ask to run may not ask before a run."
+work as described."
 
 Until you restart it, Claude keeps working with the notebook, but some tools
-may fail or behave differently. In **Ask to run**, that Julia may run code
-without asking you first. To restart it:
+may fail or behave differently.
+
+A Julia that a very early Endeavor started may not be able to ask you before
+a run. Then the note says "too old to ask before a run", and
+Claude can read and edit the notebook but can't run code until you restart
+it.
+
+To restart it:
 
 - On your Mac, use **Restart Julia** in Settings, under **Troubleshooting**.
 - On a server, click **Stop** next to the server in Settings, under **Where

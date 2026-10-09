@@ -104,9 +104,9 @@ pub struct Connection {
     /// Julia exited by itself (not a Stop, a restart or a quit), and hasn't
     /// been started since.
     pub crashed: bool,
-    /// Whether its runtime is one another Endeavor started that the app
-    /// can't use as it is (`older_runtime`); none until a runtime is ready.
-    pub older: Option<bool>,
+    /// How the app can use its runtime (`older_runtime`); none until a
+    /// runtime is ready.
+    pub older: Option<crate::older_runtime::Version>,
 }
 
 /// A dropped server connection.
@@ -816,11 +816,10 @@ impl Workspace {
             self.follow_folder(cx);
         }
         if let Some(connection) = self.connections.get_mut(host) {
-            let runtime = connection.runtime.as_ref().map(|r| (r.other_version, r.interface));
-            connection.older = runtime.map(|(older, _)| older);
-            if let Some((older, interface)) = runtime {
+            connection.older = connection.runtime.as_ref().map(|r| r.version);
+            if let Some(version) = connection.older {
                 for session in self.sessions.iter_mut().filter(|s| s.place.host == *host && !s.agent_waiting) {
-                    session.runtime_build(older, interface);
+                    session.runtime_build(version);
                 }
             }
         }

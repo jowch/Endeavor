@@ -156,10 +156,14 @@ In order. Each part is also useful to Claude, or harmless to it.
    app's own build started it (`remote::version()`). Each runtime reports
    both in the helper's `Ready`, from its `runtime.json`. This is the rule
    EndeavorMCP's own clients use (`older_runtime::usable_as_is`). Any other
-   runtime gets a note in each session on that host to restart Julia; the
-   listener relays its calls as they are. For such a runtime the app doesn't
-   treat the runtime as the one holding calls, so the agent's own prompts are
-   the cards.
+   runtime gets a note in each session on that host to restart Julia. For
+   such a runtime the app doesn't treat the runtime as the one holding calls,
+   so the agent's own prompts are the cards. A runtime whose `Ready` says
+   neither its build nor its interface may be from before the runtime held
+   runs (EndeavorMCP b0cab29; the build has been recorded since 808662c), so
+   the host's listener refuses its calls that run code, in every mode
+   (`older_runtime::refusal`). PR 3 (servers through `client::Session`)
+   has to keep this rule.
 4. **Give the agent the skills through the notebook MCP server.** Done, as a
    guide tool (`crates/endeavor-mcp/src/guide.rs`). The server's MCP
    `instructions` are three sentences: what the tools are for, and to call

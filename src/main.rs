@@ -892,7 +892,7 @@ impl Workspace {
         let (policy, edits) = (session.policy(), session.edits_ask());
         cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
         self.send_policy(key, policy, edits, cx);
-        let older = self.connections.get(&host).and_then(|c| Some((c.older?, c.runtime.as_ref()?.interface)));
+        let older = self.connections.get(&host).and_then(|c| c.older);
         let cwd = host.agent_cwd(&session.place.path);
         let _ = std::fs::create_dir_all(&cwd);
         let command = match session.id.clone() {
@@ -902,8 +902,8 @@ impl Workspace {
         self.links.send(agent, command);
         if let Some(session) = self.session_mut(key) {
             session.agent_waiting = false;
-            if let Some((older, interface)) = older {
-                session.runtime_build(older, interface);
+            if let Some(older) = older {
+                session.runtime_build(older);
             }
         }
     }
