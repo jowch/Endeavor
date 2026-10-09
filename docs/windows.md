@@ -57,13 +57,13 @@ machine](#try-first-on-a-real-windows-machine)).
 
 On Windows the app should open, install Node, the agent and Julia on first
 run, start the local runtime and run a notebook. None of that has been tried
-yet. It can't reach a server. These refuse with a plain error rather than
-half-work:
+yet. Servers go through EndeavorMCP's ssh client (`client::Session`), whose
+password and two-factor prompts reach the app over loopback TCP, as on the
+Mac; the app hasn't tried a server from Windows yet. These refuse with a plain
+error rather than half-work:
 
 | Where | What it says | What it needs |
 |---|---|---|
-| `src/remote.rs`, `Askpass` | "Endeavor can't connect to servers from Windows yet." | The askpass transport (loopback TCP or a named pipe), and an answer on `SSH_ASKPASS_REQUIRE`. |
-| `crates/endeavor-mcp/src/askpass.rs`, `ask_app` | ssh prompts aren't supported on Windows yet | The same transport, on the helper's side. |
 | `crates/endeavor-mcp/src/core.rs`, `main` | "Couldn't keep Julia's processes together with this one (Job Object): …" | Nothing, if Windows 8 or later: refuses rather than start a Julia whose workers could outlive it. |
 | `crates/endeavor-mcp/src/lib.rs`, `Runtime::kill` | logs "the runtime (pid …) is gone or isn't the one recorded; not stopping it" | Nothing: it won't end a process whose start time doesn't match the record. |
 
@@ -129,24 +129,24 @@ under the user's own `%LOCALAPPDATA%`.
 
 **The app:**
 
-- `src/platform.rs`, `overlay`: no holes in the web view, so menus, tips,
-  Settings and dialogs show under the notebook. Needs `SetWindowRgn`, or
-  hiding the web view while one is open.
+- `src/overlay_windows.rs`: menus, tips, Settings and dialogs over the
+  notebook get a hole cut in the web view's window with `SetWindowRgn`, and
+  the window is disabled while a menu or popover is open, so a click on the
+  notebook reaches GPUI and closes it. Not yet tried on a Windows machine.
+  As on Linux, the web view isn't dimmed behind Settings.
 - `src/platform.rs`, `webcontent`: a crashed WebView2 process isn't noticed
   (`ProcessFailed`), find in the notebook always says "Not found", and
   `has_keyboard` is always false. `url` and `give_keyboard` (wry's `focus`)
   are real.
-- `src/platform.rs`, `web_view_hooks` and `init`: nothing, so app shortcuts
-  don't reach GPUI while the notebook has the keyboard. Needs WebView2's
-  `AcceleratorKeyPressed`.
+- `src/platform.rs`, `web_view_hooks` and `init`: a click in GPUI gives
+  GPUI's window the keyboard, but app shortcuts still don't reach GPUI while
+  the notebook has the keyboard. Needs WebView2's `AcceleratorKeyPressed`.
 - `src/platform.rs`, `reduces_motion`: always false. Needs
   `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`.
 - `src/platform.rs`, `set_open_panel_message`, `snapshot`, `dialogs`: the
   same no-ops as on Linux.
 - `src/network.rs`, `monitor`: says the network is up once and never again.
   Needs `NotifyIpInterfaceChange`.
-- `src/remote.rs`, `kill_group`: does nothing. No ssh runs, since `Askpass`
-  refuses.
 
 Ported for real: the app data folder (`%LOCALAPPDATA%\Endeavor`,
 `src/install.rs`), the home folder for `~/.ssh` and Downloads, the depot list
@@ -156,7 +156,7 @@ Ported for real: the app data folder (`%LOCALAPPDATA%\Endeavor`,
 (`wire::files::real_path`), the time zone offset (`src/when.rs`,
 `src/trouble.rs`, through chrono), Reveal (`explorer /select,`), the
 notebook's light and dark theme (WebView2's `set_theme`), Bring All to Front,
-and the server tarball's executable bits (`src/remote.rs`: nothing in
+and the server tarball's executable bits (EndeavorMCP's bootstrap: nothing in
 `runtime/` is executable, and the helper is marked by name).
 
 ### CI
@@ -166,6 +166,15 @@ and the server tarball's executable bits (`src/remote.rs`: nothing in
 `cargo test --locked --workspace --no-fail-fast`. It turns off git's CRLF
 conversion before checkout. It passes on `main`.
 
+On `main` and on pull requests, a second job (`package`) makes a release
+build and keeps it as a workflow artifact for 30 days (see [Try a build from
+CI](#try-a-build-from-ci)). It builds with the MSVC toolchain and links the C
+runtime in (`+crt-static`), and WebView2's loader is linked in on MSVC too, so
+the exe needs no DLL that Windows doesn't ship. The job checks that with
+`dumpbin /dependents` and fails if it finds one. A release build is needed
+because a debug build compiles its shaders at launch from the crate's source
+folder, so it runs only on the machine that built it.
+
 Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 `tar`, symlinks or Unix sockets:
 
@@ -174,12 +183,6 @@ Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 - `tests/helper_mode.rs` (whole file).
 - `crates/wire/src/relay.rs`: all its tests (`UnixStream::pair`).
 - `crates/wire/src/files.rs`: `uploads_stay_inside_the_session_folder`.
-- `src/remote.rs`: `the_bootstrap_survives_any_login_shell`,
-  `tar_holds_the_helper_and_runtime`,
-  `bootstrap_installs_then_reuses_the_helper_and_attaches`,
-  `a_helper_that_ends_with_no_julia_is_a_drop_and_a_detach_is_not`,
-  `a_server_without_a_helper_build_is_refused_plainly`, `askpass_round_trip`,
-  `a_cancelled_password_prompt_ends_the_connect`.
 - `src/runtime.rs`: `repair_clears_stale_state_and_keeps_the_rest`.
 - `crates/endeavor-mcp/src/notebooks/tests.rs`: the `file_info` check in
   `the_apps_notebook_actions_restart_move_file_info_and_new_notebook`.
@@ -229,12 +232,18 @@ tests still need the fake Julia rewritten in Rust (see Tests below).
 
 - **GPUI** has a Windows backend: `gpui-pre-platform` 0.3.6 depends on
   `gpui-pre-windows` 0.3.6, a snapshot of Zed's `gpui_windows` (about 12,800
-  lines). It draws with DirectX through DirectComposition, and it handles IME
+  lines). It draws with DirectX, and it handles IME
   input and the native file and folder picker. Only two functions are left
   unimplemented, both macOS ideas that Endeavor doesn't call
   (`hide_other_apps`, `unhide_other_apps`). Zed's Windows support is new, so
   this backend has had much less use than the macOS one. Expect bugs that
   Zed hasn't met yet, particularly around child windows such as the web view.
+  One already met: GPUI's DirectComposition target is topmost, so it covers
+  the web view's child window and the notebook pane stays blank. The app
+  turns DirectComposition off (`GPUI_DISABLE_DIRECT_COMPOSITION`, set only
+  while GPUI starts, in `platform::application`), so GPUI draws into a plain
+  window swap chain instead. That loses only per-pixel window transparency,
+  which the app doesn't use.
 - **The web view.** lb-wry 0.53.3 embeds WebView2 as a child window of the
   app's window (`build_as_child` takes a Win32 handle). gpui-wry's
   `focus_parent` gives keyboard focus back to that window, so the worst Linux
@@ -268,15 +277,12 @@ Windows](#how-process-control-works-on-windows)). Left:
 
 ### ssh from Windows (M if askpass works, L if not)
 
-- **Askpass transport (S).** The password and 2FA prompts reach the app over a
-  Unix socket (`src/remote.rs:619`, `crates/endeavor-mcp/src/askpass.rs:34`).
-  Rust's standard library has no Unix sockets on Windows. Use loopback TCP
-  plus a per-launch token in an environment variable, or a named pipe with a
-  user-only ACL.
-- **Connection sharing.** Windows OpenSSH has no ControlMaster. The app
-  doesn't use it, but a user's `~/.ssh/config` might turn it on. Pass
-  `-o ControlMaster=no -o ControlPath=none` to the ssh command
-  (`Transport::command` in `src/remote.rs`).
+- **Askpass transport. Done.** The password and 2FA prompts reach the app over
+  loopback TCP with a per-connect token in an environment variable
+  (EndeavorMCP's `client::Asker`, `wire::askpass`), on every platform.
+- **Connection sharing. Done.** Windows OpenSSH has no ControlMaster, and a
+  user's `~/.ssh/config` might turn it on, so EndeavorMCP's ssh command passes
+  `-o ControlMaster=no -o ControlPath=none` there.
 - **Open question:** whether the ssh in Windows 10 and 11 honours
   `SSH_ASKPASS_REQUIRE=force`, including for Duo prompts (the same question
   as in remote-sessions.md). If it doesn't, the fallbacks are running ssh
@@ -329,11 +335,11 @@ code that runs only with servers, and upload names.
 
 ### Notebook view (M–L, about 1–1.5 weeks)
 
-- **Menus over the notebook (M).** WebView2 is a child window, so it draws
-  above GPUI's content, as on Linux. Port `overlay::set_hole` by cutting a
-  hole in the web view window with `SetWindowRgn`. It's unknown whether
-  GPUI's DirectComposition surface shows through that hole. The fallback is
-  to hide the web view while a menu is open.
+- **Menus over the notebook (M).** Written, untried: WebView2 is a child
+  window, so it draws above GPUI's content, as on Linux. `overlay::set_hole`
+  cuts a hole in the web view's window with `SetWindowRgn`; with
+  DirectComposition off, GPUI's own drawing should show through it. If it
+  doesn't, the fallback is to hide the web view while a menu is open.
 - **App shortcuts while the notebook has focus (M).** Use WebView2's
   `AcceleratorKeyPressed` to send Ctrl+B, Ctrl+Q, Ctrl+, Ctrl+Shift+E (Point) and the zoom keys to
   GPUI actions (the macOS version is `webkeys.rs`). Turn off browser
@@ -378,13 +384,15 @@ Windows or set `CLAUDE_CODE_GIT_BASH_PATH`.
 
 ### Packaging (M–L, about 1 week)
 
-- `scripts/bundle.sh` builds only a macOS .app. Windows needs an installer
-  (MSI, MSIX or Inno Setup) and an icon resource from `build.rs`.
-- Sign the app with Authenticode, or SmartScreen warns every user.
-- Windows 11 includes WebView2. Windows 10 may not, so bundle Microsoft's
-  Evergreen bootstrapper.
-- `install::resources()` looks for `../Resources` next to the executable.
-  Windows needs its own layout.
+- Done: CI builds a per-user installer with Inno Setup
+  (`scripts/installer.iss`, see [Install](#install)). It uses the layout
+  `install::resources()` already looks for (`bin\endeavor.exe`, `Resources\`
+  beside `bin`) and runs Microsoft's Evergreen WebView2 bootstrapper when the
+  runtime is missing. Untried on a real machine.
+- The exe has no icon resource yet (`build.rs`); the Start menu entry uses
+  `assets/icon/endeavor.ico`.
+- Sign the app and the installer with Authenticode, or SmartScreen warns
+  every user.
 - The installer must carry the Linux and macOS server helpers. The macOS
   helper can't be cross-built from Windows, so the release build needs a Mac.
 
@@ -397,6 +405,58 @@ and `wire`'s relay tests use `UnixStream::pair`. These are gated with
 Left: replace the fake Julia with a small Rust test binary so the
 helper and core tests run on Windows, and give the relay tests a loopback TCP
 pair.
+
+## Install
+
+The installer needs no administrator. It puts Endeavor in
+`%LOCALAPPDATA%\Programs\Endeavor`, adds it to the Start menu and to
+Settings → Apps for uninstalling, and installs Microsoft's WebView2 Runtime
+for this user if it's missing.
+
+1. Open the repository's Actions tab, then the latest **Windows** run on
+   `main`, or the one on a pull request. Under Artifacts, download
+   `Endeavor-windows-x86_64-setup-<build>` and unzip it.
+2. Run `Endeavor-setup-<build>.exe`. It isn't signed, so SmartScreen may say
+   "Windows protected your PC"; choose More info, then Run anyway.
+3. Click Install, then Finish. Endeavor opens and sets itself up.
+
+Installing a newer build over an older one asks you to quit Endeavor if it's
+open, then stops a runtime kept running after Endeavor quit (`endeavor.exe
+--stop-runtime`), since that runtime runs from the installed `endeavor.exe`.
+Its notebooks are already saved. Uninstalling does the same. Uninstalling leaves
+`%LOCALAPPDATA%\Endeavor` (Julia, the agents, sessions and settings).
+
+## Try a build from CI
+
+No Rust or Visual Studio is needed for this.
+
+1. Open the repository's Actions tab, then the latest **Windows** run on
+   `main`, or the one on a pull request. Under Artifacts, download
+   `Endeavor-windows-x86_64-<build>`. You need to be signed in to GitHub.
+   `<build>` is the commit, the same number About Endeavor shows (on a pull
+   request, the commit GitHub made by merging it into `main`).
+2. Extract all of it somewhere you can write to, such as Downloads, not
+   Program Files. Running the exe from inside the zip doesn't work: it
+   starts, but setup fails when it starts the agent. WebView2 keeps its
+   data in `endeavor.exe.WebView2` next to the exe.
+3. Run `Endeavor\bin\endeavor.exe`. Keep `bin` and `Resources` side by side:
+   the app finds its agents' pinned versions in `Resources`. The exe isn't
+   signed, so SmartScreen may say "Windows protected your PC"; choose More
+   info, then Run anyway.
+
+What the machine needs:
+
+- Windows 10 or 11, x64. Windows on ARM is untested (see
+  [Limits](#limits-we-cant-fix-from-endeavor)).
+- The WebView2 Runtime. Windows 11 has it, and so does Windows 10 once
+  Microsoft Edge's updates have installed it. If it's missing, install
+  Microsoft's Evergreen WebView2 Runtime, or use the [installer](#install),
+  which does.
+- An internet connection on first run: the app downloads Node, the agent
+  and Julia into `%LOCALAPPDATA%\Endeavor`.
+
+The app opens a console window next to its own, for now (see Console
+windows below). It can't connect to servers from Windows yet.
 
 ## Try first on a real Windows machine
 
@@ -451,8 +511,9 @@ test binary as its own stand-in core.
    machine, against a server with Duo.
 2. **Process control.** Getting the Job Object and detaching right so that
    Pluto workers never leak, and handling pid reuse.
-3. **Menus over the notebook.** The `SetWindowRgn` hole may not work with how
-   GPUI draws. Hiding the web view is the fallback.
+3. **Menus over the notebook.** The `SetWindowRgn` hole is untested with how
+   GPUI draws (a plain window swap chain, since DirectComposition is off).
+   Hiding the web view is the fallback.
 4. **GPUI's Windows backend is new.** It looks complete, but it has had
    little use, and Zed doesn't embed a child window the way Endeavor does.
 5. **Claude Code's shell requirements** on Windows.

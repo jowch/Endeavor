@@ -109,12 +109,27 @@ feeds each connection into the channel. The webview (`/?token=…`), the
 agent's MCP config (`/mcp`, `agent.rs`), and the `/endeavor/events` watcher
 use `127.0.0.1` URLs on it. Each host
 has its own listener for the whole launch, so a session's MCP URL (and the
-token, kept in the host's state folder) survive reconnects and restarts. The
-channel and the listener are EndeavorMCP's (`endeavor_mcp::client::Channel`
-and `Listener`); the app adds its older-runtime guard to the listener
-(`src/runtime.rs`). The app keeps one connection per host (`src/connection.rs`): its status
-(connecting, browsing, starting, ready, died, replaced, failed), its askpass,
-and what it follows of the runtime. On quit, servers detach; their idle stop
+token, kept in the host's state folder) survive reconnects and restarts. Each
+server is one EndeavorMCP `client::Session` (`src/remote.rs`): it signs in,
+installs the helper, starts or attaches to Julia, and gets a dropped
+connection back by itself, for up to 10 minutes, starting Julia again if it
+ran. ssh's prompts come through its `Asker`. Its listener refuses code runs
+on a runtime too old to ask before one, in the app's words
+(`client::Messages::no_run_gate`, `older_runtime`); This Mac's listener
+(`src/runtime.rs`) does the same. The app keeps one connection per host
+(`src/connection.rs`): its status (connecting, browsing, starting, ready,
+died, replaced, failed) and what it follows of the runtime. A server's comes
+from its session's state, read as it changes (`changes`). A drop that gets
+back to the same Julia within 2 s isn't shown at all (`LOST_GRACE`): the
+session usually has it back in well under a second, and Pluto's page
+reconnects by itself. A longer drop shows "Can't reach" with the page kept
+read-only, and once the session is back on the same Julia (same pid and node),
+however long it took, the page and its notebooks carry on: nothing is reopened
+or reloaded, since that would cut across the page's own reconnect. The
+app's Stop, Cancel and Restart force the stop, so a start the session resumed
+by itself after a drop is cancelled too. The session is kept for the whole launch unless the
+server's connection settings change, since its listener's port is in the MCP
+URL of the agents there; one that gave up is asked to try again. On quit, servers detach; their idle stop
 (the server's own setting, else Settings') covers forgotten notebooks.
 
 **Local sessions use the same path.** The app can run the helper as a child
@@ -151,9 +166,10 @@ and secret stay between the core and Julia, in `julia.json`). A runtime from
 a build before one port per runtime (`runtime.json` without `port`) is not
 attached to: the helper says Julia was started by an older Endeavor and asks
 for a restart, and Stop ends it by its pid.
-The runtime runs until the user stops it from the app's per-host list, or
-until a long idle timeout (days, with no notebooks open and nothing running)
-so forgotten runtimes don't pile up on shared machines. The state file
+The runtime runs until the user stops it from the app's per-host list. The
+app's server runtimes don't exit when idle (`exit_idle` off, as before the
+move to `client::Session`); each notebook still stops after the server's idle
+stop, so a forgotten runtime holds no running notebooks. The state file
 records the node name. If the host name rotates between machines, the helper
 reports that the runtime is on another node and does not start a second one.
 

@@ -6,7 +6,6 @@
 //! host's runtime through that host's local listener, whose one loopback port
 //! stays the same for the whole launch.
 
-use std::collections::HashMap;
 use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -21,6 +20,7 @@ use wire::slurm::JobRequest;
 
 pub use endeavor_mcp::client::{Channel, Hello, Notice};
 
+use crate::older_runtime::Version;
 use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
 
@@ -29,69 +29,48 @@ const MIN_JULIA: (u32, u32) = (1, 11);
 
 /// A host's listener (`endeavor_mcp::client::Listener`): the app's loopback
 /// port for its runtime, for Pluto's page, the agent's MCP and the app's
-/// calls. Each connection is relayed to the runtime of the moment. It also
-/// holds back what a runtime from an older build can't do (`older_runtime`).
+/// calls. Each connection is relayed to the runtime of the moment. It refuses
+/// the code runs of a runtime too old to ask before a run
+/// (`older_runtime::refusal`).
 pub struct Listener {
-    pub relay: Arc<client::Listener>,
-    guard: Arc<Guard>,
+    relay: Arc<client::Listener>,
+    version: Arc<Known>,
 }
 
-/// What the app knows of the runtime and its sessions, to hold back what a
-/// runtime from an older build can't do.
+/// The attached runtime's version (`older_runtime::Version`); none while a
+/// start is under way.
 #[derive(Default)]
-struct Guard {
-    watch: Mutex<Watch>,
-    /// Said when the runtime's build is known.
-    known: Condvar,
+struct Known {
+    version: Mutex<Option<Version>>,
+    changed: Condvar,
 }
 
-#[derive(Default)]
-struct Watch {
-    /// Whether the runtime is from another build than the app; none until it says.
-    older: Option<bool>,
-    /// Each session's mode (`Session::guard_mode`), by its key.
-    policies: HashMap<String, &'static str>,
-}
+/// How long a call waits for the version of a runtime being attached: only
+/// from when the listener relays to it until `start_runtime` returns.
+const VERSION_WAIT: Duration = Duration::from_secs(2);
 
-/// How long a call that an older runtime couldn't carry out waits for the
-/// runtime to say which build it is, after the app attaches to it.
-const BUILD_WAIT: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 2 });
+impl Known {
+    fn set(&self, version: Option<Version>) {
+        *self.version.lock().unwrap() = version;
+        self.changed.notify_all();
+    }
 
-impl Guard {
-    /// Why the agent's call to `tool` from session `session` is refused here:
-    /// something the runtime, from an older build, can't do safely. A runtime
-    /// that hasn't said which build it is yet counts as older once it has had
-    /// time to say.
-    fn refusal(&self, session: &str, tool: &str, arguments: &serde_json::Value) -> Option<String> {
-        let watch = self.watch.lock().unwrap();
-        let why = crate::older_runtime::refusal(watch.policies.get(session).copied().unwrap_or("ask"), tool, arguments)?;
-        let (watch, _) = self.known.wait_timeout_while(watch, BUILD_WAIT, |w| w.older.is_none()).unwrap();
-        (watch.older != Some(false)).then_some(why)
+    fn refusal(&self, tool: &str, arguments: &serde_json::Value) -> Option<String> {
+        if !endeavor_mcp::runs_code(tool, arguments) {
+            return None;
+        }
+        let version = self.version.lock().unwrap();
+        let (version, _) = self.changed.wait_timeout_while(version, VERSION_WAIT, |v| v.is_none()).unwrap();
+        crate::older_runtime::refusal((*version)?, tool, arguments)
     }
 }
 
 impl Listener {
     pub fn start(name: &str) -> Result<Arc<Listener>, String> {
-        let guard = Arc::new(Guard::default());
-        let refuse = guard.clone();
-        let relay = client::Listener::with_refuse(name, Box::new(move |session, tool, arguments| refuse.refusal(session, tool, arguments)))?;
-        Ok(Arc::new(Listener { relay, guard }))
-    }
-
-    /// A runtime is about to attach: its build isn't known until it says.
-    fn attaching(&self) {
-        self.guard.watch.lock().unwrap().older = None;
-    }
-
-    /// The runtime said which build it came from: whether that's another than the app's.
-    pub fn runtime_build(&self, older: bool) {
-        self.guard.watch.lock().unwrap().older = Some(older);
-        self.guard.known.notify_all();
-    }
-
-    /// Session `key`'s mode, as `Session::guard_mode` names it.
-    pub fn set_mode(&self, key: u64, mode: &'static str) {
-        self.guard.watch.lock().unwrap().policies.insert(key.to_string(), mode);
+        let version = Arc::new(Known::default());
+        let known = version.clone();
+        let relay = client::Listener::with_refuse(name, Box::new(move |_session, tool, arguments| known.refusal(tool, arguments)))?;
+        Ok(Arc::new(Listener { relay, version }))
     }
 
     /// This Mac's Julia is restarting (Settings → Restart Julia).
@@ -108,10 +87,6 @@ impl Listener {
     /// will reconnect it by itself, unlike a drop.
     pub fn disconnected(&self) {
         self.relay.disconnected();
-    }
-
-    pub fn port(&self) -> u16 {
-        self.relay.port()
     }
 }
 
@@ -131,12 +106,15 @@ pub struct Runtime {
     pub node: String,
     /// The cluster job it runs in.
     pub job: Option<wire::slurm::Job>,
+    /// How the app can use it: as it is, or with a note (`older_runtime`).
+    pub version: Version,
 }
 
 impl From<client::Runtime> for Runtime {
     fn from(runtime: client::Runtime) -> Runtime {
         let bridge = Bridge { url: runtime.mcp_url, token: runtime.token };
-        Runtime { page_url: runtime.page_url, bridge, pid: runtime.pid, reattached: runtime.reattached, node: runtime.node, job: runtime.job }
+        let version = Version::of(runtime.build.as_deref(), runtime.interface, crate::remote::build());
+        Runtime { page_url: runtime.page_url, bridge, pid: runtime.pid, reattached: runtime.reattached, node: runtime.node, job: runtime.job, version }
     }
 }
 
@@ -146,10 +124,14 @@ impl From<client::Runtime> for Runtime {
 /// `Submitted` and `Queued` meanwhile, and `notice` the first word of the
 /// runtime going away later, unless the app is the one stopping it. The helper
 /// installs what the start needs without asking, as it always has.
-pub fn start_runtime(channel: &Channel, listener: &Listener, job: Option<JobRequest>, on_message: &mut dyn FnMut(ToApp), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
-    listener.attaching();
+pub fn start_runtime(channel: &Channel, listener: &Arc<Listener>, job: Option<JobRequest>, on_message: &mut dyn FnMut(ToApp), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     let options = StartOptions { job, install: true, ..StartOptions::default() };
-    channel.start_runtime(&listener.relay, &options, on_message, notice).map(Runtime::from).map_err(StartError::message)
+    // A call that reaches the new runtime before this returns waits for its version.
+    let before = listener.version.version.lock().unwrap().take();
+    let started = channel.start_runtime(&listener.relay, &options, on_message, notice).map(Runtime::from).map_err(StartError::message);
+    // A start that failed left the runtime before it attached, if any.
+    listener.version.set(started.as_ref().map_or(before, |runtime| Some(runtime.version)));
+    started
 }
 
 /// The Julia the app installs on first run (design doc §11), pinned with the
@@ -307,12 +289,7 @@ pub fn clear_state() -> Result<Vec<PathBuf>, String> {
 
 fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     let state_dir = app_dir.join("runtime");
-    let recorded = std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    if let Some(recorded) = recorded
-        && let Some(pid) = recorded["pid"].as_i64().and_then(|p| i32::try_from(p).ok()).filter(|&p| p > 1)
-    {
-        stop_group(pid, recorded["started"].as_u64());
-    }
+    stop_recorded_in(&state_dir);
     let mut stale: Vec<PathBuf> = ["runtime.json", "runtime.json.tmp", "lock"].iter().map(|f| state_dir.join(f)).collect();
     if let Ok(versions) = std::fs::read_dir(app_dir.join("depot/compiled")) {
         stale.extend(versions.flatten().map(|v| v.path().join("EndeavorRuntime")));
@@ -327,6 +304,27 @@ fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(removed)
+}
+
+/// `endeavor.exe --stop-runtime`: the Windows installer stops a runtime kept
+/// running before it replaces or removes the exe, which that runtime's core
+/// runs from. Its open notebooks are already saved (Pluto saves on each change).
+pub const STOP_FLAG: &str = "--stop-runtime";
+
+/// Stop the runtime recorded in This Mac's state folder, if one still runs.
+pub fn stop_recorded() {
+    if let Ok(app_dir) = crate::install::app_dir() {
+        stop_recorded_in(&app_dir.join("runtime"));
+    }
+}
+
+fn stop_recorded_in(state_dir: &Path) {
+    let recorded = std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    if let Some(recorded) = recorded
+        && let Some(pid) = recorded["pid"].as_i64().and_then(|p| i32::try_from(p).ok()).filter(|&p| p > 1)
+    {
+        stop_group(pid, recorded["started"].as_u64());
+    }
 }
 
 /// The runtime runs in its own session, so its recorded pid (the core's, or
@@ -357,7 +355,7 @@ fn stop_group(pid: i32, started: Option<u64>) {
 /// Start This Mac's runtime on `channel` (or attach to the one running) and
 /// relay `listener` to it. `progress` hears Julia's log while it starts;
 /// `notice` hears if it goes away later.
-pub fn start_local(channel: &Channel, listener: &Listener, progress: &dyn Fn(Progress), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
+pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn Fn(Progress), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     progress(Progress::new(Step::Packages, "Starting Julia…"));
     let runtime = start_runtime(channel, listener, None, &mut |message| {
         if let ToApp::Progress { line } = message {
@@ -474,21 +472,44 @@ mod tests {
         assert_eq!(parse_version("garbage"), None);
     }
 
+    fn ready(build: Option<&str>, interface: Option<u32>) -> super::Runtime {
+        let runtime = endeavor_mcp::client::Runtime {
+            port: 1,
+            token: "t".into(),
+            mcp_url: "http://127.0.0.1:1/mcp".into(),
+            page_url: "http://127.0.0.1:1/".into(),
+            pid: 2,
+            reattached: true,
+            node: "lab".into(),
+            job: None,
+            remote_port: None,
+            build: build.map(str::to_owned),
+            interface,
+        };
+        runtime.into()
+    }
+
     #[test]
-    fn a_runtime_from_an_older_build_runs_nothing_in_ask_to_run() {
+    fn a_ready_runtime_says_how_the_app_can_use_it() {
+        use crate::older_runtime::Version;
+        use endeavor_mcp::CORE_INTERFACE;
+        assert_eq!(ready(Some("0.1.0-0000000000000000"), Some(CORE_INTERFACE)).version, Version::Usable);
+        assert_eq!(ready(Some("0.1.0-0000000000000000"), None).version, Version::Other(None));
+        assert_eq!(ready(None, Some(CORE_INTERFACE + 1)).version, Version::Other(Some(CORE_INTERFACE + 1)));
+        assert_eq!(ready(None, None).version, Version::NoRunGate);
+    }
+
+    #[test]
+    fn the_listener_refuses_code_runs_only_on_a_runtime_with_no_run_gate() {
+        use crate::older_runtime::Version;
         let listener = super::Listener::start("lab-server").unwrap();
-        let refused = |session: &str| listener.guard.refusal(session, "execute_cell", &serde_json::json!({ "cell_id": "a" }));
-        listener.set_mode(7, "ask");
-        listener.set_mode(8, "auto");
-        assert!(refused("7").is_some_and(|why| why.contains("older_runtime")), "a runtime that hasn't said its build counts as older");
-        listener.runtime_build(false);
-        assert_eq!(refused("7"), None, "the app's own build");
-        listener.runtime_build(true);
-        assert!(refused("7").is_some());
-        assert_eq!(refused("8"), None, "Auto runs without asking anyway");
-        listener.attaching();
-        listener.runtime_build(false);
-        assert_eq!(refused("7"), None);
+        let refused = |tool: &str| listener.version.refusal(tool, &serde_json::json!({ "cell_id": "a" })).is_some();
+        for (build, interface) in [(None, None), (Some("0.1.0-0000000000000000"), None), (None, Some(endeavor_mcp::CORE_INTERFACE + 1))] {
+            let version = ready(build, interface).version;
+            listener.version.set(Some(version));
+            assert_eq!(refused("execute_cell"), version == Version::NoRunGate, "{build:?} {interface:?}");
+            assert!(!refused("read_cell"));
+        }
     }
 }
 
@@ -551,12 +572,47 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
     let removed = clear_state_in(&app).unwrap();
     let removed: Vec<String> = removed.iter().map(|p| p.strip_prefix(&app).unwrap().display().to_string()).collect();
     assert_eq!(removed, ["runtime/runtime.json", "runtime/lock", "depot/compiled/v1.12/EndeavorRuntime"]);
-    assert!(julia.try_wait().unwrap().is_some(), "the recorded runtime was stopped");
+    // Its group can be empty a moment before the child is ours to reap (seen on macOS), so poll.
+    let stopped = (0..50).any(|_| {
+        let gone = julia.try_wait().unwrap().is_some();
+        if !gone {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        gone
+    });
+    assert!(stopped, "the recorded runtime was stopped");
     for kept in ["runtime/token", "runtime/runtime.log", "depot/compiled/v1.12/Pluto/a.ji", "depot/packages/Pluto/x/src/Pluto.jl", "sessions.json"] {
         assert!(app.join(kept).exists(), "{kept} stays");
     }
     assert_eq!(clear_state_in(&app).unwrap(), Vec::<PathBuf>::new(), "nothing left to clear");
     let _ = std::fs::remove_dir_all(&app);
+}
+
+// What the Windows installer relies on before it replaces endeavor.exe: the
+// recorded core is ended, and a pid reused by a later process isn't.
+#[cfg(all(test, windows))]
+#[test]
+fn stop_recorded_ends_the_recorded_process_only() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::{Foundation::FILETIME, System::Threading::GetProcessTimes};
+    let state = std::env::temp_dir().join(format!("endeavor-stop-{}", std::process::id()));
+    std::fs::create_dir_all(&state).unwrap();
+    let mut core = Command::new("ping").args(["-n", "120", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap();
+    let mut times = [FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 }; 4];
+    let [created, exited, kernel, user] = &mut times;
+    // SAFETY: four FILETIMEs to write into; a handle to our own child.
+    assert_ne!(unsafe { GetProcessTimes(core.as_raw_handle(), created, exited, kernel, user) }, 0);
+    let started = (u64::from(times[0].dwHighDateTime) << 32) | u64::from(times[0].dwLowDateTime);
+    let pid = core.id();
+    let record = |started: u64| std::fs::write(state.join("runtime.json"), format!(r#"{{"pid": {pid}, "started": {started}}}"#)).unwrap();
+
+    record(started + 1);
+    stop_recorded_in(&state);
+    assert!(core.try_wait().unwrap().is_none(), "another process with the recorded pid is left alone");
+    record(started);
+    stop_recorded_in(&state);
+    assert!(core.try_wait().unwrap().is_some(), "the recorded process was stopped");
+    let _ = std::fs::remove_dir_all(&state);
 }
 
 #[cfg(test)]

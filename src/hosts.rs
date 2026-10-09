@@ -132,8 +132,9 @@ impl Hosts {
         crate::install::app_dir().ok().map(|d| Hosts::load_from(&d.join(FILE))).unwrap_or_default()
     }
 
+    /// A file that doesn't parse is set aside first, so a save can't overwrite the servers it holds.
     fn load_from(path: &Path) -> Hosts {
-        std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+        crate::load_json_at(path)
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -144,7 +145,8 @@ impl Hosts {
 
     fn save_to(&self, path: &Path) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| format!("Couldn't save {}: {e}", path.display()))
+        // Whole or not at all: a crash or a full disk mid-write leaves the old list.
+        crate::write_atomic(path, json.as_bytes()).map_err(|e| format!("Couldn't save {}: {e}", path.display()))
     }
 
     pub fn server(&self, id: &str) -> Option<&Server> {
@@ -287,6 +289,10 @@ mod tests {
         assert!(text.contains("\"idle_stop\": \"week\"") && text.contains("\"port\": 2222"), "{text}");
         hosts.remove("a");
         assert_eq!(hosts.servers.len(), 1);
+        // A list cut short reads as none, and is kept aside rather than saved over.
+        std::fs::write(&path, &text[..text.len() / 2]).unwrap();
+        assert_eq!(Hosts::load_from(&path), Hosts::default());
+        assert!(dir.join(format!("{FILE}.bad")).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
