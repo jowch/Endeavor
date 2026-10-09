@@ -13,7 +13,8 @@ use gpui::{Bounds, Pixels};
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF};
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows_sys::Win32::UI::WindowsAndMessaging::GetParent;
 
 /// What a hole in the web view is for; each has at most one.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -80,6 +81,11 @@ fn apply(holes: &Holes) {
                 DeleteObject(region);
             }
         }
+        // A disabled window keeps the keyboard if it has it, and then keys go
+        // nowhere, so GPUI's window takes it first.
+        if holes.dismiss {
+            SetFocus(GetParent(hwnd));
+        }
         EnableWindow(hwnd, (!holes.dismiss).into());
     }
 }
@@ -101,7 +107,7 @@ pub fn set_dismiss_on_click(webview: &wry::WebView, active: bool) {
     update(Some(webview), |holes| std::mem::replace(&mut holes.dismiss, active) != active);
 }
 
-/// The web view isn't dimmed behind a panel on Windows, as on Linux.
+/// As on Linux, the web view isn't dimmed behind a panel.
 pub fn set_dimmed(_: &wry::WebView, _: bool) {}
 
 /// Cut `owner`'s hole in the web view at `hole` (relative to the web view's

@@ -131,7 +131,7 @@ under the user's own `%LOCALAPPDATA%`.
   notebook get a hole cut in the web view's window with `SetWindowRgn`, and
   the window is disabled while a menu or popover is open, so a click on the
   notebook reaches GPUI and closes it. Not yet tried on a Windows machine.
-  The web view isn't dimmed behind Settings, as on Linux.
+  As on Linux, the web view isn't dimmed behind Settings.
 - `src/platform.rs`, `webcontent`: a crashed WebView2 process isn't noticed
   (`ProcessFailed`), find in the notebook always says "Not found", and
   `has_keyboard` is always false. `url` and `give_keyboard` (wry's `focus`)

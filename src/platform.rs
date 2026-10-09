@@ -197,12 +197,15 @@ pub fn web_view_hooks() -> impl gpui::IntoElement {
 /// a click in Settings over the notebook left the keyboard in the notebook.
 /// WebView2's own keys aren't ported (docs/windows.md).
 #[cfg(windows)]
+static WAS_HOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
 pub fn web_view_hooks() -> impl gpui::IntoElement {
     use gpui::Styled;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     gpui::canvas(
         |_, _, _| (),
-        |_, _, window, _| {
+        |_, _, window, cx| {
             let Ok(handle) = window.window_handle() else { return };
             let RawWindowHandle::Win32(handle) = handle.as_raw() else { return };
             let hwnd = handle.hwnd.get() as usize;
@@ -211,6 +214,18 @@ pub fn web_view_hooks() -> impl gpui::IntoElement {
                     unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(hwnd as _) };
                 }
             });
+            // The pointer moving from GPUI onto the web view (a child window)
+            // leaves GPUI's window, but GPUI gets no last mouse move, so a
+            // tooltip stayed up until the pointer came back. Send it one from
+            // outside the window, which closes tooltips and clears hovers.
+            let hovered = window.is_window_hovered();
+            if !hovered && WAS_HOVERED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                window.defer(cx, |window, cx| {
+                    let away = gpui::MouseMoveEvent { position: gpui::point(gpui::px(-1.), gpui::px(-1.)), pressed_button: None, modifiers: window.modifiers() };
+                    window.dispatch_event(gpui::PlatformInput::MouseMove(away), cx);
+                });
+            }
+            WAS_HOVERED.store(hovered, std::sync::atomic::Ordering::Relaxed);
         },
     )
     .absolute()
