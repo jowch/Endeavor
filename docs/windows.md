@@ -169,6 +169,15 @@ and the server tarball's executable bits (EndeavorMCP's bootstrap: nothing in
 `cargo test --locked --workspace --no-fail-fast`. It turns off git's CRLF
 conversion before checkout. It passes on `main`.
 
+On `main` and on pull requests, a second job (`package`) makes a release
+build and keeps it as a workflow artifact for 30 days (see [Try a build from
+CI](#try-a-build-from-ci)). It builds with the MSVC toolchain and links the C
+runtime in (`+crt-static`), and WebView2's loader is linked in on MSVC too, so
+the exe needs no DLL that Windows doesn't ship. The job checks that with
+`dumpbin /dependents` and fails if it finds one. A release build is needed
+because a debug build compiles its shaders at launch from the crate's source
+folder, so it runs only on the machine that built it.
+
 Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 `tar`, symlinks or Unix sockets:
 
@@ -391,6 +400,37 @@ and `wire`'s relay tests use `UnixStream::pair`. These are gated with
 Left: replace the fake Julia with a small Rust test binary so the
 helper and core tests run on Windows, and give the relay tests a loopback TCP
 pair.
+
+## Try a build from CI
+
+No Rust or Visual Studio is needed for this.
+
+1. Open the repository's Actions tab, then the latest **Windows** run on
+   `main`, or the one on a pull request. Under Artifacts, download
+   `Endeavor-windows-x86_64-<build>`. You need to be signed in to GitHub.
+   `<build>` is the commit, the same number About Endeavor shows (on a pull
+   request, the commit GitHub made by merging it into `main`).
+2. Extract all of it somewhere you can write to, such as Downloads, not
+   Program Files. Running the exe from inside the zip doesn't work: it
+   starts, but setup fails when it starts the agent. WebView2 keeps its
+   data in `endeavor.exe.WebView2` next to the exe.
+3. Run `Endeavor\bin\endeavor.exe`. Keep `bin` and `Resources` side by side:
+   the app finds its agents' pinned versions in `Resources`. The exe isn't
+   signed, so SmartScreen may say "Windows protected your PC"; choose More
+   info, then Run anyway.
+
+What the machine needs:
+
+- Windows 10 or 11, x64. Windows on ARM is untested (see
+  [Limits](#limits-we-cant-fix-from-endeavor)).
+- The WebView2 Runtime. Windows 11 has it, and so does Windows 10 once
+  Microsoft Edge's updates have installed it. If it's missing, install
+  Microsoft's Evergreen WebView2 Runtime. The installer (#12) will do this.
+- An internet connection on first run: the app downloads Node, the agent
+  and Julia into `%LOCALAPPDATA%\Endeavor`.
+
+The app opens a console window next to its own, for now (see Console
+windows below). It can't connect to servers from Windows yet.
 
 ## Try first on a real Windows machine
 
