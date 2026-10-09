@@ -928,13 +928,10 @@ impl Workspace {
                     self.watch_notebooks(&host, cx);
                     self.warn_before_job_ends(&host, cx);
                 }
-                // A page let go meanwhile (another session was shown) loads as any switch does.
-                // So does one still waiting to reconnect: after a long drop Pluto's page backs off
-                // and may not try again for minutes, and with nothing to reopen a load can't race.
                 let shown = self.active_session().filter(|s| s.place.host == host).and_then(|s| s.notebook.clone());
                 let origin = self.connection(&host).and_then(|c| c.runtime.as_ref()).and_then(|r| Some(r.page_url.split_once('?')?.0.to_owned()));
                 if let (Some(id), Some(origin)) = (shown, origin)
-                    && (!crate::webcontent::url(self.webview.read(cx).raw()).starts_with(&origin) || (self.page.notebook == id && !self.page.connected))
+                    && load_again(&crate::webcontent::url(self.webview.read(cx).raw()), &origin, &self.page, &id)
                 {
                     self.load_notebook(&host, &id, cx);
                 }
@@ -2085,9 +2082,20 @@ fn stop_reason(why: &str) -> String {
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
+/// Back on the same Julia, the shown notebook's page loads again when the web
+/// view is at `at`. A page let go meanwhile (another session was shown) loads
+/// as any switch does. So does one still waiting to reconnect: after a long drop
+/// Pluto's page backs off and may not try again for minutes, and with nothing to
+/// reopen a load can't race. Not if a cell has an edit that hasn't been run:
+/// leaving the page would lose it, so Pluto's own reconnect keeps it. A page
+/// that reconnected within the last state tick loads once more, which is harmless.
+fn load_again(at: &str, origin: &str, page: &crate::annotate::PageState, notebook: &str) -> bool {
+    !at.starts_with(origin) || (page.notebook == notebook && !page.connected && !page.unsaved)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, not_restarted, not_stopped, percent, runtime_of};
+    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, not_restarted, not_stopped, percent, runtime_of};
 
     fn line(state: LineState, node: &str) -> LineStatus {
         let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
@@ -2148,6 +2156,18 @@ mod tests {
         c.status = Status::Ready;
         c.runtime = Some(runtime_of(runtime(7)));
         assert!(c.same_julia(&runtime_of(client::RuntimeInfo { reattached: true, ..runtime(7) })), "seen again while ready");
+    }
+
+    #[test]
+    fn back_on_the_same_julia_a_page_still_reconnecting_loads_again_unless_it_has_edits() {
+        let origin = "http://127.0.0.1:4100/edit";
+        let at = "http://127.0.0.1:4100/edit?id=nb";
+        let page = crate::annotate::PageState { notebook: "nb".into(), connected: false, ..Default::default() };
+        assert!(load_again("about:blank", origin, &page, "nb"), "the page was let go");
+        assert!(load_again(at, origin, &page, "nb"), "still waiting to reconnect");
+        assert!(!load_again(at, origin, &crate::annotate::PageState { connected: true, ..page.clone() }, "nb"), "already live");
+        assert!(!load_again(at, origin, &crate::annotate::PageState { unsaved: true, ..page.clone() }, "nb"), "an edit not yet run");
+        assert!(!load_again(at, origin, &page, "other"), "the page is another notebook's");
     }
 
     #[test]

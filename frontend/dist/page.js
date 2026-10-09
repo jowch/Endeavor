@@ -27,6 +27,41 @@
     return mac ? `\u2318${key}` : `Ctrl+${key}`;
   }
 
+  // src/reveal.ts
+  var css = `
+  pluto-cell.endeavor-flash { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px;
+    transition: outline-color 0.3s; }
+  pluto-cell.endeavor-flash.fading { outline-color: transparent; }
+`;
+  function cellCode(cell) {
+    const content = cell?.querySelector("pluto-input .cm-content");
+    const view = content?.cmTile?.root?.view;
+    if (view) return view.state.doc.toString();
+    const lines = content ? [...content.querySelectorAll(".cm-line")].map((l) => l.textContent ?? "") : [];
+    return lines.join("\n");
+  }
+  function reveal(ids) {
+    const cells = ids.map((id) => document.getElementById(id)).filter((c) => !!c);
+    if (!cells.length) return;
+    cells[0].scrollIntoView({ block: "center", behavior: "smooth" });
+    for (const cell of cells) {
+      cell.classList.remove("fading");
+      cell.classList.add("endeavor-flash");
+    }
+    setTimeout(() => cells.forEach((c) => c.classList.add("fading")), 900);
+    setTimeout(() => cells.forEach((c) => c.classList.remove("endeavor-flash", "fading")), 1300);
+  }
+  function initReveal() {
+    const style2 = document.createElement("style");
+    style2.textContent = css;
+    document.head.append(style2);
+    on("reveal", (msg) => reveal(msg.cells));
+    on("code", (msg) => {
+      const cell = document.getElementById(msg.cell);
+      send({ type: "code", cell: msg.cell, code: cell ? cellCode(cell) : null });
+    });
+  }
+
   // src/cellname.ts
   function cellName(code) {
     const markdown = markdownText(code);
@@ -219,6 +254,181 @@
     };
   }
 
+  // src/runguard.ts
+  function reach(start, deps) {
+    const seen = /* @__PURE__ */ new Set();
+    const todo = [...start];
+    while (todo.length) {
+      const id = todo.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const next of Object.values(deps[id]?.downstream_cells_map ?? {}).flat()) todo.push(next);
+    }
+    return [...seen];
+  }
+  var css2 = `
+  #endeavor-runguard { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 210;
+    width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 14px 16px; border-radius: 10px;
+    border: 1px solid var(--e-dialog-edge); background: var(--e-dialog-bg); box-shadow: 0 16px 48px var(--e-dialog-shadow);
+    font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
+  #endeavor-runguard b { display: block; margin-bottom: 4px; font-weight: 600; font-size: 13.5px; color: var(--e-text-primary); }
+  #endeavor-runguard code { font: 600 12.5px JuliaMono, ui-monospace, monospace; color: var(--e-text-primary); }
+  #endeavor-runguard button.show code { color: inherit; }
+  #endeavor-runguard .buttons { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  #endeavor-runguard .gap { flex: 1; }
+  #endeavor-runguard button { padding: 4px 12px; border-radius: 5px; border: 1px solid var(--e-control-edge); background: var(--e-bg-raised);
+    color: var(--e-text-primary); font: 12.5px system-ui, sans-serif; cursor: pointer; }
+  #endeavor-runguard button.show { border-color: transparent; background: none; color: var(--e-accent-text); padding: 4px 6px; }
+  #endeavor-runguard button.primary { background: var(--e-accent); border-color: var(--e-accent); color: #fff; }
+  #endeavor-runguard .hint { color: var(--e-text-dim); font-size: 11.5px; margin-left: -2px; }
+  pluto-cell.endeavor-guard-show { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px; }
+`;
+  var waiting = [];
+  var replaying = false;
+  var shown = null;
+  var escape = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  var editor = () => window.editor_state;
+  function changedCells(st) {
+    const local = st.cell_inputs_local ?? {};
+    const remote = st.notebook?.cell_inputs ?? {};
+    return (st.notebook?.cell_order ?? []).filter((id) => local[id] != null && remote[id]?.code !== local[id]?.code);
+  }
+  function differs(st, cell) {
+    const text = st.cell_inputs_local?.[cell.id]?.code ?? cellCode(cell);
+    return text !== st.notebook?.cell_inputs?.[cell.id]?.code;
+  }
+  function runStart(e, st) {
+    const target = e.target instanceof Element ? e.target : null;
+    const selected = st.selected_cells ?? [];
+    if (e.type === "click") {
+      const button = target?.closest("pluto-runarea.run button.runcell");
+      const cell = button?.closest("pluto-cell");
+      if (!cell) return null;
+      return { start: selected.includes(cell.id) ? selected : [cell.id], changes: false };
+    }
+    if (e.type !== "keydown") return null;
+    const k = e;
+    const inEditor = target?.closest("pluto-input") ? target.closest("pluto-cell") : null;
+    if (k.key?.toLowerCase() === "s" && modHeld(k) && !k.shiftKey && !k.altKey) {
+      const changed = changedCells(st);
+      return changed.length ? { start: changed, changes: true } : null;
+    }
+    if (k.key !== "Enter") return null;
+    if (k.shiftKey && !k.metaKey && !k.ctrlKey && !k.altKey) {
+      const start = [.../* @__PURE__ */ new Set([...inEditor ? [inEditor.id] : [], ...selected])];
+      return start.length ? { start, changes: false } : null;
+    }
+    if ((k.metaKey || k.ctrlKey) && !k.shiftKey && !k.altKey && inEditor) {
+      return differs(st, inEditor) ? { start: [inEditor.id], changes: true } : null;
+    }
+    return null;
+  }
+  function replayOf(e) {
+    const target = e.target;
+    if (e.type === "click") return () => target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const k = e;
+    const init2 = { key: k.key, code: k.code, shiftKey: k.shiftKey, ctrlKey: k.ctrlKey, metaKey: k.metaKey, altKey: k.altKey, bubbles: true, cancelable: true };
+    return () => {
+      target.focus?.();
+      target.dispatchEvent(new KeyboardEvent("keydown", init2));
+    };
+  }
+  var nameOf = (w, deps) => w.name || definedNames(deps[w.id]?.downstream_cells_map)[0] || "a cell";
+  function names(list) {
+    const code = list.map((n) => `<code>${escape(n)}</code>`);
+    return code.length <= 1 ? code.join("") : `${code.slice(0, -1).join(", ")} and ${code[code.length - 1]}`;
+  }
+  function outline(on2) {
+    for (const cell of document.querySelectorAll("pluto-cell.endeavor-guard-show")) cell.classList.remove("endeavor-guard-show");
+    if (!on2 || !shown) return;
+    const cells = shown.hit.map((w) => document.getElementById(w.id)).filter((c) => !!c);
+    cells[0]?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    for (const cell of cells) cell.classList.add("endeavor-guard-show");
+  }
+  function close() {
+    outline(false);
+    shown?.el.remove();
+    shown = null;
+  }
+  function cancel() {
+    close();
+  }
+  function runAnyway() {
+    if (!shown) return;
+    const { hit, replay } = shown;
+    close();
+    const ids = hit.map((w) => w.id);
+    const results = () => editor()?.notebook?.cell_results ?? {};
+    const before = Object.fromEntries(ids.map((id) => [id, results()[id]?.last_run_timestamp]));
+    replaying = true;
+    try {
+      replay();
+    } finally {
+      replaying = false;
+    }
+    const started = Date.now();
+    const answer = () => {
+      const now = results();
+      const under_way = ids.every((id) => now[id]?.queued || now[id]?.running || now[id]?.last_run_timestamp !== before[id]);
+      if (under_way || Date.now() - started > 3e3) {
+        send({ type: "run_anyway", notebook: notebookId(), cells: ids.map((id) => ({ id, last_run: before[id] ?? 0 })) });
+      } else setTimeout(answer, 50);
+    };
+    answer();
+  }
+  function show(hit, changes, replay, deps) {
+    close();
+    const list = hit.map((w) => nameOf(w, deps));
+    const one = list.length === 1;
+    const el2 = document.createElement("div");
+    el2.id = "endeavor-runguard";
+    el2.dataset.endeavorUi = "";
+    el2.setAttribute("role", "dialog");
+    el2.setAttribute("aria-label", `${context.agent} is waiting for your answer`);
+    const what = changes ? "your changes" : "this";
+    el2.innerHTML = `<b>${context.agent} is waiting for your answer on ${names(list)}.</b>Running ${what} now also runs ${one ? "it" : "them"}.<div class="buttons"><button class="show">Show ${one ? names(list) : "them"}</button><span class="gap"></span><button class="cancel">Cancel</button><span class="hint">esc</span><button class="primary run">Run anyway</button></div>`;
+    el2.querySelector(".show").onclick = () => outline(true);
+    el2.querySelector(".cancel").onclick = cancel;
+    el2.querySelector(".run").onclick = (e) => byUser(e) && runAnyway();
+    document.body.append(el2);
+    shown = { el: el2, hit, replay };
+    el2.querySelector(".run").focus();
+  }
+  function guard(e) {
+    if (replaying || !waiting.length || !byUser(e)) return;
+    const st = editor();
+    if (!st?.notebook || st.notebook.process_status === "waiting_for_permission") return;
+    const run = runStart(e, st);
+    if (!run) return;
+    const deps = st.notebook.cell_dependencies ?? {};
+    const reached = new Set(reach(run.start, deps));
+    const hit = waiting.filter((w) => reached.has(w.id));
+    if (!hit.length) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    show(hit, run.changes, replayOf(e), deps);
+  }
+  function onKey(e) {
+    if (shown && byUser(e) && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      if (e.key === "Escape" || e.key === "Enter") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return e.key === "Escape" ? cancel() : runAnyway();
+      }
+    }
+    guard(e);
+  }
+  function initRunGuard() {
+    const style2 = document.createElement("style");
+    style2.textContent = css2;
+    document.head.append(style2);
+    on("context", (msg) => {
+      waiting = msg.waiting_runs ?? [];
+    });
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("click", guard, true);
+  }
+
   // src/state.ts
   var listeners = [];
   var last = null;
@@ -250,6 +460,7 @@
       package_failed: model.failure?.name ?? null,
       dead: last.process_status === "no_process",
       connected: editor2?.connected !== false,
+      unsaved: editor2 ? changedCells(editor2).length > 0 : false,
       drawer: drawerOf()
     };
     const json = JSON.stringify(msg);
@@ -294,7 +505,7 @@
   }
 
   // src/actions.ts
-  var css = `
+  var css3 = `
   #endeavor-sheet { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
     background: var(--e-backdrop); font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--e-text-code); }
   #endeavor-sheet .card { width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 16px 18px;
@@ -336,7 +547,7 @@
     [`${cmd} E`, `Ask ${context.agent} about the selection, or the cell`],
     [`${cmd} \u21E7 E`, "Point: pick cells or draw a box to ask about"]
   ];
-  var escape = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  var escape2 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   function sheet(html) {
     document.getElementById("endeavor-sheet")?.remove();
     const el2 = document.createElement("div");
@@ -354,7 +565,7 @@
     return el2;
   }
   function showShortcuts() {
-    const rows = shortcuts().map((s) => typeof s === "string" ? `<div class="head">${escape(s)}</div>` : `<kbd>${escape(s[0])}</kbd><span>${escape(s[1])}</span>`).join("");
+    const rows = shortcuts().map((s) => typeof s === "string" ? `<div class="head">${escape2(s)}</div>` : `<kbd>${escape2(s[0])}</kbd><span>${escape2(s[1])}</span>`).join("");
     const el2 = sheet(`<h2>Keyboard shortcuts</h2><div class="keys">${rows}</div><p>The notebook file saves every time you run a cell.</p><div class="buttons"><button class="primary done">Done</button></div>`);
     const done = el2.querySelector(".done");
     done.onclick = () => el2.remove();
@@ -405,7 +616,7 @@
       const card2 = el2.querySelector(".card");
       card2.innerHTML = `<h2>Sending\u2026</h2>`;
       const outcome = feedbackOutcome(await submitFeedback(text.value.trim(), email.value.trim()));
-      card2.innerHTML = `<h2>${escape(outcome.title)}</h2><p class="said">${escape(outcome.body)}</p><div class="buttons"><button class="primary">Done</button></div>`;
+      card2.innerHTML = `<h2>${escape2(outcome.title)}</h2><p class="said">${escape2(outcome.body)}</p><div class="buttons"><button class="primary">Done</button></div>`;
       const done = card2.querySelector("button");
       done.onclick = () => el2.remove();
       done.focus();
@@ -413,7 +624,7 @@
   }
   function initActions() {
     const style2 = document.createElement("style");
-    style2.textContent = css;
+    style2.textContent = css3;
     document.head.append(style2);
     on("action", (msg) => {
       const w = window;
@@ -475,7 +686,7 @@
   var QUOTE = svg(`<path d="M3 4.5h3.75v3.75H5c0 1.6-.6 2.6-2 3.25"></path><path d="M9.25 4.5H13v3.75h-1.75c0 1.6-.6 2.6-2 3.25"></path>`, 14);
   var KEYS = mac ? { send: "\u21A9", add: "\u2318\u21A9" } : { send: "Enter", add: "Ctrl+Enter" };
   var WORKING = "endeavorWorking";
-  var css2 = `
+  var css4 = `
   .endeavor-prompt { box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; font: 13px/18px system-ui, sans-serif;
     color: var(--e-text-primary); text-align: left; }
   .endeavor-prompt.popover { position: fixed; z-index: 1000; padding: 7px 8px 8px; border-radius: 10px; border: 1px solid var(--e-popover-edge);
@@ -579,7 +790,7 @@
   }
   function initAskBox() {
     const style2 = document.createElement("style");
-    style2.textContent = css2;
+    style2.textContent = css4;
     document.head.append(style2);
     on("context", (msg) => {
       if (msg.working) document.documentElement.dataset[WORKING] = "";
@@ -589,7 +800,7 @@
 
   // src/quote.ts
   var SHOOTING = "endeavor-shooting";
-  var waiting = /* @__PURE__ */ new Map();
+  var waiting2 = /* @__PURE__ */ new Map();
   var nextShot = 1;
   var nextFrame = () => new Promise((done) => requestAnimationFrame(() => done()));
   async function shoot(b) {
@@ -609,11 +820,11 @@
     };
     const id = nextShot++;
     await new Promise((done) => {
-      waiting.set(id, done);
+      waiting2.set(id, done);
       setTimeout(done, 3e3);
       send({ type: "shoot", id, rect });
     });
-    waiting.delete(id);
+    waiting2.delete(id);
     document.body.classList.remove(SHOOTING);
     return id;
   }
@@ -627,46 +838,11 @@
     send({ type: "quote", notebook: notebook2, picks, comment, add });
   }
   function initQuote() {
-    on("shot", (msg) => waiting.get(msg.id)?.());
-  }
-
-  // src/reveal.ts
-  var css3 = `
-  pluto-cell.endeavor-flash { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px;
-    transition: outline-color 0.3s; }
-  pluto-cell.endeavor-flash.fading { outline-color: transparent; }
-`;
-  function cellCode(cell) {
-    const content = cell?.querySelector("pluto-input .cm-content");
-    const view = content?.cmTile?.root?.view;
-    if (view) return view.state.doc.toString();
-    const lines = content ? [...content.querySelectorAll(".cm-line")].map((l) => l.textContent ?? "") : [];
-    return lines.join("\n");
-  }
-  function reveal(ids) {
-    const cells = ids.map((id) => document.getElementById(id)).filter((c) => !!c);
-    if (!cells.length) return;
-    cells[0].scrollIntoView({ block: "center", behavior: "smooth" });
-    for (const cell of cells) {
-      cell.classList.remove("fading");
-      cell.classList.add("endeavor-flash");
-    }
-    setTimeout(() => cells.forEach((c) => c.classList.add("fading")), 900);
-    setTimeout(() => cells.forEach((c) => c.classList.remove("endeavor-flash", "fading")), 1300);
-  }
-  function initReveal() {
-    const style2 = document.createElement("style");
-    style2.textContent = css3;
-    document.head.append(style2);
-    on("reveal", (msg) => reveal(msg.cells));
-    on("code", (msg) => {
-      const cell = document.getElementById(msg.cell);
-      send({ type: "code", cell: msg.cell, code: cell ? cellCode(cell) : null });
-    });
+    on("shot", (msg) => waiting2.get(msg.id)?.());
   }
 
   // src/annotate.ts
-  var css4 = `
+  var css5 = `
   /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
   body.annotating pluto-cell:hover, body.annotating pluto-cell :hover { cursor: crosshair !important; }
   /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
@@ -774,7 +950,7 @@
     const active = () => document.body.classList.contains("annotating");
     const cells = () => [...document.querySelectorAll("pluto-cell")];
     const style2 = document.createElement("style");
-    style2.textContent = css4;
+    style2.textContent = css5;
     const frame2 = document.createElement("div");
     frame2.id = "annotate-frame";
     const box = document.createElement("div");
@@ -1016,7 +1192,7 @@
   }
 
   // src/asking.ts
-  var css5 = () => `
+  var css6 = () => `
   pluto-cell[data-endeavor-ask] { margin-top: 26px; }
   pluto-cell[data-endeavor-ask]::after {
     position: absolute; left: 0; top: -22px; font: 12px/18px var(--sans-serif-font-stack, system-ui); pointer-events: none;
@@ -1064,10 +1240,10 @@
   }
   function initAsking() {
     const style2 = document.createElement("style");
-    style2.textContent = css5();
+    style2.textContent = css6();
     document.head.append(style2);
     on("context", (msg) => {
-      style2.textContent = css5();
+      style2.textContent = css6();
       const cells = msg.ask_cells ?? [];
       const changed = cells.join() !== asked.join();
       asked = cells;
@@ -1085,7 +1261,7 @@
     const el2 = document.activeElement;
     return !el2 || el2 === document.body || el2 === document.documentElement;
   }
-  function onKey(e) {
+  function onKey2(e) {
     if (card === null || e.key !== "Enter" || e.repeat || e.isComposing || !byUser(e)) return;
     if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
     if (!nothingFocused() || document.body.classList.contains("annotating")) return;
@@ -1097,11 +1273,11 @@
     on("context", (msg) => {
       card = msg.card ?? null;
     });
-    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keydown", onKey2, true);
   }
 
   // src/rail.ts
-  var css6 = `
+  var css7 = `
   #endeavor-rail { position: fixed; right: 4px; top: 10px; bottom: 10px; width: 3px; z-index: 50; pointer-events: none; }
   #endeavor-rail a { position: absolute; left: 0; right: 0; min-height: 4px; border-radius: 2px;
     background: var(--e-accent); pointer-events: auto; cursor: pointer; }
@@ -1129,7 +1305,7 @@
   }
   function initRail() {
     const style2 = document.createElement("style");
-    style2.textContent = css6;
+    style2.textContent = css7;
     rail = document.createElement("div");
     rail.id = "endeavor-rail";
     rail.dataset.endeavorUi = "";
@@ -1142,7 +1318,7 @@
 
   // src/cells.ts
   var bar = "pluto-editor:not(.___):not(.____) pluto-cell[data-endeavor-bar]";
-  var css7 = `
+  var css8 = `
   pluto-cell { position: relative; }
   pluto-cell[data-endeavor="unrun"] > pluto-output { opacity: 0.4; }
   ${bar} > pluto-trafficlight {
@@ -1203,7 +1379,7 @@
   }
   function initCells() {
     const style2 = document.createElement("style");
-    style2.textContent = css7;
+    style2.textContent = css8;
     document.head.append(style2);
     on("cells", (msg) => {
       states = new Map(msg.cells.map((c) => [c.cell_id, c]));
@@ -1223,7 +1399,7 @@
   }
 
   // src/reply.ts
-  var css8 = `
+  var css9 = `
   #endeavor-reply-pill { position: absolute; z-index: 1000; display: inline-flex; align-items: center; height: 30px; box-sizing: border-box;
     padding: 0 3px; border-radius: 8px; border: 1px solid var(--e-popover-edge); background: var(--e-popover-bg);
     box-shadow: 0 8px 24px var(--e-shadow-popover); font: 13px/18px system-ui, sans-serif; }
@@ -1273,7 +1449,7 @@
   }
   function initReply(open3) {
     const style2 = document.createElement("style");
-    style2.textContent = css8;
+    style2.textContent = css9;
     document.head.append(style2);
     document.addEventListener("mouseup", (e) => {
       const target = e.target;
@@ -1299,7 +1475,7 @@
 
   // src/prompt.ts
   var GAP = 8;
-  var css9 = () => `
+  var css10 = () => `
   /* Beside Pluto's "+" in the gap above a cell (and below the last one): faint
      while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
@@ -1459,7 +1635,7 @@
   function askState() {
     return open && { kind: open.target.kind, about: open.box.what.textContent ?? "", text: open.box.text.value };
   }
-  function onKey2(e) {
+  function onKey3(e) {
     const key = e.key.toLowerCase();
     if (!modHeld(e) || e.shiftKey || e.altKey || key !== "e" && key !== "j") return;
     if (document.body.classList.contains("annotating")) return;
@@ -1478,11 +1654,11 @@
   }
   function initPrompt() {
     const style2 = document.createElement("style");
-    style2.textContent = css9();
+    style2.textContent = css10();
     document.head.append(style2);
-    on("context", () => style2.textContent = css9());
+    on("context", () => style2.textContent = css10());
     initReply((found) => openAsk({ kind: "selection", found }));
-    window.addEventListener("keydown", onKey2, true);
+    window.addEventListener("keydown", onKey3, true);
     document.addEventListener("mousedown", (e) => {
       if (open && !open.box.root.contains(e.target)) closeAsk(false);
     });
@@ -1537,7 +1713,7 @@
   }
 
   // src/diff.ts
-  var css10 = `
+  var css11 = `
   .cm-line.endeavor-add { position: relative; z-index: 0; }
   .cm-line.endeavor-add::before {
     content: ""; position: absolute; z-index: -1; pointer-events: none;
@@ -1694,7 +1870,7 @@
   }
   function initDiffs() {
     const style2 = document.createElement("style");
-    style2.textContent = css10;
+    style2.textContent = css11;
     document.head.append(style2);
     on("cells", (msg) => {
       befores.clear();
@@ -1706,7 +1882,7 @@
 
   // src/drawer.ts
   var HEADER = 36;
-  var css11 = `
+  var css12 = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
   /* Separate from --endeavor-drawer-h (the drawer's own height, which also
@@ -1797,7 +1973,7 @@
   var autoDone = false;
   var showLog = false;
   var folded = /* @__PURE__ */ new Map();
-  var escape2 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  var escape3 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   function height() {
     try {
       const saved = Number(localStorage.getItem("endeavor-drawer-h"));
@@ -1839,15 +2015,15 @@
   function statusHtml(nb, m) {
     const steps = m.steps.map((s, i) => `${i ? `<span class="line"></span>` : ""}<span class="step ${s.phase}">${markFor(s.phase)}${s.name}</span>`).join("");
     const version = String(nb.julia_version ?? "").replace(/^v/, "");
-    const julia = version ? `Julia ${escape2(version)} \xB7 ` : "";
-    const host = `<div class="host">${julia}${escape2(hostName)}</div>`;
+    const julia = version ? `Julia ${escape3(version)} \xB7 ` : "";
+    const host = `<div class="host">${julia}${escape3(hostName)}</div>`;
     const pkgBusy = m.steps[1].phase === "busy";
     const readyCount = m.packages.filter((p) => p.state === "ready").length;
     const stateText = { waiting: "waiting", installing: "installing", precompiling: "precompiling", ready: "", failed: "failed" };
     const pkgRows = m.packages.map((p) => {
       const note = p.detail === "standard library" ? `<span class="note">standard library</span>` : "";
-      const right = p.state === "ready" ? p.detail === "standard library" ? "built in" : escape2(p.detail) : stateText[p.state];
-      return `<div class="row ${p.state}">${markFor(p.state)}<span class="name">${escape2(p.name)}</span>${note}<span class="right">${right}</span></div>`;
+      const right = p.state === "ready" ? p.detail === "standard library" ? "built in" : escape3(p.detail) : stateText[p.state];
+      return `<div class="row ${p.state}">${markFor(p.state)}<span class="name">${escape3(p.name)}</span>${note}<span class="right">${right}</span></div>`;
     }).join("");
     let deps = "";
     if (m.deps) {
@@ -1858,21 +2034,21 @@
     let failure = "";
     if (m.failure) {
       const f = m.failure;
-      const blocked = f.cells.length ? ` Cells that use it can't run: <code>${f.cells.map(escape2).join("</code>, <code>")}</code>.` : "";
-      failure = `<div class="failure"><code>${escape2(f.name)}</code> ${m.packages.find((p) => p.name === f.name)?.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled."}${blocked}<div class="actions"><button class="fix">\u2726 Fix with ${escape2(context.agent)}</button><button class="restart">\u21BB Restart notebook</button><button class="plain pkglog">Log for ${escape2(f.name)}</button></div></div>`;
+      const blocked = f.cells.length ? ` Cells that use it can't run: <code>${f.cells.map(escape3).join("</code>, <code>")}</code>.` : "";
+      failure = `<div class="failure"><code>${escape3(f.name)}</code> ${m.packages.find((p) => p.name === f.name)?.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled."}${blocked}<div class="actions"><button class="fix">\u2726 Fix with ${escape3(context.agent)}</button><button class="restart">\u21BB Restart notebook</button><button class="plain pkglog">Log for ${escape3(f.name)}</button></div></div>`;
     }
     const packages = m.packages.length ? group("packages", pkgBusy || !!m.failure, "Packages", m.packages.length ? `${readyCount} of ${m.packages.length} ready` : "", pkgRows + failure + deps) : failure;
     const running = m.steps[2].phase === "busy";
     const done = m.cells.filter((c) => c.state === "done").length;
     const cellRows = m.cells.map((c) => {
       const right = c.state === "running" ? "running" : c.time ? c.time : c.state === "waiting" ? "waiting" : "";
-      return `<div class="row ${c.state}">${markFor(c.state)}<span class="name">${escape2(c.name || "(empty)")}</span><span class="right${c.time ? " time" : ""}">${right}</span></div>`;
+      return `<div class="row ${c.state}">${markFor(c.state)}<span class="name">${escape3(c.name || "(empty)")}</span><span class="right${c.time ? " time" : ""}">${right}</span></div>`;
     }).join("");
     const cells = group("cells", running, "Cells", `${done} of ${m.cells.length} \xB7 notebook order`, cellRows);
     const log = (nb.nbpkg?.terminal_outputs?.nbpkg_sync ?? "").replace(/\x1b\[[0-9;]*m/g, "");
-    const logBlock = showLog ? `<pre class="log">${escape2(log || "Nothing from Pkg yet.")}</pre>` : "";
+    const logBlock = showLog ? `<pre class="log">${escape3(log || "Nothing from Pkg yet.")}</pre>` : "";
     const foot = `<div class="foot"><button class="showlog">\u2261 ${showLog ? "Hide log" : "Show log"}</button></div>${logBlock}`;
-    return `<div class="headline${m.failure ? " failed" : ""}">${escape2(m.headline)}</div><div class="steps">${steps}</div>${host}${packages}${cells}${foot}`;
+    return `<div class="headline${m.failure ? " failed" : ""}">${escape3(m.headline)}</div><div class="steps">${steps}</div>${host}${packages}${cells}${foot}`;
   }
   var hostName = "This Mac";
   var lastHtml = "";
@@ -1914,7 +2090,7 @@
   }
   function initDrawer() {
     const style2 = document.createElement("style");
-    style2.textContent = css11;
+    style2.textContent = css12;
     document.head.append(style2);
     setHeight(height());
     drawer = document.createElement("div");
@@ -2012,7 +2188,7 @@
   var PENDING = 3e3;
   var look = `html[data-endeavor-look="endeavor"]`;
   var upstreamBar = `${look} pluto-editor:not(.___):not(.____) pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
-  var css12 = `
+  var css13 = `
   ${upstreamBar} > pluto-trafficlight { background: var(--normal-cell-color); border-left-color: var(--normal-cell-color); }
   ${upstreamBar}.selected > pluto-trafficlight { background: var(--selected-cell-color); border-left-color: var(--selected-cell-color); }
   ${upstreamBar}.code_differs > pluto-trafficlight { background: var(--code-differs-cell-color); border-left-color: var(--code-differs-cell-color); }
@@ -2253,7 +2429,7 @@
   }
   function initErrors() {
     const style2 = document.createElement("style");
-    style2.textContent = css12;
+    style2.textContent = css13;
     document.head.append(style2);
     on("context", (msg) => {
       working = !!msg.working;
@@ -2265,7 +2441,7 @@
   }
 
   // src/folded.ts
-  var css13 = `
+  var css14 = `
   pluto-cell[data-endeavor-fold] > pluto-input { display: block !important; opacity: 1 !important; }
   pluto-cell[data-endeavor-fold="closing"] > pluto-input { overflow: hidden; transition: height 200ms ease; }
   pluto-cell[data-endeavor-fold="closing"] > .endeavor-fold-tag,
@@ -2308,14 +2484,14 @@
         if (state2.errored) open2.get(id).failed = true;
         else {
           open2.delete(id);
-          close(cell);
+          close2(cell);
           continue;
         }
       }
-      show(cell);
+      show2(cell);
     }
   }
-  function show(cell) {
+  function show2(cell) {
     const kept = open2.get(cell.id);
     const input = cell.querySelector(":scope > pluto-input");
     let tag = cell.querySelector(":scope > .endeavor-fold-tag");
@@ -2352,9 +2528,9 @@
     if (span.textContent !== label) span.textContent = label;
     tag.title = label;
   }
-  function close(cell) {
+  function close2(cell) {
     const input = cell.querySelector(":scope > pluto-input");
-    if (!input || reduced()) return show(cell);
+    if (!input || reduced()) return show2(cell);
     const height2 = input.offsetHeight;
     cell.setAttribute("data-endeavor-fold", "closing");
     input.style.height = `${height2}px`;
@@ -2370,11 +2546,11 @@
     if (!open2.delete(id)) return;
     dismissed.set(id, states2.get(id)?.version);
     const cell = document.getElementById(id);
-    if (cell) show(cell);
+    if (cell) show2(cell);
   }
   function initFolded() {
     const style2 = document.createElement("style");
-    style2.textContent = css13;
+    style2.textContent = css14;
     document.head.append(style2);
     on("cells", (msg) => {
       states2 = new Map(msg.cells.map((c) => [c.cell_id, c]));
@@ -2393,181 +2569,6 @@
       true
     );
     onRedraw(update);
-  }
-
-  // src/runguard.ts
-  function reach(start, deps) {
-    const seen = /* @__PURE__ */ new Set();
-    const todo = [...start];
-    while (todo.length) {
-      const id = todo.pop();
-      if (seen.has(id)) continue;
-      seen.add(id);
-      for (const next of Object.values(deps[id]?.downstream_cells_map ?? {}).flat()) todo.push(next);
-    }
-    return [...seen];
-  }
-  var css14 = `
-  #endeavor-runguard { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 210;
-    width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 14px 16px; border-radius: 10px;
-    border: 1px solid var(--e-dialog-edge); background: var(--e-dialog-bg); box-shadow: 0 16px 48px var(--e-dialog-shadow);
-    font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
-  #endeavor-runguard b { display: block; margin-bottom: 4px; font-weight: 600; font-size: 13.5px; color: var(--e-text-primary); }
-  #endeavor-runguard code { font: 600 12.5px JuliaMono, ui-monospace, monospace; color: var(--e-text-primary); }
-  #endeavor-runguard button.show code { color: inherit; }
-  #endeavor-runguard .buttons { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
-  #endeavor-runguard .gap { flex: 1; }
-  #endeavor-runguard button { padding: 4px 12px; border-radius: 5px; border: 1px solid var(--e-control-edge); background: var(--e-bg-raised);
-    color: var(--e-text-primary); font: 12.5px system-ui, sans-serif; cursor: pointer; }
-  #endeavor-runguard button.show { border-color: transparent; background: none; color: var(--e-accent-text); padding: 4px 6px; }
-  #endeavor-runguard button.primary { background: var(--e-accent); border-color: var(--e-accent); color: #fff; }
-  #endeavor-runguard .hint { color: var(--e-text-dim); font-size: 11.5px; margin-left: -2px; }
-  pluto-cell.endeavor-guard-show { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px; }
-`;
-  var waiting2 = [];
-  var replaying = false;
-  var shown = null;
-  var escape3 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
-  var editor = () => window.editor_state;
-  function changedCells(st) {
-    const local = st.cell_inputs_local ?? {};
-    const remote = st.notebook?.cell_inputs ?? {};
-    return (st.notebook?.cell_order ?? []).filter((id) => local[id] != null && remote[id]?.code !== local[id]?.code);
-  }
-  function differs(st, cell) {
-    const text = st.cell_inputs_local?.[cell.id]?.code ?? cellCode(cell);
-    return text !== st.notebook?.cell_inputs?.[cell.id]?.code;
-  }
-  function runStart(e, st) {
-    const target = e.target instanceof Element ? e.target : null;
-    const selected = st.selected_cells ?? [];
-    if (e.type === "click") {
-      const button = target?.closest("pluto-runarea.run button.runcell");
-      const cell = button?.closest("pluto-cell");
-      if (!cell) return null;
-      return { start: selected.includes(cell.id) ? selected : [cell.id], changes: false };
-    }
-    if (e.type !== "keydown") return null;
-    const k = e;
-    const inEditor = target?.closest("pluto-input") ? target.closest("pluto-cell") : null;
-    if (k.key?.toLowerCase() === "s" && modHeld(k) && !k.shiftKey && !k.altKey) {
-      const changed = changedCells(st);
-      return changed.length ? { start: changed, changes: true } : null;
-    }
-    if (k.key !== "Enter") return null;
-    if (k.shiftKey && !k.metaKey && !k.ctrlKey && !k.altKey) {
-      const start = [.../* @__PURE__ */ new Set([...inEditor ? [inEditor.id] : [], ...selected])];
-      return start.length ? { start, changes: false } : null;
-    }
-    if ((k.metaKey || k.ctrlKey) && !k.shiftKey && !k.altKey && inEditor) {
-      return differs(st, inEditor) ? { start: [inEditor.id], changes: true } : null;
-    }
-    return null;
-  }
-  function replayOf(e) {
-    const target = e.target;
-    if (e.type === "click") return () => target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    const k = e;
-    const init2 = { key: k.key, code: k.code, shiftKey: k.shiftKey, ctrlKey: k.ctrlKey, metaKey: k.metaKey, altKey: k.altKey, bubbles: true, cancelable: true };
-    return () => {
-      target.focus?.();
-      target.dispatchEvent(new KeyboardEvent("keydown", init2));
-    };
-  }
-  var nameOf = (w, deps) => w.name || definedNames(deps[w.id]?.downstream_cells_map)[0] || "a cell";
-  function names(list) {
-    const code = list.map((n) => `<code>${escape3(n)}</code>`);
-    return code.length <= 1 ? code.join("") : `${code.slice(0, -1).join(", ")} and ${code[code.length - 1]}`;
-  }
-  function outline(on2) {
-    for (const cell of document.querySelectorAll("pluto-cell.endeavor-guard-show")) cell.classList.remove("endeavor-guard-show");
-    if (!on2 || !shown) return;
-    const cells = shown.hit.map((w) => document.getElementById(w.id)).filter((c) => !!c);
-    cells[0]?.scrollIntoView?.({ block: "center", behavior: "smooth" });
-    for (const cell of cells) cell.classList.add("endeavor-guard-show");
-  }
-  function close2() {
-    outline(false);
-    shown?.el.remove();
-    shown = null;
-  }
-  function cancel() {
-    close2();
-  }
-  function runAnyway() {
-    if (!shown) return;
-    const { hit, replay } = shown;
-    close2();
-    const ids = hit.map((w) => w.id);
-    const results = () => editor()?.notebook?.cell_results ?? {};
-    const before = Object.fromEntries(ids.map((id) => [id, results()[id]?.last_run_timestamp]));
-    replaying = true;
-    try {
-      replay();
-    } finally {
-      replaying = false;
-    }
-    const started = Date.now();
-    const answer = () => {
-      const now = results();
-      const under_way = ids.every((id) => now[id]?.queued || now[id]?.running || now[id]?.last_run_timestamp !== before[id]);
-      if (under_way || Date.now() - started > 3e3) {
-        send({ type: "run_anyway", notebook: notebookId(), cells: ids.map((id) => ({ id, last_run: before[id] ?? 0 })) });
-      } else setTimeout(answer, 50);
-    };
-    answer();
-  }
-  function show2(hit, changes, replay, deps) {
-    close2();
-    const list = hit.map((w) => nameOf(w, deps));
-    const one = list.length === 1;
-    const el2 = document.createElement("div");
-    el2.id = "endeavor-runguard";
-    el2.dataset.endeavorUi = "";
-    el2.setAttribute("role", "dialog");
-    el2.setAttribute("aria-label", `${context.agent} is waiting for your answer`);
-    const what = changes ? "your changes" : "this";
-    el2.innerHTML = `<b>${context.agent} is waiting for your answer on ${names(list)}.</b>Running ${what} now also runs ${one ? "it" : "them"}.<div class="buttons"><button class="show">Show ${one ? names(list) : "them"}</button><span class="gap"></span><button class="cancel">Cancel</button><span class="hint">esc</span><button class="primary run">Run anyway</button></div>`;
-    el2.querySelector(".show").onclick = () => outline(true);
-    el2.querySelector(".cancel").onclick = cancel;
-    el2.querySelector(".run").onclick = (e) => byUser(e) && runAnyway();
-    document.body.append(el2);
-    shown = { el: el2, hit, replay };
-    el2.querySelector(".run").focus();
-  }
-  function guard(e) {
-    if (replaying || !waiting2.length || !byUser(e)) return;
-    const st = editor();
-    if (!st?.notebook || st.notebook.process_status === "waiting_for_permission") return;
-    const run = runStart(e, st);
-    if (!run) return;
-    const deps = st.notebook.cell_dependencies ?? {};
-    const reached = new Set(reach(run.start, deps));
-    const hit = waiting2.filter((w) => reached.has(w.id));
-    if (!hit.length) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    show2(hit, run.changes, replayOf(e), deps);
-  }
-  function onKey3(e) {
-    if (shown && byUser(e) && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-      if (e.key === "Escape" || e.key === "Enter") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        return e.key === "Escape" ? cancel() : runAnyway();
-      }
-    }
-    guard(e);
-  }
-  function initRunGuard() {
-    const style2 = document.createElement("style");
-    style2.textContent = css14;
-    document.head.append(style2);
-    on("context", (msg) => {
-      waiting2 = msg.waiting_runs ?? [];
-    });
-    window.addEventListener("keydown", onKey3, true);
-    window.addEventListener("click", guard, true);
   }
 
   // src/safe.ts
