@@ -64,7 +64,7 @@ fn the_app_starts_the_runtime_core_as_the_helper() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    let start = serde_json::to_vec(&ToHelper::StartRuntime { job: None }).unwrap();
+    let start = serde_json::to_vec(&ToHelper::StartRuntime { id: 1, job: None, engine: wire::ENGINE_PLUTO.into(), install: true, attach_only: false }).unwrap();
     Frame::Control(start).write_to(helper.stdin.as_mut().unwrap()).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !dir.join("core").exists() {

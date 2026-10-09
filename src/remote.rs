@@ -420,19 +420,24 @@ pub fn connect(server: &Server, transport: &Transport, askpass: Option<&Askpass>
 
     let channel = Channel::open(child, stdin, stdout);
     let hello = channel.wait_hello(|| explain(host, &stderr.finish(), None, cancel.cancelled.load(Ordering::SeqCst)))?;
+    if let Some(why) = hello.other_version() {
+        channel.detach();
+        return Err(why);
+    }
     Ok((channel, hello))
 }
 
 /// Start the runtime on a connected server's channel (on a cluster, `job` is
 /// what to submit); `on` hears Julia being found, the job queueing, and its
 /// log. `notice` hears if the runtime goes away later.
-pub fn start(channel: &Channel, listener: &Arc<Listener>, job: Option<JobRequest>, on: &dyn Fn(Event), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
-    let runtime = channel.start_runtime(
+pub fn start(channel: &Channel, listener: &Listener, job: Option<JobRequest>, on: &dyn Fn(Event), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
+    let runtime = crate::runtime::start_runtime(
+        channel,
         listener,
         job,
         &mut |message| match message {
             ToApp::Progress { line } => on(Event::Progress(line)),
-            ToApp::FoundJulia { path, version } => on(Event::FoundJulia { path, version }),
+            ToApp::Found { name, path, version } if name == "Julia" => on(Event::FoundJulia { path, version }),
             ToApp::Submitted { job, summary } => on(Event::Submitted { job, summary }),
             ToApp::Queued { state, reason, .. } => on(Event::Queued { state, reason }),
             _ => {}
@@ -463,13 +468,10 @@ pub fn test(server: &Server, askpass: Option<&Askpass>, cancel: &Cancel, on: &dy
     let listener = test_listener()?;
     let runtime = start(&channel, &listener, None, on, |_| {})?;
     let answered = bridge_ping(listener.port(), &runtime.bridge.token);
-    if runtime.reattached {
-        channel.detach();
-    } else {
-        channel.stop();
-        channel.detach();
-    }
+    let stopped = if runtime.reattached { Ok(()) } else { channel.stop() };
+    channel.detach();
     answered.map_err(|e| format!("Julia started on {}, but it didn't answer through Endeavor's connection ({e}).", runtime.node))?;
+    stopped.map_err(|e| format!("Julia answered on {}, but Endeavor couldn't stop it afterwards: {e}", runtime.node))?;
     on(Event::Finished { stopped: !runtime.reattached });
     Ok(())
 }
@@ -881,7 +883,7 @@ mod tests {
         let (channel, _) = connect(&server, &transport, None, &Cancel::default(), &on).expect("second connect");
         assert_eq!(seen.lock().unwrap()[1], Event::Helper { installed: false });
         start(&channel, &listener, None, &on, |_| {}).expect("start again");
-        channel.stop();
+        channel.stop().unwrap();
         assert!(!fake.alive(), "Stop reaches the runtime's bridge");
         // The helper stays connected after a stop.
         assert!(channel.files(files::Request::List { path: "~".into() }).is_ok());
@@ -1067,7 +1069,7 @@ mod tests {
         eprintln!("list_notebooks: {}", json["result"]);
         assert!(json["result"]["content"].is_array() && json["result"]["isError"] != true, "{reply}");
 
-        channel.stop();
+        channel.stop().unwrap();
         channel.detach();
     }
 }

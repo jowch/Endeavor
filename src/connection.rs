@@ -454,17 +454,21 @@ impl Workspace {
         self.status = "Restarting Julia…".into();
         let stop = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
-            channel.stop();
-            resume
+            (resume, channel.stop())
         });
         cx.spawn(async move |this, cx| {
-            let resume = stop.await;
+            let (resume, stopped) = stop.await;
             let _ = this.update(cx, |this, cx| {
                 if let Some(connection) = this.connections.get_mut(&host) {
                     connection.status = Status::Died(String::new());
                     connection.resume = resume;
                 }
+                // Julia that didn't stop is still running: the start attaches to it again.
                 this.start_host(&host, cx);
+                if let Err(e) = stopped {
+                    eprintln!("Restart Julia: {e}");
+                    this.status = format!("Couldn't restart Julia: {e}").into();
+                }
             });
         })
         .detach();
@@ -543,7 +547,10 @@ impl Workspace {
         let work = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(channel) = channel {
-                channel.stop();
+                // A Julia that doesn't stop here is stopped by its recorded group below, on a repair.
+                if let Err(e) = channel.stop() {
+                    eprintln!("Stopping Julia: {e}");
+                }
                 channel.detach();
             }
             (if clear { runtime::clear_state() } else { Ok(Vec::new()) }, resume)
@@ -1084,7 +1091,7 @@ impl Workspace {
         let Some(channel) = connection.channel.clone() else { return };
         connection.cancelling = true;
         connection.steps.now("Cancelling the job");
-        cx.background_executor().spawn(async move { channel.stop() }).detach();
+        cx.background_executor().spawn(async move { channel.stop().map_err(|e| eprintln!("Cancelling the start: {e}")) }).detach();
         cx.notify();
     }
 
@@ -1166,11 +1173,17 @@ impl Workspace {
         let stop = cx.background_executor().spawn(async move { channel.stop() });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
-            stop.await;
+            let stopped = stop.await;
             let _ = this.update(cx, |this, cx| {
                 let mut restart = false;
                 if let Some(connection) = this.connections.get_mut(&host).filter(|c| c.id == id) {
                     connection.stopping = false;
+                    if let Err(e) = stopped {
+                        // It may still run: ask what does.
+                        connection.start_after_stop = false;
+                        this.status = format!("Couldn't stop Julia on {}: {e}", this.hosts.name(&host)).into();
+                        return this.check_host(&host, cx);
+                    }
                     connection.found = Some(Ok(RuntimeState::NotRunning));
                     restart = std::mem::take(&mut connection.start_after_stop);
                 }
@@ -1214,7 +1227,7 @@ impl Workspace {
             },
             // Started since by another app, as a check found.
             Status::Died(_) => match &c.found {
-                Some(Ok(found @ (RuntimeState::Running { .. } | RuntimeState::Queued { .. }))) => HostState::from(found),
+                Some(Ok(found @ (RuntimeState::Running { .. } | RuntimeState::Queued { .. } | RuntimeState::Starting))) => HostState::from(found),
                 _ => HostState::NotRunning,
             },
             Status::Starting => match &c.job {
