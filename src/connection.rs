@@ -803,7 +803,7 @@ impl Workspace {
                 self.start_agent(crate::agent::Agent::Claude, commands, cx);
             } else if let Some(e) = self.connections.get_mut(host).and_then(|c| c.not_restarted.take()) {
                 eprintln!("Restart Julia: {e}");
-                self.status = format!("Couldn't restart Julia, so Endeavor reconnected to the Julia that was running. {e}").into();
+                self.status = not_restarted(&e).into();
             } else if self.this_mac_was_ready {
                 self.status = if reattached { "Reconnected to Julia." } else { "Julia restarted." }.into();
             } else {
@@ -1185,7 +1185,7 @@ impl Workspace {
                     if let Err(e) = stopped {
                         // It may still run: ask what does.
                         connection.start_after_stop = false;
-                        this.status = format!("Couldn't stop Julia on {}: {e}", this.hosts.name(&host)).into();
+                        this.status = not_stopped(&this.hosts.name(&host), &e).into();
                         return this.check_host(&host, cx);
                     }
                     connection.found = Some(Ok(RuntimeState::NotRunning));
@@ -1583,9 +1583,43 @@ fn walker() -> Canvas<()> {
     )
 }
 
+/// The status line once Julia is back after Restart Julia's stop failed with `why`.
+fn not_restarted(why: &str) -> String {
+    format!("Julia didn't restart, so Endeavor is still using the Julia that was running. {}", stop_reason(why))
+}
+
+/// The status line when Stop failed on `host` with `why`.
+fn not_stopped(host: &str, why: &str) -> String {
+    match why.strip_prefix("Julia was not stopped: ") {
+        Some(rest) => format!("Julia on {host} was not stopped: {rest}"),
+        None => format!("Couldn't stop Julia on {host}: {why}"),
+    }
+}
+
+/// The helper's "Julia was not stopped: <why>" as just the why, with a capital.
+fn stop_reason(why: &str) -> String {
+    let rest = why.strip_prefix("Julia was not stopped: ").unwrap_or(why);
+    let mut chars = rest.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Connection, Status, Steps, elapsed, percent};
+    use super::{Connection, Status, Steps, elapsed, not_restarted, not_stopped, percent};
+
+    #[test]
+    fn a_stop_that_fails_says_what_still_runs() {
+        assert_eq!(
+            not_restarted("Julia was not stopped: it is still running."),
+            "Julia didn't restart, so Endeavor is still using the Julia that was running. It is still running."
+        );
+        assert_eq!(
+            not_restarted("Endeavor's helper didn't answer in 60 s, so Julia may not have stopped."),
+            "Julia didn't restart, so Endeavor is still using the Julia that was running. Endeavor's helper didn't answer in 60 s, so Julia may not have stopped."
+        );
+        assert_eq!(not_stopped("lab", "Julia was not stopped: it is still running."), "Julia on lab was not stopped: it is still running.");
+        assert_eq!(not_stopped("lab", "The connection to Endeavor's helper closed."), "Couldn't stop Julia on lab: The connection to Endeavor's helper closed.");
+    }
     use std::time::{Duration, Instant};
 
     #[test]
