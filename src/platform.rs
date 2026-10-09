@@ -57,10 +57,16 @@ macro_rules! shortcut {
 pub(crate) use shortcut;
 
 /// The menu item that runs `reveal` on a notebook, and on a session's folder.
-pub const REVEAL: &str = if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Show in Files" };
-pub const REVEAL_FOLDER: &str = if cfg!(target_os = "macos") { "Reveal folder in Finder" } else { "Show folder in Files" };
+pub const REVEAL: &str = if cfg!(target_os = "macos") { "Reveal in Finder" } else if cfg!(windows) { "Show in File Explorer" } else { "Show in Files" };
+pub const REVEAL_FOLDER: &str = if cfg!(target_os = "macos") { "Reveal folder in Finder" } else if cfg!(windows) { "Show folder in File Explorer" } else { "Show folder in Files" };
 /// The button that shows the log files' folder, and its accessible name.
-pub const SHOW_LOGS: (&str, &str) = if cfg!(target_os = "macos") { ("Show in Finder", "Show log files in Finder") } else { ("Show in Files", "Show log files in Files") };
+pub const SHOW_LOGS: (&str, &str) = if cfg!(target_os = "macos") {
+    ("Show in Finder", "Show log files in Finder")
+} else if cfg!(windows) {
+    ("Show in File Explorer", "Show log files in File Explorer")
+} else {
+    ("Show in Files", "Show log files in Files")
+};
 
 /// Settings' Appearance choice that follows the system's light or dark setting.
 pub const MATCH_SYSTEM: &str = if cfg!(target_os = "macos") { "Match macOS" } else { "Match system" };
@@ -72,7 +78,9 @@ pub fn reveal(path: &Path) {
     let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
     // Explorer reads `/select,` and the quoted path as one argument, which std's quoting would break.
     #[cfg(windows)]
-    let _ = std::os::windows::process::CommandExt::raw_arg(&mut std::process::Command::new("explorer"), format!("/select,\"{}\"", path.display())).spawn();
+    if let Err(e) = std::os::windows::process::CommandExt::raw_arg(&mut std::process::Command::new("explorer"), format!("/select,\"{}\"", path.display())).spawn() {
+        eprintln!("Couldn't show {} in File Explorer: {e}", path.display());
+    }
     #[cfg(target_os = "linux")]
     if let Some(folder) = if path.is_dir() { Some(path) } else { path.parent() } {
         let _ = std::process::Command::new("xdg-open").arg(folder).spawn();

@@ -67,7 +67,9 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
 
     // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
     // fails the SHA check and starts over. Kill it on quit if that bites.
-    let mut curl = Command::new("curl")
+    let mut curl = Command::new("curl");
+    endeavor_mcp::client::no_window(&mut curl);
+    let mut curl = curl
         .args(["-fsSL", "--retry", "3", "-C", "-", "-o"])
         .arg(&tarball)
         .arg(url)
@@ -145,7 +147,9 @@ fn unpack(zip: &Path, into: &Path) -> Result<std::process::ExitStatus, String> {
 #[cfg(windows)]
 fn windows_tar() -> Command {
     let system = std::env::var_os("SystemRoot").map(|root| PathBuf::from(root).join("System32").join("tar.exe"));
-    Command::new(system.filter(|tar| tar.exists()).unwrap_or_else(|| PathBuf::from("tar.exe")))
+    let mut tar = Command::new(system.filter(|tar| tar.exists()).unwrap_or_else(|| PathBuf::from("tar.exe")));
+    endeavor_mcp::client::no_window(&mut tar);
+    tar
 }
 
 #[cfg(test)]
