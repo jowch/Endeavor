@@ -555,7 +555,15 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
     let removed = clear_state_in(&app).unwrap();
     let removed: Vec<String> = removed.iter().map(|p| p.strip_prefix(&app).unwrap().display().to_string()).collect();
     assert_eq!(removed, ["runtime/runtime.json", "runtime/lock", "depot/compiled/v1.12/EndeavorRuntime"]);
-    assert!(julia.try_wait().unwrap().is_some(), "the recorded runtime was stopped");
+    // Its group can be empty a moment before the child is ours to reap (seen on macOS), so poll.
+    let stopped = (0..50).any(|_| {
+        let gone = julia.try_wait().unwrap().is_some();
+        if !gone {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        gone
+    });
+    assert!(stopped, "the recorded runtime was stopped");
     for kept in ["runtime/token", "runtime/runtime.log", "depot/compiled/v1.12/Pluto/a.ji", "depot/packages/Pluto/x/src/Pluto.jl", "sessions.json"] {
         assert!(app.join(kept).exists(), "{kept} stays");
     }
