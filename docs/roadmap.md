@@ -18,11 +18,14 @@ server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)
 
 ## Next
 
+- **A repeatable eval of the agent loop, with reproducibility checks on the
+  analyses** ([EndeavorMCP #26](https://github.com/jowch/EndeavorMCP/issues/26)).
+  Next after the app adopts EndeavorMCP; built to cover more than one engine.
 - **Ember (R notebooks).** In development in its own repository. It joins
   EndeavorMCP as another adapter behind the core; on this side it needs the
   pane, header and logo for an R notebook and the notebook chip listing R
-  files. Starts after the agent-loop eval, so the eval is built to cover
-  more than one engine from the start.
+  files. Starts after the first version of the eval above; Ember's own
+  groundwork (a version to pin, binaries) goes on in its repository meanwhile.
 - **README, landing page and documentation website.**
 
 The notebook tools (runtime, MCP server, `endeavor serve`) live in

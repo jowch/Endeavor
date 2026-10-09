@@ -16,7 +16,7 @@ Handoff for implementing the redesigned chat + notebook interface.
    | Look when you like | Agent-edited, unrun cells | Orange status bar only — no badges, no header text |
    | Where you read | Chat messages | Brightest text, 14px |
    | Ambient | Sidebar, composer, controls | Smaller, grey, no emphasis |
-3. **Native by default, CSS where needed, a thin adapter for the rest.** Every line injected into the notebook is maintained twice (Pluto, later Jupyter).
+3. **Native by default, CSS where needed, a thin adapter for the rest.** Every line injected into the notebook is maintained twice (Pluto, later Ember).
 4. **Agent-agnostic.** Every "Claude" label comes from the ACP agent's name.
 
 ## Tokens
