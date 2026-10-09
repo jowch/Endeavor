@@ -70,6 +70,7 @@ jobs:
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
           $dlls = & $dumpbin.FullName /nologo /dependents target\release\endeavor.exe | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '\.dll$' }
           $dlls
+          if (-not ($dlls -match '^kernel32\.dll$')) { Write-Error "Couldn't read endeavor.exe's imports"; exit 1 }
           $extra = $dlls | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vccorlib|ucrtbased|webview2loader)' }
           if ($extra) { Write-Error "endeavor.exe needs DLLs Windows doesn't ship: $extra"; exit 1 }
       - name: Lay out

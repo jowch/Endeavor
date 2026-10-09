@@ -413,8 +413,10 @@ No Rust or Visual Studio is needed for this.
    `Endeavor-windows-x86_64-<build>`. You need to be signed in to GitHub.
    `<build>` is the commit, the same number About Endeavor shows (on a pull
    request, the commit GitHub made by merging it into `main`).
-2. Unzip it somewhere you can write to, such as Downloads, not Program
-   Files. WebView2 keeps its data in `endeavor.exe.WebView2` next to the exe.
+2. Extract all of it somewhere you can write to, such as Downloads, not
+   Program Files. Running the exe from inside the zip doesn't work: it
+   starts, but setup fails when it starts the agent. WebView2 keeps its
+   data in `endeavor.exe.WebView2` next to the exe.
 3. Run `Endeavor\bin\endeavor.exe`. Keep `bin` and `Resources` side by side:
    the app finds its agents' pinned versions in `Resources`. The exe isn't
    signed, so SmartScreen may say "Windows protected your PC"; choose More
