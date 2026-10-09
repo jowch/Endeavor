@@ -241,7 +241,7 @@ impl Workspace {
         let questions = self.questions_tx.clone();
         std::thread::spawn(move || {
             let on = |event| drop(tx.unbounded_send(TestUpdate::Event(event)));
-            let result = remote::asker(&server, questions).and_then(|(_asker, auth)| remote::test(&server, auth, &cancel, &on));
+            let result = remote::asker(&server, questions).and_then(|(_asker, auth, _)| remote::test(&server, auth, &cancel, &on));
             let _ = tx.unbounded_send(TestUpdate::Done(result));
         });
         cx.spawn(async move |this, cx| {

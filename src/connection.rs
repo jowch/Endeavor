@@ -432,6 +432,7 @@ impl Workspace {
     fn open_line(&mut self, host: &HostId, server: &Server, cx: &mut Context<Self>) -> Result<(), String> {
         if let Some(line) = self.lines.get(host) {
             if same_connection(&line.server, server) {
+                line.declined.forget();
                 let session = line.session.clone();
                 let status = session.status();
                 // ponytail: a line in its pause between tries isn't hurried (Session has no "try now"), so Reconnect waits for its next try.
@@ -450,7 +451,7 @@ impl Workspace {
             self.close_line(host);
         }
         let (tx, rx) = futures::channel::mpsc::unbounded::<LineUpdate>();
-        let (asker, auth) = remote::asker(server, self.questions_tx.clone())?;
+        let (asker, auth, declined) = remote::asker(server, self.questions_tx.clone())?;
         let events = tx.clone();
         let session = Arc::new(remote::open(server, auth, Box::new(move |event| drop(events.unbounded_send(LineUpdate::Event(event)))))?);
         let closed: Arc<AtomicBool> = Arc::default();
@@ -472,7 +473,7 @@ impl Workspace {
             }
         });
         let generation = next_connect_id();
-        self.lines.insert(host.clone(), Line { session, _asker: asker, server: server.clone(), closed, last: None, generation, held: None });
+        self.lines.insert(host.clone(), Line { session, _asker: asker, declined, server: server.clone(), closed, last: None, generation, held: None });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             let mut rx = rx;
@@ -1703,6 +1704,8 @@ pub(crate) struct Line {
     session: Arc<client::Session>,
     /// ssh's prompts come through it while the session lives.
     _asker: client::Asker,
+    /// A sign-in the user cancelled (`remote::Declined`), forgotten when they connect again.
+    declined: remote::Declined,
     /// The server as the line was opened for it.
     server: Server,
     /// Set once the line is closed: its watcher stops.

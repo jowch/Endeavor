@@ -9,11 +9,12 @@
 //! helper's askpass mode and the library's loopback `Asker`.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use endeavor_mcp::client::{self, Asker, Auth, Session};
 use futures::channel::mpsc::UnboundedSender;
-use wire::askpass::Ask;
+use wire::askpass::{Ask, Kind};
 
 use crate::hosts::Server;
 
@@ -60,15 +61,48 @@ pub fn client_server(server: &Server) -> Result<client::Server, String> {
 
 /// The askpass for `server`'s ssh: each prompt goes to the app's modal as a
 /// `Question`, and ssh waits for the answer. It works on every platform.
-pub fn asker(server: &Server, questions: UnboundedSender<Question>) -> Result<(Asker, Auth), String> {
+pub fn asker(server: &Server, questions: UnboundedSender<Question>) -> Result<(Asker, Auth, Declined), String> {
     let host = server.name.clone();
-    let asker = Asker::start(move |ask| {
+    let declined = Declined::default();
+    let asker = Asker::start(declined.clone().answering(move |ask| {
         let (reply, answer) = mpsc::channel();
         questions.unbounded_send(Question { ask, host: host.clone(), reply }).ok()?;
         answer.recv().ok().flatten()
-    })?;
+    }))?;
     let auth = Auth::Env(asker.env(&crate::runtime::helper_program()?));
-    Ok((asker, auth))
+    Ok((asker, auth, declined))
+}
+
+/// A sign-in the user cancelled. ssh takes a cancelled password or code as a
+/// wrong one and asks again, up to three times; the askpass's exit status
+/// doesn't stop it (only a key's passphrase is given up at once). So for a
+/// while after a Cancel, ssh's next password questions are cancelled without
+/// asking, until the user connects again (`forget`).
+#[derive(Clone, Default)]
+pub struct Declined(Arc<Mutex<Option<Instant>>>);
+
+/// How long a Cancel answers ssh's repeats of the question.
+const DECLINED_FOR: Duration = Duration::from_secs(60);
+
+impl Declined {
+    fn answering(self, ask_user: impl Fn(Ask) -> Option<String> + Send + Sync + 'static) -> impl Fn(Ask) -> Option<String> + Send + Sync + 'static {
+        move |ask| {
+            let secret = ask.kind == Kind::Secret;
+            if secret && self.0.lock().unwrap().is_some_and(|at| at.elapsed() < DECLINED_FOR) {
+                return None;
+            }
+            let answer = ask_user(ask);
+            if secret && answer.is_none() {
+                *self.0.lock().unwrap() = Some(Instant::now());
+            }
+            answer
+        }
+    }
+
+    /// The user is connecting again: ask them again.
+    pub fn forget(&self) {
+        *self.0.lock().unwrap() = None;
+    }
 }
 
 /// The listener's words while a server's runtime is away, and its refusal of
@@ -242,6 +276,28 @@ mod tests {
         let theirs = client_server(&server).unwrap();
         assert_eq!((theirs.id.as_str(), theirs.name.as_str(), theirs.ssh_host.as_str(), theirs.port, theirs.julia.as_deref()), ("lab", "Lab", "jc@lab", Some(2222), Some("module load julia")));
         assert_eq!(theirs.julia_args(), server.julia_args(), "the helper gets the same Julia");
+    }
+
+    #[test]
+    fn a_cancelled_password_isnt_asked_again_when_ssh_retries() {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let declined = Declined::default();
+        let answer = declined.clone().answering({
+            let asked = asked.clone();
+            move |ask: Ask| {
+                asked.lock().unwrap().push(ask.prompt.clone());
+                if ask.kind == Kind::YesNo { Some("yes".into()) } else { None }
+            }
+        });
+        let password = || Ask { kind: Kind::Secret, prompt: "jc@lab's password:".into() };
+        assert_eq!(answer(password()), None, "the user's Cancel");
+        assert_eq!(answer(password()), None);
+        assert_eq!(answer(password()), None);
+        assert_eq!(asked.lock().unwrap().len(), 1, "ssh's two retries aren't shown");
+        assert_eq!(answer(Ask { kind: Kind::YesNo, prompt: "Are you sure (yes/no)?".into() }), Some("yes".into()), "other questions still are");
+        declined.forget();
+        assert_eq!(answer(password()), None);
+        assert_eq!(asked.lock().unwrap().len(), 3, "a new connect asks again");
     }
 
     #[test]
