@@ -423,8 +423,8 @@ for this user if it's missing.
 Installing a newer build over an older one closes Endeavor if it's open and
 stops a runtime kept running after Endeavor quit (`endeavor.exe
 --stop-runtime`), since that runtime runs from the installed `endeavor.exe`.
-Its notebooks are already saved. Uninstalling stops it too. Quit Endeavor
-before uninstalling, or its exe stays behind. Uninstalling leaves
+Its notebooks are already saved. Uninstalling stops it too, and asks you to
+quit Endeavor first if it's open. Uninstalling leaves
 `%LOCALAPPDATA%\Endeavor` (Julia, the agents, sessions and settings).
 
 ## Try a build from CI

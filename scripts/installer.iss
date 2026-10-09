@@ -9,8 +9,7 @@
 ; The layout is the one install::resources() looks for: bin\endeavor.exe and
 ; Resources\ beside bin. Julia, Node and the agents are installed on first
 ; run into %LOCALAPPDATA%\Endeavor, which uninstalling leaves in place.
-; ponytail: not signed, so SmartScreen warns (#12). Uninstalling while the
-; app is open leaves endeavor.exe behind; quit it first.
+; ponytail: not signed, so SmartScreen warns (#12).
 
 #ifndef Version
   #define Version "0.1.0"
@@ -18,6 +17,7 @@
 #ifndef Build
   #define Build "unknown"
 #endif
+#define AppMutex "EndeavorApp"
 #ifndef Dist
   #define Dist "..\dist"
 #endif
@@ -132,8 +132,19 @@ begin
     InstallWebView2;
 end;
 
+{ The app holds this mutex while it's open (platform::init). An open exe
+  can't be removed, so ask to quit it first. }
 function InitializeUninstall: Boolean;
 begin
-  StopRuntime;
   Result := True;
+  while Result and CheckForMutexes('{#AppMutex}') do
+    Result := SuppressibleMsgBox('Endeavor is open. Quit it, then click OK to uninstall it.', mbError, MB_OKCANCEL, IDCANCEL) = IDOK;
+end;
+
+{ Once the user has confirmed: the "Are you sure?" question comes after
+  InitializeUninstall. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    StopRuntime;
 end;

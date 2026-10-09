@@ -99,11 +99,13 @@ jobs:
           $sig.SignerCertificate.Subject
           if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { Write-Error "The WebView2 bootstrapper isn't signed by Microsoft: $($sig.Status)"; exit 1 }
       # Inno Setup (scripts/installer.iss): a per-user installer, no admin.
+      # The runner image has Inno Setup 6; the fallback pins a 6.x so a new
+      # major version can't change the script's meaning.
       - name: Installer
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y; if ($LASTEXITCODE) { exit 1 } }
+          if (-not (Test-Path $iscc)) { choco install innosetup --version 6.4.3 --no-progress -y; if ($LASTEXITCODE) { exit 1 } }
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
           & $iscc /Qp "/DVersion=$version" "/DBuild=${{ steps.layout.outputs.build }}" "/DDist=$PWD\dist" "/DWebView2Setup=$PWD\target\installer\MicrosoftEdgeWebview2Setup.exe" "/O$PWD\target\installer" scripts\installer.iss
           if ($LASTEXITCODE) { exit 1 }

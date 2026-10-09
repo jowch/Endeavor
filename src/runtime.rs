@@ -570,6 +570,33 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
     let _ = std::fs::remove_dir_all(&app);
 }
 
+// What the Windows installer relies on before it replaces endeavor.exe: the
+// recorded core is ended, and a pid reused by a later process isn't.
+#[cfg(all(test, windows))]
+#[test]
+fn stop_recorded_ends_the_recorded_process_only() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::{Foundation::FILETIME, System::Threading::GetProcessTimes};
+    let state = std::env::temp_dir().join(format!("endeavor-stop-{}", std::process::id()));
+    std::fs::create_dir_all(&state).unwrap();
+    let mut core = Command::new("ping").args(["-n", "120", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap();
+    let mut times = [FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 }; 4];
+    let [created, exited, kernel, user] = &mut times;
+    // SAFETY: four FILETIMEs to write into; a handle to our own child.
+    assert_ne!(unsafe { GetProcessTimes(core.as_raw_handle(), created, exited, kernel, user) }, 0);
+    let started = (u64::from(times[0].dwHighDateTime) << 32) | u64::from(times[0].dwLowDateTime);
+    let pid = core.id();
+    let record = |started: u64| std::fs::write(state.join("runtime.json"), format!(r#"{{"pid": {pid}, "started": {started}}}"#)).unwrap();
+
+    record(started + 1);
+    stop_recorded_in(&state);
+    assert!(core.try_wait().unwrap().is_none(), "another process with the recorded pid is left alone");
+    record(started);
+    stop_recorded_in(&state);
+    assert!(core.try_wait().unwrap().is_some(), "the recorded process was stopped");
+    let _ = std::fs::remove_dir_all(&state);
+}
+
 #[cfg(test)]
 #[test]
 fn a_missing_julia_points_to_settings() {
