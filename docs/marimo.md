@@ -35,7 +35,7 @@ Two things make this more than a port:
   Jupyter. The boundary is the core's engine interface
   ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)) and `Backend` in the app. marimo
   shares Pluto's model (reactive graph, plain-text file), so the boundary
-  stays small; Jupyter stays in [roadmap.md](roadmap.md) "Later".
+  stays small. Jupyter isn't planned.
 - **Same tool names and shapes for both backends.** The agent calls
   `read_cell`, `edit_cell`, `execute_cell`, `get_cell_dependencies` and the
   rest whatever the notebook is. Language differences go in the skills, not

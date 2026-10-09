@@ -60,12 +60,12 @@ second, independent connection to the same session.
 
 ## 7. Open Risks
 
-- **Other notebook kinds.** Jupyter's ZMQ kernel model and `.ipynb` JSON
-  format differ structurally from Pluto's reactive graph and plain-`.jl`
-  format. Cell identity and the dependency tools need Jupyter-specific
-  equivalents; design the notebook boundary with this in mind
-  ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md) has the engine interface; marimo, the
-  closer match, is in [marimo.md](marimo.md)).
+- **Other notebook kinds.** Ember (R) and marimo (Python) share Pluto's
+  model (a reactive graph, a plain-text file), so the engine interface stays
+  small, but each still needs its own adapter, page script and skills, and
+  marimo derives cell IDs from position instead of storing them
+  ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md) has the engine interface; marimo is in
+  [marimo.md](marimo.md), Ember in [its repository](https://github.com/jowch/Ember)).
 - **Agent-specific MCP permission defaults.** Don't assume every ACP agent
   shows a permission prompt for MCP tool calls; the runtime enforces its
   rules (read-before-edit, run approval, plan mode) itself.
