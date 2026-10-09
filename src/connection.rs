@@ -274,6 +274,13 @@ impl Connection {
         true
     }
 
+    /// Back from a drop to a job waiting in the queue: no longer lost, so the
+    /// pane shows the wait, with Cancel, rather than "Can't reach" for as long
+    /// as the queue takes. Returns the kept page, which gives way.
+    fn back_to_a_queue(&mut self) -> Option<String> {
+        self.lost.take().and_then(|lost| lost.page)
+    }
+
     /// `runtime` is the Julia this server connection was on, still ready or
     /// left by a drop: the line got back to it.
     fn same_julia(&self, runtime: &Runtime) -> bool {
@@ -838,6 +845,9 @@ impl Workspace {
                 connection.job = Some(job.clone());
                 connection.steps.found_julia = true;
                 connection.steps.advance(format!("Submitted job {job} ({summary})"), "Waiting for a node");
+                if let Some(page) = connection.back_to_a_queue() {
+                    self.blank_page(&page, cx);
+                }
             }
             Update::Event(Event::Queued { job, state, reason }) if state == "RUNNING" => {
                 connection.job.get_or_insert(job);
@@ -848,6 +858,9 @@ impl Workspace {
                 connection.job.get_or_insert(job);
                 connection.steps.now("Waiting for a node");
                 connection.steps.detail = wire::slurm::reason_text(&reason).map(|r| format!("Slurm: {r}"));
+                if let Some(page) = connection.back_to_a_queue() {
+                    self.blank_page(&page, cx);
+                }
             }
             Update::Event(Event::Progress(line)) => connection.steps.log(&line),
             Update::Event(Event::Started { .. } | Event::Finished { .. } | Event::Slurm(_)) => {}
@@ -869,8 +882,10 @@ impl Workspace {
                     connection.steps.advance(format!("Connected to {name}"), "Finding Julia");
                 }
                 let (start, stop) = (connection.start_when_connected, connection.stop_when_connected);
-                // Back as it was; one that starts Julia stays lost until it's up.
-                let back = if start { None } else { connection.lost.take() };
+                // Back as it was. One that starts Julia again keeps its page, read-only and
+                // lost, until Julia is up; one with no page shows the start (a queue may be long).
+                let keeps_page = start && connection.lost.as_ref().is_some_and(|l| l.page.is_some());
+                let back = if keeps_page { None } else { connection.lost.take() };
                 if let Some(Lost { was: Status::Died(reason), .. }) = back {
                     connection.status = Status::Died(reason);
                 }
