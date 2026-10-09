@@ -124,7 +124,7 @@ fn raise(handle: Option<AnyWindowHandle>, cx: &mut App) -> bool {
 fn small_window(title: &'static str, size: Size<Pixels>, cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
-        titlebar: Some(TitlebarOptions { title: Some(title.into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(12.))) }),
+        titlebar: Some(TitlebarOptions { title: Some(title.into()), appears_transparent: !cfg!(windows), traffic_light_position: Some(point(px(14.), px(12.))) }),
         is_resizable: false,
         is_minimizable: true,
         ..Default::default()

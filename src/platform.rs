@@ -56,10 +56,16 @@ macro_rules! shortcut {
 pub(crate) use shortcut;
 
 /// The menu item that runs `reveal` on a notebook, and on a session's folder.
-pub const REVEAL: &str = if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Show in Files" };
-pub const REVEAL_FOLDER: &str = if cfg!(target_os = "macos") { "Reveal folder in Finder" } else { "Show folder in Files" };
+pub const REVEAL: &str = if cfg!(target_os = "macos") { "Reveal in Finder" } else if cfg!(windows) { "Show in File Explorer" } else { "Show in Files" };
+pub const REVEAL_FOLDER: &str = if cfg!(target_os = "macos") { "Reveal folder in Finder" } else if cfg!(windows) { "Show folder in File Explorer" } else { "Show folder in Files" };
 /// The button that shows the log files' folder, and its accessible name.
-pub const SHOW_LOGS: (&str, &str) = if cfg!(target_os = "macos") { ("Show in Finder", "Show log files in Finder") } else { ("Show in Files", "Show log files in Files") };
+pub const SHOW_LOGS: (&str, &str) = if cfg!(target_os = "macos") {
+    ("Show in Finder", "Show log files in Finder")
+} else if cfg!(windows) {
+    ("Show in File Explorer", "Show log files in File Explorer")
+} else {
+    ("Show in Files", "Show log files in Files")
+};
 
 /// Settings' Appearance choice that follows the system's light or dark setting.
 pub const MATCH_SYSTEM: &str = if cfg!(target_os = "macos") { "Match macOS" } else { "Match system" };

@@ -239,11 +239,14 @@ pub(crate) fn claude_cli(args: &[&str]) -> Result<std::process::Command, String>
     if let Some(fake) = std::env::var_os("ENDEAVOR_CLAUDE_CLI") {
         let mut command = std::process::Command::new(fake);
         command.args(args).stdin(std::process::Stdio::null());
+        endeavor_mcp::client::no_window(&mut command);
         return Ok(command);
     }
     let (node, entry) = adapter_paths(Agent::Claude)?;
     let mut command = std::process::Command::new(node);
     command.arg(entry).arg("--cli").args(args).stdin(std::process::Stdio::null());
+    // Node is a console program, and the app on Windows has no console to share.
+    endeavor_mcp::client::no_window(&mut command);
     Ok(command)
 }
 
@@ -255,11 +258,13 @@ pub(crate) fn codex_adapter(args: &[&str]) -> Result<std::process::Command, Stri
     if let Some(fake) = std::env::var_os("ENDEAVOR_CODEX_CLI") {
         let mut command = std::process::Command::new(fake);
         command.args(args).stdin(std::process::Stdio::null());
+        endeavor_mcp::client::no_window(&mut command);
         return Ok(command);
     }
     let (node, entry) = adapter_paths(Agent::Codex)?;
     let mut command = std::process::Command::new(node);
     command.arg(entry).args(args).stdin(std::process::Stdio::null());
+    endeavor_mcp::client::no_window(&mut command);
     Ok(command)
 }
 
@@ -339,7 +344,9 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
         }
         let npm = if cfg!(windows) { node_dir.join("node_modules/npm/bin/npm-cli.js") } else { node_dir.join("lib/node_modules/npm/bin/npm-cli.js") };
         let path = format!("{}{}{}", bin.display(), if cfg!(windows) { ';' } else { ':' }, std::env::var("PATH").unwrap_or_default());
-        let out = std::process::Command::new(&node)
+        let mut npm_ci = std::process::Command::new(&node);
+        endeavor_mcp::client::no_window(&mut npm_ci);
+        let out = npm_ci
             .arg(npm)
             .args(["ci", "--ignore-scripts", "--no-audit", "--no-fund"])
             .current_dir(&staging)

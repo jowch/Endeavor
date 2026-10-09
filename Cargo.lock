@@ -1827,6 +1827,7 @@ dependencies = [
  "gtk",
  "lb-wry",
  "libc",
+ "log",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -1844,7 +1845,7 @@ dependencies = [
 [[package]]
 name = "endeavor-mcp"
 version = "0.1.0"
-source = "git+https://github.com/jowch/EndeavorMCP#004f81fff186239e7a448d76246352fec8f50ce6"
+source = "git+https://github.com/jowch/EndeavorMCP#ada05612040c4f26f5ce864db7556043664a02c4"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
@@ -9754,7 +9755,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
-source = "git+https://github.com/jowch/EndeavorMCP#004f81fff186239e7a448d76246352fec8f50ce6"
+source = "git+https://github.com/jowch/EndeavorMCP#ada05612040c4f26f5ce864db7556043664a02c4"
 dependencies = [
  "base64 0.22.1",
  "dunce",
