@@ -2438,6 +2438,11 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG) {
         endeavor_mcp::run_as(&[runtime::HELPER_FLAG], std::env::args().skip(2).collect());
     }
+    // The Windows installer stopping a runtime kept running (runtime::stop_recorded).
+    if std::env::args().nth(1).as_deref() == Some(runtime::STOP_FLAG) {
+        runtime::stop_recorded();
+        std::process::exit(0);
+    }
     if std::env::var_os(wire::askpass::SOCKET_ENV).is_some() {
         endeavor_mcp::run(std::env::args().skip(1).collect());
     }

@@ -306,12 +306,7 @@ pub fn clear_state() -> Result<Vec<PathBuf>, String> {
 
 fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     let state_dir = app_dir.join("runtime");
-    let recorded = std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    if let Some(recorded) = recorded
-        && let Some(pid) = recorded["pid"].as_i64().and_then(|p| i32::try_from(p).ok()).filter(|&p| p > 1)
-    {
-        stop_group(pid, recorded["started"].as_u64());
-    }
+    stop_recorded_in(&state_dir);
     let mut stale: Vec<PathBuf> = ["runtime.json", "runtime.json.tmp", "lock"].iter().map(|f| state_dir.join(f)).collect();
     if let Ok(versions) = std::fs::read_dir(app_dir.join("depot/compiled")) {
         stale.extend(versions.flatten().map(|v| v.path().join("EndeavorRuntime")));
@@ -326,6 +321,27 @@ fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(removed)
+}
+
+/// `endeavor.exe --stop-runtime`: the Windows installer stops a runtime kept
+/// running before it replaces or removes the exe, which that runtime's core
+/// runs from. Its open notebooks are already saved (Pluto saves on each change).
+pub const STOP_FLAG: &str = "--stop-runtime";
+
+/// Stop the runtime recorded in This Mac's state folder, if one still runs.
+pub fn stop_recorded() {
+    if let Ok(app_dir) = crate::install::app_dir() {
+        stop_recorded_in(&app_dir.join("runtime"));
+    }
+}
+
+fn stop_recorded_in(state_dir: &Path) {
+    let recorded = std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    if let Some(recorded) = recorded
+        && let Some(pid) = recorded["pid"].as_i64().and_then(|p| i32::try_from(p).ok()).filter(|&p| p > 1)
+    {
+        stop_group(pid, recorded["started"].as_u64());
+    }
 }
 
 /// The runtime runs in its own session, so its recorded pid (the core's, or
