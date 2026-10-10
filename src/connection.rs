@@ -1091,9 +1091,13 @@ impl Workspace {
         let Some(bridge) = self.bridge(host) else { return };
         let reattached = self.connections.get(host).and_then(|c| c.runtime.as_ref()).is_some_and(|r| r.reattached);
         if *host == HostId::ThisMac {
-            if let Some(commands) = self.links.get_mut(crate::agent::Agent::Claude).rx.take() {
-                self.on_progress(Progress::new(Step::Agent, "Pluto ready · starting Claude…"), cx);
-                self.start_agent(crate::agent::Agent::Claude, commands, cx);
+            // First launch: the assistant picked on the setup screen, once picked.
+            let agent = self.setup.as_ref().map_or(Some(crate::agent::Agent::Claude), |s| s.agent);
+            if let Some(agent) = agent
+                && let Some(commands) = self.links.get_mut(agent).rx.take()
+            {
+                self.on_progress(Progress::new(Step::Agent, format!("Pluto ready · starting {}…", agent.name())), cx);
+                self.start_agent(agent, commands, cx);
             } else if let Some(e) = self.connections.get_mut(host).and_then(|c| c.not_restarted.take()) {
                 eprintln!("Restart Julia: {e}");
                 self.status = not_restarted(&e).into();

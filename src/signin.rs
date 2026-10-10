@@ -1,5 +1,6 @@
-//! Signing in to Claude. First launch asks under the splash: the assistant,
-//! then the kind of account, then the browser sign-in (`claude auth login`),
+//! Signing in to Claude. First launch asks under the splash: the assistant
+//! (any one Endeavor can run here), then, for Claude, the kind of account,
+//! then the browser sign-in (`claude auth login`),
 //! which can be cancelled and reopened, and why one didn't finish. Later a
 //! sign-in that ran out shows as a card above the composer; the messages
 //! Claude couldn't answer wait and go once it's back.
@@ -255,8 +256,6 @@ fn finish(child: Child, method: Method, url_file: &Path) -> Outcome {
 
 /// Where signing in is, while signed out.
 pub enum Stage {
-    /// First launch: which assistant.
-    Assistant,
     /// Which kind of account (a Claude plan or a Console account).
     Account,
     /// Mid-use: the sign-in ran out; sign in again the way it was done last.
@@ -393,9 +392,7 @@ fn unavailable(name: &'static str, by: &'static str, why: &'static str) -> Div {
 impl Workspace {
     /// Signed out, and where to start signing in.
     fn first_stage(&self) -> Stage {
-        if self.setup.is_some() {
-            Stage::Assistant
-        } else if self.settings.sign_in_method.is_some() {
+        if self.setup.is_none() && self.settings.sign_in_method.is_some() {
             Stage::Expired
         } else {
             Stage::Account
@@ -565,54 +562,100 @@ impl Workspace {
         true
     }
 
-    /// The splash's sign-in panel: the progress line's words, whether its bar
-    /// shows, the panel, and when the turtle tucked in (a failure).
-    pub fn render_sign_in_panel(&self, cx: &mut Context<Self>) -> Option<(AnyElement, bool, Option<Instant>)> {
-        let Account::SignedOut(stage) = &self.account else { return None };
+    /// The setup screen's pick: new sessions start with it, and setup goes on
+    /// to install and start it. Signing in to Codex or Antigravity waits for
+    /// its card on the new-session screen; Claude's comes next, here.
+    fn choose_assistant(&mut self, agent: Agent, cx: &mut Context<Self>) {
+        let Some(setup) = &mut self.setup else { return };
+        setup.agent = Some(agent);
+        self.update_settings(cx, |s| s.agent = agent);
+        self.draft.agent = agent;
+        // Started now if Julia is up; otherwise once it is (`on_ready`).
+        if self.links.get(agent).failed {
+            self.restart_agent(agent, cx);
+        } else if self.bridge(&crate::hosts::HostId::ThisMac).is_some() {
+            self.ensure_agent(agent, cx);
+        }
+        self.finish_setup(cx);
+        cx.notify();
+    }
+
+    /// The setup screen's "Choose another assistant", after the one picked failed.
+    pub fn change_assistant(&mut self, cx: &mut Context<Self>) {
+        let Some(setup) = &mut self.setup else { return };
+        setup.clear_error();
+        setup.agent = None;
+        cx.notify();
+    }
+
+    /// The setup screen's choice of assistant.
+    fn assistant_choice(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let pick = |agent: Agent, detail: &'static str| {
+            let facts = agent.facts();
+            choice(
+                div().flex().gap(px(4.)).child(facts.name).child(div().font_weight(FontWeight::NORMAL).text_color(theme::text_muted()).child(facts.maker)),
+                detail,
+                false,
+                button(SharedString::from(format!("assistant-{}", facts.name.to_lowercase())), "Choose", Look::Secondary)
+                    .aria_label(SharedString::from(format!("Choose {}", facts.name)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose_assistant(agent, cx))),
+            )
+            .into_any_element()
+        };
+        let detail = |agent: Agent| match agent {
+            Agent::Claude => "Next, you sign in with your Claude account.",
+            Agent::Codex => "Uses your ChatGPT account. Sessions on this computer only.",
+            Agent::Antigravity => "Uses your Google account. Sessions on this computer only.",
+        };
+        let ready = Agent::ALL.into_iter().filter(|a| a.available()).map(|a| pick(a, detail(a)));
+        let not_yet = Agent::ALL.into_iter().filter(|a| !a.available()).map(|a| (a.name(), a.facts().maker));
+        let not_yet: Vec<_> = not_yet.chain([("Cursor", "by Anysphere")]).map(|(name, by)| unavailable(name, by, "Not available yet")).collect();
+        let mut panel = vec![
+            title("Choose your assistant").into_any_element(),
+            body("Endeavor works with an AI assistant that writes and runs code in your notebook. Pick the one you have an account with.").into_any_element(),
+        ];
+        panel.extend(ready);
+        panel.push(div().flex().flex_col().gap(px(6.)).children(not_yet).into_any_element());
+        panel.push(
+            div()
+                .flex()
+                .gap(px(4.))
+                .child(meta("You can change this later in", theme::text_muted()))
+                .child(
+                    div()
+                        .flex()
+                        .child(
+                            link("sign-in-settings", "Settings")
+                                .aria_label("Open Settings at Assistants")
+                                .line_height(px(17.))
+                                .track_focus(&self.dialog_focus("sign-in-settings", cx))
+                                .tab_stop(true)
+                                .focus_ring()
+                                .on_click(cx.listener(|this, _, window, cx| this.open_settings_at(crate::settings_panel::Page::Section(crate::settings_panel::Section::Assistants), window, cx))),
+                        )
+                        .child(meta(".", theme::text_muted())),
+                )
+                .into_any_element(),
+        );
+        panel
+    }
+
+    /// The splash's panel: the progress line's words, whether its bar shows,
+    /// the panel, and when the turtle tucked in (a failure). First the choice
+    /// of assistant, then Claude's sign-in if Claude was picked.
+    pub fn render_sign_in_panel(&self, cx: &mut Context<Self>) -> Option<(&'static str, AnyElement, bool, Option<Instant>)> {
         let panel = div().flex().flex_col().gap(px(12.)).p(px(16.)).rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::dialog_bg());
+        match self.setup.as_ref().map(|s| s.agent) {
+            Some(None) => return Some(("Choose your assistant to finish setting up", panel.children(self.assistant_choice(cx)).into_any_element(), false, None)),
+            Some(Some(agent)) if agent != Agent::Claude => return None,
+            _ => {}
+        }
+        let Account::SignedOut(stage) = &self.account else { return None };
         let tucked = match stage {
             Stage::Failed { at, .. } => Some(*at),
             _ => None,
         };
         let panel = match stage {
-            Stage::Assistant => panel
-                .child(title("Choose your assistant"))
-                .child(body("Endeavor works with an AI assistant that writes and runs code in your notebook."))
-                .child(choice(
-                    div().flex().gap(px(4.)).child("Claude").child(div().font_weight(FontWeight::NORMAL).text_color(theme::text_muted()).child("by Anthropic")),
-                    "Next, you sign in with your Claude account.",
-                    true,
-                    button("assistant-continue", "Continue", Look::Primary).on_click(cx.listener(|this, _, _, cx| this.set_stage(Stage::Account, cx))),
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .child(unavailable("Codex", "by OpenAI", "For a session, after setup"))
-                        .child(unavailable("Cursor", "by Anysphere", "Not available yet"))
-                        .child(unavailable("Antigravity", "by Google", if Agent::Antigravity.available() { "For a session, after setup" } else { "Not available yet" })),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(4.))
-                        .child(meta("You can change this later in", theme::text_muted()))
-                        .child(
-                            div().flex().child(
-                                link("sign-in-settings", "Settings")
-                                    .aria_label("Open Settings at Assistants")
-                                    .line_height(px(17.))
-                                    .track_focus(&self.dialog_focus("sign-in-settings", cx))
-                                    .tab_stop(true)
-                                    .focus_ring()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_settings_at(crate::settings_panel::Page::Section(crate::settings_panel::Section::Assistants), window, cx)
-                                    })),
-                            )
-                            .child(meta(".", theme::text_muted())),
-                        ),
-                ),
             Stage::Account => panel.children(self.account_choice(cx)),
             Stage::Expired => return None,
             Stage::Waiting(login) => panel
@@ -642,7 +685,7 @@ impl Workspace {
                 ),
             Stage::Failed { .. } => panel.children(self.failure(cx)),
         };
-        Some((panel.into_any_element(), !matches!(stage, Stage::Failed { .. }), tucked))
+        Some(("Sign in to finish setting up", panel.into_any_element(), !matches!(stage, Stage::Failed { .. }), tucked))
     }
 
     /// "Sign in to Claude": the two kinds of account, each with its Sign in.
@@ -666,8 +709,14 @@ impl Workspace {
                 .child(glyph(Glyph::Back, theme::text_new()))
                 .button_text("Back")
                 .on_click(cx.listener(|this, _, _, cx| {
-                    let back = if this.setup.is_some() { Stage::Assistant } else { Stage::Expired };
-                    this.set_stage(back, cx);
+                    // On the setup screen, back to the choice of assistant.
+                    match &mut this.setup {
+                        Some(setup) => {
+                            setup.agent = None;
+                            this.set_stage(Stage::Account, cx);
+                        }
+                        None => this.set_stage(Stage::Expired, cx),
+                    }
                 })),
         );
         // Mid-use with no earlier sign-in, the card has nowhere to go back to.
@@ -859,7 +908,6 @@ impl Workspace {
                     ),
                 Stage::Account => card(false).gap(px(12.)).px(px(14.)).py(px(12.)).children(self.account_choice(cx)),
                 Stage::Failed { .. } => card(false).gap(px(12.)).px(px(14.)).py(px(12.)).children(self.failure(cx)),
-                Stage::Assistant => return None,
             }
             .into_any_element(),
         )

@@ -216,7 +216,12 @@ fn version_of(name: &str) -> Option<Vec<u64>> {
 
 #[cfg(unix)]
 fn unpack(tarball: &Path, into: &Path) -> Result<std::process::ExitStatus, String> {
-    Command::new("tar").arg("-xzf").arg(tarball).arg("-C").arg(into).status().map_err(|e| e.to_string())
+    let zip = tarball.to_string_lossy().ends_with(".zip.part");
+    // GNU tar can't read a zip; the Mac's bsdtar can, keeping the programs' modes.
+    if zip && cfg!(target_os = "linux") {
+        return Command::new("unzip").arg("-q").arg(tarball).arg("-d").arg(into).status().map_err(|e| format!("Couldn't run unzip: {e}"));
+    }
+    Command::new("tar").arg(if zip { "-xf" } else { "-xzf" }).arg(tarball).arg("-C").arg(into).status().map_err(|e| e.to_string())
 }
 
 #[cfg(windows)]

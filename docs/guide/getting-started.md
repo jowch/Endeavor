@@ -23,15 +23,30 @@ megabytes, so they can take a few minutes. [What Endeavor installs](./overview.m
 lists every download.
 
 If a step fails, the window shows which one, with the reason. Click **Retry**
-to try that step again, or **Show logs** to see what happened. If you're
+to try that step again, or **Show logs** to see what happened. If the
+assistant's own step fails, **Choose another assistant** takes you back to
+the choice. If you're
 offline, setup pauses under **No internet connection** and goes on by itself
 when you're back online.
 
+## Choose your assistant
+
+Endeavor uses your own account with an AI assistant to answer you. Setup
+starts by asking which one, under **Choose your assistant to finish setting
+up**. Click **Choose** beside the one you have an account with:
+
+- **Claude**, by Anthropic. You sign in next, as below.
+- **Codex**, by OpenAI, with your ChatGPT account.
+- **Antigravity**, by Google, with your Google account.
+
+Codex and Antigravity work in sessions on your computer only, not on servers.
+If you pick one of them, setup finishes once it is installed, and its sign-in
+card shows on **Start a session**. You can change the assistant later in
+Settings.
+
 ## Sign in to Claude
 
-Endeavor uses your own Claude account to answer you. During setup, under
-**Sign in to finish setting up**, it first asks you to choose an assistant.
-Claude is the only one available today. Click **Continue**.
+If you picked Claude, setup asks you to sign in.
 
 ![The "Sign in to Claude" screen, with the two kinds of account to choose from](images/sign-in.png)
 

@@ -61,7 +61,8 @@ To wait for something, poll the dump. For example, loop until
 ### What it holds
 
 - `window`. The screen: `new_session`, `session`, `sign_in` or `splash`.
-  Also the setup step, the dialog on top (`ssh_prompt`, `login_node_warning`,
+  Also the setup step and the assistant picked there (`setup.assistant`, null
+  while the setup screen still asks), the dialog on top (`ssh_prompt`, `login_node_warning`,
   `server_dialog`), and `ssh_prompt`: ssh's question on screen, with its
   `host`, `kind` (`secret`, `yesno` or `confirm`), `prompt`, `retry_line`
   ("That password didn't work. Try again." when ssh asks again after an

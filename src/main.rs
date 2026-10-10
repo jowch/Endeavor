@@ -833,7 +833,8 @@ impl Workspace {
         }
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
-        // Claude starts alongside it, except on first launch, whose setup screen goes step by step.
+        // Claude starts alongside it, except on first launch, whose setup screen
+        // asks which assistant first and then goes step by step.
         if this.setup.is_none() {
             this.ensure_agent(agent::Agent::Claude, cx);
             // The new-session screen shows the last agent picked: its sign-in and options.
@@ -1775,7 +1776,7 @@ impl Workspace {
                 }
             }
             // First launch: the setup screen says why, with Retry.
-            AgentEvent::Failed(e) if self.setup.is_some() && agent == agent::Agent::Claude => {
+            AgentEvent::Failed(e) if self.setup.as_ref().is_some_and(|s| s.agent == Some(agent)) => {
                 self.links.get_mut(agent).failed = true;
                 if let Some(setup) = &mut self.setup {
                     setup.fail(e);
@@ -2060,9 +2061,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Setup is done once the agent is up and Claude is signed in.
+    /// Setup is done once the assistant picked is up and, for Claude, signed
+    /// in. Codex and Antigravity sign in from their card afterwards.
     fn finish_setup(&mut self, cx: &mut Context<Self>) {
-        if self.setup.is_some() && self.links.get(agent::Agent::Claude).ready && !self.account.signed_out() {
+        let Some(agent) = self.setup.as_ref().and_then(|s| s.agent) else { return };
+        if self.links.get(agent).ready && (agent != agent::Agent::Claude || !self.account.signed_out()) {
             self.setup = None;
             Setup::finish();
             cx.notify();
@@ -2073,7 +2076,8 @@ impl Workspace {
     pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
-        self.restart_agent(agent::Agent::Claude, cx);
+        let agent = setup.agent.unwrap_or_default();
+        self.restart_agent(agent, cx);
     }
 
     /// What About Endeavor shows in its update strip.
@@ -2110,7 +2114,7 @@ impl Workspace {
         let link = self.links.get_mut(agent);
         let commands = link.renew();
         link.ready = false;
-        if agent != agent::Agent::Claude || self.setup.is_none() || self.bridge(&HostId::ThisMac).is_some() {
+        if self.setup.as_ref().and_then(|s| s.agent) != Some(agent) || self.bridge(&HostId::ThisMac).is_some() {
             self.start_agent(agent, commands, cx);
         } else {
             // First launch: started once This Mac's Julia is up (`on_ready`).
@@ -2388,10 +2392,12 @@ impl Render for Workspace {
         if let Some(setup) = &self.setup {
             let below = match self.render_sign_in_panel(cx) {
                 _ if self.offline_since.is_some() => splash::Below::Card(self.render_offline_setup(setup, cx)),
-                Some((panel, bar, tucked)) => splash::Below::Panel { line: "Sign in to finish setting up", bar: bar.then_some(0.78), panel, tucked },
+                Some((line, panel, bar, tucked)) => splash::Below::Panel { line, bar: bar.then_some(0.78), panel, tucked },
                 None => splash::Below::Progress,
             };
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
+            // The assistant's own install or connection failed: another may do.
+            let change = (setup.agent.is_some() && setup.step() >= splash::Step::Agent).then(|| cx.listener(|this, _, _, cx| this.change_assistant(cx)));
             let settings = self.render_settings_panel(window, cx).map(|d| deferred(d).with_priority(2));
             let confirm = self.render_confirm(cx).map(|d| deferred(d).with_priority(10));
             return div()
@@ -2402,7 +2408,7 @@ impl Render for Workspace {
                 .on_action(cx.listener(Self::interrupt))
                 .on_action(cx.listener(Self::find_setting))
                 .child(div().track_focus(&self.keyboard_home))
-                .child(splash::render(setup, below, retry, cx))
+                .child(splash::render(setup, below, retry, change, cx))
                 .children(settings)
                 .children(confirm)
                 .into_any_element();
