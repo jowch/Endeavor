@@ -1,0 +1,33 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "9849bdfa-8dfa-4b20-a0d8-c2f58088932b",
+    "update": {
+      "toolCallId": "8664290319b24032bc33122edd91b1f1",
+      "title": "notebook_new_notebook",
+      "kind": "other",
+      "status": "pending",
+      "content": [],
+      "locations": [
+        {
+          "path": "C:\\Users\\me\\notebooks\\sum.jl"
+        }
+      ],
+      "rawInput": {
+        "arguments": {
+          "path": "C:\\Users\\me\\notebooks\\sum.jl"
+        },
+        "path": "C:\\Users\\me\\notebooks\\sum.jl"
+      },
+      "_meta": {
+        "mcp": {
+          "tool": "new_notebook",
+          "server": "notebook"
+        },
+        "is_mcp_tool_call": true
+      },
+      "sessionUpdate": "tool_call"
+    }
+  }
+}

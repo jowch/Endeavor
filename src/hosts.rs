@@ -63,9 +63,27 @@ impl Cluster {
         }
     }
 
-    /// The job a session with `resources` asks for.
+    /// Take the partitions a connect listed, and fit the defaults to them (a
+    /// cluster saved without Test connection still has the preset's size), and
+    /// `draft`, a new session's resources copied from those defaults before
+    /// the partitions arrived, to its own partition.
+    pub fn take_partitions(&mut self, partitions: Vec<Partition>, scratch: Option<String>, draft: Option<&mut Resources>) {
+        self.partitions = partitions;
+        self.scratch = scratch;
+        let partition = self.partition(self.resources.partition.as_deref()).cloned();
+        self.resources.clip(partition.as_ref());
+        if let Some(draft) = draft {
+            draft.clip(self.partition(draft.partition.as_deref()));
+        }
+    }
+
+    /// The job a session with `resources` asks for, kept within what its
+    /// partition's largest node has: sizes saved before Test connection listed
+    /// the partitions would otherwise ask for more than any node has.
     pub fn job(&self, resources: &Resources) -> JobRequest {
-        JobRequest { resources: resources.clone(), account: self.account.clone(), depot: self.depot.clone() }
+        let mut resources = resources.clone();
+        resources.clip(self.partition(resources.partition.as_deref()));
+        JobRequest { resources, account: self.account.clone(), depot: self.depot.clone() }
     }
 }
 
@@ -349,6 +367,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_job_asks_for_no_more_than_its_partitions_largest_node() {
+        let small = Partition { name: "standard".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
+        let big = Partition { name: "big".into(), default: false, max_minutes: Some(60), cpus: 64, mem_mb: 512 * 1024 };
+        let cluster = Cluster { partitions: vec![small, big], account: Some("lab".into()), ..Default::default() };
+        // Medium, as a cluster saved before Test connection has it.
+        let job = cluster.job(&Resources::default());
+        assert_eq!((job.resources.cpus, job.resources.mem_gb, job.resources.minutes), (4, 7, 480), "the default partition's node");
+        assert_eq!(job.account.as_deref(), Some("lab"));
+        let job = cluster.job(&Resources { partition: Some("big".into()), ..Resources::default() });
+        assert_eq!((job.resources.cpus, job.resources.mem_gb, job.resources.minutes), (8, 32, 60), "fits, but for the time limit");
+        let job = Cluster::default().job(&Resources::default());
+        assert_eq!(job.resources, Resources::default(), "no partitions known: as asked");
+    }
+
+    #[test]
+    fn partitions_arriving_fit_the_defaults_and_the_draft() {
+        let small = Partition { name: "standard".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
+        let short = Partition { name: "short".into(), default: false, max_minutes: Some(60), cpus: 2, mem_mb: 4096 };
+        // Added without Test connection: Medium, and a draft copied from it.
+        let mut cluster = Cluster::default();
+        let mut draft = Resources { partition: Some("short".into()), ..cluster.resources.clone() };
+        cluster.take_partitions(vec![small, short], Some("/scratch".into()), Some(&mut draft));
+        let size = |r: &Resources| (r.cpus, r.mem_gb, r.minutes);
+        assert_eq!(size(&cluster.resources), (4, 7, 480), "the default partition's node");
+        assert_eq!(size(&draft), (2, 4, 60), "the draft's own partition");
+        assert_eq!(cluster.scratch.as_deref(), Some("/scratch"));
+        cluster.take_partitions(Vec::new(), None, None);
+        assert_eq!(size(&cluster.resources), (4, 7, 480), "none listed: left as it was");
+    }
+
+    #[test]
     fn saves_and_loads_servers() {
         let dir = std::env::temp_dir().join(format!("endeavor-hosts-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -470,13 +519,13 @@ mod tests {
         std::fs::create_dir_all(dir.join("conf.d")).unwrap();
         std::fs::write(
             dir.join("config"),
-            "Include conf.d/lab\nInclude conf.d/*\n\nHost *\n  ForwardAgent no\nHost hoffman2 h2\n  HostName hoffman2.idre.ucla.edu\nhost=gpu-box\nHost *.cluster !bad lab-server\nMatch host x\n",
+            "Include conf.d/lab\nInclude conf.d/*\n\nHost *\n  ForwardAgent no\nHost lab-cluster lc\n  HostName login.cluster.example.edu\nhost=gpu-box\nHost *.cluster !bad lab-server\nMatch host x\n",
         )
         .unwrap();
         std::fs::write(dir.join("conf.d/lab"), "Host lab-server\nHost bench\n").unwrap();
         let mut hosts = Vec::new();
         collect_hosts(&dir.join("config"), &dir, &mut hosts, 0);
-        assert_eq!(hosts, ["lab-server", "bench", "hoffman2", "h2", "gpu-box"]);
+        assert_eq!(hosts, ["lab-server", "bench", "lab-cluster", "lc", "gpu-box"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

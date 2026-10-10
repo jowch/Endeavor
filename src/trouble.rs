@@ -94,6 +94,7 @@ impl Trouble {
             Trouble::Busy => match agent {
                 Agent::Claude => "Anthropic's servers are busy right now.",
                 Agent::Codex => "OpenAI's servers are busy right now.",
+                Agent::Antigravity => "Google's servers are busy right now.",
             },
             Trouble::RateLimited => crate::agent_text!(agent, "", " got too many requests in a short time."),
             Trouble::Connection => crate::agent_text!(agent, "The connection to ", " dropped before a reply came."),

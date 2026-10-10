@@ -125,10 +125,13 @@ text, so it doesn't fit edits that already landed.
 ## Runtime: our own replacement for PlutoMCP
 
 **Decided:** Endeavor has its own runtime, seeded from the PlutoMCP fork (MIT;
-keep its copyright notice with copied code) and living in this repo.
-Endeavor-only for now; anything generally useful can go back to PlutoMCP.jl
-later. App and runtime change in the same commit: no fork PR, merge and pin
-cycle, and no protocol to keep backward-compatible.
+keep its copyright notice with copied code). Anything generally useful can go
+back to PlutoMCP.jl later. It first lived in this repo, changing in the same
+commit as the app. It has since moved to
+[EndeavorMCP](https://github.com/jowch/EndeavorMCP), which the app pins by
+commit, so a runtime change lands there first and the app then moves its pin
+(CLAUDE.md). The app and the runtime check each other's version
+(`interface` in `runtime.json`).
 
 What changed relative to PlutoMCP:
 
@@ -196,6 +199,8 @@ outside reviewer would find most convincing.
 
 ## Open questions
 
-- Chat-panel radius and undo granularity (from the spec).
-- Does Plan mode also stop the user's own runs? (Presumably not; it
-  constrains the agent.)
+- Undo granularity (from the spec).
+
+Answered: Plan mode doesn't stop the user's own runs. The runtime refuses
+writes and runs only for the agent's notebook tools in a session in Plan
+(EndeavorMCP's `mcp.rs`); a run from the notebook page goes ahead.

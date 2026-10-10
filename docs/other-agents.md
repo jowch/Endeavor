@@ -1,10 +1,12 @@
-# Other agents: Cursor, Codex and Gemini
+# Other agents: Cursor, Codex, Antigravity and Gemini
 
-Endeavor runs two agents: Claude Code, through the
-`@agentclientprotocol/claude-agent-acp` adapter, and Codex, through
+Endeavor runs three agents: Claude Code, through the
+`@agentclientprotocol/claude-agent-acp` adapter; Codex, through
 `@agentclientprotocol/codex-acp` (This Mac only; see
-[codex-agent.md](codex-agent.md)). Cursor and Gemini are listed as "Not
-available yet".
+[codex-agent.md](codex-agent.md)); and Antigravity, through Google's own
+`agy_acp_server` (on Windows x64 only so far, this computer only; see
+[antigravity-agent.md](antigravity-agent.md)). Cursor is listed as "Not
+available yet", and so is Antigravity on other platforms.
 
 This note covers two things:
 
@@ -15,7 +17,10 @@ This note covers two things:
 Cursor was tested in a spike on 2026-09-27 and again live on 2026-10-02; its
 findings are in [cursor-agent.md](cursor-agent.md). Codex was tested on
 2026-10-04 and added the same day; its findings and what changed for it are
-in [codex-agent.md](codex-agent.md). Gemini hasn't been tested yet.
+in [codex-agent.md](codex-agent.md). Antigravity was tested on a Windows
+machine on 2026-10-10 and added after; see
+[antigravity-agent.md](antigravity-agent.md). Gemini CLI hasn't been tested
+yet.
 
 ## Where Endeavor depends on Claude Code
 
@@ -258,7 +263,7 @@ agent is cheapest to add.
 
 What is known already:
 
-- **Gemini CLI** speaks ACP itself. Installed here at `/opt/homebrew/bin/gemini`.
+- **Gemini CLI** speaks ACP itself.
 - **Codex** is answered in [codex-agent.md](codex-agent.md), and added. Its
   adapter is `@agentclientprotocol/codex-acp`; the older
   `@zed-industries/codex-acp` is deprecated.

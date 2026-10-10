@@ -432,7 +432,7 @@ impl Workspace {
     pub fn recheck_sign_in(&mut self, cx: &mut Context<Self>) {
         const MIN_GAP: Duration = Duration::from_secs(10);
         // Back from signing in to Codex in a terminal: its card goes by itself.
-        if matches!(self.codex_account, crate::codex::Account::SignedOut | crate::codex::Account::Failed) {
+        if matches!(self.codex_account, crate::agent::Account::SignedOut | crate::agent::Account::Failed) {
             self.recheck_codex(cx);
         }
         if !matches!(self.account, Account::SignedIn) || self.sign_in_checked.is_some_and(|at| at.elapsed() < MIN_GAP) {
@@ -587,7 +587,7 @@ impl Workspace {
                         .gap(px(6.))
                         .child(unavailable("Codex", "by OpenAI", "For a session, after setup"))
                         .child(unavailable("Cursor", "by Anysphere", "Not available yet"))
-                        .child(unavailable("Gemini", "by Google", "Not available yet")),
+                        .child(unavailable("Antigravity", "by Google", if Agent::Antigravity.available() { "For a session, after setup" } else { "Not available yet" })),
                 )
                 .child(
                     div()
@@ -863,13 +863,52 @@ impl Workspace {
         match agent.facts().sign_in {
             SignIn::ClaudeAuth => self.render_sign_in_card(cx),
             SignIn::CodexLogin => self.render_codex_sign_in(cx),
+            SignIn::Authenticate(_) => self.render_antigravity_sign_in(cx),
         }
+    }
+
+    /// Antigravity's sign-in card: its server signs in with a Google account
+    /// in the browser, and keeps the sign-in for itself.
+    fn render_antigravity_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::agent::Account as Google;
+        if !self.antigravity_account.signed_out() || self.offline_since().is_some() {
+            return None;
+        }
+        let heading = div().flex().items_center().gap(px(8.)).text_size(px(14.)).line_height(px(20.)).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary());
+        let lines = |lines: &[&str]| div().flex().flex_col().gap(px(2.)).text_size(theme::size_meta()).line_height(px(17.)).text_color(theme::text_new()).children(lines.iter().map(|l| l.to_string()));
+        let row = div().flex().justify_end().items_center().gap(px(6.));
+        let sign_in = |label: &'static str| button("antigravity-sign-in", label, Look::Primary).on_click(cx.listener(|this, _, _, cx| this.sign_in_to_antigravity(cx)));
+        let body = match self.antigravity_account {
+            Google::SigningIn => div()
+                .child(heading.child(crate::orbit::orbit("antigravity-sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
+                .child(lines(&["We opened Google's sign-in page. Sign in there; this card goes away by itself and your message sends."])),
+            Google::Failed => div()
+                .child(heading.child("Antigravity sign-in didn't finish"))
+                .child(lines(&["The sign-in page closed or took more than 5 minutes. Try again."]))
+                .child(row.child(sign_in("Try again"))),
+            _ => div()
+                .child(heading.child("Sign in to Antigravity"))
+                .child(lines(&["Antigravity uses your Google account. Sign in opens Google in your browser."]))
+                .child(row.child(sign_in("Sign in"))),
+        };
+        Some(
+            body.flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(12.))
+                .py(px(10.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme::composer_edge())
+                .bg(theme::bg_card())
+                .into_any_element(),
+        )
     }
 
     /// Codex's sign-in card: Codex uses the ChatGPT sign-in its own command
     /// keeps, so signing in from a terminal (`codex login`) works too.
     fn render_codex_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use crate::codex::Account as Codex;
+        use crate::agent::Account as Codex;
         if !self.codex_account.signed_out() || self.offline_since().is_some() {
             return None;
         }
@@ -939,6 +978,7 @@ impl Workspace {
         match agent.facts().sign_in {
             SignIn::ClaudeAuth => self.account.signed_out(),
             SignIn::CodexLogin => self.codex_account.signed_out(),
+            SignIn::Authenticate(_) => self.antigravity_account.signed_out(),
         }
     }
 
@@ -958,17 +998,63 @@ impl Workspace {
         match agent.facts().sign_in {
             SignIn::ClaudeAuth => self.signed_out(cx),
             SignIn::CodexLogin => {
-                self.codex_account = crate::codex::Account::SignedOut;
+                self.codex_account = crate::agent::Account::SignedOut;
+                self.sync_holds(cx);
+                cx.notify();
+            }
+            SignIn::Authenticate(_) => {
+                if self.antigravity_account != crate::agent::Account::SigningIn {
+                    self.antigravity_account = crate::agent::Account::SignedOut;
+                }
                 self.sync_holds(cx);
                 cx.notify();
             }
         }
     }
 
+    /// What a check of Antigravity's sign-in found. Signed in, its sessions
+    /// waiting for that open.
+    pub fn on_antigravity_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
+        if signed_in {
+            self.antigravity_account = crate::agent::Account::SignedIn;
+            self.open_waiting(Agent::Antigravity, cx);
+        } else {
+            self.signed_out_of(Agent::Antigravity, cx);
+        }
+        cx.notify();
+    }
+
+    /// Antigravity's browser sign-in, from its card: ACP's `authenticate`
+    /// over its connection, which ends once the browser page is done or its
+    /// server stops waiting (5 minutes).
+    pub fn sign_in_to_antigravity(&mut self, cx: &mut Context<Self>) {
+        let SignIn::Authenticate(method) = Agent::Antigravity.facts().sign_in else { return };
+        if self.antigravity_account == crate::agent::Account::SigningIn {
+            return;
+        }
+        // A link that is down drops the command; then the card offers it again.
+        let sent = self.links.get(Agent::Antigravity).tx.unbounded_send(crate::agent::Command::Authenticate(method)).is_ok();
+        self.antigravity_account = if sent { crate::agent::Account::SigningIn } else { crate::agent::Account::Failed };
+        cx.notify();
+    }
+
+    /// Antigravity's sign-in ended.
+    pub fn on_antigravity_sign_in_ended(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        match result {
+            Ok(()) => self.on_antigravity_signed_in(true, cx),
+            Err(e) => {
+                eprintln!("Antigravity sign-in: {e}");
+                self.antigravity_account = crate::agent::Account::Failed;
+                self.sync_holds(cx);
+            }
+        }
+        cx.notify();
+    }
+
     /// What a check of Codex's sign-in found. Signed in, its sessions
     /// waiting for that open.
     pub fn on_codex_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
-        self.codex_account = if signed_in { crate::codex::Account::SignedIn } else { crate::codex::Account::SignedOut };
+        self.codex_account = if signed_in { crate::agent::Account::SignedIn } else { crate::agent::Account::SignedOut };
         self.open_waiting(Agent::Codex, cx);
         cx.notify();
     }
@@ -976,10 +1062,10 @@ impl Workspace {
     /// Codex's browser sign-in (`codex-acp login`), from its card. It ends
     /// by itself once the browser page is done; then the sign-in is checked.
     pub fn sign_in_to_codex(&mut self, cx: &mut Context<Self>) {
-        if self.codex_account == crate::codex::Account::SigningIn {
+        if self.codex_account == crate::agent::Account::SigningIn {
             return;
         }
-        self.codex_account = crate::codex::Account::SigningIn;
+        self.codex_account = crate::agent::Account::SigningIn;
         cx.notify();
         let done = cx.background_executor().spawn(async { crate::codex::log_in().and_then(|()| crate::codex::signed_in()) });
         cx.spawn(async move |this, cx| {
@@ -987,7 +1073,7 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 match signed_in {
                     Ok(true) => this.on_codex_signed_in(true, cx),
-                    Ok(false) | Err(_) => this.codex_account = crate::codex::Account::Failed,
+                    Ok(false) | Err(_) => this.codex_account = crate::agent::Account::Failed,
                 }
                 if let Err(e) = signed_in {
                     eprintln!("Codex sign-in: {e}");
@@ -1004,7 +1090,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             if let Ok(signed_in) = check.await {
                 let _ = this.update(cx, |this, cx| {
-                    if this.codex_account != crate::codex::Account::SigningIn {
+                    if this.codex_account != crate::agent::Account::SigningIn {
                         this.on_codex_signed_in(signed_in, cx);
                     }
                 });

@@ -95,6 +95,28 @@ fn is_preset(r: &Resources, i: usize, partitions: &[Partition]) -> bool {
     (picked.cpus, picked.mem_gb, picked.minutes) == (r.cpus, r.mem_gb, r.minutes)
 }
 
+/// Which of `r`'s CPUs, memory and time limit sit at what `p` allows, in
+/// words, so a size cut down to fit the cluster (or stepped up to its top)
+/// says why it goes no higher. None when nothing is at a limit.
+fn limit_note(r: &Resources, p: &Partition) -> Option<String> {
+    let mut node = Vec::new();
+    if p.cpus > 0 && r.cpus >= p.cpus {
+        node.push(if p.cpus == 1 { "1 CPU".to_owned() } else { format!("{} CPUs", p.cpus) });
+    }
+    if p.mem_gb() > 0 && r.mem_gb >= p.mem_gb() {
+        node.push(format!("{} GB of memory", p.mem_gb()));
+    }
+    let time = p.max_minutes.filter(|&max| r.minutes >= max);
+    let node = (!node.is_empty()).then(|| format!("{}'s nodes have at most {}", p.name, node.join(" and ")));
+    let note = match (node, time) {
+        (None, None) => return None,
+        (Some(node), None) => node,
+        (None, Some(max)) => format!("{} allows at most {}", p.name, duration_text(max)),
+        (Some(node), Some(max)) => format!("{node}, and it allows at most {}", duration_text(max)),
+    };
+    Some(note + ".")
+}
+
 impl Workspace {
     fn resources_target(&mut self, target: Target) -> Option<(&mut Resources, Vec<Partition>, &mut bool)> {
         match target {
@@ -228,6 +250,13 @@ impl Workspace {
             ),
             Target::Draft | Target::Session(_) => rows.extend(steppers.map(|(name, stepper)| row(name, stepper).into_any_element())),
         }
+        let partition = match &r.partition {
+            Some(name) => partitions.iter().find(|p| &p.name == name),
+            None => partitions.iter().find(|p| p.default),
+        };
+        if let Some(note) = partition.and_then(|p| limit_note(r, p)) {
+            rows.push(div().pt(px(6.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(note).into_any_element());
+        }
         rows
     }
 }
@@ -276,7 +305,7 @@ fn stepper(id: usize, noun: &'static str, value: String, minus: impl Fn(&ClickEv
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Field, apply, is_preset};
+    use super::{Change, Field, apply, is_preset, limit_note};
     use wire::slurm::{Partition, Resources};
 
     fn short() -> Partition {
@@ -320,5 +349,20 @@ mod tests {
         apply(&mut r, &Change::Step(Field::Cpus, false), &parts);
         assert!(highlighted(&r).is_empty(), "changed by hand");
         assert!(is_preset(&Resources::preset(2), 2, &[]), "no partitions known: the preset as it is");
+    }
+
+    #[test]
+    fn a_size_at_the_partitions_limit_says_so() {
+        let parts = [Partition { default: true, name: "standard".into(), max_minutes: Some(480), ..short() }];
+        let mut r = Resources::default();
+        apply(&mut r, &Change::Preset(1), &parts);
+        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("standard's nodes have at most 7 GB of memory, and it allows at most 8 h."));
+        apply(&mut r, &Change::Step(Field::Time, false), &parts);
+        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("standard's nodes have at most 7 GB of memory."));
+        apply(&mut r, &Change::Step(Field::Cpus, true), &parts);
+        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("standard's nodes have at most 10 CPUs and 7 GB of memory."));
+        let r = Resources { minutes: 60, mem_gb: 4, ..Resources::preset(0) };
+        assert_eq!(limit_note(&r, &short()).as_deref(), Some("short allows at most 1 h."));
+        assert_eq!(limit_note(&Resources { minutes: 30, ..r }, &short()), None);
     }
 }

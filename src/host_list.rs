@@ -20,8 +20,9 @@ pub enum HostState {
     Stopping,
     /// `job`: a cluster job's id and when it ends.
     Running { notebooks: Option<usize>, job: Option<(String, Option<u64>)> },
-    /// A cluster job waits in the queue, or (`starting`) has a node and Julia is starting.
-    Queued { job: String, starting: bool },
+    /// A cluster job waits in the queue, or (`starting`) has a node and Julia
+    /// is starting. `reason`: why Slurm says it waits ("Priority", "Resources").
+    Queued { job: String, starting: bool, reason: Option<String> },
     NotRunning,
     Replaced,
     /// The connection dropped; Endeavor reconnects by itself.
@@ -36,7 +37,11 @@ impl From<&RuntimeState> for HostState {
             RuntimeState::Running { notebooks, job, .. } => {
                 HostState::Running { notebooks: notebooks.map(|n| n as usize), job: job.as_ref().map(|j| (j.id.clone(), j.ends_at)) }
             }
-            RuntimeState::Queued { job, state, .. } => HostState::Queued { job: job.clone(), starting: state == "RUNNING" },
+            // A running job's reason slot carries its node.
+            RuntimeState::Queued { job, state, reason } => {
+                let starting = state == "RUNNING";
+                HostState::Queued { job: job.clone(), starting, reason: (!starting).then(|| reason.clone()) }
+            }
             RuntimeState::Starting => HostState::Starting,
         }
     }
@@ -58,8 +63,11 @@ impl HostState {
             HostState::Running { notebooks: Some(1), .. } => "Running · 1 notebook open".into(),
             HostState::Running { notebooks: Some(n), .. } => format!("Running · {n} notebooks open"),
             HostState::Running { notebooks: None, .. } => "Running".into(),
-            HostState::Queued { job, starting: false } => format!("Queued · job {job} · waiting for a free node"),
-            HostState::Queued { job, starting: true } => format!("Starting · job {job}"),
+            HostState::Queued { job, starting: false, reason } => {
+                let why = reason.as_deref().and_then(wire::slurm::reason_text).unwrap_or_else(|| "waiting for a free node".into());
+                format!("Queued · job {job} · {why}")
+            }
+            HostState::Queued { job, starting: true, .. } => format!("Starting · job {job}"),
             HostState::NotRunning => "Not running".into(),
             HostState::Replaced => "In use from another connection".into(),
             HostState::Lost => "Can't reach · reconnects by itself".into(),
@@ -129,8 +137,8 @@ mod tests {
             words(HostState::Lost),
             (("Can't reach · reconnects by itself".into(), Some("If it needs your university's VPN, check that it's on.".into())), Some(HostAct::TryNow))
         );
-        assert_eq!(words(HostState::Queued { job: "16".into(), starting: false }), (("Queued · job 16 · waiting for a free node".into(), None), Some(HostAct::CancelJob)));
-        assert_eq!(words(HostState::Queued { job: "16".into(), starting: true }).1, Some(HostAct::Stop));
+        assert_eq!(words(HostState::Queued { job: "16".into(), starting: false, reason: None }), (("Queued · job 16 · waiting for a free node".into(), None), Some(HostAct::CancelJob)));
+        assert_eq!(words(HostState::Queued { job: "16".into(), starting: true, reason: None }).1, Some(HostAct::Stop));
         assert_eq!(words(HostState::Failed("ssh: connection refused".into())), (("Couldn't connect".into(), Some("ssh: connection refused".into())), Some(HostAct::TryNow)));
         assert_eq!(words(HostState::Checking), (("Checking…".into(), None), None));
     }
@@ -148,7 +156,7 @@ mod tests {
         let in_job = HostState::Running { notebooks: None, job: Some(("15".into(), Some(ends))) };
         assert_eq!(in_job.text(), format!("Running · job 15 · ends at {}", crate::when::clock(ends)));
         assert!(in_job.running() && in_job.stoppable());
-        assert_eq!(HostState::Queued { job: "16".into(), starting: false }.text(), "Queued · job 16 · waiting for a free node");
+        assert_eq!(HostState::Queued { job: "16".into(), starting: false, reason: None }.text(), "Queued · job 16 · waiting for a free node");
         assert_eq!(HostState::Unknown.text(), "Not connected");
         assert_eq!(HostState::Failed("timed out".into()).text(), "Couldn't connect");
         assert!(!HostState::NotRunning.stoppable() && !HostState::Unknown.running());
@@ -161,6 +169,8 @@ mod tests {
         assert_eq!(HostState::from(&found).text(), "Running · job 15");
         let starting = RuntimeState::Queued { job: "16".into(), state: "RUNNING".into(), reason: "n1".into() };
         assert_eq!(HostState::from(&starting).text(), "Starting · job 16");
+        let waiting = RuntimeState::Queued { job: "17".into(), state: "PENDING".into(), reason: "Priority".into() };
+        assert_eq!(HostState::from(&waiting).text(), "Queued · job 17 · other jobs are ahead in the queue");
         let local = RuntimeState::Running { node: "mac".into(), notebooks: Some(3), job: None };
         assert_eq!(HostState::from(&local).text(), "Running · 3 notebooks open");
         assert_eq!(HostState::from(&RuntimeState::NotRunning), HostState::NotRunning);
