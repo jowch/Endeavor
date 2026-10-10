@@ -12,8 +12,9 @@
 # the "release" environment (main only) has the signing secrets (MACOS_CERT_P12, the certificate and
 # its key as a base64 .p12; MACOS_CERT_PASSWORD; APPLE_TEAM_ID; and an App
 # Store Connect API key: APPLE_API_KEY_P8, APPLE_API_KEY_ID,
-# APPLE_API_ISSUER_ID). Without them it stays ad-hoc signed, and Gatekeeper
-# makes the user allow it in System Settings. Pull requests never sign.
+# APPLE_API_ISSUER_ID). Without them a run that doesn't publish stays ad-hoc
+# signed, and a run that publishes fails rather than publish a Mac build
+# Gatekeeper blocks. Pull requests never sign or publish.
 # ponytail: the installer isn't signed (SmartScreen warns). Apple Silicon
 # only. The Windows build has no server helpers (windows.yml).
 name: Nightly
@@ -99,6 +100,17 @@ jobs:
     env:
       SIGN: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERT_P12 != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
+      # A published build must be signed and notarized: stop before building
+      # if any of the six signing secrets is missing.
+      - name: Publishing needs the signing secrets
+        if: needs.pick.outputs.publish == 'true'
+        env:
+          ALL_SECRETS: ${{ secrets.MACOS_CERT_P12 != '' && secrets.MACOS_CERT_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_API_KEY_P8 != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER_ID != '' }}
+        run: |
+          if [ "$SIGN" != true ] || [ "$ALL_SECRETS" != true ]; then
+            echo "::error::This run publishes the nightly, but the release environment is missing Mac signing or notarization secrets. Nothing was published. Add the secrets, or run without publish to get an unsigned build."
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.pick.outputs.sha }}
@@ -258,15 +270,17 @@ jobs:
       - name: Publish
         run: |
           set -eu
-          short=$(echo "$SHA" | cut -c1-7)
-          MAC_UNSIGNED=
+          # The mac job already refuses to build unsigned for a publishing
+          # run; this is the last check before anything goes out.
           if [ "${{ needs.mac.outputs.signed }}" != true ]; then
-            MAC_UNSIGNED=" It isn't signed by a known developer, so macOS blocks the first open: open it once, then go to System Settings, Privacy & Security, and click Open Anyway."
+            echo "::error::The Mac build isn't signed. Nothing was published."
+            exit 1
           fi
+          short=$(echo "$SHA" | cut -c1-7)
           cat > notes.md <<EOF
           The newest build of main that passed CI: build $short, $(date -u +%Y-%m-%d). It is replaced every day main changes. It is a test build: expect rough edges.
 
-          - **Mac** (Apple Silicon, macOS 13 or later): open Endeavor-macos-arm64.dmg and drag Endeavor to Applications.$MAC_UNSIGNED
+          - **Mac** (Apple Silicon, macOS 13 or later): open Endeavor-macos-arm64.dmg and drag Endeavor to Applications.
           - **Windows** (10 or 11, 64-bit): run Endeavor-windows-x86_64-setup.exe. It isn't signed, so Windows may say it protected your PC: click More info, then Run anyway. The Windows build can't connect to servers yet.
           - **Linux**: build it from source (docs/development.md).
           EOF
