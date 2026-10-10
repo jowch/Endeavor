@@ -490,8 +490,8 @@ impl Workspace {
             Page::Julia => View {
                 back: Some(Page::Section(Section::Notebooks)),
                 title: "Julia".into(),
-                aside: Some("Pluto notebooks".into()),
-                subtitle: Some(concat!("Runs your Pluto notebooks on ", crate::platform::this_computer!(lower), ".").into()),
+                aside: Some(".jl notebooks".into()),
+                subtitle: Some(concat!("Runs your Julia notebooks on ", crate::platform::this_computer!(lower), ".").into()),
                 groups: self.julia_groups(),
             },
         }
@@ -665,13 +665,13 @@ impl Workspace {
         ask.desc = Some("When on, the assistant runs the cells it writes without stopping to ask you first. It applies to new sessions. To change one session, use Ask to run under the message box.".into());
         ask.controls.push(Control::Toggle { on: s.run_without_asking, act: Act::RunWithoutAsking, aria: "Run notebook code without asking".into() });
         let mut julia = row("julia", "Julia");
-        julia.aside = Some("Pluto notebooks".into());
+        julia.aside = Some(".jl notebooks".into());
         julia.lead = Lead::Icon { glyph: Glyph::File, dot: false, faint: false, tone: None };
         julia.problem = self.julia_broken();
         julia.status = Some(self.julia_line());
         julia.desc = None;
-        julia.search = Some("Julia Pluto notebooks".into());
-        julia.summary = Some(format!("{}. Choose which program runs your Pluto notebooks.", self.julia_line().text).into());
+        julia.search = Some("Julia .jl Pluto notebooks".into());
+        julia.summary = Some(format!("{}. Choose which program runs your Julia notebooks.", self.julia_line().text).into());
         julia.controls.push(Control::Button { label: "Settings", look: Look::Secondary, icon: Some(Glyph::Gear), act: Some(Act::Go(Page::Julia)), aria: "Julia settings".into() });
         let later = |key: &'static str, name: &'static str, kind: &'static str| {
             let mut r = row(key, name);
@@ -685,7 +685,7 @@ impl Workspace {
         vec![
             group(Some("When notebooks stop"), vec![Item::Row(idle), Item::Row(keep)]),
             group(Some("Running code"), vec![Item::Row(ask)]),
-            group(Some("Languages"), vec![Item::Row(julia), later("r", "R", "Ember notebooks"), later("python", "Python", "marimo notebooks")])
+            group(Some("Languages"), vec![Item::Row(julia), later("r", "R", ".R notebooks"), later("python", "Python", ".py notebooks")])
                 .foot("Each language has its own program. Servers and clusters set theirs in Where notebooks run."),
         ]
     }

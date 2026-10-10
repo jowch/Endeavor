@@ -1191,7 +1191,7 @@ impl Workspace {
                     })),
             )
             .child(section_label(format!("In {}", host.folder_name(&folder))))
-            .when(rows.is_empty(), |d| d.child(div().py(px(4.)).pl(px(28.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("No Pluto notebooks in this folder")))
+            .when(rows.is_empty(), |d| d.child(div().py(px(4.)).pl(px(28.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("No notebooks in this folder")))
             .child(div().id("notebook-rows").max_h(px(300.)).overflow_y_scroll().flex().flex_col().children(rows))
     }
 
