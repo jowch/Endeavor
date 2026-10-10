@@ -367,10 +367,13 @@ pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn F
             }
         }
     }, notice)?;
-    // A fresh start means no runtime runs an older pin's Julia: remove those.
+    // A fresh start means no runtime runs an older pin's Julia: remove those,
+    // in the background, since deleting 300 MB can take a while on Windows.
     if !runtime.reattached {
-        let chosen = crate::settings::Settings::load().julia;
-        crate::install::remove_other_versions("julia-", JULIA_VERSION, &chosen.as_deref().into_iter().collect::<Vec<_>>());
+        std::thread::spawn(|| {
+            let chosen = crate::settings::Settings::load().julia;
+            crate::install::remove_other_versions("julia-", JULIA_VERSION, &chosen.as_deref().into_iter().collect::<Vec<_>>());
+        });
     }
     let how = if runtime.reattached { "Reattached to" } else { "Started" };
     let log = crate::install::app_dir().map(|d| d.join("runtime/runtime.log").display().to_string()).unwrap_or_default();
