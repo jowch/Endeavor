@@ -21,9 +21,8 @@ The notebook runtime, MCP server and skills live in
 - `adapter/`, `adapter-codex/`: the pinned ACP adapters the app installs.
 - `site/`: the documentation website, built from `docs/guide/`.
 - `docs/`: start with `pluto-agent-design-doc.md` (why), `ui-spec.md` (how it
-  looks and behaves), `roadmap.md`, `design-gaps.md`, `testing.md`,
-  `development.md`. `marimo.md` is the design for the Python backend (not
-  built).
+  looks and behaves), `roadmap.md`, `testing.md`, `development.md`.
+  `marimo.md` is the design for the Python backend (not built).
 
 ## Build, test, lint
 
@@ -78,5 +77,5 @@ Say which of these limited a check rather than claiming it passed.
 Commit subjects name the area and say what changed in plain words
 ("Sidebar: a new reply is a plain orange ring, so it isn't mistaken for the
 filled needs-you dot"); the body says why. UI text and docs use plain, short
-sentences and the user's words, not internal names. Keep `roadmap.md`,
-`design-gaps.md` and the guide true when a change affects them.
+sentences and the user's words, not internal names. Keep `roadmap.md`
+and the guide true when a change affects them. Gaps go in GitHub issues.

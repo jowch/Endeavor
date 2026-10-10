@@ -2,8 +2,8 @@
 
 Living plan; update it as items land. Design rationale lives in
 [pluto-agent-design-doc.md](pluto-agent-design-doc.md) and
-[design-notes.md](design-notes.md). Open design gaps are in
-[design-gaps.md](design-gaps.md).
+[design-notes.md](design-notes.md). Open gaps are
+[GitHub issues](https://github.com/jowch/Endeavor/issues).
 
 _Last updated: 2026-10-10_
 
@@ -44,7 +44,7 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   CI keeps a Windows build and installer to try, and a "nightly"
   prerelease holds the newest Mac app and Windows installer from `main`
   (`nightly.yml`). There are no versioned releases yet.
-- **Updates** ([#15](https://github.com/jowch/Endeavor/issues/15)). The app
+- **Updates** ([#80](https://github.com/jowch/Endeavor/issues/80)). The app
   can't update itself or check for a newer version, so Check now is hidden.
 - **The Windows installer** ([#12](https://github.com/jowch/Endeavor/issues/12)):
   a per-user installer that adds WebView2 if it's missing. CI builds it; it
