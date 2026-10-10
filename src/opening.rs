@@ -46,7 +46,8 @@ impl Waiting {
         let text = match self {
             Waiting::Unreachable(server) => return Some(format!("Can't reach {server}. Endeavor keeps trying.")),
             Waiting::Connecting(server) => format!("Connecting to {server}…"),
-            Waiting::Julia(None) => "Starting Julia…".to_owned(),
+            // This computer's runtime; Julia itself starts when a Julia notebook needs it.
+            Waiting::Julia(None) => "Starting the notebook runtime…".to_owned(),
             Waiting::Julia(Some(server)) => format!("Starting Julia on {server}…"),
             Waiting::Agent { .. } | Waiting::SignIn(_) => return None,
             Waiting::Starting(agent) => format!("Starting {agent}…"),
@@ -63,6 +64,7 @@ impl Waiting {
     pub fn note(&self) -> String {
         match self {
             Waiting::Unreachable(server) => format!("The conversation is kept on {server}, so it shows once Endeavor can reach it."),
+            Waiting::Julia(None) => "The conversation shows once the notebook runtime is running.".to_owned(),
             Waiting::Connecting(_) | Waiting::Julia(_) => "The conversation shows once Julia is running.".to_owned(),
             Waiting::Agent { name, julia: true } => format!("The conversation shows once {name} and Julia are running."),
             Waiting::Agent { name, julia: false } | Waiting::Starting(name) => format!("The conversation shows once {name} is running."),
@@ -220,8 +222,8 @@ mod tests {
     #[test]
     fn the_wait_line_names_what_is_on_its_way_with_the_time_after_a_few_seconds() {
         let julia = Waiting::Julia(None);
-        assert_eq!(julia.line(Some(Duration::from_secs(2))).as_deref(), Some("Starting Julia…"));
-        assert_eq!(julia.line(Some(Duration::from_secs(12))).as_deref(), Some("Starting Julia… 0:12"));
+        assert_eq!(julia.line(Some(Duration::from_secs(2))).as_deref(), Some("Starting the notebook runtime…"));
+        assert_eq!(julia.line(Some(Duration::from_secs(12))).as_deref(), Some("Starting the notebook runtime… 0:12"));
         assert_eq!(Waiting::Julia(Some("lab-server".into())).line(None).as_deref(), Some("Starting Julia on lab-server…"));
         assert_eq!(Waiting::Connecting("lab-server".into()).line(Some(Duration::from_secs(75))).as_deref(), Some("Connecting to lab-server… 1:15"));
         assert_eq!(Waiting::Conversation.line(Some(Duration::from_secs(30))).as_deref(), Some("Loading the conversation…"));
@@ -237,7 +239,8 @@ mod tests {
         assert!(meta.starts_with("Last active yesterday at ") && meta.ends_with(" · fit_decay.jl"), "{meta}");
         assert_eq!(last_active(None, Some("de.jl"), Some("lab-server")).as_deref(), Some("de.jl · lab-server"));
         assert_eq!(last_active(None, None, None), None);
-        assert_eq!(Waiting::Julia(None).note(), "The conversation shows once Julia is running.");
+        assert_eq!(Waiting::Julia(None).note(), "The conversation shows once the notebook runtime is running.");
+        assert_eq!(Waiting::Julia(Some("lab-server".into())).note(), "The conversation shows once Julia is running.");
         assert_eq!(Waiting::Conversation.note(), "The conversation appears once all of it has loaded.");
         assert_eq!(Waiting::Unreachable("lab-server".into()).note(), "The conversation is kept on lab-server, so it shows once Endeavor can reach it.");
         assert_eq!(Waiting::Julia(None).placeholder(), "Write a message. It sends once the session is open.");

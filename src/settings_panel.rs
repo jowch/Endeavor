@@ -720,7 +720,13 @@ impl Workspace {
         let own = self.settings.julia.is_none();
         let mut ours = row("julia-own", "Endeavor's Julia");
         ours.lead = Lead::Radio { checked: own, act: Some(Act::OwnJulia) };
-        ours.desc = Some(if cfg!(windows) { "Installed by Endeavor with juliaup, Julia's installer." } else { "Installed and kept up to date by Endeavor." }.into());
+        ours.desc = Some(if cfg!(windows) {
+            "Installed by Endeavor with juliaup, Julia's installer.".to_owned()
+        } else {
+            // ponytail: the core's `auto` takes a julia on the PATH first; Endeavor's own only is EndeavorMCP #96.
+            format!("The Julia on your PATH if it's {} or newer; otherwise Endeavor downloads its own the first time you open a Julia notebook.", runtime::min_julia())
+        }
+        .into());
         // Search finds the choice by its other half, "Another Julia on this Mac".
         ours.search = None;
         ours.controls.push(Control::Note(format!("{} · recommended", runtime::JULIA_VERSION).into()));
@@ -862,7 +868,7 @@ impl Workspace {
             } else if ready {
                 concat!("Stops your Julia notebooks on ", crate::platform::this_computer!(lower), " and starts them again. Their files are already saved.")
             } else {
-                concat!("Julia isn't running on ", crate::platform::this_computer!(lower), " now. It starts when you open a session.")
+                concat!("Notebooks aren't running on ", crate::platform::this_computer!(lower), " now. Julia starts when you open a Julia notebook.")
             }
             .into(),
         );

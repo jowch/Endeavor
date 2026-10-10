@@ -1216,8 +1216,11 @@ impl Workspace {
     /// Open a session's notebook file in the current Pluto (reusing it if it's
     /// already open; otherwise running it only if `run`) and point the session, the
     /// pane if active, and any session whose copy was stopped, at it.
+    /// Julia starts first if it isn't running: the pane shows its steps meanwhile, or why it couldn't.
     fn open_for_session(&mut self, key: u64, path: String, run: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
+        let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
+        let steps = self.julia_steps(&host, cx);
         let opened = cx.background_executor().spawn({
             let path = path.clone();
             async move {
@@ -1225,13 +1228,15 @@ impl Workspace {
                 let open = listed.as_ref().and_then(|l| l.as_array()?.iter().find(|nb| nb["path"] == path.as_str()).cloned());
                 let nb = match open {
                     Some(nb) => nb,
-                    None => pluto::call_tool(&bridge, "open_notebook", serde_json::json!({ "path": path, "run_notebook": run })).ok()?,
+                    None => pluto::until_julia(|| pluto::open_notebook(&bridge, &path, run), &|step| steps.step(step))?,
                 };
-                nb["notebook_id"].as_str().map(str::to_owned)
+                nb["notebook_id"].as_str().map(str::to_owned).ok_or_else(|| format!("no notebook id in {nb}"))
             }
         });
         cx.spawn(async move |this, cx| {
-            let Some(id) = opened.await else {
+            let opened = opened.await;
+            let _ = this.update(cx, |this, cx| this.julia_answer(&host, opened.as_ref().err().map(String::as_str), cx));
+            let Ok(id) = opened else {
                 // A notebook file that's gone shows File not found.
                 let _ = this.update(cx, |this, cx| this.check_missing(key, cx));
                 return;
