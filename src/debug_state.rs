@@ -101,6 +101,7 @@ impl Workspace {
         let active = self.active_session();
         json!({
             "window": self.window_state(),
+            "log": { "skipped_window_callbacks": crate::logs::skipped_callbacks() },
             "offline": self.offline_since.map(|since| json!({ "for_secs": since.elapsed().as_secs(), "trying": self.probing })),
             "claude": {
                 "state": state_name(&self.links.get(Agent::Claude).process.state),
