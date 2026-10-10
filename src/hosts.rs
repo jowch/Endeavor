@@ -470,13 +470,13 @@ mod tests {
         std::fs::create_dir_all(dir.join("conf.d")).unwrap();
         std::fs::write(
             dir.join("config"),
-            "Include conf.d/lab\nInclude conf.d/*\n\nHost *\n  ForwardAgent no\nHost hoffman2 h2\n  HostName hoffman2.idre.ucla.edu\nhost=gpu-box\nHost *.cluster !bad lab-server\nMatch host x\n",
+            "Include conf.d/lab\nInclude conf.d/*\n\nHost *\n  ForwardAgent no\nHost lab-cluster lc\n  HostName login.cluster.example.edu\nhost=gpu-box\nHost *.cluster !bad lab-server\nMatch host x\n",
         )
         .unwrap();
         std::fs::write(dir.join("conf.d/lab"), "Host lab-server\nHost bench\n").unwrap();
         let mut hosts = Vec::new();
         collect_hosts(&dir.join("config"), &dir, &mut hosts, 0);
-        assert_eq!(hosts, ["lab-server", "bench", "hoffman2", "h2", "gpu-box"]);
+        assert_eq!(hosts, ["lab-server", "bench", "lab-cluster", "lc", "gpu-box"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
