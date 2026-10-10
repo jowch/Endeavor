@@ -16,7 +16,7 @@ The VM is Ubuntu 24.04, x86_64, running as root, with no display. With
 | Build the app and its tests | Yes | `cargo build`, `cargo test --workspace` (about 6 min cold) |
 | Page script tests and typecheck | Yes | `cd frontend && npm test && npm run -s check` |
 | Run the app and read its state dump | Yes | under Xvfb, below |
-| EndeavorMCP's tests | Yes, one known failure | see EndeavorMCP's CLAUDE.md |
+| EndeavorMCP's tests | Yes | `cargo test --workspace` there; its real-Julia tests need Julia's hosts (EndeavorMCP's CLAUDE.md) |
 | Real Julia: local runtime, `e2e_julia`, notebooks in the app | Only if the network allows Julia's hosts | below |
 | A real Claude turn in the app or through the plugin | Only with an API key | below |
 | macOS-only behaviour (menu bar, Metal, notarization) | No | needs a Mac |

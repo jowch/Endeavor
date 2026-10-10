@@ -287,6 +287,8 @@ To land a change:
 
 ## Other debug switches
 
+These are read by debug builds only.
+
 - `ENDEAVOR_FORCE_OFFLINE`: a file path. The app is offline while the file
   exists.
 - `ENDEAVOR_TEST_UNREACHABLE`: a file path. While the file exists, the
@@ -304,6 +306,27 @@ To land a change:
 - `ENDEAVOR_CLAUDE_CLI`: a program that stands in for `claude` in `claude
   auth status`, `login` and `logout`, so sign-in, the account on Settings'
   Claude page and Sign out can be tested without touching the real sign-in.
+- `ENDEAVOR_CODEX_CLI`: a program that stands in for the Codex adapter's
+  `cli` and `login`, so Codex's sign-in can be tested without touching the
+  real account. It gets the same arguments.
+- `ENDEAVOR_FAKE_AUTH_ERROR`: a file path. While the file exists, every turn
+  fails as an expired sign-in makes it fail, without reaching Claude.
+- `ENDEAVOR_JOB_WARNING_SECONDS`: seconds. The chat warns this long before a
+  cluster job ends, instead of 15 minutes, to try the warning on a short job.
+- `ENDEAVOR_MOTION_SCALE`: a number. `10` plays every animation ten times
+  slower, to check it by eye or in screenshots; `0` turns motion off.
+- `ENDEAVOR_SPLASH_PREVIEW`: `1` opens the setup screen with made-up progress
+  and installs nothing. Add `fail` to stop at the second step and `still` for
+  the reduced-motion frame (`fail,still`).
+- The SSH hosts `local-test`, `local-test-password` and `local-test-hostkey`.
+  A server whose SSH host is one of these runs on this computer through `sh`,
+  not ssh. `local-test` connects at once (see `ENDEAVOR_TEST_UNREACHABLE`).
+  `local-test-password` asks for a password through the app's prompt, and
+  any answer signs in (Cancel gives "Permission denied").
+  `local-test-hostkey` asks the host-key question; Yes signs in.
+- `ENDEAVOR_TEST_MCP_URL` and `ENDEAVOR_TEST_TOKEN`: a runtime's `/mcp`
+  address and its token, for the ignored live tests in `src/agent.rs` that
+  bring their own runtime (`cargo test -- --ignored live_list_and_load`).
 - `ENDEAVOR_TEST_STUCK_OPENING`: a file path. When the file appears, the
   notebook's page is taken down, as a runtime going away does, and the pane
   says "Opening". After 5 s the app loads the page again by itself. While the

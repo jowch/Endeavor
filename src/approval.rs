@@ -329,7 +329,7 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
         lines.push((format!("Also re-runs {n} {cells} that {depend} on {them}."), Tone::Muted));
     }
     if tool == "delete_cell" {
-        lines.push((format!("{} in the notebook brings the cell back.", crate::platform::shortcut!("Z")), Tone::Muted));
+        lines.push(("The chat keeps its code if you want it back.".into(), Tone::Muted));
     }
     Prompt { heading: question.heading, verb: question.button, code, lines, names: question.names }
 }

@@ -1,9 +1,10 @@
 # Endeavor on Linux
 
-_Status as of 2026-09-29. Tested only on Ubuntu 26.04 aarch64 (the OrbStack
-machine `endeavor-linux`), under Xvfb, with and without the Openbox window
-manager. There is no x86_64 test yet, and no test on a full desktop such as
-GNOME or KDE._
+_Status as of 2026-09-29, updated 2026-10-10. Tested on Ubuntu 26.04 aarch64
+(an OrbStack machine on a Mac), under Xvfb, with and without the Openbox
+window manager, and on Ubuntu 24.04 x86_64 (the Claude Code cloud VM, under
+Xvfb; [cloud.md](cloud.md)). There is no test on a full desktop such as GNOME
+or KDE._
 
 **Summary:** the app builds, passes its tests and runs on Linux under X11. The
 window opens with the window manager's frame, setup installs Node and the
@@ -64,7 +65,8 @@ The remaining work is ranked at the end of this page.
   GTK's `gtk-application-prefer-dark-theme` isn't an input: the app sets it to
   make WebKitGTK's `prefers-color-scheme` match.
 - **Reduce motion.** GTK's `gtk-enable-animations=false` stops the turtle's
-  animation. As on macOS, the app reads it once at launch.
+  animation. As on macOS, the app follows a change while it runs
+  (`platform::watch_reduce_motion`).
 - **Servers.** From the Linux client, Add server, Test connection, a session on
   the server and running its notebook all work. Tested against the VM itself
   over `ssh localhost`. A Linux client sends a Linux server of its own
@@ -124,7 +126,7 @@ The remaining work is ranked at the end of this page.
 
 ## System packages (Ubuntu 26.04)
 
-This is the set installed on `endeavor-linux`. It hasn't been reduced to the
+This is the set installed on the OrbStack machine. It hasn't been reduced to the
 smallest set that works.
 
 ```
@@ -149,39 +151,40 @@ desktops install anyway.
 ## Build and run in the VM
 
 OrbStack machines have no display of their own. Run the app under Xvfb and take
-screenshots.
+screenshots. `linux-vm` below stands for the machine's ssh name (OrbStack's is
+`<machine>@orb`).
 
 1. Copy the worktree into the VM and build it there:
 
    ```
-   rsync -a --delete --exclude target --exclude .git --exclude node_modules ./ endeavor-linux:endeavor/
-   ssh endeavor-linux 'cd endeavor && ~/.cargo/bin/cargo build'
+   rsync -a --delete --exclude target --exclude .git --exclude node_modules ./ linux-vm:endeavor/
+   ssh linux-vm 'cd endeavor && ~/.cargo/bin/cargo build'
    ```
 
 2. Optional: to skip the 300 MB Julia download, point the app at the helper's
    copy of Julia:
 
    ```
-   ssh endeavor-linux 'mkdir -p ~/.local/share/endeavor && ln -sfn ~/.cache/endeavor/julia-1.12.6 ~/.local/share/endeavor/julia-1.12.6'
+   ssh linux-vm 'mkdir -p ~/.local/share/endeavor && ln -sfn ~/.cache/endeavor/julia-1.12.6 ~/.local/share/endeavor/julia-1.12.6'
    ```
 
 3. Start Xvfb, optionally Openbox, and the app:
 
    ```
-   ssh endeavor-linux 'Xvfb :99 -screen 0 1600x1000x24 & sleep 1; DISPLAY=:99 openbox & cd endeavor && DISPLAY=:99 nohup target/debug/endeavor >/dev/null 2>&1 &'
+   ssh linux-vm 'Xvfb :99 -screen 0 1600x1000x24 & sleep 1; DISPLAY=:99 openbox & cd endeavor && DISPLAY=:99 nohup target/debug/endeavor >/dev/null 2>&1 &'
    ```
 
 4. Take a screenshot, or click and type:
 
    ```
-   ssh endeavor-linux 'DISPLAY=:99 import -window root png:-' > shot.png
-   ssh endeavor-linux 'DISPLAY=:99 xdotool mousemove 800 680 click 1'
+   ssh linux-vm 'DISPLAY=:99 import -window root png:-' > shot.png
+   ssh linux-vm 'DISPLAY=:99 xdotool mousemove 800 680 click 1'
    ```
 
 5. Stop the app, Openbox and Xvfb:
 
    ```
-   ssh endeavor-linux 'pkill -xf target/debug/endeavor; pkill -x openbox; pkill -x Xvfb'
+   ssh linux-vm 'pkill -xf target/debug/endeavor; pkill -x openbox; pkill -x Xvfb'
    ```
 
 In an OrbStack machine, `xdg-open` is OrbStack's own version, which opens URLs
@@ -206,7 +209,7 @@ has no `DISPLAY` in the VM. For Browse… and Match system, give it Xvfb's and
 restart the portal once Xvfb runs:
 
 ```
-ssh endeavor-linux 'systemctl --user set-environment DISPLAY=:99; systemctl --user restart xdg-desktop-portal-gtk xdg-desktop-portal'
+ssh linux-vm 'systemctl --user set-environment DISPLAY=:99; systemctl --user restart xdg-desktop-portal-gtk xdg-desktop-portal'
 ```
 
 Then `gsettings set org.gnome.desktop.interface color-scheme prefer-dark` (or
@@ -245,8 +248,8 @@ changes.
 5. **Untested on Linux (S each):**
    - A full desktop (GNOME, KDE) with a compositor, including XWayland.
    - Finishing Claude sign-in, and a real Claude turn.
-   - x86_64.
-   - Reduce motion changed while the app runs (not followed on macOS either).
+   - Reduce motion changed while the app runs: followed in code, not tried
+     by hand.
 6. **Smaller gaps (S each):**
    - Without a compositor the notebook isn't dimmed behind Settings or a
      confirm dialog, and the corners of Settings' rounded panel show the

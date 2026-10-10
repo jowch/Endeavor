@@ -17,6 +17,7 @@ mod dialogs;
 mod webkeys;
 mod about;
 mod agent;
+mod antigravity;
 mod annotate;
 mod approval;
 mod attach;
@@ -400,6 +401,7 @@ fn agent_options_file(agent: agent::Agent) -> &'static str {
     match agent {
         agent::Agent::Claude => "agent-options.json",
         agent::Agent::Codex => "codex-options.json",
+        agent::Agent::Antigravity => "antigravity-options.json",
     }
 }
 
@@ -489,7 +491,9 @@ pub struct Workspace {
     /// Each agent's connection and process.
     links: agent_process::Links,
     /// Codex's sign-in, once Codex has been started.
-    codex_account: codex::Account,
+    codex_account: agent::Account,
+    /// Antigravity's sign-in, kept the same way as Codex's.
+    antigravity_account: agent::Account,
     /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
     annotating: bool,
@@ -764,7 +768,8 @@ impl Workspace {
             offline_since: None,
             probing: false,
             links: agent_process::Links::default(),
-            codex_account: codex::Account::Unknown,
+            codex_account: agent::Account::Unknown,
+            antigravity_account: agent::Account::Unknown,
             status: "".into(),
             annotating: false,
             shots: HashMap::new(),
@@ -896,7 +901,8 @@ impl Workspace {
         }
         let mut session = Session::new(key, place, server.clone());
         session.agent = agent;
-        session.resources = self.draft.resources.clone().filter(|_| self.is_cluster(&host));
+        // As the job will ask for them (fitted to the partition), so the session's chip says what was submitted.
+        session.resources = self.draft.resources.as_ref().filter(|_| self.is_cluster(&host)).map(|r| self.draft_cluster().map_or_else(|| r.clone(), |c| c.job(r).resources));
         session.start_mode = session::app_modes().get(self.draft.mode).map(|choice| session::Mode {
             // Settings' "Run notebook code without asking" is Manual's "Always this session".
             run_without_asking: choice.run_without_asking || (self.draft.mode == session::MANUAL && self.settings.run_without_asking),
@@ -1744,6 +1750,8 @@ impl Workspace {
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
+            AgentEvent::AntigravitySignedIn(signed_in) => self.on_antigravity_signed_in(signed_in, cx),
+            AgentEvent::SignInEnded(result) => self.on_antigravity_sign_in_ended(result, cx),
             AgentEvent::Listed { cwd, sessions: Ok(sessions), complete } => self.on_listed(agent, &cwd, sessions, complete),
             // The sidebar keeps what the record has.
             AgentEvent::Listed { cwd, sessions: Err(e), .. } => eprintln!("Couldn't list the sessions in {}: {e}", cwd.display()),
@@ -1856,7 +1864,7 @@ impl Workspace {
             .into_iter()
             .map(|info| records::Listed {
                 id: info.session_id.to_string(),
-                title: info.title.as_deref().and_then(session::agent_title).map(str::to_owned),
+                title: info.title.as_deref().and_then(session::agent_title).filter(|t| !session::placeholder_title(t, &info.session_id.to_string())).map(str::to_owned),
                 updated: info.updated_at.as_deref().and_then(when::parse_iso8601).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()),
             })
             .collect();

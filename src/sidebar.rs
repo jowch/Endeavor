@@ -472,6 +472,7 @@ impl Workspace {
                 let history = match agent {
                     Agent::Claude => "Claude Code",
                     Agent::Codex => "Codex",
+                    Agent::Antigravity => "Antigravity",
                 };
                 self.open_confirm(
                     format!("Delete “{title}”?"),

@@ -87,4 +87,7 @@ set **Source** to **GitHub Actions**. Until then the publish step fails.
 ## What the app installs
 
 On first launch the app downloads and verifies Julia and Node.js and installs
-the pinned ACP adapter into `~/Library/Application Support/endeavor/`.
+the pinned ACP adapter into the app's data folder: `~/Library/Application
+Support/endeavor/` on macOS, `~/.local/share/endeavor/` on Linux (or
+`$XDG_DATA_HOME/endeavor`), `%LOCALAPPDATA%\Endeavor\` on Windows
+(`install::app_dir`).

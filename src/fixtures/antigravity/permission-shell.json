@@ -1,0 +1,44 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "session/request_permission",
+  "params": {
+    "sessionId": "9849bdfa-8dfa-4b20-a0d8-c2f58088932b",
+    "toolCall": {
+      "toolCallId": "7f168ce908984952b1f19870ace488c0",
+      "kind": "execute",
+      "status": "pending",
+      "title": "Test-Path \"C:\\Users\\me\\notebooks\"",
+      "rawInput": {
+        "CommandLine": "Test-Path \"C:\\Users\\me\\notebooks\"",
+        "Cwd": "C:\\Users\\me",
+        "WaitMsBeforeAsync": 5000
+      }
+    },
+    "options": [
+      {
+        "optionId": "allow_always",
+        "name": "Allow Always (risky)",
+        "kind": "allow_always",
+        "_meta": {
+          "agy.security.warning": {
+            "severity": "high",
+            "risk": "prompt_injection",
+            "title": "Allowing always can be risky",
+            "message": "Untrusted files or tool output could contain a prompt injection that silently re-runs this action. This approval is scoped to the exact command and the current workspace only."
+          }
+        }
+      },
+      {
+        "optionId": "allow",
+        "name": "Allow",
+        "kind": "allow_once"
+      },
+      {
+        "optionId": "deny",
+        "name": "Deny",
+        "kind": "reject_once"
+      }
+    ]
+  }
+}

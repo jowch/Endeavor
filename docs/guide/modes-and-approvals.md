@@ -110,9 +110,9 @@ Deny never leaves the notebook half changed:
 - For a run on its own, nothing runs. For a delete, the cell stays.
 
 Endeavor has no undo for Claude's edits yet. To go back, change the cell by
-hand, or ask Claude to put the old code back. A deleted cell is the
-exception: ⌘Z in the notebook brings it back. The chat keeps every change
-Claude made, with the old lines.
+hand, or ask Claude to put the old code back. That works for a cell Claude
+deleted too: ⌘Z in the notebook doesn't bring it back. The chat keeps every
+change Claude made, with the old lines.
 
 ## When you run a cell Claude is waiting on
 

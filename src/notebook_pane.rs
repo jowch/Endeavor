@@ -491,7 +491,7 @@ fn page_text(text: impl Into<SharedString>) -> Div {
 
 impl Workspace {
     /// Where a session's notebook runs, for its header: "Local", the server's
-    /// name, or a cluster's with its job ("hoffman2 · job 16").
+    /// name, or a cluster's with its job ("lab-cluster · job 16").
     pub fn host_label(&self, host: &HostId) -> String {
         match host {
             HostId::ThisMac => "Local".into(),

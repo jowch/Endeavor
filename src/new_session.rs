@@ -303,8 +303,9 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 let Some(server) = this.hosts.servers.iter_mut().find(|s| s.id == id) else { return };
                 let Some(cluster) = server.cluster.as_mut() else { return };
-                cluster.partitions = scheduler.partitions;
-                cluster.scratch = scheduler.scratch;
+                // The new-session screen copied the unfitted defaults when this host was picked.
+                let draft = this.draft.resources.as_mut().filter(|_| this.draft.host == HostId::Server(id.clone()));
+                cluster.take_partitions(scheduler.partitions, scheduler.scratch, draft);
                 let _ = this.hosts.save();
                 cx.notify();
             });
@@ -425,7 +426,7 @@ impl Workspace {
 
     fn agent_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let current = self.draft_agent();
-        div().flex().flex_col().children(Agent::ALL.into_iter().map(|agent| {
+        div().flex().flex_col().children(Agent::ALL.into_iter().filter(|agent| agent.available()).map(|agent| {
             let facts = agent.facts();
             let here = self.draft.host == HostId::ThisMac || facts.on_servers;
             let row = menu_row(SharedString::from(format!("agent-{}", facts.name.to_lowercase())), agent == current, false)
@@ -685,7 +686,7 @@ impl Workspace {
             .children(rows)
     }
 
-    /// The connection notice's text ("Julia on hoffman2 stopped. …"), and why it stopped.
+    /// The connection notice's text ("Julia on lab-cluster stopped. …"), and why it stopped.
     pub fn connection_notice_text(&self) -> Option<(String, String)> {
         let name = self.hosts.name(&self.draft.host);
         match self.status(&self.draft.host)? {
