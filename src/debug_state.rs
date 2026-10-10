@@ -97,12 +97,34 @@ impl Workspace {
         })))
     }
 
+    /// Julia on this computer: what its runtime last said (`julia_status`; null
+    /// from a runtime too old to say, or none running), and Endeavor's own
+    /// Julia as Settings last found it, with an Install or Remove under way.
+    /// `failed` is the failure the pane shows, with Try again.
+    fn julia_here_state(&self) -> Value {
+        use crate::pluto::JuliaStatus;
+        let status = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_status.as_ref()).map(|s| match s {
+            JuliaStatus::NotStarted => json!({ "state": "not_started" }),
+            JuliaStatus::Starting { step, quiet } => json!({ "state": "starting", "step": step, "quiet_secs": quiet }),
+            JuliaStatus::Ready => json!({ "state": "ready" }),
+            JuliaStatus::Failed { code, message } => json!({ "state": "failed", "code": code, "message": message }),
+        });
+        let own = match &self.own_julia.found {
+            None => json!("unknown"),
+            Some(None) => json!("not_installed"),
+            Some(Some(own)) => json!({ "julia": own.julia, "from": format!("{:?}", own.from) }),
+        };
+        let failed = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_failed.clone());
+        json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")) })
+    }
+
     fn debug_state(&self, page: Value, cx: &App) -> Value {
         let active = self.active_session();
         json!({
             "window": self.window_state(),
             "log": { "skipped_window_callbacks": crate::logs::skipped_callbacks() },
             "offline": self.offline_since.map(|since| json!({ "for_secs": since.elapsed().as_secs(), "trying": self.probing })),
+            "julia_here": self.julia_here_state(),
             "claude": {
                 "state": state_name(&self.links.get(Agent::Claude).process.state),
                 "connected": self.links.get(Agent::Claude).ready,

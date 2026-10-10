@@ -1128,7 +1128,7 @@ mod tests {
     /// This Mac's runtime, started for a live test.
     fn local_tools() -> (crate::runtime::Channel, super::Tools) {
         let listener = crate::runtime::Listener::start("This Mac").unwrap();
-        let (channel, _) = crate::runtime::connect(false, &|_| {}).expect("helper");
+        let (channel, _) = crate::runtime::connect(false).expect("helper");
         let runtime = crate::runtime::start_local(&channel, &listener, &|_| {}, |_| {}).expect("runtime");
         (channel, super::Tools { bridge: runtime.bridge, server: None })
     }

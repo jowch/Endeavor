@@ -356,6 +356,9 @@ pub enum Act {
     Idle(IdleStop),
     OwnJulia,
     ChooseJulia,
+    /// Install or remove Endeavor's own Julia (`own_julia`).
+    InstallJulia,
+    RemoveJulia,
     RestartJulia,
     RepairJulia,
     Stop(HostId),
@@ -638,7 +641,10 @@ impl Workspace {
     /// What the Notebooks page's Julia row says: Endeavor's, or the chosen one and its version, or what's wrong with it.
     fn julia_line(&self) -> Status2 {
         match (&self.settings.julia, &self.settings_checks.julia) {
-            (None, _) => Status2::new("Endeavor's Julia", Tone::Plain),
+            (None, _) => match &self.own_julia.found {
+                Some(None) => Status2::new(format!("Endeavor's Julia {} · not installed yet", runtime::JULIA_VERSION), Tone::Plain),
+                _ => Status2::new(format!("Endeavor's Julia {}", runtime::JULIA_VERSION), Tone::Plain),
+            },
             (Some(path), Some((checked, ChosenJulia::Usable(version)))) if checked == path => {
                 Status2::new(format!("{} · {version}", crate::new_session::tilde(path)), Tone::Plain)
             }
@@ -720,20 +726,21 @@ impl Workspace {
         let own = self.settings.julia.is_none();
         let mut ours = row("julia-own", "Endeavor's Julia");
         ours.lead = Lead::Radio { checked: own, act: Some(Act::OwnJulia) };
-        ours.desc = Some(if cfg!(windows) {
-            "Installed by Endeavor with juliaup, Julia's installer.".to_owned()
-        } else {
-            // ponytail: until Endeavor's own is downloaded, the core's `auto` takes a julia on the PATH first; EndeavorMCP #96.
-            format!(
-                "Endeavor downloads its own Julia {} the first time you open a Julia notebook. If you already have Julia {} or newer on your PATH, that one is used instead.",
-                runtime::JULIA_VERSION,
-                runtime::min_julia()
-            )
-        }
-        .into());
+        ours.desc = Some(
+            if cfg!(windows) {
+                format!("Julia {}, the version Endeavor is tested with. Endeavor installs it with juliaup, Julia's installer, the first time you open a Julia notebook.", runtime::JULIA_VERSION)
+            } else {
+                format!(
+                    "Julia {}, the version Endeavor is tested with. Endeavor installs it the first time you open a Julia notebook. If you use juliaup, Endeavor adds this version to it instead of downloading a second Julia.",
+                    runtime::JULIA_VERSION
+                )
+            }
+            .into(),
+        );
         // Search finds the choice by its other half, "Another Julia on this Mac".
         ours.search = None;
         ours.controls.push(Control::Note("recommended".into()));
+        self.own_julia_controls(&mut ours);
         let mut theirs = row("julia-another", concat!("Another Julia on ", crate::platform::this_computer!(lower)));
         theirs.lead = Lead::Radio { checked: !own, act: Some(Act::ChooseJulia) };
         theirs.summary = Some("Use a Julia you installed yourself.".into());
@@ -771,6 +778,46 @@ impl Workspace {
         }
         let g = group(Some("Which Julia to use"), items);
         vec![if restart { g } else { g.foot("Changing it takes effect when Julia restarts.") }]
+    }
+
+    /// Endeavor's Julia's row: installed or not, with Install or Remove, or how either is going.
+    fn own_julia_controls(&self, ours: &mut Row) {
+        use crate::own_julia::Job;
+        match (&self.own_julia.job, &self.own_julia.found) {
+            (Some(Job::Installing(step)), _) => {
+                let (text, percent) = match step.rsplit_once(' ').filter(|(_, last)| last.ends_with('%')) {
+                    Some((text, percent)) => (text.trim_end_matches('…').to_owned(), Some(percent)),
+                    None => (step.trim_end_matches('…').to_owned(), None),
+                };
+                let fraction = percent.and_then(|p| p.trim_end_matches('%').parse::<f32>().ok()).map_or(0.08, |p| (p / 100.).max(0.08));
+                ours.extra = Some(Extra::Progress { text, step: percent.unwrap_or_default().to_owned(), fraction });
+                ours.controls.push(Control::Button { label: "Install", look: Look::Secondary, icon: None, act: None, aria: "Install Endeavor's Julia".into() });
+            }
+            (Some(Job::Removing), _) => {
+                ours.status = Some(Status2::new("Removing…", Tone::Quiet));
+                ours.controls.push(Control::Button { label: "Remove…", look: Look::Secondary, icon: None, act: None, aria: "Remove Endeavor's Julia".into() });
+            }
+            (job, Some(Some(found))) => {
+                let (state, why_kept, removable) = crate::own_julia::describe(found);
+                ours.status = Some(match job {
+                    Some(Job::Failed(why)) => Status2::new(why.clone(), Tone::Danger),
+                    _ => Status2::new(why_kept.map_or_else(|| state.to_owned(), |why| format!("{state}. {why}")), Tone::Quiet),
+                });
+                if removable {
+                    ours.controls.push(button("Remove…", Look::Secondary, Act::RemoveJulia, "Remove Endeavor's Julia"));
+                }
+            }
+            (job, Some(None)) => {
+                let starting = self.julia_starting_here();
+                ours.status = Some(match job {
+                    Some(Job::Failed(why)) => Status2::new(why.clone(), Tone::Danger),
+                    _ if starting => Status2::new("Being installed for a notebook now", Tone::Quiet),
+                    _ => Status2::new("Not installed yet", Tone::Quiet),
+                });
+                ours.controls.push(Control::Button { label: "Install", look: Look::Secondary, icon: None, act: (!starting).then_some(Act::InstallJulia), aria: "Install Endeavor's Julia".into() });
+            }
+            (_, None) => ours.status = Some(Status2::new("Checking…", Tone::Quiet)),
+        }
     }
 
     fn hosts_groups(&self) -> Vec<Group> {
@@ -1095,6 +1142,7 @@ impl Workspace {
         }
         self.refresh_profile(cx);
         self.check_chosen_julia(cx);
+        self.check_own_julia(cx);
         cx.notify();
     }
 
@@ -1270,6 +1318,8 @@ impl Workspace {
             }
             Act::OwnJulia => self.set_julia(None, cx),
             Act::ChooseJulia => self.choose_julia(cx),
+            Act::InstallJulia => self.install_own_julia(cx),
+            Act::RemoveJulia => self.confirm_remove_own_julia(window, cx),
             Act::RestartJulia => self.restart_local(cx),
             Act::RepairJulia => self.confirm_repair(window, cx),
             Act::Stop(host) => self.confirm_host_stop(host, window, cx),

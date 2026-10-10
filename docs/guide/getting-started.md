@@ -18,16 +18,19 @@ steps, named after the assistant you picked:
 2. **Claude agent**
 3. **Connecting to Claude**
 
-On Windows, **Julia** comes first, as a fourth step. A progress line under
+A progress line under
 the turtle shows the current step, for example "Setting up the Claude agent ·
 2 of 3". Setting up the agent downloads it (for Claude or Codex, Node.js
 too), so it can take a minute or two. [What Endeavor installs](./overview.md#what-endeavor-installs-on-first-launch)
 lists every download.
 
-Julia isn't part of setup on a Mac or Linux. It's installed the first time you
-open a Julia notebook: the notebook pane shows the turtle and each step
-(downloading Julia, then starting it and installing Pluto's packages), which
-takes a few minutes that one time.
+Julia isn't part of setup. It's installed the first time you open a Julia
+notebook: the notebook pane shows the turtle and each step (downloading
+Julia, then starting it and installing Pluto's packages), which takes a few
+minutes that one time. To install it ahead of time, click **Install** in
+Settings › Notebooks › Julia. If Julia makes no progress for a long while, the
+pane says so; Endeavor stops a start that's stuck for 30 minutes, and the pane
+then offers **Try again**.
 
 If a step fails, the window shows which one, with the reason. Click **Retry**
 to try that step again, or **Show logs** to see what happened. If the
