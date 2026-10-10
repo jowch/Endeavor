@@ -426,7 +426,7 @@ impl Workspace {
 
     fn agent_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let current = self.draft_agent();
-        div().flex().flex_col().children(Agent::ALL.into_iter().map(|agent| {
+        div().flex().flex_col().children(Agent::ALL.into_iter().filter(|agent| agent.available()).map(|agent| {
             let facts = agent.facts();
             let here = self.draft.host == HostId::ThisMac || facts.on_servers;
             let row = menu_row(SharedString::from(format!("agent-{}", facts.name.to_lowercase())), agent == current, false)

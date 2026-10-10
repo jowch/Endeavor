@@ -57,13 +57,15 @@ pub fn app_dir() -> Result<PathBuf, String> {
 }
 
 /// Download a pinned tarball (a zip on Windows), resuming a partial one, check
-/// its SHA-256, and unpack its `top` folder to `dir`. `what` names it in
+/// its SHA-256, and unpack its `top` folder to `dir` (the whole of it when
+/// `top` is empty: a zip with its files at the top). `what` names it in
 /// progress and errors.
 pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
     let parent = dir.parent().unwrap();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let kind = if url.ends_with(".zip") { "zip" } else { "tar.gz" };
-    let tarball = parent.join(format!("{top}.{kind}.part"));
+    let name = if top.is_empty() { dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() } else { top.to_owned() };
+    let tarball = parent.join(format!("{name}.{kind}.part"));
 
     // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
     // fails the SHA check and starts over. Kill it on quit if that bites.
@@ -102,11 +104,11 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
 
     // Unpack beside the target, then rename, so a half-unpacked Julia is never used.
     progress(format!("Unpacking {what}…"), None);
-    let staging = parent.join(format!("{top}.unpacking"));
+    let staging = parent.join(format!("{name}.unpacking"));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let untar = unpack(&tarball, &staging)?;
-    let unpacked = staging.join(top);
+    let unpacked = if top.is_empty() { staging.clone() } else { staging.join(top) };
     if !untar.success() || !unpacked.is_dir() {
         return Err(format!("Couldn't unpack {what} ({untar})."));
     }

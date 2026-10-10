@@ -30,6 +30,8 @@ pub struct Settings {
     pub agent_config: std::collections::BTreeMap<String, String>,
     /// Codex's, the same way (its effort values and fast mode differ).
     pub codex_config: std::collections::BTreeMap<String, String>,
+    /// Antigravity's, the same way (its model only).
+    pub antigravity_config: std::collections::BTreeMap<String, String>,
     /// The agent new sessions start with: the last one picked.
     pub agent: crate::agent::Agent,
     /// The sidebar's Status / Where / Group by / Sort by / Show empty folders
@@ -135,6 +137,7 @@ impl Settings {
         match agent {
             crate::agent::Agent::Claude => &self.agent_config,
             crate::agent::Agent::Codex => &self.codex_config,
+            crate::agent::Agent::Antigravity => &self.antigravity_config,
         }
     }
 
@@ -142,6 +145,7 @@ impl Settings {
         match agent {
             crate::agent::Agent::Claude => &mut self.agent_config,
             crate::agent::Agent::Codex => &mut self.codex_config,
+            crate::agent::Agent::Antigravity => &mut self.antigravity_config,
         }
     }
 

@@ -1,0 +1,22 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "9849bdfa-8dfa-4b20-a0d8-c2f58088932b",
+    "update": {
+      "toolCallId": "8664290319b24032bc33122edd91b1f1",
+      "status": "completed",
+      "content": [
+        {
+          "content": {
+            "text": "New notebook",
+            "type": "text"
+          },
+          "type": "content"
+        }
+      ],
+      "rawOutput": "New notebook",
+      "sessionUpdate": "tool_call_update"
+    }
+  }
+}

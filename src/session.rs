@@ -518,6 +518,7 @@ pub fn open_failure(error: &str, agent: Agent) -> OpenFailure {
         Some(match agent {
             Agent::Claude => "Claude Code no longer has its history.",
             Agent::Codex => "Codex no longer has its history.",
+            Agent::Antigravity => "Antigravity no longer has its history.",
         })
     } else {
         None
@@ -544,6 +545,7 @@ impl Failure {
                 let why = reason.unwrap_or(match agent {
                     Agent::Claude => "Claude Code couldn't load it.",
                     Agent::Codex => "Codex couldn't load it.",
+                    Agent::Antigravity => "Antigravity couldn't load it.",
                 });
                 match notebook {
                     Beside::Open => format!("{why} The notebook is open beside it."),
@@ -586,6 +588,12 @@ fn short_title(text: &str) -> String {
 pub fn agent_title(title: &str) -> Option<&str> {
     let title = title.trim();
     (!title.is_empty() && !title.starts_with("[Endeavor]")).then_some(title)
+}
+
+/// A title an agent lists for a session it hasn't named, made from its id
+/// (Antigravity's "Session 747ec55a"): it would replace the app's own.
+pub fn placeholder_title(title: &str, id: &str) -> bool {
+    title.strip_prefix("Session ").is_some_and(|rest| rest.len() >= 4 && id.starts_with(rest))
 }
 
 pub fn folder_name(path: &Path) -> String {
@@ -2181,8 +2189,11 @@ impl Session {
     /// session's mode (`runtime_holds`) gets the runtime's card. For an agent
     /// that asks before every notebook write (Codex), a call the runtime
     /// doesn't hold goes through too: the mode doesn't ask about it.
+    /// Only a title that names a notebook tool exactly is let through: a
+    /// shell command's title is its command line, which the model writes.
+    /// (Its kind can't decide it: Codex marks its notebook calls `execute`.)
     fn runtime_asks_instead<'a>(&self, title: &str, input: &serde_json::Value, plan: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
-        let tool = celldiff::notebook_tool(title).filter(|_| !plan && self.runtime_older == Some(false))?;
+        let tool = celldiff::notebook_tool(title).filter(|tool| endeavor_mcp::is_tool(tool) && !plan && self.runtime_older == Some(false))?;
         let decides = self.agent.facts().asks_every_write || self.runtime_holds(tool, input);
         option_of_kind(options, PermissionOptionKind::AllowOnce).filter(|_| decides)
     }
@@ -2798,6 +2809,24 @@ mod tests {
         let mut s = asking_session();
         s.runtime_older = None;
         assert_eq!(allowed(&s, true), None);
+    }
+
+    #[test]
+    fn a_listed_title_made_from_the_id_isnt_a_title() {
+        assert!(super::placeholder_title("Session 747ec55a", "747ec55a-1f2e-4c3d-9a8b-0123456789ab"));
+        assert!(!super::placeholder_title("Session 747ec55a", "9849bdfa-8dfa-4b20-a0d8-c2f58088932b"));
+        assert!(!super::placeholder_title("Session notes for the sum", "747ec55a"));
+    }
+
+    #[test]
+    fn a_title_that_only_starts_like_a_notebook_call_gets_a_card() {
+        use agent_client_protocol::schema::v1::PermissionOption;
+        let options = [PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce), PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce)];
+        let mut s = asking_session();
+        s.agent = Agent::Codex;
+        let input = serde_json::json!({ "CommandLine": "mcp__notebook__read_cell; Remove-Item x" });
+        assert_eq!(s.runtime_asks_instead("mcp__notebook__read_cell; Remove-Item x", &input, false, &options), None);
+        assert!(s.runtime_asks_instead("mcp__notebook__read_cell", &serde_json::json!({ "cell_id": "a" }), false, &options).is_some());
     }
 
     /// A Codex session from the study's real `session/new` reply, through
