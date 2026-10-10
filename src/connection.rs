@@ -468,11 +468,11 @@ impl Workspace {
             let (session, closed) = (session.clone(), closed.clone());
             move || {
                 let mut last = session.status();
-                let _ = tx.unbounded_send(LineUpdate::Status(Box::new(last.clone())));
+                let _ = tx.unbounded_send(LineUpdate::Status(Box::new(last.clone()), Instant::now()));
                 while !closed.load(Ordering::SeqCst) {
                     let now = session.wait_for(Duration::from_secs(1), |now| *now != last);
                     if now != last && !closed.load(Ordering::SeqCst) {
-                        if tx.unbounded_send(LineUpdate::Status(Box::new(now.clone()))).is_err() {
+                        if tx.unbounded_send(LineUpdate::Status(Box::new(now.clone()), Instant::now())).is_err() {
                             break;
                         }
                         last = now;
@@ -502,7 +502,7 @@ impl Workspace {
     /// Close `host`'s line, if it has one: the helper is let go, and Julia keeps running there.
     fn close_line(&mut self, host: &HostId, cx: &mut Context<Self>) {
         if let Some(line) = self.lines.remove(host) {
-            let _ = self.drop_asks(line.sign_in.id, cx);
+            let _ = self.drop_asks(line.sign_in.id, None, cx);
             drop(line.close());
         }
     }
@@ -517,24 +517,24 @@ impl Workspace {
             LineUpdate::Event(SessionEvent::Step(event)) => self.on_update(host.clone(), id, Update::Event(event), cx),
             LineUpdate::Event(SessionEvent::Trouble(text)) => eprintln!("{}: {text}", self.hosts.name(host)),
             LineUpdate::Event(_) => {}
-            LineUpdate::Status(now) => {
+            LineUpdate::Status(now, seen) => {
                 let Some(line) = self.lines.get_mut(host) else { return };
                 let now = *now;
                 let last = line.last.replace(now.clone()).unwrap_or(LineStatus { state: LineState::Connecting, hello: None, ..now.clone() });
+                let (source, ssh_host) = (line.sign_in.id, line.server.ssh_host.clone());
+                // A try that ended took its ssh with it: its questions go, and its error shows instead.
+                // Only those asked before the change was seen: the next try may already be asking.
+                let gave_up = try_ended(&last, &now) && self.drop_asks(source, Some(seen), cx);
                 for mut change in changes(&last, &now) {
-                    if let Some(line) = self.lines.get(host) {
-                        match &mut change {
-                            // ssh is gone: its questions go with it, and the error shows instead.
-                            Change::ConnectFailed(why) => {
-                                let (source, ssh_host) = (line.sign_in.id, line.server.ssh_host.clone());
-                                if self.drop_asks(source, cx) {
-                                    *why = remote::gave_up(&ssh_host);
-                                }
+                    match &mut change {
+                        Change::ConnectFailed(why) if gave_up => *why = remote::gave_up(&ssh_host),
+                        // An answer that worked: a later question isn't a retry.
+                        Change::Connected(_) => {
+                            if let Some(line) = self.lines.get(host) {
+                                line.sign_in.forget();
                             }
-                            // An answer that worked: a later question isn't a retry.
-                            Change::Connected(_) => line.sign_in.forget(),
-                            _ => {}
                         }
+                        _ => {}
                     }
                     if self.hold(host, generation, &change, cx) {
                         continue;
@@ -1782,7 +1782,15 @@ impl Line {
 /// What a server's line tells the app.
 enum LineUpdate {
     Event(SessionEvent),
-    Status(Box<LineStatus>),
+    /// The line's status, and when its watcher saw it.
+    Status(Box<LineStatus>, Instant),
+}
+
+/// A try to sign in ended (and its ssh with it): the line isn't signed in and
+/// its step moved on. The session says each failed try in `step`, and on a
+/// line that was connected before it tries again without a `Failed` state.
+fn try_ended(last: &LineStatus, now: &LineStatus) -> bool {
+    !signed_in(now) && now.step != last.step
 }
 
 /// One change of a server's line, in the app's terms (`changes`).
@@ -2102,11 +2110,28 @@ fn stop_reason(why: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, not_restarted, not_stopped, percent, runtime_of};
+    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, not_restarted, not_stopped, percent, runtime_of, try_ended};
 
     fn line(state: LineState, node: &str) -> LineStatus {
         let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
         LineStatus { machine: "lab".into(), name: "lab".into(), state, step: None, hello, job: None }
+    }
+
+    #[test]
+    fn a_failed_try_while_reconnecting_ends_its_sign_in() {
+        // What the session says through a reconnect whose try fails (EndeavorMCP client/session.rs).
+        let step = |state: LineState, step: &str| LineStatus { step: Some(step.into()), hello: None, ..line(state, "") };
+        let trying = step(LineState::Connecting, "Connecting to lab");
+        let failed = step(LineState::Connecting, "Lost the connection to lab: The connection to lab ended: the server stopped waiting for the sign-in.");
+        let again = step(LineState::Connecting, "Connecting to lab");
+        assert!(changes(&trying, &failed).is_empty(), "no ConnectFailed while it tries again");
+        assert!(try_ended(&trying, &failed), "but its questions go");
+        assert!(try_ended(&failed, &again));
+        assert!(!try_ended(&trying, &trying.clone()));
+        let gave_up = step(LineState::Failed("refused".into()), "refused");
+        assert!(try_ended(&trying, &gave_up), "a first connect's failure too");
+        let connected = LineStatus { step: Some("Signed in to lab".into()), ..line(LineState::Connected, "lab") };
+        assert!(!try_ended(&trying, &connected), "signing in isn't an end");
     }
 
     fn runtime(pid: u32) -> client::RuntimeInfo {

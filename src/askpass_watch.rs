@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 /// Said on ssh's stderr, which the connect's error shows ("The connection to lab ended: …").
-const GAVE_UP: &str = "the server stopped waiting for the sign-in. Connect again to sign in.";
+const GAVE_UP: &str = "the server stopped waiting for the sign-in.";
 
 /// How often ssh's connection is looked at.
 const EVERY: Duration = if cfg!(target_os = "linux") { Duration::from_secs(1) } else { Duration::from_secs(2) };

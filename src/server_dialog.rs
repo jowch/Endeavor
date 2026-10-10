@@ -3,6 +3,7 @@
 //! and host-key prompts.
 
 use std::sync::Arc;
+use std::time::Instant;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::StreamExt;
@@ -146,7 +147,7 @@ impl Workspace {
         if let Some(test) = self.server_dialog.take().and_then(|d| d.test) {
             test.cancel.cancel();
             // Its end finds no dialog to report to, so its questions go now.
-            let _ = self.drop_asks(test.sign_in.id, cx);
+            let _ = self.drop_asks(test.sign_in.id, None, cx);
         }
         cx.notify();
     }
@@ -272,7 +273,7 @@ impl Workspace {
         if let TestUpdate::Done(result) = &mut update {
             // Its ssh is gone, so nothing is waiting for its answers any more.
             let (source, host) = (test.sign_in.id, test.host.clone());
-            if self.drop_asks(source, cx)
+            if self.drop_asks(source, None, cx)
                 && let Err(why) = result
             {
                 *why = remote::gave_up(&host);
@@ -345,14 +346,14 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Take down the questions of a sign-in that ended (`remote::SignIn`):
-    /// its ssh is gone, so nothing waits for their answers.
-    /// True if one was on screen or waiting.
-    pub fn drop_asks(&mut self, source: u64, cx: &mut Context<Self>) -> bool {
+    /// Take down the questions of a sign-in that ended (`remote::SignIn`), or
+    /// those it asked `before` a try of it ended: their ssh is gone, so nothing
+    /// waits for their answers. True if one was on screen or waiting.
+    pub fn drop_asks(&mut self, source: u64, before: Option<Instant>, cx: &mut Context<Self>) -> bool {
         // ponytail: another sign-in's question left in front isn't focused (no window here); a click focuses it.
-        let before = self.asks.len();
-        self.asks.retain(|ask| ask.question.source != source);
-        if self.asks.len() == before {
+        let count = self.asks.len();
+        self.asks.retain(|ask| !ask.question.belongs_to(source, before));
+        if self.asks.len() == count {
             return false;
         }
         cx.notify();

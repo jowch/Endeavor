@@ -67,7 +67,7 @@ pub fn asker(server: &Server, questions: UnboundedSender<Question>, sign_in: Sig
     let source = sign_in.id;
     let asker = Asker::start(sign_in.answering(move |ask, retry| {
         let (reply, answer) = mpsc::channel();
-        questions.unbounded_send(Question { ask, host: host.clone(), retry, source, reply }).map_err(|_| Gone)?;
+        questions.unbounded_send(Question { ask, host: host.clone(), retry, source, asked: Instant::now(), reply }).map_err(|_| Gone)?;
         // A question taken down unanswered (`Question` dropped) is Gone.
         answer.recv().map_err(|_| Gone)
     }))?;
@@ -114,8 +114,12 @@ struct Remembered {
 const DECLINED_FOR: Duration = Duration::from_secs(60);
 
 /// How soon after an answer the same question means the answer didn't work.
-/// ssh asks again within seconds; a later connect asks again only after
-/// minutes (its pause between tries, or the user's Reconnect).
+/// ssh asks again within seconds. A new connect asks again only after the
+/// user's Reconnect, or, on a line that dropped, after the session's pause
+/// between tries (from 1 s): when a try with the right answer fails for
+/// another reason (the helper, say), the next try's question within this
+/// time wrongly says the answer didn't work. That needs a failure right after
+/// signing in, so it is left.
 const RETRY_WITHIN: Duration = Duration::from_secs(30);
 
 impl Default for SignIn {
@@ -314,6 +318,7 @@ pub struct Question {
     pub retry: bool,
     /// The `SignIn` it belongs to.
     pub source: u64,
+    asked: Instant,
     reply: mpsc::Sender<Option<String>>,
 }
 
@@ -321,6 +326,11 @@ impl Question {
     /// `None` cancels. A question dropped unanswered was taken down (`Gone`).
     pub fn answer(self, text: Option<String>) {
         let _ = self.reply.send(text);
+    }
+
+    /// Asked by sign-in `source`, and before `before` if that is given.
+    pub fn belongs_to(&self, source: u64, before: Option<Instant>) -> bool {
+        self.source == source && before.is_none_or(|before| self.asked < before)
     }
 
     /// The line over the question on a retry.
@@ -414,9 +424,20 @@ mod tests {
     }
 
     #[test]
+    fn a_try_that_ended_takes_down_only_the_questions_it_asked() {
+        let (reply, _) = mpsc::channel();
+        let asked = Instant::now();
+        let question = Question { ask: password(), host: "Lab".into(), retry: false, source: 7, asked, reply };
+        assert!(question.belongs_to(7, None), "the sign-in ended");
+        assert!(question.belongs_to(7, Some(asked + Duration::from_millis(1))), "asked before its try ended");
+        assert!(!question.belongs_to(7, Some(asked)), "the next try's question stays");
+        assert!(!question.belongs_to(8, None), "another sign-in's stays");
+    }
+
+    #[test]
     fn a_retry_says_what_didnt_work() {
         let (reply, _) = mpsc::channel();
-        let question = |prompt: &str, retry| Question { ask: Ask { kind: Kind::Secret, prompt: prompt.into() }, host: "Lab".into(), retry, source: 0, reply: reply.clone() };
+        let question = |prompt: &str, retry| Question { ask: Ask { kind: Kind::Secret, prompt: prompt.into() }, host: "Lab".into(), retry, source: 0, asked: Instant::now(), reply: reply.clone() };
         assert_eq!(question("jc@lab's password:", false).retry_line(), None);
         assert_eq!(question("jc@lab's password:", true).retry_line(), Some("That password didn't work. Try again."));
         assert_eq!(question("Enter passphrase for key '/Users/jc/.ssh/id_ed25519':", true).retry_line(), Some("That passphrase didn't work. Try again."));
