@@ -22,6 +22,7 @@ mod approval;
 mod attach;
 mod celldiff;
 mod agent_process;
+mod agent_job;
 mod codex;
 mod composer;
 mod confirm;
@@ -2499,6 +2500,11 @@ impl Render for Workspace {
 fn main() {
     // `claude auth login` opens its page through this app (signin::Login).
     signin::browser_shim();
+    // An agent's adapter, in a job that ends its whole tree (agent_job).
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some(agent_job::FLAG) {
+        agent_job::run(std::env::args().skip(2).collect());
+    }
     // This Mac's runtime helper (runtime::connect), and ssh's askpass (remote::asker).
     if std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG) {
         endeavor_mcp::run_as(&[runtime::HELPER_FLAG], std::env::args().skip(2).collect());

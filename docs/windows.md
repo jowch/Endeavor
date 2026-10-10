@@ -94,6 +94,16 @@ error rather than half-work:
   runtime does the same (`end_recorded_runtime`).
 - The app starts the helper with `CREATE_NEW_PROCESS_GROUP`, so a Ctrl+C in
   the app's terminal doesn't reach it.
+- Each agent's adapter runs under the app's own program, as `endeavor.exe
+  --agent-job <app pid> <program> <args…>` (`agent_job.rs`). That process
+  puts itself in a new Job Object with `KILL_ON_JOB_CLOSE`, then starts the
+  adapter inside it, with the app's pipes as its stdin and stdout. It ends
+  when the adapter ends, when the agent connection kills it, or when the app
+  is gone, and the job then ends everything the adapter started, such as the
+  Claude Code process Claude's adapter runs. On Unix the ACP
+  library does this with a process group; on Windows it only ends the
+  process it started. The job allows breakaway, as a process group lets a
+  process leave.
 
 ### Stubs left
 
@@ -492,6 +502,10 @@ test binary as its own stand-in core.
    - End the app's process while the runtime is set to keep running: the
      runtime stays, and the next launch reattaches to it (pid and start time).
    - Repair runtime with a runtime running: all of it goes.
+   - While Claude is connected, the `endeavor.exe --agent-job` process, the
+     adapter's `node.exe` and the Claude Code `node.exe` it starts share one
+     job. Quit the app, or end the `--agent-job` process in Task Manager (the
+     app restarts Claude): all of them go.
 6. **Stop a running cell.** Stop a tight loop and a `sleep(60)`; see
    [Limits](#limits-we-cant-fix-from-endeavor).
 
