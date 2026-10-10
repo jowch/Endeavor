@@ -1840,7 +1840,7 @@ impl Workspace {
             .into_iter()
             .map(|info| records::Listed {
                 id: info.session_id.to_string(),
-                title: info.title.as_deref().and_then(session::agent_title).map(str::to_owned),
+                title: info.title.as_deref().and_then(session::agent_title).filter(|t| !session::placeholder_title(t, &info.session_id.to_string())).map(str::to_owned),
                 updated: info.updated_at.as_deref().and_then(when::parse_iso8601).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()),
             })
             .collect();

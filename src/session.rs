@@ -590,6 +590,12 @@ pub fn agent_title(title: &str) -> Option<&str> {
     (!title.is_empty() && !title.starts_with("[Endeavor]")).then_some(title)
 }
 
+/// A title an agent lists for a session it hasn't named, made from its id
+/// (Antigravity's "Session 747ec55a"): it would replace the app's own.
+pub fn placeholder_title(title: &str, id: &str) -> bool {
+    title.strip_prefix("Session ").is_some_and(|rest| rest.len() >= 4 && id.starts_with(rest))
+}
+
 pub fn folder_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
 }
@@ -2803,6 +2809,13 @@ mod tests {
         let mut s = asking_session();
         s.runtime_older = None;
         assert_eq!(allowed(&s, true), None);
+    }
+
+    #[test]
+    fn a_listed_title_made_from_the_id_isnt_a_title() {
+        assert!(super::placeholder_title("Session 747ec55a", "747ec55a-1f2e-4c3d-9a8b-0123456789ab"));
+        assert!(!super::placeholder_title("Session 747ec55a", "9849bdfa-8dfa-4b20-a0d8-c2f58088932b"));
+        assert!(!super::placeholder_title("Session notes for the sum", "747ec55a"));
     }
 
     #[test]
