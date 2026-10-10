@@ -8,17 +8,18 @@ This folder is the Endeavor user guide. To read it, start with
 [What Endeavor is](./overview.md). The pages, in menu order:
 
 1. [What Endeavor is](./overview.md)
-2. [Get started](./getting-started.md)
-3. [Sessions, the chat and the notebook](./sessions.md)
-4. [Modes and approvals](./modes-and-approvals.md)
-5. [Safe preview](./safe-preview.md)
-6. [Your files](./your-files.md)
-7. [Servers](./servers.md)
-8. [Clusters](./clusters.md)
-9. [Working offline](./offline.md)
-10. [Settings](./settings.md)
-11. [Troubleshooting](./troubleshooting.md)
-12. [Privacy and what stays on your computer](./privacy.md)
+2. [Install Endeavor](./install.md)
+3. [Get started](./getting-started.md)
+4. [Sessions, the chat and the notebook](./sessions.md)
+5. [Modes and approvals](./modes-and-approvals.md)
+6. [Safe preview](./safe-preview.md)
+7. [Your files](./your-files.md)
+8. [Servers](./servers.md)
+9. [Clusters](./clusters.md)
+10. [Working offline](./offline.md)
+11. [Settings](./settings.md)
+12. [Troubleshooting](./troubleshooting.md)
+13. [Privacy and what stays on your computer](./privacy.md)
 
 The rest of this page is for people who write the guide.
 
