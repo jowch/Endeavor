@@ -48,6 +48,9 @@ for example "8 CPUs · 32 GB · 8 h". Click it to set this session's job:
   8 hours) or **Large** (32 CPUs, 128 GB, 24 hours);
 - the partition;
 - CPUs, memory and time limit, each kept within what the partition allows.
+  When one is at the partition's limit, a line under them says so, for
+  example "standard's nodes have at most 7 GB of memory". A preset bigger than
+  the cluster's nodes is cut down to fit, so the job can start.
 
 If you already have an `salloc` line that you use on this cluster, click
 **Paste an salloc line…**, paste it, and click **Use these**. Endeavor reads
@@ -62,7 +65,8 @@ uses the same ones.
 When the session starts, Endeavor submits the job. The notebook pane shows
 "Submitted job" with its number, then "Waiting for a node", with how long it
 has waited and why, in plain words, such as "other jobs are ahead in the
-queue". Click **Cancel** to take the job out of the queue.
+queue". Settings' list of where notebooks run says the same. Click
+**Cancel** to take the job out of the queue.
 
 If you quit Endeavor while the job waits, it stays in the queue.
 

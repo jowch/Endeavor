@@ -303,8 +303,9 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 let Some(server) = this.hosts.servers.iter_mut().find(|s| s.id == id) else { return };
                 let Some(cluster) = server.cluster.as_mut() else { return };
-                cluster.partitions = scheduler.partitions;
-                cluster.scratch = scheduler.scratch;
+                // The new-session screen copied the unfitted defaults when this host was picked.
+                let draft = this.draft.resources.as_mut().filter(|_| this.draft.host == HostId::Server(id.clone()));
+                cluster.take_partitions(scheduler.partitions, scheduler.scratch, draft);
                 let _ = this.hosts.save();
                 cx.notify();
             });

@@ -186,11 +186,15 @@ submits, waits and relays; Julia runs in a batch job.
   resources chip ("8 CPUs · 32 GB · 8 h") whose popover sets one session's
   job: presets (Small 2 CPUs · 8 GB · 2 h, Medium 8 · 32 · 8 h, Large 32 ·
   128 · 24 h), partition, CPUs, memory and time limit, all kept within the
-  partition's limits, or a pasted `salloc` line. From a pasted line Endeavor
+  partition's limits (a line under the steppers names any limit a value sits
+  at), or a pasted `salloc` line. From a pasted line Endeavor
   reads `-p/--partition`, `-c/--cpus-per-task`, `--mem`, `-t/--time`,
   `-A/--account` and `--gres`, drops interactive-only flags (`--pty`), and
   passes the other flags to `sbatch` as they are. Each session's resources are
   saved with it (`resources.json`), for the job that runs it after a reopen.
+  Whatever was saved, the job asks for no more than its partition's largest
+  node has (`Cluster::job`), so a cluster added without Test connection, still
+  at Medium, fits once its partitions are known.
 - **Submit.** On `StartRuntime { job }` the helper finds Julia on the login
   node (the shared filesystem makes it the compute node's too), writes
   `job.sh` and runs `sbatch --parsable --job-name=endeavor` with the

@@ -896,7 +896,8 @@ impl Workspace {
         }
         let mut session = Session::new(key, place, server.clone());
         session.agent = agent;
-        session.resources = self.draft.resources.clone().filter(|_| self.is_cluster(&host));
+        // As the job will ask for them (fitted to the partition), so the session's chip says what was submitted.
+        session.resources = self.draft.resources.as_ref().filter(|_| self.is_cluster(&host)).map(|r| self.draft_cluster().map_or_else(|| r.clone(), |c| c.job(r).resources));
         session.start_mode = session::app_modes().get(self.draft.mode).map(|choice| session::Mode {
             // Settings' "Run notebook code without asking" is Manual's "Always this session".
             run_without_asking: choice.run_without_asking || (self.draft.mode == session::MANUAL && self.settings.run_without_asking),
