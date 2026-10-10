@@ -158,7 +158,6 @@ pub fn file_info(bridge: &Bridge, path: &str) -> Result<Option<f64>, String> {
     Ok(if result["exists"] == true { Some(result["modified"].as_f64().unwrap_or(0.)) } else { None })
 }
 
-/// A new notebook in session `owner`'s folder, bound to it: (notebook id, path).
 /// Open the notebook at `path`, running it if `run`: `list_notebooks`' summary
 /// of it. Julia starts first if it isn't running; while it's still starting
 /// this says so (`julia_starting`).
@@ -207,8 +206,8 @@ pub fn until_julia<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn Fn
     }
 }
 
-/// A new notebook for session `owner`, in its folder: its id and path. Julia
-/// starts first if it isn't running (see `open_notebook`).
+/// A new notebook in session `owner`'s folder, bound to it: (notebook id, path).
+/// Julia starts first if it isn't running (see `open_notebook`).
 pub fn new_notebook(bridge: &Bridge, owner: u64) -> Result<(String, String), String> {
     let result = app_call_waiting(bridge, "endeavor/new_notebook", json!({ "owner": owner.to_string() }), JULIA_CALL_WAIT)?;
     match (result["notebook_id"].as_str(), result["path"].as_str()) {

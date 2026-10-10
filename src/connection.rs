@@ -1238,6 +1238,10 @@ impl Workspace {
         }
         connection.idle_stopped = stops.into_iter().map(|(path, ..)| path).collect();
         let list = event["notebooks"].take();
+        // Julia runs after all, whoever started it (the agent's own open, say): its failure is over.
+        if list.as_array().is_some_and(|l| l.iter().any(|nb| nb["path"].as_str().is_some_and(|p| p.ends_with(".jl")))) {
+            connection.julia_failed = None;
+        }
         connection.last_notebooks = list
             .as_array()
             .into_iter()

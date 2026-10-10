@@ -24,8 +24,9 @@ pub enum Waiting {
     Connecting(String),
     /// Julia is starting: on This Mac, or on the named server.
     Julia(Option<String>),
-    /// The agent's process is restarting or stopped (its own line says so); `julia`: Julia is still starting too.
-    Agent { name: &'static str, julia: bool },
+    /// The agent's process is restarting or stopped (its own line says so); `julia`: Julia is still starting too
+    /// (`here`: this computer's runtime, which starts without Julia).
+    Agent { name: &'static str, julia: bool, here: bool },
     /// The agent is installing or connecting.
     Starting(&'static str),
     /// The user isn't signed in to the agent (its sign-in card says so).
@@ -66,8 +67,9 @@ impl Waiting {
             Waiting::Unreachable(server) => format!("The conversation is kept on {server}, so it shows once Endeavor can reach it."),
             Waiting::Julia(None) => "The conversation shows once the notebook runtime is running.".to_owned(),
             Waiting::Connecting(_) | Waiting::Julia(_) => "The conversation shows once Julia is running.".to_owned(),
-            Waiting::Agent { name, julia: true } => format!("The conversation shows once {name} and Julia are running."),
-            Waiting::Agent { name, julia: false } | Waiting::Starting(name) => format!("The conversation shows once {name} is running."),
+            Waiting::Agent { name, julia: true, here: true } => format!("The conversation shows once {name} and the notebook runtime are running."),
+            Waiting::Agent { name, julia: true, here: false } => format!("The conversation shows once {name} and Julia are running."),
+            Waiting::Agent { name, julia: false, .. } | Waiting::Starting(name) => format!("The conversation shows once {name} is running."),
             Waiting::SignIn(name) => format!("The conversation shows once you sign in to {name}."),
             Waiting::Conversation | Waiting::Copy => "The conversation appears once all of it has loaded.".to_owned(),
         }
@@ -112,7 +114,7 @@ impl Workspace {
         let julia_ready = self.bridge(host).is_some();
         let agent = self.links.get(session.agent);
         if !agent.process.up() {
-            return Some(Waiting::Agent { name: session.agent.name(), julia: !julia_ready });
+            return Some(Waiting::Agent { name: session.agent.name(), julia: !julia_ready, here: server.is_none() });
         }
         if session.agent.facts().on_demand {
             if self.signed_out_of_agent(session.agent) {
@@ -229,7 +231,7 @@ mod tests {
         assert_eq!(Waiting::Conversation.line(Some(Duration::from_secs(30))).as_deref(), Some("Loading the conversation…"));
         assert_eq!(Waiting::Copy.line(Some(Duration::from_secs(30))).as_deref(), Some("Loading…"), "Endeavor's copy shows meanwhile");
         assert_eq!(Waiting::Unreachable("lab-server".into()).line(None).as_deref(), Some("Can't reach lab-server. Endeavor keeps trying."));
-        assert_eq!(Waiting::Agent { name: "Claude", julia: true }.line(None), None, "Claude's own line says it");
+        assert_eq!(Waiting::Agent { name: "Claude", julia: true, here: true }.line(None), None, "Claude's own line says it");
     }
 
     #[test]

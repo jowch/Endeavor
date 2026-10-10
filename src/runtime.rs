@@ -171,13 +171,13 @@ const JULIA_TARBALL: (&str, &str, u64) = (
 
 
 /// How the core finds Julia (its `--julia`): the one chosen in Settings while
-/// it's there and is Julia; else the core's own search (`auto`: the login
-/// shell's julia if it's new enough, else Endeavor's own, which the core
-/// downloads when a Julia notebook first needs it). On Windows the app still
+/// it's there and is Julia; else Endeavor's own once the core has it; else the
+/// core's own search (`auto`: the login shell's julia if it's new enough, else
+/// Endeavor's own, which the core downloads when a Julia notebook first needs it). On Windows the app still
 /// installs juliaup's Julia first (src/juliaup.rs), until the core can
 /// (EndeavorMCP #96); Windows has no R notebooks yet, so nothing waits for it
 /// that didn't before. `progress` hears how that's going.
-// ponytail: `auto` prefers a PATH julia to Endeavor's own, and Windows installs juliaup's Julia here, until EndeavorMCP #96.
+// ponytail: before Endeavor's own is downloaded, `auto` prefers a PATH julia to it, and Windows installs juliaup's Julia here, until EndeavorMCP #96.
 fn julia_arg(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
     if let Some(julia) = crate::settings::Settings::load().julia {
         match check_chosen(&julia) {
@@ -191,7 +191,14 @@ fn julia_arg(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
 #[cfg(not(windows))]
 fn own_julia(_progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
     move_old_julia();
-    Ok("auto".into())
+    let own = own_julia_dir().join("bin/julia");
+    Ok(if own.is_file() { own.display().to_string() } else { "auto".into() })
+}
+
+/// Where the core keeps Endeavor's own Julia (EndeavorMCP's `julia::own_julia`).
+#[cfg(not(windows))]
+fn own_julia_dir() -> PathBuf {
+    endeavor_mcp::paths::Env::here().server_root().join(format!("julia-{JULIA_VERSION}"))
 }
 
 /// juliaup's Julia. A Julia that an older Endeavor downloaded keeps working
@@ -221,7 +228,7 @@ fn own_julia(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
 fn move_old_julia() {
     let Ok(app_dir) = crate::install::app_dir() else { return };
     let old = app_dir.join(format!("julia-{JULIA_VERSION}"));
-    let new = endeavor_mcp::paths::Env::here().server_root().join(format!("julia-{JULIA_VERSION}"));
+    let new = own_julia_dir();
     if !old.join("bin/julia").is_file() || new.exists() || app_dir.join("runtime/runtime.json").exists() {
         return;
     }
