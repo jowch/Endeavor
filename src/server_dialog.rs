@@ -101,7 +101,7 @@ impl Workspace {
             let placeholder = placeholder.to_owned();
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value))
         };
-        let name = input(server.name.clone(), "Same as the SSH host", window, cx);
+        let name = input(server.name.clone(), if server.cluster.is_some() { "SSH host (cluster)" } else { "Same as the SSH host" }, window, cx);
         let host = input(if server.ssh_host.is_empty() { String::new() } else { server.ssh_target() }, "alias, or user@host", window, cx);
         let julia = input(server.julia.clone().unwrap_or_default(), "module load julia", window, cx);
         // The suggestions follow what's typed.
@@ -157,7 +157,10 @@ impl Workspace {
     fn dialog_server(&self, cx: &App) -> Result<Server, String> {
         let dialog = self.server_dialog.as_ref().ok_or("no dialog")?;
         let (ssh_host, port) = Server::parse_target(&dialog.host.read(cx).value())?;
-        let name = dialog.name.read(cx).value().trim().to_owned();
+        let id = dialog.editing.clone().unwrap_or_else(|| dialog.new_id.clone());
+        let typed = dialog.name.read(cx).value().trim().to_owned();
+        // A name another host has stops Save, not Test connection.
+        let name = self.hosts.name_for(&id, &typed, &ssh_host, dialog.cluster.is_some()).unwrap_or(typed);
         let julia = dialog.julia.read(cx).value().trim().replace('\n', "; ");
         let text = |input: &Entity<InputState>| Some(input.read(cx).value().trim().to_owned()).filter(|t| !t.is_empty());
         let cluster = dialog.cluster.as_ref().map(|c| Cluster {
@@ -168,8 +171,8 @@ impl Workspace {
             scratch: c.scratch.clone(),
         });
         Ok(Server {
-            id: dialog.editing.clone().unwrap_or_else(|| dialog.new_id.clone()),
-            name: if name.is_empty() { ssh_host.clone() } else { name },
+            id,
+            name,
             ssh_host,
             port,
             julia: (!julia.is_empty()).then_some(julia),
@@ -183,6 +186,10 @@ impl Workspace {
             Ok(server) => server,
             Err(e) => return self.dialog_error(e, cx),
         };
+        let typed = self.server_dialog.as_ref().map(|d| d.name.read(cx).value().to_string()).unwrap_or_default();
+        if let Err(e) = self.hosts.name_for(&server.id, &typed, &server.ssh_host, server.cluster.is_some()) {
+            return self.dialog_error(e, cx);
+        }
         let adding = self.server_dialog.as_ref().is_some_and(|d| d.editing.is_none());
         let id = server.id.clone();
         self.hosts.put(server);
