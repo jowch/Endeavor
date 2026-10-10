@@ -99,7 +99,18 @@ fn install_juliaup() -> Result<(), String> {
         "try {{ Add-AppxPackage -AppInstallerFile '{APP_INSTALLER}' -ErrorAction Stop }} \
          catch {{ [Console]::Error.WriteLine(($_.Exception.Message -replace '\\s+', ' ').Trim()); exit 1 }}"
     );
-    match run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]), INSTALL_LIMIT, &quiet) {
+    let install = || run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]), INSTALL_LIMIT, &quiet);
+    // One more try after a failure that wasn't the time limit: in CI it
+    // failed once in seven runs, then worked (#62).
+    let file = install().or_else(|first| {
+        if first.starts_with("it didn't finish") {
+            return Err(first);
+        }
+        eprintln!("Installing juliaup from its App Installer file failed ({first}); trying once more.");
+        std::thread::sleep(Duration::from_secs(5));
+        install()
+    });
+    match file {
         Ok(_) => {
             eprintln!("Installed juliaup from its App Installer file.");
             Ok(())

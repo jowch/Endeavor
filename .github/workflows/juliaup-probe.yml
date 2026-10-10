@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022]
-        attempt: [1, 2, 3, 4]
+        attempt: [5, 6, 7, 8, 9, 10, 11, 12]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:

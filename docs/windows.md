@@ -357,7 +357,9 @@ only with servers.
   other channels. A `julia-1.12.6` folder an older Endeavor downloaded is used
   while juliaup can't be set up, and removed once a runtime starts with
   juliaup's Julia. Each install route gets 10 minutes and `juliaup add` 45,
-  then the next route or an error. Installing juliaup on a computer without
+  then the next route or an error. The App Installer file gets a second try
+  after a failure other than the time limit: in CI it once failed and then
+  worked, cause unknown. Installing juliaup on a computer without
   it runs in CI on Windows Server, both routes (see [CI](#ci)).
 - Windows 10 and later include `curl.exe` and `tar.exe` (bsdtar), and that
   `tar` reads .zip. The app runs `%SystemRoot%\System32\tar.exe` by path,
