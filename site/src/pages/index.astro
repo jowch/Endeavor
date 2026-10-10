@@ -74,9 +74,12 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 				<h1 class="splash-name">{hero.name}</h1>
 				<p class="tagline splash-tagline">{hero.tagline}</p>
 				<p class="lead">{hero.lead}</p>
-				<p class="status">{hero.status}</p>
+				<p class="download-note">
+					{hero.downloadNote.map((part) => (typeof part === 'string' ? part : <a href={part.href}>{part.text}</a>))}
+				</p>
 				<div class="actions">
-					<a class="button primary" href={href(hero.primary.href)}>{hero.primary.text}</a>
+					{hero.downloads.map((d) => <a class="button primary" href={d.href}>{d.text}</a>)}
+					<a class="button secondary" href={href(hero.primary.href)}>{hero.primary.text}</a>
 					<a class="button secondary" href={hero.secondary.href}>{hero.secondary.text}</a>
 				</div>
 			</div>
@@ -301,13 +304,15 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 		margin: 32px 0 0;
 		font-size: 1.1875rem;
 	}
-	.status {
+	.download-note {
+		max-width: 64rem;
 		margin: 16px 0 0;
 		color: var(--sky-muted);
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
 		font-size: 0.8125rem;
+		line-height: 1.5;
+	}
+	.download-note a {
+		color: var(--sky-text);
 	}
 	.actions {
 		display: flex;
@@ -323,6 +328,12 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 		font-weight: 600;
 		text-decoration: none;
 		line-height: 1.3;
+	}
+	@media (max-width: 480px) {
+		.button {
+			padding: 10px 14px;
+			font-size: 0.9375rem;
+		}
 	}
 	.button.primary {
 		background: var(--accent);

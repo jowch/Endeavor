@@ -4,7 +4,7 @@
 export const meta = {
 	title: 'Endeavor: data analysis with Claude in a Julia notebook',
 	description:
-		'Endeavor is a Mac app where Claude writes and runs Julia code in a live notebook beside your chat, while you watch, edit and decide what runs. Coming soon for macOS.',
+		'Endeavor is a desktop app where Claude writes and runs Julia code in a live notebook beside your chat, while you watch, edit and decide what runs. Test builds for Mac and Windows.',
 	imageAlt: 'The Endeavor window, with the chat on the left and a Julia notebook with a plot on the right',
 };
 
@@ -16,8 +16,18 @@ export const nav = {
 export const hero = {
 	name: 'Endeavor',
 	tagline: 'Build our future',
-	lead: 'A Mac app where Claude writes and runs Julia code in a live notebook beside your chat, while you watch, edit and decide what runs.',
-	status: 'Coming soon for macOS',
+	lead: 'A desktop app where Claude writes and runs Julia code in a live notebook beside your chat, while you watch, edit and decide what runs.',
+	// The nightly release's files keep these names from build to build (.github/workflows/nightly.yml).
+	downloads: [
+		{ text: 'Download for Mac', href: 'https://github.com/jowch/Endeavor/releases/download/nightly/Endeavor-macos-arm64.dmg' },
+		{ text: 'Download for Windows', href: 'https://github.com/jowch/Endeavor/releases/download/nightly/Endeavor-windows-x86_64-setup.exe' },
+	],
+	// In place of a status line, above the buttons.
+	downloadNote: [
+		'Daily test builds for Apple silicon Macs and Windows 10 or 11. Windows warns about the unsigned installer: click More info, then Run anyway. Linux: ',
+		{ text: 'build from source', href: 'https://github.com/jowch/Endeavor/blob/main/docs/development.md' },
+		'.',
+	],
 	primary: { text: 'Read the guide', href: '/overview/' },
 	secondary: { text: 'Use the notebook tools today', href: 'https://github.com/jowch/EndeavorMCP#readme' },
 };
