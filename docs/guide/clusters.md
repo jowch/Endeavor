@@ -23,7 +23,9 @@ Claude and Endeavor stay on your Mac, as with a [server](./servers.md).
 1. Open the **Where** chip on the **Start a session** screen, and click
    **Add cluster…**. You can also add one in Settings, under **Where
    notebooks run**.
-2. Fill in **SSH host** and, if you like, **Name**, as for a server.
+2. Fill in **SSH host** and, if you like, **Name**, as for a server. Left
+   empty, the name is the SSH host followed by "(cluster)", so it isn't
+   mistaken for a server on the same login node.
 3. Fill in the cluster's own fields, all optional:
    - **Account**: the Slurm account to charge, if you have more than one.
    - **How to get Julia**: a path to `julia`, or a shell line such as

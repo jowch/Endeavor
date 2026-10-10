@@ -258,6 +258,34 @@ impl Hosts {
         }
     }
 
+    /// The name the server dialog saves for host `id`: `typed`, else the SSH
+    /// host, with " (cluster)" for a cluster so it isn't taken for the server
+    /// itself. A name left empty is numbered past the names other hosts have;
+    /// a typed one they have is refused. Sessions and notes tell hosts apart
+    /// by name, so two can't share one.
+    pub fn name_for(&self, id: &str, typed: &str, ssh_host: &str, cluster: bool) -> Result<String, String> {
+        let typed = typed.trim();
+        if !typed.is_empty() {
+            return match self.name_taken(id, typed) {
+                true => Err(format!("\"{typed}\" is already in use. Choose a different name.")),
+                false => Ok(typed.to_owned()),
+            };
+        }
+        Ok(self.free_name(id, &if cluster { format!("{ssh_host} (cluster)") } else { ssh_host.to_owned() }))
+    }
+
+    /// `base`, or "`base` 2", "`base` 3"… whichever no host but `id` has.
+    pub fn free_name(&self, id: &str, base: &str) -> String {
+        std::iter::once(base.to_owned()).chain((2..).map(|n| format!("{base} {n}"))).find(|name| !self.name_taken(id, name)).unwrap_or_default()
+    }
+
+    /// Whether a host other than `id` is called `name`, ignoring case. "Local"
+    /// is how the notebook header names this computer.
+    fn name_taken(&self, id: &str, name: &str) -> bool {
+        let same = |other: &str| other.trim().to_lowercase() == name.trim().to_lowercase();
+        [crate::platform::this_computer!(), "Local"].into_iter().any(same) || self.servers.iter().any(|s| s.id != id && same(&s.name))
+    }
+
     /// Add `server`, or replace the one with its id.
     pub fn put(&mut self, server: Server) {
         match self.servers.iter_mut().find(|s| s.id == server.id) {
@@ -500,6 +528,29 @@ mod tests {
         assert_eq!(with(Some("/Users/jc/Library/Application Support/julia/bin/julia")), ["--julia", "/Users/jc/Library/Application Support/julia/bin/julia"]);
         assert_eq!(with(Some("module load julia/1.11")), ["--julia-shell", "module load julia/1.11"]);
         assert_eq!(with(Some("/opt/lmod/setup.sh && module load julia")), ["--julia-shell", "/opt/lmod/setup.sh && module load julia"]);
+    }
+
+    #[test]
+    fn two_hosts_cant_share_a_name() {
+        let server = |id: &str, name: &str| Server { id: id.into(), name: name.into(), ssh_host: "lab".into(), ..Default::default() };
+        let mut hosts = Hosts::default();
+        hosts.put(server("a", "lab"));
+        // Left empty: a cluster on the same login host isn't named like the server.
+        assert_eq!(hosts.name_for("new", "", "lab", true).as_deref(), Ok("lab (cluster)"));
+        assert_eq!(hosts.name_for("new", "  ", "lab", false).as_deref(), Ok("lab 2"));
+        hosts.put(server("b", "lab (cluster)"));
+        assert_eq!(hosts.name_for("new", "", "lab", true).as_deref(), Ok("lab (cluster) 2"));
+        // Typed: another host's name, in any case, is refused; a host keeps its own.
+        assert!(hosts.name_for("new", " LAB ", "lab", false).unwrap_err().contains("\"LAB\""));
+        assert!(hosts.name_for("new", crate::platform::this_computer!(), "lab", false).is_err());
+        assert!(hosts.name_for("new", "local", "lab", false).is_err());
+        assert_eq!(hosts.name_for("a", "lab", "lab", false).as_deref(), Ok("lab"));
+        assert_eq!(hosts.name_for("a", "", "lab", false).as_deref(), Ok("lab"));
+        assert_eq!(hosts.name_for("new", "gpu box", "lab", false).as_deref(), Ok("gpu box"));
+        hosts.put(server("c", "Über"));
+        assert!(hosts.name_for("new", "über", "lab", false).is_err());
+        // Add as cluster fills in the next free name, so Save doesn't refuse it.
+        assert_eq!(hosts.free_name("", "lab (cluster)"), "lab (cluster) 2");
     }
 
     #[test]

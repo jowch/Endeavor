@@ -39,7 +39,8 @@ says the server stopped waiting. Connect again to sign in.
      `:port` if the server doesn't use port 22. Aliases from your
      `~/.ssh/config` are listed under the field. Click one to use it.
    - **Name**: what Endeavor calls the server. Leave it empty to use the SSH
-     host.
+     host, numbered ("lab 2") if another server already has that name.
+     Each server needs its own name.
    - **How to get Julia**: see [Julia on the server](#julia-on-the-server).
      You can leave it empty.
    - **Stop idle notebooks after**: how long a notebook nobody uses keeps
