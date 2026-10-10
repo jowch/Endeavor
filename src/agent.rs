@@ -363,7 +363,8 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
     }
 
     let env = facts.env.iter().map(|(name, value)| format!("{name}={value}"));
-    Ok(env.chain([node.display().to_string(), entry.display().to_string()]).collect())
+    let program = crate::agent_job::command(node.display().to_string(), vec![entry.display().to_string()])?;
+    Ok(env.chain(program).collect())
 }
 
 /// Claude Code's own tools that read, write or run things on this Mac: off in
