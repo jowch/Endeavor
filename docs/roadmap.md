@@ -98,5 +98,5 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
 | `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
 | `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
-| `.github/workflows/nightly.yml` | the nightly is unsigned and Apple Silicon only | sharing (above) |
+| `.github/workflows/nightly.yml` | the Mac nightly is ad-hoc signed until the repository has the Developer ID secrets; Apple Silicon only | sharing (above) |
 | `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns), and the build has no server helpers | the installer is shared (#12) |
