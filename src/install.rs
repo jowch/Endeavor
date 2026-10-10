@@ -8,10 +8,38 @@ use std::time::Duration;
 
 use endeavor_mcp::embedded;
 
-/// The app's own files (`adapter/`): Contents/Resources inside Endeavor.app,
-/// else the source tree (`cargo run`).
+/// The app's own files (`adapter/`): Contents/Resources inside Endeavor.app
+/// (Resources beside bin on Windows), else, in a debug build, the source tree
+/// (`cargo run`). A release build never falls back to the source tree, which
+/// exists only on the machine that built it: `missing_files` says so instead.
 pub fn resources() -> PathBuf {
-    bundle_resources().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+    bundle_resources().unwrap_or_else(|| if source_fallback() { PathBuf::from(env!("CARGO_MANIFEST_DIR")) } else { expected_resources().unwrap_or_default() })
+}
+
+/// Debug builds use the source tree's files. `ENDEAVOR_TEST_NO_SOURCE_FALLBACK`
+/// makes one behave like a release build here, to check `missing_files`.
+fn source_fallback() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("ENDEAVOR_TEST_NO_SOURCE_FALLBACK").is_none()
+}
+
+/// What the app says at startup when its files aren't beside it: a release
+/// build run from inside a zip Explorer opened, or a copy of the program taken
+/// out of Endeavor.app.
+pub fn missing_files() -> Option<String> {
+    if bundle_resources().is_some() || source_fallback() {
+        return None;
+    }
+    let what = if cfg!(windows) {
+        "Endeavor's files are missing. If you opened it from a zip, extract all of it first, then run bin\\endeavor.exe."
+    } else if cfg!(target_os = "macos") {
+        "Endeavor's files are missing. Open Endeavor.app itself, not a copy of the program inside it."
+    } else {
+        "Endeavor's files are missing. Run bin/endeavor from a folder that has Resources beside bin."
+    };
+    Some(match expected_resources() {
+        Some(dir) => format!("{what}\n\nEndeavor looked for them in {}.", dir.display()),
+        None => what.to_owned(),
+    })
 }
 
 /// The Julia side of the runtime (`runtime/`), unpacked from the helper crate
@@ -37,8 +65,13 @@ pub fn bundled() -> bool {
 }
 
 fn bundle_resources() -> Option<PathBuf> {
+    expected_resources().filter(|r| r.join("adapter").is_dir())
+}
+
+/// Where the app's files belong: Resources beside the program's own folder.
+fn expected_resources() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    Some(exe.parent()?.parent()?.join("Resources")).filter(|r| r.join("adapter").is_dir())
+    Some(exe.parent()?.parent()?.join("Resources"))
 }
 
 /// Endeavor's folder in Application Support, on Linux in XDG_DATA_HOME, and on
@@ -204,6 +237,14 @@ fn windows_tar() -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_debug_build_uses_the_source_tree() {
+        assert!(std::env::var_os("ENDEAVOR_TEST_NO_SOURCE_FALLBACK").is_none());
+        assert_eq!(resources(), PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        assert!(resources().join("adapter").is_dir());
+        assert_eq!(missing_files(), None);
+    }
 
     #[test]
     #[cfg(windows)]

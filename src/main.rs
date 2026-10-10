@@ -519,6 +519,9 @@ pub struct Workspace {
     crashes: crash::Crashes,
     /// A one-off failure's notice, under the control that was used.
     notice: Option<notice::Notice>,
+    /// The app's own files aren't beside it (a release build run from inside a
+    /// zip): all the window shows is why, and nothing starts.
+    missing_files: Option<String>,
     /// Servers sessions can run on (persisted in hosts.json).
     hosts: hosts::Hosts,
     /// Adding a server, or its settings.
@@ -784,6 +787,7 @@ impl Workspace {
             usage_limits: offline::UsageLimits::default(),
             crashes: crash::Crashes::default(),
             notice: None,
+            missing_files: install::missing_files(),
             hosts: hosts::Hosts::load(),
             server_dialog: None,
             asks: VecDeque::new(),
@@ -822,6 +826,11 @@ impl Workspace {
             }
         })
         .detach();
+        if this.missing_files.is_some() {
+            #[cfg(debug_assertions)]
+            this.watch_state_requests(cx);
+            return this;
+        }
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
         // Claude starts alongside it, except on first launch, whose setup screen goes step by step.
@@ -2355,6 +2364,19 @@ impl Render for Workspace {
             }
         }
         overlay::set_dismiss_on_click(webview, self.dismissible_open());
+        if let Some(missing) = &self.missing_files {
+            return div()
+                .size_full()
+                .bg(theme::bg_page())
+                .text_color(theme::text_primary())
+                .text_size(theme::size_body())
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().track_focus(&self.keyboard_home))
+                .child(div().max_w(px(460.)).px_6().flex().flex_col().gap_3().children(missing.split("\n\n").enumerate().map(|(i, p)| div().when(i > 0, |d| d.text_color(theme::text_muted())).child(p.to_owned()))))
+                .into_any_element();
+        }
         if let Some(setup) = &self.setup {
             let below = match self.render_sign_in_panel(cx) {
                 _ if self.offline_since.is_some() => splash::Below::Card(self.render_offline_setup(setup, cx)),
