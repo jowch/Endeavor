@@ -93,7 +93,7 @@ need no data. Two use a file of your own.
 - "Simulate 1,000 coin flips and plot how often heads comes up"
 - "Load a CSV file I'll attach and show me what's in it"
 - "Fit an exponential decay to measurements I'll attach, and plot the fit"
-- "Show me the basics of Julia with a small worked example"
+- "Teach me the basics of this notebook's language with a small worked example"
 
 The chips above the message box say where the session works:
 

@@ -189,7 +189,7 @@ pub const EXAMPLES: [Example; 4] = [
     Example { icon: Glyph::Dice, prompt: "Simulate 1,000 coin flips and plot how often heads comes up", uses_file: false },
     Example { icon: Glyph::Table, prompt: "Load a CSV file I'll attach and show me what's in it", uses_file: true },
     Example { icon: Glyph::Curve, prompt: "Fit an exponential decay to measurements I'll attach, and plot the fit", uses_file: true },
-    Example { icon: Glyph::Cap, prompt: "Show me the basics of Julia with a small worked example", uses_file: false },
+    Example { icon: Glyph::Cap, prompt: "Teach me the basics of this notebook's language with a small worked example", uses_file: false },
 ];
 
 /// The folder a new session on This Mac starts in: the last one used there,
