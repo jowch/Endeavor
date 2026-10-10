@@ -76,8 +76,8 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 
 Deliberate simplifications with their upgrade path, marked `ponytail:` in the
 code. This is all of them; add a row with each new marker. The runtime's own
-shortcuts are EndeavorMCP's, in its
-[gaps.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/gaps.md); the
+shortcuts are EndeavorMCP's, tracked in its
+[issues](https://github.com/jowch/EndeavorMCP/issues); the
 two this list used to carry (`view_cell_output` has no timeout while the
 worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 [EndeavorMCP #62](https://github.com/jowch/EndeavorMCP/issues/62).
