@@ -138,9 +138,23 @@ pub fn remove_other_versions(prefix: &str, version: &str, keep: &[&Path]) {
     }
 }
 
+/// Remove every version named `prefix` from the app's folder, but those
+/// holding a path in `keep`: on Windows juliaup's Julia replaces the app's own.
+pub fn remove_all_versions(prefix: &str, keep: &[&Path]) {
+    if let Ok(app) = app_dir() {
+        remove_versions_in(&app, prefix, None, keep);
+    }
+}
+
 fn remove_other_versions_in(app: &Path, prefix: &str, version: &str, keep: &[&Path]) {
+    if let Some(current) = version_of(version) {
+        remove_versions_in(app, prefix, Some(&current), keep);
+    }
+}
+
+/// Those older than `below`, or with none, all.
+fn remove_versions_in(app: &Path, prefix: &str, below: Option<&[u64]>, keep: &[&Path]) {
     let Ok(entries) = std::fs::read_dir(app) else { return };
-    let Some(current) = version_of(version) else { return };
     // Compared canonical, so a Settings path in another case or form still matches.
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
     let keep: Vec<PathBuf> = keep.iter().map(|k| canonical(k)).collect();
@@ -148,7 +162,7 @@ fn remove_other_versions_in(app: &Path, prefix: &str, version: &str, keep: &[&Pa
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         // A version older than this one (not this one's download or unpacking).
-        let older = name.strip_prefix(prefix).and_then(version_of).is_some_and(|v| v < current);
+        let older = name.strip_prefix(prefix).and_then(version_of).is_some_and(|v| below.is_none_or(|below| v.as_slice() < below));
         if !older || keep.iter().any(|k| k.starts_with(canonical(&path))) {
             continue;
         }
@@ -250,6 +264,11 @@ mod tests {
         let mut left: Vec<_> = std::fs::read_dir(&app).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         left.sort();
         assert_eq!(left, ["adapter-0.100.0", "codex-adapter-0.1.0", "depot", "julia-1.11.7", "julia-1.12.10", "julia-1.12.6", "julia-1.12.6.tar.gz.part", "julia-1.12.6.unpacking", "julia-1.13.0", "node-v22.1.0"]);
+
+        remove_versions_in(&app, "julia-", None, &[&chosen]);
+        let mut left: Vec<_> = std::fs::read_dir(&app).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left, ["adapter-0.100.0", "codex-adapter-0.1.0", "depot", "julia-1.11.7", "node-v22.1.0"], "with no version, every Julia but the kept one");
         let _ = std::fs::remove_dir_all(&app);
     }
 }

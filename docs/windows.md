@@ -55,8 +55,8 @@ machine](#try-first-on-a-real-windows-machine)).
 
 ### What runs on Windows now
 
-On Windows the app should open, install Node, the agent and Julia on first
-run, start the local runtime and run a notebook. None of that has been tried
+On Windows the app should open, install Node and the agent, get Julia
+through juliaup on first run, start the local runtime and run a notebook. None of that has been tried
 yet. Servers go through EndeavorMCP's ssh client (`client::Session`), whose
 password and two-factor prompts reach the app over loopback TCP, as on the
 Mac; the app hasn't tried a server from Windows yet. These refuse with a plain
@@ -321,26 +321,36 @@ only with servers.
 
   | Download | SHA-256 | Size |
   |---|---|---|
-  | `julia-1.12.6-win64.zip` | `a63d991976e6893f508c512e3dc7bca1836c1a1f6ad1f3e4aedec159b6733e89` | 275,091,967 |
   | `node-v24.21.0-win-x64.zip` | `158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541` | 37,618,919 |
   | `node-v24.21.0-win-arm64.zip` | `8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921` | 33,679,608 |
 
   The checksums come from the published lists,
-  `https://julialang-s3.julialang.org/bin/checksums/julia-1.12.6.sha256` and
   `https://nodejs.org/dist/v24.21.0/SHASUMS256.txt` (their macOS entries
-  match the existing pins), and the sizes from the servers'
+  match the existing pins), and the sizes from the server's
   `Content-Length`. Each zip's top folder and layout was read from its
-  central directory: `julia-1.12.6\bin\julia.exe`,
-  `node-v24.21.0-win-x64\node.exe` and
-  `…\node_modules\npm\bin\npm-cli.js`. There is no official Windows ARM64
-  build of Julia 1.12, so Windows on ARM gets the x64 one, untested under
-  emulation.
+  central directory: `node-v24.21.0-win-x64\node.exe` and
+  `…\node_modules\npm\bin\npm-cli.js`.
+- **Julia comes from juliaup** (`src/juliaup.rs`), as for the plugin, not
+  from a download of the app's own. The app finds `juliaup.exe` (the PATH,
+  the Store app's alias folder, `~\.juliaup\bin`); with none, it installs
+  juliaup for this Windows account, from the Microsoft Store with `winget`,
+  else from juliaup's App Installer file. Neither needs admin. It then adds
+  the channel for the pinned Julia (`juliaup add 1.12.6`) if juliaup lacks it,
+  and runs that channel's own `julia.exe`, which `juliaup api getconfig1`
+  lists. It never runs juliaup's launcher: on a fresh juliaup the launcher
+  first downloads the latest Julia, and a Julia started through the Store
+  app's alias outlived the runtime
+  (EndeavorMCP #55). A juliaup the person already has keeps its default and
+  other channels. A `julia-1.12.6` folder an older Endeavor downloaded is used
+  while juliaup can't be set up, and removed once a runtime starts with
+  juliaup's Julia. Each install route gets 10 minutes and `juliaup add` 45,
+  then the next route or an error. Installing juliaup on a computer without
+  it is untried.
 - Windows 10 and later include `curl.exe` and `tar.exe` (bsdtar), and that
   `tar` reads .zip. The app runs `%SystemRoot%\System32\tar.exe` by path,
   since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. The
   app hashes downloads in Rust with `sha2` on every platform.
-- Executable layout differs: `bin\julia.exe`, `node.exe` at the top of the
-  Node folder, and npm at `node_modules\npm\bin\npm-cli.js`
+- Executable layout differs: `node.exe` at the top of the Node folder, and npm at `node_modules\npm\bin\npm-cli.js`
   (`src/install.rs`, `src/agent.rs`, `src/runtime.rs`).
 - The server's own Julia download (`crates/endeavor-mcp/src/julia.rs`)
   stays Unix-only: a Windows server is out of scope.
@@ -464,11 +474,11 @@ What the machine needs:
   Microsoft Edge's updates have installed it. If it's missing, install
   Microsoft's Evergreen WebView2 Runtime, or use the [installer](#install),
   which does.
-- An internet connection on first run: the app downloads Node, the agent
-  and Julia into `%LOCALAPPDATA%\Endeavor`.
+- An internet connection on first run: the app downloads Node and the agent
+  into `%LOCALAPPDATA%\Endeavor`, and gets Julia through juliaup (installing
+  juliaup for this account if it isn't there).
 
-The app opens a console window next to its own, for now (see Console
-windows below). It can't connect to servers from Windows yet.
+The app opens no console window (see Console windows below).
 
 ## Try first on a real Windows machine
 
@@ -480,9 +490,8 @@ test binary as its own stand-in core.
 1. **Build and open.** `cargo run`. The window should open with the setup
    screen.
 2. **First-run downloads.** Setup downloads Node's zip, checks it, unpacks it
-   with `System32\tar.exe` and runs `npm ci` with `node.exe`; then Julia's
-   275 MB zip into `%LOCALAPPDATA%\Endeavor\julia-1.12.6`. Watch for paths
-   over 260 characters while unpacking Julia, and for antivirus holding
+   with `System32\tar.exe` and runs `npm ci` with `node.exe`; then finds or
+   installs juliaup and adds Julia 1.12.6 to it. Watch for antivirus holding
    unpacked files so the rename from `….unpacking` fails.
 3. **Start the runtime.** No console window should open, for the core, Julia
    or later Pluto's workers. `%LOCALAPPDATA%\Endeavor\runtime\runtime.json`

@@ -720,7 +720,7 @@ impl Workspace {
         let own = self.settings.julia.is_none();
         let mut ours = row("julia-own", "Endeavor's Julia");
         ours.lead = Lead::Radio { checked: own, act: Some(Act::OwnJulia) };
-        ours.desc = Some("Installed and kept up to date by Endeavor.".into());
+        ours.desc = Some(if cfg!(windows) { "Installed by Endeavor with juliaup, Julia's installer." } else { "Installed and kept up to date by Endeavor." }.into());
         // Search finds the choice by its other half, "Another Julia on this Mac".
         ours.search = None;
         ours.controls.push(Control::Note(format!("{} · recommended", runtime::JULIA_VERSION).into()));
