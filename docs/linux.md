@@ -142,9 +142,9 @@ sudo apt-get install -y openbox sysstat
 At runtime the binary links these libraries: WebKitGTK 4.1, GTK 3, xcb,
 xkbcommon(-x11), Xlib, libXext, fontconfig and libwayland-client.
 `mesa-vulkan-drivers` provides llvmpipe, a software GPU driver, for a VM with
-no GPU. The app also calls `curl`, `tar` and `shasum` (Ubuntu's `perl` package
-provides `shasum`). Browse… and Match system need `xdg-desktop-portal` and a
-backend such as `xdg-desktop-portal-gtk`, which desktops install anyway.
+no GPU. The app also calls `curl` and `tar`. Browse… and Match system need
+`xdg-desktop-portal` and a backend such as `xdg-desktop-portal-gtk`, which
+desktops install anyway.
 
 ## Build and run in the VM
 

@@ -337,8 +337,8 @@ only with servers.
   emulation.
 - Windows 10 and later include `curl.exe` and `tar.exe` (bsdtar), and that
   `tar` reads .zip. The app runs `%SystemRoot%\System32\tar.exe` by path,
-  since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. There
-  is no `shasum`, so Windows hashes in Rust with `sha2`.
+  since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. The
+  app hashes downloads in Rust with `sha2` on every platform.
 - Executable layout differs: `bin\julia.exe`, `node.exe` at the top of the
   Node folder, and npm at `node_modules\npm\bin\npm-cli.js`
   (`src/install.rs`, `src/agent.rs`, `src/runtime.rs`).

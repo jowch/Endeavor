@@ -444,6 +444,7 @@ fn npm_adapter(agent: Agent, pins: &str, installed: &str, progress: &dyn Fn(Prog
         crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), &|detail, fraction| {
             progress(Progress { fraction, ..Progress::new(Step::Agent, detail) })
         })?;
+        crate::install::remove_other_versions("node-v", NODE_VERSION, &[]);
     }
 
     let pinned = crate::install::resources().join(pins);
@@ -476,6 +477,7 @@ fn npm_adapter(agent: Agent, pins: &str, installed: &str, progress: &dyn Fn(Prog
         }
         let _ = std::fs::remove_dir_all(&adapter);
         std::fs::rename(&staging, &adapter).map_err(|e| e.to_string())?;
+        crate::install::remove_other_versions(&format!("{}-", facts.installed), &pinned_adapter_version(agent)?, &[]);
     }
 
     Ok(vec![node.display().to_string(), entry.display().to_string()])
