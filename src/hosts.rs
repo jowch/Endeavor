@@ -264,20 +264,26 @@ impl Hosts {
     /// a typed one they have is refused. Sessions and notes tell hosts apart
     /// by name, so two can't share one.
     pub fn name_for(&self, id: &str, typed: &str, ssh_host: &str, cluster: bool) -> Result<String, String> {
-        let taken = |name: &str| {
-            let name = name.trim();
-            [crate::platform::this_computer!(), "Local"].iter().any(|n| n.eq_ignore_ascii_case(name))
-                || self.servers.iter().any(|s| s.id != id && s.name.trim().eq_ignore_ascii_case(name))
-        };
         let typed = typed.trim();
         if !typed.is_empty() {
-            return match taken(typed) {
+            return match self.name_taken(id, typed) {
                 true => Err(format!("\"{typed}\" is already in use. Choose a different name.")),
                 false => Ok(typed.to_owned()),
             };
         }
-        let base = if cluster { format!("{ssh_host} (cluster)") } else { ssh_host.to_owned() };
-        Ok(std::iter::once(base.clone()).chain((2..).map(|n| format!("{base} {n}"))).find(|name| !taken(name)).unwrap_or(base))
+        Ok(self.free_name(id, &if cluster { format!("{ssh_host} (cluster)") } else { ssh_host.to_owned() }))
+    }
+
+    /// `base`, or "`base` 2", "`base` 3"… whichever no host but `id` has.
+    pub fn free_name(&self, id: &str, base: &str) -> String {
+        std::iter::once(base.to_owned()).chain((2..).map(|n| format!("{base} {n}"))).find(|name| !self.name_taken(id, name)).unwrap_or_default()
+    }
+
+    /// Whether a host other than `id` is called `name`, ignoring case. "Local"
+    /// is how the notebook header names this computer.
+    fn name_taken(&self, id: &str, name: &str) -> bool {
+        let same = |other: &str| other.trim().to_lowercase() == name.trim().to_lowercase();
+        [crate::platform::this_computer!(), "Local"].into_iter().any(same) || self.servers.iter().any(|s| s.id != id && same(&s.name))
     }
 
     /// Add `server`, or replace the one with its id.
@@ -541,6 +547,10 @@ mod tests {
         assert_eq!(hosts.name_for("a", "lab", "lab", false).as_deref(), Ok("lab"));
         assert_eq!(hosts.name_for("a", "", "lab", false).as_deref(), Ok("lab"));
         assert_eq!(hosts.name_for("new", "gpu box", "lab", false).as_deref(), Ok("gpu box"));
+        hosts.put(server("c", "Über"));
+        assert!(hosts.name_for("new", "über", "lab", false).is_err());
+        // Add as cluster fills in the next free name, so Save doesn't refuse it.
+        assert_eq!(hosts.free_name("", "lab (cluster)"), "lab (cluster) 2");
     }
 
     #[test]

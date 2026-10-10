@@ -153,14 +153,17 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The server as the dialog's fields describe it.
-    fn dialog_server(&self, cx: &App) -> Result<Server, String> {
+    /// The server as the dialog's fields describe it. With `saving`, a name
+    /// another host has is refused; otherwise (Test connection) it's kept.
+    fn dialog_server(&self, saving: bool, cx: &App) -> Result<Server, String> {
         let dialog = self.server_dialog.as_ref().ok_or("no dialog")?;
         let (ssh_host, port) = Server::parse_target(&dialog.host.read(cx).value())?;
         let id = dialog.editing.clone().unwrap_or_else(|| dialog.new_id.clone());
         let typed = dialog.name.read(cx).value().trim().to_owned();
-        // A name another host has stops Save, not Test connection.
-        let name = self.hosts.name_for(&id, &typed, &ssh_host, dialog.cluster.is_some()).unwrap_or(typed);
+        let name = match self.hosts.name_for(&id, &typed, &ssh_host, dialog.cluster.is_some()) {
+            Err(e) if saving => return Err(e),
+            name => name.unwrap_or(typed),
+        };
         let julia = dialog.julia.read(cx).value().trim().replace('\n', "; ");
         let text = |input: &Entity<InputState>| Some(input.read(cx).value().trim().to_owned()).filter(|t| !t.is_empty());
         let cluster = dialog.cluster.as_ref().map(|c| Cluster {
@@ -182,14 +185,10 @@ impl Workspace {
     }
 
     fn save_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let server = match self.dialog_server(cx) {
+        let server = match self.dialog_server(true, cx) {
             Ok(server) => server,
             Err(e) => return self.dialog_error(e, cx),
         };
-        let typed = self.server_dialog.as_ref().map(|d| d.name.read(cx).value().to_string()).unwrap_or_default();
-        if let Err(e) = self.hosts.name_for(&server.id, &typed, &server.ssh_host, server.cluster.is_some()) {
-            return self.dialog_error(e, cx);
-        }
         let adding = self.server_dialog.as_ref().is_some_and(|d| d.editing.is_none());
         let id = server.id.clone();
         self.hosts.put(server);
@@ -238,7 +237,7 @@ impl Workspace {
             test.cancel.cancel();
             return;
         }
-        let server = match self.dialog_server(cx) {
+        let server = match self.dialog_server(false, cx) {
             Ok(server) => server,
             Err(e) => return self.dialog_error(e, cx),
         };
@@ -640,7 +639,7 @@ impl Workspace {
                     .child(button("login-node-cluster", "Add as cluster", true, &self.dialog_focus("login-node-cluster", cx), theme::dialog_bg()).on_click(cx.listener(|this, _, window, cx| {
                         let Some(id) = this.login_node_warning.take() else { return };
                         let Some(server) = this.hosts.server(&id).cloned() else { return };
-                        let template = Server { id: String::new(), name: format!("{} (cluster)", server.name), cluster: Some(Cluster::default()), ..server };
+                        let template = Server { id: String::new(), name: this.hosts.free_name("", &format!("{} (cluster)", server.name)), cluster: Some(Cluster::default()), ..server };
                         this.open_new_host(template, window, cx);
                     }))),
             );
