@@ -9,6 +9,7 @@ use wire::slurm::{PRESETS, Partition, Resources, duration_text};
 
 use crate::new_session::{Glyph, glyph, menu_row};
 use crate::{Workspace, theme};
+use crate::theme::TextButton as _;
 
 const CPUS: [u32; 12] = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128];
 const MEM_GB: [u32; 14] = [1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512];
@@ -155,7 +156,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::bg_card()))
                     .text_size(theme::size_meta())
-                    .child(*name)
+                    .button_text(*name)
                     .on_click(cx.listener(on(Change::Preset(i))))
             });
             rows.push(label("Presets").into_any_element());
@@ -210,11 +211,11 @@ impl Workspace {
             );
         }
         let steppers = [
-            ("CPUs", Field::Cpus, r.cpus.to_string()),
-            ("Memory", Field::Mem, if r.mem_gb == 0 { "per CPU".into() } else { format!("{} GB", r.mem_gb) }),
-            ("Time limit", Field::Time, duration_text(r.minutes)),
+            ("CPUs", "CPUs", Field::Cpus, r.cpus.to_string()),
+            ("Memory", "memory", Field::Mem, if r.mem_gb == 0 { "per CPU".into() } else { format!("{} GB", r.mem_gb) }),
+            ("Time limit", "time limit", Field::Time, duration_text(r.minutes)),
         ];
-        let steppers = steppers.map(|(name, field, value)| (name, stepper(field as usize + 10 * target.index(), value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))));
+        let steppers = steppers.map(|(name, noun, field, value)| (name, stepper(field as usize + 10 * target.index(), noun, value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))));
         match target {
             // The dialog has more to fit, so its three share one row.
             Target::Dialog => rows.push(
@@ -241,12 +242,13 @@ fn row(name: &'static str, control: impl IntoElement) -> Div {
 
 type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// − value +
-fn stepper(id: usize, value: String, minus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, plus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
-    let button = |id: (&'static str, usize), text: &'static str, handler: OnClick| {
+/// − value +. `noun` names the buttons: "Decrease memory".
+fn stepper(id: usize, noun: &'static str, value: String, minus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, plus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
+    let button = |id: (&'static str, usize), text: &'static str, name: String, handler: OnClick| {
         div()
             .id(id)
             .role(Role::Button)
+            .aria_label(name)
             .w(px(28.))
             .h_full()
             .flex()
@@ -267,9 +269,9 @@ fn stepper(id: usize, value: String, minus: impl Fn(&ClickEvent, &mut Window, &m
         .border_1()
         .border_color(theme::control_edge())
         .overflow_hidden()
-        .child(button(("step-down", id), "−", Box::new(minus)))
+        .child(button(("step-down", id), "−", format!("Decrease {noun}"), Box::new(minus)))
         .child(div().flex_1().h_full().flex().items_center().justify_center().border_l_1().border_r_1().border_color(theme::control_edge()).child(value))
-        .child(button(("step-up", id), "+", Box::new(plus)))
+        .child(button(("step-up", id), "+", format!("Increase {noun}"), Box::new(plus)))
 }
 
 #[cfg(test)]

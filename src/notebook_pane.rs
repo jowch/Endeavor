@@ -24,6 +24,7 @@ use crate::overlay;
 use crate::menu::MenuTarget;
 use crate::notice::{Notice, Retry, Spot};
 use crate::{Workspace, platform, pluto, theme};
+use crate::theme::TextButton as _;
 
 /// An item in the notebook's ⋮ menu or its Share menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -477,7 +478,7 @@ fn page_button(id: &'static str, icon: Glyph, label: impl Into<SharedString>, pr
                 d.border_1().border_color(theme::control_edge()).text_color(theme::text_primary()).hover(|s| s.bg(theme::row_active())).child(glyph(icon, theme::text_muted()))
             }
         })
-        .child(label.into())
+        .button_text(label)
 }
 
 fn page_title(text: impl IntoElement) -> Div {

@@ -27,6 +27,7 @@ use crate::splash::{Progress, Step};
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme};
 use crate::theme::FocusRing as _;
+use crate::theme::TextButton as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
@@ -724,7 +725,7 @@ impl Workspace {
             .cursor_pointer()
             .bg(theme::bg_raised())
             .text_color(theme::text_primary())
-            .child(fix.label())
+            .button_text(fix.label())
             .on_click(cx.listener(move |this, _, _, cx| this.apply_fix(&fix, cx)))
     }
 
@@ -1609,7 +1610,7 @@ impl Workspace {
                 .cursor_pointer()
                 .bg(theme::accent())
                 .text_color(gpui::white())
-                .child(label)
+                .button_text(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if start_julia {
                         this.start_host(&host, cx);
@@ -1663,6 +1664,7 @@ impl Workspace {
                         .text_color(theme::text_muted())
                         .hover(|s| s.text_color(theme::text_primary()))
                         .child("Cancel")
+                        .aria_label(format!("Cancel connecting to {name}"))
                         .on_click(cx.listener(move |this, _, _, cx| this.cancel_start(&host, cx)))
                 });
                 return Some(starting_pane(&steps).children(cancel).into_any_element());

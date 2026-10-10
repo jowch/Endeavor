@@ -27,6 +27,7 @@ use crate::session::folder_name;
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme, when};
 use crate::theme::FocusRing as _;
+use crate::theme::TextButton as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NotebookChoice {
@@ -723,7 +724,7 @@ impl Workspace {
                                 .cursor_pointer()
                                 .bg(theme::bg_raised())
                                 .text_color(theme::text_primary())
-                                .child("Start Julia")
+                                .button_text("Start Julia")
                                 .on_click(cx.listener(move |this, _, _, cx| this.start_host(&host, cx))),
                         )
                         .children(fixes.into_iter().map(|fix| self.fix_button(fix, true, cx))),
@@ -977,7 +978,7 @@ impl Workspace {
                             .bg(theme::accent())
                             .text_color(gpui::white())
                             .text_size(theme::size_meta())
-                            .child("Use these")
+                            .button_text("Use these")
                             .on_click(cx.listener(|this, _, window, cx| this.paste_salloc(window, cx))),
                     ),
                 )
@@ -1141,7 +1142,7 @@ impl Workspace {
                         .cursor_pointer()
                         .bg(theme::accent())
                         .text_color(gpui::white())
-                        .child("Choose this folder")
+                        .button_text("Choose this folder")
                         .on_click(cx.listener(move |this, _, window, cx| this.set_draft_folder(choose.clone(), window, cx))),
                 ),
             ))

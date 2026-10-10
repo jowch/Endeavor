@@ -152,6 +152,7 @@ impl Workspace {
                 .text_color(theme::text_secondary())
                 .hover(|s| s.text_color(theme::text_primary()).bg(theme::row_active()))
                 .child("Try now")
+                .aria_label("Try reconnecting now")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.reconnect_lost(&host, cx);
                     cx.notify();

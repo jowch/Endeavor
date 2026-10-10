@@ -9,6 +9,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::{Workspace, theme};
+use crate::theme::TextButton as _;
 
 pub const WEBSITE: &str = "https://github.com/jowch/Endeavor";
 pub const HELP: &str = "https://github.com/jowch/Endeavor#readme";
@@ -186,7 +187,7 @@ impl About {
                 .font_weight(FontWeight::MEDIUM)
                 .when(primary, |b| b.bg(theme::accent()).text_color(gpui::white()))
                 .when(!primary, |b| b.bg(theme::bg_raised()).text_color(theme::text_primary()))
-                .child(label)
+                .button_text(label)
         });
         div()
             .min_h(px(24.))
@@ -200,7 +201,7 @@ impl About {
 }
 
 fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
-    div().id(id).role(Role::Link).cursor_pointer().text_color(theme::accent_text()).hover(|s| s.underline()).child(label)
+    div().id(id).role(Role::Link).cursor_pointer().text_color(theme::accent_text()).hover(|s| s.underline()).button_text(label)
 }
 
 impl Render for About {
