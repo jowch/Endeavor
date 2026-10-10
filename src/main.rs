@@ -948,7 +948,7 @@ impl Workspace {
         if let Some(path) = &existing {
             session.open_on_start(path.clone());
             context.push(format!(
-                "[Endeavor] The user started this session on the Pluto notebook {path}, which is open in the \
+                "[Endeavor] The user started this session on the notebook {path}, which is open in the \
                  notebook pane in safe preview (nothing has run). Unless they say otherwise, \"the notebook\" \
                  means this one; list_notebooks gives its id."
             ));
@@ -1459,7 +1459,7 @@ impl Workspace {
             edits = std::mem::take(&mut session.user_edits);
         }
         let mut text = format!(
-            "[Endeavor] The user is viewing Pluto notebook {id} in the notebook pane. \
+            "[Endeavor] The user is viewing notebook {id} in the notebook pane. \
              Unless they say otherwise, \"the notebook\" means this one."
         );
         if !edits.is_empty() {
