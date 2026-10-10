@@ -676,7 +676,8 @@ pub enum AgentEvent {
     Ready,
     Started { key: u64, result: Result<Started, String> },
     /// A failed listing is an error, not an empty folder.
-    Listed { cwd: PathBuf, sessions: Result<Vec<SessionInfo>, String> },
+    /// `complete`: the agent had no further page, so a session left out isn't there.
+    Listed { cwd: PathBuf, sessions: Result<Vec<SessionInfo>, String>, complete: bool },
     /// The copy made by `ForkSession` exists; its history replays next.
     Forked { key: u64, id: SessionId },
     Session(SessionId, SessionEvent),
@@ -818,7 +819,7 @@ pub fn start(agent: Agent, commands: UnboundedReceiver<Command>) -> UnboundedRec
 enum Done {
     Turn(SessionId, Result<PromptResponse, agent_client_protocol::Error>),
     Started(u64, Result<Started, agent_client_protocol::Error>),
-    Listed(PathBuf, Result<Vec<SessionInfo>, agent_client_protocol::Error>),
+    Listed(PathBuf, Result<(Vec<SessionInfo>, bool), agent_client_protocol::Error>),
     Forked(u64, PathBuf, Tools, Result<SessionId, agent_client_protocol::Error>),
     Config(SessionId, Result<SetSessionConfigOptionResponse, agent_client_protocol::Error>),
     SignedIn(Result<AuthenticateResponse, agent_client_protocol::Error>),
@@ -940,8 +941,9 @@ async fn run(
                         continue;
                     }
                     Either::Left(Some(Done::Listed(cwd, result))) => {
-                        let sessions = result.map_err(|e| e.to_string());
-                        let _ = events.unbounded_send(AgentEvent::Listed { cwd, sessions });
+                        let complete = result.as_ref().is_ok_and(|(_, complete)| *complete);
+                        let sessions = result.map(|(sessions, _)| sessions).map_err(|e| e.to_string());
+                        let _ = events.unbounded_send(AgentEvent::Listed { cwd, sessions, complete });
                         continue;
                     }
                     Either::Left(Some(Done::Config(session, result))) => {
@@ -991,9 +993,10 @@ async fn run(
                         pending.push(async move { Done::Forked(key, cwd, tools, forked.await.map(|r| r.session_id)) }.boxed_local());
                     }
                     Command::ListSessions { cwd } => {
-                        // ponytail: first page only; a folder with a long history shows its newest sessions.
+                        // ponytail: first page only; a folder with a long history shows its newest
+                        // sessions, and a listing with more pages marks nothing missing.
                         let listed = connection.send_request(ListSessionsRequest::new().cwd(cwd.clone())).block_task();
-                        pending.push(async move { Done::Listed(cwd, listed.await.map(|r| r.sessions)) }.boxed_local());
+                        pending.push(async move { Done::Listed(cwd, listed.await.map(|r| (r.sessions, r.next_cursor.is_none()))) }.boxed_local());
                     }
                     // ponytail: fire and forget; the agent confirms with a mode/config update.
                     Command::SetMode(session, mode) => {

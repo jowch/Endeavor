@@ -220,8 +220,10 @@ In order. Each part is also useful to Claude, or harmless to it.
     in `archived.json`), and the sidebar draws from it at launch.
     `Records::merge` takes one agent's listing of a folder (or of a server's
     whole agent folder) and touches only that agent's sessions; sessions an
-    agent made outside Endeavor aren't added, and a failed listing changes
-    nothing. Claude starts at launch alongside Julia, except during
+    agent made outside Endeavor aren't added, a failed listing changes
+    nothing, and a session a complete listing (no further page) leaves
+    out is marked missing for the launch but kept: only Delete removes a
+    record. Claude starts at launch alongside Julia, except during
     first-launch setup. A session opened before its host's Julia is up waits
     with "Starting Julia…". An agent that starts on demand (Codex) starts
     when it is picked or one of its sessions opens. Still to do: showing the
