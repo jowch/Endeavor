@@ -493,7 +493,9 @@ What the machine needs:
   into `%LOCALAPPDATA%\Endeavor`, and gets Julia through juliaup (installing
   juliaup for this account if it isn't there).
 
-The app opens no console window (see Console windows below).
+The app opens no console window, and neither do the runtime, Julia or
+Pluto's workers (see Console windows under
+[Smaller app fixes](#smaller-app-fixes-about-1-week-in-total)).
 
 ## Try first on a real Windows machine
 
