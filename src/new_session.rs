@@ -301,6 +301,9 @@ impl Workspace {
                 let Some(cluster) = server.cluster.as_mut() else { return };
                 cluster.partitions = scheduler.partitions;
                 cluster.scratch = scheduler.scratch;
+                // A cluster saved without Test connection still has the preset's size.
+                let partition = cluster.partition(cluster.resources.partition.as_deref()).cloned();
+                cluster.resources.clip(partition.as_ref());
                 let _ = this.hosts.save();
                 cx.notify();
             });

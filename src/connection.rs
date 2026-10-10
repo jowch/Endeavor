@@ -74,6 +74,8 @@ pub struct Connection {
     pub found: Option<Result<RuntimeState, String>>,
     /// On a cluster, the job Julia is starting in.
     pub job: Option<String>,
+    /// Why Slurm says that job waits ("Priority", "Resources"), while it does.
+    pub queue_reason: Option<String>,
     pub steps: Steps,
     /// Open notebooks (id, path) as last seen, to reopen after a restart.
     pub last_notebooks: Vec<(String, String)>,
@@ -224,6 +226,7 @@ impl Connection {
             stopping: false,
             found: None,
             job: None,
+            queue_reason: None,
             steps,
             last_notebooks: Vec::new(),
             resume: Vec::new(),
@@ -633,6 +636,7 @@ impl Workspace {
         connection.cancelling = false;
         connection.found = None;
         connection.job = None;
+        connection.queue_reason = None;
         connection.steps = match host {
             HostId::ThisMac => Steps::new("Starting Julia"),
             HostId::Server(_) => Steps { done: vec![format!("Connected to {}", self.hosts.name(host))], ..Steps::new("Finding Julia") },
@@ -854,10 +858,11 @@ impl Workspace {
                 connection.steps.advance(format!("Got a node: {reason}"), "Starting Julia");
             }
             Update::Event(Event::Queued { job, reason, .. }) => {
-                // A job this start found waiting, not one it submitted.
+                // The job this start submitted, or one it found waiting.
                 connection.job.get_or_insert(job);
                 connection.steps.now("Waiting for a node");
                 connection.steps.detail = wire::slurm::reason_text(&reason).map(|r| format!("Slurm: {r}"));
+                connection.queue_reason = Some(reason);
                 if let Some(page) = connection.back_to_a_queue() {
                     self.blank_page(&page, cx);
                 }
@@ -1498,7 +1503,7 @@ impl Workspace {
                 _ => HostState::NotRunning,
             },
             Status::Starting => match &c.job {
-                Some(job) => HostState::Queued { job: job.clone(), starting: c.steps.current != "Waiting for a node" },
+                Some(job) => HostState::Queued { job: job.clone(), starting: c.steps.current != "Waiting for a node", reason: c.queue_reason.clone() },
                 None => HostState::Starting,
             },
             Status::Ready => HostState::Running {

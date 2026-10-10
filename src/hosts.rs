@@ -62,9 +62,14 @@ impl Cluster {
         }
     }
 
-    /// The job a session with `resources` asks for.
+    /// The job a session with `resources` asks for, kept within what its
+    /// partition's largest node has: sizes saved before Test connection listed
+    /// the partitions (or before they changed) would otherwise ask for more
+    /// than any node has.
     pub fn job(&self, resources: &Resources) -> JobRequest {
-        JobRequest { resources: resources.clone(), account: self.account.clone(), depot: self.depot.clone() }
+        let mut resources = resources.clone();
+        resources.clip(self.partition(resources.partition.as_deref()));
+        JobRequest { resources, account: self.account.clone(), depot: self.depot.clone() }
     }
 }
 
@@ -268,6 +273,21 @@ fn collect_hosts(path: &Path, ssh_dir: &Path, hosts: &mut Vec<String>, depth: us
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_job_asks_for_no_more_than_its_partitions_largest_node() {
+        let small = Partition { name: "LocalQ".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
+        let big = Partition { name: "big".into(), default: false, max_minutes: Some(60), cpus: 64, mem_mb: 512 * 1024 };
+        let cluster = Cluster { partitions: vec![small, big], account: Some("lab".into()), ..Default::default() };
+        // Medium, as a cluster saved before Test connection has it.
+        let job = cluster.job(&Resources::default());
+        assert_eq!((job.resources.cpus, job.resources.mem_gb, job.resources.minutes), (4, 7, 480), "the default partition's node");
+        assert_eq!(job.account.as_deref(), Some("lab"));
+        let job = cluster.job(&Resources { partition: Some("big".into()), ..Resources::default() });
+        assert_eq!((job.resources.cpus, job.resources.mem_gb, job.resources.minutes), (8, 32, 60), "fits, but for the time limit");
+        let job = Cluster::default().job(&Resources::default());
+        assert_eq!(job.resources, Resources::default(), "no partitions known: as asked");
+    }
 
     #[test]
     fn saves_and_loads_servers() {
