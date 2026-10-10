@@ -855,6 +855,7 @@ impl Workspace {
             }
             Update::Event(Event::Queued { job, state, reason }) if state == "RUNNING" => {
                 connection.job.get_or_insert(job);
+                connection.queue_reason = None;
                 connection.steps.advance(format!("Got a node: {reason}"), "Starting Julia");
             }
             Update::Event(Event::Queued { job, reason, .. }) => {

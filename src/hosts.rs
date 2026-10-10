@@ -62,10 +62,23 @@ impl Cluster {
         }
     }
 
+    /// Take the partitions a connect listed, and fit the defaults to them (a
+    /// cluster saved without Test connection still has the preset's size), and
+    /// `draft`, a new session's resources copied from those defaults before
+    /// the partitions arrived, to its own partition.
+    pub fn take_partitions(&mut self, partitions: Vec<Partition>, scratch: Option<String>, draft: Option<&mut Resources>) {
+        self.partitions = partitions;
+        self.scratch = scratch;
+        let partition = self.partition(self.resources.partition.as_deref()).cloned();
+        self.resources.clip(partition.as_ref());
+        if let Some(draft) = draft {
+            draft.clip(self.partition(draft.partition.as_deref()));
+        }
+    }
+
     /// The job a session with `resources` asks for, kept within what its
     /// partition's largest node has: sizes saved before Test connection listed
-    /// the partitions (or before they changed) would otherwise ask for more
-    /// than any node has.
+    /// the partitions would otherwise ask for more than any node has.
     pub fn job(&self, resources: &Resources) -> JobRequest {
         let mut resources = resources.clone();
         resources.clip(self.partition(resources.partition.as_deref()));
@@ -287,6 +300,22 @@ mod tests {
         assert_eq!((job.resources.cpus, job.resources.mem_gb, job.resources.minutes), (8, 32, 60), "fits, but for the time limit");
         let job = Cluster::default().job(&Resources::default());
         assert_eq!(job.resources, Resources::default(), "no partitions known: as asked");
+    }
+
+    #[test]
+    fn partitions_arriving_fit_the_defaults_and_the_draft() {
+        let small = Partition { name: "LocalQ".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
+        let short = Partition { name: "short".into(), default: false, max_minutes: Some(60), cpus: 2, mem_mb: 4096 };
+        // Added without Test connection: Medium, and a draft copied from it.
+        let mut cluster = Cluster::default();
+        let mut draft = Resources { partition: Some("short".into()), ..cluster.resources.clone() };
+        cluster.take_partitions(vec![small, short], Some("/scratch".into()), Some(&mut draft));
+        let size = |r: &Resources| (r.cpus, r.mem_gb, r.minutes);
+        assert_eq!(size(&cluster.resources), (4, 7, 480), "the default partition's node");
+        assert_eq!(size(&draft), (2, 4, 60), "the draft's own partition");
+        assert_eq!(cluster.scratch.as_deref(), Some("/scratch"));
+        cluster.take_partitions(Vec::new(), None, None);
+        assert_eq!(size(&cluster.resources), (4, 7, 480), "none listed: left as it was");
     }
 
     #[test]
