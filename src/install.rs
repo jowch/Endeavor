@@ -116,20 +116,53 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     Ok(())
 }
 
-#[cfg(unix)]
-fn sha256_of(file: &Path) -> Result<String, String> {
-    let out = Command::new("shasum").args(["-a", "256"]).arg(file).output().map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned())
-}
-
-/// Windows has no `shasum`.
-#[cfg(windows)]
 fn sha256_of(file: &Path) -> Result<String, String> {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     let mut file = std::fs::File::open(file).map_err(|e| e.to_string())?;
     std::io::copy(&mut file, &mut hasher).map_err(|e| e.to_string())?;
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Remove what older pins left in the app's folder: the folders (and partial
+/// downloads) named `prefix` and a version older than `version`, such as
+/// `julia-1.12.5` beside `julia-1.12.6`. Newer ones stay: another build
+/// sharing the folder (an installed app beside a development build) may use
+/// them. Those holding a path in `keep` stay too. Best effort: what can't be
+/// removed (a file in use on Windows) stays until next time.
+pub fn remove_other_versions(prefix: &str, version: &str, keep: &[&Path]) {
+    if let Ok(app) = app_dir() {
+        remove_other_versions_in(&app, prefix, version, keep);
+    }
+}
+
+fn remove_other_versions_in(app: &Path, prefix: &str, version: &str, keep: &[&Path]) {
+    let Ok(entries) = std::fs::read_dir(app) else { return };
+    let Some(current) = version_of(version) else { return };
+    // Compared canonical, so a Settings path in another case or form still matches.
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+    let keep: Vec<PathBuf> = keep.iter().map(|k| canonical(k)).collect();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // A version older than this one (not this one's download or unpacking).
+        let older = name.strip_prefix(prefix).and_then(version_of).is_some_and(|v| v < current);
+        if !older || keep.iter().any(|k| k.starts_with(canonical(&path))) {
+            continue;
+        }
+        let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        match removed {
+            Ok(()) => eprintln!("Removed {}, which an older version of Endeavor installed.", path.display()),
+            Err(e) => eprintln!("Couldn't remove {}, which an older version of Endeavor installed: {e}", path.display()),
+        }
+    }
+}
+
+/// The version a name starts with, as numbers: "1.12.6.unpacking" -> [1, 12, 6].
+fn version_of(name: &str) -> Option<Vec<u64>> {
+    let digits = name.split(|c: char| !c.is_ascii_digit() && c != '.').next()?;
+    let parts: Vec<u64> = digits.split('.').filter(|p| !p.is_empty()).map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    (name.starts_with(|c: char| c.is_ascii_digit()) && !parts.is_empty()).then_some(parts)
 }
 
 #[cfg(unix)]
@@ -196,5 +229,25 @@ mod tests {
         tarball(&good, "Thing", "thing-1.0", (&url, &sha, size), &|_, _| {}).unwrap();
         assert!(good.join("bin/thing").exists());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn removes_only_other_versions() {
+        let app = std::env::temp_dir().join(format!("endeavor-versions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&app);
+        for dir in ["julia-1.12.5", "julia-1.12.6", "julia-1.12.6.unpacking", "julia-1.11.7", "julia-1.12.10", "julia-1.13.0", "node-v22.1.0", "adapter-0.80.0", "adapter-0.9.0", "adapter-0.100.0", "codex-adapter-0.1.0", "depot"] {
+            std::fs::create_dir_all(app.join(dir).join("bin")).unwrap();
+        }
+        for file in ["julia-1.12.5.tar.gz.part", "julia-1.12.6.tar.gz.part"] {
+            std::fs::write(app.join(file), "").unwrap();
+        }
+        let chosen = app.join("julia-1.11.7/bin/julia");
+        std::fs::write(&chosen, "").unwrap();
+        remove_other_versions_in(&app, "julia-", "1.12.6", &[&chosen]);
+        remove_other_versions_in(&app, "adapter-", "0.81.2", &[]);
+        let mut left: Vec<_> = std::fs::read_dir(&app).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left, ["adapter-0.100.0", "codex-adapter-0.1.0", "depot", "julia-1.11.7", "julia-1.12.10", "julia-1.12.6", "julia-1.12.6.tar.gz.part", "julia-1.12.6.unpacking", "julia-1.13.0", "node-v22.1.0"]);
+        let _ = std::fs::remove_dir_all(&app);
     }
 }
