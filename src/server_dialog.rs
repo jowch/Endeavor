@@ -56,6 +56,8 @@ pub struct ClusterFields {
 struct TestRun {
     id: u64,
     cancel: Arc<Cancel>,
+    /// Its ssh's questions, taken down when it ends.
+    sign_in: remote::SignIn,
     host: String,
     done: Vec<String>,
     /// What it's doing now, and the latest line of Julia's output.
@@ -73,6 +75,12 @@ enum TestUpdate {
 pub struct AskModal {
     question: Question,
     input: Entity<InputState>,
+}
+
+impl AskModal {
+    pub fn question(&self) -> &Question {
+        &self.question
+    }
 }
 
 impl Workspace {
@@ -137,6 +145,8 @@ impl Workspace {
     fn close_server_dialog(&mut self, cx: &mut Context<Self>) {
         if let Some(test) = self.server_dialog.take().and_then(|d| d.test) {
             test.cancel.cancel();
+            // Its end finds no dialog to report to, so its questions go now.
+            let _ = self.drop_asks(test.sign_in.id, cx);
         }
         cx.notify();
     }
@@ -226,11 +236,13 @@ impl Workspace {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let cancel = Arc::new(Cancel::default());
+        let sign_in = remote::SignIn::default();
         let Some(dialog) = &mut self.server_dialog else { return };
         dialog.error = None;
         dialog.test = Some(TestRun {
             id,
             cancel: cancel.clone(),
+            sign_in: sign_in.clone(),
             host: server.ssh_host.clone(),
             done: Vec::new(),
             working: Some(format!("Connecting to {}…", server.ssh_host)),
@@ -241,7 +253,7 @@ impl Workspace {
         let questions = self.questions_tx.clone();
         std::thread::spawn(move || {
             let on = |event| drop(tx.unbounded_send(TestUpdate::Event(event)));
-            let result = remote::asker(&server, questions).and_then(|(_asker, auth, _)| remote::test(&server, auth, &cancel, &on));
+            let result = remote::asker(&server, questions, sign_in).and_then(|(_asker, auth)| remote::test(&server, auth, &cancel, &on));
             let _ = tx.unbounded_send(TestUpdate::Done(result));
         });
         cx.spawn(async move |this, cx| {
@@ -255,11 +267,15 @@ impl Workspace {
         cx.notify();
     }
 
-    fn on_test_update(&mut self, id: u64, update: TestUpdate, cx: &mut Context<Self>) {
-        if matches!(update, TestUpdate::Done(_)) {
-            // Its ssh is gone, so nothing is waiting for these answers any more.
-            for ask in self.asks.drain(..) {
-                ask.question.answer(None);
+    fn on_test_update(&mut self, id: u64, mut update: TestUpdate, cx: &mut Context<Self>) {
+        let Some(test) = self.server_dialog.as_mut().and_then(|d| d.test.as_mut()).filter(|t| t.id == id) else { return };
+        if let TestUpdate::Done(result) = &mut update {
+            // Its ssh is gone, so nothing is waiting for its answers any more.
+            let (source, host) = (test.sign_in.id, test.host.clone());
+            if self.drop_asks(source, cx)
+                && let Err(why) = result
+            {
+                *why = remote::gave_up(&host);
             }
         }
         let Some(test) = self.server_dialog.as_mut().and_then(|d| d.test.as_mut()).filter(|t| t.id == id) else { return };
@@ -327,6 +343,20 @@ impl Workspace {
         }
         self.asks.push_back(AskModal { question, input });
         cx.notify();
+    }
+
+    /// Take down the questions of a sign-in that ended (`remote::SignIn`):
+    /// its ssh is gone, so nothing waits for their answers.
+    /// True if one was on screen or waiting.
+    pub fn drop_asks(&mut self, source: u64, cx: &mut Context<Self>) -> bool {
+        // ponytail: another sign-in's question left in front isn't focused (no window here); a click focuses it.
+        let before = self.asks.len();
+        self.asks.retain(|ask| ask.question.source != source);
+        if self.asks.len() == before {
+            return false;
+        }
+        cx.notify();
+        true
     }
 
     fn answer_ask(&mut self, yes: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -635,6 +665,7 @@ impl Workspace {
                     .child(glyph(Glyph::Server, theme::text_muted()))
                     .child(div().text_size(theme::size_subhead()).font_weight(FontWeight::SEMIBOLD).child(question.host.clone())),
             )
+            .children(question.retry_line().map(|line| div().text_color(theme::danger()).child(line)))
             .child(
                 div()
                     .text_color(theme::text_secondary())

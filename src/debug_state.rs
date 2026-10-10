@@ -133,15 +133,26 @@ impl Workspace {
     }
 
     fn window_state(&self) -> Value {
-        let modal = if self.server_dialog.is_some() {
-            Some("server_dialog")
-        } else if !self.asks.is_empty() {
+        // The one on top (main.rs draws them in this order).
+        let modal = if !self.asks.is_empty() {
             Some("ssh_prompt")
         } else if self.login_node_warning.is_some() {
             Some("login_node_warning")
+        } else if self.server_dialog.is_some() {
+            Some("server_dialog")
         } else {
             None
         };
+        let ssh_prompt = self.asks.front().map(|ask| {
+            let q = ask.question();
+            json!({
+                "host": q.host,
+                "kind": format!("{:?}", q.ask.kind).to_lowercase(),
+                "prompt": q.ask.prompt,
+                "retry_line": q.retry_line(),
+                "waiting": self.asks.len() - 1,
+            })
+        });
         let screen = match &self.setup {
             Some(_) if self.offline_since.is_none() && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
             Some(_) => "splash",
@@ -152,6 +163,7 @@ impl Workspace {
             "screen": screen,
             "setup": self.setup.as_ref().map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
             "modal": modal,
+            "ssh_prompt": ssh_prompt,
             "settings_open": self.settings_panel.is_some(),
             "menu_open": self.menu.is_some(),
             "menu": self.menu_state(),

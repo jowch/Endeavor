@@ -67,6 +67,7 @@ Deliberate simplifications with their upgrade path (search the code for
 | `transcript.rs` | long diffs are cut, not scrollable | real notebooks hit it |
 | runtime `view_cell_output` | no timeout when the worker is busy | a long run blocks it in practice |
 | `connection.rs` `open_line` | Reconnect on a server that dropped waits for the library's next try (up to 30 s apart) instead of trying at once; a server whose connection settings change gets a new listener port, so its sessions' agents need a restart | `client::Session` can be asked to try now, and can keep its port |
+| `server_dialog.rs` `drop_asks` | when a sign-in ends while another server's question waits behind it, that question comes to the front without the focus | two servers asking at once happens in practice |
 | `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download | an upgrade, or overlapping launches bite |
 
 Also noted: SIGTERM can leave Julia hung mid-exit. The helper stops a runtime

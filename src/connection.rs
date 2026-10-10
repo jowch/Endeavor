@@ -439,7 +439,7 @@ impl Workspace {
     fn open_line(&mut self, host: &HostId, server: &Server, cx: &mut Context<Self>) -> Result<(), String> {
         if let Some(line) = self.lines.get(host) {
             if same_connection(&line.server, server) {
-                line.declined.forget();
+                line.sign_in.forget();
                 let session = line.session.clone();
                 let status = session.status();
                 // ponytail: a line in its pause between tries isn't hurried (Session has no "try now"), so Reconnect waits for its next try.
@@ -455,10 +455,11 @@ impl Workspace {
                 }
                 return Ok(());
             }
-            self.close_line(host);
+            self.close_line(host, cx);
         }
         let (tx, rx) = futures::channel::mpsc::unbounded::<LineUpdate>();
-        let (asker, auth, declined) = remote::asker(server, self.questions_tx.clone())?;
+        let sign_in = remote::SignIn::default();
+        let (asker, auth) = remote::asker(server, self.questions_tx.clone(), sign_in.clone())?;
         let events = tx.clone();
         let session = Arc::new(remote::open(server, auth, Box::new(move |event| drop(events.unbounded_send(LineUpdate::Event(event)))))?);
         let closed: Arc<AtomicBool> = Arc::default();
@@ -480,7 +481,7 @@ impl Workspace {
             }
         });
         let generation = next_connect_id();
-        self.lines.insert(host.clone(), Line { session, _asker: asker, declined, server: server.clone(), closed, last: None, generation, held: None });
+        self.lines.insert(host.clone(), Line { session, _asker: asker, sign_in, server: server.clone(), closed, last: None, generation, held: None });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             let mut rx = rx;
@@ -499,8 +500,9 @@ impl Workspace {
     }
 
     /// Close `host`'s line, if it has one: the helper is let go, and Julia keeps running there.
-    fn close_line(&mut self, host: &HostId) {
+    fn close_line(&mut self, host: &HostId, cx: &mut Context<Self>) {
         if let Some(line) = self.lines.remove(host) {
+            let _ = self.drop_asks(line.sign_in.id, cx);
             drop(line.close());
         }
     }
@@ -519,7 +521,21 @@ impl Workspace {
                 let Some(line) = self.lines.get_mut(host) else { return };
                 let now = *now;
                 let last = line.last.replace(now.clone()).unwrap_or(LineStatus { state: LineState::Connecting, hello: None, ..now.clone() });
-                for change in changes(&last, &now) {
+                for mut change in changes(&last, &now) {
+                    if let Some(line) = self.lines.get(host) {
+                        match &mut change {
+                            // ssh is gone: its questions go with it, and the error shows instead.
+                            Change::ConnectFailed(why) => {
+                                let (source, ssh_host) = (line.sign_in.id, line.server.ssh_host.clone());
+                                if self.drop_asks(source, cx) {
+                                    *why = remote::gave_up(&ssh_host);
+                                }
+                            }
+                            // An answer that worked: a later question isn't a retry.
+                            Change::Connected(_) => line.sign_in.forget(),
+                            _ => {}
+                        }
+                    }
                     if self.hold(host, generation, &change, cx) {
                         continue;
                     }
@@ -1553,7 +1569,7 @@ impl Workspace {
         if let Some(channel) = connection.channel.take() {
             cx.background_executor().spawn(async move { channel.detach() }).detach();
         }
-        self.close_line(host);
+        self.close_line(host, cx);
         cx.notify();
     }
 
@@ -1719,8 +1735,9 @@ pub(crate) struct Line {
     session: Arc<client::Session>,
     /// ssh's prompts come through it while the session lives.
     _asker: client::Asker,
-    /// A sign-in the user cancelled (`remote::Declined`), forgotten when they connect again.
-    declined: remote::Declined,
+    /// Its ssh's sign-in: a Cancel, forgotten when the user connects again,
+    /// and the questions to take down when a connect fails (`remote::SignIn`).
+    sign_in: remote::SignIn,
     /// The server as the line was opened for it.
     server: Server,
     /// Set once the line is closed: its watcher stops.

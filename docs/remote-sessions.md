@@ -302,6 +302,15 @@ and relay the prompt, or embed `russh`. `russh` gives full control over
 prompts but has to reimplement config parsing, the agent, and ProxyJump, and
 has no Kerberos sign-in, which some clusters use.
 
+While its askpass waits for the user, ssh reads nothing from the server, so
+it can't see the server give up on the sign-in (sshd's `LoginGraceTime`). The
+app, run as the askpass, watches ssh's TCP connection (`src/askpass_watch.rs`:
+`/proc` on Linux, `lsof` on macOS, the TCP table on Windows). Once the server
+has closed it, the askpass exits without an answer, ssh fails, and the app
+takes the prompt down and says the server stopped waiting. Through a
+ProxyJump or ProxyCommand ssh holds no TCP socket of its own, so nothing is
+watched and the prompt stays up as before.
+
 ## Rejected alternatives
 
 - **An sshfs-style mount** so Claude's local tools see remote files. On macOS
