@@ -45,10 +45,11 @@ up**. Click **Choose** beside the one you have an account with:
 - **Codex**, by OpenAI, with your ChatGPT account.
 - **Antigravity**, by Google, with your Google account.
 
-Codex and Antigravity work in sessions on your computer only, not on servers.
-If you pick one of them, setup finishes once it is installed, and its sign-in
-card shows on **Start a session**. You can change the assistant later in
-Settings.
+Codex and Antigravity work in sessions on your computer only. If you pick one
+of them, setup finishes once it is installed, and its sign-in card shows on
+**Start a session**. A session on a server always uses Claude, so to work on a
+server you also need to sign in to Claude. You can change the assistant later
+in Settings.
 
 ## Sign in to Claude
 

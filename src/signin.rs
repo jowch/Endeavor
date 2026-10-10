@@ -567,6 +567,9 @@ impl Workspace {
     /// its card on the new-session screen; Claude's comes next, here.
     fn choose_assistant(&mut self, agent: Agent, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
+        if setup.agent != Some(agent) {
+            setup.back_to(crate::splash::Step::Agent);
+        }
         setup.agent = Some(agent);
         self.update_settings(cx, |s| s.agent = agent);
         self.draft.agent = agent;
@@ -598,6 +601,9 @@ impl Workspace {
                 false,
                 button(SharedString::from(format!("assistant-{}", facts.name.to_lowercase())), "Choose", Look::Secondary)
                     .aria_label(SharedString::from(format!("Choose {}", facts.name)))
+                    .track_focus(&self.dialog_focus(format!("assistant-{}", facts.name.to_lowercase()), cx))
+                    .tab_stop(true)
+                    .focus_ring()
                     .on_click(cx.listener(move |this, _, _, cx| this.choose_assistant(agent, cx))),
             )
             .into_any_element()

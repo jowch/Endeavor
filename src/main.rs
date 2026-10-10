@@ -1767,6 +1767,8 @@ impl Workspace {
                     }
                 }
             }
+            // On the setup screen, only the assistant picked moves the steps.
+            AgentEvent::Setup(_) if self.setup.as_ref().is_some_and(|s| s.agent.is_some_and(|a| a != agent)) => {}
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
@@ -2081,8 +2083,11 @@ impl Workspace {
     pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
-        let agent = setup.agent.unwrap_or_default();
-        self.restart_agent(agent, cx);
+        match setup.agent {
+            Some(agent) => self.restart_agent(agent, cx),
+            // Nothing picked yet: the step that failed is the runtime's (Julia's on Windows).
+            None => self.ensure_runtime(&HostId::ThisMac, cx),
+        }
     }
 
     /// What About Endeavor shows in its update strip.
@@ -2413,7 +2418,7 @@ impl Render for Workspace {
                 .on_action(cx.listener(Self::interrupt))
                 .on_action(cx.listener(Self::find_setting))
                 .child(div().track_focus(&self.keyboard_home))
-                .child(splash::render(setup, below, retry, change, cx))
+                .child(splash::render(setup, below, retry, change, &|id| self.dialog_focus(id, cx), cx))
                 .children(settings)
                 .children(confirm)
                 .into_any_element();

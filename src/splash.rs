@@ -10,6 +10,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::theme;
+use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
 use crate::turtle::{self, Gaze, Pose, ease, lerp};
 
@@ -122,6 +123,14 @@ impl Setup {
 
     pub fn fail(&mut self, error: String) {
         self.error = Some((error, Instant::now()));
+    }
+
+    /// Back to `step` if setup is past it: a new pick of assistant starts its steps over.
+    pub fn back_to(&mut self, step: Step) {
+        if self.step > step {
+            self.step = step;
+            self.fraction = None;
+        }
     }
 
     pub fn clear_error(&mut self) {
@@ -265,6 +274,7 @@ pub fn render(
     below: Below,
     retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     change: Option<impl Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
+    focus: &dyn Fn(&'static str) -> FocusHandle,
     cx: &App,
 ) -> Div {
     const BAR: f32 = 240.;
@@ -310,7 +320,21 @@ pub fn render(
                 .child(div().w_4().text_color(color).child(mark))
                 .child(div().when(step > setup.step, |d| d.text_color(muted)).child(step.label(setup.agent_name())))
         });
-        let button = |id: &'static str, label: &'static str| div().id(id).role(Role::Button).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).text_color(theme::text_primary()).button_text(label);
+        let button = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .role(Role::Button)
+                .track_focus(&focus(id))
+                .tab_stop(true)
+                .focus_ring()
+                .px_3()
+                .py_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .bg(theme::bg_raised())
+                .text_color(theme::text_primary())
+                .button_text(label)
+        };
         div()
             .mt(px(36.))
             .w(px(WIDE))
@@ -454,7 +478,7 @@ pub mod preview {
                 this.setup.clear_error();
                 cx.notify();
             });
-            div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(super::render(&self.setup, super::Below::Progress, retry, None::<fn(&ClickEvent, &mut Window, &mut App)>, cx))
+            div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(super::render(&self.setup, super::Below::Progress, retry, None::<fn(&ClickEvent, &mut Window, &mut App)>, &|_| cx.focus_handle(), cx))
         }
     }
 }
