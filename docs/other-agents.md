@@ -258,7 +258,7 @@ agent is cheapest to add.
 
 What is known already:
 
-- **Gemini CLI** speaks ACP itself. Installed here at `/opt/homebrew/bin/gemini`.
+- **Gemini CLI** speaks ACP itself.
 - **Codex** is answered in [codex-agent.md](codex-agent.md), and added. Its
   adapter is `@agentclientprotocol/codex-acp`; the older
   `@zed-industries/codex-acp` is deprecated.

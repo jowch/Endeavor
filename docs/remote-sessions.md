@@ -151,9 +151,9 @@ sends the launcher and the folder's name in the bootstrap's preamble.
 
 ```
 <state folder>/runtime.json   (mode 0600)
-{ "launcher": "process", "node": "labbox3", "pid": 81234, "job": "",
+{ "launcher": "process", "node": "lab-server", "pid": 81234, "job": "",
   "started": null, "port": 40211, "token": "…" }
-{ "launcher": "slurm", "job": "4812731", "node": "n2cn0216", "pid": 5120,
+{ "launcher": "slurm", "job": "4812731", "node": "node042", "pid": 5120,
   "started": null, "port": 40211, "token": "…" }
 ```
 
@@ -228,7 +228,7 @@ submits, waits and relays; Julia runs in a batch job.
   applies inside the job.
 - **Stop and end.** Stop asks the runtime to shut down through the relay,
   then runs `scancel`. When the job ends on its own, the app says why, from
-  `sacct` (or `squeue`, or the job's log): "Julia on hoffman2 stopped. Its
+  `sacct` (or `squeue`, or the job's log): "Julia on lab-cluster stopped. Its
   Slurm job reached its time limit." Likewise for preemption, cancellation,
   running out of memory, a failed node.
 
@@ -296,9 +296,12 @@ macOS or Linux doesn't break the connection.
 
 Password and two-factor prompts have no terminal to appear in. On macOS and
 Linux, use `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force` (OpenSSH 8.4 or
-later) to show them in the app. Windows askpass support has been unreliable
-across versions. If it fails, either drive `ssh` through a pseudo-terminal
-and relay the prompt, or embed `russh`. `russh` gives full control over
+later) to show them in the app. On Windows this works too: Windows 10's
+OpenSSH shows a password, a key's passphrase and a host-key question through
+the app with `SSH_ASKPASS_REQUIRE=force` (tried against a test server). A
+two-factor prompt such as Duo hasn't been tried on Windows. If it fails there,
+either drive `ssh` through a pseudo-terminal and relay the prompt, or embed
+`russh`. `russh` gives full control over
 prompts but has to reimplement config parsing, the agent, and ProxyJump, and
 has no Kerberos sign-in, which some clusters use.
 
@@ -321,8 +324,9 @@ has no Kerberos sign-in, which some clusters use.
 
 ## Open questions
 
-- Does current Windows 11 OpenSSH honor `SSH_ASKPASS_REQUIRE=force` with a
-  Duo account? Test before choosing between system `ssh` and `russh`.
+- Does Windows OpenSSH show a Duo or other two-factor prompt through the
+  askpass? Passwords, passphrases and host keys work on Windows 10; test a
+  two-factor account before choosing between system `ssh` and `russh`.
 
 ## Prior art
 
