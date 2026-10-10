@@ -10,6 +10,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::theme;
+use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
 use crate::turtle::{self, Gaze, Pose, ease, lerp};
 
@@ -32,33 +33,34 @@ impl Step {
     #[cfg(not(windows))]
     pub const ALL: [Step; 3] = [Step::Runtime, Step::Agent, Step::Claude];
 
-    pub fn label(self) -> &'static str {
+    /// `agent` names the assistant picked ("Claude agent", "Connecting to Codex").
+    pub fn label(self, agent: &str) -> String {
         match self {
             #[cfg(windows)]
-            Step::Julia => "Julia",
-            Step::Runtime => "Notebook runtime",
-            Step::Agent => "Claude agent",
-            Step::Claude => "Connecting to Claude",
+            Step::Julia => "Julia".into(),
+            Step::Runtime => "Notebook runtime".into(),
+            Step::Agent => format!("{agent} agent"),
+            Step::Claude => format!("Connecting to {agent}"),
         }
     }
 
-    fn doing(self) -> &'static str {
+    fn doing(self, agent: &str) -> String {
         match self {
             #[cfg(windows)]
-            Step::Julia => "Setting up Julia",
-            Step::Runtime => "Starting the notebook runtime",
-            Step::Agent => "Setting up the Claude agent",
-            Step::Claude => "Connecting to Claude",
+            Step::Julia => "Setting up Julia".into(),
+            Step::Runtime => "Starting the notebook runtime".into(),
+            Step::Agent => format!("Setting up the {agent} agent"),
+            Step::Claude => format!("Connecting to {agent}"),
         }
     }
 
-    fn failed(self) -> &'static str {
+    fn failed(self, agent: &str) -> String {
         match self {
             #[cfg(windows)]
-            Step::Julia => "Couldn't set up Julia.",
-            Step::Runtime => "Couldn't start the notebook runtime.",
-            Step::Agent => "Couldn't set up the Claude agent.",
-            Step::Claude => "Couldn't connect to Claude.",
+            Step::Julia => "Couldn't set up Julia.".into(),
+            Step::Runtime => "Couldn't start the notebook runtime.".into(),
+            Step::Agent => format!("Couldn't set up the {agent} agent."),
+            Step::Claude => format!("Couldn't connect to {agent}."),
         }
     }
 }
@@ -86,11 +88,13 @@ pub struct Setup {
     error: Option<(String, Instant)>,
     /// The intro plays from here.
     shown: Instant,
+    /// The assistant picked on this screen; until then the choice shows.
+    pub agent: Option<crate::agent::Agent>,
 }
 
 impl Default for Setup {
     fn default() -> Self {
-        Self { step: Step::ALL[0], fraction: None, error: None, shown: Instant::now() }
+        Self { step: Step::ALL[0], fraction: None, error: None, shown: Instant::now(), agent: None }
     }
 }
 
@@ -121,12 +125,25 @@ impl Setup {
         self.error = Some((error, Instant::now()));
     }
 
+    /// Back to `step` if setup is past it: a new pick of assistant starts its steps over.
+    pub fn back_to(&mut self, step: Step) {
+        if self.step > step {
+            self.step = step;
+            self.fraction = None;
+        }
+    }
+
     pub fn clear_error(&mut self) {
         self.error = None;
     }
 
     pub fn failed(&self) -> bool {
         self.error.is_some()
+    }
+
+    /// The assistant's name for the steps: the one picked, else Claude.
+    pub fn agent_name(&self) -> &'static str {
+        self.agent.unwrap_or_default().name()
     }
 
     /// The step under way, or the one that failed.
@@ -250,8 +267,16 @@ pub enum Below {
     Card(AnyElement),
 }
 
-/// `retry` restarts the failed step.
-pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, cx: &App) -> Div {
+/// `retry` restarts the failed step; `change`, when the assistant's own step
+/// failed, goes back to the choice of assistant.
+pub fn render(
+    setup: &Setup,
+    below: Below,
+    retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    change: Option<impl Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
+    focus: &dyn Fn(&'static str) -> FocusHandle,
+    cx: &App,
+) -> Div {
     const BAR: f32 = 240.;
     const WIDE: f32 = 360.;
     const PANEL: f32 = 376.;
@@ -273,7 +298,7 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
         .items_center()
         .gap(px(10.))
         .opacity(tagline_in)
-        .child(div().text_size(theme::size_meta()).text_color(muted).child(format!("{} · {n} of {}", setup.step.doing(), Step::ALL.len())))
+        .child(div().text_size(theme::size_meta()).text_color(muted).child(format!("{} · {n} of {}", setup.step.doing(setup.agent_name()), Step::ALL.len())))
         .child(
             div()
                 .w(px(BAR))
@@ -293,9 +318,23 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
                 .flex()
                 .gap_2()
                 .child(div().w_4().text_color(color).child(mark))
-                .child(div().when(step > setup.step, |d| d.text_color(muted)).child(step.label()))
+                .child(div().when(step > setup.step, |d| d.text_color(muted)).child(step.label(setup.agent_name())))
         });
-        let button = |id: &'static str, label: &'static str| div().id(id).role(Role::Button).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).text_color(theme::text_primary()).button_text(label);
+        let button = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .role(Role::Button)
+                .track_focus(&focus(id))
+                .tab_stop(true)
+                .focus_ring()
+                .px_3()
+                .py_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .bg(theme::bg_raised())
+                .text_color(theme::text_primary())
+                .button_text(label)
+        };
         div()
             .mt(px(36.))
             .w(px(WIDE))
@@ -308,7 +347,7 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(setup.step.failed())
+                    .child(setup.step.failed(setup.agent_name()))
                     .child(div().text_size(theme::size_meta()).text_color(muted).child(error.clone()))
                     .child(div().text_size(theme::size_meta()).text_color(muted).child("Check your connection and retry, or see the logs.")),
             )
@@ -317,7 +356,8 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
                     .flex()
                     .gap_2()
                     .child(button("retry-setup", "Retry").bg(theme::accent()).text_color(gpui::white()).on_click(retry))
-                    .child(button("setup-logs", "Show logs").on_click(|_, _, _| crate::logs::reveal())),
+                    .child(button("setup-logs", "Show logs").on_click(|_, _, _| crate::logs::reveal()))
+                    .children(change.map(|change| button("setup-change-assistant", "Choose another assistant").on_click(change))),
             )
     });
     // The night sky is a band over the steps: dark in both appearances, while
@@ -438,7 +478,7 @@ pub mod preview {
                 this.setup.clear_error();
                 cx.notify();
             });
-            div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(super::render(&self.setup, super::Below::Progress, retry, cx))
+            div().size_full().bg(theme::bg_page()).text_color(theme::text_primary()).text_size(theme::size_body()).child(super::render(&self.setup, super::Below::Progress, retry, None::<fn(&ClickEvent, &mut Window, &mut App)>, &|_| cx.focus_handle(), cx))
         }
     }
 }

@@ -28,12 +28,11 @@ sign-in, the same one as the `codex` command. When you're not signed in, its
 row has **Sign in**, which opens ChatGPT's sign-in page in your browser, and
 **Check again**, for after you sign in with `codex login` in a terminal.
 
-**Antigravity**, by Google, works in sessions on your computer, on Windows
-for now. It uses your Google account. When you're not signed in, its row has
-**Sign in**, which opens Google's sign-in page in your browser. Unlike
-Claude in Endeavor, Antigravity can read any file on your computer without
-asking; its commands still ask first. On a Mac or Linux it is listed as
-**Not available yet**.
+**Antigravity**, by Google, works in sessions on your computer. It uses your
+Google account. When you're not signed in, its row has **Sign in**, which
+opens Google's sign-in page in your browser. Unlike Claude in Endeavor,
+Antigravity can read any file on your computer without asking; its commands
+still ask first.
 
 Cursor is listed as **Not available yet**.
 

@@ -10,7 +10,9 @@ notebook with a plot in it.
 
 ## Let Endeavor set itself up
 
-Open Endeavor. The first time, a setup window shows three steps:
+Open Endeavor. The first time, a setup window asks which assistant to use
+(see [Choose your assistant](#choose-your-assistant)), then shows three
+steps, named after the assistant you picked:
 
 1. **Notebook runtime**
 2. **Claude agent**
@@ -18,8 +20,8 @@ Open Endeavor. The first time, a setup window shows three steps:
 
 On Windows, **Julia** comes first, as a fourth step. A progress line under
 the turtle shows the current step, for example "Setting up the Claude agent ·
-2 of 3". Setting up the agent downloads Node.js and Claude Code, so it can
-take a minute or two. [What Endeavor installs](./overview.md#what-endeavor-installs-on-first-launch)
+2 of 3". Setting up the agent downloads it (for Claude or Codex, Node.js
+too), so it can take a minute or two. [What Endeavor installs](./overview.md#what-endeavor-installs-on-first-launch)
 lists every download.
 
 Julia isn't part of setup on a Mac or Linux. It's installed the first time you
@@ -28,15 +30,30 @@ open a Julia notebook: the notebook pane shows the turtle and each step
 takes a few minutes that one time.
 
 If a step fails, the window shows which one, with the reason. Click **Retry**
-to try that step again, or **Show logs** to see what happened. If you're
-offline, setup pauses under **No internet connection** and goes on by itself
+to try that step again, or **Show logs** to see what happened. If the
+assistant's own step fails, **Choose another assistant** takes you back to
+the choice. If you're offline, setup pauses under **No internet connection** and goes on by itself
 when you're back online.
+
+## Choose your assistant
+
+Endeavor uses your own account with an AI assistant to answer you. Setup
+starts by asking which one, under **Choose your assistant to finish setting
+up**. Click **Choose** beside the one you have an account with:
+
+- **Claude**, by Anthropic. You sign in next, as below.
+- **Codex**, by OpenAI, with your ChatGPT account.
+- **Antigravity**, by Google, with your Google account.
+
+Codex and Antigravity work in sessions on your computer only. If you pick one
+of them, setup finishes once it is installed, and its sign-in card shows on
+**Start a session**. A session on a server always uses Claude, so to work on a
+server you also need to sign in to Claude. You can change the assistant later
+in Settings.
 
 ## Sign in to Claude
 
-Endeavor uses your own Claude account to answer you. During setup, under
-**Sign in to finish setting up**, it first asks you to choose an assistant.
-Claude is the only one available today. Click **Continue**.
+If you picked Claude, setup asks you to sign in.
 
 ![The "Sign in to Claude" screen, with the two kinds of account to choose from](images/sign-in.png)
 

@@ -533,7 +533,8 @@ impl Workspace {
         if self.offline_since.is_some() {
             return (Some(StatusMark::Offline), "Offline · reconnects by itself".into());
         }
-        if self.account.signed_out() {
+        // Only for someone using Claude: a Codex or Antigravity user needn't sign in to it.
+        if self.account.signed_out() && (self.settings.agent == crate::agent::Agent::Claude || self.sessions.iter().any(|s| s.agent == crate::agent::Agent::Claude)) {
             return (Some(StatusMark::SignedOut), "Signed out of Claude.".into());
         }
         for agent in crate::agent::Agent::ALL {

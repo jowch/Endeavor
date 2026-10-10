@@ -170,14 +170,16 @@ impl Workspace {
         });
         let screen = match &self.setup {
             _ if self.missing_files.is_some() => "missing_files",
-            Some(_) if self.offline_since.is_none() && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
+            // The choice of assistant, or Claude's sign-in once Claude is picked.
+            Some(s) if self.offline_since.is_none() && s.agent.is_none() => "sign_in",
+            Some(s) if self.offline_since.is_none() && s.agent == Some(crate::agent::Agent::Claude) && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
             Some(_) => "splash",
             None if self.active.is_some() => "session",
             None => "new_session",
         };
         json!({
             "screen": screen,
-            "setup": self.setup.as_ref().filter(|_| self.missing_files.is_none()).map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
+            "setup": self.setup.as_ref().filter(|_| self.missing_files.is_none()).map(|s| json!({ "step": s.step().label(s.agent_name()), "assistant": s.agent.map(|a| a.name()), "failed": s.failed(), "offline": self.offline_since.is_some() })),
             "missing_files": self.missing_files,
             "modal": modal,
             "ssh_prompt": ssh_prompt,
@@ -194,14 +196,13 @@ impl Workspace {
             Account::SignedOut(stage) => stage,
         };
         let stage = match stage {
-            Stage::Assistant => "choose_assistant",
             Stage::Account => "choose_account",
             Stage::Expired => "expired",
             Stage::Waiting(_) => "waiting_for_browser",
             Stage::Failed { .. } => "failed",
         };
         // The card above the composer: not on the setup screen, nor while offline.
-        let card = self.setup.is_none() && self.offline_since.is_none() && stage != "choose_assistant";
+        let card = self.setup.is_none() && self.offline_since.is_none();
         json!({ "account": "signed_out", "stage": stage, "card": card })
     }
 

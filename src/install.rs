@@ -216,7 +216,15 @@ fn version_of(name: &str) -> Option<Vec<u64>> {
 
 #[cfg(unix)]
 fn unpack(tarball: &Path, into: &Path) -> Result<std::process::ExitStatus, String> {
-    Command::new("tar").arg("-xzf").arg(tarball).arg("-C").arg(into).status().map_err(|e| e.to_string())
+    let zip = tarball.to_string_lossy().ends_with(".zip.part");
+    // GNU tar can't read a zip; the Mac's bsdtar can, keeping the programs' modes.
+    if zip && cfg!(target_os = "linux") {
+        return Command::new("unzip").arg("-q").arg(tarball).arg("-d").arg(into).status().map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => "unzip isn't installed. Install it (for example `sudo apt install unzip`), then try again.".to_owned(),
+            _ => format!("Couldn't run unzip: {e}"),
+        });
+    }
+    Command::new("tar").arg(if zip { "-xf" } else { "-xzf" }).arg(tarball).arg("-C").arg(into).status().map_err(|e| e.to_string())
 }
 
 #[cfg(windows)]
@@ -286,6 +294,35 @@ mod tests {
         let good = tmp.join("app/good");
         tarball(&good, "Thing", "thing-1.0", (&url, &sha, size), &|_, _| {}).unwrap();
         assert!(good.join("bin/thing").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A zip with its files at the top, as Antigravity's are: unpacked with an
+    /// empty `top`, its program still runnable.
+    #[test]
+    #[cfg(unix)]
+    fn installs_a_zip_and_keeps_its_programs_runnable() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("endeavor-install-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let program = src.join("server.par");
+        std::fs::write(&program, "#!/bin/sh\necho ok\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(src.join("helper"), "").unwrap();
+        let archive = tmp.join("server.zip");
+        assert!(Command::new("zip").arg("-q").arg(&archive).arg("server.par").arg("helper").current_dir(&src).status().unwrap().success());
+        let sha = sha256_of(&archive).unwrap();
+        let url = format!("file://{}", archive.display());
+        let size = std::fs::metadata(&archive).unwrap().len();
+
+        let dir = tmp.join("app/server-1.0");
+        tarball(&dir, "Server", "", (&url, &sha, size), &|_, _| {}).unwrap();
+        assert!(dir.join("helper").exists());
+        let mode = std::fs::metadata(dir.join("server.par")).unwrap().permissions().mode();
+        assert!(mode & 0o111 != 0, "lost its executable bit: {mode:o}");
+        assert_eq!(Command::new(dir.join("server.par")).output().unwrap().stdout, b"ok\n");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
