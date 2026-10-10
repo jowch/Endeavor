@@ -686,7 +686,7 @@ impl Workspace {
             .children(rows)
     }
 
-    /// The connection notice's text ("Julia on hoffman2 stopped. …"), and why it stopped.
+    /// The connection notice's text ("Julia on lab-cluster stopped. …"), and why it stopped.
     pub fn connection_notice_text(&self) -> Option<(String, String)> {
         let name = self.hosts.name(&self.draft.host);
         match self.status(&self.draft.host)? {

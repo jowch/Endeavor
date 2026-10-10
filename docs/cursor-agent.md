@@ -108,8 +108,6 @@ In order of importance:
      that start with "[Endeavor]", so a reopened message with a chip loses the
      user's words. Replay should split the chunk on the "[Endeavor]" and
      `<attached …>` markers.
-   - **Claude named in the UI.** "Claude connected." and "Fix with Claude" are
-     hard-coded.
    - **Commands.** `available_commands_update` lists about 30 commands,
      including personal skills.
    - **Leftovers on the user's machine.** Each session leaves a folder in
@@ -119,16 +117,18 @@ In order of importance:
 
 ## Order of work when it resumes
 
-1. **The rest of the agent-neutral work** ([other-agents.md](other-agents.md)
-   items 5 to 9): per-agent facts in one table in `agent.rs` (launch
-   command, sign-in check, session `_meta`, the name shown in the UI), one
-   ACP connection per agent, a per-agent saved model, and replay that splits
-   joined messages.
-2. **An agent picker on the new-session panel.**
-3. **Cursor-specific handling.**
+The agent-neutral work it waited on is done: per-agent facts in one table in
+`agent.rs`, one ACP connection per agent, a per-agent saved model, the agent
+named in the UI from that table, and an agent choice on the new-session
+screen ([other-agents.md](other-agents.md) items 5 to 7 and 9). What is left:
+
+1. **Replay that splits joined messages** ([other-agents.md](other-agents.md)
+   item 8), needed only for Cursor.
+2. **Cursor-specific handling.**
    - Auto-approve read-only notebook tools.
    - Show `cursor/create_plan` as a plan-approval card.
-   - A model picker that warns it changes the Cursor CLI default.
+   - A model picker that warns it changes the Cursor CLI default, and no
+     re-applying the last model to a new Cursor session.
 
 ## Testing note
 

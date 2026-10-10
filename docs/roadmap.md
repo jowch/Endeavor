@@ -5,7 +5,7 @@ Living plan; update it as items land. Design rationale lives in
 [design-notes.md](design-notes.md). Open design gaps are in
 [design-gaps.md](design-gaps.md).
 
-_Last updated: 2026-10-09_
+_Last updated: 2026-10-10_
 
 ## Where things stand
 
@@ -36,7 +36,16 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 
 - **Signing and notarization.** `scripts/bundle.sh` builds an ad-hoc signed
   `Endeavor.app` (resources in `Contents/Resources`); sharing it needs a
-  Developer ID signature, hardened runtime, and notarization.
+  Developer ID signature, hardened runtime, and notarization. The Windows
+  build isn't signed either.
+- **A release pipeline** ([#13](https://github.com/jowch/Endeavor/issues/13)).
+  CI keeps a Windows build and installer to try; the Mac build isn't kept,
+  and nothing is published as a release yet.
+- **Updates** ([#15](https://github.com/jowch/Endeavor/issues/15)). The app
+  can't update itself or check for a newer version, so Check now is hidden.
+- **The Windows installer** ([#12](https://github.com/jowch/Endeavor/issues/12)):
+  a per-user installer that adds WebView2 if it's missing. CI builds it; it
+  is unsigned and has been tried on one Windows machine.
 
 ## Later
 
@@ -61,16 +70,28 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 
 ## Known shortcuts
 
-Deliberate simplifications with their upgrade path (search the code for
-`ponytail:`).
+Deliberate simplifications with their upgrade path, marked `ponytail:` in the
+code. This is all of them; add a row with each new marker. The runtime's own
+shortcuts are EndeavorMCP's, in its
+[gaps.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/gaps.md); the
+two this list used to carry (`view_cell_output` has no timeout while the
+worker is busy, and SIGTERM can leave Julia hung mid-exit) are
+[EndeavorMCP #62](https://github.com/jowch/EndeavorMCP/issues/62).
 
 | Where | Shortcut | Upgrade when |
 |---|---|---|
 | `transcript.rs` | long diffs are cut, not scrollable | real notebooks hit it |
-| runtime `view_cell_output` | no timeout when the worker is busy | a long run blocks it in practice |
+| `frontend/src/diff.ts` | the page's diff is an O(n·m) table; when the two versions' line counts multiply past 250,000, no diff is shown | big cells need a diff |
 | `connection.rs` `open_line` | Reconnect on a server that dropped waits for the library's next try (up to 30 s apart) instead of trying at once; a server whose connection settings change gets a new listener port, so its sessions' agents need a restart | `client::Session` can be asked to try now, and can keep its port |
-| `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download | an upgrade, or overlapping launches bite |
-
-Also noted: SIGTERM can leave Julia hung mid-exit. The helper stops a runtime
-with the bridge's `endeavor/shutdown` first and only falls back to SIGTERM,
-then SIGKILL after a grace period.
+| `connection.rs` idle limit | a failed send leaves the runtime on its default idle stop (48 hours) until the next start | it fails in practice |
+| `main.rs` `send_binding`, `follow_folder`, `send_policy` | sends to the runtime are fire and forget: a failed one leaves the session unbound until it opens, Pluto suggesting the previous folder, or the run policy stale until the next change | a failed send is seen |
+| `main.rs` `check_run_state` | the run-state note warns about every open notebook on the host, not only the session's | it confuses someone |
+| `agent.rs` session list | only the first page of a folder's past sessions is listed | a folder's history outgrows a page |
+| `agent.rs` mode, close, delete | sent fire and forget; the agent confirms a mode change itself, and a failed close or delete leaves the file behind | it bites |
+| `main.rs` `save_json_at`, `settings.rs`, `transcript_copy.rs` | small files are saved best effort: a failed save keeps the last good file (`write_atomic`) and loses only that change; without a transcript copy a session opens on its summary | a lost change is seen |
+| `main.rs` `write_atomic` | `sync_all` runs on the caller's thread, the UI thread for most saves | a save on a hot path |
+| `main.rs` context ring | arcs drawn as 48-segment polylines | it looks faceted |
+| `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
+| `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
+| `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
+| `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns), and the build has no server helpers | the installer is shared (#12) |

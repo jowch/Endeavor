@@ -91,7 +91,9 @@ Julia install by default. Opt-in: the user points at their own `julia`
 binary.
 
 - **Install on first run, not bundled.** Download the official Julia tarball
-  to `~/Library/Application Support/endeavor/julia-<ver>/`, verified against a
+  to `julia-<ver>/` in the app's data folder (`~/Library/Application
+  Support/endeavor` on macOS, `~/.local/share/endeavor` on Linux,
+  `%LOCALAPPDATA%\Endeavor` on Windows), verified against a
   SHA-256 pinned in the app. Avoids ~500MB `.app` bloat and signing/notarizing
   every Julia dylib inside the bundle.
 - **Private, stacked depot.** `JULIA_DEPOT_PATH=<app>/depot:` — writes go to
@@ -107,8 +109,9 @@ binary.
 - **Topology.** The `endeavor` helper starts the runtime's core, which
   serves the bridge (the agent's MCP over Streamable HTTP, and the app's
   `/call` and `/events`) and starts Julia running Pluto as its child. The
-  core writes the ports, token and Pluto's secret to `runtime.json`, which
-  the helper reads ([remote-sessions.md](remote-sessions.md),
+  core writes its port, token and pid to `runtime.json`, which the helper
+  reads; Pluto's port and secret stay between the core and Julia, in
+  `julia.json` ([remote-sessions.md](remote-sessions.md),
   [runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)). The app is a client of the same
   bridge, so it sees what the agent's tools do.
 - **Lifetime.** The runtime runs detached, started by the helper, which the

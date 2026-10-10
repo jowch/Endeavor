@@ -2,7 +2,8 @@
 
 Design for adding marimo (reactive Python notebooks) as a second notebook
 backend next to Pluto. The app-side boundary (build step 1) is built;
-nothing marimo-specific is.
+nothing marimo-specific is. The rest waits until after Ember (R notebooks),
+which goes first as the second engine behind EndeavorMCP's core.
 
 _Drafted 2026-09-26, against marimo 0.25.0 (released 2026-09-23)_
 

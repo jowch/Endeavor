@@ -15,7 +15,7 @@ Claude and Endeavor stay on your Mac, as with a [server](./servers.md).
 ## What you need
 
 - You can sign in to the cluster's login node from Terminal on your Mac, for
-  example with `ssh hoffman2`.
+  example with `ssh lab-cluster`.
 - The cluster uses Slurm, and you can submit jobs there.
 
 ## Add a cluster
@@ -77,17 +77,17 @@ you:
 
 - The notebook's header shows when the job ends, such as "Job ends 18:40".
   It turns orange in the last 15 minutes.
-- At 15 minutes, the chat says: "The cluster job running Julia on hoffman2
+- At 15 minutes, the chat says: "The cluster job running Julia on lab-cluster
   ends at 18:40 (in 15 min), and its notebooks stop then. The notebook file
   is already saved; Start Julia afterwards runs it in a new job."
 
-When the job ends, Endeavor says why, for example "Julia on hoffman2
+When the job ends, Endeavor says why, for example "Julia on lab-cluster
 stopped. Its Slurm job reached its time limit." Other reasons are that the
 cluster preempted the job, the job was cancelled, it ran out of memory, or
 its node failed.
 
 The notebook file is saved on the cluster. To go on, click **Start on
-hoffman2** in the notebook pane.
+lab-cluster** in the notebook pane.
 Endeavor submits a new job and runs the notebook from the top. If a job keeps
 running out of time or memory, choose bigger resources before you start it.
 

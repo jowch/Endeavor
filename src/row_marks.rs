@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn one_mark_strongest_first() {
         let all =
-            RowFacts { needs_you: true, error: true, working: true, agent: "Claude", new_reply: true, server_down: Some("hoffman2".into()), waiting: waiting(2), mac_offline: false };
+            RowFacts { needs_you: true, error: true, working: true, agent: "Claude", new_reply: true, server_down: Some("lab-cluster".into()), waiting: waiting(2), mac_offline: false };
         assert_eq!(row_mark(&all), Some(RowMark::NeedsYou));
         let f = RowFacts { needs_you: false, ..all };
         assert_eq!(row_mark(&f), Some(RowMark::Error));
@@ -121,7 +121,7 @@ mod tests {
         let f = RowFacts { working: false, ..f };
         assert_eq!(row_mark(&f), Some(RowMark::NewReply));
         let f = RowFacts { new_reply: false, ..f };
-        assert_eq!(row_mark(&f), Some(RowMark::ServerDown { host: "hoffman2".into() }));
+        assert_eq!(row_mark(&f), Some(RowMark::ServerDown { host: "lab-cluster".into() }));
         let f = RowFacts { server_down: None, ..f };
         assert_eq!(row_mark(&f), Some(RowMark::Waiting { count: 2, until: "Claude is back".into() }));
         let f = RowFacts { waiting: waiting(0), ..f };
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn offline_rows_show_nothing_extra() {
-        let f = RowFacts { server_down: Some("hoffman2".into()), waiting: waiting(2), mac_offline: true, ..Default::default() };
+        let f = RowFacts { server_down: Some("lab-cluster".into()), waiting: waiting(2), mac_offline: true, ..Default::default() };
         assert_eq!(row_mark(&f), None);
         let f = RowFacts { needs_you: true, mac_offline: true, ..Default::default() };
         assert_eq!(row_mark(&f), Some(RowMark::NeedsYou));
@@ -160,8 +160,8 @@ mod tests {
         assert_eq!(RowMark::Working { agent: "Claude" }.words(), "Claude is working");
         assert_eq!(RowMark::Working { agent: "Claude" }.label("Decay fit"), "Decay fit, Claude is working");
         assert_eq!(RowMark::NewReply.words(), "New reply");
-        assert_eq!(RowMark::ServerDown { host: "hoffman2".into() }.words(), "hoffman2 isn't reachable");
-        assert_eq!(RowMark::Waiting { count: 2, until: "hoffman2 is back".into() }.words(), "2 messages wait to send once hoffman2 is back");
+        assert_eq!(RowMark::ServerDown { host: "lab-cluster".into() }.words(), "lab-cluster isn't reachable");
+        assert_eq!(RowMark::Waiting { count: 2, until: "lab-cluster is back".into() }.words(), "2 messages wait to send once lab-cluster is back");
         assert_eq!(RowMark::Waiting { count: 1, until: "Claude is back".into() }.words(), "1 message waits to send once Claude is back");
         assert_eq!(RowMark::NeedsYou.label("Residual plots"), "Residual plots, waiting for your answer");
         assert_eq!(RowMark::ServerDown { host: "Lab".into() }.label("Logistic growth"), "Logistic growth, Lab isn't reachable");
