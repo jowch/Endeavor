@@ -21,6 +21,7 @@ use crate::runs;
 use crate::session::{Approval, Entry, Failed, FailedKind, Session, cell_label, file_name, file_path};
 use crate::signin::Look;
 use crate::theme;
+use crate::theme::TextButton as _;
 
 /// A run-state warning as the transcript shows it.
 pub(crate) fn run_state_line(warning: &pluto::RunWarning) -> String {
@@ -275,11 +276,12 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .child(
                     div()
                         .id(id("user-fold"))
+                        .role(Role::Button)
                         .cursor_pointer()
                         .text_size(theme::chat_meta())
                         .text_color(muted)
                         .hover(|s| s.text_color(theme::text_primary()))
-                        .child(if *expanded { "Show less" } else { "Show more" })
+                        .button_text(if *expanded { "Show less" } else { "Show more" })
                         .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.toggle(ix)))),
                 )
                 .children(delivered)
@@ -443,6 +445,7 @@ fn markdown(state: &Entity<TextViewState>) -> TextView {
         let code = block.code().to_string();
         div()
             .id("copy")
+            .role(Role::Button)
             .px(px(6.))
             .py(px(2.))
             .rounded(px(4.))
@@ -461,7 +464,8 @@ fn markdown(state: &Entity<TextViewState>) -> TextView {
             .opacity(0.)
             .group_hover(MESSAGE, |s| s.opacity(1.))
             .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
-            .child("Copy")
+            .button_text("Copy")
+            .aria_label("Copy code")
             .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(code.clone())))
     })
 }

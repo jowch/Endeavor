@@ -18,6 +18,7 @@ use crate::agent::{Agent, SignIn};
 use crate::new_session::{Glyph, glyph, glyph_at};
 use crate::theme;
 use crate::theme::FocusRing as _;
+use crate::theme::TextButton as _;
 
 /// The two kinds of Claude account the CLI signs in with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,13 +289,15 @@ pub enum Look {
 }
 
 pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, look: Look) -> Stateful<Div> {
-    button_frame(id, look).child(label.into())
+    button_frame(id, look).button_text(label)
 }
 
-/// A button to put an icon and a label in.
+/// A button to put an icon and a label in. It has the button role but no
+/// name: give it one with `button_text` or `aria_label`.
 pub fn button_frame(id: impl Into<ElementId>, look: Look) -> Stateful<Div> {
     div()
         .id(id)
+        .role(Role::Button)
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -322,6 +325,7 @@ pub fn button_frame(id: impl Into<ElementId>, look: Look) -> Stateful<Div> {
 fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
+        .role(Role::Link)
         .flex()
         .items_center()
         .gap(px(4.))
@@ -329,7 +333,7 @@ fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
         .text_size(theme::size_meta())
         .text_color(theme::accent_text())
         .hover(|s| s.underline())
-        .child(label)
+        .button_text(label)
 }
 
 fn title(text: impl IntoElement) -> Div {
@@ -597,7 +601,6 @@ impl Workspace {
                         .child(
                             div().flex().child(
                                 link("sign-in-settings", "Settings")
-                                    .role(Role::Link)
                                     .aria_label("Open Settings at Assistants")
                                     .line_height(px(17.))
                                     .track_focus(&self.dialog_focus("sign-in-settings", cx))
@@ -647,6 +650,7 @@ impl Workspace {
         let back = div().mt(px(-6.)).mb(px(-6.)).child(
             div()
                 .id("sign-in-back")
+                .role(Role::Button)
                 .flex()
                 .items_center()
                 .gap(px(2.))
@@ -660,7 +664,7 @@ impl Workspace {
                 .text_color(theme::text_new())
                 .hover(|s| s.bg(theme::row_active()))
                 .child(glyph(Glyph::Back, theme::text_new()))
-                .child("Back")
+                .button_text("Back")
                 .on_click(cx.listener(|this, _, _, cx| {
                     let back = if this.setup.is_some() { Stage::Assistant } else { Stage::Expired };
                     this.set_stage(back, cx);
@@ -677,7 +681,7 @@ impl Workspace {
                     "A Claude plan",
                     "Pro, Max, Team or Enterprise. You pay monthly and chat with Claude at claude.ai.",
                     true,
-                    button("sign-in-claude", "Sign in", Look::Primary).on_click(cx.listener(|this, _, _, cx| this.begin_sign_in(Method::ClaudeAi, cx))),
+                    button("sign-in-claude", "Sign in", Look::Primary).aria_label("Sign in with a Claude plan").on_click(cx.listener(|this, _, _, cx| this.begin_sign_in(Method::ClaudeAi, cx))),
                 )
                 .into_any_element(),
             ),
@@ -686,7 +690,7 @@ impl Workspace {
                     "An Anthropic Console account",
                     "You or your lab pay for what you use, at console.anthropic.com. Often set up by a lab or company.",
                     false,
-                    button("sign-in-console", "Sign in", Look::Secondary).on_click(cx.listener(|this, _, _, cx| this.begin_sign_in(Method::Console, cx))),
+                    button("sign-in-console", "Sign in", Look::Secondary).aria_label("Sign in with an Anthropic Console account").on_click(cx.listener(|this, _, _, cx| this.begin_sign_in(Method::Console, cx))),
                 )
                 .into_any_element(),
             ),
@@ -730,6 +734,8 @@ impl Workspace {
         let toggle = (!detail.is_empty()).then(|| {
             div()
                 .id("sign-in-details")
+                .role(Role::Button)
+                .aria_label(if details { "Hide details" } else { "Details" })
                 .flex()
                 .items_center()
                 .gap(px(3.))
@@ -759,7 +765,7 @@ impl Workspace {
                     .child(
                         button_frame("sign-in-retry", Look::Primary)
                             .child(glyph(Glyph::Restart, gpui::white().into()))
-                            .child("Try again")
+                            .button_text("Try again")
                             .on_click(cx.listener(move |this, _, _, cx| this.begin_sign_in(method, cx))),
                     )
                     .children(other)
@@ -832,7 +838,7 @@ impl Workspace {
                         .child(
                             row()
                                 .child(button("sign-in-another", "Use another account", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.set_stage(Stage::Account, cx))))
-                                .child(button("sign-in-again", "Sign in", Look::Primary).child(hint("↵")).on_click(cx.listener(move |this, _, _, cx| this.begin_sign_in(last, cx)))),
+                                .child(button("sign-in-again", "Sign in", Look::Primary).aria_keyshortcuts("Enter").child(hint("↵")).on_click(cx.listener(move |this, _, _, cx| this.begin_sign_in(last, cx)))),
                         )
                 }
                 Stage::Waiting(login) => card(false)
@@ -844,6 +850,7 @@ impl Workspace {
                             .child(button("sign-in-reopen", "Open it again", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.open_sign_in_again(cx))))
                             .child(
                                 button("sign-in-cancel", "Cancel", Look::Plain)
+                                    .aria_keyshortcuts("Escape")
                                     .child(div().text_size(theme::size_meta_small()).text_color(theme::text_muted()).child("esc"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.cancel_sign_in(cx);
