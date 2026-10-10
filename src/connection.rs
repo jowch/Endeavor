@@ -1900,7 +1900,7 @@ fn runtime_of(runtime: client::RuntimeInfo) -> Runtime {
 /// The same connection to a server: a change in anything else (its name, its
 /// idle stop) keeps the line open.
 fn same_connection(a: &Server, b: &Server) -> bool {
-    (&a.ssh_host, a.port, &a.julia, &a.cluster) == (&b.ssh_host, b.port, &b.julia, &b.cluster)
+    (&a.ssh_host, a.port, &a.julia, &a.r, &a.cluster) == (&b.ssh_host, b.port, &b.julia, &b.r, &b.cluster)
 }
 
 /// What answers for a host's runtime: This Mac's helper, or a server's line.

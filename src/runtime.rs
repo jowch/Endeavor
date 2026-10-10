@@ -268,6 +268,8 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
         .args(["--julia", &julia, "--runtime"])
         .arg(crate::install::runtime()?)
         .args(["--depot", &depot])
+        // Read as a server's R setting is: a path, or a shell line. R starts with the first R notebook.
+        .args(client::Server { r: crate::settings::Settings::load().r, ..Default::default() }.r_args())
         // This Mac's state folder is its own, so another node name means a renamed Mac.
         .arg("--any-node");
     if let Some(build) = crate::remote::build() {

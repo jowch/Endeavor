@@ -18,6 +18,9 @@ pub struct Settings {
     pub personal_claude: bool,
     /// A julia binary to use instead of Endeavor's own.
     pub julia: Option<PathBuf>,
+    /// The R for R notebooks on this computer: an Rscript path, or a shell line
+    /// such as `module load R`. None is the login shell's Rscript.
+    pub r: Option<String>,
     /// New sessions run notebook code without asking first.
     pub run_without_asking: bool,
     /// Light, dark, or follow macOS: the whole window, notebook included.
