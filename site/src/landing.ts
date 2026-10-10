@@ -2,9 +2,9 @@
 // `href` values starting with "/" are inside the site and get the /Endeavor base added.
 
 export const meta = {
-	title: 'Endeavor: data analysis with Claude in a Julia notebook',
+	title: 'Endeavor: work through your data with an AI agent in a live notebook',
 	description:
-		'Endeavor is a desktop app where Claude writes and runs Julia code in a live notebook beside your chat, while you watch, edit and decide what runs. Test builds for Mac and Windows.',
+		'Endeavor is a desktop app for working through your data together with an AI agent, in a live notebook that keeps every step as code you can read, rerun and share. Test builds for Mac and Windows.',
 	imageAlt: 'The Endeavor window, with the chat on the left and a Julia notebook with a plot on the right',
 };
 
@@ -16,7 +16,7 @@ export const nav = {
 export const hero = {
 	name: 'Endeavor',
 	tagline: 'Build our future',
-	lead: 'A desktop app where Claude writes and runs Julia code in a live notebook beside your chat, while you watch, edit and decide what runs.',
+	lead: 'Work through your data with an AI agent in a live notebook. Explore, test ideas and learn what it says together, with every step kept as code you can rerun.',
 	// The nightly release's files keep these names from build to build (.github/workflows/nightly.yml).
 	downloads: [
 		{ text: 'Download for Mac', href: 'https://github.com/jowch/Endeavor/releases/download/nightly/Endeavor-macos-arm64.dmg' },
@@ -24,7 +24,7 @@ export const hero = {
 	],
 	// In place of a status line, above the buttons.
 	downloadNote: [
-		'Daily test builds for Apple silicon Macs and Windows 10 or 11. Windows warns about the unsigned installer: click More info, then Run anyway. Linux: ',
+		'Test builds for Apple silicon Macs and Windows 10 or 11. Windows warns about the unsigned installer: click More info, then Run anyway. Linux: ',
 		{ text: 'build from source', href: 'https://github.com/jowch/Endeavor/blob/main/docs/development.md' },
 		'.',
 	],
