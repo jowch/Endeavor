@@ -104,7 +104,8 @@ jobs:
           ref: ${{ needs.pick.outputs.sha }}
       # The app comes from the picked commit, but the packaging (assets/dmg)
       # from this workflow's own commit: the picked commit can be older than
-      # the packaging.
+      # the packaging. The volume icon (assets/icon) stays the picked commit's,
+      # like the app's own icon.
       - name: Packaging from this workflow's commit
         if: needs.pick.outputs.sha != github.sha
         run: |
