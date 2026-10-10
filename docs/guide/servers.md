@@ -42,8 +42,8 @@ says the server stopped waiting. Connect again to sign in.
      host, numbered ("lab 2") if another server already has that name.
      Each server needs its own name.
    - **How to get Julia**: see [Julia on the server](#julia-on-the-server).
-   - **How to get R**, for R notebooks: see [R on the server](#r-on-the-server).
      You can leave it empty.
+   - **How to get R**, for R notebooks: see [R on the server](#r-on-the-server).
    - **Stop idle notebooks after**: how long a notebook nobody uses keeps
      running. The default follows Settings.
 3. Click **Test connection**. Endeavor connects, installs what it needs,
@@ -90,9 +90,9 @@ Endeavor needs Julia 1.11 or newer.
 
 ## R on the server
 
-**How to get R** works the same way: nothing uses the `Rscript` your login
-shell finds, or give the path to an `Rscript` program, or a shell line such as
-`module load R`. Endeavor never installs R on a server. The first R notebook
+**How to get R** works the same way. Left empty, it uses the `Rscript` your
+login shell finds. It also takes the path to an `Rscript` program, or a shell
+line such as `module load R`. Endeavor never installs R on a server. The first R notebook
 installs Ember, the R package that runs R notebooks, which takes a few minutes
 that one time.
 

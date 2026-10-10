@@ -1922,7 +1922,8 @@ impl Workspace {
             connection.bridge()
         });
         let waiting = self.active_session().filter(|s| s.place.host == *host && s.notebook.is_none() && s.stopped.is_none() && !s.missing);
-        let Some((key, path)) = waiting.and_then(|s| Some((s.key, s.notebook_path.clone()?))) else { return cx.notify() };
+        // Its notebook opens again, or with none yet (the pane's New notebook), it's made again.
+        let Some(again) = waiting.map(|s| (s.key, s.notebook_path.clone())) else { return cx.notify() };
         match bridge.filter(|_| install) {
             Some(bridge) => {
                 let allowed = cx.background_executor().spawn(async move { pluto::allow_r_install(&bridge) });
@@ -1930,15 +1931,22 @@ impl Workspace {
                 cx.spawn(async move |this, cx| {
                     let allowed = allowed.await;
                     let _ = this.update(cx, |this, cx| match allowed {
-                        Ok(()) => this.open_for_session(key, path, false, cx),
+                        Ok(()) => this.open_again(again, cx),
                         Err(e) => this.julia_answer(&host, Backend::Ember, Some(&format!("r_failed::Couldn't install R: {e}")), cx),
                     });
                 })
                 .detach();
             }
-            None => self.open_for_session(key, path, false, cx),
+            None => self.open_again(again, cx),
         }
         cx.notify();
+    }
+
+    fn open_again(&mut self, (key, path): (u64, Option<String>), cx: &mut Context<Self>) {
+        match path {
+            Some(path) => self.open_for_session(key, path, false, cx),
+            None => self.new_notebook_here(key, cx),
+        }
     }
 
     /// What the notebook pane shows while `host` isn't ready; None once it is,

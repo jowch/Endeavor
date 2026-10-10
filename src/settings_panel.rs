@@ -807,14 +807,17 @@ impl Workspace {
                 ours.controls.push(Control::Button { label: "Remove…", look: Look::Secondary, icon: None, act: None, aria: "Remove Endeavor's R".into() });
             }
             (job, Some(found)) => {
+                // The pane's Install R is under way in the runtime: a second install would share its folder.
+                let starting = found.is_none() && self.connections.get(&HostId::ThisMac).is_some_and(|c| c.r.is_some());
                 ours.status = Some(match job {
                     Some(Job::Failed(why)) => Status2::new(why.clone(), Tone::Danger),
+                    _ if starting => Status2::new("Being set up for a notebook now", Tone::Quiet),
                     _ => Status2::new(if found.is_some() { "Installed" } else { "Not installed" }, Tone::Quiet),
                 });
                 ours.controls.push(if found.is_some() {
                     button("Remove…", Look::Secondary, Act::RemoveR, "Remove Endeavor's R")
                 } else {
-                    button("Install", Look::Secondary, Act::InstallR, "Install Endeavor's R")
+                    Control::Button { label: "Install", look: Look::Secondary, icon: None, act: (!starting).then_some(Act::InstallR), aria: "Install Endeavor's R".into() }
                 });
             }
             (_, None) => ours.status = Some(Status2::new("Checking…", Tone::Quiet)),
