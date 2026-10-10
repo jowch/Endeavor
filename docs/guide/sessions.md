@@ -139,6 +139,10 @@ Click **⋮** on a row for **Rename**, **Reveal folder in Finder**,
 including its Claude Code history. The notebook and the other files the
 session made stay on disk.
 
+Only Delete takes a session out of the list. If Claude doesn't list a session
+(you're signed out, or signed in to another account), its title turns grey and
+it stays. Hover over its bullet to see why. It opens again once Claude has it.
+
 ## How much Claude can keep in mind
 
 The ring at the right end of the bar under the message box shows how much of

@@ -9,6 +9,7 @@
 //! helper's askpass mode and the library's loopback `Asker`.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -61,47 +62,104 @@ pub fn client_server(server: &Server) -> Result<client::Server, String> {
 
 /// The askpass for `server`'s ssh: each prompt goes to the app's modal as a
 /// `Question`, and ssh waits for the answer. It works on every platform.
-pub fn asker(server: &Server, questions: UnboundedSender<Question>) -> Result<(Asker, Auth, Declined), String> {
+pub fn asker(server: &Server, questions: UnboundedSender<Question>, sign_in: SignIn) -> Result<(Asker, Auth), String> {
     let host = server.name.clone();
-    let declined = Declined::default();
-    let asker = Asker::start(declined.clone().answering(move |ask| {
+    let source = sign_in.id;
+    let asker = Asker::start(sign_in.answering(move |ask, retry| {
         let (reply, answer) = mpsc::channel();
-        questions.unbounded_send(Question { ask, host: host.clone(), reply }).ok()?;
-        answer.recv().ok().flatten()
+        questions.unbounded_send(Question { ask, host: host.clone(), retry, source, asked: Instant::now(), reply }).map_err(|_| Gone)?;
+        // A question taken down unanswered (`Question` dropped) is Gone.
+        answer.recv().map_err(|_| Gone)
     }))?;
     let auth = Auth::Env(asker.env(&crate::runtime::helper_program()?));
-    Ok((asker, auth, declined))
+    Ok((asker, auth))
 }
 
-/// A sign-in the user cancelled. ssh takes a cancelled password or code as a
-/// wrong one and asks again, up to three times; the askpass's exit status
-/// doesn't stop it (only a key's passphrase is given up at once). So for a
-/// while after a Cancel, ssh's next password questions are cancelled without
-/// asking, until the user connects again (`forget`).
-#[derive(Clone, Default)]
-pub struct Declined(Arc<Mutex<Option<Instant>>>);
+/// A question taken down without the user's answer: its sign-in ended.
+pub struct Gone;
+
+/// Why a connect ended while its question waited for the user: the askpass
+/// saw the server close the connection (`askpass_watch`). ssh's own words
+/// then are those of the try before, such as "Permission denied".
+pub fn gave_up(host: &str) -> String {
+    format!("{host} stopped waiting for the sign-in.")
+}
+
+/// What one connection's sign-in remembers between ssh's questions.
+///
+/// A Cancel: ssh takes a cancelled password or code as a wrong one and asks
+/// again, up to three times; the askpass's exit status doesn't stop it (only a
+/// key's passphrase is given up at once). So for a while after a Cancel, ssh's
+/// next password questions are cancelled without asking, until the user
+/// connects again (`forget`).
+///
+/// An answer: ssh asks the same question again only when the answer didn't
+/// work, and words it the same both times, so the same question soon after an
+/// answer is a retry (`Question::retry`).
+#[derive(Clone)]
+pub struct SignIn {
+    /// Tells this sign-in's questions from another's (`Question::source`).
+    pub id: u64,
+    state: Arc<Mutex<Remembered>>,
+}
+
+#[derive(Default)]
+struct Remembered {
+    declined: Option<Instant>,
+    /// The secret question last answered, and when.
+    answered: Option<(String, Instant)>,
+}
 
 /// How long a Cancel answers ssh's repeats of the question.
 const DECLINED_FOR: Duration = Duration::from_secs(60);
 
-impl Declined {
-    fn answering(self, ask_user: impl Fn(Ask) -> Option<String> + Send + Sync + 'static) -> impl Fn(Ask) -> Option<String> + Send + Sync + 'static {
+/// How soon after an answer the same question means the answer didn't work.
+/// ssh asks again within seconds. A new connect asks again only after the
+/// user's Reconnect, or, on a line that dropped, after the session's pause
+/// between tries (from 1 s): when a try with the right answer fails for
+/// another reason (the helper, say), the next try's question within this
+/// time wrongly says the answer didn't work. That needs a failure right after
+/// signing in, so it is left.
+const RETRY_WITHIN: Duration = Duration::from_secs(30);
+
+impl Default for SignIn {
+    fn default() -> SignIn {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        SignIn { id: NEXT.fetch_add(1, Ordering::Relaxed), state: Arc::default() }
+    }
+}
+
+impl SignIn {
+    fn answering(self, ask_user: impl Fn(Ask, bool) -> Result<Option<String>, Gone> + Send + Sync + 'static) -> impl Fn(Ask) -> Option<String> + Send + Sync + 'static {
         move |ask| {
             let secret = ask.kind == Kind::Secret;
-            if secret && self.0.lock().unwrap().is_some_and(|at| at.elapsed() < DECLINED_FOR) {
-                return None;
+            let retry = {
+                let state = self.state.lock().unwrap();
+                if secret && state.declined.is_some_and(|at| at.elapsed() < DECLINED_FOR) {
+                    return None;
+                }
+                secret && state.answered.as_ref().is_some_and(|(prompt, at)| *prompt == ask.prompt && at.elapsed() < RETRY_WITHIN)
+            };
+            let prompt = ask.prompt.clone();
+            let answer = ask_user(ask, retry);
+            let mut state = self.state.lock().unwrap();
+            match &answer {
+                Ok(Some(_)) if secret => state.answered = Some((prompt, Instant::now())),
+                Ok(None) if secret => {
+                    state.declined = Some(Instant::now());
+                    state.answered = None;
+                }
+                // Taken down because the connect ended: not the user's Cancel.
+                Err(Gone) => state.answered = None,
+                _ => {}
             }
-            let answer = ask_user(ask);
-            if secret && answer.is_none() {
-                *self.0.lock().unwrap() = Some(Instant::now());
-            }
-            answer
+            answer.ok().flatten()
         }
     }
 
     /// The user is connecting again: ask them again.
     pub fn forget(&self) {
-        *self.0.lock().unwrap() = None;
+        *self.state.lock().unwrap() = Remembered::default();
     }
 }
 
@@ -256,13 +314,38 @@ pub struct Question {
     pub ask: Ask,
     /// The server's name, for the modal's title.
     pub host: String,
+    /// ssh asks again: the last answer didn't work.
+    pub retry: bool,
+    /// The `SignIn` it belongs to.
+    pub source: u64,
+    asked: Instant,
     reply: mpsc::Sender<Option<String>>,
 }
 
 impl Question {
-    /// `None` cancels.
+    /// `None` cancels. A question dropped unanswered was taken down (`Gone`).
     pub fn answer(self, text: Option<String>) {
         let _ = self.reply.send(text);
+    }
+
+    /// Asked by sign-in `source`, and before `before` if that is given.
+    pub fn belongs_to(&self, source: u64, before: Option<Instant>) -> bool {
+        self.source == source && before.is_none_or(|before| self.asked < before)
+    }
+
+    /// The line over the question on a retry.
+    pub fn retry_line(&self) -> Option<&'static str> {
+        if !self.retry {
+            return None;
+        }
+        let prompt = self.ask.prompt.to_lowercase();
+        Some(if prompt.contains("passphrase") {
+            "That passphrase didn't work. Try again."
+        } else if prompt.contains("password") {
+            "That password didn't work. Try again."
+        } else {
+            "That didn't work. Try again."
+        })
     }
 }
 
@@ -279,26 +362,87 @@ mod tests {
         assert_eq!(theirs.r_args(), ["--r-shell", "module load R"], "and the same R");
     }
 
+    fn password() -> Ask {
+        Ask { kind: Kind::Secret, prompt: "jc@lab's password:".into() }
+    }
+
     #[test]
     fn a_cancelled_password_isnt_asked_again_when_ssh_retries() {
         let asked = Arc::new(Mutex::new(Vec::new()));
-        let declined = Declined::default();
-        let answer = declined.clone().answering({
+        let sign_in = SignIn::default();
+        let answer = sign_in.clone().answering({
             let asked = asked.clone();
-            move |ask: Ask| {
+            move |ask: Ask, _| {
                 asked.lock().unwrap().push(ask.prompt.clone());
-                if ask.kind == Kind::YesNo { Some("yes".into()) } else { None }
+                Ok(if ask.kind == Kind::YesNo { Some("yes".into()) } else { None })
             }
         });
-        let password = || Ask { kind: Kind::Secret, prompt: "jc@lab's password:".into() };
         assert_eq!(answer(password()), None, "the user's Cancel");
         assert_eq!(answer(password()), None);
         assert_eq!(answer(password()), None);
         assert_eq!(asked.lock().unwrap().len(), 1, "ssh's two retries aren't shown");
         assert_eq!(answer(Ask { kind: Kind::YesNo, prompt: "Are you sure (yes/no)?".into() }), Some("yes".into()), "other questions still are");
-        declined.forget();
+        sign_in.forget();
         assert_eq!(answer(password()), None);
         assert_eq!(asked.lock().unwrap().len(), 3, "a new connect asks again");
+    }
+
+    #[test]
+    fn the_same_question_after_an_answer_says_the_answer_didnt_work() {
+        let retries = Arc::new(Mutex::new(Vec::new()));
+        let sign_in = SignIn::default();
+        let answer = sign_in.clone().answering({
+            let retries = retries.clone();
+            move |_, retry| {
+                retries.lock().unwrap().push(retry);
+                Ok(Some("hunter2".into()))
+            }
+        });
+        answer(password());
+        answer(password());
+        answer(Ask { kind: Kind::Secret, prompt: "Verification code:".into() });
+        answer(password());
+        sign_in.forget();
+        answer(password());
+        assert_eq!(*retries.lock().unwrap(), [false, true, false, false, false], "only the same question again, and not after a new connect");
+    }
+
+    #[test]
+    fn a_question_taken_down_isnt_a_cancel() {
+        let shown = Arc::new(Mutex::new(0));
+        let answer = SignIn::default().answering({
+            let shown = shown.clone();
+            move |_, retry| {
+                let mut shown = shown.lock().unwrap();
+                *shown += 1;
+                assert!(!retry);
+                if *shown == 1 { Err(Gone) } else { Ok(Some("hunter2".into())) }
+            }
+        });
+        assert_eq!(answer(password()), None, "ssh gets no answer");
+        assert_eq!(answer(password()), Some("hunter2".into()), "the next connect's question is shown, not cancelled");
+        assert_eq!(*shown.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_try_that_ended_takes_down_only_the_questions_it_asked() {
+        let (reply, _) = mpsc::channel();
+        let asked = Instant::now();
+        let question = Question { ask: password(), host: "Lab".into(), retry: false, source: 7, asked, reply };
+        assert!(question.belongs_to(7, None), "the sign-in ended");
+        assert!(question.belongs_to(7, Some(asked + Duration::from_millis(1))), "asked before its try ended");
+        assert!(!question.belongs_to(7, Some(asked)), "the next try's question stays");
+        assert!(!question.belongs_to(8, None), "another sign-in's stays");
+    }
+
+    #[test]
+    fn a_retry_says_what_didnt_work() {
+        let (reply, _) = mpsc::channel();
+        let question = |prompt: &str, retry| Question { ask: Ask { kind: Kind::Secret, prompt: prompt.into() }, host: "Lab".into(), retry, source: 0, asked: Instant::now(), reply: reply.clone() };
+        assert_eq!(question("jc@lab's password:", false).retry_line(), None);
+        assert_eq!(question("jc@lab's password:", true).retry_line(), Some("That password didn't work. Try again."));
+        assert_eq!(question("Enter passphrase for key '/Users/jc/.ssh/id_ed25519':", true).retry_line(), Some("That passphrase didn't work. Try again."));
+        assert_eq!(question("Verification code:", true).retry_line(), Some("That didn't work. Try again."));
     }
 
     #[test]

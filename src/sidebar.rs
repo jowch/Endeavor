@@ -681,6 +681,17 @@ impl Workspace {
         sidebar_filter::order_folders(folders, self.settings.sidebar_filters.group_by)
     }
 
+    /// For a past session its agent's latest listing left out (signed out, a
+    /// fresh profile, a list that failed partway): the row's tooltip.
+    pub(crate) fn unlisted_words(&self, id: &SessionId) -> Option<SharedString> {
+        let id = id.to_string();
+        if !self.records.is_missing(&id) {
+            return None;
+        }
+        let agent = self.records.get(&id).map_or("The agent", |r| r.agent.name());
+        Some(format!("{agent} didn't list this session, so it may be signed out or on another account. Endeavor keeps the session; open it to try again.").into())
+    }
+
     /// A folder's past sessions the sidebar lists, newest first: recorded, not
     /// already open, and matching the Status filter.
     fn past_rows(&self, folder: &Place) -> Vec<SessionId> {
@@ -798,15 +809,36 @@ impl Workspace {
                 let title = self.row_lines(&row, &title_text, query, folder_line.as_deref());
                 let group: SharedString = format!("past-{:?}-{}-{id}", place.host, place.path).into();
                 let archived = self.archived.contains(&id.to_string());
+                // Its agent's listing left it out: kept, and says so.
+                let missing = self.unlisted_words(&id);
                 let focus = self.past_row_focus(&id, cx);
-                let label = if archived { format!("{title_text}, archived") } else { title_text };
+                let mut label = title_text;
+                if archived {
+                    label.push_str(", archived");
+                }
+                if let Some(words) = &missing {
+                    label = format!("{label}. {words}");
+                }
+                let mark = if archived {
+                    bullet_slot().child(glyph_at(Glyph::Archive, theme::text_section(), MARK_GLYPH)).into_any_element()
+                } else {
+                    bullet("row-bullet", None).into_any_element()
+                };
+                let mark = match missing {
+                    Some(words) => div()
+                        .id(ElementId::Name(format!("missing-{id}").into()))
+                        .child(mark)
+                        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(words.clone()).build(window, cx))
+                        .into_any_element(),
+                    None => mark,
+                };
                 self.session_row(row.clone(), group.clone(), false, cx)
                     .aria_label(label)
                     .track_focus(&focus)
                     .tab_stop(true)
                     .focus_visible(|d| d.border_color(theme::focus_ring()))
-                    .when(archived, |d| d.text_color(theme::text_section()))
-                    .child(if archived { bullet_slot().child(glyph_at(Glyph::Archive, theme::text_section(), MARK_GLYPH)).into_any_element() } else { bullet("row-bullet", None).into_any_element() })
+                    .when(archived || self.records.is_missing(&id.to_string()), |d| d.text_color(theme::text_section()))
+                    .child(mark)
                     .child(title)
                     .child(self.row_more(row.clone(), group, false, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {

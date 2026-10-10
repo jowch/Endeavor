@@ -147,15 +147,26 @@ impl Workspace {
     }
 
     fn window_state(&self) -> Value {
-        let modal = if self.server_dialog.is_some() {
-            Some("server_dialog")
-        } else if !self.asks.is_empty() {
+        // The one on top (main.rs draws them in this order).
+        let modal = if !self.asks.is_empty() {
             Some("ssh_prompt")
         } else if self.login_node_warning.is_some() {
             Some("login_node_warning")
+        } else if self.server_dialog.is_some() {
+            Some("server_dialog")
         } else {
             None
         };
+        let ssh_prompt = self.asks.front().map(|ask| {
+            let q = ask.question();
+            json!({
+                "host": q.host,
+                "kind": format!("{:?}", q.ask.kind).to_lowercase(),
+                "prompt": q.ask.prompt,
+                "retry_line": q.retry_line(),
+                "waiting": self.asks.len() - 1,
+            })
+        });
         let screen = match &self.setup {
             Some(_) if self.offline_since.is_none() && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
             Some(_) => "splash",
@@ -166,6 +177,7 @@ impl Workspace {
             "screen": screen,
             "setup": self.setup.as_ref().map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
             "modal": modal,
+            "ssh_prompt": ssh_prompt,
             "settings_open": self.settings_panel.is_some(),
             "menu_open": self.menu.is_some(),
             "menu": self.menu_state(),
@@ -204,10 +216,14 @@ impl Workspace {
             Row::Past(..) => None,
         };
         let archived = self.row_session_id(row).is_some_and(|id| self.archived.contains(&id.to_string()));
-        let tooltip = row_mark.as_ref().map(|m| m.words());
+        let tooltip = match row {
+            Row::Past(id, _) => self.unlisted_words(id).map(|w| w.to_string()),
+            Row::Open(_) => row_mark.as_ref().map(|m| m.words()),
+        };
         let mark = row_mark.as_ref().map(|m| m.name()).or(archived.then_some("archived"));
         let source = match row {
             Row::Open(_) => None,
+            Row::Past(id, _) if self.records.is_missing(&id.to_string()) => Some("missing"),
             Row::Past(_, place) if self.records.was_listed(crate::agent::Agent::Claude, place) => Some("listed"),
             Row::Past(..) => Some("record"),
         };

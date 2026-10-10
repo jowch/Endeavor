@@ -61,8 +61,11 @@ To wait for something, poll the dump. For example, loop until
 ### What it holds
 
 - `window`. The screen: `new_session`, `session`, `sign_in` or `splash`.
-  Also the setup step, an open dialog (`server_dialog`, `ssh_prompt`,
-  `login_node_warning`), whether Settings is open (`settings_open`), and
+  Also the setup step, the dialog on top (`ssh_prompt`, `login_node_warning`,
+  `server_dialog`), and `ssh_prompt`: ssh's question on screen, with its
+  `host`, `kind` (`secret`, `yesno` or `confirm`), `prompt`, `retry_line`
+  ("That password didn't work. Try again." when ssh asks again after an
+  answer, else null) and how many more are `waiting`. Also whether Settings is open (`settings_open`), and
   whether a menu is open (`menu_open`). `menu` is the open ⋮ or ⌄ menu: what
   it's `for` (`row`, `session` for the chat header's title, `notebook` or
   `share`) and its `items`, each with its `label` and `key`.
@@ -88,7 +91,8 @@ To wait for something, poll the dump. For example, loop until
   `mark` (`needs_approval`, `error`, `new_reply`, `server_down`, `waiting`
   or `archived`) and its `tooltip`. A past row's `source`
   is `record` (from sessions.json, drawn at launch) until the agent has listed
-  its folder this launch, then `listed`; an open row's is null. Also the "Show N more"
+  its folder this launch, then `listed`, or `missing` when that listing left it
+  out (the row stays); an open row's is null. Also the "Show N more"
   line, the Restart Julia row, the status line (`status`) and its mark
   (`status_mark`: `offline`, `signed_out`, `spinner` while Claude restarts,
   `red_dot` when something needs the user, or null).
