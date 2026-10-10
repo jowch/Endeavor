@@ -49,6 +49,7 @@ mod older_runtime;
 mod opening;
 mod orbit;
 mod own_julia;
+mod own_r;
 mod outbox;
 #[cfg(target_os = "macos")]
 mod overlay;
@@ -119,7 +120,12 @@ use crate::theme::FocusRing as _;
 /// Notebook id from a notebook page's URL. Only the id is used: the URL may
 /// also carry the runtime's token, which must never reach the agent.
 fn viewed_notebook_id(url: &str) -> Option<&str> {
-    Backend::Pluto.notebook_id(url).filter(|id| annotate::is_uuid(id))
+    viewed_notebook(url).map(|(_, id)| id)
+}
+
+/// The kind and id of the notebook a notebook page's URL shows.
+fn viewed_notebook(url: &str) -> Option<(Backend, &str)> {
+    Backend::ALL.into_iter().find_map(|kind| Some((kind, kind.notebook_id(url).filter(|id| annotate::is_uuid(id))?)))
 }
 
 actions!(
@@ -481,6 +487,7 @@ pub struct Workspace {
     settings_checks: settings_panel::Checks,
     /// Endeavor's own Julia on this computer, for Settings.
     own_julia: own_julia::OwnJuliaState,
+    own_r: own_r::OwnRState,
     /// First launch: the setup screen covers the window until setup finishes.
     setup: Option<Setup>,
     /// Claude Code's sign-in: checked when the agent starts and when the window
@@ -735,7 +742,7 @@ impl Workspace {
 
         let recent = load_recent();
         let settings = Settings::load();
-        let mut draft = Draft::new(new_session::default_folder(&recent), new_session::new_kind(&settings), window, cx);
+        let mut draft = Draft::new(new_session::default_folder(&recent), new_session::new_kind(&settings, &HostId::ThisMac), window, cx);
         draft.agent = settings.agent;
         let mut this = Self {
             webview,
@@ -764,6 +771,7 @@ impl Workspace {
             settings_page: settings_panel::Page::Section(settings_panel::Section::Assistants),
             settings_checks: settings_panel::Checks::default(),
             own_julia: own_julia::OwnJuliaState::default(),
+            own_r: own_r::OwnRState::default(),
             resizing: None,
             composer: composer::Composer::new(cx),
             chip_popover: None,
@@ -1236,7 +1244,8 @@ impl Workspace {
     fn open_for_session(&mut self, key: u64, path: String, run: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
-        let steps = self.julia_steps(&host, cx);
+        let kind = new_session::kind_of_path(&path);
+        let steps = self.julia_steps(&host, kind, cx);
         let opened = cx.background_executor().spawn({
             let path = path.clone();
             async move {
@@ -1251,7 +1260,7 @@ impl Workspace {
         });
         cx.spawn(async move |this, cx| {
             let opened = opened.await;
-            let _ = this.update(cx, |this, cx| this.julia_answer(&host, opened.as_ref().err().map(String::as_str), cx));
+            let _ = this.update(cx, |this, cx| this.julia_answer(&host, kind, opened.as_ref().err().map(String::as_str), cx));
             let Ok(id) = opened else {
                 // A notebook file that's gone shows File not found.
                 let _ = this.update(cx, |this, cx| this.check_missing(key, cx));
@@ -1569,8 +1578,9 @@ impl Workspace {
                     let why = [fallback.unwrap_or_default(), &refused.join(" "), "The message went without it."].join(" ");
                     this.composer.notice = Some(why.trim_start().into());
                 }
+                let kind = this.session_kind(key);
                 let done = (!text.is_empty() || !attachments.is_empty()).then(|| {
-                    let blocks = attach::prompt_blocks(&text, &attachments, &mentioned);
+                    let blocks = attach::prompt_blocks(&text, &attachments, &mentioned, kind);
                     (attachments, blocks)
                 });
                 let Some(session) = this.session_mut(key) else { return };
@@ -1585,7 +1595,7 @@ impl Workspace {
     fn submit_message(&mut self, key: u64, context: Option<ContentBlock>, message: (String, Vec<attach::Attachment>, Vec<String>), now: bool, edit: bool, cx: &mut Context<Self>) {
         let (text, attachments, mentioned) = message;
         let mut blocks: Vec<_> = context.into_iter().collect();
-        blocks.extend(attach::prompt_blocks(&text, &attachments, &mentioned));
+        blocks.extend(attach::prompt_blocks(&text, &attachments, &mentioned, self.session_kind(key)));
         let effects = self.submit_for(key, Queued::new(text, attachments, blocks).as_edit(edit), now);
         self.apply_effects(key, effects, cx);
     }
@@ -1925,11 +1935,25 @@ impl Workspace {
     // Notebook pane and annotation mode
     // -----------------------------------------------------------------------
 
-    /// Show notebook `id` of `host`'s Pluto in the pane.
+    /// Session `key`'s notebook kind, which its attachments' cell links name.
+    fn session_kind(&self, key: u64) -> Backend {
+        self.sessions.iter().find(|s| s.key == key).map_or(Backend::Pluto, |s| s.kind)
+    }
+
+    /// Whose notebook `id` of `host` is, from its file's name: a session's file, else the runtime's
+    /// last list of open notebooks, else Julia's.
+    pub fn notebook_kind(&self, host: &HostId, id: &str) -> Backend {
+        let session = self.sessions.iter().filter(|s| &s.place.host == host && s.notebook.as_deref() == Some(id)).find_map(|s| s.notebook_path.clone());
+        let listed = || self.connection(host)?.last_notebooks.iter().find(|(nb, _)| nb == id).map(|(_, path)| path.clone());
+        session.or_else(listed).map_or(Backend::Pluto, |path| new_session::kind_of_path(&path))
+    }
+
+    /// Show notebook `id` of `host` in the pane: Pluto's page, or Ember's for an R notebook.
     pub fn load_notebook(&mut self, host: &HostId, id: &str, cx: &mut Context<Self>) {
+        let kind = self.notebook_kind(host, id);
         let Some(runtime) = self.connection(host).and_then(|c| c.runtime.as_ref()) else { return };
         // page_url carries the runtime's token; keep it app-side.
-        let url = Backend::Pluto.notebook_url(&runtime.page_url, id);
+        let url = kind.notebook_url(&runtime.page_url, id);
         #[cfg(debug_assertions)]
         let url = if notebook_pane::test_stuck_opening().is_some_and(|keep| keep) { "about:blank".to_owned() } else { url };
         self.webview.update(cx, |w, _| w.load_url(&url));
@@ -1989,7 +2013,7 @@ impl Workspace {
                 self.open_before_sending(key, cx);
                 let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
                 let attachments = vec![ask.attachment];
-                blocks.extend(attach::prompt_blocks(&ask.text, &attachments, &[]));
+                blocks.extend(attach::prompt_blocks(&ask.text, &attachments, &[], self.session_kind(key)));
                 let effects = self.submit_for(key, Queued::new(ask.text, attachments, blocks), false);
                 self.apply_effects(key, effects, cx);
             }
@@ -2056,7 +2080,7 @@ impl Workspace {
         let Some(key) = self.active else { return };
         self.open_before_sending(key, cx);
         let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
-        blocks.extend(attach::prompt_blocks("", &quotes, &[]));
+        blocks.extend(attach::prompt_blocks("", &quotes, &[], self.session_kind(key)));
         let effects = self.submit_for(key, Queued::new(String::new(), quotes, blocks), false);
         self.apply_effects(key, effects, cx);
         cx.notify();
@@ -2860,7 +2884,8 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_json_at, save_json_at, viewed_notebook_id, write_atomic};
+    use super::{load_json_at, save_json_at, viewed_notebook, viewed_notebook_id, write_atomic};
+    use wire::backend::Backend;
     use std::collections::HashMap;
 
     #[test]
@@ -2870,6 +2895,14 @@ mod tests {
         assert_eq!(viewed_notebook_id(&url), Some(id));
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/?token=t0k3n"), None);
         assert_eq!(viewed_notebook_id("http://127.0.0.1:1234/edit?id=../../secret"), None);
+    }
+
+    #[test]
+    fn an_ember_page_shows_an_r_notebook() {
+        let id = "6a1b2c3d-0000-4000-8000-1234567890ab";
+        assert_eq!(viewed_notebook(&format!("http://127.0.0.1:1234/ember/edit?id={id}")), Some((Backend::Ember, id)));
+        assert_eq!(viewed_notebook(&format!("http://127.0.0.1:1234/edit?id={id}")), Some((Backend::Pluto, id)));
+        assert_eq!(viewed_notebook("http://127.0.0.1:1234/ember/edit?id=../x"), None);
     }
 
     /// `pending_moved` (the "notebook moved" note waiting to reach the agent,

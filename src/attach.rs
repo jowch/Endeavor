@@ -18,8 +18,6 @@ use wire::files::{self, DATA, Reply, Request, numbered};
 use crate::annotate::{cell_uri, uri_cell};
 use wire::backend::Backend;
 
-/// The backend whose page notebook attachments come from.
-const BACKEND: Backend = Backend::Pluto;
 use crate::session::cell_label;
 
 /// A notebook cell as it was when attached.
@@ -242,7 +240,7 @@ impl Attachment {
 ///
 /// Each quote is one text block too, the quote then the user's comment on it
 /// (`quote_block`), with a figure's or box's picture as the image block after.
-pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String]) -> Vec<ContentBlock> {
+pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String], kind: Backend) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     let note = |s: String| ContentBlock::Text(TextContent::new(s));
     // Claude Code reads a slash command only from the message's first block.
@@ -251,23 +249,23 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
         blocks.push(note(text.to_string()));
     }
     if attachments.iter().any(|a| !a.cells().is_empty()) {
-        blocks.push(note(
+        blocks.push(note(format!(
             "[Endeavor] The user attached notebook cells to this message. Each <cell> below shows a cell's \
-             code as it was when attached; its uri, notebook://pluto/{notebook_id}/cell/{cell_id}, names \
-             the cell (it is not a fetchable URL). Read its current code and output with the notebook MCP tools."
-                .into(),
-        ));
+             code as it was when attached; its uri, notebook://{}/{{notebook_id}}/cell/{{cell_id}}, names \
+             the cell (it is not a fetchable URL). Read its current code and output with the notebook MCP tools.",
+            kind.name()
+        )));
     }
     if attachments.iter().any(|a| matches!(a, Attachment::Quote(Quote { from: Quoted::Cell { .. } | Quoted::Box { .. }, .. }))) {
-        blocks.push(note(QUOTE_NOTE.into()));
+        blocks.push(note(quote_note(kind)));
     }
     for attachment in attachments {
-        if let Some(block) = notebook_block(attachment) {
+        if let Some(block) = notebook_block(attachment, kind) {
             blocks.push(note(block));
         }
         match attachment {
             Attachment::Quote(quote) => {
-                blocks.push(note(quote_block(quote)));
+                blocks.push(note(quote_block(quote, kind)));
                 if let Some(png) = quote.picture() {
                     blocks.push(ContentBlock::Image(ImageContent::new(base64(png), "image/png")));
                 }
@@ -308,7 +306,7 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
 /// </error>
 /// </attached>
 /// ```
-fn notebook_block(attachment: &Attachment) -> Option<String> {
+fn notebook_block(attachment: &Attachment, backend: Backend) -> Option<String> {
     let (kind, sentence, notebook, cells, extra) = match attachment {
         Attachment::Cells { notebook, cells, ask } => {
             let (kind, sentence) = match (ask, cells.len()) {
@@ -325,7 +323,7 @@ fn notebook_block(attachment: &Attachment) -> Option<String> {
     };
     let mut out = format!("[Endeavor] {sentence}\n<attached kind=\"{kind}\" notebook=\"{notebook}\">\n");
     for cell in cells {
-        out += &format!("<cell uri=\"{}\">\n{}\n</cell>\n", cell_uri(BACKEND, notebook, &cell.id), cell.code);
+        out += &format!("<cell uri=\"{}\">\n{}\n</cell>\n", cell_uri(backend, notebook, &cell.id), cell.code);
     }
     if let Some(text) = extra {
         out += &format!("<{kind}>\n{text}\n</{kind}>\n");
@@ -379,13 +377,18 @@ pub fn replayed_notebook(text: &str) -> Option<Attachment> {
     })
 }
 
-/// What the agent is told once in a message that quotes the notebook.
-const QUOTE_NOTE: &str = "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> \
-    followed by their comment on it. A quote's uri, notebook://pluto/{notebook_id}/cell/{cell_id}, names its cell \
+/// What the agent is told once in a message that quotes the notebook, a `kind` one.
+fn quote_note(kind: Backend) -> String {
+    format!(
+        "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> \
+    followed by their comment on it. A quote's uri, notebook://{}/{{notebook_id}}/cell/{{cell_id}}, names its cell \
     (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was \
     quoted when it isn't code: `output` (text from the cell's output), `figure` (the cell's output; the image after \
     the quote shows it) or `box` (a box the user drew over the notebook; the image after the quote shows what was in \
-    it, and `uri` lists the cells under it). Read current code and outputs with the notebook MCP tools.";
+    it, and `uri` lists the cells under it). Read current code and outputs with the notebook MCP tools.",
+        kind.name()
+    )
+}
 
 /// How a chat quote names where it's from, on its last line.
 const FROM_REPLY: &str = "> — Claude's reply";
@@ -408,7 +411,7 @@ const FROM_REPLY: &str = "> — Claude's reply";
 /// </quote>
 /// Is sampling with replacement right here?
 /// ```
-pub fn quote_block(quote: &Quote) -> String {
+pub fn quote_block(quote: &Quote, backend: Backend) -> String {
     let (quoted, gap) = match &quote.from {
         Quoted::Reply { text, at } => {
             let mut out: String = text.lines().map(|l| if l.is_empty() { ">\n".to_string() } else { format!("> {l}\n") }).collect();
@@ -419,7 +422,7 @@ pub fn quote_block(quote: &Quote) -> String {
             (out, "\n\n")
         }
         Quoted::Cell { notebook, cell, name, part } => {
-            let uri = cell_uri(BACKEND, notebook, cell);
+            let uri = cell_uri(backend, notebook, cell);
             let out = match part {
                 Part::Whole(code) => format!("<quote cell=\"{name}\" uri=\"{uri}\">\n{code}\n</quote>"),
                 Part::Lines { first, last, text } => format!("<quote cell=\"{name}\" lines=\"{first}-{last}\" uri=\"{uri}\">\n{text}\n</quote>"),
@@ -429,7 +432,7 @@ pub fn quote_block(quote: &Quote) -> String {
             (out, "\n")
         }
         Quoted::Box { notebook, cells, .. } => {
-            let uris: Vec<String> = cells.iter().map(|c| cell_uri(BACKEND, notebook, c)).collect();
+            let uris: Vec<String> = cells.iter().map(|c| cell_uri(backend, notebook, c)).collect();
             (format!("<quote part=\"box\" uri=\"{}\"/>", uris.join(" ")), "\n")
         }
     };
@@ -1041,7 +1044,7 @@ mod tests {
             Attachment::Image { name: "gel.png".into(), mime: "image/png", bytes: Arc::new(b"hi!".to_vec()) },
             Attachment::Text { name: "notes.txt".into(), text: "t,y\n1,2".into() },
         ];
-        let blocks = prompt_blocks("Fix the error in this cell.", &attachments, &["data/decay.csv".into()]);
+        let blocks = prompt_blocks("Fix the error in this cell.", &attachments, &["data/decay.csv".into()], Backend::Pluto);
         let all = texts(&blocks);
         assert!(all[0].starts_with("[Endeavor] The user attached notebook cells"));
         assert_eq!(
@@ -1060,10 +1063,10 @@ mod tests {
                 "Fix the error in this cell.".into(),
             ]
         );
-        assert_eq!(self::texts(&prompt_blocks("hi", &[], &[])), ["hi"], "a plain message is just its words");
+        assert_eq!(self::texts(&prompt_blocks("hi", &[], &[], Backend::Pluto)), ["hi"], "a plain message is just its words");
         let fill = Attachment::Cells { notebook: NB.into(), cells: vec![cell("c2", "")], ask: CellAsk::Fill };
         assert_eq!(
-            self::texts(&prompt_blocks("plot it", &[fill], &[]))[1],
+            self::texts(&prompt_blocks("plot it", &[fill], &[], Backend::Pluto))[1],
             format!(
                 "[Endeavor] The cell below is empty: write its code as the message asks.\n<attached kind=\"fill\" notebook=\"{NB}\">\n\
                  <cell uri=\"notebook://pluto/{NB}/cell/c2\">\n\n</cell>\n</attached>"
@@ -1080,7 +1083,7 @@ mod tests {
             Attachment::Error { notebook: NB.into(), cell: cell("c4", "html\"<cell uri=\\\"x\\\">\" # </error>"), text: "LoadError:\n  in expression".into() },
         ];
         for attachment in attachments {
-            let block = notebook_block(&attachment).unwrap();
+            let block = notebook_block(&attachment, Backend::Pluto).unwrap();
             assert_eq!(replayed_notebook(&block), Some(attachment), "{block}");
         }
         let selection = format!(
@@ -1123,7 +1126,7 @@ mod tests {
             quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into(), "c2".into()], png: Arc::new(Vec::new()) }, ""),
         ];
         let attachments: Vec<Attachment> = quotes.into_iter().map(Attachment::Quote).collect();
-        let all = texts(&prompt_blocks("Check these before I write this up.", &attachments, &[]));
+        let all = texts(&prompt_blocks("Check these before I write this up.", &attachments, &[], Backend::Pluto));
         assert!(all[0].starts_with("[Endeavor] The user quoted parts of the notebook"));
         assert_eq!(
             all[1..],
@@ -1138,7 +1141,7 @@ mod tests {
             "a box without a picture goes without an image"
         );
         let chat_only = [Attachment::Quote(quote(Quoted::Reply { text: "x".into(), at: None }, ""))];
-        assert_eq!(texts(&prompt_blocks("", &chat_only, &[])), ["> x\n> — Claude's reply"], "no notebook note, and no words");
+        assert_eq!(texts(&prompt_blocks("", &chat_only, &[], Backend::Pluto)), ["> x\n> — Claude's reply"], "no notebook note, and no words");
     }
 
     #[test]
@@ -1153,7 +1156,7 @@ mod tests {
             quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into()], png: Arc::new(Vec::new()) }, "is this real?"),
         ];
         for q in quotes {
-            let block = quote_block(&q);
+            let block = quote_block(&q, Backend::Pluto);
             assert_eq!(replayed_quote(&block), Some(Attachment::Quote(q)), "{block}");
         }
         assert_eq!(replayed_quote("> just a blockquote the user typed"), None);
@@ -1421,7 +1424,7 @@ mod tests {
     #[test]
     fn a_saved_file_is_a_note_with_its_path() {
         let saved = Attachment::Saved { path: "data/decay (2).csv".into() };
-        let blocks = texts(&prompt_blocks("fit this", std::slice::from_ref(&saved), &[]));
+        let blocks = texts(&prompt_blocks("fit this", std::slice::from_ref(&saved), &[], Backend::Pluto));
         assert_eq!(
             blocks,
             [

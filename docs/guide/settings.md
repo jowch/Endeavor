@@ -64,7 +64,24 @@ Cursor is listed as **Not available yet**.
 The change takes effect when Julia restarts. Servers and clusters set their
 own Julia. See [Servers](./servers.md).
 
-R and Python notebooks are listed as **Not available yet**.
+**R** sets which R runs your R notebooks on your Mac or Linux computer.
+Click **Settings** next to it to choose:
+
+- **Find R by itself** (the default): the R your login shell finds. On a
+  Mac, Endeavor's own R 4.6.1 comes first once it's installed, and when a
+  Mac has no R at all, the first R notebook offers **Install R** (about
+  165 MB, from CRAN). **Install** and **Remove…** under **Endeavor's R** do
+  the same ahead of time, or undo it; notebooks on your Mac stop first if
+  they're running. On Linux, Endeavor doesn't install R:
+  [rig](https://github.com/r-lib/rig) installs one without admin rights.
+- **Another R on this computer**: an R you installed yourself. Click
+  **Choose…** (or **Change…**) and pick the file named `Rscript`, in a `bin`
+  folder.
+
+A change takes effect when notebooks restart: **Restart** appears under the
+choice while notebooks run. Servers and clusters set their own R. R notebooks
+don't run on Windows yet, so there the row says **Not available yet**, as
+Python's does everywhere.
 
 ## Where notebooks run
 

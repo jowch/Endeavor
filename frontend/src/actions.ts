@@ -2,9 +2,12 @@
 // Present (window.present), Record (the Editor's recording state), Frontmatter
 // (Pluto's own dialog). Also two sheets of our own: Pluto shows its keyboard
 // shortcuts in a plain alert() and takes feedback in a small form in its
-// footer, so the list and a feedback box are drawn here (both looks).
+// footer, so the list and a feedback box are drawn here (both looks). Ember's
+// page has a shortcut sheet of its own, with F1 for R help at the cursor, so
+// there the ⋮ item opens Ember's and F1 and ⌘? reach Ember.
 
 import { on } from "./bridge";
+import { onEmber } from "./engine";
 import { mac } from "./keys";
 import { context } from "./state";
 
@@ -156,14 +159,14 @@ export function initActions(): void {
     if (msg.name === "present") w.present?.();
     else if (msg.name === "record") w.editor_state_set?.({ recording_waiting_to_start: true });
     else if (msg.name === "frontmatter") window.dispatchEvent(new CustomEvent("open pluto frontmatter"));
-    else if (msg.name === "shortcuts") showShortcuts();
+    else if (msg.name === "shortcuts") onEmber() ? window.dispatchEvent(new CustomEvent("ember open shortcuts")) : showShortcuts();
     else if (msg.name === "feedback") showFeedback();
   });
   // Pluto's own F1 / ⌘? list is a plain alert(); this one is laid out.
   window.addEventListener(
     "keydown",
     (e) => {
-      if (e.key === "F1" || (e.key === "?" && (e.metaKey || e.ctrlKey))) {
+      if (!onEmber() && (e.key === "F1" || (e.key === "?" && (e.metaKey || e.ctrlKey)))) {
         e.preventDefault();
         e.stopImmediatePropagation();
         showShortcuts();

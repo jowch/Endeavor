@@ -48,11 +48,12 @@ impl NotebookChoice {
     }
 }
 
-/// The kinds the chip offers as a new notebook, in its order.
-// ponytail: the pane shows only Pluto's page, so New R notebook waits until it
-// shows Ember's (stage 8); then [Pluto, Ember], with Ember left out on Windows
-// (a cfg pair or a function, not one const).
-pub const NEW_KINDS: &[Backend] = &[Backend::Pluto];
+/// The kinds the chip offers as a new notebook on `host`, in its order, and
+/// lists the files of. R notebooks don't run on Windows until Ember does, so a
+/// Windows computer offers Julia's only; servers run Linux or macOS.
+pub fn new_kinds(host: &HostId) -> &'static [Backend] {
+    if cfg!(windows) && *host == HostId::ThisMac { &[Backend::Pluto] } else { &Backend::ALL }
+}
 
 /// A notebook file's kind from its name, in any host's rules: `.R` is R's, the rest Julia's.
 pub fn kind_of_path(path: &str) -> Backend {
@@ -63,9 +64,10 @@ pub fn kind_of_path(path: &str) -> Backend {
     }
 }
 
-/// The kind of new notebook last picked, while the chip offers it.
-pub fn new_kind(settings: &crate::settings::Settings) -> Backend {
-    settings.notebook_kind.filter(|kind| NEW_KINDS.contains(kind)).unwrap_or(NEW_KINDS[0])
+/// The kind of new notebook last picked, while the chip offers it on `host`.
+pub fn new_kind(settings: &crate::settings::Settings, host: &HostId) -> Backend {
+    let kinds = new_kinds(host);
+    settings.notebook_kind.filter(|kind| kinds.contains(kind)).unwrap_or(kinds[0])
 }
 
 /// What the chip calls a new notebook of `kind`.
@@ -73,6 +75,14 @@ pub fn new_notebook_label(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "New Julia notebook",
         Backend::Ember => "New R notebook",
+    }
+}
+
+/// The language a notebook of `kind` is in, as the chip's rows mark it.
+pub fn language_name(kind: Backend) -> &'static str {
+    match kind {
+        Backend::Pluto => "Julia",
+        Backend::Ember => "R",
     }
 }
 
@@ -384,7 +394,7 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 if this.draft.host == host && this.draft.folder.as_ref() == Some(&folder) {
                     this.draft.notebooks = match found {
-                        Ok(Reply::Notebooks { found }) => found,
+                        Ok(Reply::Notebooks { found }) => found.into_iter().filter(|f| new_kinds(&host).contains(&f.backend)).collect(),
                         _ => Vec::new(),
                     };
                     cx.notify();
@@ -406,7 +416,7 @@ impl Workspace {
 
     /// A new notebook of the kind last picked.
     pub fn new_notebook_choice(&self) -> NotebookChoice {
-        NotebookChoice::New(new_kind(&self.settings))
+        NotebookChoice::New(new_kind(&self.settings, &self.draft.host))
     }
 
     /// The chip's New Julia notebook or New R notebook: remembered for the next session.
@@ -1236,8 +1246,9 @@ impl Workspace {
             let relative = host.strip_prefix(&found.path, &folder).unwrap_or_else(|| found.path.clone());
             let dir = host.parent(&relative).filter(|p| !p.is_empty()).map(|p| format!("{p}/"));
             let path = found.path.clone();
+            let language = language_name(found.backend);
             choice_row(("notebook-row", i), chosen, false, relative.clone())
-                .aria_description(when::ago(found.modified))
+                .aria_description(format!("{language} notebook, {}", when::ago(found.modified)))
                 .child(glyph(Glyph::File, theme::text_muted()))
                 .child(
                     div()
@@ -1251,6 +1262,7 @@ impl Workspace {
                         .children(dir.map(|d| div().text_color(theme::text_faint()).child(d)))
                         .child(host.folder_name(&found.path)),
                 )
+                .child(div().flex_shrink_0().text_size(theme::size_meta()).text_color(theme::text_muted()).child(language))
                 .child(div().flex_shrink_0().text_size(theme::size_meta()).text_color(theme::text_faint()).child(when::ago(found.modified)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.choose_notebook(NotebookChoice::Existing(path.clone()), cx);
@@ -1261,7 +1273,7 @@ impl Workspace {
         div()
             .flex()
             .flex_col()
-            .children(NEW_KINDS.iter().map(|&kind| {
+            .children(new_kinds(host).iter().map(|&kind| {
                 let label = new_notebook_label(kind);
                 choice_row(("new-notebook", kind as usize), self.draft.notebook == NotebookChoice::New(kind), false, label)
                     .child(glyph(Glyph::File, theme::text_muted()))
@@ -1310,7 +1322,7 @@ impl Workspace {
 
     pub fn render_draft_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(folder) = self.draft_pane_folder() else {
-            return self.host_pane(&self.draft.host.clone(), false, cx).unwrap_or_else(|| turtle_pane().into_any_element());
+            return self.host_pane(&self.draft.host.clone(), self.draft.notebook.kind(), false, cx).unwrap_or_else(|| turtle_pane().into_any_element());
         };
         match (&self.draft.notebook, &self.draft.preview) {
             (NotebookChoice::New(_), _) => {

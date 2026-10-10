@@ -20,6 +20,7 @@ use crate::new_session::{self, Glyph, glyph};
 use crate::resources::Target;
 use crate::session::{Effect, Session, Stopped, folder_name};
 use crate::settings::NotebookTheme;
+use wire::backend::Backend;
 use crate::overlay;
 use crate::menu::MenuTarget;
 use crate::notice::{Notice, Retry, Spot};
@@ -35,6 +36,8 @@ pub enum NotebookAction {
     MoveTo,
     LookEndeavor,
     LookClassic,
+    /// Ember's page as Ember draws it: an R notebook's LookClassic.
+    LookEmber,
     Shortcuts,
     NewSession,
     Feedback,
@@ -58,6 +61,7 @@ impl NotebookAction {
             NotebookAction::MoveTo => "Move to…",
             NotebookAction::LookEndeavor => "Endeavor",
             NotebookAction::LookClassic => "Pluto classic",
+            NotebookAction::LookEmber => "Ember classic",
             NotebookAction::Shortcuts => "Keyboard shortcuts",
             NotebookAction::NewSession => "Open in a new session…",
             NotebookAction::Feedback => "Send feedback to Pluto's developers…",
@@ -81,7 +85,7 @@ impl NotebookAction {
             NotebookAction::Rename => ("r", "R"),
             NotebookAction::MoveTo => ("m", "M"),
             NotebookAction::LookEndeavor => ("e", "E"),
-            NotebookAction::LookClassic => ("p", "P"),
+            NotebookAction::LookClassic | NotebookAction::LookEmber => ("p", "P"),
             NotebookAction::Shortcuts => ("f1", "F1"),
             NotebookAction::NewSession => ("n", "N"),
             NotebookAction::Feedback => ("b", ""),
@@ -115,7 +119,7 @@ impl NotebookAction {
             NotebookAction::Present => Glyph::Screen,
             NotebookAction::Record => Glyph::Record,
             NotebookAction::Frontmatter => Glyph::Tag,
-            NotebookAction::LookEndeavor | NotebookAction::LookClassic => return None,
+            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber => return None,
         })
     }
 
@@ -123,7 +127,7 @@ impl NotebookAction {
     pub fn detail(self) -> Option<&'static str> {
         match self {
             NotebookAction::NewSession => Some("The same notebook, a new conversation"),
-            NotebookAction::ExportFile => Some("A copy of the .jl file"),
+            NotebookAction::ExportFile => Some("A copy of the notebook's file"),
             NotebookAction::ExportHtml => Some("A web page with the outputs"),
             NotebookAction::ExportPdf => Some("For printing or email"),
             _ => None,
@@ -134,7 +138,7 @@ impl NotebookAction {
     pub fn group(self) -> u8 {
         match self {
             NotebookAction::CopyPath | NotebookAction::Reveal | NotebookAction::Rename | NotebookAction::MoveTo => 0,
-            NotebookAction::LookEndeavor | NotebookAction::LookClassic => 1,
+            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber => 1,
             NotebookAction::Shortcuts => 2,
             NotebookAction::NewSession | NotebookAction::Feedback => 3,
             NotebookAction::Start | NotebookAction::Restart | NotebookAction::Stop => 4,
@@ -160,7 +164,9 @@ impl NotebookAction {
     /// Restart and Stop need a running notebook, and Restart isn't offered in
     /// safe preview, where Run notebook is the way to start it. A stopped
     /// notebook offers Start, the pane's own Start button's only other way in.
-    pub fn for_notebook(open: bool, stopped: bool, safe: bool, local: bool) -> Vec<NotebookAction> {
+    /// An R notebook (`kind`) has Ember's classic look, and no feedback form
+    /// for Pluto's developers.
+    pub fn for_notebook(kind: Backend, open: bool, stopped: bool, safe: bool, local: bool) -> Vec<NotebookAction> {
         use NotebookAction::*;
         let mut items = vec![CopyPath];
         if local {
@@ -172,7 +178,10 @@ impl NotebookAction {
                 items.push(MoveTo);
             }
         }
-        items.extend([LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback]);
+        items.extend(match kind {
+            Backend::Pluto => [LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback].as_slice(),
+            Backend::Ember => [LookEndeavor, LookEmber, Shortcuts, NewSession].as_slice(),
+        });
         if stopped {
             items.push(Start);
         }
@@ -185,9 +194,13 @@ impl NotebookAction {
         items
     }
 
-    pub fn for_share() -> Vec<NotebookAction> {
+    /// Share and export. Present, Record and Frontmatter are Pluto's own; Ember's page has none.
+    pub fn for_share(kind: Backend) -> Vec<NotebookAction> {
         use NotebookAction::*;
-        vec![ExportFile, ExportHtml, ExportPdf, Present, Record, Frontmatter]
+        match kind {
+            Backend::Pluto => vec![ExportFile, ExportHtml, ExportPdf, Present, Record, Frontmatter],
+            Backend::Ember => vec![ExportFile, ExportHtml, ExportPdf],
+        }
     }
 }
 
@@ -322,6 +335,7 @@ pub enum HeaderTag {
     RestartNeeded,
     RestartRecommended,
     JuliaStopped,
+    RStopped,
 }
 
 impl HeaderTag {
@@ -336,6 +350,7 @@ impl HeaderTag {
             HeaderTag::RestartNeeded => "Restart needed",
             HeaderTag::RestartRecommended => "Restart recommended",
             HeaderTag::JuliaStopped => "Julia stopped",
+            HeaderTag::RStopped => "R stopped",
         }
     }
 }
@@ -343,6 +358,21 @@ impl HeaderTag {
 /// The Pluto logo: three dots, stacked.
 fn pluto_logo() -> impl IntoElement {
     div().flex().flex_col().gap(px(1.)).flex_shrink_0().children([rgb(0x3b972e), rgb(0x945bb0), rgb(0xc93d39)].map(|c| div().size(px(4.)).rounded_full().bg(c)))
+}
+
+/// Ember's mark, drawn like Pluto's: its flame as a dot, and two sparks off it.
+fn ember_logo() -> impl IntoElement {
+    let ember = rgb(0xe8590c);
+    let dot = |size: f32, left: f32, top: f32| div().absolute().left(px(left)).top(px(top)).size(px(size)).rounded_full().bg(ember);
+    div().relative().size(px(10.)).flex_shrink_0().children([dot(7., 0., 3.), dot(2.5, 6.5, 1.), dot(1.5, 8.5, 0.)])
+}
+
+/// A notebook's engine's logo: Pluto's for Julia notebooks, Ember's for R ones.
+fn engine_logo(kind: Backend) -> AnyElement {
+    match kind {
+        Backend::Pluto => pluto_logo().into_any_element(),
+        Backend::Ember => ember_logo().into_any_element(),
+    }
 }
 
 /// A small tag in the header ("Local", "Safe preview", "Not saved").
@@ -521,6 +551,7 @@ impl Workspace {
         let read_only = self.read_only(session);
         let reconnecting = page.is_some_and(|p| !p.connected) && !read_only;
         let mut tags = Vec::new();
+        let stopped_tag = if session.kind == Backend::Ember { HeaderTag::RStopped } else { HeaderTag::JuliaStopped };
         if read_only {
             tags.push(HeaderTag::ReadOnly);
         }
@@ -531,7 +562,7 @@ impl Workspace {
         } else if session.stopped.is_some() {
             tags.push(HeaderTag::Stopped);
         } else if crashed {
-            tags.push(HeaderTag::JuliaStopped);
+            tags.push(stopped_tag);
         }
         let page = page.filter(|_| endeavor);
         if let Some(p) = page {
@@ -546,7 +577,7 @@ impl Workspace {
             } else if let Some(restart) = &p.restart {
                 tags.push(if restart == "required" { HeaderTag::RestartNeeded } else { HeaderTag::RestartRecommended });
             } else if p.dead && !crashed {
-                tags.push(HeaderTag::JuliaStopped);
+                tags.push(stopped_tag);
             }
         }
         HeaderInfo {
@@ -646,7 +677,7 @@ impl Workspace {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| this.restart_notebook(key, cx)))
                     .into_any_element(),
-                HeaderTag::JuliaStopped => chip(Some(Glyph::Warning), label, theme::danger()).into_any_element(),
+                HeaderTag::JuliaStopped | HeaderTag::RStopped => chip(Some(Glyph::Warning), label, theme::danger()).into_any_element(),
             }
         });
         let chips: Vec<AnyElement> = chips.collect();
@@ -705,7 +736,7 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(pluto_logo())
+            .child(engine_logo(session.kind))
             .child(name)
             .child(host_chip)
             .children(chips)
@@ -898,7 +929,7 @@ impl Workspace {
             NotebookAction::Reveal => platform::reveal(Path::new(&path)),
             NotebookAction::Rename => self.start_notebook_rename(key, window, cx),
             NotebookAction::MoveTo => self.move_notebook_to(key, cx),
-            NotebookAction::LookEndeavor | NotebookAction::LookClassic => {
+            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber => {
                 let look = if action == NotebookAction::LookEndeavor { NotebookTheme::Endeavor } else { NotebookTheme::Pluto };
                 self.update_settings(cx, |s| s.notebook_theme = look);
                 self.apply_look(cx);
@@ -915,7 +946,7 @@ impl Workspace {
             NotebookAction::Start => self.start_notebook(key, cx),
             NotebookAction::Restart => self.restart_notebook(key, cx),
             NotebookAction::Stop => self.stop_notebook(key, path, cx),
-            NotebookAction::ExportFile => self.export(key, "notebookfile", "jl", cx),
+            NotebookAction::ExportFile => self.export(key, "notebookfile", if session.kind == Backend::Ember { "R" } else { "jl" }, cx),
             NotebookAction::ExportHtml => self.export(key, "notebookexport", "html", cx),
             NotebookAction::ExportPdf => {
                 // WebKit's print panel, whose PDF menu saves the file.
@@ -933,7 +964,9 @@ impl Workspace {
         let (Some(id), Some(path)) = (session.notebook.clone(), session.notebook_path.clone()) else { return };
         let Some(runtime) = self.connection(&session.place.host).and_then(|c| c.runtime.as_ref()) else { return };
         let offline = if kind == "notebookexport" { "&offline_bundle=true" } else { "" };
-        let (bridge, export) = (runtime.bridge.clone(), format!("/{kind}?id={id}{offline}"));
+        // Ember's exports are under its pages' prefix.
+        let prefix = if session.kind == Backend::Ember { "/ember" } else { "" };
+        let (bridge, export) = (runtime.bridge.clone(), format!("{prefix}/{kind}?id={id}{offline}"));
         let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("notebook").to_string();
         let dir = match &session.place.host {
             HostId::ThisMac => Path::new(&path).parent().map(Path::to_path_buf).unwrap_or_default(),
@@ -1118,12 +1151,12 @@ impl Workspace {
     /// Julia starts first if it isn't running: the pane shows its steps meanwhile.
     pub(crate) fn new_notebook_here(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
-        let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
-        let steps = self.julia_steps(&host, cx);
+        let Some((host, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.kind)) else { return };
+        let steps = self.julia_steps(&host, kind, cx);
         let task = cx.background_executor().spawn(async move { pluto::until_julia(|| pluto::new_notebook(&bridge, key), &|step| steps.step(step)) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |this, cx| this.julia_answer(&host, result.as_ref().err().map(String::as_str), cx));
+            let _ = this.update(cx, |this, cx| this.julia_answer(&host, kind, result.as_ref().err().map(String::as_str), cx));
             let _ = this.update(cx, |this, cx| match result {
                 Ok((id, path)) => {
                     if let Some(session) = this.session_mut(key) {
@@ -1133,8 +1166,8 @@ impl Workspace {
                     }
                     this.apply_effects(key, vec![Effect::ShowNotebook { id, path: Some(path) }], cx);
                 }
-                // The pane says why Julia couldn't start, with Try again.
-                Err(e) if pluto::julia_failed(&e).is_some() => {}
+                // The pane says why Julia, or R, couldn't start, with Try again.
+                Err(e) if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).is_some() => {}
                 Err(e) => this.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &e, Some(Retry::NewNotebook(key))), cx),
             });
         })
@@ -1231,7 +1264,7 @@ impl Workspace {
         let path = session.notebook_path.clone().unwrap_or_default();
         let file = folder_name(Path::new(&path));
         Some(match self.pane_shows(session, cx) {
-            PaneShows::Host(_) => return self.host_pane(&session.place.host, true, cx),
+            PaneShows::Host(_) => return self.host_pane(&session.place.host, session.kind, true, cx),
             PaneShows::Page => return None,
             PaneShows::Crashed => self.render_crash_page(key, cx),
             PaneShows::Missing => {
@@ -1298,7 +1331,7 @@ impl Workspace {
 
     /// What the notebook pane shows for a session.
     pub fn pane_shows(&self, session: &Session, cx: &App) -> PaneShows {
-        if let Some(host) = self.host_pane_state(&session.place.host, cx) {
+        if let Some(host) = self.host_pane_state(&session.place.host, session.kind, cx) {
             return PaneShows::Host(host);
         }
         if session.missing {
@@ -1521,6 +1554,7 @@ fn dirs_downloads() -> PathBuf {
 mod tests {
     use super::NotebookAction::{self, *};
     use super::{OPENING_GRACE, OpeningStep, OpeningWatch};
+    use wire::backend::Backend;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1560,21 +1594,23 @@ mod tests {
     #[test]
     fn the_notebook_menu_offers_what_applies() {
         assert_eq!(
-            NotebookAction::for_notebook(true, false, false, true),
+            NotebookAction::for_notebook(Backend::Pluto, true, false, false, true),
             [CopyPath, Reveal, Rename, MoveTo, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback, Restart, Stop]
         );
-        assert_eq!(NotebookAction::for_notebook(true, false, true, true).contains(&Restart), false, "safe preview: Run notebook, not Restart");
-        assert_eq!(NotebookAction::for_notebook(true, false, false, false), [CopyPath, Rename, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback, Restart, Stop]);
-        assert_eq!(NotebookAction::for_notebook(false, false, false, true), [CopyPath, Reveal, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback]);
+        assert_eq!(NotebookAction::for_notebook(Backend::Pluto, true, false, true, true).contains(&Restart), false, "safe preview: Run notebook, not Restart");
+        assert_eq!(NotebookAction::for_notebook(Backend::Pluto, true, false, false, false), [CopyPath, Rename, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback, Restart, Stop]);
+        assert_eq!(NotebookAction::for_notebook(Backend::Pluto, false, false, false, true), [CopyPath, Reveal, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback]);
         assert_eq!(
-            NotebookAction::for_notebook(false, true, false, true),
+            NotebookAction::for_notebook(Backend::Pluto, false, true, false, true),
             [CopyPath, Reveal, LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback, Start],
             "a stopped notebook offers Start instead of Restart and Stop"
         );
         assert!(Stop.danger() && !Restart.danger() && !Start.danger());
-        let share = NotebookAction::for_share();
+        assert_eq!(NotebookAction::for_notebook(Backend::Ember, true, false, false, true), [CopyPath, Reveal, Rename, MoveTo, LookEndeavor, LookEmber, Shortcuts, NewSession, Restart, Stop]);
+        assert_eq!(NotebookAction::for_share(Backend::Ember), [ExportFile, ExportHtml, ExportPdf]);
+        let share = NotebookAction::for_share(Backend::Pluto);
         assert_eq!(share.iter().map(|a| a.label()).collect::<Vec<_>>(), ["Notebook file…", "Static HTML…", "PDF…", "Present", "Record…", "Frontmatter…"]);
-        for menu in [NotebookAction::for_notebook(true, false, false, true), NotebookAction::for_notebook(false, true, false, true), share] {
+        for menu in [NotebookAction::for_notebook(Backend::Pluto, true, false, false, true), NotebookAction::for_notebook(Backend::Pluto, false, true, false, true), share] {
             let mut keys: Vec<_> = menu.iter().map(|a| a.shortcut().0).collect();
             keys.sort();
             keys.dedup();

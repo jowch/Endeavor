@@ -524,11 +524,9 @@ const LOCAL_TOOLS: [&str; 8] = ["Bash", "Read", "Write", "Edit", "MultiEdit", "G
 /// Claude Code's own reads do in its default mode. Claude Code prompts for any
 /// MCP tool without an allow rule, `readOnlyHint` or not (2.1.280). Every other
 /// notebook and host tool (edits, runs, `run_shell`) still asks in Manual.
-const READ_ONLY_TOOLS: [&str; 16] = [
+const READ_ONLY_TOOLS: [&str; 15] = [
     "mcp__notebook__list_notebooks",
     "mcp__notebook__session_status",
-    // Its name before EndeavorMCP #73, still answered for one release.
-    "mcp__notebook__pluto_session_status",
     "mcp__notebook__read_cell",
     "mcp__notebook__read_notebook_code",
     "mcp__notebook__view_cell_output",
@@ -1487,11 +1485,9 @@ mod tests {
                 let full = format!("mcp__notebook__{tool}");
                 assert_ne!(allowed.contains(&full), asks.contains(&tool.as_str()), "{tool}: decide whether it asks");
             }
-            // An old name the runtime still answers (a renamed tool) isn't listed, but is allowed too.
-            let old: Vec<&String> = allowed.iter().filter(|t| !tools.iter().any(|tool| **t == format!("mcp__notebook__{tool}"))).collect();
-            assert_eq!(old, ["mcp__notebook__pluto_session_status"], "no allowed tool the runtime doesn't have");
-            assert!(old.iter().all(|t| endeavor_mcp::is_tool(t.trim_start_matches("mcp__notebook__"))));
-            assert_eq!(allowed.len() - old.len() + asks.len(), tools.len());
+            let other: Vec<&String> = allowed.iter().filter(|t| !tools.iter().any(|tool| **t == format!("mcp__notebook__{tool}"))).collect();
+            assert!(other.is_empty(), "no allowed tool the runtime doesn't have: {other:?}");
+            assert_eq!(allowed.len() + asks.len(), tools.len());
         }
     }
 

@@ -11,6 +11,7 @@ use crate::new_session::{self, glyph};
 use crate::notebook_pane::NotebookAction;
 use crate::overlay;
 use crate::settings::NotebookTheme;
+use wire::backend::Backend;
 use crate::sidebar::{Row, RowAction};
 use crate::theme;
 use crate::{Interrupt, Workspace};
@@ -115,9 +116,10 @@ impl Workspace {
                 let stopped = session.is_some_and(|s| s.stopped.is_some() && !s.missing);
                 let safe = session.and_then(|s| s.notebook.as_deref()).is_some_and(|id| self.page.notebook == id && self.page.safe);
                 let local = session.is_some_and(|s| s.place.host == HostId::ThisMac);
-                NotebookAction::for_notebook(open, stopped, safe, local).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
+                let kind = session.map_or(Backend::Pluto, |s| s.kind);
+                NotebookAction::for_notebook(kind, open, stopped, safe, local).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
             }
-            MenuTarget::Share(key) => NotebookAction::for_share().into_iter().map(|action| MenuPick::Notebook(*key, action)).collect(),
+            MenuTarget::Share(key) => NotebookAction::for_share(self.sessions.iter().find(|s| s.key == *key).map_or(Backend::Pluto, |s| s.kind)).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect(),
         }
     }
 
@@ -251,7 +253,7 @@ impl Workspace {
             });
             let checked = match action {
                 Some(NotebookAction::LookEndeavor) => Some(self.settings.notebook_theme == NotebookTheme::Endeavor),
-                Some(NotebookAction::LookClassic) => Some(self.settings.notebook_theme == NotebookTheme::Pluto),
+                Some(NotebookAction::LookClassic | NotebookAction::LookEmber) => Some(self.settings.notebook_theme == NotebookTheme::Pluto),
                 _ => None,
             };
             let color = if danger { theme::danger() } else { theme::text_muted() };

@@ -10,6 +10,7 @@
 // Show". The trace is folded to one line with its length.
 
 import { byUser, on, send, type ErrorAsk } from "./bridge";
+import { onEmber } from "./engine";
 import { shortcut } from "./keys";
 import { onRedraw } from "./redraw";
 import { cellCode } from "./reveal";
@@ -224,7 +225,8 @@ function decorateOwn(error: HTMLElement, cell: HTMLElement, nb: Notebook | undef
   const frames = body(nb, cell.id)?.stacktrace;
   const plutoTrace = error.querySelector(":scope > section");
   let toggle = error.querySelector<HTMLElement>(":scope > .endeavor-trace");
-  if (!plutoTrace || (frames && frames.length === 0)) {
+  // Ember's error box has its own traceback toggle.
+  if (!plutoTrace || (frames && frames.length === 0) || onEmber()) {
     toggle?.remove();
     return;
   }
