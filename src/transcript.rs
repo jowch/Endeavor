@@ -600,7 +600,6 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
             .when(cell.removed > 0, |d| d.child(mono(format!("−{}", cell.removed), theme::diff_del())))
             .when(!deleted, |d| {
                 d.role(Role::Button)
-                    .aria_label(format!("Show {} in the notebook", cell.name))
                     .border_2()
                     .border_color(gpui::transparent_black())
                     .track_focus(&session.changed_cell_focus(ix, n, cx))

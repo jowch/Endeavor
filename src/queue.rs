@@ -159,7 +159,7 @@ impl Workspace {
                     .text_color(theme::text_muted())
                     .hover(|s| s.text_color(theme::text_primary()))
                     .child(format!("{} more ›", outbox.items.len() - SHOWN))
-                    .aria_label(format!("Show {} more queued", outbox.items.len() - SHOWN))
+                    .aria_label(format!("Show {} more queued messages", outbox.items.len() - SHOWN))
                     .on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.queue_all = true)))
                     .into_any_element(),
             );

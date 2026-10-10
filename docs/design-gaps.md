@@ -43,3 +43,12 @@ _Listed 2026-10-03._
   - **Linking edits.** Can Endeavor record which edits belong together? The runtime already keeps each cell's code from before the agent's edit (`before`), and the end-of-turn changed-cells card lists a turn's cells, so that card is a likely place for the button.
   - **What the button does.** Put the earlier code back itself, or send Claude a message that the user wants those edits reverted, leaving Claude to work out the dependencies. The second felt odd but may be simpler.
   - Earlier exploration: [ui-spec.md](ui-spec.md) lists per-change and per-cell undo as explored and left out of the final states.
+
+## Accessibility
+
+- [ ] Clickable text with no role makes no accessibility node, so a screen
+  reader can't find it: the sign-in card, setup's Retry and Show logs, Show
+  more, a code block's Copy, the + menu rows, the folder browser's Up and
+  path, Remove server, and others
+  ([#53](https://github.com/jowch/Endeavor/issues/53)). Text buttons that
+  have a role are named.
