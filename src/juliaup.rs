@@ -101,9 +101,10 @@ fn install_juliaup() -> Result<(), String> {
     );
     let install = || run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]), INSTALL_LIMIT, &quiet);
     // One more try after a failure that wasn't the time limit: in CI it
-    // failed once in seven runs, then worked (#62).
+    // failed once in sixteen runs on Windows Server 2022, cause unknown (#62).
+    // The juliaup workflow flags a run that needed it.
     let file = install().or_else(|first| {
-        if first.starts_with("it didn't finish") {
+        if let Failed::TimedOut(_) = first {
             return Err(first);
         }
         eprintln!("Installing juliaup from its App Installer file failed ({first}); trying once more.");
@@ -132,13 +133,32 @@ fn channel_julia(juliaup: &Path, version: &str) -> Option<PathBuf> {
     channel_file(&listed, version).filter(|julia| julia.is_file())
 }
 
+/// Why a command `run` started didn't succeed.
+#[cfg(windows)]
+enum Failed {
+    /// It ran past its time limit and was stopped.
+    TimedOut(Duration),
+    /// It couldn't start, or it failed: its last words.
+    Error(String),
+}
+
+#[cfg(windows)]
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Failed::TimedOut(limit) => write!(f, "it didn't finish within {}", minutes(*limit)),
+            Failed::Error(why) => f.write_str(why),
+        }
+    }
+}
+
 /// Run `command` without a window or input, for at most `limit`, telling
 /// `tick` every 15 s how long it has run; its output, or why it failed.
 #[cfg(windows)]
-fn run(command: &mut Command, limit: Duration, tick: &dyn Fn(Duration)) -> Result<String, String> {
+fn run(command: &mut Command, limit: Duration, tick: &dyn Fn(Duration)) -> Result<String, Failed> {
     use std::io::Read;
     endeavor_mcp::client::no_window(command);
-    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| Failed::Error(e.to_string()))?;
     // Read both pipes while it runs, so a full pipe can't stall it.
     let reader = |pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
@@ -154,14 +174,14 @@ fn run(command: &mut Command, limit: Duration, tick: &dyn Fn(Duration)) -> Resul
     let started = Instant::now();
     let mut told = Duration::ZERO;
     let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child.try_wait().map_err(|e| Failed::Error(e.to_string()))? {
             break status;
         }
         let waited = started.elapsed();
         if waited >= limit {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("it didn't finish within {}", minutes(limit)));
+            return Err(Failed::TimedOut(limit));
         }
         if waited >= told + Duration::from_secs(15) {
             told = waited;
@@ -175,7 +195,7 @@ fn run(command: &mut Command, limit: Duration, tick: &dyn Fn(Duration)) -> Resul
     }
     // Its last words, from stderr if it wrote any (winget writes to stdout).
     let last = |text: &str| text.lines().map(str::trim).rfind(|l| !l.is_empty()).map(str::to_owned);
-    Err(last(stderr.as_str()).or_else(|| last(stdout.as_str())).unwrap_or_else(|| status.to_string()))
+    Err(Failed::Error(last(stderr.as_str()).or_else(|| last(stdout.as_str())).unwrap_or_else(|| status.to_string())))
 }
 
 /// "4 min", or "30 s" under a minute.

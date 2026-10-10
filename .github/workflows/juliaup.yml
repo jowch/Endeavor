@@ -82,3 +82,9 @@ jobs:
         run: |
           cargo test --locked -p endeavor --bin endeavor -- --ignored --exact juliaup::tests::installs_juliaup_and_julia_where_there_is_none --nocapture 2>&1 | tee test.log
           grep -q 'test result: ok. 1 passed' test.log || { echo "::error::The juliaup install test didn't run"; exit 1; }
+          # A retried App Installer install still passes, so say so where
+          # it will be seen.
+          if grep -q 'trying once more' test.log; then
+            echo "::warning::The App Installer install failed once and worked on its second try: $(grep -m1 'trying once more' test.log)"
+            echo "The App Installer install needed its second try." >> "$GITHUB_STEP_SUMMARY"
+          fi
