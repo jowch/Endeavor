@@ -1126,7 +1126,7 @@ mod tests {
         assert_eq!(bash.heading, format!("Run a command on {}?", crate::platform::this_computer!()));
         assert_eq!(bash.code, Some(super::CardCode::Plain("npm test".into())));
         assert_eq!(bash.lines[0].0, "Runs the tests");
-        assert!(bash.lines[1].0.starts_with("In ") && bash.lines[1].0.ends_with("projects/decay-fits"));
+        assert!(bash.lines[1].0.starts_with("In ") && bash.lines[1].0.ends_with(&crate::hosts::text(std::path::Path::new("projects/decay-fits"))));
         // ⏎ allows once, ⌘⏎ is Always this session (allow-once, remembered by Endeavor),
         // and "In this folder" is the agent's own allow-always, under the ⌄.
         assert_eq!(
