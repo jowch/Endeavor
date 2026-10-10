@@ -1838,11 +1838,19 @@ impl Workspace {
             })
             .collect();
         let open: HashSet<String> = self.sessions.iter().filter_map(|s| Some(s.id.as_ref()?.to_string())).collect();
-        let before: Vec<String> = self.records.saved().keys().cloned().collect();
-        if self.records.merge(agent, scope, listed, &open) {
+        // Ids Endeavor still keeps something for (only deleting a session clears
+        // these), so a session an older Endeavor dropped from sessions.json
+        // comes back when its agent lists it.
+        let known: HashSet<String> = (self.titles.keys())
+            .chain(self.session_notebooks.keys())
+            .chain(self.session_modes.keys())
+            .chain(self.session_resources.keys())
+            .chain(self.pending_moved.keys())
+            .chain(self.archived.iter())
+            .cloned()
+            .collect();
+        if self.records.merge(agent, scope, listed, &open, &known) {
             self.save_records();
-            // Sessions their agent no longer has: their copies of the transcript go too.
-            before.iter().filter(|id| self.records.get(id).is_none()).for_each(|id| transcript_copy::delete(id));
         }
     }
 

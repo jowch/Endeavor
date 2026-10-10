@@ -88,7 +88,8 @@ To wait for something, poll the dump. For example, loop until
   `mark` (`needs_approval`, `error`, `new_reply`, `server_down`, `waiting`
   or `archived`) and its `tooltip`. A past row's `source`
   is `record` (from sessions.json, drawn at launch) until the agent has listed
-  its folder this launch, then `listed`; an open row's is null. Also the "Show N more"
+  its folder this launch, then `listed`, or `missing` when that listing left it
+  out (the row stays); an open row's is null. Also the "Show N more"
   line, the Restart Julia row, the status line (`status`) and its mark
   (`status_mark`: `offline`, `signed_out`, `spinner` while Claude restarts,
   `red_dot` when something needs the user, or null).
