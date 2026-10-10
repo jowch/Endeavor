@@ -48,7 +48,8 @@ reasoning stays with the code.
 - An internet connection the first time you open Endeavor, and whenever you
   talk to Claude. Notebooks on your Mac keep working offline.
 
-Endeavor runs only on macOS for now. There is no Windows or Linux version.
+Endeavor is made for macOS. A Windows 10 or 11 (x64) build is there to try:
+see [On Windows](#on-windows). There is no Linux version.
 Besides Claude, a session on your Mac can use Codex, OpenAI's assistant,
 with a ChatGPT account. Pick it on the new-session screen. Other assistants
 are listed in Settings as **Not available yet**.
@@ -56,6 +57,32 @@ are listed in Settings as **Not available yet**.
 There is no signed download yet. For now, Endeavor is
 [built from its source code](https://github.com/jowch/Endeavor#build-it). The
 app also can't update itself yet.
+
+## On Windows
+
+The Windows build has made a notebook and run a Claude session from start
+to finish on Windows 10. It has rough edges:
+
+- It isn't signed, so Windows may say "Windows protected your PC". Choose
+  **More info**, then **Run anyway**.
+- There is no download page yet. You need a GitHub account to get it.
+- It can't use servers or clusters yet. Notebooks run on your computer.
+- Claude Code on Windows has needed [Git for Windows](https://git-scm.com/downloads/win).
+  Install it first if you don't have it.
+
+To install it:
+
+1. Sign in to GitHub and open the newest
+   [Windows build](https://github.com/jowch/Endeavor/actions/workflows/windows.yml?query=branch%3Amain+is%3Asuccess)
+   on `main`. Under **Artifacts**, download
+   `Endeavor-windows-x86_64-setup-…` and unzip it. Builds are kept for 30
+   days.
+2. Run `Endeavor-setup-….exe`. It installs for you only and doesn't ask for
+   an administrator.
+3. Click **Install**, then **Finish**. Endeavor opens and sets itself up.
+
+Uninstall it from **Settings → Apps**. Your sessions, settings and Julia stay
+in `%LOCALAPPDATA%\Endeavor`.
 
 ## What Endeavor installs on first launch
 

@@ -15,6 +15,9 @@ code and results, is the record of the analysis that you keep and can check.
 Read the [user guide](docs/guide/overview.md), also published at
 <https://jowch.github.io/Endeavor/>.
 
+A Windows build is there to try; the guide says
+[how to install it](docs/guide/overview.md#on-windows).
+
 The notebook tools also work without the app: run `endeavor serve` on a
 workstation or cluster node and connect any MCP agent and a browser. See
 [EndeavorMCP's README](https://github.com/jowch/EndeavorMCP#readme).
