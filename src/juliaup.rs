@@ -93,7 +93,12 @@ fn install_juliaup() -> Result<(), String> {
         return Ok(());
     };
     eprintln!("Installing juliaup from the Microsoft Store failed ({store}); trying its App Installer file.");
-    let script = format!("Add-AppxPackage -AppInstallerFile '{APP_INSTALLER}'");
+    // Add-AppxPackage's own error is several lines that end with its error
+    // id, so print the message alone, on one line.
+    let script = format!(
+        "try {{ Add-AppxPackage -AppInstallerFile '{APP_INSTALLER}' -ErrorAction Stop }} \
+         catch {{ [Console]::Error.WriteLine(($_.Exception.Message -replace '\\s+', ' ').Trim()); exit 1 }}"
+    );
     match run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]), INSTALL_LIMIT, &quiet) {
         Ok(_) => {
             eprintln!("Installed juliaup from its App Installer file.");
