@@ -49,7 +49,7 @@ for example "8 CPUs · 32 GB · 8 h". Click it to set this session's job:
 - the partition;
 - CPUs, memory and time limit, each kept within what the partition allows.
   When one is at the partition's limit, a line under them says so, for
-  example "LocalQ's nodes have at most 7 GB of memory". A preset bigger than
+  example "standard's nodes have at most 7 GB of memory". A preset bigger than
   the cluster's nodes is cut down to fit, so the job can start.
 
 If you already have an `salloc` line that you use on this cluster, click

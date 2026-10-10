@@ -353,14 +353,14 @@ mod tests {
 
     #[test]
     fn a_size_at_the_partitions_limit_says_so() {
-        let parts = [Partition { default: true, name: "LocalQ".into(), max_minutes: Some(480), ..short() }];
+        let parts = [Partition { default: true, name: "standard".into(), max_minutes: Some(480), ..short() }];
         let mut r = Resources::default();
         apply(&mut r, &Change::Preset(1), &parts);
-        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("LocalQ's nodes have at most 7 GB of memory, and it allows at most 8 h."));
+        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("standard's nodes have at most 7 GB of memory, and it allows at most 8 h."));
         apply(&mut r, &Change::Step(Field::Time, false), &parts);
-        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("LocalQ's nodes have at most 7 GB of memory."));
+        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("standard's nodes have at most 7 GB of memory."));
         apply(&mut r, &Change::Step(Field::Cpus, true), &parts);
-        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("LocalQ's nodes have at most 10 CPUs and 7 GB of memory."));
+        assert_eq!(limit_note(&r, &parts[0]).as_deref(), Some("standard's nodes have at most 10 CPUs and 7 GB of memory."));
         let r = Resources { minutes: 60, mem_gb: 4, ..Resources::preset(0) };
         assert_eq!(limit_note(&r, &short()).as_deref(), Some("short allows at most 1 h."));
         assert_eq!(limit_note(&Resources { minutes: 30, ..r }, &short()), None);

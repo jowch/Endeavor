@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn a_job_asks_for_no_more_than_its_partitions_largest_node() {
-        let small = Partition { name: "LocalQ".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
+        let small = Partition { name: "standard".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
         let big = Partition { name: "big".into(), default: false, max_minutes: Some(60), cpus: 64, mem_mb: 512 * 1024 };
         let cluster = Cluster { partitions: vec![small, big], account: Some("lab".into()), ..Default::default() };
         // Medium, as a cluster saved before Test connection has it.
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn partitions_arriving_fit_the_defaults_and_the_draft() {
-        let small = Partition { name: "LocalQ".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
+        let small = Partition { name: "standard".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
         let short = Partition { name: "short".into(), default: false, max_minutes: Some(60), cpus: 2, mem_mb: 4096 };
         // Added without Test connection: Medium, and a draft copied from it.
         let mut cluster = Cluster::default();
