@@ -72,8 +72,10 @@ To wait for something, poll the dump. For example, loop until
   a minute); `error` is why it last stopped, with the log's last lines (null
   while up); `details_open` is whether the "Claude isn't running" card's
   Details are open; `connected` is whether Claude has connected since launch.
-- `usage_limit`. Null unless a turn hit the account's usage limit. Then
+  `usage_limit` is null unless a turn hit Claude's usage limit; then
   `resets_in_secs`, or null when Claude Code's message gave no time.
+  `codex` has the same `usage_limit` for Codex: one agent's limit doesn't
+  hold the other's sessions.
 - `notice`. A one-off failure's notice (a failed export, rename, move, run,
   restart, stop, new notebook or sign out), or null: its `spot` (where it
   hangs: `notebook_name`, `notebook_buttons`, `notebook_pane` or
