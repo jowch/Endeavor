@@ -41,8 +41,9 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   Developer ID signature, hardened runtime, and notarization. The Windows
   build isn't signed either.
 - **A release pipeline** ([#13](https://github.com/jowch/Endeavor/issues/13)).
-  CI keeps a Windows build and installer to try; the Mac build isn't kept,
-  and nothing is published as a release yet.
+  CI keeps a Windows build and installer to try, and a "nightly"
+  prerelease holds the newest Mac app and Windows installer from `main`
+  (`nightly.yml`). There are no versioned releases yet.
 - **Updates** ([#15](https://github.com/jowch/Endeavor/issues/15)). The app
   can't update itself or check for a newer version, so Check now is hidden.
 - **The Windows installer** ([#12](https://github.com/jowch/Endeavor/issues/12)):
@@ -97,4 +98,5 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
 | `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
 | `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
+| `.github/workflows/nightly.yml` | the nightly is unsigned and Apple Silicon only | sharing (above) |
 | `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns), and the build has no server helpers | the installer is shared (#12) |

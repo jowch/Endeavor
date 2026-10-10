@@ -9,7 +9,7 @@
 # ponytail: ad-hoc signed; Developer ID signing + notarization come with sharing.
 set -eu
 cd "$(dirname "$0")/.."
-cargo build --release
+cargo build --locked --release
 # Linux servers' helpers: kept, downloaded or built (scripts/helpers.sh).
 scripts/helpers.sh || echo "note: no helpers for Linux servers; this build can't connect to them" >&2
 

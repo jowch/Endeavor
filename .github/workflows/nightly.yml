@@ -1,0 +1,124 @@
+# Keeps one "nightly" prerelease holding the newest build of main that passed
+# CI on macOS, Linux and Windows: Endeavor-macos-arm64.zip (scripts/bundle.sh,
+# with the Linux servers' helpers inside) and Endeavor-windows-x86_64-setup.exe
+# (the installer windows.yml built from that same commit). Each run replaces the
+# files and moves the tag, so the download links stay the same and releases
+# don't pile up. A scheduled run does nothing when the nightly already holds
+# that commit.
+# ponytail: unsigned. The Mac app is ad-hoc signed (Gatekeeper makes the user
+# allow it in System Settings) and the installer isn't signed (SmartScreen
+# warns). Apple Silicon only. The Windows build has no server helpers
+# (windows.yml).
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The newest main commit whose Windows run (with its installer) and CI run
+  # both passed.
+  pick:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      windows_run: ${{ steps.pick.outputs.windows_run }}
+      skip: ${{ steps.pick.outputs.skip }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          sha=; windows_run=
+          for row in $(gh run list --workflow windows.yml --branch main --event push --status success --limit 20 --json databaseId,headSha -q '.[] | "\(.databaseId),\(.headSha)"'); do
+            if [ "$(gh run list --workflow ci.yml --commit "${row#*,}" --event push --status success --json databaseId -q length)" != 0 ]; then
+              windows_run=${row%,*}; sha=${row#*,}; break
+            fi
+          done
+          [ -n "$sha" ] || { echo "No recent commit on main passed both CI and the Windows build." >&2; exit 1; }
+          current=$(gh api "repos/$GH_REPO/git/ref/tags/nightly" -q .object.sha 2>/dev/null || true)
+          skip=false
+          if [ "$current" = "$sha" ] && [ "${{ github.event_name }}" = schedule ]; then skip=true; fi
+          echo "main $sha (Windows run $windows_run); nightly now ${current:-none}; skip $skip"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "windows_run=$windows_run" >> "$GITHUB_OUTPUT"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+  mac:
+    needs: pick
+    if: needs.pick.outputs.skip != 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.pick.outputs.sha }}
+      - name: Toolchain
+        run: rustup toolchain install
+      # Fails if EndeavorMCP's Helpers release has no build for the pinned
+      # commit, rather than shipping an app that can't reach Linux servers.
+      - name: Linux servers' helpers
+        run: scripts/helpers.sh --fetch-only
+      - name: Bundle
+        run: |
+          scripts/bundle.sh
+          mkdir dist
+          ditto -c -k --keepParent target/release/Endeavor.app dist/Endeavor-macos-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-mac
+          path: dist/
+          retention-days: 1
+
+  publish:
+    needs: [pick, mac]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ needs.pick.outputs.sha }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightly-mac
+          path: dist
+      - name: The Windows installer
+        run: |
+          set -eu
+          gh run download "${{ needs.pick.outputs.windows_run }}" --pattern 'Endeavor-windows-x86_64-setup-*' --dir win
+          setup=$(find win -name 'Endeavor-setup-*.exe' | head -1)
+          [ -n "$setup" ] || { echo "The Windows run kept no installer." >&2; exit 1; }
+          cp "$setup" dist/Endeavor-windows-x86_64-setup.exe
+          ls -l dist
+      - name: Publish
+        run: |
+          set -eu
+          short=$(echo "$SHA" | cut -c1-7)
+          cat > notes.md <<EOF
+          The newest build of main that passed CI: build $short, $(date -u +%Y-%m-%d). It is replaced every day main changes. It is a test build: expect rough edges.
+
+          - **Mac** (Apple Silicon, macOS 13 or later): unzip Endeavor-macos-arm64.zip and move Endeavor to Applications. It isn't signed by a known developer, so macOS blocks the first open: open it once, then go to System Settings, Privacy & Security, and click Open Anyway.
+          - **Windows** (10 or 11, 64-bit): run Endeavor-windows-x86_64-setup.exe. It isn't signed, so Windows may say it protected your PC: click More info, then Run anyway. The Windows build can't connect to servers yet.
+          - **Linux**: build it from source (docs/development.md).
+          EOF
+          if ! gh release view nightly >/dev/null 2>&1; then
+            gh release create nightly --prerelease --title "Nightly build" --notes-file notes.md --target "$SHA"
+          fi
+          gh release upload nightly dist/* --clobber
+          gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$SHA" -F force=true >/dev/null
+          gh release edit nightly --prerelease --title "Nightly build" --notes-file notes.md
