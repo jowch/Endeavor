@@ -196,7 +196,10 @@ impl Workspace {
             Row::Past(..) => None,
         };
         let archived = self.row_session_id(row).is_some_and(|id| self.archived.contains(&id.to_string()));
-        let tooltip = row_mark.as_ref().map(|m| m.words());
+        let tooltip = match row {
+            Row::Past(id, _) => self.unlisted_words(id).map(|w| w.to_string()),
+            Row::Open(_) => row_mark.as_ref().map(|m| m.words()),
+        };
         let mark = row_mark.as_ref().map(|m| m.name()).or(archived.then_some("archived"));
         let source = match row {
             Row::Open(_) => None,

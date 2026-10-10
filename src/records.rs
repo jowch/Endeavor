@@ -159,12 +159,13 @@ impl Records {
     /// such as the Claude Code CLI's, aren't added, except one in `known`
     /// (ids Endeavor still has a name, notebook or mode for) listed in a
     /// folder, which brings back a record an older Endeavor dropped. That
-    /// agent's sessions in `scope` the listing leaves out are marked missing
-    /// and kept, since an empty or short list can mean the agent is signed
-    /// out or looking at another profile; `keep` (open sessions, which an
-    /// agent may not list until their first turn) aren't marked. Other
-    /// agents' sessions are untouched. True if a record changed.
-    pub fn merge(&mut self, agent: Agent, scope: Scope, listed: Vec<Listed>, keep: &HashSet<String>, known: &HashSet<String>) -> bool {
+    /// agent's sessions in `scope` a `complete` listing (no further page)
+    /// leaves out are marked missing and kept, since an empty or short list
+    /// can mean the agent is signed out or looking at another profile; `keep`
+    /// (open sessions, which an agent may not list until their first turn)
+    /// aren't marked. Other agents' sessions are untouched. True if a record
+    /// changed.
+    pub fn merge(&mut self, agent: Agent, scope: Scope, listed: Vec<Listed>, complete: bool, keep: &HashSet<String>, known: &HashSet<String>) -> bool {
         let before = self.records.clone();
         let ids: HashSet<&str> = listed.iter().map(|l| l.id.as_str()).collect();
         for (id, r) in &self.records {
@@ -173,7 +174,7 @@ impl Records {
             }
             if ids.contains(id.as_str()) || keep.contains(id) {
                 self.missing.remove(id);
-            } else {
+            } else if complete {
                 self.missing.insert(id.clone());
             }
         }
@@ -277,6 +278,7 @@ mod tests {
             Agent::Claude,
             Scope::Folder(Place::local("/f")),
             vec![listed("kept", Some("New title"), Some(50)), listed("cli", Some("From the CLI"), Some(40)), listed("bare", None, Some(30))],
+            true,
             &keep,
             &none(),
         );
@@ -301,7 +303,7 @@ mod tests {
                 "b": {"agent": "claude", "place": {"host": {"server": "lab"}, "path": "/y"}},
                 "c": {"agent": "claude", "place": {"host": {"server": "hpc"}, "path": "/x"}}}"#,
         );
-        records.merge(Agent::Claude, Scope::Host(HostId::Server("lab".into())), vec![listed("a", Some("A"), Some(9)), listed("stranger", None, None)], &none(), &HashSet::from(["stranger".to_owned()]));
+        records.merge(Agent::Claude, Scope::Host(HostId::Server("lab".into())), vec![listed("a", Some("A"), Some(9)), listed("stranger", None, None)], true, &none(), &HashSet::from(["stranger".to_owned()]));
         assert_eq!(records.get("a"), Some(&record(Some(server("lab", "/x")), Some("A"), Some(9))));
         assert_eq!(records.get("b"), Some(&record(Some(server("lab", "/y")), None, None)));
         assert!(records.is_missing("b") && !records.is_missing("a") && !records.is_missing("c"));
@@ -313,7 +315,7 @@ mod tests {
     #[test]
     fn merge_leaves_other_agents_sessions_alone() {
         let mut records = Records::parse(r#"{"mine": {"agent": "claude", "place": "/f"}, "theirs": {"agent": "codex", "place": "/f", "title": "T"}}"#);
-        records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("theirs", Some("Renamed"), Some(5))], &none(), &none());
+        records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("theirs", Some("Renamed"), Some(5))], true, &none(), &none());
         assert_eq!(records.get("mine"), Some(&record(Some(Place::local("/f")), None, None)));
         assert!(records.is_missing("mine") && !records.is_missing("theirs"));
         assert_eq!(records.get("theirs"), Some(&Record { agent: Agent::Codex, place: Some(Place::local("/f")), title: Some("T".into()), updated: None }));
@@ -322,8 +324,8 @@ mod tests {
     #[test]
     fn an_unchanged_listing_changes_nothing() {
         let mut records = Records::parse(r#"{"a": {"agent": "claude", "place": "/f", "title": "A", "updated": 9}}"#);
-        assert!(!records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("a", Some("A"), Some(9))], &none(), &none()));
-        assert!(!records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("a", None, None)], &none(), &none()));
+        assert!(!records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("a", Some("A"), Some(9))], true, &none(), &none()));
+        assert!(!records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("a", None, None)], true, &none(), &none()));
         assert_eq!(records.get("a"), Some(&record(Some(Place::local("/f")), Some("A"), Some(9))));
     }
 
@@ -338,7 +340,7 @@ mod tests {
     fn an_empty_listing_keeps_every_record() {
         let mut records = two_sessions();
         let saved = records.saved().clone();
-        assert!(!records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![], &none(), &none()), "nothing to save");
+        assert!(!records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![], true, &none(), &none()), "nothing to save");
         assert_eq!(records.saved(), &saved);
         assert!(records.is_missing("a") && records.is_missing("b"));
         assert_eq!(records.in_folder(&Place::local("/f")).len(), 2, "both still show");
@@ -351,33 +353,47 @@ mod tests {
         let mut records = two_sessions();
         let saved = records.saved().clone();
         let f = Scope::Folder(Place::local("/f"));
-        records.merge(Agent::Claude, f.clone(), vec![], &none(), &none());
+        records.merge(Agent::Claude, f.clone(), vec![], true, &none(), &none());
         let json = serde_json::to_string(records.saved()).unwrap();
         let mut relaunched = Records::parse(&json);
         assert_eq!(relaunched.saved(), &saved, "sessions.json still holds both");
         assert!(!relaunched.is_missing("a"), "missing is for this launch only");
-        relaunched.merge(Agent::Claude, f, vec![listed("a", Some("A"), Some(9)), listed("b", Some("B"), Some(8))], &none(), &none());
+        relaunched.merge(Agent::Claude, f, vec![listed("a", Some("A"), Some(9)), listed("b", Some("B"), Some(8))], true, &none(), &none());
         assert_eq!(relaunched.saved(), &saved);
         assert!(!relaunched.is_missing("a") && !relaunched.is_missing("b"));
     }
 
     #[test]
-    fn a_partial_listing_keeps_the_rest() {
+    fn a_short_listing_keeps_the_rest() {
         let mut records = two_sessions();
         let f = Scope::Folder(Place::local("/f"));
-        records.merge(Agent::Claude, f.clone(), vec![listed("a", Some("A2"), Some(20))], &none(), &none());
+        records.merge(Agent::Claude, f.clone(), vec![listed("a", Some("A2"), Some(20))], true, &none(), &none());
         assert_eq!(records.get("a").and_then(|r| r.title.as_deref()), Some("A2"));
         assert_eq!(records.get("b"), Some(&record(Some(Place::local("/f")), Some("B"), Some(8))));
         assert!(records.is_missing("b") && !records.is_missing("a"));
         // The next, full listing has it again.
-        records.merge(Agent::Claude, f, vec![listed("a", None, None), listed("b", None, None)], &none(), &none());
+        records.merge(Agent::Claude, f, vec![listed("a", None, None), listed("b", None, None)], true, &none(), &none());
         assert!(!records.is_missing("b"));
+    }
+
+    #[test]
+    fn a_first_page_marks_nothing_missing() {
+        // The agent has more pages (Codex pages over every thread, then filters
+        // by folder), so a session left out may just be on a later page.
+        let mut records = two_sessions();
+        let known = HashSet::from(["lost".to_owned()]);
+        let changed = records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("a", Some("A2"), Some(20)), listed("lost", None, None)], false, &none(), &known);
+        assert!(changed);
+        assert_eq!(records.get("a").and_then(|r| r.title.as_deref()), Some("A2"), "titles and times still update");
+        assert!(records.get("lost").is_some(), "known ids still come back");
+        assert!(!records.is_missing("b"));
+        assert!(records.get("b").is_some());
     }
 
     #[test]
     fn only_deleting_removes_a_record() {
         let mut records = two_sessions();
-        records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![], &none(), &none());
+        records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![], true, &none(), &none());
         assert!(records.remove("b"));
         assert_eq!(records.get("b"), None);
         assert!(!records.is_missing("b"));
@@ -394,6 +410,7 @@ mod tests {
             Agent::Claude,
             Scope::Folder(Place::local("/f")),
             vec![listed("a", None, None), listed("lost", Some("Fit decay"), Some(7)), listed("cli", Some("From the CLI"), None)],
+            true,
             &none(),
             &known,
         );

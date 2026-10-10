@@ -1095,26 +1095,34 @@ impl Workspace {
         if self.renaming.as_ref().is_some_and(|r| matches!(&r.row, Row::Past(p, _) if *p == id)) {
             self.renaming = None;
         }
-        if self.records.remove(&id.to_string()) {
-            self.save_records();
-        }
-        if self.titles.remove(&id.to_string()).is_some() {
-            save_json("titles.json", &self.titles);
-        }
-        if self.session_modes.remove(&id.to_string()).is_some() {
-            save_json("modes.json", &self.session_modes);
-        }
-        if self.archived.remove(&id.to_string()) {
-            save_json("archived.json", &self.archived);
-        }
-        if self.session_notebooks.remove(&id.to_string()).is_some() {
-            save_json("notebooks.json", &self.session_notebooks);
-        }
-        if self.pending_moved.remove(&id.to_string()).is_some() {
-            save_json("pending-context.json", &self.pending_moved);
-        }
+        self.forget_session(&id.to_string());
         transcript_copy::delete(&id.to_string());
         cx.notify();
+    }
+
+    /// Everything Endeavor keeps for a deleted session; `known_ids` reads the same files.
+    fn forget_session(&mut self, id: &str) {
+        if self.records.remove(id) {
+            self.save_records();
+        }
+        if self.titles.remove(id).is_some() {
+            save_json("titles.json", &self.titles);
+        }
+        if self.session_modes.remove(id).is_some() {
+            save_json("modes.json", &self.session_modes);
+        }
+        if self.archived.remove(id) {
+            save_json("archived.json", &self.archived);
+        }
+        if self.session_notebooks.remove(id).is_some() {
+            save_json("notebooks.json", &self.session_notebooks);
+        }
+        if self.pending_moved.remove(id).is_some() {
+            save_json("pending-context.json", &self.pending_moved);
+        }
+        if self.session_resources.remove(id).is_some() {
+            save_json("resources.json", &self.session_resources);
+        }
     }
 
     /// A menu or popover open that a click outside it, even on the web view,
@@ -1736,9 +1744,9 @@ impl Workspace {
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
-            AgentEvent::Listed { cwd, sessions: Ok(sessions) } => self.on_listed(agent, &cwd, sessions),
+            AgentEvent::Listed { cwd, sessions: Ok(sessions), complete } => self.on_listed(agent, &cwd, sessions, complete),
             // The sidebar keeps what the record has.
-            AgentEvent::Listed { cwd, sessions: Err(e) } => eprintln!("Couldn't list the sessions in {}: {e}", cwd.display()),
+            AgentEvent::Listed { cwd, sessions: Err(e), .. } => eprintln!("Couldn't list the sessions in {}: {e}", cwd.display()),
             AgentEvent::Forked { key, id } => {
                 if let Some(session) = self.session_mut(key) {
                     session.id = Some(id);
@@ -1819,12 +1827,27 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Ids Endeavor keeps something for besides sessions.json, so a session an
+    /// older Endeavor dropped from it comes back when its agent lists it. Only
+    /// Delete clears these (`forget_session`), so a deleted session can't.
+    fn known_ids(&self) -> HashSet<String> {
+        (self.titles.keys())
+            .chain(self.session_notebooks.keys())
+            .chain(self.session_modes.keys())
+            .chain(self.session_resources.keys())
+            .chain(self.pending_moved.keys())
+            .chain(self.archived.iter())
+            .cloned()
+            .collect()
+    }
+
     fn save_records(&self) {
         save_json("sessions.json", self.records.saved());
     }
 
-    /// An agent's listing of a folder, or of a server's whole agent folder.
-    fn on_listed(&mut self, agent: records::Agent, cwd: &Path, sessions: Vec<SessionInfo>) {
+    /// An agent's listing of a folder, or of a server's whole agent folder;
+    /// `complete` when the agent had no further page.
+    fn on_listed(&mut self, agent: records::Agent, cwd: &Path, sessions: Vec<SessionInfo>, complete: bool) {
         let scope = match HostId::of_agent_cwd(cwd) {
             Some(host) => records::Scope::Host(host),
             None => records::Scope::Folder(Place::local(cwd)),
@@ -1838,18 +1861,7 @@ impl Workspace {
             })
             .collect();
         let open: HashSet<String> = self.sessions.iter().filter_map(|s| Some(s.id.as_ref()?.to_string())).collect();
-        // Ids Endeavor still keeps something for (only deleting a session clears
-        // these), so a session an older Endeavor dropped from sessions.json
-        // comes back when its agent lists it.
-        let known: HashSet<String> = (self.titles.keys())
-            .chain(self.session_notebooks.keys())
-            .chain(self.session_modes.keys())
-            .chain(self.session_resources.keys())
-            .chain(self.pending_moved.keys())
-            .chain(self.archived.iter())
-            .cloned()
-            .collect();
-        if self.records.merge(agent, scope, listed, &open, &known) {
+        if self.records.merge(agent, scope, listed, complete, &open, &self.known_ids()) {
             self.save_records();
         }
     }

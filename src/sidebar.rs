@@ -680,8 +680,6 @@ impl Workspace {
         sidebar_filter::order_folders(folders, self.settings.sidebar_filters.group_by)
     }
 
-    /// A folder's past sessions the sidebar lists, newest first: recorded, not
-    /// already open, and matching the Status filter.
     /// For a past session its agent's latest listing left out (signed out, a
     /// fresh profile, a list that failed partway): the row's tooltip.
     pub(crate) fn unlisted_words(&self, id: &SessionId) -> Option<SharedString> {
@@ -693,6 +691,8 @@ impl Workspace {
         Some(format!("{agent} didn't list this session, so it may be signed out or on another account. Endeavor keeps the session; open it to try again.").into())
     }
 
+    /// A folder's past sessions the sidebar lists, newest first: recorded, not
+    /// already open, and matching the Status filter.
     fn past_rows(&self, folder: &Place) -> Vec<SessionId> {
         let is_open = |id: &str| self.sessions.iter().any(|s| s.id.as_ref().is_some_and(|s| s.to_string() == id));
         let status = self.settings.sidebar_filters.status;
