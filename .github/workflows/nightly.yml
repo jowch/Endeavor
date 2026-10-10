@@ -4,7 +4,9 @@
 # (the installer windows.yml built from that same commit). Each run replaces the
 # files and moves the tag, so the download links stay the same and releases
 # don't pile up. A scheduled run does nothing when the nightly already holds
-# that commit.
+# that commit. On a pull request that changes the Mac packaging it only builds
+# the disk image from the pull request and keeps it as an Actions artifact,
+# with a screenshot of its window; nothing is published.
 # ponytail: unsigned. The Mac app is ad-hoc signed (Gatekeeper makes the user
 # allow it in System Settings) and the installer isn't signed (SmartScreen
 # warns). Apple Silicon only. The Windows build has no server helpers
@@ -15,17 +17,22 @@ on:
   schedule:
     - cron: '0 9 * * *'
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+      - assets/dmg/**
+      - scripts/bundle.sh
 
 concurrency:
-  group: nightly
-  cancel-in-progress: false
+  group: nightly-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
   # The newest main commit whose Windows run (with its installer) and CI run
-  # both passed.
+  # both passed; on a pull request, its head.
   pick:
     runs-on: ubuntu-24.04
     permissions:
@@ -42,6 +49,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -eu
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            { echo "sha=${{ github.event.pull_request.head.sha }}"; echo "windows_run="; echo "skip=false"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           sha=; windows_run=
           for row in $(gh run list --workflow windows.yml --branch main --event push --status success --limit 20 --json databaseId,headSha -q '.[] | "\(.databaseId),\(.headSha)"'); do
             if [ "$(gh run list --workflow ci.yml --commit "${row#*,}" --event push --status success --json databaseId -q length)" != 0 ]; then
@@ -77,31 +88,47 @@ jobs:
             echo "::error::EndeavorMCP's Helpers release has no build for the commit Cargo.lock pins: Helpers never built it, or pruned it because this app commit is older than the last 10 pins on main. No nightly this time."
             exit 1
           }
-      # A disk image with the app and a link to Applications, the usual
-      # drag-to-install window. The app inside keeps bundle.sh's ad-hoc
-      # signature. hdiutil sometimes fails with "Resource busy" on hosted
-      # runners, so it gets three tries.
+      # A disk image whose window shows the splash scene (assets/dmg), the app
+      # and a link to Applications. dmgbuild writes the window's layout itself,
+      # so it doesn't need Finder, and copies the app with ditto, which keeps
+      # bundle.sh's ad-hoc signature.
       - name: Bundle
         run: |
           scripts/bundle.sh
-          mkdir -p dmg dist
-          ditto target/release/Endeavor.app dmg/Endeavor.app
-          codesign --verify --strict dmg/Endeavor.app
-          ln -s /Applications dmg/Applications
-          for try in 1 2 3; do
-            hdiutil create -volname Endeavor -srcfolder dmg -fs HFS+ -format UDZO -ov dist/Endeavor-macos-arm64.dmg && break
-            [ "$try" = 3 ] && exit 1
-            sleep 10
-          done
+          python3 -m venv target/dmgbuild
+          target/dmgbuild/bin/pip install -q dmgbuild==1.6.7
+          mkdir -p dist
+          target/dmgbuild/bin/dmgbuild -s assets/dmg/settings.py -D app=target/release/Endeavor.app Endeavor dist/Endeavor-macos-arm64.dmg
           hdiutil verify dist/Endeavor-macos-arm64.dmg
+      - name: Check the disk image
+        run: |
+          set -eu
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/endeavor-dmg dist/Endeavor-macos-arm64.dmg
+          ls -la /tmp/endeavor-dmg
+          codesign --verify --strict /tmp/endeavor-dmg/Endeavor.app
+          [ "$(readlink /tmp/endeavor-dmg/Applications)" = /Applications ]
+          test -f /tmp/endeavor-dmg/.DS_Store
+          hdiutil detach /tmp/endeavor-dmg
+      # What a user sees on opening it, for review on pull requests. Hosted
+      # runners have a desktop, but Finder there can be slow or refuse, so a
+      # missing screenshot doesn't fail the build.
+      - name: Screenshot of its window
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          open dist/Endeavor-macos-arm64.dmg
+          sleep 15
+          screencapture -x dist/dmg-window.png
+          hdiutil detach /Volumes/Endeavor || true
       - uses: actions/upload-artifact@v4
         with:
           name: nightly-mac
           path: dist/
-          retention-days: 1
+          retention-days: ${{ github.event_name == 'pull_request' && 14 || 1 }}
 
   publish:
     needs: [pick, mac]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -122,6 +149,7 @@ jobs:
           setup=$(find win -name 'Endeavor-setup-*.exe' | head -1)
           [ -n "$setup" ] || { echo "The Windows run kept no installer." >&2; exit 1; }
           cp "$setup" dist/Endeavor-windows-x86_64-setup.exe
+          rm -f dist/dmg-window.png
           ls -l dist
       - name: Publish
         run: |
