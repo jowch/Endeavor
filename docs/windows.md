@@ -336,12 +336,16 @@ only with servers.
   juliaup for this Windows account, from the Microsoft Store with `winget`,
   else from juliaup's App Installer file. Neither needs admin. It then adds
   the channel for the pinned Julia (`juliaup add 1.12.6`) if juliaup lacks it,
-  and runs that Julia's own `julia.exe` (its `Sys.BINDIR`), not juliaup's
-  launcher: Julia started through the Store app's alias outlived the runtime
+  and runs that channel's own `julia.exe`, which `juliaup api getconfig1`
+  lists. It never runs juliaup's launcher: on a fresh juliaup the launcher
+  first downloads the latest Julia, and a Julia started through the Store
+  app's alias outlived the runtime
   (EndeavorMCP #55). A juliaup the person already has keeps its default and
   other channels. A `julia-1.12.6` folder an older Endeavor downloaded is used
   while juliaup can't be set up, and removed once a runtime starts with
-  juliaup's Julia. Installing juliaup on a computer without it is untried.
+  juliaup's Julia. Each install route gets 10 minutes and `juliaup add` 45,
+  then the next route or an error. Installing juliaup on a computer without
+  it is untried.
 - Windows 10 and later include `curl.exe` and `tar.exe` (bsdtar), and that
   `tar` reads .zip. The app runs `%SystemRoot%\System32\tar.exe` by path,
   since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. The

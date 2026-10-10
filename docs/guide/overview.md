@@ -71,9 +71,10 @@ takes a few minutes and needs the internet once.
 - **Pluto and the packages it needs**, which Julia downloads from Julia's
   package registry.
 
-Endeavor checks the Julia and Node.js downloads against fixed checksums
-before it uses them (on Windows, Julia comes from juliaup, Julia's own
-installer, which Endeavor installs if you don't have it), and Claude Code's packages against a fixed list. A
+On Windows, Julia comes from juliaup, Julia's own installer, which
+Endeavor installs if you don't have it; juliaup checks the Julia it
+downloads. Endeavor checks the Node.js download, and outside Windows the
+Julia download, against fixed checksums before it uses them, and Claude Code's packages against a fixed list. A
 download that doesn't match is deleted, and setup stops and tells you.
 
 Everything goes into one folder:
