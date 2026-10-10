@@ -4,6 +4,7 @@
 // register here, and the app's header gets a summary as `state` messages.
 
 import { on, send } from "./bridge";
+import { changedCells } from "./runguard";
 import { statusModel, type NotebookLike, type StatusModel } from "./status";
 
 export type Drawer = "docs" | "status" | null;
@@ -57,6 +58,7 @@ export function report(): void {
     package_failed: model.failure?.name ?? null,
     dead: last.process_status === "no_process",
     connected: editor?.connected !== false,
+    unsaved: editor ? changedCells(editor).length > 0 : false,
     drawer: drawerOf(),
   };
   const json = JSON.stringify(msg);
