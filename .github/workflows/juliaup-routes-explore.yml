@@ -1,0 +1,45 @@
+# Temporary: tries each juliaup install route on its own (issue #62).
+name: juliaup routes (explore)
+on:
+  push:
+    branches: [claude/project-thread-w9vkoe]
+    paths: [.github/workflows/juliaup-routes-explore.yml]
+jobs:
+  route:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+        route: [store, appinstaller]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Runner
+        shell: pwsh
+        run: |
+          (Get-CimInstance Win32_OperatingSystem).Caption
+          Get-Command winget -ErrorAction SilentlyContinue | Format-List Source, Version
+          Get-Command juliaup -ErrorAction SilentlyContinue | Format-List Source
+          Get-Command julia -ErrorAction SilentlyContinue | Format-List Source
+      - name: Store
+        if: matrix.route == 'store'
+        shell: pwsh
+        run: |
+          $t = Get-Date
+          winget install --id 9NJNWW8PVKMN --exact --source msstore --accept-package-agreements --accept-source-agreements
+          "exit $LASTEXITCODE after $((Get-Date) - $t)"
+      - name: App Installer file
+        if: matrix.route == 'appinstaller'
+        shell: pwsh
+        run: |
+          $t = Get-Date
+          powershell -NoProfile -NonInteractive -Command "Add-AppxPackage -AppInstallerFile 'https://install.julialang.org/Julia.appinstaller'"
+          "exit $LASTEXITCODE after $((Get-Date) - $t)"
+      - name: Found
+        if: always()
+        shell: pwsh
+        run: |
+          Get-AppxPackage -Name *Julia* | Format-List Name, Version, InstallLocation
+          Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\juliaup.exe"
+          & "$env:LOCALAPPDATA\Microsoft\WindowsApps\juliaup.exe" --version
+          "exit $LASTEXITCODE"

@@ -79,9 +79,10 @@ fn exists(path: &Path) -> bool {
 }
 
 /// Install juliaup for this account: from the Microsoft Store with winget,
-/// else from its App Installer file. Neither needs admin.
+/// else from its App Installer file. Neither needs admin. Says which route
+/// installed it.
 #[cfg(windows)]
-fn install_juliaup() -> Result<(), String> {
+fn install_juliaup() -> Result<&'static str, String> {
     let quiet = |_: Duration| {};
     let store = run(
         Command::new("winget").args(["install", "--id", STORE_ID, "--exact", "--source", "msstore", "--accept-package-agreements", "--accept-source-agreements"]),
@@ -90,14 +91,14 @@ fn install_juliaup() -> Result<(), String> {
     );
     let Err(store) = store else {
         eprintln!("Installed juliaup from the Microsoft Store.");
-        return Ok(());
+        return Ok("the Microsoft Store");
     };
     eprintln!("Installing juliaup from the Microsoft Store failed ({store}); trying its App Installer file.");
     let script = format!("Add-AppxPackage -AppInstallerFile '{APP_INSTALLER}'");
     match run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]), INSTALL_LIMIT, &quiet) {
         Ok(_) => {
             eprintln!("Installed juliaup from its App Installer file.");
-            Ok(())
+            Ok("its App Installer file")
         }
         Err(file) => Err(format!(
             "Couldn't install juliaup, which Endeavor uses to install Julia. From the Microsoft Store: {store}. From its installer file: {file}. \
@@ -198,5 +199,38 @@ mod tests {
         assert_eq!(channel_file(&as_default, "1.12.6"), Some(PathBuf::from(file)));
         assert_eq!(channel_file(r#"{"DefaultChannel":null,"OtherChannels":[]}"#, "1.12.6"), None, "a juliaup with no channels yet");
         assert_eq!(channel_file("not json", "1.12.6"), None);
+    }
+
+    /// The first run on a Windows computer with no juliaup: install it, add
+    /// the pinned channel and find that channel's julia.exe. It changes the
+    /// account it runs as, so it's ignored; the Windows workflow's juliaup job
+    /// runs it on a fresh runner (issue #62).
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "installs juliaup and Julia for this account; run on a computer without juliaup"]
+    fn installs_juliaup_and_julia_where_there_is_none() {
+        let version = crate::runtime::JULIA_VERSION;
+        assert_eq!(find_juliaup(), None, "this computer already has juliaup, so its install can't be tried here");
+        let started = Instant::now();
+        let route = install_juliaup().unwrap_or_else(|why| panic!("{why}"));
+        let installed = started.elapsed();
+        eprintln!("juliaup installed from {route} in {}", minutes(installed));
+        let started = Instant::now();
+        let julia = julia(version, &|what, _| eprintln!("{what}")).unwrap_or_else(|why| panic!("{why}"));
+        let added = started.elapsed();
+        eprintln!("Julia {version} added in {}: {}", minutes(added), julia.display());
+        assert!(
+            julia.components().any(|c| c.as_os_str().to_string_lossy().starts_with(&format!("julia-{version}"))),
+            "{} isn't in a julia-{version} folder",
+            julia.display()
+        );
+        let said = run(Command::new(&julia).arg("--version"), LIST_LIMIT, &|_| {}).unwrap_or_else(|why| panic!("{} --version: {why}", julia.display()));
+        assert_eq!(said.trim(), format!("julia version {version}"));
+        // For the workflow's summary.
+        if let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+            use std::io::Write;
+            let line = format!("juliaup installed from {route} in {}; Julia {version} added in {}.\n", minutes(installed), minutes(added));
+            let _ = std::fs::OpenOptions::new().append(true).open(summary).and_then(|mut f| f.write_all(line.as_bytes()));
+        }
     }
 }

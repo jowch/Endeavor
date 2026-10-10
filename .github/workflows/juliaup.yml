@@ -1,0 +1,62 @@
+# The app's first run on a Windows computer with no juliaup (issue #62): it
+# installs juliaup for the account (the Microsoft Store with winget, else
+# juliaup's App Installer file), adds the pinned Julia's channel and finds
+# that channel's julia.exe (src/juliaup.rs). GitHub's Windows runner has no
+# juliaup, so this runs that path for real, as the ignored test
+# installs_juliaup_and_julia_where_there_is_none. The job summary says which
+# route installed juliaup and how long each part took.
+#
+# It downloads juliaup and about 300 MB of Julia, so it runs only when the
+# install code or this file changes, once a week (the Store and juliaup's
+# installer change without us), and by hand.
+name: juliaup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/juliaup.rs
+      - src/runtime.rs
+      - .github/workflows/juliaup.yml
+  pull_request:
+    paths:
+      - src/juliaup.rs
+      - src/runtime.rs
+      - .github/workflows/juliaup.yml
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: juliaup-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  first-install:
+    name: juliaup first install (windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Git
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build the test
+        run: cargo test --locked -p endeavor --bin endeavor --no-run
+      # What the runner has, for reading a failure.
+      - name: Runner
+        shell: pwsh
+        run: |
+          [Environment]::OSVersion.VersionString
+          (Get-CimInstance Win32_OperatingSystem).Caption
+          Get-Command winget -ErrorAction SilentlyContinue | Format-List Source, Version
+          Get-Command juliaup -ErrorAction SilentlyContinue | Format-List Source
+          Get-AppxPackage -Name *Julia* | Format-List Name, Version
+      - name: Install juliaup and Julia
+        run: cargo test --locked -p endeavor --bin endeavor -- --ignored --exact juliaup::tests::installs_juliaup_and_julia_where_there_is_none --nocapture
