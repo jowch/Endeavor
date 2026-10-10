@@ -90,6 +90,34 @@ screenshots. `xdotool` drives clicks and keys. Without Julia's hosts the app
 stops at the splash with "Couldn't set up Julia", which the dump shows as
 `.window.setup.failed`.
 
+## The accessibility tree
+
+GPUI builds its accessibility tree only while a screen reader is on. To read
+it under Xvfb, start a session bus and the accessibility bus, switch the
+screen reader flag on, then start the app on that bus:
+
+```sh
+apt-get install -y at-spi2-core          # the bus launcher, once
+export DBUS_SESSION_BUS_ADDRESS=$(dbus-daemon --session --fork --print-address=1 | head -1)
+/usr/libexec/at-spi-bus-launcher --launch-immediately &
+for flag in IsEnabled ScreenReaderEnabled; do
+  dbus-send --session --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
+    string:org.a11y.Status string:$flag variant:boolean:true
+done
+DISPLAY=:99 target/debug/endeavor &      # with the state dump's variables as above
+python3.12 scripts/atspi-tree.py         # the tree, as Orca gets it
+python3.12 scripts/atspi-tree.py "Sign in"   # click a node by name, as a screen reader does
+```
+
+The system `python3` may not match the installed `gi`; `python3.12` does on
+this VM. AccessKit on Linux and macOS doesn't pass on whether a control is
+expanded; only Windows does. On a Mac, `scripts/ax-tree.swift` reads the
+same tree as VoiceOver gets it.
+
+A signed-in Claude hides the sign-in card. To see it, start the app with
+`ENDEAVOR_CLAUDE_CLI` set to a script that prints `{"loggedIn": false}` for
+`auth status` ([testing.md](testing.md)).
+
 ## A real Claude turn
 
 The app's agent (Claude Code through the ACP adapter) and the plugin need a

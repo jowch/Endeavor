@@ -7,7 +7,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use wire::slurm::{PRESETS, Partition, Resources, duration_text};
 
-use crate::new_session::{Glyph, glyph, menu_row};
+use crate::new_session::{Glyph, choice_row, glyph};
 use crate::{Workspace, theme};
 use crate::theme::TextButton as _;
 
@@ -167,6 +167,7 @@ impl Workspace {
                 div()
                     .id(("preset", i))
                     .role(Role::Button)
+                    .aria_toggled(if active { accesskit::Toggled::True } else { accesskit::Toggled::False })
                     .flex_1()
                     .h(px(26.))
                     .flex()
@@ -188,6 +189,8 @@ impl Workspace {
         let shown = r.partition.clone().or_else(|| default_name.clone().map(|n| format!("{n} (default)"))).unwrap_or_else(|| "Cluster default".into());
         let partition = div()
             .id(("partition-select", target.index()))
+            .role(Role::Button)
+            .aria_label(format!("Partition: {shown}"))
             .min_w(px(136.))
             .max_w(px(200.))
             .h(px(26.))
@@ -213,7 +216,8 @@ impl Workspace {
                         let time = p.max_minutes.map_or("no time limit".into(), |m| format!("up to {}", duration_text(m)));
                         format!("{time} · {} CPUs · {} GB per node", p.cpus, p.mem_gb())
                     });
-                    menu_row(("partition-option", i), r.partition == value, false)
+                    choice_row(("partition-option", i), r.partition == value, false, name.clone())
+                        .when_some(limits.clone(), |d, l| d.aria_description(l))
                         .child(div().flex_shrink_0().child(name))
                         .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_right().text_size(theme::size_meta_small()).text_color(theme::text_faint()).children(limits))
                         .on_click(cx.listener(on(Change::Partition(value))))
@@ -271,13 +275,17 @@ fn row(name: &'static str, control: impl IntoElement) -> Div {
 
 type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// − value +. `noun` names the buttons: "Decrease memory".
+/// − value +. `noun` names the buttons: "Decrease memory". GPUI has no live
+/// region, so each button's description carries the value ("Now 16 GB"), and
+/// the value is a node of its own for a screen reader to read.
 fn stepper(id: usize, noun: &'static str, value: String, minus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, plus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
+    let now: SharedString = format!("Now {value}").into();
     let button = |id: (&'static str, usize), text: &'static str, name: String, handler: OnClick| {
         div()
             .id(id)
             .role(Role::Button)
             .aria_label(name)
+            .aria_description(now.clone())
             .w(px(28.))
             .h_full()
             .flex()
@@ -299,7 +307,22 @@ fn stepper(id: usize, noun: &'static str, value: String, minus: impl Fn(&ClickEv
         .border_color(theme::control_edge())
         .overflow_hidden()
         .child(button(("step-down", id), "−", format!("Decrease {noun}"), Box::new(minus)))
-        .child(div().flex_1().h_full().flex().items_center().justify_center().border_l_1().border_r_1().border_color(theme::control_edge()).child(value))
+        .child(
+            div()
+                .id(("step-value", id))
+                .role(Role::Label)
+                .aria_label(noun)
+                .aria_value(value.clone())
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_l_1()
+                .border_r_1()
+                .border_color(theme::control_edge())
+                .child(value),
+        )
         .child(button(("step-up", id), "+", format!("Increase {noun}"), Box::new(plus)))
 }
 

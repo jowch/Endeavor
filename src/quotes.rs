@@ -552,6 +552,8 @@ impl Workspace {
                         .child(
                             div()
                                 .id(ElementId::NamedInteger("sent-quote".into(), (key << 32) | ((entry as u64) << 8) | i as u64))
+                                .role(Role::Button)
+                                .aria_label(format!("{label}, show in notebook"))
                                 .h(px(22.))
                                 .flex()
                                 .items_center()

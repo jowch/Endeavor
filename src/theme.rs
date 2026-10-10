@@ -205,6 +205,15 @@ impl<E: InteractiveElement> FocusRing for E {}
 /// sets both. A later `aria_label` still replaces the name. The name only
 /// reaches the tree when the element has a `role`: without one, GPUI makes
 /// no node and drops the label.
+///
+/// An element that only has `on_click` shouldn't also take `aria_expanded`
+/// or the `ComboBox` role unless it also handles `Action::Expand` and
+/// `Collapse` with `on_a11y_action` (#68). On Windows, AccessKit then offers
+/// a screen reader Expand instead of Invoke, and GPUI drops actions nothing
+/// handles. `aria_selected`, and `aria_toggled` on a radio menu item
+/// (`choice_row`), give Select instead: AccessKit sends it as a click, but
+/// only to a row not already selected or checked. Toggle on other roles is
+/// sent as a click.
 pub trait TextButton: StatefulInteractiveElement + ParentElement + Sized {
     fn button_text(self, text: impl Into<SharedString>) -> Self {
         let text = text.into();
