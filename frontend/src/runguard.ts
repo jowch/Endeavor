@@ -71,7 +71,7 @@ type EditorState = {
 const editor = (): EditorState | undefined => (window as any).editor_state;
 
 /** The cells ⌘S submits: those whose editor text differs from the notebook's (Pluto's own test). */
-function changedCells(st: EditorState): string[] {
+export function changedCells(st: EditorState): string[] {
   const local = st.cell_inputs_local ?? {};
   const remote = st.notebook?.cell_inputs ?? {};
   return (st.notebook?.cell_order ?? []).filter((id) => local[id] != null && remote[id]?.code !== local[id]?.code);
