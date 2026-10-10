@@ -39,13 +39,20 @@ pin. The others serve Julia packages (Pluto and its dependencies):
 `pkg.julialang.org` sends each client on to a regional server such as
 `us-east.pkg.julialang.org`.
 
+R notebooks need more. The first one installs Ember from
+`codeload.github.com` and any package Ember needs that Ubuntu's R lacks from
+`cloud.r-project.org`. A notebook's own packages come from
+`packagemanager.posit.co` (CRAN at the notebook's date) and
+`bioconductor.org`. Add those that the list doesn't already allow.
+
 ## The setup script
 
 `scripts/cloud-setup.sh` installs the app's Linux libraries (the list in
 [linux.md](linux.md)), Xvfb and Openbox, Julia 1.12.6 (checked against the
-SHA-256 the app pins), marimo 0.25.1 as a uv tool, and clippy and rustfmt
-for the pinned Rust. It is safe to run again, never fails the session, and
-takes about a minute on a fresh VM. EndeavorMCP keeps a copy; tests in both
+SHA-256 the app pins), R from Ubuntu's archive with the packages Ember needs,
+marimo 0.25.1 as a uv tool, and clippy and rustfmt for the pinned Rust. It is
+safe to run again, never fails the session, and takes a few minutes on a fresh
+VM. EndeavorMCP keeps a copy; tests in both
 repositories check that its Julia and Rust pins match the code's.
 
 Where it runs:
