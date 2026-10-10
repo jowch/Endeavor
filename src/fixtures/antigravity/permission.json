@@ -1,0 +1,50 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "session/request_permission",
+  "params": {
+    "sessionId": "9849bdfa-8dfa-4b20-a0d8-c2f58088932b",
+    "toolCall": {
+      "toolCallId": "8664290319b24032bc33122edd91b1f1",
+      "kind": "other",
+      "status": "pending",
+      "title": "notebook_new_notebook",
+      "content": [],
+      "locations": [
+        {
+          "path": "C:\\Users\\me\\notebooks\\sum.jl"
+        }
+      ],
+      "rawInput": {
+        "arguments": {
+          "path": "C:\\Users\\me\\notebooks\\sum.jl"
+        },
+        "path": "C:\\Users\\me\\notebooks\\sum.jl"
+      },
+      "_meta": {
+        "mcp": {
+          "tool": "new_notebook",
+          "server": "notebook"
+        },
+        "is_mcp_tool_call": true
+      }
+    },
+    "options": [
+      {
+        "optionId": "allow_always",
+        "name": "Allow Always",
+        "kind": "allow_always"
+      },
+      {
+        "optionId": "allow",
+        "name": "Allow",
+        "kind": "allow_once"
+      },
+      {
+        "optionId": "deny",
+        "name": "Deny",
+        "kind": "reject_once"
+      }
+    ]
+  }
+}

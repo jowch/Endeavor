@@ -17,6 +17,7 @@ mod dialogs;
 mod webkeys;
 mod about;
 mod agent;
+mod antigravity;
 mod annotate;
 mod approval;
 mod attach;
@@ -400,6 +401,7 @@ fn agent_options_file(agent: agent::Agent) -> &'static str {
     match agent {
         agent::Agent::Claude => "agent-options.json",
         agent::Agent::Codex => "codex-options.json",
+        agent::Agent::Antigravity => "antigravity-options.json",
     }
 }
 
@@ -490,6 +492,8 @@ pub struct Workspace {
     links: agent_process::Links,
     /// Codex's sign-in, once Codex has been started.
     codex_account: codex::Account,
+    /// Antigravity's sign-in, kept the same way as Codex's.
+    antigravity_account: codex::Account,
     /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
     annotating: bool,
@@ -765,6 +769,7 @@ impl Workspace {
             probing: false,
             links: agent_process::Links::default(),
             codex_account: codex::Account::Unknown,
+            antigravity_account: codex::Account::Unknown,
             status: "".into(),
             annotating: false,
             shots: HashMap::new(),
@@ -1736,6 +1741,8 @@ impl Workspace {
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
+            AgentEvent::AntigravitySignedIn(signed_in) => self.on_antigravity_signed_in(signed_in, cx),
+            AgentEvent::SignInEnded(result) => self.on_antigravity_sign_in_ended(result, cx),
             AgentEvent::Listed { cwd, sessions: Ok(sessions) } => self.on_listed(agent, &cwd, sessions),
             // The sidebar keeps what the record has.
             AgentEvent::Listed { cwd, sessions: Err(e) } => eprintln!("Couldn't list the sessions in {}: {e}", cwd.display()),

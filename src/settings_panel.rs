@@ -343,6 +343,7 @@ pub enum Act {
     /// Codex's browser sign-in, or checking it again.
     SignInCodex,
     CheckCodex,
+    SignInAntigravity,
     SignIn(Method),
     CancelSignIn,
     ReopenSignIn,
@@ -538,11 +539,27 @@ impl Workspace {
             r.controls.push(Control::Meta("Not available yet".into()));
             Item::Row(r)
         };
+        let antigravity = if Agent::Antigravity.available() {
+            let mut antigravity = row("antigravity", "Antigravity");
+            antigravity.aside = Some("by Google".into());
+            antigravity.lead = Lead::Radio { checked: self.settings.agent == Agent::Antigravity, act: Some(Act::UseAgent(Agent::Antigravity)) };
+            antigravity.search = Some("Antigravity Google Gemini assistant sign in".into());
+            antigravity.desc = Some("Sessions on this computer only. Uses your Google account.".into());
+            antigravity.status = Some(match self.antigravity_account {
+                crate::codex::Account::Unknown => Status2::new("Starts when you pick it", Tone::Quiet),
+                crate::codex::Account::SignedIn => Status2::new("Signed in", Tone::Plain),
+                crate::codex::Account::SigningIn => Status2::new("Finish signing in in your browser.", Tone::Plain),
+                crate::codex::Account::SignedOut | crate::codex::Account::Failed => Status2::new("Not signed in. Antigravity can't answer until you sign in.", Tone::Attention),
+            });
+            if matches!(self.antigravity_account, crate::codex::Account::SignedOut | crate::codex::Account::Failed) {
+                antigravity.controls.push(button("Sign in", Look::Primary, Act::SignInAntigravity, "Sign in to Antigravity"));
+            }
+            Item::Row(antigravity)
+        } else {
+            later("antigravity", "Antigravity", "by Google")
+        };
         vec![
-            group(
-                Some("New sessions use"),
-                vec![Item::Row(claude), Item::Row(codex), later("cursor", "Cursor", "by Anysphere"), later("gemini", "Gemini", "by Google")],
-            )
+            group(Some("New sessions use"), vec![Item::Row(claude), Item::Row(codex), antigravity, later("cursor", "Cursor", "by Anysphere")])
             .foot("Pick one for new sessions. Settings opens that assistant's sign-in and options."),
         ]
     }
@@ -1225,6 +1242,7 @@ impl Workspace {
             }
             Act::SignInCodex => self.sign_in_to_codex(cx),
             Act::CheckCodex => self.recheck_codex(cx),
+            Act::SignInAntigravity => self.sign_in_to_antigravity(cx),
             Act::PersonalClaude => self.update_settings(cx, |s| s.personal_claude = !s.personal_claude),
             Act::KeepRunning => self.update_settings(cx, |s| s.keep_running = !s.keep_running),
             Act::RunWithoutAsking => self.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking),

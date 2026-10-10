@@ -40,7 +40,9 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 
 ## Later
 
-- **Other ACP agents** (Codex, Gemini). The work that makes Endeavor
+- **Other ACP agents** (Codex, Antigravity, Gemini). Antigravity runs on
+  Windows x64 only so far ([antigravity-agent.md](antigravity-agent.md)).
+  The work that makes Endeavor
   agent-neutral is partly done; what is left, and what to find out about each
   agent, is in [other-agents.md](other-agents.md). Steering is only
   available where the agent advertises it. Cursor was tried and parked: see

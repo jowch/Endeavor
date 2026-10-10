@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ClientCapabilities, ClientSessionCapabilities, NoticeCapabilities,
+    AuthenticateRequest, AuthenticateResponse, ClientCapabilities, ClientSessionCapabilities, NoticeCapabilities,
     CancelNotification, CloseSessionRequest, ContentBlock, DeleteSessionRequest, ForkSessionRequest, HttpHeader, InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer,
     McpServerHttp, NewSessionRequest, PromptRequest, PromptResponse, RequestPermissionRequest,
     RequestPermissionResponse, SessionConfigOption, SessionId, SessionInfo,
@@ -32,21 +32,32 @@ pub enum Agent {
     #[default]
     Claude,
     Codex,
+    Antigravity,
 }
 
 impl Agent {
-    pub const ALL: [Agent; 2] = [Agent::Claude, Agent::Codex];
+    pub const ALL: [Agent; 3] = [Agent::Claude, Agent::Codex, Agent::Antigravity];
 
     pub fn facts(self) -> &'static AgentFacts {
         match self {
             Agent::Claude => &CLAUDE_CODE,
             Agent::Codex => &CODEX,
+            Agent::Antigravity => &ANTIGRAVITY,
         }
     }
 
     /// The agent's name in the app ("Claude", "Codex").
     pub fn name(self) -> &'static str {
         self.facts().name
+    }
+
+    /// It can run on this computer: an agent whose program is pinned for
+    /// some platforms only shows as "Not available yet" on the others.
+    pub fn available(self) -> bool {
+        match &self.facts().install {
+            Install::Npm { .. } => true,
+            Install::Program { zip, .. } => zip.is_some(),
+        }
     }
 }
 
@@ -58,6 +69,7 @@ macro_rules! agent_text {
         match $agent {
             $crate::agent::Agent::Claude => concat!($before, "Claude", $after),
             $crate::agent::Agent::Codex => concat!($before, "Codex", $after),
+            $crate::agent::Agent::Antigravity => concat!($before, "Antigravity", $after),
         }
     };
 }
@@ -67,14 +79,14 @@ pub struct AgentFacts {
     pub name: &'static str,
     /// Who makes it, as the agent choice says ("by Anthropic").
     pub maker: &'static str,
-    /// Its ACP adapter's npm package. The app's resources folder `pins` holds
-    /// package.json + package-lock.json pinning it and its dependencies, which
-    /// install into `<installed>-<version>` in the app's folder.
-    package: &'static str,
-    pins: &'static str,
-    installed: &'static str,
+    /// How its ACP adapter is installed and started.
+    pub install: Install,
     /// Set on the adapter's process.
     env: &'static [(&'static str, &'static str)],
+    /// Its process gets a temp folder of its own in the app's folder, emptied
+    /// before each start: a server that unpacks itself into the temp folder
+    /// on every start and leaves that behind when it's ended (Antigravity's).
+    private_temp: bool,
     /// It loads Endeavor's skills as a Claude Code plugin (`session_options`),
     /// so the runtime leaves out its own guide to them.
     plugin: bool,
@@ -111,6 +123,22 @@ pub enum SignIn {
     ClaudeAuth,
     /// `codex login status`, and `codex-acp login` for the browser sign-in (codex.rs).
     CodexLogin,
+    /// ACP's own `authenticate` with this method, over the agent's
+    /// connection; checked by the agent's sign-in file (antigravity.rs).
+    Authenticate(&'static str),
+}
+
+/// How an agent's ACP adapter is installed and started.
+pub enum Install {
+    /// An npm package run on the app's Node. The app's resources folder
+    /// `pins` holds package.json + package-lock.json pinning it and its
+    /// dependencies, which install into `<installed>-<version>` in the app's
+    /// folder.
+    Npm { package: &'static str, pins: &'static str, installed: &'static str },
+    /// A program in a pinned zip, unpacked into `folder` in the app's folder;
+    /// `program` is its path inside. `zip` is None on a platform it isn't
+    /// pinned for.
+    Program { what: &'static str, zip: Option<(&'static str, &'static str, u64)>, folder: &'static str, program: &'static str },
 }
 
 /// Claude Code writes its rules to the folder's `.claude/settings.local.json`
@@ -118,11 +146,10 @@ pub enum SignIn {
 pub const CLAUDE_CODE: AgentFacts = AgentFacts {
     name: "Claude",
     maker: "by Anthropic",
-    package: "@agentclientprotocol/claude-agent-acp",
-    pins: "adapter",
-    installed: "adapter",
+    install: Install::Npm { package: "@agentclientprotocol/claude-agent-acp", pins: "adapter", installed: "adapter" },
     // A run waits in the runtime for the user's answer, for as long as that takes.
     env: &[("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT", "0")],
+    private_temp: false,
     plugin: true,
     folder_rules: Some(".claude/settings.local.json"),
     on_servers: true,
@@ -140,10 +167,9 @@ pub const CLAUDE_CODE: AgentFacts = AgentFacts {
 pub const CODEX: AgentFacts = AgentFacts {
     name: "Codex",
     maker: "by OpenAI",
-    package: "@agentclientprotocol/codex-acp",
-    pins: "adapter-codex",
-    installed: "codex-adapter",
+    install: Install::Npm { package: "@agentclientprotocol/codex-acp", pins: "adapter-codex", installed: "codex-adapter" },
     env: &[("INITIAL_AGENT_MODE", "workspace-write")],
+    private_temp: false,
     plugin: false,
     folder_rules: None,
     // Its shell and file tools can't be turned off per session, and would act on this computer.
@@ -160,6 +186,39 @@ pub const CODEX: AgentFacts = AgentFacts {
     ),
     on_demand: true,
 };
+
+/// Antigravity through Google's own ACP server, `agy_acp_server`
+/// (docs/antigravity-agent.md), pinned for Windows x64 only so far. It is a
+/// launcher that unpacks itself into the temp folder on every start and runs
+/// a second process; on Windows the agent's job ends both (agent_job.rs). It
+/// asks before every notebook call, reads included, and Endeavor leaves the
+/// decision to the runtime's gate; its own shell commands get the usual cards.
+pub const ANTIGRAVITY: AgentFacts = AgentFacts {
+    name: "Antigravity",
+    maker: "by Google",
+    install: Install::Program { what: "Antigravity's ACP server 1.3.0", zip: ANTIGRAVITY_ZIP, folder: "antigravity-acp-1.3.0", program: ANTIGRAVITY_PROGRAM },
+    env: &[],
+    private_temp: true,
+    plugin: false,
+    folder_rules: None,
+    // Its shell and file tools act on this computer.
+    on_servers: false,
+    asks_every_write: true,
+    config: &[("model", "Model")],
+    sign_in: SignIn::Authenticate(crate::antigravity::SIGN_IN_METHOD),
+    session_intro: CODEX.session_intro,
+    on_demand: true,
+};
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = Some((
+    "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.3.0-windows-x86_64.zip",
+    "65215e0688681fa3116e048a9eab27ef53af1bbd6f3da3f1c52bd4911d8b17f9",
+    124_509_787,
+));
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = None;
+const ANTIGRAVITY_PROGRAM: &str = if cfg!(windows) { "agy_acp_server.exe" } else { "agy_acp_server.par" };
 
 /// The Node.js the adapter runs on, installed on first launch like Julia.
 const NODE_VERSION: &str = "24.21.0";
@@ -208,10 +267,10 @@ const NODE_TARBALL: (&str, &str, u64, &str) = (
 
 /// The adapter version this build of the app pins (`<pins>/package.json`).
 fn pinned_adapter_version(agent: Agent) -> Result<String, String> {
-    let facts = agent.facts();
-    let manifest = std::fs::read_to_string(crate::install::resources().join(facts.pins).join("package.json")).map_err(|e| e.to_string())?;
+    let Install::Npm { package, pins, .. } = agent.facts().install else { return Err(format!("{} has no npm adapter", agent.name())) };
+    let manifest = std::fs::read_to_string(crate::install::resources().join(pins).join("package.json")).map_err(|e| e.to_string())?;
     let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| e.to_string())?;
-    manifest["dependencies"][facts.package].as_str().map(str::to_owned).ok_or_else(|| format!("{}/package.json has no adapter version", facts.pins))
+    manifest["dependencies"][package].as_str().map(str::to_owned).ok_or_else(|| format!("{pins}/package.json has no adapter version"))
 }
 
 /// The pinned adapter version, and whether it is installed yet. A new app
@@ -224,11 +283,11 @@ pub fn adapter_status(agent: Agent) -> Result<(String, bool), String> {
 /// Where the app's Node and the pinned adapter's entry point live (installed or not).
 fn adapter_paths(agent: Agent) -> Result<(PathBuf, PathBuf), String> {
     let app = crate::install::app_dir()?;
-    let facts = agent.facts();
+    let Install::Npm { package, installed, .. } = agent.facts().install else { return Err(format!("{} has no npm adapter", agent.name())) };
     let version = pinned_adapter_version(agent)?;
     // Windows' Node keeps node.exe at the top of its folder, not in bin/.
     let node = if cfg!(windows) { app.join(format!("node-v{NODE_VERSION}")).join("node.exe") } else { app.join(format!("node-v{NODE_VERSION}/bin/node")) };
-    let entry = app.join(format!("{}-{version}/node_modules/{}/dist/index.js", facts.installed, facts.package));
+    let entry = app.join(format!("{installed}-{version}/node_modules/{package}/dist/index.js"));
     Ok((node, entry))
 }
 
@@ -315,9 +374,45 @@ fn fake_turn_error() -> Option<Vec<SessionEvent>> {
     None
 }
 
-/// The command that runs the ACP adapter: the app's own Node and a `npm ci` of
-/// the pinned lockfile (integrity-checked), both installed on first launch.
+/// The command that runs the agent's ACP adapter, installed first if it
+/// isn't yet, with the variables it is started with in front.
 fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
+    let facts = agent.facts();
+    let mut env: Vec<String> = facts.env.iter().map(|(name, value)| format!("{name}={value}")).collect();
+    let program = match facts.install {
+        Install::Npm { pins, installed, .. } => npm_adapter(agent, pins, installed, progress)?,
+        Install::Program { what, zip, folder, program } => {
+            let app = crate::install::app_dir()?;
+            let zip = zip.ok_or_else(|| format!("{} isn't available on this computer yet.", facts.name))?;
+            let dir = app.join(folder);
+            let exe = dir.join(program);
+            if !exe.exists() {
+                progress(Progress::new(Step::Agent, format!("Installing the {} agent…", facts.name)));
+                crate::install::tarball(&dir, what, "", zip, &|detail, fraction| progress(Progress { fraction, ..Progress::new(Step::Agent, detail) }))?;
+            }
+            vec![exe.display().to_string()]
+        }
+    };
+    if facts.private_temp {
+        let temp = crate::install::app_dir()?.join(format!("{}-temp", agent_slug(agent)));
+        // What an earlier start left: a killed server can't clean up after itself.
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).map_err(|e| format!("Couldn't make {}'s temp folder: {e}", facts.name))?;
+        env.extend(["TEMP", "TMP", "TMPDIR"].map(|name| format!("{name}={}", temp.display())));
+    }
+    let [program, args @ ..] = program.as_slice() else { return Err("no adapter program".into()) };
+    let program = crate::agent_job::command(program.clone(), args.to_vec())?;
+    Ok(env.into_iter().chain(program).collect())
+}
+
+/// The agent's name as a file name ("antigravity").
+fn agent_slug(agent: Agent) -> String {
+    agent.name().to_lowercase()
+}
+
+/// An npm adapter's command: the app's own Node and a `npm ci` of the pinned
+/// lockfile (integrity-checked), both installed on first start.
+fn npm_adapter(agent: Agent, pins: &str, installed: &str, progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     let app = crate::install::app_dir()?;
     let facts = agent.facts();
     let (node, entry) = adapter_paths(agent)?;
@@ -330,13 +425,13 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
         })?;
     }
 
-    let pinned = crate::install::resources().join(facts.pins);
+    let pinned = crate::install::resources().join(pins);
     // entry = <adapter>/node_modules/<scope>/<package>/dist/index.js
     let adapter = entry.ancestors().nth(5).ok_or("bad adapter path")?.to_path_buf();
     if !entry.exists() {
         progress(Progress::new(Step::Agent, format!("Installing the {} agent…", facts.name)));
         // Install beside the target, then rename, so a partial install is never used.
-        let staging = app.join(format!("{}.installing", facts.installed));
+        let staging = app.join(format!("{installed}.installing"));
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
         for file in ["package.json", "package-lock.json"] {
@@ -362,9 +457,7 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
         std::fs::rename(&staging, &adapter).map_err(|e| e.to_string())?;
     }
 
-    let env = facts.env.iter().map(|(name, value)| format!("{name}={value}"));
-    let program = crate::agent_job::command(node.display().to_string(), vec![entry.display().to_string()])?;
-    Ok(env.chain(program).collect())
+    Ok(vec![node.display().to_string(), entry.display().to_string()])
 }
 
 /// Claude Code's own tools that read, write or run things on this Mac: off in
@@ -505,6 +598,9 @@ pub enum Command {
     /// Stop a session and delete its history.
     DeleteSession(SessionId),
     Turn(SessionId, Turn),
+    /// ACP's sign-in with this method (Antigravity's opens the browser and
+    /// waits for it); answered by [`AgentEvent::SignInEnded`].
+    Authenticate(&'static str),
 }
 
 pub enum SessionEvent {
@@ -563,6 +659,11 @@ pub enum AgentEvent {
     SignedIn(Option<crate::signin::Method>),
     /// Codex's sign-in, checked before connecting.
     CodexSignedIn(bool),
+    /// Antigravity's sign-in, checked before connecting, or found missing
+    /// when a session wouldn't open without it.
+    AntigravitySignedIn(bool),
+    /// A [`Command::Authenticate`] ended: signed in, or why not.
+    SignInEnded(Result<(), String>),
     /// The connection is gone; no session works any more.
     Failed(String),
 }
@@ -581,6 +682,7 @@ pub struct ModeSwitch {
 enum Dialect {
     Claude,
     Codex(crate::codex::Dialect),
+    Antigravity(crate::antigravity::Dialect),
 }
 
 impl Dialect {
@@ -588,6 +690,7 @@ impl Dialect {
         match agent {
             Agent::Claude => Dialect::Claude,
             Agent::Codex => Dialect::Codex(crate::codex::Dialect::default()),
+            Agent::Antigravity => Dialect::Antigravity(crate::antigravity::Dialect),
         }
     }
 
@@ -596,6 +699,7 @@ impl Dialect {
         match self {
             Dialect::Claude => (started, None),
             Dialect::Codex(codex) => codex.started(started),
+            Dialect::Antigravity(antigravity) => antigravity.started(started),
         }
     }
 
@@ -603,6 +707,14 @@ impl Dialect {
         match self {
             Dialect::Claude => vec![update],
             Dialect::Codex(codex) => codex.update(session, update),
+            Dialect::Antigravity(antigravity) => antigravity.update(update),
+        }
+    }
+
+    /// A permission request as the app takes it.
+    fn permission(&self, request: &mut RequestPermissionRequest) {
+        if let Dialect::Antigravity(antigravity) = self {
+            antigravity.permission(request);
         }
     }
 
@@ -610,6 +722,7 @@ impl Dialect {
         match self {
             Dialect::Claude => options,
             Dialect::Codex(codex) => codex.options(options),
+            Dialect::Antigravity(antigravity) => antigravity.options(options),
         }
     }
 
@@ -617,6 +730,7 @@ impl Dialect {
         match self {
             Dialect::Claude => ModeSwitch { mode: Some(mode), set: None, confirm: None },
             Dialect::Codex(codex) => codex.set_mode(session, &mode),
+            Dialect::Antigravity(antigravity) => antigravity.set_mode(&mode),
         }
     }
 
@@ -624,6 +738,7 @@ impl Dialect {
         match self {
             Dialect::Claude => id,
             Dialect::Codex(codex) => codex.option_id(&id),
+            Dialect::Antigravity(_) => id,
         }
     }
 
@@ -654,6 +769,7 @@ pub fn start(agent: Agent, commands: UnboundedReceiver<Command>) -> UnboundedRec
             let signed_in = match agent.facts().sign_in {
                 SignIn::ClaudeAuth => crate::signin::status().map(AgentEvent::SignedIn),
                 SignIn::CodexLogin => crate::codex::signed_in().map(AgentEvent::CodexSignedIn),
+                SignIn::Authenticate(_) => Ok(AgentEvent::AntigravitySignedIn(crate::antigravity::signed_in())),
             };
             if let Ok(event) = signed_in {
                 let _ = events.unbounded_send(event);
@@ -678,6 +794,7 @@ enum Done {
     Listed(PathBuf, Result<Vec<SessionInfo>, agent_client_protocol::Error>),
     Forked(u64, PathBuf, Tools, Result<SessionId, agent_client_protocol::Error>),
     Config(SessionId, Result<SetSessionConfigOptionResponse, agent_client_protocol::Error>),
+    SignedIn(Result<AuthenticateResponse, agent_client_protocol::Error>),
 }
 
 async fn run(
@@ -689,7 +806,7 @@ async fn run(
     let adapter = AcpAgent::from_args(command)?;
     let (notify, permit) = (events.clone(), events.clone());
     let dialect = std::sync::Arc::new(std::sync::Mutex::new(Dialect::of(agent)));
-    let translate = dialect.clone();
+    let (translate, name_asks) = (dialect.clone(), dialect.clone());
 
     agent_client_protocol::Client
         .builder()
@@ -706,7 +823,10 @@ async fn run(
         .on_receive_request(
             // Hand the responder to the UI and return at once: awaiting the user's
             // click here would stall the connection's dispatch loop.
-            async move |request: RequestPermissionRequest, responder, _cx| {
+            async move |mut request: RequestPermissionRequest, responder, _cx| {
+                if let Ok(dialect) = name_asks.lock() {
+                    dialect.permission(&mut request);
+                }
                 let session = request.session_id.clone();
                 let _ = permit.unbounded_send(AgentEvent::Session(session, SessionEvent::Permission(request, responder)));
                 Ok(())
@@ -774,6 +894,13 @@ async fn run(
                         continue;
                     }
                     Either::Left(Some(Done::Started(key, result))) => {
+                        // Antigravity's sign-in ran out since it was checked: its card shows.
+                        if let Err(e) = &result
+                            && e.code == ErrorCode::AuthRequired
+                            && matches!(agent.facts().sign_in, SignIn::Authenticate(_))
+                        {
+                            let _ = events.unbounded_send(AgentEvent::AntigravitySignedIn(false));
+                        }
                         let result = result.map_err(|e| e.to_string()).map(|started| {
                             let (started, fix) = dialect.lock().expect("dialect").started(started);
                             if let Some((id, value)) = fix {
@@ -810,6 +937,10 @@ async fn run(
                                 let _ = events.unbounded_send(AgentEvent::Started { key, result: Err(e.to_string()) });
                             }
                         }
+                        continue;
+                    }
+                    Either::Left(Some(Done::SignedIn(result))) => {
+                        let _ = events.unbounded_send(AgentEvent::SignInEnded(result.map(|_| ()).map_err(|e| e.to_string())));
                         continue;
                     }
                     Either::Left(None) => continue,
@@ -910,6 +1041,10 @@ async fn run(
                         if running.contains(&session) {
                             connection.send_notification(CancelNotification::new(session))?;
                         }
+                    }
+                    Command::Authenticate(method) => {
+                        let signed_in = connection.send_request(AuthenticateRequest::new(method)).block_task();
+                        pending.push(async move { Done::SignedIn(signed_in.await) }.boxed_local());
                     }
                 }
             }

@@ -518,6 +518,7 @@ pub fn open_failure(error: &str, agent: Agent) -> OpenFailure {
         Some(match agent {
             Agent::Claude => "Claude Code no longer has its history.",
             Agent::Codex => "Codex no longer has its history.",
+            Agent::Antigravity => "Antigravity no longer has its history.",
         })
     } else {
         None
@@ -544,6 +545,7 @@ impl Failure {
                 let why = reason.unwrap_or(match agent {
                     Agent::Claude => "Claude Code couldn't load it.",
                     Agent::Codex => "Codex couldn't load it.",
+                    Agent::Antigravity => "Antigravity couldn't load it.",
                 });
                 match notebook {
                     Beside::Open => format!("{why} The notebook is open beside it."),

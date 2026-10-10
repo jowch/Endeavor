@@ -103,6 +103,7 @@ impl Link {
 pub struct Links {
     claude: Link,
     codex: Link,
+    antigravity: Link,
 }
 
 impl Links {
@@ -110,6 +111,7 @@ impl Links {
         match agent {
             Agent::Claude => &self.claude,
             Agent::Codex => &self.codex,
+            Agent::Antigravity => &self.antigravity,
         }
     }
 
@@ -117,6 +119,7 @@ impl Links {
         match agent {
             Agent::Claude => &mut self.claude,
             Agent::Codex => &mut self.codex,
+            Agent::Antigravity => &mut self.antigravity,
         }
     }
 

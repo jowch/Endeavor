@@ -28,7 +28,12 @@ sign-in, the same one as the `codex` command. When you're not signed in, its
 row has **Sign in**, which opens ChatGPT's sign-in page in your browser, and
 **Check again**, for after you sign in with `codex login` in a terminal.
 
-Cursor and Gemini are listed as **Not available yet**.
+**Antigravity**, by Google, works in sessions on your computer, on Windows
+for now. It uses your Google account. When you're not signed in, its row has
+**Sign in**, which opens Google's sign-in page in your browser. On a Mac or
+Linux it is listed as **Not available yet**.
+
+Cursor is listed as **Not available yet**.
 
 ## Notebooks
 
