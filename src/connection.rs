@@ -379,6 +379,10 @@ impl Workspace {
     /// Connect to `host` unless it's connected or connecting; `start` also
     /// starts Julia once it is.
     pub fn connect_host(&mut self, host: &HostId, start: bool, cx: &mut Context<Self>) {
+        // Nothing starts while the app's own files are missing.
+        if self.missing_files.is_some() {
+            return;
+        }
         match self.connections.get_mut(host).map(|c| (c.status.clone(), c)) {
             Some((Status::Connecting, connection)) => {
                 connection.start_when_connected |= start;

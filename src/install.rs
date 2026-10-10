@@ -34,7 +34,7 @@ pub fn missing_files() -> Option<String> {
     } else if cfg!(target_os = "macos") {
         "Endeavor's files are missing. Open Endeavor.app itself, not a copy of the program inside it."
     } else {
-        "Endeavor's files are missing. Run bin/endeavor from a folder that has Resources beside bin."
+        "Endeavor's files are missing. A release build needs its Resources folder beside the folder it runs from. On Linux, run Endeavor with cargo run for now."
     };
     Some(match expected_resources() {
         Some(dir) => format!("{what}\n\nEndeavor looked for them in {}.", dir.display()),
@@ -239,6 +239,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(debug_assertions)]
     fn a_debug_build_uses_the_source_tree() {
         assert!(std::env::var_os("ENDEAVOR_TEST_NO_SOURCE_FALLBACK").is_none());
         assert_eq!(resources(), PathBuf::from(env!("CARGO_MANIFEST_DIR")));

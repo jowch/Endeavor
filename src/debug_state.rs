@@ -176,7 +176,7 @@ impl Workspace {
         };
         json!({
             "screen": screen,
-            "setup": self.setup.as_ref().map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
+            "setup": self.setup.as_ref().filter(|_| self.missing_files.is_none()).map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
             "missing_files": self.missing_files,
             "modal": modal,
             "ssh_prompt": ssh_prompt,

@@ -1617,6 +1617,9 @@ impl Workspace {
 
     /// Zoom the notebook by `step` (or back to 100%), kept in settings.
     fn zoom(&mut self, step: f64, reset: bool, cx: &mut Context<Self>) {
+        if self.missing_files.is_some() {
+            return;
+        }
         let current = if self.settings.zoom > 0. { self.settings.zoom } else { 1. };
         self.settings.zoom = if reset { 1. } else { (current * step).clamp(0.5, 3.) };
         self.settings.save();
@@ -2126,6 +2129,11 @@ impl Workspace {
     }
 
     pub fn start_agent(&mut self, agent: agent::Agent, commands: UnboundedReceiver<Command>, cx: &mut Context<Self>) {
+        // Nothing starts while the app's own files are missing.
+        if self.missing_files.is_some() {
+            self.links.get_mut(agent).rx = Some(commands);
+            return;
+        }
         let mut events = agent::start(agent, commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
@@ -2731,6 +2739,10 @@ fn main() {
                 let ws = workspace.downgrade();
                 cx.on_action(move |_: &ToggleSidebar, cx| {
                     ws.update(cx, |this, cx| {
+                        // The missing-files screen has no sidebar to show.
+                        if this.missing_files.is_some() {
+                            return;
+                        }
                         this.settings.layout.sidebar_open = !this.settings.layout.sidebar_open;
                         this.settings.save();
                         cx.notify();
