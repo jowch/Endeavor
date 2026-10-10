@@ -1211,12 +1211,15 @@ impl Workspace {
                 }
                 for (i, choice) in choices.into_iter().enumerate() {
                     let item = popup_row(ElementId::NamedInteger("slash-choice".into(), i as u64), i == selected, Role::ListBoxOption, choice.name.clone())
-                        .aria_description(match (&choice.description, choice.current) {
-                            (Some(d), true) => format!("current, {d}"),
-                            (Some(d), false) => d.clone(),
-                            (None, true) => "current".to_string(),
-                            (None, false) => String::new(),
-                        })
+                        .when_some(
+                            match (&choice.description, choice.current) {
+                                (Some(d), true) => Some(format!("current, {d}")),
+                                (Some(d), false) => Some(d.clone()),
+                                (None, true) => Some("current".to_string()),
+                                (None, false) => None,
+                            },
+                            |d, text| d.aria_description(text),
+                        )
                         .gap(px(12.))
                         .child(div().w(px(160.)).flex_shrink_0().truncate().child(choice.name))
                         .child(div().flex_1().min_w_0().truncate().text_size(theme::chat_meta()).text_color(theme::text_muted()).children(choice.description))
