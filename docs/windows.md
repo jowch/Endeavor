@@ -1,13 +1,15 @@
 # Endeavor on Windows: what a port would take
 
-_Estimate as of 2026-09-28; status updated 2026-10-03. Step 1 of the
-suggested order is done: the workspace builds for Windows, and a Windows CI
-workflow builds it and runs its tests, which pass. Step 2 (run a local
-notebook) is written but untried: process control, downloads and paths have
-Windows code, checked only by type-checking on a Mac and by tests that CI runs
-on `windows-latest`. Nothing has run on a real Windows machine yet. The rest
-comes from reading the code, the dependencies' sources, and
-[linux.md](linux.md), which records how the Linux port went._
+_Estimate as of 2026-09-28; status updated 2026-10-10. The app runs on
+Windows 10: the CI installer installed it, a notebook was made and run in a
+real Claude session, and reinstall and uninstall worked (October 2026, one
+machine that already had Julia, Node, a Claude sign-in and Git for Windows;
+the build predates the switch to Julia through juliaup).
+Not run yet: a first Claude sign-in on Windows, a browser download through
+SmartScreen, Windows 11, and servers, which the Windows build can't reach
+because it carries no server helpers. Parts of this page below still
+describe the port before those runs. User steps are in the guide's
+[On Windows](guide/overview.md#on-windows)._
 
 **Summary:** a Windows port is feasible, and no single item blocks it. It is
 about **6–8 weeks** of work for one person to reach a usable app: roughly 3–4
