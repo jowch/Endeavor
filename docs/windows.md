@@ -185,6 +185,19 @@ the exe needs no DLL that Windows doesn't ship. The job checks that with
 because a debug build compiles its shaders at launch from the crate's source
 folder, so it runs only on the machine that built it.
 
+`.github/workflows/juliaup.yml` runs the app's first-run juliaup install for
+real on runners that have no juliaup: the ignored test
+`installs_juliaup_and_julia_where_there_is_none` installs juliaup, adds Julia
+1.12.6 and checks that channel's `julia.exe`. Windows Server 2025 has winget,
+so it takes the Microsoft Store route; Windows Server 2022 has none, so it
+falls back to juliaup's App Installer file. On the first runs (October 2026)
+the Store route took 1 min, the file 27 s, and `juliaup add` about 20 s. It
+runs when `src/juliaup.rs`, `src/runtime.rs`, `Cargo.lock`, the toolchain or
+the workflow changes, weekly, and by hand. Windows Server isn't a Windows 10 or
+11 desktop. The 2022 fallback starts because winget is missing; on a desktop
+whose Store is blocked, winget is there and fails its own way, so that case is
+still untried.
+
 Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 `tar`, symlinks or Unix sockets:
 
@@ -344,8 +357,10 @@ only with servers.
   other channels. A `julia-1.12.6` folder an older Endeavor downloaded is used
   while juliaup can't be set up, and removed once a runtime starts with
   juliaup's Julia. Each install route gets 10 minutes and `juliaup add` 45,
-  then the next route or an error. Installing juliaup on a computer without
-  it is untried.
+  then the next route or an error. The App Installer file gets a second try
+  after a failure other than the time limit: in CI it once failed and then
+  worked, cause unknown. Installing juliaup on a computer without
+  it runs in CI on Windows Server, both routes (see [CI](#ci)).
 - Windows 10 and later include `curl.exe` and `tar.exe` (bsdtar), and that
   `tar` reads .zip. The app runs `%SystemRoot%\System32\tar.exe` by path,
   since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. The
