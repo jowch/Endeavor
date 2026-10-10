@@ -50,7 +50,8 @@ impl NotebookChoice {
 
 /// The kinds the chip offers as a new notebook, in its order.
 // ponytail: the pane shows only Pluto's page, so New R notebook waits until it
-// shows Ember's (stage 8); then [Pluto, Ember], with Ember left out on Windows.
+// shows Ember's (stage 8); then [Pluto, Ember], with Ember left out on Windows
+// (a cfg pair or a function, not one const).
 pub const NEW_KINDS: &[Backend] = &[Backend::Pluto];
 
 /// A notebook file's kind from its name, in any host's rules: `.R` is R's, the rest Julia's.

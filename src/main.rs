@@ -1278,8 +1278,17 @@ impl Workspace {
     fn bind_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(session) = self.session_mut(key) else { return };
         session.notebook_path = Some(path.clone());
+        // The session's kind follows its notebook, so a restarted core is told the right one.
+        session.kind = new_session::kind_of_path(&path);
+        let kind = session.kind;
         let place = Place { host: session.place.host.clone(), path: path.clone() };
-        if let Some(id) = session.id.as_ref().map(ToString::to_string)
+        let id = session.id.as_ref().map(ToString::to_string);
+        if let Some(id) = &id
+            && self.records.set_kind(id, kind)
+        {
+            self.save_records();
+        }
+        if let Some(id) = id
             && self.session_notebooks.get(&id) != Some(&place)
         {
             self.session_notebooks.insert(id, place);
@@ -1811,6 +1820,7 @@ impl Workspace {
                     Ok(started) => {
                         let id = started.id.clone();
                         let (place, kind) = (session.place.clone(), session.kind);
+                        // `|`, not `||`: both have to update.
                         if self.records.started(&id.to_string(), agent, &place, unix_now()) | self.records.set_kind(&id.to_string(), kind) {
                             self.save_records();
                         }
