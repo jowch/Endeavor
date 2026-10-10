@@ -83,6 +83,7 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `transcript.rs` | long diffs are cut, not scrollable | real notebooks hit it |
 | `frontend/src/diff.ts` | the page's diff is an O(n·m) table; when the two versions' line counts multiply past 250,000, no diff is shown | big cells need a diff |
 | `connection.rs` `open_line` | Reconnect on a server that dropped waits for the library's next try (up to 30 s apart) instead of trying at once; a server whose connection settings change gets a new listener port, so its sessions' agents need a restart | `client::Session` can be asked to try now, and can keep its port |
+| `server_dialog.rs` `drop_asks` | when a sign-in ends while another server's question waits behind it, that question comes to the front without the focus | two servers asking at once happens in practice |
 | `connection.rs` idle limit | a failed send leaves the runtime on its default idle stop (48 hours) until the next start | it fails in practice |
 | `main.rs` `send_binding`, `follow_folder`, `send_policy` | sends to the runtime are fire and forget: a failed one leaves the session unbound until it opens, Pluto suggesting the previous folder, or the run policy stale until the next change | a failed send is seen |
 | `main.rs` `check_run_state` | the run-state note warns about every open notebook on the host, not only the session's | it confuses someone |

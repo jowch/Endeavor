@@ -19,6 +19,7 @@ mod about;
 mod agent;
 mod antigravity;
 mod annotate;
+mod askpass_watch;
 mod approval;
 mod attach;
 mod celldiff;
@@ -2524,6 +2525,8 @@ fn main() {
         std::process::exit(0);
     }
     if [wire::askpass::ADDRESS_ENV, wire::askpass::SOCKET_ENV].iter().any(|v| std::env::var_os(v).is_some()) {
+        // Ends the askpass if the server gives up on the sign-in meanwhile.
+        askpass_watch::start();
         endeavor_mcp::run(std::env::args().skip(1).collect());
     }
     logs::start();

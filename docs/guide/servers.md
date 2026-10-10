@@ -24,7 +24,10 @@ instead.
   kind of processor as your Mac.
 
 If the server asks for a password or a two-factor code, Endeavor shows the
-prompt in a dialog.
+prompt in a dialog. If an answer doesn't work, the dialog says so and asks
+again. A server gives you only so long to answer (two minutes, unless its
+administrator changed it). If you take longer, the dialog closes and Endeavor
+says the server stopped waiting. Connect again to sign in.
 
 ## Add a server
 
