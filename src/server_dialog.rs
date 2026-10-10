@@ -16,7 +16,7 @@ use wire::slurm::{Partition, Resources};
 
 use crate::hosts::{Cluster, HostId, Server};
 use crate::resources::Target;
-use crate::new_session::{Glyph, glyph, menu_row};
+use crate::new_session::{Glyph, choice_row, glyph};
 use crate::remote::{self, Cancel, Event, Question};
 use crate::settings::IdleStop;
 use crate::{Workspace, theme};
@@ -419,6 +419,8 @@ impl Workspace {
                 .children(suggestions.into_iter().enumerate().map(|(i, host)| {
                     div()
                         .id(("ssh-suggestion", i))
+                        .role(Role::Button)
+                        .aria_label(format!("Use {host}"))
                         .px(px(6.))
                         .rounded(px(4.))
                         .cursor_pointer()
@@ -444,7 +446,7 @@ impl Workspace {
                 .chain(IdleStop::ALL.iter().map(|&(value, label)| (Some(value), label.to_owned())))
                 .enumerate()
                 .map(|(i, (value, label))| {
-                    menu_row(("idle-option", i), current == value, false).child(label).on_click(cx.listener(move |this, _, _, cx| {
+                    choice_row(("idle-option", i), current == value, false, label.clone()).child(label).on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(dialog) = &mut this.server_dialog {
                             dialog.idle_stop = value;
                             dialog.idle_menu = false;
@@ -457,6 +459,8 @@ impl Workspace {
                 deferred(
                     div()
                         .id("idle-menu")
+                        .role(Role::Menu)
+                        .aria_label("Stop idle notebooks after")
                         .occlude()
                         .w(px(220.))
                         .p(px(4.))
@@ -494,9 +498,10 @@ impl Workspace {
                     d.child(
                         div()
                             .id("remove-server")
+                            .role(Role::Button)
                             .cursor_pointer()
                             .text_color(theme::danger())
-                            .child(if is_cluster { "Remove cluster…" } else { "Remove server…" })
+                            .button_text(if is_cluster { "Remove cluster…" } else { "Remove server…" })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(dialog) = &mut this.server_dialog {
                                     dialog.confirm_remove = true;
@@ -570,6 +575,8 @@ impl Workspace {
                                 div().relative().child(
                                     div()
                                         .id("idle-stop")
+                                        .role(Role::Button)
+                                        .aria_label(format!("Stop idle notebooks after: {idle_label}"))
                                         .w(px(220.))
                                         .h(px(28.))
                                         .px(px(10.))

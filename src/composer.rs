@@ -319,8 +319,10 @@ fn popup() -> Div {
         .text_color(theme::text_primary())
 }
 
-fn popup_row(id: ElementId, selected: bool) -> Stateful<Div> {
-    inert_row(id).cursor_pointer().when(selected, |d| d.bg(theme::menu_hover())).hover(|s| s.bg(theme::menu_hover()))
+/// A row to pick in a popup. GPUI makes no accessibility node for an element
+/// without a role, so every row takes one and a name.
+fn popup_row(id: ElementId, selected: bool, role: Role, name: impl Into<SharedString>) -> Stateful<Div> {
+    inert_row(id).role(role).aria_label(name).cursor_pointer().when(selected, |d| d.bg(theme::menu_hover())).hover(|s| s.bg(theme::menu_hover()))
 }
 
 /// A menu row that can't be picked (greyed by the caller).
@@ -1167,7 +1169,8 @@ impl Workspace {
                         None => (description.to_string(), Vec::new()),
                     };
                     let key = (command.own == Some(Own::Mode)).then_some(slash::SHIFT_TAB);
-                    let item = popup_row(ElementId::NamedInteger("slash".into(), i as u64), i == selected)
+                    let item = popup_row(ElementId::NamedInteger("slash".into(), i as u64), i == selected, Role::ListBoxOption, name.clone())
+                        .aria_description(command.description.lines().next().unwrap_or_default().to_string())
                         .gap(px(12.))
                         .child(
                             div()
@@ -1207,7 +1210,13 @@ impl Workspace {
                     after.push(line(format!("No {} matches", title.to_lowercase())));
                 }
                 for (i, choice) in choices.into_iter().enumerate() {
-                    let item = popup_row(ElementId::NamedInteger("slash-choice".into(), i as u64), i == selected)
+                    let item = popup_row(ElementId::NamedInteger("slash-choice".into(), i as u64), i == selected, Role::ListBoxOption, choice.name.clone())
+                        .aria_description(match (&choice.description, choice.current) {
+                            (Some(d), true) => format!("current, {d}"),
+                            (Some(d), false) => d.clone(),
+                            (None, true) => "current".to_string(),
+                            (None, false) => String::new(),
+                        })
                         .gap(px(12.))
                         .child(div().w(px(160.)).flex_shrink_0().truncate().child(choice.name))
                         .child(div().flex_1().min_w_0().truncate().text_size(theme::chat_meta()).text_color(theme::text_muted()).children(choice.description))
@@ -1225,6 +1234,8 @@ impl Workspace {
         let footer = div().mt(px(4.)).pt(px(5.)).px(px(8.)).pb(px(1.)).border_t_1().border_color(theme::border()).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(slash::FOOTER);
         let list = popup()
             .id("slash-list")
+            .role(Role::ListBox)
+            .aria_label("Slash commands")
             .child(div().id("slash-rows").flex().flex_col().max_h(px(SLASH_LIST_MAX)).overflow_y_scroll().track_scroll(&self.composer.slash_scroll).children(rows))
             .children(after)
             .child(footer);
@@ -1250,13 +1261,15 @@ impl Workspace {
             let rows = matches.into_iter().enumerate().map(|(i, path)| {
                 let dir = path.ends_with('/');
                 let pick = path.clone();
-                popup_row(ElementId::NamedInteger("mention".into(), i as u64), i == self.composer.selected)
+                popup_row(ElementId::NamedInteger("mention".into(), i as u64), i == self.composer.selected, Role::ListBoxOption, path.clone())
                     .child(glyph(if dir { Glyph::Folder } else { Glyph::File }, theme::text_muted()))
                     .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(theme::chat_code()).child(path))
                     .on_click(cx.listener(move |this, _, window, cx| this.pick_mention(pick.clone(), window, cx)))
             });
             let list = popup()
                 .id("mention-list")
+                .role(Role::ListBox)
+                .aria_label("Files in this session's folder")
                 .left_0()
                 .right_0()
                 .child(div().px(px(8.)).pt(px(2.)).pb(px(4.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child("Files in this session's folder"))
@@ -1268,16 +1281,19 @@ impl Workspace {
         let body = match menu {
             Menu::Plus => {
                 popup()
+                    .id("plus-menu")
+                    .role(Role::Menu)
+                    .aria_label("Add")
                     .w(px(240.))
                     .child(
-                        popup_row("plus-files".into(), false)
+                        popup_row("plus-files".into(), false, Role::MenuItem, "Add files or photos")
                             .child(glyph(Glyph::File, theme::text_muted()))
                             .child(div().flex_1().child("Add files or photos"))
                             .child(div().text_size(theme::chat_meta()).text_color(theme::text_faint()).child(crate::platform::shortcut!("U")))
                             .on_click(cx.listener(|this, _, window, cx| this.add_files(&AddFiles, window, cx))),
                     )
                     .child(
-                        popup_row("plus-commands".into(), false)
+                        popup_row("plus-commands".into(), false, Role::MenuItem, "Slash commands")
                             .child(glyph(Glyph::Slash, theme::text_muted()))
                             .child(div().flex_1().child("Slash commands"))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1292,10 +1308,15 @@ impl Workspace {
             Menu::Mode => {
                 let (choices, current) = self.mode_list();
                 popup()
+                    .id("mode-menu")
+                    .role(Role::Menu)
+                    .aria_label("Mode")
                     .w(px(300.))
                     .child(div().px(px(8.)).pt(px(2.)).pb(px(2.)).text_size(theme::chat_meta()).text_color(theme::text_faint()).child("Mode"))
                     .children(choices.into_iter().enumerate().map(|(i, choice)| {
-                        popup_row(ElementId::NamedInteger("mode-choice".into(), i as u64), i == self.composer.selected)
+                        popup_row(ElementId::NamedInteger("mode-choice".into(), i as u64), i == self.composer.selected, Role::MenuItemRadio, choice.name.clone())
+                            .aria_description(choice.description.clone())
+                            .aria_toggled(if current == Some(i) { accesskit::Toggled::True } else { accesskit::Toggled::False })
                             .items_start()
                             .child(
                                 div()
@@ -1315,10 +1336,14 @@ impl Workspace {
             Menu::Config(id) => {
                 let (current, options) = self.config_for(session, id)?;
                 popup()
+                    .id("config-menu")
+                    .role(Role::Menu)
                     .w(px(260.))
                     .children(options.into_iter().enumerate().map(|(i, option)| {
                         let value = option.value.clone();
-                        popup_row(ElementId::NamedInteger("pick".into(), i as u64), false)
+                        popup_row(ElementId::NamedInteger("pick".into(), i as u64), false, Role::MenuItemRadio, option.name.clone())
+                            .when_some(option.description.clone(), |d, text| d.aria_description(text))
+                            .aria_toggled(if option.value == current { accesskit::Toggled::True } else { accesskit::Toggled::False })
                             .items_start()
                             .child(div().w(px(10.)).flex_shrink_0().text_color(theme::accent_text()).child(if option.value == current { "✓" } else { "" }))
                             .child(
@@ -1466,7 +1491,10 @@ impl Workspace {
             .filter(|(_, a)| !matches!(a, Attachment::Quote(_)))
             .map(|(i, a)| {
                 let open = popover.is_some_and(|p| p.chip == i);
+                let name = a.label();
                 chip(ElementId::NamedInteger("sent-chip".into(), (key << 32) | ((entry as u64) << 8) | i as u64), a)
+                    .role(Role::Button)
+                    .aria_label(format!("{}{}", name.plain, name.mono))
                     .cursor_pointer()
                     .when(open, |d| d.bg(theme::bg_raised()))
                     .hover(|s| s.bg(theme::bg_raised()))
@@ -1527,6 +1555,7 @@ impl Workspace {
                         .child(
                             div()
                                 .id("show-in-notebook")
+                                .role(Role::Button)
                                 .px(px(8.))
                                 .py(px(3.))
                                 .rounded(px(4.))
@@ -1536,6 +1565,7 @@ impl Workspace {
                                 .text_color(theme::text_primary())
                                 .hover(|s| s.bg(theme::composer_edge()))
                                 .child("Show in notebook →")
+                                .aria_label("Show in notebook")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.chip_popover = None;
                                     this.reveal_cells(cells.clone(), cx);

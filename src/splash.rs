@@ -10,6 +10,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::theme;
+use crate::theme::TextButton as _;
 use crate::turtle::{self, Gaze, Pose, ease, lerp};
 
 /// Setup steps, in the order they run.
@@ -285,7 +286,7 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
                 .child(div().w_4().text_color(color).child(mark))
                 .child(div().when(step > setup.step, |d| d.text_color(muted)).child(step.label()))
         });
-        let button = |id: &'static str, label: &'static str| div().id(id).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).text_color(theme::text_primary()).child(label);
+        let button = |id: &'static str, label: &'static str| div().id(id).role(Role::Button).px_3().py_1().rounded_sm().cursor_pointer().bg(theme::bg_raised()).text_color(theme::text_primary()).button_text(label);
         div()
             .mt(px(36.))
             .w(px(WIDE))

@@ -41,9 +41,16 @@ _Listed 2026-10-03._
 
 ## Accessibility
 
-- [ ] Clickable text with no role makes no accessibility node, so a screen
-  reader can't find it: the sign-in card, setup's Retry and Show logs, Show
-  more, a code block's Copy, the + menu rows, the folder browser's Up and
-  path, Remove server, and others
-  ([#53](https://github.com/jowch/Endeavor/issues/53)). Text buttons that
-  have a role are named.
+- [ ] Plain text makes no accessibility node in GPUI, so a screen reader
+  hears the buttons but not the words around them: the sign-in card's
+  heading and explanation, setup's error, a message's text. Clickable text
+  has a role and a name since
+  [#53](https://github.com/jowch/Endeavor/issues/53).
+- [ ] Most clickable text isn't a Tab stop, so it can be reached with a
+  screen reader but not with the keyboard alone (the sign-in card's buttons,
+  the chip menus' rows).
+- [ ] On Windows, a sidebar folder heading and Settings' dropdowns say
+  whether they're open, which makes AccessKit offer a screen reader Expand
+  instead of Invoke. GPUI ignores Expand, so activating them from a screen
+  reader may do nothing (inferred from AccessKit's code, not yet tried with
+  Narrator or NVDA).
