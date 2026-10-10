@@ -2,9 +2,9 @@
 // `href` values starting with "/" are inside the site and get the /Endeavor base added.
 
 export const meta = {
-	title: 'Endeavor: data analysis with Claude in a Julia notebook',
+	title: 'Endeavor: work through your data with an AI agent in a live notebook',
 	description:
-		'Endeavor is a Mac app where Claude writes and runs Julia code in a live notebook beside your chat, while you watch, edit and decide what runs. Coming soon for macOS.',
+		'Endeavor is a desktop app for working through your data together with an AI agent, in a live notebook that keeps every step as code that runs the same way every time, for you or anyone you share it with. Test builds for Mac and Windows.',
 	imageAlt: 'The Endeavor window, with the chat on the left and a Julia notebook with a plot on the right',
 };
 
@@ -16,10 +16,23 @@ export const nav = {
 export const hero = {
 	name: 'Endeavor',
 	tagline: 'Build our future',
-	lead: 'A Mac app where Claude writes and runs Julia code in a live notebook beside your chat, while you watch, edit and decide what runs.',
-	status: 'Coming soon for macOS',
+	lead: 'Work through your data with an AI agent in a live notebook. Explore, test ideas and learn what it says together, in code that runs the same way every time.',
+	// The nightly release's files keep these names from build to build (.github/workflows/nightly.yml).
+	downloads: [
+		{ text: 'Download for Mac', href: 'https://github.com/jowch/Endeavor/releases/download/nightly/Endeavor-macos-arm64.dmg' },
+		{ text: 'Download for Windows', href: 'https://github.com/jowch/Endeavor/releases/download/nightly/Endeavor-windows-x86_64-setup.exe' },
+	],
+	// In place of a status line, above the buttons. Phones get hero.phone in their place.
+	downloadNote: [
+		'Test builds for Apple silicon Macs and Windows 10 or 11. ',
+		{ text: 'How to install', href: '/install/' },
+		'. On Linux, ',
+		{ text: 'build from source', href: 'https://github.com/jowch/Endeavor#build-it' },
+		'.',
+	],
+	// Phones can't run the app, so they get the install guide instead of the downloads.
+	phone: { text: 'Get started', href: '/install/' },
 	primary: { text: 'Read the guide', href: '/overview/' },
-	secondary: { text: 'Use the notebook tools today', href: 'https://github.com/jowch/EndeavorMCP#readme' },
 };
 
 export const record = {
@@ -83,7 +96,7 @@ export const features = [
 export const withoutApp = {
 	heading: 'Use the notebook tools without the app',
 	paragraphs: [
-		'If you already work with Claude Code, Codex or Gemini CLI, you can use Endeavor’s notebook tools today. They are a separate program, EndeavorMCP, that runs on your computer, a lab server or a cluster node.',
+		'If you already work with Claude Code, Codex or Gemini CLI, you can use Endeavor’s notebook tools on their own. They are a separate program, EndeavorMCP, that runs on your computer, a lab server or a cluster node.',
 		'Run it in the folder for your notebooks. It prints a link to watch the notebook in your browser, and the settings to connect your agent over MCP.',
 	],
 	code: ['cargo install --git https://github.com/jowch/EndeavorMCP endeavor-mcp', 'cd ~/my-analysis', 'endeavor serve'],
