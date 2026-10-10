@@ -328,6 +328,8 @@ impl Workspace {
         let chips: Vec<Value> = self.draft_chips().into_iter().map(|c| json!({ "chip": c.id, "label": c.label, "waiting": c.waiting })).collect();
         json!({
             "chips": chips,
+            "notebook_kind": crate::new_session::kind_name(self.draft.notebook.kind()),
+            "new_notebook_kinds": crate::new_session::NEW_KINDS.iter().map(|&k| crate::new_session::new_notebook_label(k)).collect::<Vec<_>>(),
             "mode": self.mode_label(None),
             "notice": self.draft.notice.as_ref().map(|n| n.to_string()),
             "connection_notice": self.connection_notice_text().map(|(text, _)| text),
@@ -526,6 +528,7 @@ impl Workspace {
                 }))
             }),
             "path": s.notebook_path,
+            "kind": crate::new_session::kind_name(s.kind),
             "header": header,
             "warning": self.read_only(s).then(|| {
                 let (title, line) = self.pane_warning(s);
@@ -548,7 +551,7 @@ impl Workspace {
     /// The notebook pane before a session starts.
     fn draft_pane_state(&self, cx: &App) -> Value {
         let header = match &self.draft.notebook {
-            NotebookChoice::New => "New notebook".to_string(),
+            NotebookChoice::New(kind) => crate::new_session::new_notebook_label(*kind).to_string(),
             NotebookChoice::Existing(path) => self.draft.host.folder_name(path),
         };
         let Some(folder) = self.draft_pane_folder() else {
@@ -557,7 +560,7 @@ impl Workspace {
             return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.hosts.name(&self.draft.host))), "header": header });
         };
         match (&self.draft.notebook, &self.draft.preview) {
-            (NotebookChoice::New, _) => json!({ "shows": "new_notebook", "saved_in": self.draft_tilde(folder), "header": header }),
+            (NotebookChoice::New(_), _) => json!({ "shows": "new_notebook", "saved_in": self.draft_tilde(folder), "header": header }),
             (NotebookChoice::Existing(_), None) => json!({ "shows": "loading", "header": header }),
             (NotebookChoice::Existing(_), Some(p)) => json!({ "shows": "safe_preview", "cells_shown": p.cells.len(), "cells": p.total, "header": header }),
         }

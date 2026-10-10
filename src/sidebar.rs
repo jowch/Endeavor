@@ -10,7 +10,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use crate::agent::Agent;
 use crate::hosts::{HostId, Place};
 use crate::menu::MenuTarget;
-use crate::new_session::{Glyph, NotebookChoice, glyph, glyph_at, menu_row};
+use crate::new_session::{Glyph, glyph, glyph_at, menu_row};
 use crate::row_marks::{self, RowFacts, RowMark};
 use crate::session::Session;
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
@@ -424,7 +424,7 @@ impl Workspace {
         if self.draft.folder.as_ref() != Some(&folder.path) {
             self.draft.folder = Some(folder.path);
             self.draft.notebooks.clear();
-            self.choose_notebook(NotebookChoice::New, cx);
+            self.choose_notebook(self.new_notebook_choice(), cx);
             self.scan_notebooks(cx);
         }
         cx.notify();

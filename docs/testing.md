@@ -106,8 +106,11 @@ To wait for something, poll the dump. For example, loop until
   (`status_mark`: `offline`, `signed_out`, `spinner` while Claude restarts,
   `red_dot` when something needs the user, or null).
 - `new_session`, on the new-session screen. The chips (where, resources, folder,
-  notebook) with their labels, the mode, the notice and connection notice, and
-  either `resume` (Pick up where you left off) or `examples`.
+  notebook) with their labels, the session's notebook kind (`notebook_kind`:
+  `julia` or `r`, the new notebook's or the picked file's), the new notebooks
+  the notebook chip offers (`new_notebook_kinds`), the mode, the notice and
+  connection notice, and either `resume` (Pick up where you left off) or
+  `examples`.
 - `session`, for the active session. `failed` is null unless it couldn't
   open; then the page in place of its transcript: `kind` (`in_cli` for one
   open in the Claude Code CLI, else `other`), `title`, `text`, `buttons` and
@@ -139,7 +142,8 @@ To wait for something, poll the dump. For example, loop until
   `following` (it keeps to the end), `at_end`, and `rows`, each item in view
   as `[entry index, top from the viewport's top, height]`. Between two dumps
   a row in both should move by exactly the amount scrolled.
-- `notebook`. What the notebook pane shows:
+- `notebook`. What the notebook pane shows, and `kind`, the session's
+  notebook kind as the core is told it (`julia` or `r`):
   - `page`: the notebook's page. `page` then has the notebook id, the
     backend, the look, safe preview, read-only and whether the page is
     connected.

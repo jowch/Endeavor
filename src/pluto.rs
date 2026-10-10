@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use wire::backend::Backend;
 
 /// One runtime as its host's listener serves it: the MCP URL the agent's
 /// config carries (its host is the app's way in too), and the bearer token
@@ -78,8 +79,10 @@ pub fn set_notebook(bridge: &Bridge, owner: u64, path: &str) -> Result<(), Strin
 
 /// The session `owner`'s working folder, where the runtime's `run_shell` runs
 /// by default. Paths here are the runtime machine's (`Place::path`).
-pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str) -> Result<(), String> {
-    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder })).map(|_| ())
+pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend) -> Result<(), String> {
+    // The core forgets kinds when it restarts, so every call says it.
+    let kind = crate::new_session::kind_name(kind);
+    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder, "kind": kind })).map(|_| ())
 }
 
 /// Make `dir` the folder Pluto suggests when saving a new notebook.

@@ -734,8 +734,8 @@ impl Workspace {
         .detach();
 
         let recent = load_recent();
-        let mut draft = Draft::new(new_session::default_folder(&recent), window, cx);
         let settings = Settings::load();
+        let mut draft = Draft::new(new_session::default_folder(&recent), new_session::new_kind(&settings), window, cx);
         draft.agent = settings.agent;
         let mut this = Self {
             webview,
@@ -916,6 +916,7 @@ impl Workspace {
         }
         let mut session = Session::new(key, place, server.clone());
         session.agent = agent;
+        session.kind = self.draft.notebook.kind();
         // As the job will ask for them (fitted to the partition), so the session's chip says what was submitted.
         session.resources = self.draft.resources.as_ref().filter(|_| self.is_cluster(&host)).map(|r| self.draft_cluster().map_or_else(|| r.clone(), |c| c.job(r).resources));
         session.start_mode = session::app_modes().get(self.draft.mode).map(|choice| session::Mode {
@@ -928,7 +929,7 @@ impl Workspace {
             connection.job_request = Some(job);
         }
         let existing = match &self.draft.notebook {
-            NotebookChoice::New => None,
+            NotebookChoice::New(_) => None,
             NotebookChoice::Existing(path) => Some(path.clone()),
         };
         let mut context: Vec<String> = agent.facts().session_intro.map(str::to_owned).into_iter().collect();
@@ -949,6 +950,14 @@ impl Workspace {
                 ));
             }
         }
+        // The skill says Julia unless the user asks for R; picking New R notebook is that ask.
+        if existing.is_none() && session.kind == Backend::Ember {
+            context.push(
+                "[Endeavor] The user chose an R notebook for this session. Make the notebook an R notebook \
+                 (a .R path, or new_notebook without a path, which makes one)."
+                    .into(),
+            );
+        }
         if let Some(path) = &existing {
             session.open_on_start(path.clone());
             context.push(format!(
@@ -966,7 +975,7 @@ impl Workspace {
             self.bind_notebook(key, path, cx);
         }
         self.request_agent(key, cx);
-        self.draft.notebook = NotebookChoice::New;
+        self.draft.notebook = self.new_notebook_choice();
         self.draft.preview = None;
         self.activate(key, cx);
         self.send(key, None, false, window, cx);
@@ -986,9 +995,9 @@ impl Workspace {
         let host = session.place.host.clone();
         let Some(bridge) = self.bridge(&host) else { return self.ensure_runtime(&host, cx) };
         let tools = agent::Tools { bridge: bridge.clone(), server: session.server.clone() };
-        let folder = session.place.path.clone();
+        let (folder, kind) = (session.place.path.clone(), session.kind);
         let (policy, edits) = (session.policy(), session.edits_ask());
-        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
+        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
         self.send_policy(key, policy, edits, cx);
         let older = self.connections.get(&host).and_then(|c| c.older);
         let cwd = host.agent_cwd(&session.place.path);
@@ -1036,8 +1045,11 @@ impl Workspace {
         let row_focus = self.past_row_focus.get_mut().remove(&id);
         let copy = transcript_copy::load(&id.to_string());
         let agent = self.records.get(&id.to_string()).map_or(agent::Agent::Claude, |r| r.agent);
+        // Its notebook's kind, else the one it was started with.
+        let kind = notebook.as_deref().map(new_session::kind_of_path).or_else(|| self.records.get(&id.to_string())?.kind).unwrap_or(Backend::Pluto);
         let mut session = Session::loading(key, id, place, server, title);
         session.agent = agent;
+        session.kind = kind;
         if let Some(copy) = copy {
             session.show_copy(copy);
         }
@@ -1266,8 +1278,17 @@ impl Workspace {
     fn bind_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(session) = self.session_mut(key) else { return };
         session.notebook_path = Some(path.clone());
+        // The session's kind follows its notebook, so a restarted core is told the right one.
+        session.kind = new_session::kind_of_path(&path);
+        let kind = session.kind;
         let place = Place { host: session.place.host.clone(), path: path.clone() };
-        if let Some(id) = session.id.as_ref().map(ToString::to_string)
+        let id = session.id.as_ref().map(ToString::to_string);
+        if let Some(id) = &id
+            && self.records.set_kind(id, kind)
+        {
+            self.save_records();
+        }
+        if let Some(id) = id
             && self.session_notebooks.get(&id) != Some(&place)
         {
             self.session_notebooks.insert(id, place);
@@ -1798,8 +1819,9 @@ impl Workspace {
                 match result {
                     Ok(started) => {
                         let id = started.id.clone();
-                        let place = session.place.clone();
-                        if self.records.started(&id.to_string(), agent, &place, unix_now()) {
+                        let (place, kind) = (session.place.clone(), session.kind);
+                        // `|`, not `||`: both have to update.
+                        if self.records.started(&id.to_string(), agent, &place, unix_now()) | self.records.set_kind(&id.to_string(), kind) {
                             self.save_records();
                         }
                         if let Some(resources) = self.session_mut(key).and_then(|s| s.resources.clone())
