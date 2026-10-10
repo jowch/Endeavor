@@ -50,8 +50,16 @@ The findings it was built from came from a test on a Windows machine on
   diffs and run cards work. The label result isn't JSON, so the session asks
   the runtime for the call's result, as it does for Codex.
 - **Permissions** (`asks_every_write`). Notebook prompts are answered
-  allow-once, and the runtime decides by the session's mode. Its own
-  PowerShell and file tools get the usual cards.
+  allow-once, and the runtime decides by the session's mode. Only a call
+  whose `_meta` names a notebook tool counts as one. A shell command's title
+  is its command line, which the model writes, so one that reads like a
+  notebook call is renamed ("Antigravity: …"). The session also lets a
+  prompt through only when its title names a notebook tool exactly. Its
+  PowerShell commands get the usual cards, with Allow and Deny only.
+  "Allow Always" is dropped, because Antigravity would keep it as a rule of
+  its own, which the app can't show or remove and which would hold in
+  Manual too. Its `view_file` doesn't ask at all: it reads any file on this
+  computer without a card.
 - **Sign-in.** The app checks for the token file before connecting. While
   signed out, a card above the composer offers **Sign in**, which sends ACP's
   `authenticate` with `oauth-personal`; the server opens Google's page in the
@@ -71,6 +79,15 @@ The findings it was built from came from a test on a Windows machine on
   one-second grace, then kills it. The job ends its whole tree and the temp
   folder is emptied at the next start, but the server gets no clean exit.
 - **Its own tools stay on.** Its PowerShell and file tools can't be turned
-  off from ACP, so it stays on this computer.
+  off from ACP, so it stays on this computer. `view_file` reads anything
+  without asking, the runtime's token file in the app's folder included.
+  The token is only of use through a command, and every command gets a
+  card. It is listed with EndeavorMCP #53.
+- **Stop leaves a running cell running.** That is so for every agent: the
+  runtime only drops a call still waiting for an answer (EndeavorMCP #59).
+- **Reopened sessions.** `_meta` comes only on a live call and its first
+  update. If a replayed call carries none, a reopened session shows it
+  under Antigravity's own name, without its diff. The Windows check says
+  which.
 - **Read prompts.** Reads ask too; the app answers them allow-once, so the
   user doesn't see them, but each one costs a round trip.

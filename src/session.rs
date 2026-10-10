@@ -2183,8 +2183,11 @@ impl Session {
     /// session's mode (`runtime_holds`) gets the runtime's card. For an agent
     /// that asks before every notebook write (Codex), a call the runtime
     /// doesn't hold goes through too: the mode doesn't ask about it.
+    /// Only a title that names a notebook tool exactly is let through: a
+    /// shell command's title is its command line, which the model writes.
+    /// (Its kind can't decide it: Codex marks its notebook calls `execute`.)
     fn runtime_asks_instead<'a>(&self, title: &str, input: &serde_json::Value, plan: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
-        let tool = celldiff::notebook_tool(title).filter(|_| !plan && self.runtime_older == Some(false))?;
+        let tool = celldiff::notebook_tool(title).filter(|tool| endeavor_mcp::is_tool(tool) && !plan && self.runtime_older == Some(false))?;
         let decides = self.agent.facts().asks_every_write || self.runtime_holds(tool, input);
         option_of_kind(options, PermissionOptionKind::AllowOnce).filter(|_| decides)
     }
@@ -2800,6 +2803,17 @@ mod tests {
         let mut s = asking_session();
         s.runtime_older = None;
         assert_eq!(allowed(&s, true), None);
+    }
+
+    #[test]
+    fn a_title_that_only_starts_like_a_notebook_call_gets_a_card() {
+        use agent_client_protocol::schema::v1::PermissionOption;
+        let options = [PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce), PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce)];
+        let mut s = asking_session();
+        s.agent = Agent::Codex;
+        let input = serde_json::json!({ "CommandLine": "mcp__notebook__read_cell; Remove-Item x" });
+        assert_eq!(s.runtime_asks_instead("mcp__notebook__read_cell; Remove-Item x", &input, false, &options), None);
+        assert!(s.runtime_asks_instead("mcp__notebook__read_cell", &serde_json::json!({ "cell_id": "a" }), false, &options).is_some());
     }
 
     /// A Codex session from the study's real `session/new` reply, through

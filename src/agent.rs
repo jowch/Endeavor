@@ -116,6 +116,26 @@ pub struct AgentFacts {
     pub on_demand: bool,
 }
 
+/// An agent's sign-in, as the app knows it, for an agent other than Claude
+/// (whose sign-in has screens of its own: signin.rs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Account {
+    /// Not checked yet: the agent hasn't started.
+    Unknown,
+    SignedIn,
+    SignedOut,
+    /// Its browser sign-in is under way.
+    SigningIn,
+    /// The browser sign-in didn't finish.
+    Failed,
+}
+
+impl Account {
+    pub fn signed_out(self) -> bool {
+        matches!(self, Account::SignedOut | Account::SigningIn | Account::Failed)
+    }
+}
+
 /// How an agent's sign-in is checked and made.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SignIn {
@@ -218,7 +238,8 @@ const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = Some((
 ));
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = None;
-const ANTIGRAVITY_PROGRAM: &str = if cfg!(windows) { "agy_acp_server.exe" } else { "agy_acp_server.par" };
+// Elsewhere a guess, with no zip pinned behind it yet.
+const ANTIGRAVITY_PROGRAM: &str = if cfg!(windows) { "agy_acp_server.exe" } else { "agy_acp_server" };
 
 /// The Node.js the adapter runs on, installed on first launch like Julia.
 const NODE_VERSION: &str = "24.21.0";

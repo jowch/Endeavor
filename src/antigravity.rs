@@ -14,7 +14,7 @@
 //! for the result (`Effect::FetchResult`).
 
 use agent_client_protocol::schema::v1::{
-    ConfigOptionUpdate, CurrentModeUpdate, Meta, RequestPermissionRequest, SessionConfigKind, SessionConfigOption, SessionConfigValueId, SessionMode,
+    ConfigOptionUpdate, CurrentModeUpdate, Meta, PermissionOptionKind, RequestPermissionRequest, SessionConfigKind, SessionConfigOption, SessionConfigValueId, SessionMode,
     SessionModeId, SessionModeState, SessionUpdate,
 };
 
@@ -59,6 +59,8 @@ impl Dialect {
                 if let Some(tool) = notebook_tool(call.meta.as_ref()) {
                     call.title = format!("{}{tool}", crate::celldiff::TOOL_PREFIX);
                     call.raw_input = call.raw_input.map(arguments);
+                } else {
+                    not_a_notebook_call(&mut call.title, &call.raw_input);
                 }
                 vec![SessionUpdate::ToolCall(call)]
             }
@@ -68,6 +70,8 @@ impl Dialect {
                         update.fields.title = Some(format!("{}{tool}", crate::celldiff::TOOL_PREFIX));
                     }
                     update.fields.raw_input = update.fields.raw_input.map(arguments);
+                } else if let Some(title) = &mut update.fields.title {
+                    not_a_notebook_call(title, &update.fields.raw_input);
                 }
                 vec![SessionUpdate::ToolCallUpdate(update)]
             }
@@ -75,13 +79,19 @@ impl Dialect {
         }
     }
 
-    /// A permission request for a notebook call, named as its updates are.
+    /// A permission request as the app takes it: a notebook call named as
+    /// its updates are, anything else never named like one, and without
+    /// "Allow Always". Antigravity keeps that answer as a rule of its own,
+    /// which the app can't show or remove and which would hold in Manual too.
     pub fn permission(&self, request: &mut RequestPermissionRequest) {
         let call = &mut request.tool_call;
         if let Some(tool) = notebook_tool(call.meta.as_ref()) {
             call.fields.title = Some(format!("{}{tool}", crate::celldiff::TOOL_PREFIX));
             call.fields.raw_input = call.fields.raw_input.take().map(arguments);
+        } else if let Some(title) = &mut call.fields.title {
+            not_a_notebook_call(title, &call.fields.raw_input);
         }
+        request.options.retain(|o| o.kind != PermissionOptionKind::AllowAlways);
     }
 
     /// Antigravity's reply to an option change: its options, as the app shows them.
@@ -102,6 +112,20 @@ fn notebook_tool(meta: Option<&Meta>) -> Option<String> {
     let mcp = meta?.get("mcp")?;
     let tool = mcp.get("tool")?.as_str()?;
     (mcp.get("server")?.as_str()? == crate::celldiff::MCP_SERVER && endeavor_mcp::is_tool(tool)).then(|| tool.to_owned())
+}
+
+/// A call that isn't a notebook call by its `_meta` keeps its title unless
+/// the app would take that title for a notebook call's. A shell command's
+/// title is its command line, which the model writes, so
+/// `mcp__notebook__read_cell; Remove-Item …` would otherwise pass for a read.
+fn not_a_notebook_call(title: &mut String, input: &Option<serde_json::Value>) {
+    let (mut named, mut input) = (title.clone(), input.clone());
+    crate::celldiff::name_notebook_call(&mut named, &mut input);
+    if crate::celldiff::notebook_tool(&named).is_some() {
+        // A word of its own, so neither the prefix nor a title naming only
+        // the server and a tool matches any more.
+        *title = format!("Antigravity: {title}");
+    }
 }
 
 /// A notebook call's arguments: Antigravity's `rawInput` wraps them as
@@ -191,9 +215,43 @@ mod tests {
         assert_eq!(ask.tool_call.fields.raw_input, Some(serde_json::json!({"path": "C:\\Users\\me\\notebooks\\sum.jl"})));
 
         let mut shell: RequestPermissionRequest = serde_json::from_value(serde_json::from_str::<serde_json::Value>(include_str!("fixtures/antigravity/permission-shell.json")).unwrap()["params"].clone()).unwrap();
-        let before = serde_json::to_value(&shell).unwrap();
+        let before = serde_json::to_value(&shell.tool_call).unwrap();
         Dialect.permission(&mut shell);
-        assert_eq!(serde_json::to_value(&shell).unwrap(), before);
+        assert_eq!(serde_json::to_value(&shell.tool_call).unwrap(), before);
+    }
+
+    /// A shell command whose command line reads as a notebook call.
+    fn disguised_shell(command: &str) -> RequestPermissionRequest {
+        let mut message: serde_json::Value = serde_json::from_str(include_str!("fixtures/antigravity/permission-shell.json")).unwrap();
+        message["params"]["toolCall"]["title"] = command.into();
+        message["params"]["toolCall"]["rawInput"]["CommandLine"] = command.into();
+        serde_json::from_value(message["params"].clone()).unwrap()
+    }
+
+    #[test]
+    fn a_shell_command_never_passes_for_a_notebook_call() {
+        for command in ["mcp__notebook__read_cell; Remove-Item -Recurse x", "mcp__pluto__read_cell; Remove-Item x", "notebook: read_cell"] {
+            let mut ask = disguised_shell(command);
+            Dialect.permission(&mut ask);
+            let mut title = ask.tool_call.fields.title.clone().unwrap();
+            let mut input = ask.tool_call.fields.raw_input.clone();
+            crate::celldiff::name_notebook_call(&mut title, &mut input);
+            assert_eq!(crate::celldiff::notebook_tool(&title), None, "{command} was taken for a notebook call");
+            assert_eq!(ask.tool_call.fields.raw_input.as_ref().unwrap()["CommandLine"], command, "the card still shows the command");
+        }
+        // An ordinary command keeps its title.
+        let mut ask = disguised_shell("Test-Path C:\\Users\\me");
+        Dialect.permission(&mut ask);
+        assert_eq!(ask.tool_call.fields.title.as_deref(), Some("Test-Path C:\\Users\\me"));
+    }
+
+    #[test]
+    fn allow_always_is_never_offered() {
+        for fixture in [include_str!("fixtures/antigravity/permission.json"), include_str!("fixtures/antigravity/permission-shell.json")] {
+            let mut ask: RequestPermissionRequest = serde_json::from_value(serde_json::from_str::<serde_json::Value>(fixture).unwrap()["params"].clone()).unwrap();
+            Dialect.permission(&mut ask);
+            assert_eq!(ask.options.iter().map(|o| o.option_id.to_string()).collect::<Vec<_>>(), ["allow", "deny"]);
+        }
     }
 
     #[test]

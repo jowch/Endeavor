@@ -521,12 +521,12 @@ impl Workspace {
         codex.search = Some("Codex OpenAI ChatGPT assistant sign in".into());
         codex.desc = Some("Sessions on this computer only. Uses your ChatGPT sign-in, the same one as the codex command.".into());
         codex.status = Some(match self.codex_account {
-            crate::codex::Account::Unknown => Status2::new("Starts when you pick it", Tone::Quiet),
-            crate::codex::Account::SignedIn => Status2::new("Signed in", Tone::Plain),
-            crate::codex::Account::SigningIn => Status2::new("Finish signing in in your browser.", Tone::Plain),
-            crate::codex::Account::SignedOut | crate::codex::Account::Failed => Status2::new("Not signed in. Codex can't answer until you sign in.", Tone::Attention),
+            crate::agent::Account::Unknown => Status2::new("Starts when you pick it", Tone::Quiet),
+            crate::agent::Account::SignedIn => Status2::new("Signed in", Tone::Plain),
+            crate::agent::Account::SigningIn => Status2::new("Finish signing in in your browser.", Tone::Plain),
+            crate::agent::Account::SignedOut | crate::agent::Account::Failed => Status2::new("Not signed in. Codex can't answer until you sign in.", Tone::Attention),
         });
-        if matches!(self.codex_account, crate::codex::Account::SignedOut | crate::codex::Account::Failed) {
+        if matches!(self.codex_account, crate::agent::Account::SignedOut | crate::agent::Account::Failed) {
             codex.controls.push(button("Check again", Look::Secondary, Act::CheckCodex, "Check Codex's sign-in again"));
             codex.controls.push(button("Sign in", Look::Primary, Act::SignInCodex, "Sign in to Codex"));
         }
@@ -546,12 +546,12 @@ impl Workspace {
             antigravity.search = Some("Antigravity Google Gemini assistant sign in".into());
             antigravity.desc = Some("Sessions on this computer only. Uses your Google account.".into());
             antigravity.status = Some(match self.antigravity_account {
-                crate::codex::Account::Unknown => Status2::new("Starts when you pick it", Tone::Quiet),
-                crate::codex::Account::SignedIn => Status2::new("Signed in", Tone::Plain),
-                crate::codex::Account::SigningIn => Status2::new("Finish signing in in your browser.", Tone::Plain),
-                crate::codex::Account::SignedOut | crate::codex::Account::Failed => Status2::new("Not signed in. Antigravity can't answer until you sign in.", Tone::Attention),
+                crate::agent::Account::Unknown => Status2::new("Starts when you pick it", Tone::Quiet),
+                crate::agent::Account::SignedIn => Status2::new("Signed in", Tone::Plain),
+                crate::agent::Account::SigningIn => Status2::new("Finish signing in in your browser.", Tone::Plain),
+                crate::agent::Account::SignedOut | crate::agent::Account::Failed => Status2::new("Not signed in. Antigravity can't answer until you sign in.", Tone::Attention),
             });
-            if matches!(self.antigravity_account, crate::codex::Account::SignedOut | crate::codex::Account::Failed) {
+            if matches!(self.antigravity_account, crate::agent::Account::SignedOut | crate::agent::Account::Failed) {
                 antigravity.controls.push(button("Sign in", Look::Primary, Act::SignInAntigravity, "Sign in to Antigravity"));
             }
             Item::Row(antigravity)

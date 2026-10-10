@@ -137,6 +137,10 @@ impl Workspace {
         let mut details = vec![error];
         details.extend(log_tail(8));
         let restart = self.links.get_mut(agent).process.stopped(Instant::now(), details.join("\n"));
+        // A sign-in made over the connection went with it: the card offers it again.
+        if agent == Agent::Antigravity && self.antigravity_account == crate::agent::Account::SigningIn {
+            self.antigravity_account = crate::agent::Account::Failed;
+        }
         for session in self.sessions.iter_mut().filter(|s| s.agent == agent) {
             session.agent_stopped();
         }

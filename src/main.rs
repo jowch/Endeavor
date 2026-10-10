@@ -491,9 +491,9 @@ pub struct Workspace {
     /// Each agent's connection and process.
     links: agent_process::Links,
     /// Codex's sign-in, once Codex has been started.
-    codex_account: codex::Account,
+    codex_account: agent::Account,
     /// Antigravity's sign-in, kept the same way as Codex's.
-    antigravity_account: codex::Account,
+    antigravity_account: agent::Account,
     /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
     annotating: bool,
@@ -768,8 +768,8 @@ impl Workspace {
             offline_since: None,
             probing: false,
             links: agent_process::Links::default(),
-            codex_account: codex::Account::Unknown,
-            antigravity_account: codex::Account::Unknown,
+            codex_account: agent::Account::Unknown,
+            antigravity_account: agent::Account::Unknown,
             status: "".into(),
             annotating: false,
             shots: HashMap::new(),
