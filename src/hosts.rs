@@ -33,6 +33,9 @@ pub struct Server {
     /// A julia path, or a shell line such as `module load julia`; unset looks
     /// on the login shell's PATH, then downloads Endeavor's own Julia.
     pub julia: Option<String>,
+    /// An Rscript path, or a shell line such as `module load R`, for R notebooks;
+    /// unset is the login shell's Rscript. Endeavor doesn't download R.
+    pub r: Option<String>,
     /// Overrides Settings' "Stop idle notebooks after" for this server.
     pub idle_stop: Option<IdleStop>,
     /// Set for a cluster: Julia runs in a Slurm job.

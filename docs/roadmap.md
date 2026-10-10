@@ -24,7 +24,9 @@ server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)
 - **Ember (R notebooks).** In development in its own repository. It joins
   EndeavorMCP as another adapter behind the core; on this side it needs the
   pane, header and logo for an R notebook and the notebook chip listing R
-  files. Starts after the first version of the eval above; Ember's own
+  files, and an R setting in Settings and the server dialog (a server record's
+  `r` and Settings' `r` already reach the helper; nothing in the app sets them
+  yet). Starts after the first version of the eval above; Ember's own
   groundwork (a version to pin, binaries) goes on in its repository meanwhile.
 - **README, landing page and documentation website.**
 

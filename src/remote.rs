@@ -355,10 +355,11 @@ mod tests {
 
     #[test]
     fn a_server_record_reads_the_same_to_the_library() {
-        let server = Server { id: "lab".into(), name: "Lab".into(), ssh_host: "jc@lab".into(), port: Some(2222), julia: Some("module load julia".into()), ..Server::default() };
+        let server = Server { id: "lab".into(), name: "Lab".into(), ssh_host: "jc@lab".into(), port: Some(2222), julia: Some("module load julia".into()), r: Some("module load R".into()), ..Server::default() };
         let theirs = client_server(&server).unwrap();
         assert_eq!((theirs.id.as_str(), theirs.name.as_str(), theirs.ssh_host.as_str(), theirs.port, theirs.julia.as_deref()), ("lab", "Lab", "jc@lab", Some(2222), Some("module load julia")));
         assert_eq!(theirs.julia_args(), server.julia_args(), "the helper gets the same Julia");
+        assert_eq!(theirs.r_args(), ["--r-shell", "module load R"], "and the same R");
     }
 
     fn password() -> Ask {

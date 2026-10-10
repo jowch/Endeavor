@@ -32,6 +32,8 @@ pub struct ServerDialog {
     name: Entity<InputState>,
     host: Entity<InputState>,
     julia: Entity<InputState>,
+    /// The record's R setting, which the dialog doesn't show yet; kept as it was.
+    r: Option<String>,
     idle_stop: Option<IdleStop>,
     idle_menu: bool,
     /// `Host` entries from ~/.ssh/config.
@@ -132,6 +134,7 @@ impl Workspace {
             name,
             host,
             julia,
+            r: server.r.clone(),
             idle_stop: server.idle_stop,
             idle_menu: false,
             ssh_hosts: crate::hosts::ssh_config_hosts(),
@@ -179,6 +182,7 @@ impl Workspace {
             ssh_host,
             port,
             julia: (!julia.is_empty()).then_some(julia),
+            r: dialog.r.clone(),
             idle_stop: dialog.idle_stop,
             cluster,
         })
