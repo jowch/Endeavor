@@ -1,10 +1,15 @@
 # The app's first run on a Windows computer with no juliaup (issue #62): it
 # installs juliaup for the account (the Microsoft Store with winget, else
 # juliaup's App Installer file), adds the pinned Julia's channel and finds
-# that channel's julia.exe (src/juliaup.rs). GitHub's Windows runner has no
+# that channel's julia.exe (src/juliaup.rs). GitHub's Windows runners have no
 # juliaup, so this runs that path for real, as the ignored test
 # installs_juliaup_and_julia_where_there_is_none. The job summary says which
 # route installed juliaup and how long each part took.
+#
+# Each image takes a different route. Windows Server 2025 has winget, and the
+# Store install works there. Windows Server 2022 has no winget, so the app
+# falls back to juliaup's App Installer file, as on a computer whose Store is
+# blocked. Each route took about 35 s when this was written (October 2026).
 #
 # It downloads juliaup and about 300 MB of Julia, so it runs only when the
 # install code or this file changes, once a week (the Store and juliaup's
@@ -36,8 +41,12 @@ permissions:
 
 jobs:
   first-install:
-    name: juliaup first install (windows)
-    runs-on: windows-latest
+    name: juliaup first install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
       - name: Git
@@ -49,13 +58,15 @@ jobs:
         run: rustup toolchain install
       - name: Build the test
         run: cargo test --locked -p endeavor --bin endeavor --no-run
-      # What the runner has, for reading a failure.
+      # What the runner has, for reading a failure. Windows PowerShell, since
+      # PowerShell 7 can't load the Appx module here.
       - name: Runner
-        shell: pwsh
+        shell: powershell
         run: |
-          [Environment]::OSVersion.VersionString
-          (Get-CimInstance Win32_OperatingSystem).Caption
-          Get-Command winget -ErrorAction SilentlyContinue | Format-List Source, Version
+          $os = (Get-CimInstance Win32_OperatingSystem).Caption
+          $winget = if (Get-Command winget -ErrorAction SilentlyContinue) { 'has winget' } else { 'has no winget' }
+          "$os, $winget"
+          "**$os**, $winget." | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           Get-Command juliaup -ErrorAction SilentlyContinue | Format-List Source
           Get-AppxPackage -Name *Julia* | Format-List Name, Version
       - name: Install juliaup and Julia
