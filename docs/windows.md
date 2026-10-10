@@ -289,19 +289,21 @@ Windows](#how-process-control-works-on-windows)). Left:
   under a hidden console (ConPTY) or an ssh library in Rust such as `russh`.
   Either adds about two weeks.
 
-### Paths (M, about 1 week; the local half done)
+### Paths (written; server half untried on Windows)
 
 Done for a local notebook: home and app data, the depot list's separator,
 canonical paths without `\\?\`, and notebook paths as Julia's Windows rules
-give them (see "Ported for real" above). Left: server paths, PATH joins in
-code that runs only with servers, and upload names.
+give them (see "Ported for real" above). Left: PATH joins in code that runs
+only with servers.
 
-- **Server paths vs local paths.** Wire messages carry server paths as
-  `PathBuf` (`wire/src/files.rs`, `wire/src/notebooks.rs`). On a Windows
-  client, `join` would put `\` into Linux paths. Make server paths a `String`
-  or a `RemotePath` type, and update the app's call sites.
-- **Upload names** (`files.rs`) must also reject `\`, `:` and reserved names
-  such as `CON`.
+- **Server paths.** A server's folders and notebooks are plain strings with
+  `/` rules, in the app (`Place::path`, the folder browser, uploads) and in
+  EndeavorMCP's wire messages; `wire::server_path` and `HostId`'s path
+  methods take them apart. Only This Mac's paths use `PathBuf`. Untried:
+  the folder browser and an upload from Windows to a Linux server.
+- **Upload names.** A Windows machine refuses names it can't hold (`\`,
+  `:`, device names such as `CON`, a trailing dot or space) in
+  `wire::files::place` and `write`. Linux and macOS servers still take them.
 
 ### First-run setup and downloads (S–M, 2–3 days; written, untried)
 

@@ -146,7 +146,7 @@ impl Workspace {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let rules = match &target {
-            MenuTarget::FolderRules(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| crate::permits::folder_rules(&s.place.path)).unwrap_or_default(),
+            MenuTarget::FolderRules(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| crate::permits::folder_rules(Path::new(&s.place.path))).unwrap_or_default(),
             _ => Vec::new(),
         };
         self.menu = Some(PopupMenu { target, rules, at, selected: None, focus, restore });
@@ -173,11 +173,11 @@ impl Workspace {
     /// show the list as the file now reads.
     fn remove_folder_rule(&mut self, key: u64, rule: String, cx: &mut Context<Self>) {
         let Some(folder) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.path.clone()) else { return };
-        if let Err(e) = crate::permits::remove_folder_rule(&folder, &rule) {
+        if let Err(e) = crate::permits::remove_folder_rule(Path::new(&folder), &rule) {
             eprintln!("remove folder rule {rule}: {e}");
         }
         if let Some(menu) = self.menu.as_mut().filter(|m| m.target == MenuTarget::FolderRules(key)) {
-            menu.rules = crate::permits::folder_rules(&folder);
+            menu.rules = crate::permits::folder_rules(Path::new(&folder));
         }
         cx.notify();
     }

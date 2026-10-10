@@ -72,13 +72,14 @@ pub fn set_notebook(bridge: &Bridge, owner: u64, path: &str) -> Result<(), Strin
     rpc(bridge, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
 }
 
-/// The session `owner`'s working folder, where the runtime's `run_shell` runs by default.
-pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &Path) -> Result<(), String> {
+/// The session `owner`'s working folder, where the runtime's `run_shell` runs
+/// by default. Paths here are the runtime machine's (`Place::path`).
+pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str) -> Result<(), String> {
     rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder })).map(|_| ())
 }
 
 /// Make `dir` the folder Pluto suggests when saving a new notebook.
-pub fn set_folder(bridge: &Bridge, dir: &Path) -> Result<(), String> {
+pub fn set_folder(bridge: &Bridge, dir: &str) -> Result<(), String> {
     rpc(bridge, "endeavor/set_folder", json!({ "path": dir })).map(|_| ())
 }
 

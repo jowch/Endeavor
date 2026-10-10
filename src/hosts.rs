@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use wire::server_path;
 use wire::slurm::{JobRequest, Partition, Resources};
 
 use crate::settings::IdleStop;
@@ -81,10 +82,58 @@ impl HostId {
     /// The local folder Claude Code works in for sessions on this host: the
     /// session's own folder on This Mac; for a server, one folder per server in
     /// Application Support (its files are out of reach of Claude's own tools).
-    pub fn agent_cwd(&self, folder: &Path) -> PathBuf {
+    pub fn agent_cwd(&self, folder: &str) -> PathBuf {
         match self {
-            HostId::ThisMac => folder.to_path_buf(),
+            HostId::ThisMac => PathBuf::from(folder),
             HostId::Server(id) => crate::install::app_dir().unwrap_or_default().join("hosts").join(id),
+        }
+    }
+
+    /// `name` (or a relative path) in the folder `dir` on this host.
+    pub fn join(&self, dir: &str, name: &str) -> String {
+        match self {
+            HostId::ThisMac => text(&Path::new(dir).join(name)),
+            HostId::Server(_) => server_path::join(dir, name),
+        }
+    }
+
+    /// The folder `path` on this host is in, as with `Path::parent`.
+    pub fn parent(&self, path: &str) -> Option<String> {
+        match self {
+            HostId::ThisMac => Path::new(path).parent().map(text),
+            HostId::Server(_) => server_path::parent(path).map(str::to_owned),
+        }
+    }
+
+    /// `path` on this host, then each folder it is in, as with `Path::ancestors`.
+    pub fn ancestors(&self, path: &str) -> Vec<String> {
+        match self {
+            HostId::ThisMac => Path::new(path).ancestors().map(text).filter(|p| !p.is_empty()).collect(),
+            HostId::Server(_) => server_path::ancestors(path).map(str::to_owned).collect(),
+        }
+    }
+
+    /// The last part of `path` on this host, or the whole path when it has
+    /// none (`/`): how a folder is named in a list.
+    pub fn folder_name(&self, path: &str) -> String {
+        self.file_name(path).unwrap_or_else(|| path.to_owned())
+    }
+
+    /// The last part of `path` on this host.
+    pub fn file_name(&self, path: &str) -> Option<String> {
+        match self {
+            HostId::ThisMac => Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()),
+            HostId::Server(_) => server_path::file_name(path).map(str::to_owned),
+        }
+    }
+
+    /// `path` relative to the folder `base` on this host, part by part: `""`
+    /// for `base` itself, None when it isn't inside. Written with `/` on a
+    /// server and with this computer's separator here.
+    pub fn strip_prefix(&self, path: &str, base: &str) -> Option<String> {
+        match self {
+            HostId::ThisMac => Path::new(path).strip_prefix(base).ok().map(text),
+            HostId::Server(_) => server_path::strip_prefix(path, base).map(str::to_owned),
         }
     }
 
@@ -102,29 +151,59 @@ impl HostId {
 #[serde(from = "SavedPlace")]
 pub struct Place {
     pub host: HostId,
-    pub path: PathBuf,
+    /// As text in the host's rules: This Mac's own, or a server's `/` rules
+    /// whatever this computer's are (a `PathBuf` on Windows would turn a
+    /// Linux path's `/` into `\`). Take it apart with the host's methods below.
+    pub path: String,
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum SavedPlace {
-    Local(PathBuf),
-    Hosted { host: HostId, path: PathBuf },
+    Local(String),
+    Hosted { host: HostId, path: String },
 }
 
 impl From<SavedPlace> for Place {
     fn from(saved: SavedPlace) -> Place {
         match saved {
-            SavedPlace::Local(path) => Place { host: HostId::ThisMac, path },
+            SavedPlace::Local(path) | SavedPlace::Hosted { host: HostId::ThisMac, path } => Place::local(path),
             SavedPlace::Hosted { host, path } => Place { host, path },
         }
     }
 }
 
 impl Place {
-    pub fn local(path: impl Into<PathBuf>) -> Place {
-        Place { host: HostId::ThisMac, path: path.into() }
+    /// Written part by part, so a trailing separator or a `.` part doesn't
+    /// make the same folder a second place (`PathBuf`'s `==` ignored them).
+    pub fn local(path: impl AsRef<Path>) -> Place {
+        Place { host: HostId::ThisMac, path: text(&path.as_ref().components().collect::<PathBuf>()) }
     }
+
+    /// The path on This Mac; None for a server's.
+    pub fn here(&self) -> Option<&Path> {
+        (self.host == HostId::ThisMac).then(|| Path::new(&self.path))
+    }
+
+    /// `name` (or a relative path) in this folder.
+    pub fn join(&self, name: &str) -> Place {
+        Place { host: self.host.clone(), path: self.host.join(&self.path, name) }
+    }
+
+    /// The folder this is in.
+    pub fn parent(&self) -> Option<Place> {
+        self.host.parent(&self.path).map(|path| Place { host: self.host.clone(), path })
+    }
+
+    /// The last part of the path, or the whole path when it has none (`/`).
+    pub fn name(&self) -> String {
+        self.host.folder_name(&self.path)
+    }
+}
+
+/// A path of This Mac as `Place` keeps it.
+pub fn text(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 impl Hosts {
@@ -308,12 +387,45 @@ mod tests {
     }
 
     #[test]
+    fn a_servers_paths_follow_slash_rules_on_every_computer() {
+        let lab = HostId::Server("server-1".into());
+        let folder = Place { host: lab.clone(), path: "/home/jc/qpcr".into() };
+        assert_eq!(folder.join("data").path, "/home/jc/qpcr/data", "never a backslash, even on Windows");
+        assert_eq!(folder.join("data/run 1.csv").path, "/home/jc/qpcr/data/run 1.csv");
+        assert_eq!(folder.parent().map(|p| p.path), Some("/home/jc".into()));
+        assert_eq!(folder.name(), "qpcr");
+        assert_eq!(Place { host: lab.clone(), path: "/".into() }.name(), "/");
+        assert_eq!(Place { host: lab.clone(), path: "/".into() }.parent(), None);
+        assert_eq!(lab.ancestors("/home/jc"), ["/home/jc", "/home", "/"]);
+        assert_eq!(lab.strip_prefix("/home/jc/qpcr/sub/a.jl", "/home/jc/qpcr").as_deref(), Some("sub/a.jl"));
+        assert_eq!(lab.strip_prefix("/home/jc/qpcr2/a.jl", "/home/jc/qpcr"), None);
+        // What Windows reads as a drive or a separator is only part of a name on a server.
+        assert_eq!(lab.file_name(r"/home/jc/C:\x.jl").as_deref(), Some(r"C:\x.jl"));
+        assert_eq!(lab.join("/home/jc", "C:x"), "/home/jc/C:x");
+        assert!(folder.here().is_none());
+    }
+
+    #[test]
+    fn this_macs_paths_follow_its_own_rules() {
+        let home = std::env::temp_dir();
+        let folder = Place::local(&home);
+        assert_eq!(folder.here(), Some(home.as_path()));
+        assert_eq!(folder.join("data").path, text(&home.join("data")));
+        assert_eq!(folder.join("data").parent(), Some(folder.clone()));
+        assert_eq!(HostId::ThisMac.strip_prefix(&text(&home.join("a.jl")), &folder.path).as_deref(), Some("a.jl"));
+        // macOS's and Windows's temp folder end in a separator; the same
+        // folder with and without it is one place.
+        assert_eq!(Place::local(home.join("x").join("")), Place::local(home.join("x")));
+        assert_eq!(Place::local(home.join(".").join("x")), Place::local(home.join("x")));
+    }
+
+    #[test]
     fn server_sessions_share_one_agent_folder_per_server() {
         let lab = HostId::Server("server-1".into());
-        let cwd = lab.agent_cwd(Path::new("/home/jc/qpcr"));
-        assert_eq!(cwd, lab.agent_cwd(Path::new("/srv/other")));
+        let cwd = lab.agent_cwd("/home/jc/qpcr");
+        assert_eq!(cwd, lab.agent_cwd("/srv/other"));
         assert_eq!(HostId::of_agent_cwd(&cwd), Some(lab));
-        assert_eq!(HostId::ThisMac.agent_cwd(Path::new("/Users/jc/x")), PathBuf::from("/Users/jc/x"));
+        assert_eq!(HostId::ThisMac.agent_cwd("/Users/jc/x"), PathBuf::from("/Users/jc/x"));
         assert_eq!(HostId::of_agent_cwd(Path::new("/Users/jc/x")), None);
     }
 

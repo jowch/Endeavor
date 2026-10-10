@@ -903,7 +903,7 @@ impl Workspace {
             NotebookAction::Frontmatter => self.send_to_page(&page("frontmatter"), cx),
             NotebookAction::NewSession => {
                 let folder = session.place.clone();
-                self.new_session_on(folder, PathBuf::from(path), cx);
+                self.new_session_on(folder, path, cx);
             }
             NotebookAction::Start => self.start_notebook(key, cx),
             NotebookAction::Restart => self.restart_notebook(key, cx),
@@ -973,13 +973,15 @@ impl Workspace {
     fn finish_notebook_rename(&mut self, cx: &mut Context<Self>) {
         let Some((key, input)) = self.notebook_rename.take() else { return };
         let name = input.read(cx).value().trim().trim_end_matches(".jl").to_string();
-        let Some(path) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook_path.clone()) else { return };
-        let old = Path::new(&path);
-        if name.is_empty() || name.contains('/') || Some(name.as_str()) == old.file_stem().and_then(|s| s.to_str()) {
+        let Some((host, path)) = self.sessions.iter().find(|s| s.key == key).and_then(|s| Some((s.place.host.clone(), s.notebook_path.clone()?))) else { return };
+        let old = host.file_name(&path).unwrap_or_default();
+        let separator = host == HostId::ThisMac && name.contains(std::path::MAIN_SEPARATOR);
+        if name.is_empty() || name.contains('/') || separator || name == old.trim_end_matches(".jl") {
             return cx.notify();
         }
-        let target = old.with_file_name(format!("{name}.jl"));
-        self.move_notebook(key, target.display().to_string(), true, cx);
+        // In the notebook's own folder, by its host's rules: a server's `/`, whatever this computer uses.
+        let target = host.join(&host.parent(&path).unwrap_or_default(), &format!("{name}.jl"));
+        self.move_notebook(key, target, true, cx);
     }
 
     /// Move to…: a folder on This Mac, from the macOS panel.
@@ -1141,7 +1143,7 @@ impl Workspace {
         #[cfg(target_os = "macos")]
         {
             let old_dir = session.notebook_path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| d.is_dir()).map(Path::to_path_buf);
-            new_session::set_open_panel_folder(&old_dir.unwrap_or(folder));
+            new_session::set_open_panel_folder(&old_dir.unwrap_or_else(|| PathBuf::from(&folder)));
         }
         let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Use this notebook".into()) });
         cx.spawn(async move |this, cx| {
@@ -1196,13 +1198,13 @@ impl Workspace {
             return cx.notify();
         }
         #[cfg(target_os = "macos")]
-        new_session::set_open_panel_folder(&place.path);
+        new_session::set_open_panel_folder(Path::new(&place.path));
         let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Open".into()) });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
             let Some(file) = paths.into_iter().next() else { return };
             let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
-            let _ = this.update(cx, |this, cx| this.new_session_on(Place::local(folder), file, cx));
+            let _ = this.update(cx, |this, cx| this.new_session_on(Place::local(folder), crate::hosts::text(&file), cx));
         })
         .detach();
     }
