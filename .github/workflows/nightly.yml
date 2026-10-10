@@ -1,0 +1,269 @@
+# Keeps one "nightly" prerelease holding the newest build of main that passed
+# CI on macOS, Linux and Windows: Endeavor-macos-arm64.dmg (scripts/bundle.sh's
+# app, with the Linux servers' helpers inside) and Endeavor-windows-x86_64-setup.exe
+# (the installer windows.yml built from that same commit). Each run replaces the
+# files and moves the tag, so the download links stay the same and releases
+# don't pile up. A scheduled run does nothing when the nightly already holds
+# that commit. On a pull request that changes the Mac packaging it only builds
+# the disk image from the pull request and keeps it as an Actions artifact,
+# with a screenshot of its window; nothing is published. The schedule
+# publishes only while the repository variable NIGHTLY_PUBLISH is true.
+# The Mac app is signed with a Developer ID and the disk image notarized when
+# the "release" environment (main only) has the signing secrets (MACOS_CERT_P12, the certificate and
+# its key as a base64 .p12; MACOS_CERT_PASSWORD; APPLE_TEAM_ID; and an App
+# Store Connect API key: APPLE_API_KEY_P8, APPLE_API_KEY_ID,
+# APPLE_API_ISSUER_ID). Without them it stays ad-hoc signed, and Gatekeeper
+# makes the user allow it in System Settings. Pull requests never sign.
+# ponytail: the installer isn't signed (SmartScreen warns). Apple Silicon
+# only. The Windows build has no server helpers (windows.yml).
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  # A run by hand builds (and on main signs and notarizes) the Mac disk image
+  # and keeps it as an artifact; it publishes only when asked to.
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Replace the nightly release with this build
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+      - assets/dmg/**
+      - scripts/bundle.sh
+
+concurrency:
+  group: nightly-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # The newest main commit whose Windows run (with its installer) and CI run
+  # both passed; on a pull request, its head.
+  pick:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      windows_run: ${{ steps.pick.outputs.windows_run }}
+      skip: ${{ steps.pick.outputs.skip }}
+      publish: ${{ steps.pick.outputs.publish }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            { echo "sha=${{ github.event.pull_request.head.sha }}"; echo "windows_run="; echo "skip=false"; echo "publish=false"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sha=; windows_run=
+          for row in $(gh run list --workflow windows.yml --branch main --event push --status success --limit 20 --json databaseId,headSha -q '.[] | "\(.databaseId),\(.headSha)"'); do
+            if [ "$(gh run list --workflow ci.yml --commit "${row#*,}" --event push --status success --json databaseId -q length)" != 0 ]; then
+              windows_run=${row%,*}; sha=${row#*,}; break
+            fi
+          done
+          [ -n "$sha" ] || { echo "No recent commit on main passed both CI and the Windows build." >&2; exit 1; }
+          current=$(gh api "repos/$GH_REPO/git/ref/tags/nightly" -q .object.sha 2>/dev/null || true)
+          skip=false; publish=false
+          if [ "${{ github.event_name }}" = schedule ]; then
+            if [ "${{ vars.NIGHTLY_PUBLISH }}" = true ]; then publish=true; else skip=true; fi
+            if [ "$current" = "$sha" ]; then skip=true; fi
+          elif [ "${{ inputs.publish }}" = true ]; then
+            publish=true
+          fi
+          echo "main $sha (Windows run $windows_run); nightly now ${current:-none}; skip $skip; publish $publish"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "windows_run=$windows_run" >> "$GITHUB_OUTPUT"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+  mac:
+    needs: pick
+    if: needs.pick.outputs.skip != 'true'
+    runs-on: macos-15
+    # The signing secrets live in the "release" environment, which only main
+    # may use. Pull requests run outside it and never sign.
+    environment: ${{ github.event_name != 'pull_request' && 'release' || '' }}
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
+    env:
+      SIGN: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERT_P12 != '' && secrets.APPLE_API_KEY_P8 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.pick.outputs.sha }}
+      - name: Toolchain
+        run: rustup toolchain install
+      # Fails if EndeavorMCP's Helpers release has no build for the pinned
+      # commit, rather than shipping an app that can't reach Linux servers.
+      # That happens when Helpers never built that commit, or when its build
+      # was pruned (scripts/prune-helpers.sh keeps the last 10 pins on main).
+      - name: Linux servers' helpers
+        run: |
+          scripts/helpers.sh --fetch-only || {
+            echo "::error::EndeavorMCP's Helpers release has no build for the commit Cargo.lock pins: Helpers never built it, or pruned it because this app commit is older than the last 10 pins on main. No nightly this time."
+            exit 1
+          }
+      - name: Bundle
+        run: scripts/bundle.sh
+      # A throwaway keychain holding only the Developer ID certificate, deleted
+      # at the end of the job. Nothing secret is echoed.
+      - name: Signing keychain
+        id: signing
+        if: env.SIGN == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -eu
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          pw=$(openssl rand -hex 24); echo "::add-mask::$pw"
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          id=$(security find-identity -v -p codesigning "$kc" | awk -v team="($APPLE_TEAM_ID)" '/Developer ID Application/ && index($0, team) { print $2; exit }')
+          [ -n "$id" ] || { echo "::error::The certificate in MACOS_CERT_P12 isn't a Developer ID Application certificate for APPLE_TEAM_ID."; exit 1; }
+          echo "SIGN_ID=$id" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+      # Inside out: every Mach-O file in the app (this Mac's server helper),
+      # then the app. Hardened runtime with no entitlements: the app only
+      # starts other programs (Julia, Node, the agents) and shows WKWebView,
+      # whose web content runs in WebKit's own processes.
+      - name: Sign the app
+        if: env.SIGN == 'true'
+        run: |
+          set -eu
+          app=target/release/Endeavor.app
+          find "$app/Contents/Resources" -type f -perm -u+x | while read -r f; do
+            if file -b "$f" | grep -q Mach-O; then codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$f" || exit 1; fi
+          done
+          codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$app"
+          codesign --verify --strict --deep "$app"
+      # A disk image whose window shows the splash scene (assets/dmg), the app
+      # and a link to Applications. dmgbuild writes the window's layout itself,
+      # so it doesn't need Finder, and copies the app with ditto, which keeps
+      # its signature.
+      - name: Disk image
+        run: |
+          python3 -m venv target/dmgbuild
+          target/dmgbuild/bin/pip install -q dmgbuild==1.6.7
+          mkdir -p dist
+          target/dmgbuild/bin/dmgbuild -s assets/dmg/settings.py -D app=target/release/Endeavor.app Endeavor dist/Endeavor-macos-arm64.dmg
+          hdiutil verify dist/Endeavor-macos-arm64.dmg
+      - name: Sign and notarize the disk image
+        if: env.SIGN == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -eu
+          dmg=dist/Endeavor-macos-arm64.dmg
+          codesign --force --timestamp --sign "$SIGN_ID" "$dmg"
+          key="$RUNNER_TEMP/api-key.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
+          out=$(xcrun notarytool submit "$dmg" --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" --wait --timeout 30m --output-format json)
+          echo "$out"
+          status=$(printf '%s' "$out" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", ""))')
+          if [ "$status" != Accepted ]; then
+            sub=$(printf '%s' "$out" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("id", ""))')
+            [ -z "$sub" ] || xcrun notarytool log "$sub" --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            rm -f "$key"
+            echo "::error::Notarization came back $status."
+            exit 1
+          fi
+          rm -f "$key"
+          xcrun stapler staple "$dmg"
+          spctl --assess --type open --context context:primary-signature -v "$dmg"
+      - name: Check the disk image
+        run: |
+          set -eu
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/endeavor-dmg dist/Endeavor-macos-arm64.dmg
+          ls -la /tmp/endeavor-dmg
+          codesign --verify --strict /tmp/endeavor-dmg/Endeavor.app
+          [ "$(readlink /tmp/endeavor-dmg/Applications)" = /Applications ]
+          test -f /tmp/endeavor-dmg/.DS_Store
+          if [ "$SIGN" = true ]; then spctl --assess --type execute -v /tmp/endeavor-dmg/Endeavor.app; fi
+          hdiutil detach /tmp/endeavor-dmg
+      # What a user sees on opening it, for review on pull requests. Hosted
+      # runners have a desktop, but Finder there can be slow or refuse, so a
+      # missing screenshot doesn't fail the build.
+      - name: Screenshot of its window
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          open dist/Endeavor-macos-arm64.dmg
+          sleep 15
+          screencapture -x dist/dmg-window.png
+          hdiutil detach /Volumes/Endeavor || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-mac
+          path: dist/
+          retention-days: ${{ needs.pick.outputs.publish == 'true' && 1 || 14 }}
+      - name: Remove the signing keychain
+        if: always() && steps.signing.outputs.signed == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+
+  publish:
+    needs: [pick, mac]
+    if: needs.pick.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ needs.pick.outputs.sha }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightly-mac
+          path: dist
+      - name: The Windows installer
+        run: |
+          set -eu
+          gh run download "${{ needs.pick.outputs.windows_run }}" --pattern 'Endeavor-windows-x86_64-setup-*' --dir win
+          setup=$(find win -name 'Endeavor-setup-*.exe' | head -1)
+          [ -n "$setup" ] || { echo "The Windows run kept no installer." >&2; exit 1; }
+          cp "$setup" dist/Endeavor-windows-x86_64-setup.exe
+          rm -f dist/dmg-window.png
+          ls -l dist
+      - name: Publish
+        run: |
+          set -eu
+          short=$(echo "$SHA" | cut -c1-7)
+          MAC_UNSIGNED=
+          if [ "${{ needs.mac.outputs.signed }}" != true ]; then
+            MAC_UNSIGNED=" It isn't signed by a known developer, so macOS blocks the first open: open it once, then go to System Settings, Privacy & Security, and click Open Anyway."
+          fi
+          cat > notes.md <<EOF
+          The newest build of main that passed CI: build $short, $(date -u +%Y-%m-%d). It is replaced every day main changes. It is a test build: expect rough edges.
+
+          - **Mac** (Apple Silicon, macOS 13 or later): open Endeavor-macos-arm64.dmg and drag Endeavor to Applications.$MAC_UNSIGNED
+          - **Windows** (10 or 11, 64-bit): run Endeavor-windows-x86_64-setup.exe. It isn't signed, so Windows may say it protected your PC: click More info, then Run anyway. The Windows build can't connect to servers yet.
+          - **Linux**: build it from source (docs/development.md).
+          EOF
+          if ! gh release view nightly >/dev/null 2>&1; then
+            gh release create nightly --prerelease --title "Nightly build" --notes-file notes.md --target "$SHA"
+          fi
+          gh release upload nightly dist/* --clobber
+          gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$SHA" -F force=true >/dev/null
+          gh release edit nightly --prerelease --title "Nightly build" --notes-file notes.md
