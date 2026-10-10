@@ -185,6 +185,17 @@ the exe needs no DLL that Windows doesn't ship. The job checks that with
 because a debug build compiles its shaders at launch from the crate's source
 folder, so it runs only on the machine that built it.
 
+`.github/workflows/juliaup.yml` runs the app's first-run juliaup install for
+real on runners that have no juliaup: the ignored test
+`installs_juliaup_and_julia_where_there_is_none` installs juliaup, adds Julia
+1.12.6 and checks that channel's `julia.exe`. Windows Server 2025 has winget,
+so it takes the Microsoft Store route; Windows Server 2022 has none, so it
+falls back to juliaup's App Installer file. Each route took under 2 minutes and
+`juliaup add` about 20 s (October 2026). It runs only when `src/juliaup.rs`,
+`src/runtime.rs` or the workflow changes, weekly, and by hand. Windows Server
+isn't a Windows 10 or 11 desktop, so a desktop with a blocked or missing Store
+is still untried.
+
 Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 `tar`, symlinks or Unix sockets:
 
@@ -345,7 +356,7 @@ only with servers.
   while juliaup can't be set up, and removed once a runtime starts with
   juliaup's Julia. Each install route gets 10 minutes and `juliaup add` 45,
   then the next route or an error. Installing juliaup on a computer without
-  it is untried.
+  it runs in CI on Windows Server, both routes (see [CI](#ci)).
 - Windows 10 and later include `curl.exe` and `tar.exe` (bsdtar), and that
   `tar` reads .zip. The app runs `%SystemRoot%\System32\tar.exe` by path,
   since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. The
