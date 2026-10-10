@@ -387,7 +387,7 @@ fn column_header(id: impl Into<ElementId>) -> Stateful<Div> {
 /// Recently used working folders on every host, most recent first, kept across
 /// launches. Only This Mac's can be checked for still being there.
 fn load_recent() -> Vec<Place> {
-    load_json::<Vec<Place>>("recent.json").into_iter().filter(|p| p.host != HostId::ThisMac || p.path.is_dir()).collect()
+    load_json::<Vec<Place>>("recent.json").into_iter().filter(|p| p.here().is_none_or(Path::is_dir)).collect()
 }
 
 fn load_records() -> records::Records {
@@ -907,7 +907,7 @@ impl Workspace {
         }
         let existing = match &self.draft.notebook {
             NotebookChoice::New => None,
-            NotebookChoice::Existing(path) => Some(path.display().to_string()),
+            NotebookChoice::Existing(path) => Some(path.clone()),
         };
         let mut context: Vec<String> = agent.facts().session_intro.map(str::to_owned).into_iter().collect();
         if let (Some(server), HostId::Server(id)) = (&server, &host) {
@@ -917,7 +917,7 @@ impl Workspace {
                  the notebook and the files are all on that server; your own file and shell tools are off because \
                  they'd see the user's computer instead. Use the notebook tools list_folder, read_file and run_shell (the user \
                  approves each command), with the server's paths.",
-                folder.display()
+                folder
             ));
             if let Some(resources) = &session.resources {
                 context.push(format!(
@@ -991,7 +991,7 @@ impl Workspace {
         if let Some(title) = self.titles.get(&id).cloned().or_else(|| self.records.get(&id)?.title.clone()) {
             return (title, false);
         }
-        let notebook = self.session_notebooks.get(&id).and_then(|p| p.path.file_name()).map(|n| n.to_string_lossy().into_owned());
+        let notebook = self.session_notebooks.get(&id).map(Place::name);
         (notebook.unwrap_or_else(|| "Earlier session".into()), true)
     }
 
@@ -1008,7 +1008,7 @@ impl Workspace {
         // A "notebook moved" note that never reached the agent before the app quit.
         let pending = self.pending_moved.get(&id.to_string()).cloned();
         let (title, untitled) = self.past_title(&id);
-        let notebook = self.session_notebooks.get(&id.to_string()).map(|p| p.path.display().to_string());
+        let notebook = self.session_notebooks.get(&id.to_string()).map(|p| p.path.clone());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
         // The row keeps its handle as it turns from past to open, so keyboard focus stays on it.
         let row_focus = self.past_row_focus.get_mut().remove(&id);
@@ -1231,7 +1231,7 @@ impl Workspace {
     fn bind_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(session) = self.session_mut(key) else { return };
         session.notebook_path = Some(path.clone());
-        let place = Place { host: session.place.host.clone(), path: PathBuf::from(&path) };
+        let place = Place { host: session.place.host.clone(), path: path.clone() };
         if let Some(id) = session.id.as_ref().map(ToString::to_string)
             && self.session_notebooks.get(&id) != Some(&place)
         {
@@ -1478,7 +1478,7 @@ impl Workspace {
         let (progress, mut progressed) = futures::channel::mpsc::unbounded::<attach::Progress>();
         let helper = self.helper(&place.host);
         let (dest, fallback) = match (&place.host, helper) {
-            (HostId::ThisMac, _) => (attach::Dest::Here(place.path), None),
+            (HostId::ThisMac, _) => (attach::Dest::Here(place.path.into()), None),
             (host, _) if !self.helper_saves_files(host) => (attach::Dest::Message, Some(attach::UNWRITABLE)),
             (_, Some(helper)) => {
                 let ask = Box::new(move |request| helper.files(request));

@@ -493,7 +493,7 @@ impl Workspace {
     fn draft_pane_state(&self, cx: &App) -> Value {
         let header = match &self.draft.notebook {
             NotebookChoice::New => "New notebook".to_string(),
-            NotebookChoice::Existing(path) => session::folder_name(path),
+            NotebookChoice::Existing(path) => self.draft.host.folder_name(path),
         };
         let Some(folder) = self.draft_pane_folder() else {
             let pane = self.host_pane_state(&self.draft.host, cx);

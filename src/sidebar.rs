@@ -12,7 +12,7 @@ use crate::hosts::{HostId, Place};
 use crate::menu::MenuTarget;
 use crate::new_session::{Glyph, NotebookChoice, glyph, glyph_at, menu_row};
 use crate::row_marks::{self, RowFacts, RowMark};
-use crate::session::{Session, folder_name};
+use crate::session::Session;
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
 use crate::theme::FocusRing as _;
 
@@ -405,7 +405,7 @@ impl Workspace {
     /// open now or a past session).
     fn row_notebook_name(&self, row: &Row) -> Option<String> {
         let id = self.row_session_id(row)?;
-        self.session_notebooks.get(&id.to_string()).and_then(|p| p.path.file_name()).map(|n| n.to_string_lossy().into_owned())
+        self.session_notebooks.get(&id.to_string()).map(Place::name)
     }
 
     /// Whether the sidebar has any session at all, open or past, before any
@@ -446,8 +446,8 @@ impl Workspace {
                     Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.place.clone()),
                     Row::Past(_, place) => Some(place.clone()),
                 };
-                if let Some(Place { host: HostId::ThisMac, path: folder }) = folder {
-                    platform::reveal(&folder);
+                if let Some(folder) = folder.as_ref().and_then(Place::here) {
+                    platform::reveal(folder);
                 }
             }
             RowAction::Archive => self.set_archived(row, true, cx),
@@ -660,8 +660,8 @@ impl Workspace {
     /// A folder's name, with its server's for a folder on one ("decay-fits · lab").
     pub(crate) fn folder_heading(&self, place: &Place) -> String {
         match place.host {
-            HostId::ThisMac => folder_name(&place.path),
-            _ => format!("{} · {}", folder_name(&place.path), self.hosts.name(&place.host)),
+            HostId::ThisMac => place.name(),
+            _ => format!("{} · {}", place.name(), self.hosts.name(&place.host)),
         }
     }
 
@@ -795,7 +795,7 @@ impl Workspace {
                 let title_text = self.row_title(&row).unwrap_or_default();
                 let folder_line = flat.then(|| self.folder_heading(&place));
                 let title = self.row_lines(&row, &title_text, query, folder_line.as_deref());
-                let group: SharedString = format!("past-{:?}-{}-{id}", place.host, place.path.display()).into();
+                let group: SharedString = format!("past-{:?}-{}-{id}", place.host, place.path).into();
                 let archived = self.archived.contains(&id.to_string());
                 let focus = self.past_row_focus(&id, cx);
                 let label = if archived { format!("{title_text}, archived") } else { title_text };
@@ -828,7 +828,7 @@ impl Workspace {
     /// the folder before, so a heading is nearer its own rows.
     fn render_folder_heading(&self, folder: &Place, first: bool, collapsed: bool, mark: Option<RowMark>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = self.folder_heading(folder);
-        let key = format!("{:?}-{}", folder.host, folder.path.display());
+        let key = format!("{:?}-{}", folder.host, folder.path);
         let label = if collapsed { format!("{name} ›") } else { name.clone() };
         let toggle_folder = folder.clone();
         let heading = div()
@@ -913,7 +913,7 @@ impl Workspace {
                     let body: Vec<AnyElement> = rows.into_iter().map(|row| self.render_sidebar_row(row, &query, false, cx)).collect();
                     let more_row = more.map(|(label, fewer)| {
                         let folder = folder.clone();
-                        sidebar_row(ElementId::Name(format!("more-{:?}-{}", folder.host, folder.path.display()).into()), false)
+                        sidebar_row(ElementId::Name(format!("more-{:?}-{}", folder.host, folder.path).into()), false)
                             .aria_label(label.clone())
                             .text_color(theme::text_faint())
                             .child(bullet_slot())

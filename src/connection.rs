@@ -1093,7 +1093,7 @@ impl Workspace {
         // A new runtime knows no session's notebook or policy.
         let on_host: Vec<&Session> = self.sessions.iter().filter(|s| s.place.host == *host).collect();
         let bound: Vec<(u64, String)> = on_host.iter().filter_map(|s| Some((s.key, s.notebook_path.clone()?))).collect();
-        let folders: Vec<(u64, std::path::PathBuf)> = on_host.iter().map(|s| (s.key, s.place.path.clone())).collect();
+        let folders: Vec<(u64, String)> = on_host.iter().map(|s| (s.key, s.place.path.clone())).collect();
         let policies: Vec<(u64, &'static str, bool)> = on_host.iter().map(|s| (s.key, s.policy(), s.edits_ask())).collect();
         let waiting: Vec<u64> = on_host.iter().filter(|s| s.agent_waiting).map(|s| s.key).collect();
         for (key, path) in bound {
@@ -1873,7 +1873,7 @@ fn hello_of(hello: &client::HelloInfo) -> Hello {
         Some("process") => Some(client::Launcher::Process),
         _ => None,
     };
-    Hello { protocol: wire::PROTOCOL, node: hello.node.clone(), home: hello.home.clone().into(), slurm: hello.slurm, uploads: hello.uploads, launcher }
+    Hello { protocol: wire::PROTOCOL, node: hello.node.clone(), home: hello.home.clone(), slurm: hello.slurm, uploads: hello.uploads, launcher }
 }
 
 /// A server's runtime, as the app follows it.

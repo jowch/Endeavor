@@ -208,7 +208,7 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
         agent_prompt(session, title, *kind, input, path.as_deref(), code.as_deref())
     } else if tool == "run_shell" {
         let host = session.server.clone().unwrap_or_else(|| "the server".into());
-        let folder = session.place.path.display().to_string();
+        let folder = session.place.path.clone();
         let cwd = input["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or(&folder);
         Prompt {
             heading: format!("Run a command on {host}?"),
@@ -339,7 +339,7 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
 fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &serde_json::Value, path: Option<&Path>, existing: Option<&str>) -> Prompt {
     let field = |name: &str| input[name].as_str().filter(|s| !s.trim().is_empty());
     let here = crate::platform::this_computer!();
-    let folder = tilde(&session.place.path);
+    let folder = tilde(Path::new(&session.place.path));
     // A file inside the session's folder by its path there, else by its name.
     let named = |file: &str| {
         Path::new(file).strip_prefix(&session.place.path).ok().map(|p| p.display().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(|| file_name(file))
