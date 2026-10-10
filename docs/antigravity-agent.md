@@ -97,6 +97,6 @@ The findings it was built from came from a test on a Windows machine on
   that the live session didn't show, so it doesn't match the app's copy:
   the history shows "Earlier messages were replaced" at the top. Whether
   replayed notebook calls carry `_meta` isn't known yet; without it they
-  show under Antigravity's own names, without their diffs.
+  show under Antigravity's own names, without their diffs (Endeavor #58).
 - **Read prompts.** Reads ask too; the app answers them allow-once, so the
   user doesn't see them, but each one costs a round trip.
