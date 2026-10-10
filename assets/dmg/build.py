@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the Mac disk image's window background from the splash scene.
 
-Writes, next to this script, background.png (640 x 440) and background@2x.png;
+Writes, next to this script, background.png (640 x 480) and background@2x.png;
 dmgbuild combines them (settings.py, used by .github/workflows/nightly.yml).
 
 The top is the setup window's sky (src/splash.rs, src/turtle.rs): the turtle
@@ -21,7 +21,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONTS = os.path.join(HERE, "..", "..", "fonts")
-W, H = 640, 440
+W, H = 640, 480
 
 PAGE = """<!doctype html>
 <html><head><style>

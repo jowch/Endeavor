@@ -15,8 +15,9 @@ symlinks = {"Applications": "/Applications"}
 icon = "assets/icon/Endeavor.icns"
 background = "assets/dmg/background.png"
 
-# The window's height counts its title bar, so it is taller than the
-# background (640 x 440) to show all of it, labels under the icons included.
+# The window's height counts its title bar, so the window shows a bit less
+# than the background (both 640 x 480): the plain ground at the bottom is cut,
+# whatever the title bar's height, and the icons' labels stay in view.
 window_rect = ((200, 120), (640, 480))
 default_view = "icon-view"
 show_status_bar = False
