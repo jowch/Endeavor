@@ -13,23 +13,30 @@ use crate::theme;
 use crate::theme::TextButton as _;
 use crate::turtle::{self, Gaze, Pose, ease, lerp};
 
-/// Setup steps, in the order they run.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+/// Setup steps, in the order they run. Julia isn't one: the core installs and
+/// starts it when a Julia notebook first needs it, and the runtime starts
+/// without it. Windows still installs juliaup's Julia first (src/runtime.rs
+/// `julia_arg`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Step {
-    #[default]
+    #[cfg(windows)]
     Julia,
-    Packages,
+    Runtime,
     Agent,
     Claude,
 }
 
 impl Step {
-    pub const ALL: [Step; 4] = [Step::Julia, Step::Packages, Step::Agent, Step::Claude];
+    #[cfg(windows)]
+    pub const ALL: [Step; 4] = [Step::Julia, Step::Runtime, Step::Agent, Step::Claude];
+    #[cfg(not(windows))]
+    pub const ALL: [Step; 3] = [Step::Runtime, Step::Agent, Step::Claude];
 
     pub fn label(self) -> &'static str {
         match self {
+            #[cfg(windows)]
             Step::Julia => "Julia",
-            Step::Packages => "Pluto and its packages",
+            Step::Runtime => "Notebook runtime",
             Step::Agent => "Claude agent",
             Step::Claude => "Connecting to Claude",
         }
@@ -37,8 +44,9 @@ impl Step {
 
     fn doing(self) -> &'static str {
         match self {
+            #[cfg(windows)]
             Step::Julia => "Setting up Julia",
-            Step::Packages => "Installing Pluto and its packages",
+            Step::Runtime => "Starting the notebook runtime",
             Step::Agent => "Setting up the Claude agent",
             Step::Claude => "Connecting to Claude",
         }
@@ -46,8 +54,9 @@ impl Step {
 
     fn failed(self) -> &'static str {
         match self {
+            #[cfg(windows)]
             Step::Julia => "Couldn't set up Julia.",
-            Step::Packages => "Couldn't install Pluto and its packages.",
+            Step::Runtime => "Couldn't start the notebook runtime.",
             Step::Agent => "Couldn't set up the Claude agent.",
             Step::Claude => "Couldn't connect to Claude.",
         }
@@ -60,7 +69,7 @@ pub struct Progress {
     pub step: Step,
     pub detail: String,
     pub fraction: Option<f32>,
-    /// A raw log line (e.g. Julia precompiling): setup screen only, not the status line.
+    /// A raw log line: setup screen only, not the status line.
     pub log: bool,
 }
 
@@ -81,7 +90,7 @@ pub struct Setup {
 
 impl Default for Setup {
     fn default() -> Self {
-        Self { step: Step::default(), fraction: None, error: None, shown: Instant::now() }
+        Self { step: Step::ALL[0], fraction: None, error: None, shown: Instant::now() }
     }
 }
 
@@ -371,7 +380,7 @@ pub fn render(setup: &Setup, below: Below, retry: impl Fn(&ClickEvent, &mut Wind
 }
 
 /// Debug builds only: `ENDEAVOR_SPLASH_PREVIEW=1` opens the setup screen with made-up
-/// progress, installing nothing. Add `fail` to stop at the second step, `still` for
+/// progress, installing nothing. Add `fail` to stop partway, `still` for
 /// the reduced-motion frame (e.g. `fail,still`).
 #[cfg(debug_assertions)]
 pub mod preview {
@@ -413,11 +422,11 @@ pub mod preview {
                 return;
             }
             self.ticks = (self.ticks + 1).min(39);
-            let step = Step::ALL[self.ticks / 10];
+            let step = Step::ALL[self.ticks * Step::ALL.len() / 40];
             self.setup.apply(Progress { fraction: Some((self.ticks % 10) as f32 / 10.), ..Progress::new(step, "") });
             if self.fail && self.ticks == 15 {
                 self.fail = false;
-                self.setup.fail("Precompiling Pluto failed: connection reset by peer (preview)".into());
+                self.setup.fail("Installing the agent failed: connection reset by peer (preview)".into());
             }
             cx.notify();
         }
@@ -441,12 +450,14 @@ mod tests {
     #[test]
     fn steps_only_move_forward_and_fill_the_bar() {
         let mut s = Setup::default();
-        s.apply(Progress { fraction: Some(0.5), ..Progress::new(Step::Julia, "Downloading") });
-        assert_eq!(s.overall(), 0.125);
-        s.apply(Progress::new(Step::Agent, "Installing"));
-        s.apply(Progress::new(Step::Packages, "late Julia log line"));
-        assert_eq!(s.step, Step::Agent);
-        assert_eq!(s.overall(), 0.5);
+        assert_eq!(s.step, Step::ALL[0]);
+        s.apply(Progress { fraction: Some(0.5), ..Progress::new(Step::Agent, "Installing") });
+        let before = Step::ALL.iter().position(|s| *s == Step::Agent).unwrap() as f32;
+        assert_eq!(s.overall(), (before + 0.5) / Step::ALL.len() as f32);
+        s.apply(Progress::new(Step::Claude, "Connecting"));
+        s.apply(Progress::new(Step::Runtime, "a late line"));
+        assert_eq!(s.step, Step::Claude);
+        assert_eq!(s.overall(), (Step::ALL.len() - 1) as f32 / Step::ALL.len() as f32);
     }
 
     #[test]

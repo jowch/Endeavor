@@ -10,17 +10,22 @@ notebook with a plot in it.
 
 ## Let Endeavor set itself up
 
-Open Endeavor. The first time, a setup window shows four steps:
+Open Endeavor. The first time, a setup window shows three steps:
 
-1. **Julia**
-2. **Pluto and its packages**
-3. **Claude agent**
-4. **Connecting to Claude**
+1. **Notebook runtime**
+2. **Claude agent**
+3. **Connecting to Claude**
 
-A progress line under the turtle shows the current step, for example
-"Setting up Julia · 1 of 4". The first two steps download several hundred
-megabytes, so they can take a few minutes. [What Endeavor installs](./overview.md#what-endeavor-installs-on-first-launch)
+On Windows, **Julia** comes first, as a fourth step. A progress line under
+the turtle shows the current step, for example "Setting up the Claude agent ·
+2 of 3". Setting up the agent downloads Node.js and Claude Code, so it can
+take a minute or two. [What Endeavor installs](./overview.md#what-endeavor-installs-on-first-launch)
 lists every download.
+
+Julia isn't part of setup on a Mac or Linux. It's installed the first time you
+open a Julia notebook: the notebook pane shows the turtle and each step
+(downloading Julia, then starting it and installing Pluto's packages), which
+takes a few minutes that one time.
 
 If a step fails, the window shows which one, with the reason. Click **Retry**
 to try that step again, or **Show logs** to see what happened. If you're

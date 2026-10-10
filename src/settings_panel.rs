@@ -638,7 +638,7 @@ impl Workspace {
     /// What the Notebooks page's Julia row says: Endeavor's, or the chosen one and its version, or what's wrong with it.
     fn julia_line(&self) -> Status2 {
         match (&self.settings.julia, &self.settings_checks.julia) {
-            (None, _) => Status2::new(format!("Endeavor's Julia {}", runtime::JULIA_VERSION), Tone::Plain),
+            (None, _) => Status2::new("Endeavor's Julia", Tone::Plain),
             (Some(path), Some((checked, ChosenJulia::Usable(version)))) if checked == path => {
                 Status2::new(format!("{} · {version}", crate::new_session::tilde(path)), Tone::Plain)
             }
@@ -720,10 +720,20 @@ impl Workspace {
         let own = self.settings.julia.is_none();
         let mut ours = row("julia-own", "Endeavor's Julia");
         ours.lead = Lead::Radio { checked: own, act: Some(Act::OwnJulia) };
-        ours.desc = Some(if cfg!(windows) { "Installed by Endeavor with juliaup, Julia's installer." } else { "Installed and kept up to date by Endeavor." }.into());
+        ours.desc = Some(if cfg!(windows) {
+            "Installed by Endeavor with juliaup, Julia's installer.".to_owned()
+        } else {
+            // ponytail: until Endeavor's own is downloaded, the core's `auto` takes a julia on the PATH first; EndeavorMCP #96.
+            format!(
+                "Endeavor downloads its own Julia {} the first time you open a Julia notebook. If you already have Julia {} or newer on your PATH, that one is used instead.",
+                runtime::JULIA_VERSION,
+                runtime::min_julia()
+            )
+        }
+        .into());
         // Search finds the choice by its other half, "Another Julia on this Mac".
         ours.search = None;
-        ours.controls.push(Control::Note(format!("{} · recommended", runtime::JULIA_VERSION).into()));
+        ours.controls.push(Control::Note("recommended".into()));
         let mut theirs = row("julia-another", concat!("Another Julia on ", crate::platform::this_computer!(lower)));
         theirs.lead = Lead::Radio { checked: !own, act: Some(Act::ChooseJulia) };
         theirs.summary = Some("Use a Julia you installed yourself.".into());
@@ -862,7 +872,7 @@ impl Workspace {
             } else if ready {
                 concat!("Stops your Julia notebooks on ", crate::platform::this_computer!(lower), " and starts them again. Their files are already saved.")
             } else {
-                concat!("Julia isn't running on ", crate::platform::this_computer!(lower), " now. It starts when you open a session.")
+                concat!("Notebooks aren't running on ", crate::platform::this_computer!(lower), " now. Julia starts when you open a Julia notebook.")
             }
             .into(),
         );

@@ -1115,11 +1115,15 @@ impl Workspace {
     }
 
     /// New notebook, from the empty pages: made in the session's folder and shown.
+    /// Julia starts first if it isn't running: the pane shows its steps meanwhile.
     pub(crate) fn new_notebook_here(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
-        let task = cx.background_executor().spawn(async move { pluto::new_notebook(&bridge, key) });
+        let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
+        let steps = self.julia_steps(&host, cx);
+        let task = cx.background_executor().spawn(async move { pluto::until_julia(|| pluto::new_notebook(&bridge, key), &|step| steps.step(step)) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
+            let _ = this.update(cx, |this, cx| this.julia_answer(&host, result.as_ref().err().map(String::as_str), cx));
             let _ = this.update(cx, |this, cx| match result {
                 Ok((id, path)) => {
                     if let Some(session) = this.session_mut(key) {
@@ -1129,6 +1133,8 @@ impl Workspace {
                     }
                     this.apply_effects(key, vec![Effect::ShowNotebook { id, path: Some(path) }], cx);
                 }
+                // The pane says why Julia couldn't start, with Try again.
+                Err(e) if pluto::julia_failed(&e).is_some() => {}
                 Err(e) => this.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &e, Some(Retry::NewNotebook(key))), cx),
             });
         })
