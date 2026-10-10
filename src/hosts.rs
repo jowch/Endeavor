@@ -167,15 +167,17 @@ enum SavedPlace {
 impl From<SavedPlace> for Place {
     fn from(saved: SavedPlace) -> Place {
         match saved {
-            SavedPlace::Local(path) => Place { host: HostId::ThisMac, path },
+            SavedPlace::Local(path) | SavedPlace::Hosted { host: HostId::ThisMac, path } => Place::local(path),
             SavedPlace::Hosted { host, path } => Place { host, path },
         }
     }
 }
 
 impl Place {
+    /// Written part by part, so a trailing separator or a `.` part doesn't
+    /// make the same folder a second place (`PathBuf`'s `==` ignored them).
     pub fn local(path: impl AsRef<Path>) -> Place {
-        Place { host: HostId::ThisMac, path: text(path.as_ref()) }
+        Place { host: HostId::ThisMac, path: text(&path.as_ref().components().collect::<PathBuf>()) }
     }
 
     /// The path on This Mac; None for a server's.
@@ -411,6 +413,10 @@ mod tests {
         assert_eq!(folder.join("data").path, text(&home.join("data")));
         assert_eq!(folder.join("data").parent(), Some(folder.clone()));
         assert_eq!(HostId::ThisMac.strip_prefix(&text(&home.join("a.jl")), &folder.path).as_deref(), Some("a.jl"));
+        // macOS's and Windows's temp folder end in a separator; the same
+        // folder with and without it is one place.
+        assert_eq!(Place::local(home.join("x").join("")), Place::local(home.join("x")));
+        assert_eq!(Place::local(home.join(".").join("x")), Place::local(home.join("x")));
     }
 
     #[test]
