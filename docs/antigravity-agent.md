@@ -75,6 +75,10 @@ The findings it was built from came from a test on a Windows machine on
   build is pinned once one is checked.
 - **Other sign-ins.** Only the personal Google sign-in is offered; a work
   account, an API key and Agent Platform aren't.
+- **A first sign-in, end to end.** The card's states, Try again and a
+  restart mid-sign-in are checked on Windows, but a completed sign-in from
+  the card isn't yet. What is unknown is whether `session/new` works in the
+  same server process straight after `authenticate`, without a restart.
 - **A server that never exits.** Every stop waits out the ACP library's
   one-second grace, then kills it. The job ends its whole tree and the temp
   folder is emptied at the next start, but the server gets no clean exit.
