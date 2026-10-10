@@ -3,7 +3,8 @@
 _Estimate as of 2026-09-28; status updated 2026-10-10. The app runs on
 Windows 10: the CI installer installed it, a notebook was made and run in a
 real Claude session, and reinstall and uninstall worked (October 2026, one
-machine that already had Julia, Node, a Claude sign-in and Git for Windows).
+machine that already had Julia, Node, a Claude sign-in and Git for Windows;
+the build predates the switch to Julia through juliaup).
 Not run yet: a first Claude sign-in on Windows, a browser download through
 SmartScreen, Windows 11, and servers, which the Windows build can't reach
 because it carries no server helpers. Parts of this page below still

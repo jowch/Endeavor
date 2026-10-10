@@ -67,6 +67,7 @@ to finish on Windows 10. It has rough edges:
   **More info**, then **Run anyway**.
 - There is no download page yet. You need a GitHub account to get it.
 - It can't use servers or clusters yet. Notebooks run on your computer.
+- Signing in to Claude for the first time hasn't been tried on Windows yet.
 - Claude Code on Windows has needed [Git for Windows](https://git-scm.com/downloads/win).
   Install it first if you don't have it.
 
@@ -81,8 +82,8 @@ To install it:
    an administrator.
 3. Click **Install**, then **Finish**. Endeavor opens and sets itself up.
 
-Uninstall it from **Settings → Apps**. Your sessions, settings and Julia stay
-in `%LOCALAPPDATA%\Endeavor`.
+Uninstall it from **Settings → Apps**. Your sessions and settings stay in
+`%LOCALAPPDATA%\Endeavor`, and Julia stays in juliaup.
 
 ## What Endeavor installs on first launch
 
