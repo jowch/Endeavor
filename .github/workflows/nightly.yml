@@ -8,12 +8,11 @@
 # the disk image from the pull request and keeps it as an Actions artifact,
 # with a screenshot of its window; nothing is published.
 # The Mac app is signed with a Developer ID and the disk image notarized when
-# the repository has the signing secrets (MACOS_CERT_P12, the certificate and
+# the "release" environment (main only) has the signing secrets (MACOS_CERT_P12, the certificate and
 # its key as a base64 .p12; MACOS_CERT_PASSWORD; APPLE_TEAM_ID; and an App
 # Store Connect API key: APPLE_API_KEY_P8, APPLE_API_KEY_ID,
 # APPLE_API_ISSUER_ID). Without them it stays ad-hoc signed, and Gatekeeper
-# makes the user allow it in System Settings. Pull requests from forks get no
-# secrets, so they never sign.
+# makes the user allow it in System Settings. Pull requests never sign.
 # ponytail: the installer isn't signed (SmartScreen warns). Apple Silicon
 # only. The Windows build has no server helpers (windows.yml).
 name: Nightly
@@ -77,10 +76,13 @@ jobs:
     needs: pick
     if: needs.pick.outputs.skip != 'true'
     runs-on: macos-15
+    # The signing secrets live in the "release" environment, which only main
+    # may use. Pull requests run outside it and never sign.
+    environment: ${{ github.event_name != 'pull_request' && 'release' || '' }}
     outputs:
       signed: ${{ steps.signing.outputs.signed }}
     env:
-      SIGN: ${{ secrets.MACOS_CERT_P12 != '' && secrets.APPLE_API_KEY_P8 != '' }}
+      SIGN: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERT_P12 != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
