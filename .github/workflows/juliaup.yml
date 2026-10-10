@@ -4,15 +4,17 @@
 # that channel's julia.exe (src/juliaup.rs). GitHub's Windows runners have no
 # juliaup, so this runs that path for real, as the ignored test
 # installs_juliaup_and_julia_where_there_is_none. The job summary says which
-# route installed juliaup and how long each part took.
+# runner has winget and how long each part took; the log says which route
+# installed juliaup.
 #
 # Each image takes a different route. Windows Server 2025 has winget, and the
 # Store install works there. Windows Server 2022 has no winget, so the app
-# falls back to juliaup's App Installer file, as on a computer whose Store is
-# blocked. Each route took about 35 s when this was written (October 2026).
+# falls back to juliaup's App Installer file. That isn't a desktop whose Store
+# is blocked: there winget is present and fails its own way.
 #
 # It downloads juliaup and about 300 MB of Julia, so it runs only when the
-# install code or this file changes, once a week (the Store and juliaup's
+# install code, the pins (Cargo.lock: the process helper comes from
+# EndeavorMCP), the toolchain or this file changes, once a week (the Store and juliaup's
 # installer change without us), and by hand.
 name: juliaup
 
@@ -22,11 +24,15 @@ on:
     paths:
       - src/juliaup.rs
       - src/runtime.rs
+      - Cargo.lock
+      - rust-toolchain.toml
       - .github/workflows/juliaup.yml
   pull_request:
     paths:
       - src/juliaup.rs
       - src/runtime.rs
+      - Cargo.lock
+      - rust-toolchain.toml
       - .github/workflows/juliaup.yml
   schedule:
     - cron: '17 6 * * 1'
@@ -69,5 +75,10 @@ jobs:
           "**$os**, $winget." | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           Get-Command juliaup -ErrorAction SilentlyContinue | Format-List Source
           Get-AppxPackage -Name *Julia* | Format-List Name, Version
+      # Fails unless exactly that one test ran: a filter that matches nothing
+      # passes with "0 passed".
       - name: Install juliaup and Julia
-        run: cargo test --locked -p endeavor --bin endeavor -- --ignored --exact juliaup::tests::installs_juliaup_and_julia_where_there_is_none --nocapture
+        shell: bash
+        run: |
+          cargo test --locked -p endeavor --bin endeavor -- --ignored --exact juliaup::tests::installs_juliaup_and_julia_where_there_is_none --nocapture 2>&1 | tee test.log
+          grep -q 'test result: ok. 1 passed' test.log || { echo "::error::The juliaup install test didn't run"; exit 1; }

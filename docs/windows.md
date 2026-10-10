@@ -190,11 +190,13 @@ real on runners that have no juliaup: the ignored test
 `installs_juliaup_and_julia_where_there_is_none` installs juliaup, adds Julia
 1.12.6 and checks that channel's `julia.exe`. Windows Server 2025 has winget,
 so it takes the Microsoft Store route; Windows Server 2022 has none, so it
-falls back to juliaup's App Installer file. Each route took under 2 minutes and
-`juliaup add` about 20 s (October 2026). It runs only when `src/juliaup.rs`,
-`src/runtime.rs` or the workflow changes, weekly, and by hand. Windows Server
-isn't a Windows 10 or 11 desktop, so a desktop with a blocked or missing Store
-is still untried.
+falls back to juliaup's App Installer file. On the first runs (October 2026)
+the Store route took 1 min, the file 27 s, and `juliaup add` about 20 s. It
+runs when `src/juliaup.rs`, `src/runtime.rs`, `Cargo.lock`, the toolchain or
+the workflow changes, weekly, and by hand. Windows Server isn't a Windows 10 or
+11 desktop. The 2022 fallback starts because winget is missing; on a desktop
+whose Store is blocked, winget is there and fails its own way, so that case is
+still untried.
 
 Compiled out on Windows with `#[cfg(unix)]`, because they need `sh`, signals,
 `tar`, symlinks or Unix sockets:
