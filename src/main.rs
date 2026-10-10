@@ -506,8 +506,8 @@ pub struct Workspace {
     lines: HashMap<HostId, connection::Line>,
     /// The composer's placeholder as last set (it changes while Claude works).
     placeholder: SharedString,
-    /// The account's usage limit was reached: messages wait until it resets.
-    usage_limit: Option<offline::UsageLimit>,
+    /// Each agent's usage limit, while reached: its sessions' messages wait until it resets.
+    usage_limits: offline::UsageLimits,
     /// Notebooks whose Julia stopped by itself, and the runs after Restart Julia.
     crashes: crash::Crashes,
     /// A one-off failure's notice, under the control that was used.
@@ -697,7 +697,7 @@ impl Workspace {
             let Ok(busy) = this.update(cx, |this, cx| {
                 this.check_opening(cx);
                 this.check_usage_limit(cx);
-                this.usage_limit.is_some()
+                !this.usage_limits.is_empty()
                     || this.sessions.iter().any(|s| s.busy_since.is_some())
                     || this.connections.values().any(|c| matches!(c.status, connection::Status::Connecting | connection::Status::Starting))
             }) else {
@@ -773,7 +773,7 @@ impl Workspace {
             lines: HashMap::new(),
             placeholder: "Type / for commands".into(),
             drawn: None,
-            usage_limit: None,
+            usage_limits: offline::UsageLimits::default(),
             crashes: crash::Crashes::default(),
             notice: None,
             hosts: hosts::Hosts::load(),
@@ -1349,7 +1349,7 @@ impl Workspace {
                 Effect::SetPolicy(policy, edits) => self.send_policy(key, policy, edits, cx),
                 Effect::SignedOut => self.signed_out_of(agent, cx),
                 Effect::Asked(ix) => self.prompt_arrived(key, ix),
-                Effect::UsageLimit(reset) => self.hit_usage_limit(reset, cx),
+                Effect::UsageLimit(reset) => self.hit_usage_limit(agent, reset, cx),
                 Effect::PreviewRun { ix, tool, input } => {
                     let Some(bridge) = self.session_bridge(key) else { continue };
                     let task = cx.background_executor().spawn(async move { pluto::run_preview(&bridge, &tool, &input) });
@@ -2275,7 +2275,7 @@ impl Workspace {
                     .gap_2()
                     .children(card("pinned-plan", approval::render_pinned_plan(session, cx)))
                     .children(card("offline-line", self.render_offline_line(Some(session), cx)))
-                    .children(card("usage-line", self.render_usage_line(cx)))
+                    .children(card("usage-line", self.render_usage_line(session, cx)))
                     .children(card("runtime-wait", self.render_runtime_wait(session, cx)))
                     .children(card("agent-trouble", self.render_agent_trouble(session.agent, cx)))
                     .children(card("sign-in-card", self.render_agent_sign_in(session.agent, cx)))
