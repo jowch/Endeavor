@@ -56,6 +56,15 @@ impl Version {
     pub fn usable(self) -> bool {
         self == Version::Usable
     }
+
+    /// Its core says where Julia is (`endeavor/julia_status`, interface 5 on).
+    pub fn has_julia_status(self) -> bool {
+        match self {
+            Version::Usable => endeavor_mcp::CORE_INTERFACE >= 5,
+            Version::Other(interface) => interface.is_some_and(|i| i >= 5),
+            Version::NoRunGate => false,
+        }
+    }
 }
 
 /// How a core that offers `interface` compares with the app's: "an older",

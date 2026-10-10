@@ -39,7 +39,6 @@ mod find_bar;
 mod host_list;
 mod hosts;
 mod install;
-mod juliaup;
 mod logs;
 mod new_session;
 mod network;
@@ -49,6 +48,7 @@ mod offline;
 mod older_runtime;
 mod opening;
 mod orbit;
+mod own_julia;
 mod outbox;
 #[cfg(target_os = "macos")]
 mod overlay;
@@ -479,6 +479,8 @@ pub struct Workspace {
     settings_page: settings_panel::Page,
     /// What Settings found out: the account, the chosen Julia.
     settings_checks: settings_panel::Checks,
+    /// Endeavor's own Julia on this computer, for Settings.
+    own_julia: own_julia::OwnJuliaState,
     /// First launch: the setup screen covers the window until setup finishes.
     setup: Option<Setup>,
     /// Claude Code's sign-in: checked when the agent starts and when the window
@@ -732,8 +734,8 @@ impl Workspace {
         .detach();
 
         let recent = load_recent();
-        let mut draft = Draft::new(new_session::default_folder(&recent), window, cx);
         let settings = Settings::load();
+        let mut draft = Draft::new(new_session::default_folder(&recent), new_session::new_kind(&settings), window, cx);
         draft.agent = settings.agent;
         let mut this = Self {
             webview,
@@ -761,6 +763,7 @@ impl Workspace {
             settings_panel: None,
             settings_page: settings_panel::Page::Section(settings_panel::Section::Assistants),
             settings_checks: settings_panel::Checks::default(),
+            own_julia: own_julia::OwnJuliaState::default(),
             resizing: None,
             composer: composer::Composer::new(cx),
             chip_popover: None,
@@ -833,7 +836,8 @@ impl Workspace {
         }
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
-        // Claude starts alongside it, except on first launch, whose setup screen goes step by step.
+        // Claude starts alongside it, except on first launch, whose setup screen
+        // asks which assistant first and then goes step by step.
         if this.setup.is_none() {
             this.ensure_agent(agent::Agent::Claude, cx);
             // The new-session screen shows the last agent picked: its sign-in and options.
@@ -912,6 +916,7 @@ impl Workspace {
         }
         let mut session = Session::new(key, place, server.clone());
         session.agent = agent;
+        session.kind = self.draft.notebook.kind();
         // As the job will ask for them (fitted to the partition), so the session's chip says what was submitted.
         session.resources = self.draft.resources.as_ref().filter(|_| self.is_cluster(&host)).map(|r| self.draft_cluster().map_or_else(|| r.clone(), |c| c.job(r).resources));
         session.start_mode = session::app_modes().get(self.draft.mode).map(|choice| session::Mode {
@@ -924,7 +929,7 @@ impl Workspace {
             connection.job_request = Some(job);
         }
         let existing = match &self.draft.notebook {
-            NotebookChoice::New => None,
+            NotebookChoice::New(_) => None,
             NotebookChoice::Existing(path) => Some(path.clone()),
         };
         let mut context: Vec<String> = agent.facts().session_intro.map(str::to_owned).into_iter().collect();
@@ -945,6 +950,14 @@ impl Workspace {
                 ));
             }
         }
+        // The skill says Julia unless the user asks for R; picking New R notebook is that ask.
+        if existing.is_none() && session.kind == Backend::Ember {
+            context.push(
+                "[Endeavor] The user chose an R notebook for this session. Make the notebook an R notebook \
+                 (a .R path, or new_notebook without a path, which makes one)."
+                    .into(),
+            );
+        }
         if let Some(path) = &existing {
             session.open_on_start(path.clone());
             context.push(format!(
@@ -962,7 +975,7 @@ impl Workspace {
             self.bind_notebook(key, path, cx);
         }
         self.request_agent(key, cx);
-        self.draft.notebook = NotebookChoice::New;
+        self.draft.notebook = self.new_notebook_choice();
         self.draft.preview = None;
         self.activate(key, cx);
         self.send(key, None, false, window, cx);
@@ -982,9 +995,9 @@ impl Workspace {
         let host = session.place.host.clone();
         let Some(bridge) = self.bridge(&host) else { return self.ensure_runtime(&host, cx) };
         let tools = agent::Tools { bridge: bridge.clone(), server: session.server.clone() };
-        let folder = session.place.path.clone();
+        let (folder, kind) = (session.place.path.clone(), session.kind);
         let (policy, edits) = (session.policy(), session.edits_ask());
-        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder) }).detach();
+        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
         self.send_policy(key, policy, edits, cx);
         let older = self.connections.get(&host).and_then(|c| c.older);
         let cwd = host.agent_cwd(&session.place.path);
@@ -1032,8 +1045,11 @@ impl Workspace {
         let row_focus = self.past_row_focus.get_mut().remove(&id);
         let copy = transcript_copy::load(&id.to_string());
         let agent = self.records.get(&id.to_string()).map_or(agent::Agent::Claude, |r| r.agent);
+        // Its notebook's kind, else the one it was started with.
+        let kind = notebook.as_deref().map(new_session::kind_of_path).or_else(|| self.records.get(&id.to_string())?.kind).unwrap_or(Backend::Pluto);
         let mut session = Session::loading(key, id, place, server, title);
         session.agent = agent;
+        session.kind = kind;
         if let Some(copy) = copy {
             session.show_copy(copy);
         }
@@ -1216,8 +1232,11 @@ impl Workspace {
     /// Open a session's notebook file in the current Pluto (reusing it if it's
     /// already open; otherwise running it only if `run`) and point the session, the
     /// pane if active, and any session whose copy was stopped, at it.
+    /// Julia starts first if it isn't running: the pane shows its steps meanwhile, or why it couldn't.
     fn open_for_session(&mut self, key: u64, path: String, run: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
+        let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
+        let steps = self.julia_steps(&host, cx);
         let opened = cx.background_executor().spawn({
             let path = path.clone();
             async move {
@@ -1225,13 +1244,15 @@ impl Workspace {
                 let open = listed.as_ref().and_then(|l| l.as_array()?.iter().find(|nb| nb["path"] == path.as_str()).cloned());
                 let nb = match open {
                     Some(nb) => nb,
-                    None => pluto::call_tool(&bridge, "open_notebook", serde_json::json!({ "path": path, "run_notebook": run })).ok()?,
+                    None => pluto::until_julia(|| pluto::open_notebook(&bridge, &path, run), &|step| steps.step(step))?,
                 };
-                nb["notebook_id"].as_str().map(str::to_owned)
+                nb["notebook_id"].as_str().map(str::to_owned).ok_or_else(|| format!("no notebook id in {nb}"))
             }
         });
         cx.spawn(async move |this, cx| {
-            let Some(id) = opened.await else {
+            let opened = opened.await;
+            let _ = this.update(cx, |this, cx| this.julia_answer(&host, opened.as_ref().err().map(String::as_str), cx));
+            let Ok(id) = opened else {
                 // A notebook file that's gone shows File not found.
                 let _ = this.update(cx, |this, cx| this.check_missing(key, cx));
                 return;
@@ -1257,8 +1278,17 @@ impl Workspace {
     fn bind_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(session) = self.session_mut(key) else { return };
         session.notebook_path = Some(path.clone());
+        // The session's kind follows its notebook, so a restarted core is told the right one.
+        session.kind = new_session::kind_of_path(&path);
+        let kind = session.kind;
         let place = Place { host: session.place.host.clone(), path: path.clone() };
-        if let Some(id) = session.id.as_ref().map(ToString::to_string)
+        let id = session.id.as_ref().map(ToString::to_string);
+        if let Some(id) = &id
+            && self.records.set_kind(id, kind)
+        {
+            self.save_records();
+        }
+        if let Some(id) = id
             && self.session_notebooks.get(&id) != Some(&place)
         {
             self.session_notebooks.insert(id, place);
@@ -1761,6 +1791,8 @@ impl Workspace {
                     }
                 }
             }
+            // On the setup screen, only the assistant picked moves the steps.
+            AgentEvent::Setup(_) if self.setup.as_ref().is_some_and(|s| s.agent.is_some_and(|a| a != agent)) => {}
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
@@ -1775,7 +1807,7 @@ impl Workspace {
                 }
             }
             // First launch: the setup screen says why, with Retry.
-            AgentEvent::Failed(e) if self.setup.is_some() && agent == agent::Agent::Claude => {
+            AgentEvent::Failed(e) if self.setup.as_ref().is_some_and(|s| s.agent == Some(agent)) => {
                 self.links.get_mut(agent).failed = true;
                 if let Some(setup) = &mut self.setup {
                     setup.fail(e);
@@ -1787,8 +1819,9 @@ impl Workspace {
                 match result {
                     Ok(started) => {
                         let id = started.id.clone();
-                        let place = session.place.clone();
-                        if self.records.started(&id.to_string(), agent, &place, unix_now()) {
+                        let (place, kind) = (session.place.clone(), session.kind);
+                        // `|`, not `||`: both have to update.
+                        if self.records.started(&id.to_string(), agent, &place, unix_now()) | self.records.set_kind(&id.to_string(), kind) {
                             self.save_records();
                         }
                         if let Some(resources) = self.session_mut(key).and_then(|s| s.resources.clone())
@@ -2060,9 +2093,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Setup is done once the agent is up and Claude is signed in.
+    /// Setup is done once the assistant picked is up and, for Claude, signed
+    /// in. Codex and Antigravity sign in from their card afterwards.
     fn finish_setup(&mut self, cx: &mut Context<Self>) {
-        if self.setup.is_some() && self.links.get(agent::Agent::Claude).ready && !self.account.signed_out() {
+        let Some(agent) = self.setup.as_ref().and_then(|s| s.agent) else { return };
+        if self.links.get(agent).ready && (agent != agent::Agent::Claude || !self.account.signed_out()) {
             self.setup = None;
             Setup::finish();
             cx.notify();
@@ -2073,7 +2108,11 @@ impl Workspace {
     pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
-        self.restart_agent(agent::Agent::Claude, cx);
+        match setup.agent {
+            Some(agent) => self.restart_agent(agent, cx),
+            // Nothing picked yet: the step that failed is the runtime's (Julia's on Windows).
+            None => self.ensure_runtime(&HostId::ThisMac, cx),
+        }
     }
 
     /// What About Endeavor shows in its update strip.
@@ -2110,7 +2149,7 @@ impl Workspace {
         let link = self.links.get_mut(agent);
         let commands = link.renew();
         link.ready = false;
-        if agent != agent::Agent::Claude || self.setup.is_none() || self.bridge(&HostId::ThisMac).is_some() {
+        if self.setup.as_ref().and_then(|s| s.agent) != Some(agent) || self.bridge(&HostId::ThisMac).is_some() {
             self.start_agent(agent, commands, cx);
         } else {
             // First launch: started once This Mac's Julia is up (`on_ready`).
@@ -2388,10 +2427,12 @@ impl Render for Workspace {
         if let Some(setup) = &self.setup {
             let below = match self.render_sign_in_panel(cx) {
                 _ if self.offline_since.is_some() => splash::Below::Card(self.render_offline_setup(setup, cx)),
-                Some((panel, bar, tucked)) => splash::Below::Panel { line: "Sign in to finish setting up", bar: bar.then_some(0.78), panel, tucked },
+                Some((line, panel, bar, tucked)) => splash::Below::Panel { line, bar: bar.then_some(0.78), panel, tucked },
                 None => splash::Below::Progress,
             };
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
+            // The assistant's own install or connection failed: another may do.
+            let change = (setup.agent.is_some() && setup.step() >= splash::Step::Agent).then(|| cx.listener(|this, _, _, cx| this.change_assistant(cx)));
             let settings = self.render_settings_panel(window, cx).map(|d| deferred(d).with_priority(2));
             let confirm = self.render_confirm(cx).map(|d| deferred(d).with_priority(10));
             return div()
@@ -2402,7 +2443,7 @@ impl Render for Workspace {
                 .on_action(cx.listener(Self::interrupt))
                 .on_action(cx.listener(Self::find_setting))
                 .child(div().track_focus(&self.keyboard_home))
-                .child(splash::render(setup, below, retry, cx))
+                .child(splash::render(setup, below, retry, change, &|id| self.dialog_focus(id, cx), cx))
                 .children(settings)
                 .children(confirm)
                 .into_any_element();

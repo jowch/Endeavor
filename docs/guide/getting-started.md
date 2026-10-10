@@ -10,28 +10,53 @@ notebook with a plot in it.
 
 ## Let Endeavor set itself up
 
-Open Endeavor. The first time, a setup window shows four steps:
+Open Endeavor. The first time, a setup window asks which assistant to use
+(see [Choose your assistant](#choose-your-assistant)), then shows three
+steps, named after the assistant you picked:
 
-1. **Julia**
-2. **Pluto and its packages**
-3. **Claude agent**
-4. **Connecting to Claude**
+1. **Notebook runtime**
+2. **Claude agent**
+3. **Connecting to Claude**
 
-A progress line under the turtle shows the current step, for example
-"Setting up Julia · 1 of 4". The first two steps download several hundred
-megabytes, so they can take a few minutes. [What Endeavor installs](./overview.md#what-endeavor-installs-on-first-launch)
+A progress line under
+the turtle shows the current step, for example "Setting up the Claude agent ·
+2 of 3". Setting up the agent downloads it (for Claude or Codex, Node.js
+too), so it can take a minute or two. [What Endeavor installs](./overview.md#what-endeavor-installs-on-first-launch)
 lists every download.
 
+Julia isn't part of setup. It's installed the first time you open a Julia
+notebook: the notebook pane shows the turtle and each step (downloading
+Julia, then starting it and installing Pluto's packages), which takes a few
+minutes that one time. To install it ahead of time, click **Install** in
+Settings › Notebooks › Julia. If Julia makes no progress for a long while, the
+pane says so; Endeavor stops a start that's stuck for 30 minutes, and the pane
+then offers **Try again**.
+
 If a step fails, the window shows which one, with the reason. Click **Retry**
-to try that step again, or **Show logs** to see what happened. If you're
-offline, setup pauses under **No internet connection** and goes on by itself
+to try that step again, or **Show logs** to see what happened. If the
+assistant's own step fails, **Choose another assistant** takes you back to
+the choice. If you're offline, setup pauses under **No internet connection** and goes on by itself
 when you're back online.
+
+## Choose your assistant
+
+Endeavor uses your own account with an AI assistant to answer you. Setup
+starts by asking which one, under **Choose your assistant to finish setting
+up**. Click **Choose** beside the one you have an account with:
+
+- **Claude**, by Anthropic. You sign in next, as below.
+- **Codex**, by OpenAI, with your ChatGPT account.
+- **Antigravity**, by Google, with your Google account.
+
+Codex and Antigravity work in sessions on your computer only. If you pick one
+of them, setup finishes once it is installed, and its sign-in card shows on
+**Start a session**. A session on a server always uses Claude, so to work on a
+server you also need to sign in to Claude. You can change the assistant later
+in Settings.
 
 ## Sign in to Claude
 
-Endeavor uses your own Claude account to answer you. During setup, under
-**Sign in to finish setting up**, it first asks you to choose an assistant.
-Claude is the only one available today. Click **Continue**.
+If you picked Claude, setup asks you to sign in.
 
 ![The "Sign in to Claude" screen, with the two kinds of account to choose from](images/sign-in.png)
 
@@ -74,8 +99,8 @@ The chips above the message box say where the session works:
   pick a server or a cluster you have added.
 - **The folder** the session works in. A new session on your Mac starts in
   the last folder you used, or in `~/Documents/Endeavor` the first time.
-- **The notebook**. **New notebook** lets Claude create one when there is code
-  to run. You can also pick a notebook that is already in the folder.
+- **The notebook**. **New Julia notebook** lets Claude create one when there
+  is code to run. You can also pick a notebook that is already in the folder.
 
 To start:
 

@@ -2,8 +2,8 @@
 
 Living plan; update it as items land. Design rationale lives in
 [pluto-agent-design-doc.md](pluto-agent-design-doc.md) and
-[design-notes.md](design-notes.md). Open design gaps are in
-[design-gaps.md](design-gaps.md).
+[design-notes.md](design-notes.md). Open gaps are
+[GitHub issues](https://github.com/jowch/Endeavor/issues).
 
 _Last updated: 2026-10-10_
 
@@ -23,8 +23,9 @@ server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)
   Next after the app adopts EndeavorMCP; built to cover more than one engine.
 - **Ember (R notebooks).** In development in its own repository. It joins
   EndeavorMCP as another adapter behind the core; on this side it needs the
-  pane, header and logo for an R notebook and the notebook chip listing R
-  files, and an R setting in Settings and the server dialog (a server record's
+  pane, header and logo for an R notebook, the notebook chip offering New R
+  notebook and listing R files (the chip's kind already reaches the core as
+  the session's kind, #74), and an R setting in Settings and the server dialog (a server record's
   `r` and Settings' `r` already reach the helper; nothing in the app sets them
   yet). Starts after the first version of the eval above; Ember's own
   groundwork (a version to pin, binaries) goes on in its repository meanwhile.
@@ -44,7 +45,7 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   CI keeps a Windows build and installer to try, and a "nightly"
   prerelease holds the newest Mac app and Windows installer from `main`
   (`nightly.yml`). There are no versioned releases yet.
-- **Updates** ([#15](https://github.com/jowch/Endeavor/issues/15)). The app
+- **Updates** ([#80](https://github.com/jowch/Endeavor/issues/80)). The app
   can't update itself or check for a newer version, so Check now is hidden.
 - **The Windows installer** ([#12](https://github.com/jowch/Endeavor/issues/12)):
   a per-user installer that adds WebView2 if it's missing. CI builds it; it
@@ -52,8 +53,9 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 
 ## Later
 
-- **Other ACP agents** (Codex, Antigravity, Gemini). Antigravity runs on
-  Windows x64 only so far ([antigravity-agent.md](antigravity-agent.md)).
+- **Other ACP agents** (Codex, Antigravity, Gemini). Antigravity is pinned
+  for Windows, Mac and Linux, and has run on Windows only so far
+  ([antigravity-agent.md](antigravity-agent.md)).
   The work that makes Endeavor
   agent-neutral is partly done; what is left, and what to find out about each
   agent, is in [other-agents.md](other-agents.md). Steering is only
@@ -76,8 +78,8 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 
 Deliberate simplifications with their upgrade path, marked `ponytail:` in the
 code. This is all of them; add a row with each new marker. The runtime's own
-shortcuts are EndeavorMCP's, in its
-[gaps.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/gaps.md); the
+shortcuts are EndeavorMCP's, tracked in its
+[issues](https://github.com/jowch/EndeavorMCP/issues); the
 two this list used to carry (`view_cell_output` has no timeout while the
 worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 [EndeavorMCP #62](https://github.com/jowch/EndeavorMCP/issues/62).
@@ -97,7 +99,8 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `main.rs` `write_atomic` | `sync_all` runs on the caller's thread, the UI thread for most saves | a save on a hot path |
 | `main.rs` context ring | arcs drawn as 48-segment polylines | it looks faceted |
 | `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
-| `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
+| `install.rs` first-run installs | Node 24.21.0 pinned in code (bump URL, SHA-256, size per release; Julia's pin is EndeavorMCP's, checked by `runtime.rs`); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
+| `own_julia.rs` `install_own_julia` | Settings' Install and a Julia notebook opened meanwhile can both download Endeavor's Julia at once (Install waits while the runtime is starting Julia, not the other way round); the second fails its check or rename, and trying again works | it bites |
 | `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
-| `.github/workflows/nightly.yml` | the Mac nightly is ad-hoc signed until the repository has the Developer ID secrets; Apple Silicon only | sharing (above) |
+| `.github/workflows/nightly.yml` | without the Developer ID secrets the Mac nightly builds ad-hoc signed and isn't published; Apple Silicon only | sharing (above) |
 | `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns), and the build has no server helpers | the installer is shared (#12) |

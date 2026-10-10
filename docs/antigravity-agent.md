@@ -1,8 +1,10 @@
 # Antigravity as a third agent
 
 Endeavor runs Antigravity, Google's agent, through its own ACP server,
-`agy_acp_server` 1.3.0. It runs on this computer only, and is pinned for
-Windows x64 only so far; on other platforms it shows as "Not available yet".
+`agy_acp_server` 1.3.0. It runs on this computer only. It is pinned for
+Windows x64, Mac (Apple Silicon and Intel) and Linux (x64 and arm64); on
+other platforms it shows as "Not available yet". Only Windows has run a real
+session so far.
 The findings it was built from came from a test on a Windows machine on
 2026-10-10.
 
@@ -34,7 +36,11 @@ The findings it was built from came from a test on a Windows machine on
 - **Install** (`agent.rs`, `Install::Program`). The app downloads the
   pinned zip, checks its SHA-256 and unpacks it into
   `antigravity-acp-1.3.0` in its folder. The zip has its files at the top,
-  so `install::tarball` takes an empty `top`.
+  so `install::tarball` takes an empty `top`. On a Mac and Linux the program
+  is `agy_acp_server.par` (a native program despite the name), with a helper
+  `localharness_external` beside it. The Mac's bsdtar unpacks the zip; on
+  Linux, `unzip` does, since GNU tar can't. The Mac programs are signed by
+  Google LLC and, downloaded by curl, carry no quarantine flag.
 - **Its own temp folder** (`private_temp`). The server runs with `TEMP`,
   `TMP` and `TMPDIR` set to `antigravity-temp` in the app's folder, which
   the app empties before each start. A killed server's `_MEI*` folder is
@@ -74,8 +80,10 @@ The findings it was built from came from a test on a Windows machine on
 
 ## Left open
 
-- **Other platforms.** Only the Windows x64 zip is pinned. A Mac or Linux
-  build is pinned once one is checked.
+- **Other platforms.** The Mac and Linux zips are pinned from their
+  checksums, and the Mac arm64 program runs, but no session has run on a Mac
+  or Linux yet. Whether the `.par` program unpacks itself like the Windows
+  one (`private_temp`) is unchecked.
 - **Other sign-ins.** Only the personal Google sign-in is offered; a work
   account, an API key and Agent Platform aren't.
 - **A first sign-in, end to end.** The card's states, Try again and a

@@ -61,7 +61,8 @@ To wait for something, poll the dump. For example, loop until
 ### What it holds
 
 - `window`. The screen: `new_session`, `session`, `sign_in` or `splash`.
-  Also the setup step, the dialog on top (`ssh_prompt`, `login_node_warning`,
+  Also the setup step and the assistant picked there (`setup.assistant`, null
+  while the setup screen still asks), the dialog on top (`ssh_prompt`, `login_node_warning`,
   `server_dialog`), and `ssh_prompt`: ssh's question on screen, with its
   `host`, `kind` (`secret`, `yesno` or `confirm`), `prompt`, `retry_line`
   ("That password didn't work. Try again." when ssh asks again after an
@@ -70,6 +71,14 @@ To wait for something, poll the dump. For example, loop until
   it's `for` (`row`, `session` for the chat header's title, `notebook` or
   `share`) and its `items`, each with its `label` and `key`.
 - `offline`. Null when online. Otherwise, how long the app has been offline.
+- `julia_here`. Julia on this computer: `status` is what its runtime last
+  said (`endeavor/julia_status`: `state` `not_started`, `starting` with `step`
+  and `quiet_secs`, `ready`, or `failed` with `code` and `message`; null with
+  no runtime, or one too old to say). `failed` is the failure the pane
+  shows, with Try again. `own` is Endeavor's own Julia as
+  Settings last found it (`unknown` until Settings opens, `not_installed`, or
+  its `julia` and where it came `from`), and `job` an Install or Remove under
+  way, or how the last one failed.
 - `claude`. Claude Code's adapter process: `state` is `up`, `restarting`
   (it stopped by itself and is starting again) or `down` (it stopped twice in
   a minute); `error` is why it last stopped, with the log's last lines (null
@@ -97,8 +106,11 @@ To wait for something, poll the dump. For example, loop until
   (`status_mark`: `offline`, `signed_out`, `spinner` while Claude restarts,
   `red_dot` when something needs the user, or null).
 - `new_session`, on the new-session screen. The chips (where, resources, folder,
-  notebook) with their labels, the mode, the notice and connection notice, and
-  either `resume` (Pick up where you left off) or `examples`.
+  notebook) with their labels, the session's notebook kind (`notebook_kind`:
+  `julia` or `r`, the new notebook's or the picked file's), the new notebooks
+  the notebook chip offers (`new_notebook_kinds`), the mode, the notice and
+  connection notice, and either `resume` (Pick up where you left off) or
+  `examples`.
 - `session`, for the active session. `failed` is null unless it couldn't
   open; then the page in place of its transcript: `kind` (`in_cli` for one
   open in the Claude Code CLI, else `other`), `title`, `text`, `buttons` and
@@ -120,7 +132,7 @@ To wait for something, poll the dump. For example, loop until
   its cell diffs. A `changes` entry is the end-of-turn card: its `cells`,
   each with the `name` shown, the `cell` id, `tag` (`new`, `deleted` or
   null), the net `added` and `removed` line counts over the turn, and
-  `shows` (false for a deleted cell, whose row has no `›`). Also `wait_line` ("Starting Julia…" while the session waits to open until its host's Julia is up, else null), `activity` (the working line), `pinned_plan`, and
+  `shows` (false for a deleted cell, whose row has no `›`). Also `wait_line` ("Starting the notebook runtime…", or "Starting Julia on lab-server…", while the session waits to open until its host's runtime is up, else null), `activity` (the working line), `pinned_plan`, and
   `approval`: the card above the composer (`approval` or `plan`) with its
   title, code, lines, `plan` (its title, numbered `steps`, whether it's
   `open`, and the `text` shown when it is) and buttons (each with its label, key and `weight`:
@@ -130,7 +142,8 @@ To wait for something, poll the dump. For example, loop until
   `following` (it keeps to the end), `at_end`, and `rows`, each item in view
   as `[entry index, top from the viewport's top, height]`. Between two dumps
   a row in both should move by exactly the amount scrolled.
-- `notebook`. What the notebook pane shows:
+- `notebook`. What the notebook pane shows, and `kind`, the session's
+  notebook kind as the core is told it (`julia` or `r`):
   - `page`: the notebook's page. `page` then has the notebook id, the
     backend, the look, safe preview, read-only and whether the page is
     connected.
@@ -139,8 +152,10 @@ To wait for something, poll the dump. For example, loop until
     reload), `reloaded`, whether the app loaded the page again, and
     `reload_button`, whether "Reload notebook" shows.
   - `host`: the host isn't ready. `host_pane.kind` is one of `cant_reach`,
-    `starting`, `stopping`, `julia_not_running`, `replaced` or
-    `not_connected`, with the host and the reason.
+    `starting`, `julia_starting` (the runtime is up and Julia is starting,
+    for whoever asked; `reason` is the step), `julia_failed`,
+    `stopping`, `julia_not_running`, `replaced` or `not_connected`, with the
+    host and the reason.
   - `stopped`: the notebook was stopped. `stopped.idle_hours` is set when it
     stopped for being idle.
   - `crashed`: its own Julia stopped by itself: "Julia stopped unexpectedly".

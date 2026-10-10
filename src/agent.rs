@@ -236,10 +236,38 @@ const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = Some((
     "65215e0688681fa3116e048a9eab27ef53af1bbd6f3da3f1c52bd4911d8b17f9",
     124_509_787,
 ));
-#[cfg(not(all(windows, target_arch = "x86_64")))]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = Some((
+    "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-arm64.zip",
+    "7cd97045f7b4fe81175a107cdf16f9c51484e3c78a5162cae415338bb6aa5b88",
+    111_456_962,
+));
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = Some((
+    "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-x86_64.zip",
+    "bb23956b89984bf5d354af2c3725e6c57f0cc1b7228e77a0e91c9c2bc1d47646",
+    117_245_544,
+));
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = Some((
+    "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.3.0-linux-arm64.zip",
+    "500b0bc0fb858e88f4df404d4cedf80bf9298c178291e39e383d6c50b111cbdf",
+    321_690_363,
+));
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = Some((
+    "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.3.0-linux-x86_64.zip",
+    "9fb60956af0a9d76220a4db91ca9ac88e2a2372ad68f985ab5fceace6b825b96",
+    333_727_150,
+));
+#[cfg(not(any(
+    all(windows, target_arch = "x86_64"),
+    all(any(target_os = "macos", target_os = "linux"), any(target_arch = "aarch64", target_arch = "x86_64"))
+)))]
 const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = None;
-// Elsewhere a guess, with no zip pinned behind it yet.
-const ANTIGRAVITY_PROGRAM: &str = if cfg!(windows) { "agy_acp_server.exe" } else { "agy_acp_server" };
+// The Mac and Linux zips hold `agy_acp_server.par` (a native program despite
+// the name) with its helper `localharness_external` beside it, no folder.
+const ANTIGRAVITY_PROGRAM: &str = if cfg!(windows) { "agy_acp_server.exe" } else { "agy_acp_server.par" };
 
 /// The Node.js the adapter runs on, installed on first launch like Julia.
 const NODE_VERSION: &str = "24.21.0";
@@ -1100,7 +1128,7 @@ mod tests {
     /// This Mac's runtime, started for a live test.
     fn local_tools() -> (crate::runtime::Channel, super::Tools) {
         let listener = crate::runtime::Listener::start("This Mac").unwrap();
-        let (channel, _) = crate::runtime::connect(false, &|_| {}).expect("helper");
+        let (channel, _) = crate::runtime::connect(false).expect("helper");
         let runtime = crate::runtime::start_local(&channel, &listener, &|_| {}, |_| {}).expect("runtime");
         (channel, super::Tools { bridge: runtime.bridge, server: None })
     }

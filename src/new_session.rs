@@ -15,6 +15,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use wire::files::{self, Entry, Reply, Request};
+use wire::backend::Backend;
 use wire::notebooks::{Found, Preview};
 
 use wire::slurm::{Resources, duration_text};
@@ -31,10 +32,56 @@ use crate::theme::TextButton as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NotebookChoice {
-    /// The agent creates the notebook when it needs one.
-    New,
+    /// The agent creates the notebook when it needs one, of this kind.
+    New(Backend),
     /// The notebook file, in the draft host's rules.
     Existing(String),
+}
+
+impl NotebookChoice {
+    /// The session's notebook kind: the new notebook's, or the file's.
+    pub fn kind(&self) -> Backend {
+        match self {
+            NotebookChoice::New(kind) => *kind,
+            NotebookChoice::Existing(path) => kind_of_path(path),
+        }
+    }
+}
+
+/// The kinds the chip offers as a new notebook, in its order.
+// ponytail: the pane shows only Pluto's page, so New R notebook waits until it
+// shows Ember's (stage 8); then [Pluto, Ember], with Ember left out on Windows
+// (a cfg pair or a function, not one const).
+pub const NEW_KINDS: &[Backend] = &[Backend::Pluto];
+
+/// A notebook file's kind from its name, in any host's rules: `.R` is R's, the rest Julia's.
+pub fn kind_of_path(path: &str) -> Backend {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    match name.rsplit_once('.') {
+        Some((_, "R" | "r")) => Backend::Ember,
+        _ => Backend::Pluto,
+    }
+}
+
+/// The kind of new notebook last picked, while the chip offers it.
+pub fn new_kind(settings: &crate::settings::Settings) -> Backend {
+    settings.notebook_kind.filter(|kind| NEW_KINDS.contains(kind)).unwrap_or(NEW_KINDS[0])
+}
+
+/// What the chip calls a new notebook of `kind`.
+pub fn new_notebook_label(kind: Backend) -> &'static str {
+    match kind {
+        Backend::Pluto => "New Julia notebook",
+        Backend::Ember => "New R notebook",
+    }
+}
+
+/// The name the core knows a session's kind by (`kind` in `endeavor/set_session_folder`).
+pub fn kind_name(kind: Backend) -> &'static str {
+    match kind {
+        Backend::Pluto => "julia",
+        Backend::Ember => "r",
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -188,7 +235,7 @@ pub(crate) fn set_open_panel_folder(dir: &Path) {
 }
 
 impl Draft {
-    pub fn new(folder: String, window: &mut Window, cx: &mut Context<Workspace>) -> Self {
+    pub fn new(folder: String, kind: Backend, window: &mut Window, cx: &mut Context<Workspace>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search folders"));
         cx.subscribe_in(&search, window, |this: &mut Workspace, _, event: &InputEvent, window, cx| match event {
             InputEvent::Change => {
@@ -207,7 +254,7 @@ impl Draft {
             host: HostId::ThisMac,
             notice: None,
             folder: Some(folder),
-            notebook: NotebookChoice::New,
+            notebook: NotebookChoice::New(kind),
             popover: None,
             notebooks: Vec::new(),
             preview: None,
@@ -351,10 +398,24 @@ impl Workspace {
         if Some(&folder) != self.draft.folder.as_ref() {
             self.draft.folder = Some(folder);
             self.draft.notebooks.clear();
-            self.choose_notebook(NotebookChoice::New, cx);
+            self.choose_notebook(self.new_notebook_choice(), cx);
             self.scan_notebooks(cx);
         }
         self.close_popover(window, cx);
+    }
+
+    /// A new notebook of the kind last picked.
+    pub fn new_notebook_choice(&self) -> NotebookChoice {
+        NotebookChoice::New(new_kind(&self.settings))
+    }
+
+    /// The chip's New Julia notebook or New R notebook: remembered for the next session.
+    fn pick_new_notebook(&mut self, kind: Backend, cx: &mut Context<Self>) {
+        if self.settings.notebook_kind != Some(kind) {
+            self.settings.notebook_kind = Some(kind);
+            self.settings.save();
+        }
+        self.choose_notebook(NotebookChoice::New(kind), cx);
     }
 
     pub fn choose_notebook(&mut self, choice: NotebookChoice, cx: &mut Context<Self>) {
@@ -744,7 +805,7 @@ impl Workspace {
     pub(crate) fn draft_chips(&self) -> Vec<DraftChip> {
         let connecting = self.draft.host != HostId::ThisMac && self.draft.folder.is_none();
         let notebook_label = match &self.draft.notebook {
-            NotebookChoice::New => "New notebook".to_string(),
+            NotebookChoice::New(kind) => new_notebook_label(*kind).to_string(),
             NotebookChoice::Existing(path) => self.draft.host.folder_name(path),
         };
         let mono = matches!(self.draft.notebook, NotebookChoice::Existing(_));
@@ -858,7 +919,7 @@ impl Workspace {
             self.draft.host = host.clone();
             self.draft.resources = self.draft_cluster().map(|c| c.resources.clone());
             self.draft.notebooks.clear();
-            self.choose_notebook(NotebookChoice::New, cx);
+            self.choose_notebook(self.new_notebook_choice(), cx);
             if host != HostId::ThisMac {
                 self.connect_host(&host, false, cx);
             }
@@ -1200,15 +1261,16 @@ impl Workspace {
         div()
             .flex()
             .flex_col()
-            .child(
-                choice_row("new-notebook", self.draft.notebook == NotebookChoice::New, false, "New notebook")
+            .children(NEW_KINDS.iter().map(|&kind| {
+                let label = new_notebook_label(kind);
+                choice_row(("new-notebook", kind as usize), self.draft.notebook == NotebookChoice::New(kind), false, label)
                     .child(glyph(Glyph::File, theme::text_muted()))
-                    .child("New notebook")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.choose_notebook(NotebookChoice::New, cx);
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.pick_new_notebook(kind, cx);
                         this.close_popover(window, cx);
-                    })),
-            )
+                    }))
+            }))
             .child(section_label(format!("In {}", host.folder_name(&folder))))
             .when(rows.is_empty(), |d| d.child(div().py(px(4.)).pl(px(28.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("No notebooks in this folder")))
             .child(div().id("notebook-rows").max_h(px(300.)).overflow_y_scroll().flex().flex_col().children(rows))
@@ -1229,7 +1291,7 @@ impl Workspace {
     /// The notebook pane's header before the session starts.
     pub fn draft_pane_header(&self) -> AnyElement {
         match &self.draft.notebook {
-            NotebookChoice::New => div().text_color(theme::text_muted()).child("New notebook").into_any_element(),
+            NotebookChoice::New(kind) => div().text_color(theme::text_muted()).child(new_notebook_label(*kind)).into_any_element(),
             NotebookChoice::Existing(path) => {
                 let dir = self.draft.host.parent(path).filter(|d| !d.is_empty()).map(|d| self.draft_tilde(&d));
                 notebook_title(self.draft.host.folder_name(path), dir).into_any_element()
@@ -1251,7 +1313,7 @@ impl Workspace {
             return self.host_pane(&self.draft.host.clone(), false, cx).unwrap_or_else(|| turtle_pane().into_any_element());
         };
         match (&self.draft.notebook, &self.draft.preview) {
-            (NotebookChoice::New, _) => {
+            (NotebookChoice::New(_), _) => {
                 let saved_in = div()
                     .max_w_full()
                     .flex()
@@ -1911,8 +1973,19 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
 
 #[cfg(test)]
 mod tests {
-    use super::tilde_of;
+    use super::{NotebookChoice, kind_of_path, tilde_of};
     use crate::hosts::HostId;
+    use wire::backend::Backend;
+
+    #[test]
+    fn a_sessions_kind_is_the_new_notebooks_or_the_files() {
+        assert_eq!(NotebookChoice::New(Backend::Ember).kind(), Backend::Ember);
+        assert_eq!(NotebookChoice::Existing("/home/jc/fits/decay.jl".into()).kind(), Backend::Pluto);
+        assert_eq!(NotebookChoice::Existing("/home/jc/fits/counts.R".into()).kind(), Backend::Ember);
+        assert_eq!(kind_of_path(r"C:\Users\jc\counts.r"), Backend::Ember);
+        assert_eq!(kind_of_path("/home/jc/my.R/decay.jl"), Backend::Pluto);
+        assert_eq!(kind_of_path("/home/jc/R"), Backend::Pluto);
+    }
 
     #[test]
     fn home_is_written_as_tilde_by_the_hosts_rules() {

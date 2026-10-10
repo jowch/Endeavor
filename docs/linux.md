@@ -139,6 +139,8 @@ sudo apt-get install -y build-essential clang cmake pkg-config libssl-dev \
 sudo apt-get install -y xvfb imagemagick xdotool
 # A window manager, and CPU measurement:
 sudo apt-get install -y openbox sysstat
+# To unpack Antigravity's server when you pick it:
+sudo apt-get install -y unzip
 ```
 
 At runtime the binary links these libraries: WebKitGTK 4.1, GTK 3, xcb,

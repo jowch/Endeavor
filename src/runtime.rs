@@ -134,74 +134,82 @@ pub fn start_runtime(channel: &Channel, listener: &Arc<Listener>, job: Option<Jo
     started
 }
 
-/// The Julia the app installs on first run (design doc §11), pinned with the
-/// official tarballs' (Windows: zip's) SHA-256 and size (bump all three per release).
+/// Endeavor's own Julia, which the core installs the first time a Julia
+/// notebook needs it (with juliaup where there is juliaup, always on Windows). Pinned with
+/// the official tarballs' SHA-256 and size, as EndeavorMCP's `src/julia.rs` pins
+/// them (bump all three per release, in both).
 pub const JULIA_VERSION: &str = "1.12.6";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg_attr(not(test), allow(dead_code))]
 const JULIA_TARBALL: (&str, &str, u64) = (
     "https://julialang-s3.julialang.org/bin/mac/aarch64/1.12/julia-1.12.6-macaarch64.tar.gz",
     "277d82fbd2eda99d0963b3e41f3dc979d7486f181399f8430fb637318ccd6a31",
     231_027_185,
 );
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[cfg_attr(not(test), allow(dead_code))]
 const JULIA_TARBALL: (&str, &str, u64) = (
     "https://julialang-s3.julialang.org/bin/mac/x64/1.12/julia-1.12.6-mac64.tar.gz",
     "1a70b7c606d6bac38a246e722369e5b30914dccf9378499d2712fb3bd282642c",
     271_518_180,
 );
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+#[cfg_attr(not(test), allow(dead_code))]
 const JULIA_TARBALL: (&str, &str, u64) = (
     "https://julialang-s3.julialang.org/bin/linux/aarch64/1.12/julia-1.12.6-linux-aarch64.tar.gz",
     "029b93b857bd0ffd627f9a8580d3bbaa63daf008d7b7aed02fbceb8fd57c4899",
     306_918_080,
 );
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg_attr(not(test), allow(dead_code))]
 const JULIA_TARBALL: (&str, &str, u64) = (
     "https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.6-linux-x86_64.tar.gz",
     "bbabf3bef19421a9dbd24a767d807606ab85e444323b5a1c73ffe293fa3d079a",
     289_794_236,
 );
-// Windows gets the same Julia through juliaup (src/juliaup.rs).
+// Windows gets the same Julia through juliaup, which the core installs.
 
 
-/// The julia binary to run: the user's (Settings) while it's there and is
-/// Julia, else the app's own, downloaded and verified on first run (on
-/// Windows, juliaup's). `progress` hears how that's going.
-fn julia_binary(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
+/// How the core finds Julia (its `--julia`): the one chosen in Settings while
+/// it's there and is Julia; else Endeavor's own (`own`): the pinned Julia,
+/// which the core installs the first time a Julia notebook needs it, as
+/// juliaup's channel for that version where there is juliaup (always on
+/// Windows, where the core installs juliaup first), else as its own download.
+/// Never a julia on the PATH that Settings doesn't name.
+fn julia_arg() -> String {
     if let Some(julia) = crate::settings::Settings::load().julia {
         match check_chosen(&julia) {
-            ChosenJulia::Usable(_) => return Ok(julia.display().to_string()),
+            ChosenJulia::Usable(_) => return julia.display().to_string(),
             problem => eprintln!("The chosen Julia {} can't be used ({problem:?}); using Endeavor's.", julia.display()),
         }
     }
-    own_julia(progress)
+    #[cfg(not(windows))]
+    move_old_julia();
+    "own".into()
 }
 
+/// Where the core keeps the Julia it downloads (EndeavorMCP's `julia::download_dir`).
 #[cfg(not(windows))]
-fn own_julia(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
-    let dir = crate::install::app_dir()?.join(format!("julia-{JULIA_VERSION}"));
-    let bin = dir.join("bin").join("julia");
-    if !bin.exists() {
-        crate::install::tarball(&dir, &format!("Julia {JULIA_VERSION}"), &format!("julia-{JULIA_VERSION}"), JULIA_TARBALL, progress)?;
-    }
-    Ok(bin.display().to_string())
+fn own_julia_dir() -> PathBuf {
+    endeavor_mcp::paths::Env::here().server_root().join(format!("julia-{JULIA_VERSION}"))
 }
 
-/// juliaup's Julia. A Julia that an older Endeavor downloaded keeps working
-/// while juliaup can't be set up (offline, say); once juliaup's runs, the
-/// app removes it (`start_local`).
-#[cfg(windows)]
-fn own_julia(progress: &dyn Fn(String, Option<f32>)) -> Result<String, String> {
-    match crate::juliaup::julia(JULIA_VERSION, progress) {
-        Ok(julia) => Ok(julia.display().to_string()),
-        Err(why) => {
-            let old = crate::install::app_dir()?.join(format!("julia-{JULIA_VERSION}")).join("bin").join("julia.exe");
-            if !old.is_file() {
-                return Err(why);
-            }
-            eprintln!("{why} Using the Julia an older Endeavor installed, {}, until juliaup works.", old.display());
-            Ok(old.display().to_string())
-        }
+/// The Julia an older Endeavor downloaded into the app's folder becomes the
+/// core's own (`~/.cache/endeavor/julia-<version>`), so it isn't downloaded
+/// again. Only while no runtime runs, since one may be running that Julia.
+#[cfg(not(windows))]
+fn move_old_julia() {
+    let Ok(app_dir) = crate::install::app_dir() else { return };
+    let old = app_dir.join(format!("julia-{JULIA_VERSION}"));
+    let new = own_julia_dir();
+    if !old.join("bin/julia").is_file() || new.exists() || app_dir.join("runtime/runtime.json").exists() {
+        return;
+    }
+    let moved = new.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::rename(&old, &new));
+    match moved {
+        Ok(()) => eprintln!("Moved Endeavor's Julia {JULIA_VERSION} to {}", new.display()),
+        // Another disk, say: the core downloads its own when it needs it, and the old one goes after the next start.
+        Err(e) => eprintln!("Couldn't move {} to {}: {e}", old.display(), new.display()),
     }
 }
 
@@ -247,15 +255,15 @@ pub fn helper_program() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| format!("Couldn't find Endeavor's own program: {e}"))
 }
 
-/// The julia the last `connect` gave the helper: what a runtime it starts runs.
+/// The `--julia` the last `connect` gave the helper: what a runtime it starts runs (`auto`: the core's choice).
 static STARTED_WITH: Mutex<Option<String>> = Mutex::new(None);
 
 /// Run This Mac's helper and wait for its hello. `keep_running` leaves the
-/// runtime running if the app goes away without quitting; `progress` hears
-/// about Julia's install.
-pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Channel, Hello), String> {
-    let julia = julia_binary(&|detail, fraction| progress(Progress { fraction, ..Progress::new(Step::Julia, detail) }))?;
-    check_version(&julia)?;
+/// runtime running if the app goes away without quitting. Julia itself is
+/// installed and started the first time a Julia notebook needs it, not with
+/// the runtime (`--julia-when-needed`).
+pub fn connect(keep_running: bool) -> Result<(Channel, Hello), String> {
+    let julia = julia_arg();
     *STARTED_WITH.lock().unwrap() = Some(julia.clone());
     let app_dir = crate::install::app_dir()?;
     let state_dir = app_dir.join("runtime");
@@ -265,7 +273,7 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
     command
         .args(["connect", "--state-dir"])
         .arg(&state_dir)
-        .args(["--julia", &julia, "--runtime"])
+        .args(["--julia", &julia, "--julia-when-needed", "--runtime"])
         .arg(crate::install::runtime()?)
         .args(["--depot", &depot])
         // Read as a server's R setting is: a path, or a shell line. R starts with the first R notebook.
@@ -377,65 +385,32 @@ fn stop_group(pid: i32, started: Option<u64>) {
 }
 
 /// Start This Mac's runtime on `channel` (or attach to the one running) and
-/// relay `listener` to it. `progress` hears Julia's log while it starts;
-/// `notice` hears if it goes away later.
+/// relay `listener` to it. Julia isn't part of it: it starts when a Julia
+/// notebook first needs it. `progress` hears the start; `notice` hears if the
+/// runtime goes away later.
 pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn Fn(Progress), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
-    progress(Progress::new(Step::Packages, "Starting Julia…"));
+    progress(Progress::new(Step::Runtime, "Starting the notebook runtime…"));
     let runtime = start_runtime(channel, listener, None, &mut |message| {
         if let ToApp::Progress { line } = message {
             eprintln!("{line}");
-            // Package installs and precompiles show on the setup screen.
-            let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
-            if !text.is_empty() {
-                progress(Progress { log: true, ..Progress::new(Step::Packages, text) });
-            }
         }
     }, notice)?;
-    // A fresh start means no runtime runs an older pin's Julia: remove those,
-    // in the background, since deleting 300 MB can take a while on Windows.
-    // On Windows juliaup's Julia replaces the app's own, so a runtime that
-    // isn't running one of the app's folders frees them all.
+    // A fresh start means no runtime runs a Julia from the app's own folder:
+    // remove those, in the background, since deleting 300 MB can take a while
+    // on Windows. The core keeps its own Julia elsewhere (juliaup's on
+    // Windows), so only a Julia chosen in Settings stays.
     if !runtime.reattached {
         std::thread::spawn(|| {
             let chosen = crate::settings::Settings::load().julia;
-            let mut keep: Vec<&Path> = chosen.as_deref().into_iter().collect();
-            if cfg!(windows) {
-                let started = STARTED_WITH.lock().unwrap().clone();
-                keep.extend(started.as_deref().map(Path::new));
-                crate::install::remove_all_versions("julia-", &keep);
-            } else {
-                crate::install::remove_other_versions("julia-", JULIA_VERSION, &keep);
-            }
+            let started = STARTED_WITH.lock().unwrap().clone();
+            let keep: Vec<&Path> = chosen.as_deref().into_iter().chain(started.as_deref().map(Path::new)).collect();
+            crate::install::remove_all_versions("julia-", &keep);
         });
     }
     let how = if runtime.reattached { "Reattached to" } else { "Started" };
     let log = crate::install::app_dir().map(|d| d.join("runtime/runtime.log").display().to_string()).unwrap_or_default();
-    eprintln!("{how} Julia on {}; its log is {log}", runtime.node);
+    eprintln!("{how} the runtime on {}; its log is {log}", runtime.node);
     Ok(runtime)
-}
-
-fn check_version(julia: &str) -> Result<(), String> {
-    let mut command = Command::new(julia);
-    endeavor_mcp::client::no_window(&mut command);
-    let output = command.arg("--version").output().map_err(|e| {
-        if e.kind() == ErrorKind::NotFound {
-            format!(
-                "Julia wasn't found at `{julia}`. In Settings, choose a julia binary \
-                 or switch back to Endeavor's own Julia."
-            )
-        } else {
-            format!("Couldn't run {julia}: {e}")
-        }
-    })?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    match parse_version(&text) {
-        Some(v) if v < MIN_JULIA => Err(format!(
-            "Endeavor needs Julia {}.{} or newer; `{julia}` is {}.{}. Update it (e.g. `juliaup update`) \
-             or choose a newer julia in Settings.",
-            MIN_JULIA.0, MIN_JULIA.1, v.0, v.1
-        )),
-        _ => Ok(()),
-    }
 }
 
 /// What a julia the user chose in Settings turned out to be.
@@ -562,7 +537,7 @@ mod tests {
 #[ignore]
 fn live_die_and_restart() {
     let listener = Listener::start("test").unwrap();
-    let (channel, _) = connect(false, &|_| {}).expect("connect");
+    let (channel, _) = connect(false).expect("connect");
     let (heard_tx, heard) = std::sync::mpsc::channel();
     let first = start_local(&channel, &listener, &|_| {}, move |notice| drop(heard_tx.send(notice))).expect("start");
     let list = crate::pluto::call_tool(&first.bridge, "list_notebooks", serde_json::json!({})).unwrap();
@@ -656,14 +631,6 @@ fn stop_recorded_ends_the_recorded_process_only() {
     let _ = std::fs::remove_dir_all(&state);
 }
 
-#[cfg(test)]
-#[test]
-fn a_missing_julia_points_to_settings() {
-    let err = check_version("/nonexistent/julia").unwrap_err();
-    println!("{err}");
-    assert!(err.contains("wasn't found") && err.contains("Settings"));
-}
-
 /// EndeavorMCP downloads its own Julia on servers, pinned in its `src/julia.rs`;
 /// both pins move together (CLAUDE.md). Reads the pinned library's source.
 #[cfg(test)]
@@ -691,7 +658,7 @@ fn the_library_pins_the_same_julia() {
         pins.extend([format!("\"{url}\","), format!("\"{sha}\",")]);
     }
     for pin in pins {
-        assert!(library.lines().any(|l| l.trim() == pin), "EndeavorMCP's src/julia.rs should have `{pin}`, as src/runtime.rs does");
+        assert!(library.lines().any(|l| l.trim().trim_start_matches("pub ") == pin), "EndeavorMCP's src/julia.rs should have `{pin}`, as src/runtime.rs does");
     }
 }
 

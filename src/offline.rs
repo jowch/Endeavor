@@ -454,7 +454,7 @@ impl Workspace {
                 .h(px(24.))
                 .text_size(theme::size_meta())
                 .child(div().w(px(12.)).flex().justify_center().child(mark))
-                .child(div().flex_1().text_color(name_color).child(step.label()))
+                .child(div().flex_1().text_color(name_color).child(step.label(setup.agent_name())))
                 .child(state)
         });
         div()

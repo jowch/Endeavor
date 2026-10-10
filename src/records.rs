@@ -11,6 +11,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use wire::backend::Backend;
+
 use crate::hosts::{HostId, Place};
 
 pub use crate::agent::Agent;
@@ -26,6 +28,10 @@ pub struct Record {
     /// Last activity, in Unix seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<u64>,
+    /// Its notebook's kind, for a session reopened before it has a notebook;
+    /// None is Julia's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Backend>,
 }
 
 /// What one listing covers. On This Mac an agent lists one folder; a server's
@@ -73,7 +79,7 @@ impl Records {
             Places(HashMap<String, Place>),
             Ids(Vec<String>),
         }
-        let record = |place| Record { agent: Agent::Claude, place, title: None, updated: None };
+        let record = |place| Record { agent: Agent::Claude, place, title: None, updated: None, kind: None };
         let records = match serde_json::from_str::<Saved>(json) {
             Ok(Saved::Records(records)) => records,
             Ok(Saved::Places(places)) => places.into_iter().map(|(id, place)| (id, record(Some(place)))).collect(),
@@ -124,10 +130,17 @@ impl Records {
                 true
             }
             None => {
-                self.records.insert(id.to_owned(), Record { agent, place: Some(place.clone()), title: None, updated: Some(now) });
+                self.records.insert(id.to_owned(), Record { agent, place: Some(place.clone()), title: None, updated: Some(now), kind: None });
                 true
             }
         }
+    }
+
+    /// A session's notebook kind, when it isn't Julia's. True if it changed.
+    pub fn set_kind(&mut self, id: &str, kind: Backend) -> bool {
+        let Some(record) = self.records.get_mut(id) else { return false };
+        let kind = (kind != Backend::Pluto).then_some(kind);
+        std::mem::replace(&mut record.kind, kind) != kind
     }
 
     /// A session's title changed, or it had activity at `now`. True if anything changed.
@@ -182,7 +195,7 @@ impl Records {
             if let (Scope::Folder(folder), false) = (&scope, self.records.contains_key(&id))
                 && known.contains(&id)
             {
-                self.records.insert(id.clone(), Record { agent, place: Some(folder.clone()), title: None, updated: None });
+                self.records.insert(id.clone(), Record { agent, place: Some(folder.clone()), title: None, updated: None, kind: None });
             }
             let Some(record) = self.records.get_mut(&id).filter(|r| r.agent == agent) else { continue };
             if let (None, Scope::Folder(folder)) = (&record.place, &scope) {
@@ -205,7 +218,7 @@ mod tests {
     use super::*;
 
     fn record(place: Option<Place>, title: Option<&str>, updated: Option<u64>) -> Record {
-        Record { agent: Agent::Claude, place, title: title.map(str::to_owned), updated }
+        Record { agent: Agent::Claude, place, title: title.map(str::to_owned), updated, kind: None }
     }
 
     fn listed(id: &str, title: Option<&str>, updated: Option<u64>) -> Listed {
@@ -244,6 +257,20 @@ mod tests {
         let json = serde_json::to_string_pretty(records.saved()).unwrap();
         assert!(json.contains(r#""agent": "claude""#), "{json}");
         assert_eq!(Records::parse(&json).get("a"), Some(&record(Some(server("lab", "/home/me/x")), Some("Fit decay"), Some(200))));
+    }
+
+    #[test]
+    fn keeps_a_kind_that_isnt_julias() {
+        let mut records = Records::default();
+        records.started("a", Agent::Claude, &Place::local("/f"), 100);
+        assert!(!records.set_kind("a", Backend::Pluto), "Julia's is the default, not saved");
+        assert!(!serde_json::to_string(records.saved()).unwrap().contains("kind"));
+        assert!(records.set_kind("a", Backend::Ember));
+        assert!(!records.set_kind("a", Backend::Ember));
+        let json = serde_json::to_string(records.saved()).unwrap();
+        assert!(json.contains(r#""kind":"ember""#), "{json}");
+        assert_eq!(Records::parse(&json).get("a").unwrap().kind, Some(Backend::Ember));
+        assert!(!records.set_kind("unknown", Backend::Ember));
     }
 
     #[test]
@@ -318,7 +345,7 @@ mod tests {
         records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("theirs", Some("Renamed"), Some(5))], true, &none(), &none());
         assert_eq!(records.get("mine"), Some(&record(Some(Place::local("/f")), None, None)));
         assert!(records.is_missing("mine") && !records.is_missing("theirs"));
-        assert_eq!(records.get("theirs"), Some(&Record { agent: Agent::Codex, place: Some(Place::local("/f")), title: Some("T".into()), updated: None }));
+        assert_eq!(records.get("theirs"), Some(&Record { agent: Agent::Codex, place: Some(Place::local("/f")), title: Some("T".into()), updated: None, kind: None }));
     }
 
     #[test]

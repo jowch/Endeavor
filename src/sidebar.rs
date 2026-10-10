@@ -10,7 +10,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use crate::agent::Agent;
 use crate::hosts::{HostId, Place};
 use crate::menu::MenuTarget;
-use crate::new_session::{Glyph, NotebookChoice, glyph, glyph_at, menu_row};
+use crate::new_session::{Glyph, glyph, glyph_at, menu_row};
 use crate::row_marks::{self, RowFacts, RowMark};
 use crate::session::Session;
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
@@ -424,7 +424,7 @@ impl Workspace {
         if self.draft.folder.as_ref() != Some(&folder.path) {
             self.draft.folder = Some(folder.path);
             self.draft.notebooks.clear();
-            self.choose_notebook(NotebookChoice::New, cx);
+            self.choose_notebook(self.new_notebook_choice(), cx);
             self.scan_notebooks(cx);
         }
         cx.notify();
@@ -533,7 +533,8 @@ impl Workspace {
         if self.offline_since.is_some() {
             return (Some(StatusMark::Offline), "Offline · reconnects by itself".into());
         }
-        if self.account.signed_out() {
+        // Only for someone using Claude: a Codex or Antigravity user needn't sign in to it.
+        if self.account.signed_out() && (self.settings.agent == crate::agent::Agent::Claude || self.sessions.iter().any(|s| s.agent == crate::agent::Agent::Claude)) {
             return (Some(StatusMark::SignedOut), "Signed out of Claude.".into());
         }
         for agent in crate::agent::Agent::ALL {

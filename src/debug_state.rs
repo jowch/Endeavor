@@ -97,12 +97,34 @@ impl Workspace {
         })))
     }
 
+    /// Julia on this computer: what its runtime last said (`julia_status`; null
+    /// from a runtime too old to say, or none running), and Endeavor's own
+    /// Julia as Settings last found it, with an Install or Remove under way.
+    /// `failed` is the failure the pane shows, with Try again.
+    fn julia_here_state(&self) -> Value {
+        use crate::pluto::JuliaStatus;
+        let status = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_status.as_ref()).map(|s| match s {
+            JuliaStatus::NotStarted => json!({ "state": "not_started" }),
+            JuliaStatus::Starting { step, quiet } => json!({ "state": "starting", "step": step, "quiet_secs": quiet }),
+            JuliaStatus::Ready => json!({ "state": "ready" }),
+            JuliaStatus::Failed { code, message } => json!({ "state": "failed", "code": code, "message": message }),
+        });
+        let own = match &self.own_julia.found {
+            None => json!("unknown"),
+            Some(None) => json!("not_installed"),
+            Some(Some(own)) => json!({ "julia": own.julia, "from": format!("{:?}", own.from) }),
+        };
+        let failed = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_failed.clone());
+        json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")) })
+    }
+
     fn debug_state(&self, page: Value, cx: &App) -> Value {
         let active = self.active_session();
         json!({
             "window": self.window_state(),
             "log": { "skipped_window_callbacks": crate::logs::skipped_callbacks() },
             "offline": self.offline_since.map(|since| json!({ "for_secs": since.elapsed().as_secs(), "trying": self.probing })),
+            "julia_here": self.julia_here_state(),
             "claude": {
                 "state": state_name(&self.links.get(Agent::Claude).process.state),
                 "connected": self.links.get(Agent::Claude).ready,
@@ -170,14 +192,16 @@ impl Workspace {
         });
         let screen = match &self.setup {
             _ if self.missing_files.is_some() => "missing_files",
-            Some(_) if self.offline_since.is_none() && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
+            // The choice of assistant, or Claude's sign-in once Claude is picked.
+            Some(s) if self.offline_since.is_none() && s.agent.is_none() => "sign_in",
+            Some(s) if self.offline_since.is_none() && s.agent == Some(crate::agent::Agent::Claude) && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
             Some(_) => "splash",
             None if self.active.is_some() => "session",
             None => "new_session",
         };
         json!({
             "screen": screen,
-            "setup": self.setup.as_ref().filter(|_| self.missing_files.is_none()).map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
+            "setup": self.setup.as_ref().filter(|_| self.missing_files.is_none()).map(|s| json!({ "step": s.step().label(s.agent_name()), "assistant": s.agent.map(|a| a.name()), "failed": s.failed(), "offline": self.offline_since.is_some() })),
             "missing_files": self.missing_files,
             "modal": modal,
             "ssh_prompt": ssh_prompt,
@@ -194,14 +218,13 @@ impl Workspace {
             Account::SignedOut(stage) => stage,
         };
         let stage = match stage {
-            Stage::Assistant => "choose_assistant",
             Stage::Account => "choose_account",
             Stage::Expired => "expired",
             Stage::Waiting(_) => "waiting_for_browser",
             Stage::Failed { .. } => "failed",
         };
         // The card above the composer: not on the setup screen, nor while offline.
-        let card = self.setup.is_none() && self.offline_since.is_none() && stage != "choose_assistant";
+        let card = self.setup.is_none() && self.offline_since.is_none();
         json!({ "account": "signed_out", "stage": stage, "card": card })
     }
 
@@ -305,6 +328,8 @@ impl Workspace {
         let chips: Vec<Value> = self.draft_chips().into_iter().map(|c| json!({ "chip": c.id, "label": c.label, "waiting": c.waiting })).collect();
         json!({
             "chips": chips,
+            "notebook_kind": crate::new_session::kind_name(self.draft.notebook.kind()),
+            "new_notebook_kinds": crate::new_session::NEW_KINDS.iter().map(|&k| crate::new_session::new_notebook_label(k)).collect::<Vec<_>>(),
             "mode": self.mode_label(None),
             "notice": self.draft.notice.as_ref().map(|n| n.to_string()),
             "connection_notice": self.connection_notice_text().map(|(text, _)| text),
@@ -503,6 +528,7 @@ impl Workspace {
                 }))
             }),
             "path": s.notebook_path,
+            "kind": crate::new_session::kind_name(s.kind),
             "header": header,
             "warning": self.read_only(s).then(|| {
                 let (title, line) = self.pane_warning(s);
@@ -525,7 +551,7 @@ impl Workspace {
     /// The notebook pane before a session starts.
     fn draft_pane_state(&self, cx: &App) -> Value {
         let header = match &self.draft.notebook {
-            NotebookChoice::New => "New notebook".to_string(),
+            NotebookChoice::New(kind) => crate::new_session::new_notebook_label(*kind).to_string(),
             NotebookChoice::Existing(path) => self.draft.host.folder_name(path),
         };
         let Some(folder) = self.draft_pane_folder() else {
@@ -534,7 +560,7 @@ impl Workspace {
             return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.hosts.name(&self.draft.host))), "header": header });
         };
         match (&self.draft.notebook, &self.draft.preview) {
-            (NotebookChoice::New, _) => json!({ "shows": "new_notebook", "saved_in": self.draft_tilde(folder), "header": header }),
+            (NotebookChoice::New(_), _) => json!({ "shows": "new_notebook", "saved_in": self.draft_tilde(folder), "header": header }),
             (NotebookChoice::Existing(_), None) => json!({ "shows": "loading", "header": header }),
             (NotebookChoice::Existing(_), Some(p)) => json!({ "shows": "safe_preview", "cells_shown": p.cells.len(), "cells": p.total, "header": header }),
         }
@@ -690,12 +716,15 @@ fn chip_label(a: &crate::attach::Attachment) -> String {
     [label.plain, label.mono].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
-/// The pane of a host that isn't ready: "cant_reach", "starting", "stopping",
+/// The pane of a host that isn't ready: "cant_reach", "starting",
+/// "julia_starting" (with the step), "julia_failed", "stopping",
 /// "julia_not_running", "replaced" or "not_connected", the host, and why.
 fn host_pane(pane: &HostPane, host: &str) -> Value {
     let (kind, reason) = match pane {
         HostPane::Lost => ("cant_reach", None),
         HostPane::Starting => ("starting", None),
+        HostPane::JuliaStarting(step) => ("julia_starting", Some(step)),
+        HostPane::JuliaFailed(reason) => ("julia_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => ("julia_not_running", Some(reason)),
         HostPane::Crashed(reason) => ("julia_crashed", Some(reason)),

@@ -187,14 +187,14 @@ the exe needs no DLL that Windows doesn't ship. The job checks that with
 because a debug build compiles its shaders at launch from the crate's source
 folder, so it runs only on the machine that built it.
 
-`.github/workflows/juliaup.yml` runs the app's first-run juliaup install for
+`.github/workflows/juliaup.yml` runs the first juliaup install for
 real on runners that have no juliaup: the ignored test
 `installs_juliaup_and_julia_where_there_is_none` installs juliaup, adds Julia
 1.12.6 and checks that channel's `julia.exe`. Windows Server 2025 has winget,
 so it takes the Microsoft Store route; Windows Server 2022 has none, so it
 falls back to juliaup's App Installer file. On the first runs (October 2026)
 the Store route took 1 min, the file 27 s, and `juliaup add` about 20 s. It
-runs when `src/juliaup.rs`, `src/runtime.rs`, `Cargo.lock`, the toolchain or
+runs when `src/own_julia.rs`, `src/runtime.rs`, `Cargo.lock`, the toolchain or
 the workflow changes, weekly, and by hand. Windows Server isn't a Windows 10 or
 11 desktop. The 2022 fallback starts because winget is missing; on a desktop
 whose Store is blocked, winget is there and fails its own way, so that case is
@@ -345,8 +345,10 @@ only with servers.
   `Content-Length`. Each zip's top folder and layout was read from its
   central directory: `node-v24.21.0-win-x64\node.exe` and
   `…\node_modules\npm\bin\npm-cli.js`.
-- **Julia comes from juliaup** (`src/juliaup.rs`), as for the plugin, not
-  from a download of the app's own. The app finds `juliaup.exe` (the PATH,
+- **Julia comes from juliaup**, as for the plugin, not from a download of
+  the app's own. The core installs it the first time a Julia notebook needs
+  it (or Settings' Install does), with EndeavorMCP's `julia::install_own`,
+  which came from the app's own `src/juliaup.rs`. It finds `juliaup.exe` (the PATH,
   the Store app's alias folder, `~\.juliaup\bin`); with none, it installs
   juliaup for this Windows account, from the Microsoft Store with `winget`,
   else from juliaup's App Installer file. Neither needs admin. It then adds
@@ -356,9 +358,8 @@ only with servers.
   first downloads the latest Julia, and a Julia started through the Store
   app's alias outlived the runtime
   (EndeavorMCP #55). A juliaup the person already has keeps its default and
-  other channels. A `julia-1.12.6` folder an older Endeavor downloaded is used
-  while juliaup can't be set up, and removed once a runtime starts with
-  juliaup's Julia. Each install route gets 10 minutes and `juliaup add` 45,
+  other channels. A `julia-1.12.6` folder an older Endeavor downloaded is
+  removed once a runtime starts. Each install route gets 10 minutes and `juliaup add` 45,
   then the next route or an error. The App Installer file gets a second try
   after a failure other than the time limit: in CI it once failed and then
   worked, cause unknown. Installing juliaup on a computer without

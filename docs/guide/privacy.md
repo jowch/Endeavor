@@ -65,11 +65,13 @@ connected to Claude Code.
 
 ## Other connections Endeavor makes
 
-- **On first launch**, it downloads Julia from julialang.org, Node.js from
-  nodejs.org, and Claude Code from the npm package registry. On Windows,
-  Julia comes through juliaup, which Endeavor installs from the Microsoft
-  Store, or from install.julialang.org if the Store doesn't work, when you
-  don't have it.
+- **On first launch**, it downloads Node.js from nodejs.org and Claude Code
+  from the npm package registry. **The first time you open a Julia
+  notebook** (or when you click **Install** in Settings), it downloads Julia
+  from julialang.org, through juliaup if you use it. On Windows, Julia always
+  comes through juliaup, which Endeavor installs from the Microsoft Store, or
+  from install.julialang.org if the Store doesn't work, when you don't have
+  it.
 - **Julia** downloads the packages your notebooks use from Julia's package
   servers.
 - **To check that you're online**, it opens a connection to Anthropic's API

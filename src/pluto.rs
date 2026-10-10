@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use wire::backend::Backend;
 
 /// One runtime as its host's listener serves it: the MCP URL the agent's
 /// config carries (its host is the app's way in too), and the bearer token
@@ -44,7 +45,11 @@ pub fn watch_notebooks(bridge: &Bridge, mut on_event: impl FnMut(Value)) -> Resu
 
 /// Call a runtime tool and return its decoded JSON result.
 pub fn call_tool(bridge: &Bridge, tool: &str, arguments: Value) -> Result<Value, String> {
-    let rpc = rpc(bridge, "tools/call", json!({ "name": tool, "arguments": arguments }))?;
+    call_tool_waiting(bridge, tool, arguments, CALL_WAIT)
+}
+
+fn call_tool_waiting(bridge: &Bridge, tool: &str, arguments: Value, wait: Duration) -> Result<Value, String> {
+    let rpc = rpc_waiting(bridge, "tools/call", json!({ "name": tool, "arguments": arguments }), wait)?;
     let text = rpc["result"]["content"][0]["text"]
         .as_str()
         .ok_or_else(|| format!("tool error: {}", rpc["result"]))?;
@@ -74,8 +79,10 @@ pub fn set_notebook(bridge: &Bridge, owner: u64, path: &str) -> Result<(), Strin
 
 /// The session `owner`'s working folder, where the runtime's `run_shell` runs
 /// by default. Paths here are the runtime machine's (`Place::path`).
-pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str) -> Result<(), String> {
-    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder })).map(|_| ())
+pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend) -> Result<(), String> {
+    // The core forgets kinds when it restarts, so every call says it.
+    let kind = crate::new_session::kind_name(kind);
+    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder, "kind": kind })).map(|_| ())
 }
 
 /// Make `dir` the folder Pluto suggests when saving a new notebook.
@@ -109,7 +116,11 @@ pub fn stop_notebook(bridge: &Bridge, path: &str) -> Result<Option<bool>, String
 
 /// An app-only bridge method's `result`, or its error message.
 fn app_call(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
-    let reply = rpc(bridge, method, params)?;
+    app_call_waiting(bridge, method, params, CALL_WAIT)
+}
+
+fn app_call_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration) -> Result<Value, String> {
+    let reply = rpc_waiting(bridge, method, params, wait)?;
     match reply.get("error") {
         Some(error) => Err(error["message"].as_str().unwrap_or("failed").trim_start_matches("ArgumentError: ").to_string()),
         None => Ok(reply["result"].clone()),
@@ -150,9 +161,102 @@ pub fn file_info(bridge: &Bridge, path: &str) -> Result<Option<f64>, String> {
     Ok(if result["exists"] == true { Some(result["modified"].as_f64().unwrap_or(0.)) } else { None })
 }
 
+/// Open the notebook at `path`, running it if `run`: `list_notebooks`' summary
+/// of it. Julia starts first if it isn't running; while it's still starting
+/// this says so (`julia_starting`).
+pub fn open_notebook(bridge: &Bridge, path: &str, run: bool) -> Result<Value, String> {
+    let result = call_tool_waiting(bridge, "open_notebook", json!({ "path": path, "run_notebook": run }), JULIA_CALL_WAIT)?;
+    match result["error"].as_str() {
+        // As an app call says it: `kind::message`.
+        Some(kind) => Err(format!("{kind}::{}", result["message"].as_str().unwrap_or_default())),
+        None => Ok(result),
+    }
+}
+
+/// How long the app's calls wait for an answer.
+const CALL_WAIT: Duration = Duration::from_secs(10);
+/// How long a call that may start Julia waits: the core waits up to 30 s for
+/// Julia before it answers that Julia is still starting.
+const JULIA_CALL_WAIT: Duration = Duration::from_secs(45);
+
+/// What Julia is doing, from a call's error that says it's still starting
+/// ("julia_starting::Downloading Julia 1.12.6… 42%. The first start can take…").
+pub fn julia_starting(error: &str) -> Option<&str> {
+    let step = error.strip_prefix("julia_starting::")?;
+    Some(step.split_once(". The first start").map_or(step, |(step, _)| step).trim())
+}
+
+/// Why Julia couldn't start, from a call's error that says so.
+pub fn julia_failed(error: &str) -> Option<&str> {
+    error.strip_prefix("julia_failed::").or_else(|| error.strip_prefix("julia_not_found::")).map(str::trim)
+}
+
+/// Why Julia couldn't start, for the person: the core words it for the agent,
+/// whose part ("Tell the user…", "Ask the user…") the pane's Try again stands in for.
+pub fn julia_failed_words(why: &str) -> String {
+    let agent = |sentence: &str| ["Tell the user", "Ask the user"].iter().any(|start| sentence.trim_start().starts_with(start));
+    let kept: Vec<&str> = why.split_inclusive(". ").filter(|sentence| !agent(sentence)).collect();
+    let words = kept.concat();
+    if words.trim().is_empty() { why.trim().to_owned() } else { words.trim().to_owned() }
+}
+
+/// What Julia is doing in a runtime, as `endeavor/julia_status` says it (EndeavorMCP interface 5).
+#[derive(Clone, Debug, PartialEq)]
+pub enum JuliaStatus {
+    /// Nothing has needed Julia yet.
+    NotStarted,
+    /// The step under way, and how many seconds since the last sign of progress.
+    Starting { step: String, quiet: u64 },
+    Ready,
+    /// The last start failed: its code (`julia_failed`, `julia_not_found`) and why.
+    Failed { code: String, message: String },
+}
+
+impl JuliaStatus {
+    fn from(result: &Value) -> Result<JuliaStatus, String> {
+        let text = |key: &str| result[key].as_str().unwrap_or_default().to_owned();
+        Ok(match result["state"].as_str() {
+            Some("not_started") => JuliaStatus::NotStarted,
+            Some("starting") => JuliaStatus::Starting { step: text("step"), quiet: result["quiet_seconds"].as_u64().unwrap_or(0) },
+            Some("ready") => JuliaStatus::Ready,
+            Some("failed") => JuliaStatus::Failed { code: text("code"), message: text("message") },
+            _ => return Err(format!("unexpected Julia status {result}")),
+        })
+    }
+}
+
+/// Where Julia is, without starting it.
+pub fn julia_status(bridge: &Bridge) -> Result<JuliaStatus, String> {
+    JuliaStatus::from(&app_call(bridge, "endeavor/julia_status", json!({}))?)
+}
+
+/// Start Julia now (after a failure: the person's Try again), and where it is then.
+pub fn start_julia(bridge: &Bridge) -> Result<JuliaStatus, String> {
+    JuliaStatus::from(&app_call(bridge, "endeavor/start_julia", json!({}))?)
+}
+
+/// `call` again while it answers that Julia is still starting (the first
+/// start downloads Julia and installs Pluto's packages, which takes minutes),
+/// with `step` hearing what Julia is doing each time.
+pub fn until_julia<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn Fn(&str)) -> Result<T, String> {
+    loop {
+        match call() {
+            Err(e) => match julia_starting(&e) {
+                Some(doing) => {
+                    step(doing);
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+                None => return Err(e),
+            },
+            done => return done,
+        }
+    }
+}
+
 /// A new notebook in session `owner`'s folder, bound to it: (notebook id, path).
+/// Julia starts first if it isn't running (see `open_notebook`).
 pub fn new_notebook(bridge: &Bridge, owner: u64) -> Result<(String, String), String> {
-    let result = app_call(bridge, "endeavor/new_notebook", json!({ "owner": owner.to_string() }))?;
+    let result = app_call_waiting(bridge, "endeavor/new_notebook", json!({ "owner": owner.to_string() }), JULIA_CALL_WAIT)?;
     match (result["notebook_id"].as_str(), result["path"].as_str()) {
         (Some(id), Some(path)) => Ok((id.to_owned(), path.to_owned())),
         _ => Err(format!("unexpected reply {result}")),
@@ -240,11 +344,15 @@ pub fn run_preview(bridge: &Bridge, tool: &str, arguments: &Value) -> Result<Run
 
 /// One JSON-RPC request to the runtime's app-only `/endeavor/call` endpoint.
 fn rpc(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
+    rpc_waiting(bridge, method, params, CALL_WAIT)
+}
+
+fn rpc_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration) -> Result<Value, String> {
     let host = bridge.host()?;
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
 
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
-    stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
+    stream.set_read_timeout(Some(wait)).map_err(|e| e.to_string())?;
     // HTTP/1.0: the bridge sends no Content-Length, so read the body to EOF
     // instead of dealing with chunked encoding.
     write!(
@@ -378,7 +486,45 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunWarning, cells_that_ran, run_warnings, still_true, user_edits};
+    use super::{RunWarning, cells_that_ran, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
+
+    #[test]
+    fn a_call_that_waits_for_julia_says_what_julia_is_doing() {
+        // As the core words it (EndeavorMCP core.rs `JuliaStarter::wait`).
+        let starting = "julia_starting::Downloading Julia 1.12.6… 42%. The first start can take several minutes (Julia, then Pluto's packages). Try again in a minute.";
+        assert_eq!(julia_starting(starting), Some("Downloading Julia 1.12.6… 42%"));
+        assert_eq!(julia_starting("julia_starting::Julia is starting"), Some("Julia is starting"));
+        assert_eq!(julia_starting("notebook_not_found::No notebook"), None);
+        assert_eq!(julia_failed("julia_failed::Couldn't start /x/julia: gone"), Some("Couldn't start /x/julia: gone"));
+        assert_eq!(julia_failed(starting), None);
+    }
+
+    #[test]
+    fn julia_status_reads_each_state_and_a_failure_keeps_only_the_persons_words() {
+        use super::{JuliaStatus, julia_failed_words};
+        let read = |v: serde_json::Value| JuliaStatus::from(&v);
+        assert_eq!(read(serde_json::json!({ "state": "not_started" })), Ok(JuliaStatus::NotStarted));
+        assert_eq!(read(serde_json::json!({ "state": "starting", "step": "Downloading Julia 1.12.6… 42%", "quiet_seconds": 3 })), Ok(JuliaStatus::Starting { step: "Downloading Julia 1.12.6… 42%".into(), quiet: 3 }));
+        assert_eq!(read(serde_json::json!({ "state": "ready" })), Ok(JuliaStatus::Ready));
+        assert_eq!(read(serde_json::json!({ "state": "failed", "code": "julia_failed", "message": "no" })), Ok(JuliaStatus::Failed { code: "julia_failed".into(), message: "no".into() }));
+        assert!(read(serde_json::json!({})).is_err());
+        // As the core words a start that stalled (EndeavorMCP core.rs `JuliaStarter::start`).
+        let stalled = "Julia made no progress for 30 minutes while starting (no new step, nothing new in the runtime's log), so it was stopped. The runtime's log (/x/runtime.log) shows where it stopped. Tell the user; trying again starts Julia afresh, so ask them before trying again.";
+        assert_eq!(julia_failed_words(stalled), "Julia made no progress for 30 minutes while starting (no new step, nothing new in the runtime's log), so it was stopped. The runtime's log (/x/runtime.log) shows where it stopped.");
+        assert_eq!(julia_failed_words("Couldn't start /x/julia: gone"), "Couldn't start /x/julia: gone");
+        assert_eq!(julia_failed_words("Tell the user."), "Tell the user.", "never nothing");
+    }
+
+    #[test]
+    fn until_julia_tries_again_while_julia_starts_and_hears_each_step() {
+        let answers = std::cell::RefCell::new(vec![Ok(7), Err("julia_starting::Julia 1.12.6 is starting and loading Pluto. The first start…".to_owned()), Err("julia_starting::Julia is starting".to_owned())]);
+        let heard = std::cell::RefCell::new(Vec::new());
+        let result = until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned()));
+        assert_eq!(result, Ok(7));
+        assert_eq!(*heard.borrow(), ["Julia is starting", "Julia 1.12.6 is starting and loading Pluto"]);
+        let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
+        assert_eq!(failed, Err("julia_failed::no".into()));
+    }
 
     #[test]
     fn cells_that_ran_were_unrun_and_now_are_not() {

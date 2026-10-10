@@ -64,7 +64,7 @@ they need without wading through basics.
 - No H1 in the body. The site shows the title. Start sections at `##`.
 - Link to other guide pages with relative paths: `[Servers](./servers.md)`.
 - Don't link to the internal docs in `docs/` (the UI spec, design notes,
-  design gaps, roadmap) or to source files. Those are for people working on
+  roadmap) or to source files. Those are for people working on
   the app, and they change without notice.
 - Link to [EndeavorMCP's README](https://github.com/jowch/EndeavorMCP#readme)
   for the notebook tools used without the app, rather than repeating it.

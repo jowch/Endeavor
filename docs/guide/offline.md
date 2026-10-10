@@ -28,9 +28,10 @@ continue when you're back."
 - **Server and cluster notebooks.** Endeavor can't reach them, so their
   notebooks are read-only until it reconnects. They keep running on the
   server meanwhile.
-- **First setup.** Endeavor needs the internet once, to download Julia,
-  Node.js and Claude Code. If you're offline, setup pauses and goes on by
-  itself when you're back.
+- **First setup.** Endeavor needs the internet once, to download Node.js and
+  Claude Code, and once more to download Julia the first time you open a
+  Julia notebook. If you're offline, setup pauses and goes on by itself when
+  you're back.
 - **New packages.** A notebook that needs a Julia package it hasn't
   installed yet can't download it.
 
