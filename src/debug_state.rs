@@ -168,6 +168,7 @@ impl Workspace {
             })
         });
         let screen = match &self.setup {
+            _ if self.missing_files.is_some() => "missing_files",
             Some(_) if self.offline_since.is_none() && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
             Some(_) => "splash",
             None if self.active.is_some() => "session",
@@ -175,7 +176,8 @@ impl Workspace {
         };
         json!({
             "screen": screen,
-            "setup": self.setup.as_ref().map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
+            "setup": self.setup.as_ref().filter(|_| self.missing_files.is_none()).map(|s| json!({ "step": s.step().label(), "failed": s.failed(), "offline": self.offline_since.is_some() })),
+            "missing_files": self.missing_files,
             "modal": modal,
             "ssh_prompt": ssh_prompt,
             "settings_open": self.settings_panel.is_some(),

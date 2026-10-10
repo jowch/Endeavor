@@ -318,6 +318,10 @@ These are read by debug builds only.
   cluster job ends, instead of 15 minutes, to try the warning on a short job.
 - `ENDEAVOR_MOTION_SCALE`: a number. `10` plays every animation ten times
   slower, to check it by eye or in screenshots; `0` turns motion off.
+- `ENDEAVOR_TEST_NO_SOURCE_FALLBACK`: set to anything. The app looks for its
+  files only where a release build does (`Resources` beside the program's
+  folder), not in the source tree, so it shows the "Endeavor's files are
+  missing" screen and starts nothing.
 - `ENDEAVOR_SPLASH_PREVIEW`: `1` opens the setup screen with made-up progress
   and installs nothing. Add `fail` to stop at the second step and `still` for
   the reduced-motion frame (`fail,still`).

@@ -1053,6 +1053,10 @@ fn lower_first(text: &str) -> String {
 impl Workspace {
     /// Open Settings at `page` (or bring it there if open).
     pub fn open_settings_at(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        // The missing-files screen draws no Settings, and opening it would start hosts.
+        if self.missing_files.is_some() {
+            return;
+        }
         if let Some(panel) = &mut self.settings_panel {
             panel.page = page;
             panel.highlight = None;

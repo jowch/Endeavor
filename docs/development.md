@@ -14,6 +14,11 @@ cargo run
 
 `cargo run` alone builds only the app, so run `cargo build` after pulling.
 
+Run a debug build from source. A release build (`cargo run --release`) looks
+for its files only in `Resources` beside the folder it runs from, as in
+`Endeavor.app`, so from the source tree it shows "Endeavor's files are
+missing" and starts nothing. To try a release build, bundle it (below).
+
 To keep the Linux helpers current by themselves, turn on the repo's git hooks
 once: `git config core.hooksPath .githooks`. After each pull or branch switch
 they fetch the helpers GitHub built for that commit.
