@@ -121,7 +121,7 @@ To wait for something, poll the dump. For example, loop until
   its cell diffs. A `changes` entry is the end-of-turn card: its `cells`,
   each with the `name` shown, the `cell` id, `tag` (`new`, `deleted` or
   null), the net `added` and `removed` line counts over the turn, and
-  `shows` (false for a deleted cell, whose row has no `›`). Also `wait_line` ("Starting Julia…" while the session waits to open until its host's Julia is up, else null), `activity` (the working line), `pinned_plan`, and
+  `shows` (false for a deleted cell, whose row has no `›`). Also `wait_line` ("Starting the notebook runtime…", or "Starting Julia on lab-server…", while the session waits to open until its host's runtime is up, else null), `activity` (the working line), `pinned_plan`, and
   `approval`: the card above the composer (`approval` or `plan`) with its
   title, code, lines, `plan` (its title, numbered `steps`, whether it's
   `open`, and the `text` shown when it is) and buttons (each with its label, key and `weight`:
@@ -140,8 +140,10 @@ To wait for something, poll the dump. For example, loop until
     reload), `reloaded`, whether the app loaded the page again, and
     `reload_button`, whether "Reload notebook" shows.
   - `host`: the host isn't ready. `host_pane.kind` is one of `cant_reach`,
-    `starting`, `stopping`, `julia_not_running`, `replaced` or
-    `not_connected`, with the host and the reason.
+    `starting`, `julia_starting` (the runtime is up and Julia is starting for
+    a notebook the app opens; `reason` is the step), `julia_failed`,
+    `stopping`, `julia_not_running`, `replaced` or `not_connected`, with the
+    host and the reason.
   - `stopped`: the notebook was stopped. `stopped.idle_hours` is set when it
     stopped for being idle.
   - `crashed`: its own Julia stopped by itself: "Julia stopped unexpectedly".

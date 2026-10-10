@@ -2,8 +2,8 @@
 
 Living plan; update it as items land. Design rationale lives in
 [pluto-agent-design-doc.md](pluto-agent-design-doc.md) and
-[design-notes.md](design-notes.md). Open design gaps are in
-[design-gaps.md](design-gaps.md).
+[design-notes.md](design-notes.md). Open gaps are
+[GitHub issues](https://github.com/jowch/Endeavor/issues).
 
 _Last updated: 2026-10-10_
 
@@ -44,7 +44,7 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   CI keeps a Windows build and installer to try, and a "nightly"
   prerelease holds the newest Mac app and Windows installer from `main`
   (`nightly.yml`). There are no versioned releases yet.
-- **Updates** ([#15](https://github.com/jowch/Endeavor/issues/15)). The app
+- **Updates** ([#80](https://github.com/jowch/Endeavor/issues/80)). The app
   can't update itself or check for a newer version, so Check now is hidden.
 - **The Windows installer** ([#12](https://github.com/jowch/Endeavor/issues/12)):
   a per-user installer that adds WebView2 if it's missing. CI builds it; it
@@ -77,8 +77,8 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 
 Deliberate simplifications with their upgrade path, marked `ponytail:` in the
 code. This is all of them; add a row with each new marker. The runtime's own
-shortcuts are EndeavorMCP's, in its
-[gaps.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/gaps.md); the
+shortcuts are EndeavorMCP's, tracked in its
+[issues](https://github.com/jowch/EndeavorMCP/issues); the
 two this list used to carry (`view_cell_output` has no timeout while the
 worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 [EndeavorMCP #62](https://github.com/jowch/EndeavorMCP/issues/62).
@@ -98,7 +98,9 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `main.rs` `write_atomic` | `sync_all` runs on the caller's thread, the UI thread for most saves | a save on a hot path |
 | `main.rs` context ring | arcs drawn as 48-segment polylines | it looks faceted |
 | `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
-| `install.rs` first-run installs | Julia 1.12.6 and Node 24.21.0 pinned in code (bump URL, SHA-256, size per release); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
+| `install.rs` first-run installs | Node 24.21.0 pinned in code (bump URL, SHA-256, size per release; Julia's pin is EndeavorMCP's, checked by `runtime.rs`); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
+| `runtime.rs` `julia_arg`, `settings_panel.rs` | "Endeavor's Julia" is Endeavor's own 1.12.6 once the core has it, and before that the core's `--julia auto`, which takes a julia on the PATH first; Windows still installs juliaup's Julia before the runtime starts | the core has `--julia own` and installs with juliaup ([EndeavorMCP #96](https://github.com/jowch/EndeavorMCP/issues/96)) |
+| `connection.rs` `julia_steps` | the pane learns what Julia is doing only from the answers of the app's own calls that wait for it (every 30 s or so); a Julia that the agent's call starts shows nothing in the pane | the core reports Julia's state ([EndeavorMCP #96](https://github.com/jowch/EndeavorMCP/issues/96)) |
 | `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
-| `.github/workflows/nightly.yml` | the Mac nightly is ad-hoc signed until the repository has the Developer ID secrets; Apple Silicon only | sharing (above) |
+| `.github/workflows/nightly.yml` | without the Developer ID secrets the Mac nightly builds ad-hoc signed and isn't published; Apple Silicon only | sharing (above) |
 | `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns), and the build has no server helpers | the installer is shared (#12) |

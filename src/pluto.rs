@@ -44,7 +44,11 @@ pub fn watch_notebooks(bridge: &Bridge, mut on_event: impl FnMut(Value)) -> Resu
 
 /// Call a runtime tool and return its decoded JSON result.
 pub fn call_tool(bridge: &Bridge, tool: &str, arguments: Value) -> Result<Value, String> {
-    let rpc = rpc(bridge, "tools/call", json!({ "name": tool, "arguments": arguments }))?;
+    call_tool_waiting(bridge, tool, arguments, CALL_WAIT)
+}
+
+fn call_tool_waiting(bridge: &Bridge, tool: &str, arguments: Value, wait: Duration) -> Result<Value, String> {
+    let rpc = rpc_waiting(bridge, "tools/call", json!({ "name": tool, "arguments": arguments }), wait)?;
     let text = rpc["result"]["content"][0]["text"]
         .as_str()
         .ok_or_else(|| format!("tool error: {}", rpc["result"]))?;
@@ -109,7 +113,11 @@ pub fn stop_notebook(bridge: &Bridge, path: &str) -> Result<Option<bool>, String
 
 /// An app-only bridge method's `result`, or its error message.
 fn app_call(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
-    let reply = rpc(bridge, method, params)?;
+    app_call_waiting(bridge, method, params, CALL_WAIT)
+}
+
+fn app_call_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration) -> Result<Value, String> {
+    let reply = rpc_waiting(bridge, method, params, wait)?;
     match reply.get("error") {
         Some(error) => Err(error["message"].as_str().unwrap_or("failed").trim_start_matches("ArgumentError: ").to_string()),
         None => Ok(reply["result"].clone()),
@@ -150,9 +158,58 @@ pub fn file_info(bridge: &Bridge, path: &str) -> Result<Option<f64>, String> {
     Ok(if result["exists"] == true { Some(result["modified"].as_f64().unwrap_or(0.)) } else { None })
 }
 
+/// Open the notebook at `path`, running it if `run`: `list_notebooks`' summary
+/// of it. Julia starts first if it isn't running; while it's still starting
+/// this says so (`julia_starting`).
+pub fn open_notebook(bridge: &Bridge, path: &str, run: bool) -> Result<Value, String> {
+    let result = call_tool_waiting(bridge, "open_notebook", json!({ "path": path, "run_notebook": run }), JULIA_CALL_WAIT)?;
+    match result["error"].as_str() {
+        // As an app call says it: `kind::message`.
+        Some(kind) => Err(format!("{kind}::{}", result["message"].as_str().unwrap_or_default())),
+        None => Ok(result),
+    }
+}
+
+/// How long the app's calls wait for an answer.
+const CALL_WAIT: Duration = Duration::from_secs(10);
+/// How long a call that may start Julia waits: the core waits up to 30 s for
+/// Julia before it answers that Julia is still starting.
+const JULIA_CALL_WAIT: Duration = Duration::from_secs(45);
+
+/// What Julia is doing, from a call's error that says it's still starting
+/// ("julia_starting::Downloading Julia 1.12.6… 42%. The first start can take…").
+pub fn julia_starting(error: &str) -> Option<&str> {
+    let step = error.strip_prefix("julia_starting::")?;
+    Some(step.split_once(". The first start").map_or(step, |(step, _)| step).trim())
+}
+
+/// Why Julia couldn't start, from a call's error that says so.
+pub fn julia_failed(error: &str) -> Option<&str> {
+    error.strip_prefix("julia_failed::").or_else(|| error.strip_prefix("julia_not_found::")).map(str::trim)
+}
+
+/// `call` again while it answers that Julia is still starting (the first
+/// start downloads Julia and installs Pluto's packages, which takes minutes),
+/// with `step` hearing what Julia is doing each time.
+pub fn until_julia<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn Fn(&str)) -> Result<T, String> {
+    loop {
+        match call() {
+            Err(e) => match julia_starting(&e) {
+                Some(doing) => {
+                    step(doing);
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+                None => return Err(e),
+            },
+            done => return done,
+        }
+    }
+}
+
 /// A new notebook in session `owner`'s folder, bound to it: (notebook id, path).
+/// Julia starts first if it isn't running (see `open_notebook`).
 pub fn new_notebook(bridge: &Bridge, owner: u64) -> Result<(String, String), String> {
-    let result = app_call(bridge, "endeavor/new_notebook", json!({ "owner": owner.to_string() }))?;
+    let result = app_call_waiting(bridge, "endeavor/new_notebook", json!({ "owner": owner.to_string() }), JULIA_CALL_WAIT)?;
     match (result["notebook_id"].as_str(), result["path"].as_str()) {
         (Some(id), Some(path)) => Ok((id.to_owned(), path.to_owned())),
         _ => Err(format!("unexpected reply {result}")),
@@ -240,11 +297,15 @@ pub fn run_preview(bridge: &Bridge, tool: &str, arguments: &Value) -> Result<Run
 
 /// One JSON-RPC request to the runtime's app-only `/endeavor/call` endpoint.
 fn rpc(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
+    rpc_waiting(bridge, method, params, CALL_WAIT)
+}
+
+fn rpc_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration) -> Result<Value, String> {
     let host = bridge.host()?;
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
 
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
-    stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
+    stream.set_read_timeout(Some(wait)).map_err(|e| e.to_string())?;
     // HTTP/1.0: the bridge sends no Content-Length, so read the body to EOF
     // instead of dealing with chunked encoding.
     write!(
@@ -378,7 +439,29 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunWarning, cells_that_ran, run_warnings, still_true, user_edits};
+    use super::{RunWarning, cells_that_ran, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
+
+    #[test]
+    fn a_call_that_waits_for_julia_says_what_julia_is_doing() {
+        // As the core words it (EndeavorMCP core.rs `JuliaStarter::wait`).
+        let starting = "julia_starting::Downloading Julia 1.12.6… 42%. The first start can take several minutes (Julia, then Pluto's packages). Try again in a minute.";
+        assert_eq!(julia_starting(starting), Some("Downloading Julia 1.12.6… 42%"));
+        assert_eq!(julia_starting("julia_starting::Julia is starting"), Some("Julia is starting"));
+        assert_eq!(julia_starting("notebook_not_found::No notebook"), None);
+        assert_eq!(julia_failed("julia_failed::Couldn't start /x/julia: gone"), Some("Couldn't start /x/julia: gone"));
+        assert_eq!(julia_failed(starting), None);
+    }
+
+    #[test]
+    fn until_julia_tries_again_while_julia_starts_and_hears_each_step() {
+        let answers = std::cell::RefCell::new(vec![Ok(7), Err("julia_starting::Julia 1.12.6 is starting and loading Pluto. The first start…".to_owned()), Err("julia_starting::Julia is starting".to_owned())]);
+        let heard = std::cell::RefCell::new(Vec::new());
+        let result = until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned()));
+        assert_eq!(result, Ok(7));
+        assert_eq!(*heard.borrow(), ["Julia is starting", "Julia 1.12.6 is starting and loading Pluto"]);
+        let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
+        assert_eq!(failed, Err("julia_failed::no".into()));
+    }
 
     #[test]
     fn cells_that_ran_were_unrun_and_now_are_not() {

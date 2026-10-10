@@ -88,20 +88,24 @@ Uninstall it from **Settings → Apps**. Your sessions and settings stay in
 ## What Endeavor installs on first launch
 
 Endeavor sets up the programs it needs the first time you open it. This
-takes a few minutes and needs the internet once.
+takes a minute or two and needs the internet once.
 
-- **Julia 1.12.6**, from julialang.org (about 230 MB, or 270 MB on an
-  Intel Mac).
 - **Node.js 24.21.0**, from nodejs.org (about 50 MB). Endeavor uses it to run
   Claude Code.
 - **Claude Code** and the adapter Endeavor uses to talk to it, from the npm
   package registry (about 110 small packages).
+
+The first time you open a Julia notebook, it installs:
+
+- **Julia 1.12.6**, from julialang.org (about 230 MB, or 270 MB on an
+  Intel Mac), unless a Julia 1.11 or newer is already on your PATH. It goes
+  in `~/.cache/endeavor/`.
 - **Pluto and the packages it needs**, which Julia downloads from Julia's
   package registry.
 
 On Windows, Julia comes from juliaup, Julia's own installer, which
-Endeavor installs if you don't have it; juliaup checks the Julia it
-downloads. Endeavor checks the Node.js download, and outside Windows the
+Endeavor installs during setup if you don't have it; juliaup checks the Julia
+it downloads. Endeavor checks the Node.js download, and outside Windows the
 Julia download, against fixed checksums before it uses them, and Claude Code's packages against a fixed list. A
 download that doesn't match is deleted, and setup stops and tells you.
 

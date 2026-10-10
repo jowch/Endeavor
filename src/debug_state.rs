@@ -691,12 +691,15 @@ fn chip_label(a: &crate::attach::Attachment) -> String {
     [label.plain, label.mono].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
-/// The pane of a host that isn't ready: "cant_reach", "starting", "stopping",
+/// The pane of a host that isn't ready: "cant_reach", "starting",
+/// "julia_starting" (with the step), "julia_failed", "stopping",
 /// "julia_not_running", "replaced" or "not_connected", the host, and why.
 fn host_pane(pane: &HostPane, host: &str) -> Value {
     let (kind, reason) = match pane {
         HostPane::Lost => ("cant_reach", None),
         HostPane::Starting => ("starting", None),
+        HostPane::JuliaStarting(step) => ("julia_starting", Some(step)),
+        HostPane::JuliaFailed(reason) => ("julia_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => ("julia_not_running", Some(reason)),
         HostPane::Crashed(reason) => ("julia_crashed", Some(reason)),
