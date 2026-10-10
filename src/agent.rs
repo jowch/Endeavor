@@ -410,6 +410,10 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
             if !exe.exists() {
                 progress(Progress::new(Step::Agent, format!("Installing the {} agent…", facts.name)));
                 crate::install::tarball(&dir, what, "", zip, &|detail, fraction| progress(Progress { fraction, ..Progress::new(Step::Agent, detail) }))?;
+                // `antigravity-acp-1.3.0`: what an older pin left beside it.
+                if let Some((name, version)) = folder.rsplit_once('-') {
+                    crate::install::remove_other_versions(&format!("{name}-"), version, &[]);
+                }
             }
             vec![exe.display().to_string()]
         }
@@ -477,7 +481,7 @@ fn npm_adapter(agent: Agent, pins: &str, installed: &str, progress: &dyn Fn(Prog
         }
         let _ = std::fs::remove_dir_all(&adapter);
         std::fs::rename(&staging, &adapter).map_err(|e| e.to_string())?;
-        crate::install::remove_other_versions(&format!("{}-", facts.installed), &pinned_adapter_version(agent)?, &[]);
+        crate::install::remove_other_versions(&format!("{installed}-"), &pinned_adapter_version(agent)?, &[]);
     }
 
     Ok(vec![node.display().to_string(), entry.display().to_string()])
