@@ -39,7 +39,6 @@ mod find_bar;
 mod host_list;
 mod hosts;
 mod install;
-mod juliaup;
 mod logs;
 mod new_session;
 mod network;
@@ -49,6 +48,7 @@ mod offline;
 mod older_runtime;
 mod opening;
 mod orbit;
+mod own_julia;
 mod outbox;
 #[cfg(target_os = "macos")]
 mod overlay;
@@ -479,6 +479,8 @@ pub struct Workspace {
     settings_page: settings_panel::Page,
     /// What Settings found out: the account, the chosen Julia.
     settings_checks: settings_panel::Checks,
+    /// Endeavor's own Julia on this computer, for Settings.
+    own_julia: own_julia::OwnJuliaState,
     /// First launch: the setup screen covers the window until setup finishes.
     setup: Option<Setup>,
     /// Claude Code's sign-in: checked when the agent starts and when the window
@@ -761,6 +763,7 @@ impl Workspace {
             settings_panel: None,
             settings_page: settings_panel::Page::Section(settings_panel::Section::Assistants),
             settings_checks: settings_panel::Checks::default(),
+            own_julia: own_julia::OwnJuliaState::default(),
             resizing: None,
             composer: composer::Composer::new(cx),
             chip_popover: None,

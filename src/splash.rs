@@ -16,28 +16,20 @@ use crate::turtle::{self, Gaze, Pose, ease, lerp};
 
 /// Setup steps, in the order they run. Julia isn't one: the core installs and
 /// starts it when a Julia notebook first needs it, and the runtime starts
-/// without it. Windows still installs juliaup's Julia first (src/runtime.rs
-/// `julia_arg`).
+/// without it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Step {
-    #[cfg(windows)]
-    Julia,
     Runtime,
     Agent,
     Claude,
 }
 
 impl Step {
-    #[cfg(windows)]
-    pub const ALL: [Step; 4] = [Step::Julia, Step::Runtime, Step::Agent, Step::Claude];
-    #[cfg(not(windows))]
     pub const ALL: [Step; 3] = [Step::Runtime, Step::Agent, Step::Claude];
 
     /// `agent` names the assistant picked ("Claude agent", "Connecting to Codex").
     pub fn label(self, agent: &str) -> String {
         match self {
-            #[cfg(windows)]
-            Step::Julia => "Julia".into(),
             Step::Runtime => "Notebook runtime".into(),
             Step::Agent => format!("{agent} agent"),
             Step::Claude => format!("Connecting to {agent}"),
@@ -46,8 +38,6 @@ impl Step {
 
     fn doing(self, agent: &str) -> String {
         match self {
-            #[cfg(windows)]
-            Step::Julia => "Setting up Julia".into(),
             Step::Runtime => "Starting the notebook runtime".into(),
             Step::Agent => format!("Setting up the {agent} agent"),
             Step::Claude => format!("Connecting to {agent}"),
@@ -56,8 +46,6 @@ impl Step {
 
     fn failed(self, agent: &str) -> String {
         match self {
-            #[cfg(windows)]
-            Step::Julia => "Couldn't set up Julia.".into(),
             Step::Runtime => "Couldn't start the notebook runtime.".into(),
             Step::Agent => format!("Couldn't set up the {agent} agent."),
             Step::Claude => format!("Couldn't connect to {agent}."),

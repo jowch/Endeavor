@@ -121,8 +121,12 @@ pub struct Connection {
     pub julia: Option<Steps>,
     /// The app's calls waiting for Julia now: `julia` goes when the last ends.
     julia_waits: u32,
-    /// Why Julia couldn't start for the notebook the app opened last.
+    /// Why Julia couldn't start for the notebook the app opened last, or for
+    /// a start the app watched (`julia_status`).
     pub julia_failed: Option<String>,
+    /// Where Julia is, as the runtime last said (`endeavor/julia_status`); none
+    /// from a runtime too old to say.
+    pub julia_status: Option<pluto::JuliaStatus>,
 }
 
 /// A dropped server connection.
@@ -225,6 +229,19 @@ impl Steps {
     }
 }
 
+impl Steps {
+    /// What the runtime says Julia is doing (`endeavor/julia_status`): the step
+    /// as `julia` reads it, and after a couple of minutes without any sign of
+    /// progress, how long it has been, since the runtime stops a start that
+    /// makes none for long.
+    fn julia_status(&mut self, step: &str, quiet: u64) {
+        self.julia(step);
+        if quiet >= 120 {
+            self.detail = Some(format!("No sign of progress for {} minutes.", quiet / 60));
+        }
+    }
+}
+
 /// The last word of a downloading line: "Downloading Julia 1.12.6… 42%" -> "42%".
 fn percent(line: &str) -> Option<&str> {
     line.rsplit(' ').next().filter(|w| w.ends_with('%'))
@@ -273,6 +290,7 @@ impl Connection {
             julia: None,
             julia_waits: 0,
             julia_failed: None,
+            julia_status: None,
             lost: None,
             dropped: None,
             crashed: false,
@@ -335,6 +353,7 @@ impl Connection {
         self.watching.fetch_add(1, Ordering::SeqCst);
         self.julia = None;
         self.julia_failed = None;
+        self.julia_status = None;
         self.notebooks = serde_json::Value::Null;
         self.cells = serde_json::Value::Null;
         self.runtime.take()
@@ -457,8 +476,7 @@ impl Workspace {
                 // The helper runs this Julia for as long as it lives (runtime::connect).
                 self.settings_checks.local_julia = Some(self.settings.julia.clone());
                 std::thread::spawn(move || {
-                    let progress = |p: Progress| drop(tx.unbounded_send(Update::Local(p)));
-                    let result = runtime::connect(keep_running, &progress).map(|(channel, hello)| (Arc::new(channel), hello));
+                    let result = runtime::connect(keep_running).map(|(channel, hello)| (Arc::new(channel), hello));
                     report_until_closed(&tx, result);
                 });
                 self.follow(host.clone(), id, rx, cx);
@@ -1192,9 +1210,13 @@ impl Workspace {
     fn watch_notebooks(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get(host) else { return };
         let Some(bridge) = connection.bridge() else { return };
+        let julia_status = connection.runtime.as_ref().is_some_and(|r| r.version.has_julia_status());
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<serde_json::Value>();
         let watching = connection.watching.clone();
         let mine = watching.fetch_add(1, Ordering::SeqCst) + 1;
+        if julia_status {
+            self.watch_julia(host, bridge.clone(), watching.clone(), mine, cx);
+        }
         // A long-lived blocking read: its own thread, not the executor's pool. If the
         // stream drops it reconnects, until this runtime is replaced or dies.
         let current = watching.clone();
@@ -1220,6 +1242,72 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    /// Follow where Julia is on `host`'s runtime (`endeavor/julia_status`), while
+    /// it's the one `watching` follows: every second while Julia starts, else
+    /// every few. It never starts Julia.
+    fn watch_julia(&mut self, host: &HostId, bridge: Bridge, watching: Arc<AtomicU64>, mine: u64, cx: &mut Context<Self>) {
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<pluto::JuliaStatus>();
+        let current = watching.clone();
+        std::thread::spawn(move || {
+            while current.load(Ordering::SeqCst) == mine {
+                let status = pluto::julia_status(&bridge);
+                let starting = matches!(status, Ok(pluto::JuliaStatus::Starting { .. }));
+                if let Ok(status) = status
+                    && tx.unbounded_send(status).is_err()
+                {
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(if starting { 1 } else { 3 }));
+            }
+        });
+        let host = host.clone();
+        cx.spawn(async move |this, cx| {
+            while let Some(status) = rx.next().await {
+                if watching.load(Ordering::SeqCst) != mine {
+                    break;
+                }
+                if this.update(cx, |this, cx| this.on_julia_status(&host, status, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The runtime said where Julia is: the pane shows its steps while it
+    /// starts, whoever started it (the agent, a warm-up), and why a start it
+    /// watched failed (a stall the runtime ended, say), with Try again.
+    fn on_julia_status(&mut self, host: &HostId, status: pluto::JuliaStatus, cx: &mut Context<Self>) {
+        let Some(connection) = self.connections.get_mut(host) else { return };
+        if connection.julia_status.as_ref() == Some(&status) {
+            return;
+        }
+        let was_starting = matches!(connection.julia_status, Some(pluto::JuliaStatus::Starting { .. }));
+        match &status {
+            pluto::JuliaStatus::Starting { step, quiet } => {
+                connection.julia_failed = None;
+                connection.julia.get_or_insert_with(|| Steps::new("Starting Julia")).julia_status(step, *quiet);
+            }
+            other => {
+                if connection.julia_waits == 0 {
+                    connection.julia = None;
+                }
+                match other {
+                    pluto::JuliaStatus::Ready => connection.julia_failed = None,
+                    pluto::JuliaStatus::Failed { message, .. } if was_starting => connection.julia_failed = Some(message.clone()),
+                    _ => {}
+                }
+            }
+        }
+        let ended = was_starting && !matches!(status, pluto::JuliaStatus::Starting { .. });
+        connection.julia_status = Some(status);
+        // The start may have installed Endeavor's own Julia: Settings says so.
+        if ended && *host == HostId::ThisMac && self.settings_panel.is_some() {
+            self.check_own_julia(cx);
+        }
+        cx.notify();
     }
 
     fn on_notebooks_event(&mut self, host: &HostId, mut event: serde_json::Value, cx: &mut Context<Self>) {
@@ -1532,6 +1620,9 @@ impl Workspace {
                         // It may still run: ask what does.
                         connection.start_after_stop = false;
                         this.status = not_stopped(&this.hosts.name(&host), &e).into();
+                        if host == HostId::ThisMac {
+                            this.own_julia_after_stop(false, cx);
+                        }
                         return this.check_host(&host, cx);
                     }
                     connection.found = Some(Ok(RuntimeState::NotRunning));
@@ -1542,6 +1633,7 @@ impl Workspace {
                 }
                 if host == HostId::ThisMac {
                     this.status = concat!("Julia on ", crate::platform::this_computer!(), " is stopped.").into();
+                    this.own_julia_after_stop(true, cx);
                 }
                 cx.notify();
             });
@@ -1660,7 +1752,7 @@ impl Workspace {
     /// For a call to `host`'s runtime that may wait for Julia to start
     /// (`pluto::until_julia`): what it hears goes to the pane's step log until
     /// it and every other such call end.
-    // ponytail: only the app's own calls hear Julia's steps (about every 30 s); the core reporting Julia's state is EndeavorMCP #96.
+    // A runtime that says where Julia is (`watch_julia`) shows the same steps every second, whoever waits.
     pub fn julia_steps(&mut self, host: &HostId, cx: &mut Context<Self>) -> JuliaSteps {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<String>();
         if let Some(connection) = self.connections.get_mut(host) {
@@ -1705,14 +1797,44 @@ impl Workspace {
         }
     }
 
-    /// The pane's Try again after Julia couldn't start: open the shown session's notebook again.
+    /// The pane's Try again after Julia couldn't start: start it again (a
+    /// runtime that says where Julia is starts it only when asked, after a
+    /// failure), then open the shown session's notebook again.
     fn retry_julia(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let mut start = None;
         if let Some(connection) = self.connections.get_mut(host) {
             connection.julia_failed = None;
+            if connection.julia_status.is_some() {
+                start = connection.bridge();
+                connection.julia_status = None;
+                connection.julia.get_or_insert_with(|| Steps::new("Starting Julia"));
+            }
         }
         let waiting = self.active_session().filter(|s| s.place.host == *host && s.notebook.is_none() && s.stopped.is_none() && !s.missing);
-        if let Some((key, path)) = waiting.and_then(|s| Some((s.key, s.notebook_path.clone()?))) {
-            self.open_for_session(key, path, false, cx);
+        let open = waiting.and_then(|s| Some((s.key, s.notebook_path.clone()?)));
+        match start {
+            Some(bridge) => {
+                let started = cx.background_executor().spawn(async move { pluto::start_julia(&bridge) });
+                let host = host.clone();
+                cx.spawn(async move |this, cx| {
+                    let started = started.await;
+                    let _ = this.update(cx, |this, cx| {
+                        match started {
+                            Ok(status) => this.on_julia_status(&host, status, cx),
+                            Err(e) => this.julia_answer(&host, Some(&format!("julia_failed::{e}")), cx),
+                        }
+                        if let Some((key, path)) = open {
+                            this.open_for_session(key, path, false, cx);
+                        }
+                    });
+                })
+                .detach();
+            }
+            None => {
+                if let Some((key, path)) = open {
+                    self.open_for_session(key, path, false, cx);
+                }
+            }
         }
         cx.notify();
     }
@@ -1811,7 +1933,7 @@ impl Workspace {
                     .text_color(gpui::white())
                     .button_text("Try again")
                     .on_click(cx.listener(move |this, _, _, cx| this.retry_julia(&host, cx)));
-                resting.child(div().text_color(theme::text_muted()).child(format!("Julia couldn't start on {name}."))).child(message(reason)).child(retry)
+                resting.child(div().text_color(theme::text_muted()).child(format!("Julia couldn't start on {name}."))).child(message(pluto::julia_failed_words(&reason))).child(retry)
             }
             HostPane::Starting => {
                 let steps = connection.map_or_else(|| Steps::new(format!("Connecting to {name}")), |c| c.steps.clone());

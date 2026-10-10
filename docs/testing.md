@@ -71,6 +71,13 @@ To wait for something, poll the dump. For example, loop until
   it's `for` (`row`, `session` for the chat header's title, `notebook` or
   `share`) and its `items`, each with its `label` and `key`.
 - `offline`. Null when online. Otherwise, how long the app has been offline.
+- `julia_here`. Julia on this computer: `status` is what its runtime last
+  said (`endeavor/julia_status`: `state` `not_started`, `starting` with `step`
+  and `quiet_secs`, `ready`, or `failed` with `code` and `message`; null with
+  no runtime, or one too old to say). `own` is Endeavor's own Julia as
+  Settings last found it (`unknown` until Settings opens, `not_installed`, or
+  its `julia` and where it came `from`), and `job` an Install or Remove under
+  way, or how the last one failed.
 - `claude`. Claude Code's adapter process: `state` is `up`, `restarting`
   (it stopped by itself and is starting again) or `down` (it stopped twice in
   a minute); `error` is why it last stopped, with the log's last lines (null
@@ -140,8 +147,8 @@ To wait for something, poll the dump. For example, loop until
     reload), `reloaded`, whether the app loaded the page again, and
     `reload_button`, whether "Reload notebook" shows.
   - `host`: the host isn't ready. `host_pane.kind` is one of `cant_reach`,
-    `starting`, `julia_starting` (the runtime is up and Julia is starting for
-    a notebook the app opens; `reason` is the step), `julia_failed`,
+    `starting`, `julia_starting` (the runtime is up and Julia is starting,
+    for whoever asked; `reason` is the step), `julia_failed`,
     `stopping`, `julia_not_running`, `replaced` or `not_connected`, with the
     host and the reason.
   - `stopped`: the notebook was stopped. `stopped.idle_hours` is set when it

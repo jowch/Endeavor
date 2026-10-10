@@ -1,7 +1,9 @@
 # The app's first run on a Windows computer with no juliaup (issue #62): it
 # installs juliaup for the account (the Microsoft Store with winget, else
 # juliaup's App Installer file), adds the pinned Julia's channel and finds
-# that channel's julia.exe (src/juliaup.rs). GitHub's Windows runners have no
+# that channel's julia.exe (EndeavorMCP's julia::install_own, which the core
+# runs at the first Julia notebook and Settings' Install runs; the app's test is
+# in src/own_julia.rs). GitHub's Windows runners have no
 # juliaup, so this runs that path for real, as the ignored test
 # installs_juliaup_and_julia_where_there_is_none. The job summary says which
 # runner has winget and how long each part took; the log says which route
@@ -22,14 +24,14 @@ on:
   push:
     branches: [main]
     paths:
-      - src/juliaup.rs
+      - src/own_julia.rs
       - src/runtime.rs
       - Cargo.lock
       - rust-toolchain.toml
       - .github/workflows/juliaup.yml
   pull_request:
     paths:
-      - src/juliaup.rs
+      - src/own_julia.rs
       - src/runtime.rs
       - Cargo.lock
       - rust-toolchain.toml
@@ -80,7 +82,7 @@ jobs:
       - name: Install juliaup and Julia
         shell: bash
         run: |
-          cargo test --locked -p endeavor --bin endeavor -- --ignored --exact juliaup::tests::installs_juliaup_and_julia_where_there_is_none --nocapture 2>&1 | tee test.log
+          cargo test --locked -p endeavor --bin endeavor -- --ignored --exact own_julia::tests::installs_juliaup_and_julia_where_there_is_none --nocapture 2>&1 | tee test.log
           grep -q 'test result: ok. 1 passed' test.log || { echo "::error::The juliaup install test didn't run"; exit 1; }
           # A retried App Installer install still passes, so say so where
           # it will be seen.

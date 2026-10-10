@@ -47,10 +47,16 @@ Cursor is listed as **Not available yet**.
 **Julia** sets which Julia runs your notebooks on your Mac. Click
 **Settings** next to it to choose:
 
-- **Endeavor's Julia** (the default): Endeavor downloads its own Julia 1.12.6
-  the first time you open a Julia notebook. If you already have Julia 1.11 or
-  newer on your PATH when that happens, that one is used instead. On Windows, Endeavor installs it with juliaup,
-  Julia's installer, and leaves your other juliaup versions alone.
+- **Endeavor's Julia** (the default): Julia 1.12.6, the version Endeavor is
+  tested with. Endeavor installs it the first time you open a Julia notebook,
+  or when you click **Install**. If you use juliaup, Julia's installer,
+  Endeavor adds 1.12.6 to it rather than downloading a second Julia, and
+  leaves your other juliaup versions alone. On Windows it always comes through
+  juliaup, which Endeavor installs if you don't have it. A Julia on your PATH
+  isn't used unless you choose it below. **Remove…** deletes Endeavor's Julia
+  (Julia on your Mac stops first if it's running); it's installed again the
+  next time you open a Julia notebook. If you added 1.12.6 to juliaup
+  yourself, Endeavor leaves it there.
 - **Another Julia on this Mac**: a Julia you installed yourself. Click
   **Choose…** (or **Change…**) and pick the file named `julia`, in a `bin`
   folder. It must be Julia 1.11 or newer.

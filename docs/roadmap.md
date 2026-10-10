@@ -99,8 +99,7 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `main.rs` context ring | arcs drawn as 48-segment polylines | it looks faceted |
 | `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
 | `install.rs` first-run installs | Node 24.21.0 pinned in code (bump URL, SHA-256, size per release; Julia's pin is EndeavorMCP's, checked by `runtime.rs`); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
-| `runtime.rs` `julia_arg`, `settings_panel.rs` | "Endeavor's Julia" is Endeavor's own 1.12.6 once the core has it, and before that the core's `--julia auto`, which takes a julia on the PATH first; Windows still installs juliaup's Julia before the runtime starts | the core has `--julia own` and installs with juliaup ([EndeavorMCP #96](https://github.com/jowch/EndeavorMCP/issues/96)) |
-| `connection.rs` `julia_steps` | the pane learns what Julia is doing only from the answers of the app's own calls that wait for it (every 30 s or so); a Julia that the agent's call starts shows nothing in the pane | the core reports Julia's state ([EndeavorMCP #96](https://github.com/jowch/EndeavorMCP/issues/96)) |
+| `own_julia.rs` `install_own_julia` | Settings' Install and a Julia notebook opened meanwhile can both download Endeavor's Julia at once (Install waits while the runtime is starting Julia, not the other way round); the second fails its check or rename, and trying again works | it bites |
 | `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
 | `.github/workflows/nightly.yml` | without the Developer ID secrets the Mac nightly builds ad-hoc signed and isn't published; Apple Silicon only | sharing (above) |
 | `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns), and the build has no server helpers | the installer is shared (#12) |

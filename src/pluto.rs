@@ -188,6 +188,50 @@ pub fn julia_failed(error: &str) -> Option<&str> {
     error.strip_prefix("julia_failed::").or_else(|| error.strip_prefix("julia_not_found::")).map(str::trim)
 }
 
+/// Why Julia couldn't start, for the person: the core words it for the agent,
+/// whose part ("Tell the user…", "Ask the user…") the pane's Try again stands in for.
+pub fn julia_failed_words(why: &str) -> String {
+    let agent = |sentence: &str| ["Tell the user", "Ask the user"].iter().any(|start| sentence.trim_start().starts_with(start));
+    let kept: Vec<&str> = why.split_inclusive(". ").filter(|sentence| !agent(sentence)).collect();
+    let words = kept.concat();
+    if words.trim().is_empty() { why.trim().to_owned() } else { words.trim().to_owned() }
+}
+
+/// What Julia is doing in a runtime, as `endeavor/julia_status` says it (EndeavorMCP interface 5).
+#[derive(Clone, Debug, PartialEq)]
+pub enum JuliaStatus {
+    /// Nothing has needed Julia yet.
+    NotStarted,
+    /// The step under way, and how many seconds since the last sign of progress.
+    Starting { step: String, quiet: u64 },
+    Ready,
+    /// The last start failed: its code (`julia_failed`, `julia_not_found`) and why.
+    Failed { code: String, message: String },
+}
+
+impl JuliaStatus {
+    fn from(result: &Value) -> Result<JuliaStatus, String> {
+        let text = |key: &str| result[key].as_str().unwrap_or_default().to_owned();
+        Ok(match result["state"].as_str() {
+            Some("not_started") => JuliaStatus::NotStarted,
+            Some("starting") => JuliaStatus::Starting { step: text("step"), quiet: result["quiet_seconds"].as_u64().unwrap_or(0) },
+            Some("ready") => JuliaStatus::Ready,
+            Some("failed") => JuliaStatus::Failed { code: text("code"), message: text("message") },
+            _ => return Err(format!("unexpected Julia status {result}")),
+        })
+    }
+}
+
+/// Where Julia is, without starting it.
+pub fn julia_status(bridge: &Bridge) -> Result<JuliaStatus, String> {
+    JuliaStatus::from(&app_call(bridge, "endeavor/julia_status", json!({}))?)
+}
+
+/// Start Julia now (after a failure: the person's Try again), and where it is then.
+pub fn start_julia(bridge: &Bridge) -> Result<JuliaStatus, String> {
+    JuliaStatus::from(&app_call(bridge, "endeavor/start_julia", json!({}))?)
+}
+
 /// `call` again while it answers that Julia is still starting (the first
 /// start downloads Julia and installs Pluto's packages, which takes minutes),
 /// with `step` hearing what Julia is doing each time.
@@ -450,6 +494,22 @@ mod tests {
         assert_eq!(julia_starting("notebook_not_found::No notebook"), None);
         assert_eq!(julia_failed("julia_failed::Couldn't start /x/julia: gone"), Some("Couldn't start /x/julia: gone"));
         assert_eq!(julia_failed(starting), None);
+    }
+
+    #[test]
+    fn julia_status_reads_each_state_and_a_failure_keeps_only_the_persons_words() {
+        use super::{JuliaStatus, julia_failed_words};
+        let read = |v: serde_json::Value| JuliaStatus::from(&v);
+        assert_eq!(read(serde_json::json!({ "state": "not_started" })), Ok(JuliaStatus::NotStarted));
+        assert_eq!(read(serde_json::json!({ "state": "starting", "step": "Downloading Julia 1.12.6… 42%", "quiet_seconds": 3 })), Ok(JuliaStatus::Starting { step: "Downloading Julia 1.12.6… 42%".into(), quiet: 3 }));
+        assert_eq!(read(serde_json::json!({ "state": "ready" })), Ok(JuliaStatus::Ready));
+        assert_eq!(read(serde_json::json!({ "state": "failed", "code": "julia_failed", "message": "no" })), Ok(JuliaStatus::Failed { code: "julia_failed".into(), message: "no".into() }));
+        assert!(read(serde_json::json!({})).is_err());
+        // As the core words a start that stalled (EndeavorMCP core.rs `JuliaStarter::start`).
+        let stalled = "Julia made no progress for 30 minutes while starting (no new step, nothing new in the runtime's log), so it was stopped. The runtime's log (/x/runtime.log) shows where it stopped. Tell the user; trying again starts Julia afresh, so ask them before trying again.";
+        assert_eq!(julia_failed_words(stalled), "Julia made no progress for 30 minutes while starting (no new step, nothing new in the runtime's log), so it was stopped. The runtime's log (/x/runtime.log) shows where it stopped.");
+        assert_eq!(julia_failed_words("Couldn't start /x/julia: gone"), "Couldn't start /x/julia: gone");
+        assert_eq!(julia_failed_words("Tell the user."), "Tell the user.", "never nothing");
     }
 
     #[test]
