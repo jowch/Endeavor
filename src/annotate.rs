@@ -113,6 +113,8 @@ pub struct PageState {
     pub dead: bool,
     /// The page's connection to Pluto is up.
     pub connected: bool,
+    /// A cell's code was edited and not run yet.
+    pub unsaved: bool,
     /// The drawer's open tab ("docs", "status").
     pub drawer: Option<String>,
 }
@@ -221,6 +223,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
                 package_failed: text("package_failed"),
                 dead: flag("dead"),
                 connected: v.get("connected").and_then(|b| b.as_bool()).unwrap_or(true),
+                unsaved: flag("unsaved"),
                 drawer: text("drawer").filter(|d| d == "docs" || d == "status"),
             }))
         }
@@ -414,7 +417,7 @@ mod tests {
     #[test]
     fn parses_the_notebook_panes_messages() {
         let state = format!(
-            r#"{{"type":"state","notebook":"{NB}","safe":false,"busy":"Installing packages · 2 of 5","restart":"sometime","save_failed":true,"package_failed":"Plots","dead":false,"connected":false,"drawer":"status"}}"#
+            r#"{{"type":"state","notebook":"{NB}","safe":false,"busy":"Installing packages · 2 of 5","restart":"sometime","save_failed":true,"package_failed":"Plots","dead":false,"connected":false,"unsaved":true,"drawer":"status"}}"#
         );
         assert_eq!(
             parse_with(&state, ""),
@@ -427,6 +430,7 @@ mod tests {
                 package_failed: Some("Plots".into()),
                 dead: false,
                 connected: false,
+                unsaved: true,
                 drawer: Some("status".into()),
             }))
         );

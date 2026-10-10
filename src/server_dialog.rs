@@ -20,6 +20,7 @@ use crate::remote::{self, Cancel, Event, Question};
 use crate::settings::IdleStop;
 use crate::{Workspace, theme};
 use crate::theme::FocusRing as _;
+use crate::theme::TextButton as _;
 
 pub struct ServerDialog {
     /// The server being edited; None adds one.
@@ -767,7 +768,7 @@ pub(crate) fn button(id: &'static str, label: &'static str, primary: bool, focus
             (false, true) => d.bg(theme::bg_raised()).hover(|s| s.bg(theme::button_hover())).focus_ring_on(on),
             (false, false) => d.border_color(theme::control_edge()).hover(|s| s.bg(theme::bg_raised())).focus_visible(|s| s.border_color(theme::focus_ring())),
         })
-        .child(label)
+        .button_text(label)
 }
 
 fn row(label: &'static str, control: impl IntoElement) -> Div {

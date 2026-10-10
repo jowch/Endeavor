@@ -22,6 +22,7 @@ mod approval;
 mod attach;
 mod celldiff;
 mod agent_process;
+mod agent_job;
 mod codex;
 mod composer;
 mod confirm;
@@ -387,7 +388,7 @@ fn column_header(id: impl Into<ElementId>) -> Stateful<Div> {
 /// Recently used working folders on every host, most recent first, kept across
 /// launches. Only This Mac's can be checked for still being there.
 fn load_recent() -> Vec<Place> {
-    load_json::<Vec<Place>>("recent.json").into_iter().filter(|p| p.host != HostId::ThisMac || p.path.is_dir()).collect()
+    load_json::<Vec<Place>>("recent.json").into_iter().filter(|p| p.here().is_none_or(Path::is_dir)).collect()
 }
 
 fn load_records() -> records::Records {
@@ -506,8 +507,8 @@ pub struct Workspace {
     lines: HashMap<HostId, connection::Line>,
     /// The composer's placeholder as last set (it changes while Claude works).
     placeholder: SharedString,
-    /// The account's usage limit was reached: messages wait until it resets.
-    usage_limit: Option<offline::UsageLimit>,
+    /// Each agent's usage limit, while reached: its sessions' messages wait until it resets.
+    usage_limits: offline::UsageLimits,
     /// Notebooks whose Julia stopped by itself, and the runs after Restart Julia.
     crashes: crash::Crashes,
     /// A one-off failure's notice, under the control that was used.
@@ -697,7 +698,7 @@ impl Workspace {
             let Ok(busy) = this.update(cx, |this, cx| {
                 this.check_opening(cx);
                 this.check_usage_limit(cx);
-                this.usage_limit.is_some()
+                !this.usage_limits.is_empty()
                     || this.sessions.iter().any(|s| s.busy_since.is_some())
                     || this.connections.values().any(|c| matches!(c.status, connection::Status::Connecting | connection::Status::Starting))
             }) else {
@@ -773,7 +774,7 @@ impl Workspace {
             lines: HashMap::new(),
             placeholder: "Type / for commands".into(),
             drawn: None,
-            usage_limit: None,
+            usage_limits: offline::UsageLimits::default(),
             crashes: crash::Crashes::default(),
             notice: None,
             hosts: hosts::Hosts::load(),
@@ -908,7 +909,7 @@ impl Workspace {
         }
         let existing = match &self.draft.notebook {
             NotebookChoice::New => None,
-            NotebookChoice::Existing(path) => Some(path.display().to_string()),
+            NotebookChoice::Existing(path) => Some(path.clone()),
         };
         let mut context: Vec<String> = agent.facts().session_intro.map(str::to_owned).into_iter().collect();
         if let (Some(server), HostId::Server(id)) = (&server, &host) {
@@ -918,7 +919,7 @@ impl Workspace {
                  the notebook and the files are all on that server; your own file and shell tools are off because \
                  they'd see the user's computer instead. Use the notebook tools list_folder, read_file and run_shell (the user \
                  approves each command), with the server's paths.",
-                folder.display()
+                folder
             ));
             if let Some(resources) = &session.resources {
                 context.push(format!(
@@ -992,7 +993,7 @@ impl Workspace {
         if let Some(title) = self.titles.get(&id).cloned().or_else(|| self.records.get(&id)?.title.clone()) {
             return (title, false);
         }
-        let notebook = self.session_notebooks.get(&id).and_then(|p| p.path.file_name()).map(|n| n.to_string_lossy().into_owned());
+        let notebook = self.session_notebooks.get(&id).map(Place::name);
         (notebook.unwrap_or_else(|| "Earlier session".into()), true)
     }
 
@@ -1009,7 +1010,7 @@ impl Workspace {
         // A "notebook moved" note that never reached the agent before the app quit.
         let pending = self.pending_moved.get(&id.to_string()).cloned();
         let (title, untitled) = self.past_title(&id);
-        let notebook = self.session_notebooks.get(&id.to_string()).map(|p| p.path.display().to_string());
+        let notebook = self.session_notebooks.get(&id.to_string()).map(|p| p.path.clone());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
         // The row keeps its handle as it turns from past to open, so keyboard focus stays on it.
         let row_focus = self.past_row_focus.get_mut().remove(&id);
@@ -1232,7 +1233,7 @@ impl Workspace {
     fn bind_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(session) = self.session_mut(key) else { return };
         session.notebook_path = Some(path.clone());
-        let place = Place { host: session.place.host.clone(), path: PathBuf::from(&path) };
+        let place = Place { host: session.place.host.clone(), path: path.clone() };
         if let Some(id) = session.id.as_ref().map(ToString::to_string)
             && self.session_notebooks.get(&id) != Some(&place)
         {
@@ -1350,7 +1351,7 @@ impl Workspace {
                 Effect::SetPolicy(policy, edits) => self.send_policy(key, policy, edits, cx),
                 Effect::SignedOut => self.signed_out_of(agent, cx),
                 Effect::Asked(ix) => self.prompt_arrived(key, ix),
-                Effect::UsageLimit(reset) => self.hit_usage_limit(reset, cx),
+                Effect::UsageLimit(reset) => self.hit_usage_limit(agent, reset, cx),
                 Effect::PreviewRun { ix, tool, input } => {
                     let Some(bridge) = self.session_bridge(key) else { continue };
                     let task = cx.background_executor().spawn(async move { pluto::run_preview(&bridge, &tool, &input) });
@@ -1479,7 +1480,7 @@ impl Workspace {
         let (progress, mut progressed) = futures::channel::mpsc::unbounded::<attach::Progress>();
         let helper = self.helper(&place.host);
         let (dest, fallback) = match (&place.host, helper) {
-            (HostId::ThisMac, _) => (attach::Dest::Here(place.path), None),
+            (HostId::ThisMac, _) => (attach::Dest::Here(place.path.into()), None),
             (host, _) if !self.helper_saves_files(host) => (attach::Dest::Message, Some(attach::UNWRITABLE)),
             (_, Some(helper)) => {
                 let ask = Box::new(move |request| helper.files(request));
@@ -2276,7 +2277,7 @@ impl Workspace {
                     .gap_2()
                     .children(card("pinned-plan", approval::render_pinned_plan(session, cx)))
                     .children(card("offline-line", self.render_offline_line(Some(session), cx)))
-                    .children(card("usage-line", self.render_usage_line(cx)))
+                    .children(card("usage-line", self.render_usage_line(session, cx)))
                     .children(card("runtime-wait", self.render_runtime_wait(session, cx)))
                     .children(card("agent-trouble", self.render_agent_trouble(session.agent, cx)))
                     .children(card("sign-in-card", self.render_agent_sign_in(session.agent, cx)))
@@ -2500,6 +2501,11 @@ impl Render for Workspace {
 fn main() {
     // `claude auth login` opens its page through this app (signin::Login).
     signin::browser_shim();
+    // An agent's adapter, in a job that ends its whole tree (agent_job).
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some(agent_job::FLAG) {
+        agent_job::run(std::env::args().skip(2).collect());
+    }
     // This Mac's runtime helper (runtime::connect), and ssh's askpass (remote::asker).
     if std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG) {
         endeavor_mcp::run_as(&[runtime::HELPER_FLAG], std::env::args().skip(2).collect());

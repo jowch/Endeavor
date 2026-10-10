@@ -27,6 +27,7 @@ use crate::splash::{Progress, Step};
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme};
 use crate::theme::FocusRing as _;
+use crate::theme::TextButton as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
@@ -728,7 +729,7 @@ impl Workspace {
             .cursor_pointer()
             .bg(theme::bg_raised())
             .text_color(theme::text_primary())
-            .child(fix.label())
+            .button_text(fix.label())
             .on_click(cx.listener(move |this, _, _, cx| this.apply_fix(&fix, cx)))
     }
 
@@ -934,11 +935,10 @@ impl Workspace {
                     self.watch_notebooks(&host, cx);
                     self.warn_before_job_ends(&host, cx);
                 }
-                // A page let go meanwhile (another session was shown) loads as any switch does.
                 let shown = self.active_session().filter(|s| s.place.host == host).and_then(|s| s.notebook.clone());
                 let origin = self.connection(&host).and_then(|c| c.runtime.as_ref()).and_then(|r| Some(r.page_url.split_once('?')?.0.to_owned()));
                 if let (Some(id), Some(origin)) = (shown, origin)
-                    && !crate::webcontent::url(self.webview.read(cx).raw()).starts_with(&origin)
+                    && load_again(&crate::webcontent::url(self.webview.read(cx).raw()), &origin, &self.page, &id)
                 {
                     self.load_notebook(&host, &id, cx);
                 }
@@ -1099,7 +1099,7 @@ impl Workspace {
         // A new runtime knows no session's notebook or policy.
         let on_host: Vec<&Session> = self.sessions.iter().filter(|s| s.place.host == *host).collect();
         let bound: Vec<(u64, String)> = on_host.iter().filter_map(|s| Some((s.key, s.notebook_path.clone()?))).collect();
-        let folders: Vec<(u64, std::path::PathBuf)> = on_host.iter().map(|s| (s.key, s.place.path.clone())).collect();
+        let folders: Vec<(u64, String)> = on_host.iter().map(|s| (s.key, s.place.path.clone())).collect();
         let policies: Vec<(u64, &'static str, bool)> = on_host.iter().map(|s| (s.key, s.policy(), s.edits_ask())).collect();
         let waiting: Vec<u64> = on_host.iter().filter(|s| s.agent_waiting).map(|s| s.key).collect();
         for (key, path) in bound {
@@ -1616,7 +1616,7 @@ impl Workspace {
                 .cursor_pointer()
                 .bg(theme::accent())
                 .text_color(gpui::white())
-                .child(label)
+                .button_text(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if start_julia {
                         this.start_host(&host, cx);
@@ -1670,6 +1670,7 @@ impl Workspace {
                         .text_color(theme::text_muted())
                         .hover(|s| s.text_color(theme::text_primary()))
                         .child("Cancel")
+                        .aria_label(format!("Cancel connecting to {name}"))
                         .on_click(cx.listener(move |this, _, _, cx| this.cancel_start(&host, cx)))
                 });
                 return Some(starting_pane(&steps).children(cancel).into_any_element());
@@ -1879,7 +1880,7 @@ fn hello_of(hello: &client::HelloInfo) -> Hello {
         Some("process") => Some(client::Launcher::Process),
         _ => None,
     };
-    Hello { protocol: wire::PROTOCOL, node: hello.node.clone(), home: hello.home.clone().into(), slurm: hello.slurm, uploads: hello.uploads, launcher }
+    Hello { protocol: wire::PROTOCOL, node: hello.node.clone(), home: hello.home.clone(), slurm: hello.slurm, uploads: hello.uploads, launcher }
 }
 
 /// A server's runtime, as the app follows it.
@@ -2089,9 +2090,20 @@ fn stop_reason(why: &str) -> String {
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
+/// Back on the same Julia, the shown notebook's page loads again when the web
+/// view is at `at`. A page let go meanwhile (another session was shown) loads
+/// as any switch does. So does one still waiting to reconnect: after a long drop
+/// Pluto's page backs off and may not try again for minutes, and with nothing to
+/// reopen a load can't race. Not if a cell has an edit that hasn't been run:
+/// leaving the page would lose it, so Pluto's own reconnect keeps it. A page
+/// that reconnected within the last state tick loads once more, which is harmless.
+fn load_again(at: &str, origin: &str, page: &crate::annotate::PageState, notebook: &str) -> bool {
+    !at.starts_with(origin) || (page.notebook == notebook && !page.connected && !page.unsaved)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, not_restarted, not_stopped, percent, runtime_of};
+    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, not_restarted, not_stopped, percent, runtime_of};
 
     fn line(state: LineState, node: &str) -> LineStatus {
         let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
@@ -2152,6 +2164,18 @@ mod tests {
         c.status = Status::Ready;
         c.runtime = Some(runtime_of(runtime(7)));
         assert!(c.same_julia(&runtime_of(client::RuntimeInfo { reattached: true, ..runtime(7) })), "seen again while ready");
+    }
+
+    #[test]
+    fn back_on_the_same_julia_a_page_still_reconnecting_loads_again_unless_it_has_edits() {
+        let origin = "http://127.0.0.1:4100/edit";
+        let at = "http://127.0.0.1:4100/edit?id=nb";
+        let page = crate::annotate::PageState { notebook: "nb".into(), connected: false, ..Default::default() };
+        assert!(load_again("about:blank", origin, &page, "nb"), "the page was let go");
+        assert!(load_again(at, origin, &page, "nb"), "still waiting to reconnect");
+        assert!(!load_again(at, origin, &crate::annotate::PageState { connected: true, ..page.clone() }, "nb"), "already live");
+        assert!(!load_again(at, origin, &crate::annotate::PageState { unsaved: true, ..page.clone() }, "nb"), "an edit not yet run");
+        assert!(!load_again(at, origin, &page, "other"), "the page is another notebook's");
     }
 
     #[test]

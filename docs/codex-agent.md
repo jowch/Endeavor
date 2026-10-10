@@ -498,9 +498,9 @@ applied over ACP). Three Codex turns and one Claude turn.
   session folder and runs sandboxed commands without asking; Manual asks
   only before notebook edits and runs. `read-only` would make it ask, at
   the cost of a prompt for every shell write.
-- **Usage limit.** A turn that hits a usage limit holds every session's
-  messages, Claude's and Codex's, as it did with one agent. Codex's limit
-  errors haven't been seen, so whether they are recognised is unknown.
+- **Codex's usage limit errors** haven't been seen, so whether they are
+  recognised is unknown. A usage limit is kept per agent: Claude's holds
+  only Claude's sessions, and Codex's only Codex's.
 - **The sidebar** doesn't show which agent a session is on.
 - **Codex's model list** comes from its first session; the new-session
   screen shows Codex's chips only after Codex has started once.

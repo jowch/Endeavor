@@ -753,7 +753,8 @@ pub enum Dest {
     /// The session's folder on this Mac.
     Here(PathBuf),
     /// The session's folder on a server, through its helper.
-    Server { folder: PathBuf, ask: Box<Ask>, progress: Box<dyn Fn(Progress) + Send> },
+    /// `folder` is in the server's `/` rules (`Place::path`).
+    Server { folder: String, ask: Box<Ask>, progress: Box<dyn Fn(Progress) + Send> },
     /// Into the message: the server's helper can't save files, or isn't connected.
     Message,
 }
@@ -766,14 +767,14 @@ const PIECE: usize = 1 << 20;
 /// its path relative to the folder, by the same rule as `save_into`: a file
 /// in `data/` with the same contents (size and SHA-256, so nothing is sent),
 /// else a new one, numbered past names whose contents differ.
-pub fn send_to_server(folder: &Path, source: &Path, ask: &Ask, progress: &dyn Fn(Progress)) -> Result<String, String> {
+pub fn send_to_server(folder: &str, source: &Path, ask: &Ask, progress: &dyn Fn(Progress)) -> Result<String, String> {
     use std::io::Read;
     let name = file_name(source);
     let couldnt = |why: String| format!("Couldn't copy {name} into the session's folder: {}.", why.trim_end_matches('.'));
     let io = |e: std::io::Error| couldnt(e.to_string());
     let size = std::fs::metadata(source).map_err(io)?.len();
     let sha256 = files::sha256_file(source).map_err(io)?;
-    let folder = folder.display().to_string();
+    let folder = folder.to_owned();
     let path = match ask(Request::Place { folder: folder.clone(), name: name.clone(), size, sha256 }).map_err(couldnt)? {
         Reply::Place { path, have: true } => return Ok(path),
         Reply::Place { path, have: false } => path,
@@ -1355,7 +1356,7 @@ mod tests {
     /// A server's folder at `folder`, its helper's answers given here.
     fn server(folder: &Path, progress: Arc<std::sync::Mutex<Vec<(u64, u64)>>>) -> Dest {
         Dest::Server {
-            folder: folder.to_path_buf(),
+            folder: crate::hosts::text(folder),
             ask: Box::new(|request| match files::answer(&request) {
                 Reply::Error { message } => Err(message),
                 reply => Ok(reply),
@@ -1392,7 +1393,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(session.join("data")).unwrap().count(), 2, "no parts left behind");
 
         // A helper that answers with an error: refused, in plain words.
-        let failing = Dest::Server { folder: session.join("nope"), ask: Box::new(|_| Err("The connection closed.".into())), progress: Box::new(|_| {}) };
+        let failing = Dest::Server { folder: crate::hosts::text(&session.join("nope")), ask: Box::new(|_| Err("The connection closed.".into())), progress: Box::new(|_| {}) };
         let (placed, refused) = place_uploads(vec![upload(&other)], &failing);
         assert!(placed.is_empty());
         assert_eq!(refused, ["Couldn't copy decay.csv into the session's folder: The connection closed."]);

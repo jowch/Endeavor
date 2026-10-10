@@ -112,6 +112,7 @@ pub fn render_jump(session: &Session, cx: &mut Context<Workspace>) -> Option<Any
                     .text_size(theme::chat_meta())
                     .text_color(theme::text_primary())
                     .hover(|s| s.bg(theme::button_hover()))
+                    .aria_label(label.trim_end_matches(" ↓").to_owned())
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(session) = this.sessions.iter().find(|s| s.key == key) {

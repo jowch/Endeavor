@@ -9,6 +9,7 @@ use gpui::*;
 use crate::new_session::{Glyph, glyph_at};
 use crate::signin::{Look, button_frame};
 use crate::theme;
+use crate::theme::TextButton as _;
 
 /// A button with an icon before its label.
 pub fn action(id: impl Into<ElementId>, icon: Option<Glyph>, label: impl Into<SharedString>, look: Look) -> Stateful<Div> {
@@ -16,7 +17,7 @@ pub fn action(id: impl Into<ElementId>, icon: Option<Glyph>, label: impl Into<Sh
         Look::Primary => gpui::white().into(),
         Look::Secondary | Look::Plain => theme::text_muted(),
     };
-    button_frame(id, look).role(Role::Button).children(icon.map(|g| glyph_at(g, tint, 1.))).child(label.into())
+    button_frame(id, look).role(Role::Button).children(icon.map(|g| glyph_at(g, tint, 1.))).button_text(label)
 }
 
 /// Text whose `backticked` names (a cell's) stand out as code. It wraps as

@@ -46,11 +46,9 @@ _Listed 2026-10-03._
 
 ## Accessibility
 
-- [ ] The composer's text box shows its caret but no focus ring. GPUI 0.3.6
-  has no public "does a descendant have keyboard focus" query, and sharing
-  its internal `FocusHandle` with the box risks registering it twice as a
-  Tab stop.
-- [ ] Accessible names on text-only buttons. A button's visible text alone
-  isn't an accessible name in GPUI; the new-session chips read as empty
-  until given `.aria_label()`. The sweep covered icon-only controls; other
-  text-only buttons may have the same problem.
+- [ ] Clickable text with no role makes no accessibility node, so a screen
+  reader can't find it: the sign-in card, setup's Retry and Show logs, Show
+  more, a code block's Copy, the + menu rows, the folder browser's Up and
+  path, Remove server, and others
+  ([#53](https://github.com/jowch/Endeavor/issues/53)). Text buttons that
+  have a role are named.

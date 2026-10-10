@@ -7,6 +7,7 @@ use gpui::*;
 
 use crate::new_session::{Glyph, glyph_at};
 use crate::{Workspace, overlay, theme};
+use crate::theme::TextButton as _;
 
 const ARROW: f32 = 7.;
 
@@ -91,7 +92,7 @@ fn got_it(id: &'static str) -> Stateful<Div> {
         .hover(|s| s.bg(theme::composer_edge()))
         .text_color(theme::text_primary())
         .font_weight(FontWeight::MEDIUM)
-        .child("Got it")
+        .button_text("Got it")
 }
 
 impl Workspace {

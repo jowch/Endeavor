@@ -944,7 +944,7 @@ impl Workspace {
 
     /// `agent` can't answer now: messages wait.
     pub fn out_of_reach(&self, agent: Agent) -> bool {
-        self.signed_out_of_agent(agent) || self.offline_since().is_some() || self.usage_limit.is_some() || !self.links.get(agent).process.up()
+        self.signed_out_of_agent(agent) || self.offline_since().is_some() || self.usage_limits.holds(agent) || !self.links.get(agent).process.up()
     }
 
     /// A session's messages wait: its agent can't be reached, or its server
