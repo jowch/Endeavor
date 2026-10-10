@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
+use endeavor_mcp::r;
 
 use crate::about::{self, Adapter};
 use crate::connection::Status;
@@ -99,14 +100,17 @@ pub enum Page {
     Claude,
     /// Notebooks › Julia.
     Julia,
+    /// Notebooks › R.
+    R,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 9] = [
         Page::Section(Section::Assistants),
         Page::Claude,
         Page::Section(Section::Notebooks),
         Page::Julia,
+        Page::R,
         Page::Section(Section::Hosts),
         Page::Section(Section::Appearance),
         Page::Section(Section::Troubleshooting),
@@ -117,7 +121,7 @@ impl Page {
         match self {
             Page::Section(s) => s,
             Page::Claude => Section::Assistants,
-            Page::Julia => Section::Notebooks,
+            Page::Julia | Page::R => Section::Notebooks,
         }
     }
 
@@ -126,6 +130,7 @@ impl Page {
             Page::Section(s) => s.key(),
             Page::Claude => "claude",
             Page::Julia => "julia",
+            Page::R => "r",
         }
     }
 
@@ -135,6 +140,7 @@ impl Page {
             Page::Section(_) => None,
             Page::Claude => Some("Claude"),
             Page::Julia => Some("Julia"),
+            Page::R => Some("R"),
         }
     }
 }
@@ -165,6 +171,8 @@ pub struct Checks {
     /// The Julia This Mac's helper was started with, as Settings chose it then:
     /// a different choice since needs a restart.
     pub local_julia: Option<Option<PathBuf>>,
+    /// Likewise its R setting (`Settings::r`).
+    pub local_r: Option<Option<String>>,
     /// Repair Julia is under way.
     pub repairing: bool,
 }
@@ -361,6 +369,12 @@ pub enum Act {
     RemoveJulia,
     RestartJulia,
     RepairJulia,
+    /// R: found by itself (`Settings::r` none), or one the user chose.
+    AutoR,
+    ChooseR,
+    /// Install or remove Endeavor's own R (`own_r`).
+    InstallR,
+    RemoveR,
     Stop(HostId),
     TryNow(HostId),
     HostSettings(String),
@@ -496,6 +510,13 @@ impl Workspace {
                 aside: Some(".jl notebooks".into()),
                 subtitle: Some(concat!("Runs your Julia notebooks on ", crate::platform::this_computer!(lower), ".").into()),
                 groups: self.julia_groups(),
+            },
+            Page::R => View {
+                back: Some(Page::Section(Section::Notebooks)),
+                title: "R".into(),
+                aside: None,
+                subtitle: Some(concat!("Runs your R notebooks on ", crate::platform::this_computer!(lower), ".").into()),
+                groups: self.r_groups(),
             },
         }
     }
@@ -691,9 +712,116 @@ impl Workspace {
         vec![
             group(Some("When notebooks stop"), vec![Item::Row(idle), Item::Row(keep)]),
             group(Some("Running code"), vec![Item::Row(ask)]),
-            group(Some("Languages"), vec![Item::Row(julia), later("r", "R", ".R notebooks"), later("python", "Python", ".py notebooks")])
+            group(Some("Languages"), vec![Item::Row(julia), self.r_row().map_or_else(|| later("r", "R", ".R notebooks"), Item::Row), later("python", "Python", ".py notebooks")])
                 .foot("Each language has its own program. Servers and clusters set theirs in Where notebooks run."),
         ]
+    }
+
+    /// What the Notebooks page's R row says: which R runs R notebooks.
+    fn r_line(&self) -> String {
+        match (&self.settings.r, &self.own_r.found) {
+            (Some(r), _) => crate::new_session::tilde(Path::new(r)),
+            (None, Some(Some(own))) => format!("Endeavor's R {}", own.version),
+            (None, _) => "The R your login shell finds".into(),
+        }
+    }
+
+    /// Notebooks › R's row; none where R notebooks don't run (Windows).
+    fn r_row(&self) -> Option<Row> {
+        if cfg!(windows) {
+            return None;
+        }
+        let mut r = row("r", "R");
+        r.aside = Some(".R notebooks".into());
+        r.lead = Lead::Icon { glyph: Glyph::File, dot: false, faint: false, tone: None };
+        r.status = Some(Status2::new(self.r_line(), Tone::Plain));
+        r.search = Some("R .R Ember notebooks Rscript".into());
+        r.summary = Some(format!("{}. Choose which R runs your R notebooks.", self.r_line()).into());
+        r.controls.push(Control::Button { label: "Settings", look: Look::Secondary, icon: Some(Glyph::Gear), act: Some(Act::Go(Page::R)), aria: "R settings".into() });
+        Some(r)
+    }
+
+    /// The R setting differs from the one This Mac's runtime was started with.
+    fn r_needs_restart(&self) -> bool {
+        self.status(&HostId::ThisMac) == Some(&Status::Ready) && self.r_changed()
+    }
+
+    pub fn r_changed(&self) -> bool {
+        self.settings_checks.local_r.as_ref().is_some_and(|started| *started != self.settings.r)
+    }
+
+    fn r_groups(&self) -> Vec<Group> {
+        if cfg!(windows) {
+            return Vec::new();
+        }
+        let auto = self.settings.r.is_none();
+        let mut found = row("r-auto", "Find R by itself");
+        found.lead = Lead::Radio { checked: auto, act: Some(Act::AutoR) };
+        found.desc = Some(if crate::connection::own_r_item().is_some() {
+            format!("Endeavor's own R {} if it's installed, else the R your login shell finds. With neither, Endeavor offers to install its own the first time you open an R notebook.", r::OWN_VERSION)
+        } else {
+            "The R your login shell finds. Endeavor doesn't install R here: rig (github.com/r-lib/rig) installs one without admin rights.".to_owned()
+        }
+        .into());
+        found.search = None;
+        found.controls.push(Control::Note("recommended".into()));
+        let mut theirs = row("r-another", concat!("Another R on ", crate::platform::this_computer!(lower)));
+        theirs.lead = Lead::Radio { checked: !auto, act: Some(Act::ChooseR) };
+        theirs.summary = Some("Use an R you installed yourself.".into());
+        theirs.controls.push(button(if auto { "Choose…" } else { "Change…" }, Look::Secondary, Act::ChooseR, "Choose another R"));
+        match &self.settings.r {
+            None => theirs.desc = Some("Choose its Rscript program, if your login shell doesn't find the R you want.".into()),
+            Some(r) => theirs.extra = Some(Extra::Path { path: crate::new_session::tilde(Path::new(r)), version: String::new() }),
+        }
+        let mut items = vec![Item::Row(found), Item::Row(theirs)];
+        let restart = self.r_needs_restart();
+        if restart {
+            let mut r = row("r-restart", "Restart notebooks to use it");
+            r.search = None;
+            r.lead = Lead::Icon { glyph: Glyph::Info, dot: false, faint: false, tone: Some(Tone::Attention) };
+            r.desc = Some("Notebooks stop and start again, R notebooks with the R you chose. Their files are already saved.".into());
+            r.controls.push(Control::Button { label: "Restart", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartJulia), aria: "Restart notebooks".into() });
+            items.push(Item::Row(r));
+        }
+        let which = group(Some("Which R to use"), items);
+        let mut groups = vec![if restart { which } else { which.foot("Changing it takes effect when notebooks restart.") }];
+        if crate::connection::own_r_item().is_some() {
+            let mut ours = row("r-own", "Endeavor's R");
+            ours.desc = Some(format!("R {}, the version Endeavor is tested with, kept apart from any other R.", r::OWN_VERSION).into());
+            self.own_r_controls(&mut ours);
+            groups.push(group(None, vec![Item::Row(ours)]));
+        }
+        groups
+    }
+
+    /// Endeavor's R's row: installed or not, with Install or Remove, or how either is going.
+    fn own_r_controls(&self, ours: &mut Row) {
+        use crate::own_julia::Job;
+        match (&self.own_r.job, &self.own_r.found) {
+            (Some(Job::Installing(step)), _) => {
+                ours.extra = Some(Extra::Progress { text: step.trim_end_matches('…').to_owned(), step: String::new(), fraction: 0.08 });
+                ours.controls.push(Control::Button { label: "Install", look: Look::Secondary, icon: None, act: None, aria: "Install Endeavor's R".into() });
+            }
+            (Some(Job::Removing), _) => {
+                ours.status = Some(Status2::new("Removing…", Tone::Quiet));
+                ours.controls.push(Control::Button { label: "Remove…", look: Look::Secondary, icon: None, act: None, aria: "Remove Endeavor's R".into() });
+            }
+            (job, Some(found)) => {
+                // The pane's Install R is under way in the runtime: a second install would share its folder.
+                let starting = found.is_none() && self.connections.get(&HostId::ThisMac).is_some_and(|c| c.r.is_some());
+                ours.status = Some(match job {
+                    Some(Job::Failed(why)) => Status2::new(why.clone(), Tone::Danger),
+                    _ if starting => Status2::new("Being set up for a notebook now", Tone::Quiet),
+                    _ => Status2::new(if found.is_some() { "Installed" } else { "Not installed" }, Tone::Quiet),
+                });
+                ours.controls.push(if found.is_some() {
+                    button("Remove…", Look::Secondary, Act::RemoveR, "Remove Endeavor's R")
+                } else {
+                    Control::Button { label: "Install", look: Look::Secondary, icon: None, act: (!starting).then_some(Act::InstallR), aria: "Install Endeavor's R".into() }
+                });
+            }
+            (_, None) => ours.status = Some(Status2::new("Checking…", Tone::Quiet)),
+        }
     }
 
     /// This Mac's open notebooks' file names.
@@ -1143,6 +1271,7 @@ impl Workspace {
         self.refresh_profile(cx);
         self.check_chosen_julia(cx);
         self.check_own_julia(cx);
+        self.check_own_r(cx);
         cx.notify();
     }
 
@@ -1256,6 +1385,29 @@ impl Workspace {
         .detach();
     }
 
+    /// Choose another R: its Rscript, with the file picker or, in debug builds,
+    /// the path in the file `ENDEAVOR_TEST_PICK_R` names.
+    fn choose_r(&mut self, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if let Some(file) = std::env::var_os("ENDEAVOR_TEST_PICK_R")
+            && let Ok(text) = std::fs::read_to_string(&file)
+        {
+            let r = text.trim().to_owned();
+            return self.update_settings(cx, |s| s.r = Some(r));
+        }
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Choose".into()) });
+        crate::platform::set_open_panel_message("Choose the Rscript program. It's in the bin folder of an R install.", cx);
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = picked.await
+                && let Some(path) = paths.pop()
+            {
+                let r = path.to_string_lossy().into_owned();
+                let _ = this.update(cx, |this, cx| this.update_settings(cx, |s| s.r = Some(r)));
+            }
+        })
+        .detach();
+    }
+
     fn set_julia(&mut self, julia: Option<PathBuf>, cx: &mut Context<Self>) {
         self.update_settings(cx, |s| s.julia = julia);
         self.check_chosen_julia(cx);
@@ -1320,6 +1472,10 @@ impl Workspace {
             Act::ChooseJulia => self.choose_julia(cx),
             Act::InstallJulia => self.install_own_julia(cx),
             Act::RemoveJulia => self.confirm_remove_own_julia(window, cx),
+            Act::AutoR => self.update_settings(cx, |s| s.r = None),
+            Act::ChooseR => self.choose_r(cx),
+            Act::InstallR => self.install_own_r(cx),
+            Act::RemoveR => self.confirm_remove_own_r(window, cx),
             Act::RestartJulia => self.restart_local(cx),
             Act::RepairJulia => self.confirm_repair(window, cx),
             Act::Stop(host) => self.confirm_host_stop(host, window, cx),

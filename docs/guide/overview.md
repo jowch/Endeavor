@@ -103,6 +103,13 @@ The first time you open a Julia notebook, it installs:
 - **Pluto and the packages it needs**, which Julia downloads from Julia's
   package registry.
 
+The first time you open an R notebook, it installs:
+
+- **Ember**, the R package that runs R notebooks, and the packages it needs,
+  from Ember's R package repository and CRAN.
+- **R 4.6.1**, from CRAN (about 165 MB), only on a Mac that has no R, and
+  only when you click **Install R**. It goes in `~/.cache/endeavor/`.
+
 On Windows, Julia comes from juliaup, Julia's own installer, which
 Endeavor installs during setup if you don't have it; juliaup checks the Julia
 it downloads. Endeavor checks the Node.js download, and outside Windows the
