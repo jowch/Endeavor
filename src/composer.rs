@@ -1341,6 +1341,7 @@ impl Workspace {
                 popup()
                     .id("config-menu")
                     .role(Role::Menu)
+                    .when_some(self.composer_agent(session).facts().config.iter().find(|&&(c, _)| c == id).map(|&(_, name)| name), |d, name| d.aria_label(name))
                     .w(px(260.))
                     .children(options.into_iter().enumerate().map(|(i, option)| {
                         let value = option.value.clone();
@@ -1494,7 +1495,7 @@ impl Workspace {
             .filter(|(_, a)| !matches!(a, Attachment::Quote(_)))
             .map(|(i, a)| {
                 let open = popover.is_some_and(|p| p.chip == i);
-                let name = a.label();
+                let name = a.full_label();
                 chip(ElementId::NamedInteger("sent-chip".into(), (key << 32) | ((entry as u64) << 8) | i as u64), a)
                     .role(Role::Button)
                     .aria_label(format!("{}{}", name.plain, name.mono))
