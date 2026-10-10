@@ -74,7 +74,8 @@ To wait for something, poll the dump. For example, loop until
 - `julia_here`. Julia on this computer: `status` is what its runtime last
   said (`endeavor/julia_status`: `state` `not_started`, `starting` with `step`
   and `quiet_secs`, `ready`, or `failed` with `code` and `message`; null with
-  no runtime, or one too old to say). `own` is Endeavor's own Julia as
+  no runtime, or one too old to say). `failed` is the failure the pane
+  shows, with Try again. `own` is Endeavor's own Julia as
   Settings last found it (`unknown` until Settings opens, `not_installed`, or
   its `julia` and where it came `from`), and `job` an Install or Remove under
   way, or how the last one failed.

@@ -76,6 +76,7 @@ impl Workspace {
     }
 
     /// Install: in its own thread, since a download takes minutes.
+    // ponytail: a Julia notebook opened while this runs can download too; roadmap.md.
     pub fn install_own_julia(&mut self, cx: &mut Context<Self>) {
         if matches!(self.own_julia.job, Some(Job::Installing(_) | Job::Removing)) {
             return;
@@ -119,6 +120,9 @@ impl Workspace {
         let mut detail = String::new();
         if running {
             detail.push_str(concat!("Julia stops on ", crate::platform::this_computer!(lower), " first, with any notebooks open there. Their files are already saved.\n\n"));
+        }
+        if matches!(self.own_julia.found, Some(Some(OwnJulia { from: OwnFrom::Juliaup { .. }, .. }))) {
+            detail.push_str(&format!("This removes Julia {} from juliaup, for anything else that uses it too.\n\n", julia::JULIA_VERSION));
         }
         detail.push_str("Endeavor installs it again the next time you open a Julia notebook, or with Install.");
         self.open_confirm(format!("Remove Endeavor's Julia {}?", julia::JULIA_VERSION), detail, "Remove", window, cx, move |this, _, cx| {

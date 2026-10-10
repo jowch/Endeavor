@@ -1285,6 +1285,7 @@ impl Workspace {
             return;
         }
         let was_starting = matches!(connection.julia_status, Some(pluto::JuliaStatus::Starting { .. }));
+        let failure = new_failure(connection.julia_status.as_ref(), &status).map(str::to_owned);
         match &status {
             pluto::JuliaStatus::Starting { step, quiet } => {
                 connection.julia_failed = None;
@@ -1294,10 +1295,11 @@ impl Workspace {
                 if connection.julia_waits == 0 {
                     connection.julia = None;
                 }
-                match other {
-                    pluto::JuliaStatus::Ready => connection.julia_failed = None,
-                    pluto::JuliaStatus::Failed { message, .. } if was_starting => connection.julia_failed = Some(message.clone()),
-                    _ => {}
+                if matches!(other, pluto::JuliaStatus::Ready) {
+                    connection.julia_failed = None;
+                }
+                if failure.is_some() {
+                    connection.julia_failed = failure;
                 }
             }
         }
@@ -2405,13 +2407,34 @@ fn load_again(at: &str, origin: &str, page: &crate::annotate::PageState, noteboo
     !at.starts_with(origin) || (page.notebook == notebook && !page.connected && !page.unsaved)
 }
 
+/// Why Julia failed, when that's news: Julia wasn't failed already. Not only
+/// after `starting`, since a start can fail between two polls (a first Julia
+/// notebook opened offline) and the watcher sees `not_started`, then `failed`.
+fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaStatus) -> Option<&'a str> {
+    match now {
+        pluto::JuliaStatus::Failed { message, .. } if !matches!(before, Some(pluto::JuliaStatus::Failed { .. })) => Some(message),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, not_restarted, not_stopped, percent, runtime_of, try_ended};
+    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, new_failure, not_restarted, not_stopped, percent, runtime_of, try_ended};
 
     fn line(state: LineState, node: &str) -> LineStatus {
         let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
         LineStatus { machine: "lab".into(), name: "lab".into(), state, step: None, hello, job: None }
+    }
+
+    #[test]
+    fn a_start_that_fails_between_two_polls_still_shows_why() {
+        use crate::pluto::JuliaStatus::{Failed, NotStarted, Ready, Starting};
+        let failed = Failed { code: "julia_download_failed".into(), message: "Couldn't download Julia.".into() };
+        assert_eq!(new_failure(Some(&NotStarted), &failed), Some("Couldn't download Julia."), "offline: never seen starting");
+        assert_eq!(new_failure(Some(&Starting { step: "Downloading".into(), quiet: 0 }), &failed), Some("Couldn't download Julia."));
+        assert_eq!(new_failure(None, &failed), Some("Couldn't download Julia."), "a first look after attaching");
+        assert_eq!(new_failure(Some(&failed), &failed), None, "said once");
+        assert_eq!(new_failure(Some(&NotStarted), &Ready), None);
     }
 
     #[test]

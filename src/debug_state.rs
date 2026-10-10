@@ -100,6 +100,7 @@ impl Workspace {
     /// Julia on this computer: what its runtime last said (`julia_status`; null
     /// from a runtime too old to say, or none running), and Endeavor's own
     /// Julia as Settings last found it, with an Install or Remove under way.
+    /// `failed` is the failure the pane shows, with Try again.
     fn julia_here_state(&self) -> Value {
         use crate::pluto::JuliaStatus;
         let status = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_status.as_ref()).map(|s| match s {
@@ -113,7 +114,8 @@ impl Workspace {
             Some(None) => json!("not_installed"),
             Some(Some(own)) => json!({ "julia": own.julia, "from": format!("{:?}", own.from) }),
         };
-        json!({ "status": status, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")) })
+        let failed = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_failed.clone());
+        json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")) })
     }
 
     fn debug_state(&self, page: Value, cx: &App) -> Value {
