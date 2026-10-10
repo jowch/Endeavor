@@ -367,6 +367,11 @@ pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn F
             }
         }
     }, notice)?;
+    // A fresh start means no runtime runs an older pin's Julia: remove those.
+    if !runtime.reattached {
+        let chosen = crate::settings::Settings::load().julia;
+        crate::install::remove_other_versions("julia-", JULIA_VERSION, &chosen.as_deref().into_iter().collect::<Vec<_>>());
+    }
     let how = if runtime.reattached { "Reattached to" } else { "Started" };
     let log = crate::install::app_dir().map(|d| d.join("runtime/runtime.log").display().to_string()).unwrap_or_default();
     eprintln!("{how} Julia on {}; its log is {log}", runtime.node);
@@ -621,6 +626,35 @@ fn a_missing_julia_points_to_settings() {
     let err = check_version("/nonexistent/julia").unwrap_err();
     println!("{err}");
     assert!(err.contains("wasn't found") && err.contains("Settings"));
+}
+
+/// EndeavorMCP downloads its own Julia on servers, pinned in its `src/julia.rs`;
+/// both pins move together (CLAUDE.md). Reads the pinned library's source.
+#[cfg(test)]
+#[test]
+fn the_library_pins_the_same_julia() {
+    let rustc = Command::new("rustc").arg("-vV").output().unwrap();
+    let host = String::from_utf8_lossy(&rustc.stdout).lines().find_map(|l| l.strip_prefix("host: ").map(str::to_owned)).unwrap();
+    // Only this platform's packages: the others aren't downloaded.
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = Command::new(cargo)
+        .args(["metadata", "--locked", "--offline", "--format-version", "1", "--filter-platform", &host])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "cargo metadata: {}", String::from_utf8_lossy(&out.stderr));
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let manifest = metadata["packages"].as_array().unwrap().iter().find(|p| p["name"] == "endeavor-mcp").unwrap()["manifest_path"].as_str().unwrap();
+    let library = std::fs::read_to_string(Path::new(manifest).with_file_name("src").join("julia.rs")).unwrap();
+    let mut pins = vec![format!("const JULIA_VERSION: &str = \"{JULIA_VERSION}\";"), format!("const MIN_JULIA: (u32, u32) = ({}, {});", MIN_JULIA.0, MIN_JULIA.1)];
+    // The library downloads no Julia on Windows (juliaup there).
+    if cfg!(not(windows)) {
+        let (url, sha, _) = JULIA_TARBALL;
+        pins.extend([format!("\"{url}\","), format!("\"{sha}\",")]);
+    }
+    for pin in pins {
+        assert!(library.lines().any(|l| l.trim() == pin), "EndeavorMCP's src/julia.rs should have `{pin}`, as src/runtime.rs does");
+    }
 }
 
 /// The cloud VMs' setup script installs this Julia and the pinned Rust too (docs/cloud.md).
