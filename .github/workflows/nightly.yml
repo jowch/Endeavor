@@ -1,6 +1,6 @@
 # Keeps one "nightly" prerelease holding the newest build of main that passed
-# CI on macOS, Linux and Windows: Endeavor-macos-arm64.zip (scripts/bundle.sh,
-# with the Linux servers' helpers inside) and Endeavor-windows-x86_64-setup.exe
+# CI on macOS, Linux and Windows: Endeavor-macos-arm64.dmg (scripts/bundle.sh's
+# app, with the Linux servers' helpers inside) and Endeavor-windows-x86_64-setup.exe
 # (the installer windows.yml built from that same commit). Each run replaces the
 # files and moves the tag, so the download links stay the same and releases
 # don't pile up. A scheduled run does nothing when the nightly already holds
@@ -69,13 +69,31 @@ jobs:
         run: rustup toolchain install
       # Fails if EndeavorMCP's Helpers release has no build for the pinned
       # commit, rather than shipping an app that can't reach Linux servers.
+      # That happens when Helpers never built that commit, or when its build
+      # was pruned (scripts/prune-helpers.sh keeps the last 10 pins on main).
       - name: Linux servers' helpers
-        run: scripts/helpers.sh --fetch-only
+        run: |
+          scripts/helpers.sh --fetch-only || {
+            echo "::error::EndeavorMCP's Helpers release has no build for the commit Cargo.lock pins: Helpers never built it, or pruned it because this app commit is older than the last 10 pins on main. No nightly this time."
+            exit 1
+          }
+      # A disk image with the app and a link to Applications, the usual
+      # drag-to-install window. The app inside keeps bundle.sh's ad-hoc
+      # signature. hdiutil sometimes fails with "Resource busy" on hosted
+      # runners, so it gets three tries.
       - name: Bundle
         run: |
           scripts/bundle.sh
-          mkdir dist
-          ditto -c -k --keepParent target/release/Endeavor.app dist/Endeavor-macos-arm64.zip
+          mkdir -p dmg dist
+          ditto target/release/Endeavor.app dmg/Endeavor.app
+          codesign --verify --strict dmg/Endeavor.app
+          ln -s /Applications dmg/Applications
+          for try in 1 2 3; do
+            hdiutil create -volname Endeavor -srcfolder dmg -fs HFS+ -format UDZO -ov dist/Endeavor-macos-arm64.dmg && break
+            [ "$try" = 3 ] && exit 1
+            sleep 10
+          done
+          hdiutil verify dist/Endeavor-macos-arm64.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: nightly-mac
@@ -112,7 +130,7 @@ jobs:
           cat > notes.md <<EOF
           The newest build of main that passed CI: build $short, $(date -u +%Y-%m-%d). It is replaced every day main changes. It is a test build: expect rough edges.
 
-          - **Mac** (Apple Silicon, macOS 13 or later): unzip Endeavor-macos-arm64.zip and move Endeavor to Applications. It isn't signed by a known developer, so macOS blocks the first open: open it once, then go to System Settings, Privacy & Security, and click Open Anyway.
+          - **Mac** (Apple Silicon, macOS 13 or later): open Endeavor-macos-arm64.dmg and drag Endeavor to Applications. It isn't signed by a known developer, so macOS blocks the first open: open it once, then go to System Settings, Privacy & Security, and click Open Anyway.
           - **Windows** (10 or 11, 64-bit): run Endeavor-windows-x86_64-setup.exe. It isn't signed, so Windows may say it protected your PC: click More info, then Run anyway. The Windows build can't connect to servers yet.
           - **Linux**: build it from source (docs/development.md).
           EOF
