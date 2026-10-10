@@ -94,6 +94,16 @@ error rather than half-work:
   runtime does the same (`end_recorded_runtime`).
 - The app starts the helper with `CREATE_NEW_PROCESS_GROUP`, so a Ctrl+C in
   the app's terminal doesn't reach it.
+- Each agent's adapter runs under the app's own program, as `endeavor.exe
+  --agent-job <app pid> <program> <args…>` (`agent_job.rs`). That process
+  puts itself in a new Job Object with `KILL_ON_JOB_CLOSE`, then starts the
+  adapter inside it, with the app's pipes as its stdin and stdout. It ends
+  when the adapter ends, when the agent connection kills it, or when the app
+  is gone, and the job then ends everything the adapter started, such as the
+  Claude Code process Claude's adapter runs. On Unix the ACP
+  library does this with a process group; on Windows it only ends the
+  process it started. The job allows breakaway, as a process group lets a
+  process leave.
 
 ### Stubs left
 
@@ -289,19 +299,21 @@ Windows](#how-process-control-works-on-windows)). Left:
   under a hidden console (ConPTY) or an ssh library in Rust such as `russh`.
   Either adds about two weeks.
 
-### Paths (M, about 1 week; the local half done)
+### Paths (written; server half untried on Windows)
 
 Done for a local notebook: home and app data, the depot list's separator,
 canonical paths without `\\?\`, and notebook paths as Julia's Windows rules
-give them (see "Ported for real" above). Left: server paths, PATH joins in
-code that runs only with servers, and upload names.
+give them (see "Ported for real" above). Left: PATH joins in code that runs
+only with servers.
 
-- **Server paths vs local paths.** Wire messages carry server paths as
-  `PathBuf` (`wire/src/files.rs`, `wire/src/notebooks.rs`). On a Windows
-  client, `join` would put `\` into Linux paths. Make server paths a `String`
-  or a `RemotePath` type, and update the app's call sites.
-- **Upload names** (`files.rs`) must also reject `\`, `:` and reserved names
-  such as `CON`.
+- **Server paths.** A server's folders and notebooks are plain strings with
+  `/` rules, in the app (`Place::path`, the folder browser, uploads) and in
+  EndeavorMCP's wire messages; `wire::server_path` and `HostId`'s path
+  methods take them apart. Only This Mac's paths use `PathBuf`. Untried:
+  the folder browser and an upload from Windows to a Linux server.
+- **Upload names.** A Windows machine refuses names it can't hold (`\`,
+  `:`, device names such as `CON`, a trailing dot or space) in
+  `wire::files::place` and `write`. Linux and macOS servers still take them.
 
 ### First-run setup and downloads (S–M, 2–3 days; written, untried)
 
@@ -325,8 +337,8 @@ code that runs only with servers, and upload names.
   emulation.
 - Windows 10 and later include `curl.exe` and `tar.exe` (bsdtar), and that
   `tar` reads .zip. The app runs `%SystemRoot%\System32\tar.exe` by path,
-  since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. There
-  is no `shasum`, so Windows hashes in Rust with `sha2`.
+  since a `tar` earlier on PATH may be Git's GNU tar, which reads no zips. The
+  app hashes downloads in Rust with `sha2` on every platform.
 - Executable layout differs: `bin\julia.exe`, `node.exe` at the top of the
   Node folder, and npm at `node_modules\npm\bin\npm-cli.js`
   (`src/install.rs`, `src/agent.rs`, `src/runtime.rs`).
@@ -490,6 +502,10 @@ test binary as its own stand-in core.
    - End the app's process while the runtime is set to keep running: the
      runtime stays, and the next launch reattaches to it (pid and start time).
    - Repair runtime with a runtime running: all of it goes.
+   - While Claude is connected, the `endeavor.exe --agent-job` process, the
+     adapter's `node.exe` and the Claude Code `node.exe` it starts share one
+     job. Quit the app, or end the `--agent-job` process in Task Manager (the
+     app restarts Claude): all of them go.
 6. **Stop a running cell.** Stop a tight loop and a `sleep(60)`; see
    [Limits](#limits-we-cant-fix-from-endeavor).
 

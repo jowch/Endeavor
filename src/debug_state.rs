@@ -90,6 +90,13 @@ impl Workspace {
         }
     }
 
+    /// Null unless a turn hit `agent`'s usage limit.
+    fn usage_limit_state(&self, agent: Agent) -> Value {
+        json!(self.usage_limits.get(agent).map(|l| json!({
+            "resets_in_secs": l.until.map(|at| at.duration_since(std::time::SystemTime::now()).unwrap_or_default().as_secs()),
+        })))
+    }
+
     fn debug_state(&self, page: Value, cx: &App) -> Value {
         let active = self.active_session();
         json!({
@@ -100,16 +107,15 @@ impl Workspace {
                 "connected": self.links.get(Agent::Claude).ready,
                 "error": (!self.links.get(Agent::Claude).process.up()).then(|| self.links.get(Agent::Claude).process.error.clone()),
                 "details_open": self.links.get(Agent::Claude).details_open,
+                "usage_limit": self.usage_limit_state(Agent::Claude),
             },
             "codex": {
                 "started": self.links.get(Agent::Codex).rx.is_none(),
                 "state": state_name(&self.links.get(Agent::Codex).process.state),
                 "connected": self.links.get(Agent::Codex).ready,
                 "account": format!("{:?}", self.codex_account),
+                "usage_limit": self.usage_limit_state(Agent::Codex),
             },
-            "usage_limit": self.usage_limit.as_ref().map(|l| json!({
-                "resets_in_secs": l.until.map(|at| at.duration_since(std::time::SystemTime::now()).unwrap_or_default().as_secs()),
-            })),
             "sign_in": self.sign_in_state(),
             "sidebar": self.sidebar_state(cx),
             "new_session": (self.active.is_none()).then(|| self.new_session_state()),
@@ -505,7 +511,7 @@ impl Workspace {
     fn draft_pane_state(&self, cx: &App) -> Value {
         let header = match &self.draft.notebook {
             NotebookChoice::New => "New notebook".to_string(),
-            NotebookChoice::Existing(path) => session::folder_name(path),
+            NotebookChoice::Existing(path) => self.draft.host.folder_name(path),
         };
         let Some(folder) = self.draft_pane_folder() else {
             let pane = self.host_pane_state(&self.draft.host, cx);
@@ -528,7 +534,7 @@ impl Workspace {
                 if let Some(line) = self.offline_line(Some(s)) {
                     notice("offline", line.into());
                 }
-                if let Some(line) = self.usage_line() {
+                if let Some(line) = self.usage_line(s) {
                     notice("usage_limit", line);
                 }
                 match self.links.get(s.agent).process.state {

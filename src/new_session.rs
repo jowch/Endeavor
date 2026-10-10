@@ -21,18 +21,20 @@ use wire::slurm::{Resources, duration_text};
 
 use crate::agent::Agent;
 use crate::connection::Status;
-use crate::hosts::{Cluster, HostId, Place, Server};
+use crate::hosts::{self, Cluster, HostId, Place, Server};
 use crate::resources::Target;
 use crate::session::folder_name;
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme, when};
 use crate::theme::FocusRing as _;
+use crate::theme::TextButton as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NotebookChoice {
     /// The agent creates the notebook when it needs one.
     New,
-    Existing(PathBuf),
+    /// The notebook file, in the draft host's rules.
+    Existing(String),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -54,8 +56,9 @@ pub struct Draft {
     pub host: HostId,
     /// A short note above the chips (why pressing send did nothing yet).
     pub notice: Option<SharedString>,
-    /// The folder on `host`; unknown until a server has said where home is.
-    pub folder: Option<PathBuf>,
+    /// The folder on `host`, in its rules (`Place::path`); unknown until a
+    /// server has said where home is.
+    pub folder: Option<String>,
     pub notebook: NotebookChoice,
     pub popover: Option<Chip>,
     /// Notebooks found in `folder`, newest first.
@@ -85,7 +88,8 @@ pub struct Browser {
     /// Picking a notebook file for this session (Locate file…, Open the
     /// notebook only) rather than the new session's folder.
     pub pick_for: Option<u64>,
-    pub path: PathBuf,
+    /// In the host's rules (`Place::path`).
+    pub path: String,
     pub listing: Option<Result<Vec<Entry>, String>>,
 }
 
@@ -134,31 +138,31 @@ pub const EXAMPLES: [Example; 4] = [
 /// The folder a new session on This Mac starts in: the last one used there,
 /// else ~/Documents/Endeavor, created at launch so the folder chip and
 /// Browse… have somewhere real to point.
-pub fn default_folder(recent: &[Place]) -> PathBuf {
+pub fn default_folder(recent: &[Place]) -> String {
     if let Some(place) = recent.iter().find(|p| p.host == HostId::ThisMac) {
         return place.path.clone();
     }
     let folder = home().join("Documents/Endeavor");
     let _ = std::fs::create_dir_all(&folder);
-    folder
+    hosts::text(&folder)
 }
 
 fn home() -> PathBuf {
     files::home()
 }
 
-/// `path` with `home` written as `~`.
-fn tilde_of(path: &Path, home: &Path) -> String {
-    match path.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => path.display().to_string(),
+/// `path` on `host` with `home` written as `~`.
+fn tilde_of(host: &HostId, path: &str, home: &str) -> String {
+    match host.strip_prefix(path, home) {
+        Some(rest) if rest.is_empty() => "~".into(),
+        Some(rest) => format!("~/{rest}"),
+        None => path.to_owned(),
     }
 }
 
 /// `path` with This Mac's home folder written as `~`.
 pub(crate) fn tilde(path: &Path) -> String {
-    tilde_of(path, &home())
+    tilde_of(&HostId::ThisMac, &hosts::text(path), &hosts::text(&home()))
 }
 
 /// Where Browse… opens: ~/Documents/Endeavor, or ~/Documents without it.
@@ -184,7 +188,7 @@ pub(crate) fn set_open_panel_folder(dir: &Path) {
 }
 
 impl Draft {
-    pub fn new(folder: PathBuf, window: &mut Window, cx: &mut Context<Workspace>) -> Self {
+    pub fn new(folder: String, window: &mut Window, cx: &mut Context<Workspace>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search folders"));
         cx.subscribe_in(&search, window, |this: &mut Workspace, _, event: &InputEvent, window, cx| match event {
             InputEvent::Change => {
@@ -309,24 +313,24 @@ impl Workspace {
     }
 
     /// The draft host's home folder: This Mac's, or what a connected server said.
-    fn draft_home(&self) -> Option<PathBuf> {
+    fn draft_home(&self) -> Option<String> {
         match &self.draft.host {
-            HostId::ThisMac => Some(home()),
+            HostId::ThisMac => Some(hosts::text(&home())),
             host => self.connection(host)?.hello.as_ref().map(|h| h.home.clone()),
         }
     }
 
-    pub fn draft_tilde(&self, path: &Path) -> String {
+    pub fn draft_tilde(&self, path: &str) -> String {
         match self.draft_home() {
-            Some(home) => tilde_of(path, &home),
-            None => path.display().to_string(),
+            Some(home) => tilde_of(&self.draft.host, path, &home),
+            None => path.to_owned(),
         }
     }
 
     /// Look for notebooks in the draft's folder.
     pub fn scan_notebooks(&mut self, cx: &mut Context<Self>) {
         let (host, Some(folder)) = (self.draft.host.clone(), self.draft.folder.clone()) else { return };
-        let Some(scan) = self.ask_files(&host, Request::Notebooks { path: folder.display().to_string() }, cx) else { return };
+        let Some(scan) = self.ask_files(&host, Request::Notebooks { path: folder.clone() }, cx) else { return };
         cx.spawn(async move |this, cx| {
             let found = scan.await;
             let _ = this.update(cx, |this, cx| {
@@ -342,7 +346,7 @@ impl Workspace {
         .detach();
     }
 
-    fn set_draft_folder(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_draft_folder(&mut self, folder: String, window: &mut Window, cx: &mut Context<Self>) {
         if Some(&folder) != self.draft.folder.as_ref() {
             self.draft.folder = Some(folder);
             self.draft.notebooks.clear();
@@ -356,7 +360,7 @@ impl Workspace {
         self.draft.preview = None;
         self.draft.notebook = choice.clone();
         if let NotebookChoice::Existing(path) = choice
-            && let Some(read) = self.ask_files(&self.draft.host.clone(), Request::Preview { path: path.display().to_string() }, cx)
+            && let Some(read) = self.ask_files(&self.draft.host.clone(), Request::Preview { path: path.clone() }, cx)
         {
             cx.spawn(async move |this, cx| {
                 let preview = match read.await {
@@ -459,7 +463,7 @@ impl Workspace {
             if let Ok(Ok(Some(mut paths))) = picked.await
                 && let Some(path) = paths.pop()
             {
-                let _ = this.update_in(cx, |this, window, cx| this.set_draft_folder(path, window, cx));
+                let _ = this.update_in(cx, |this, window, cx| this.set_draft_folder(hosts::text(&path), window, cx));
             }
         })
         .detach();
@@ -472,7 +476,7 @@ impl Workspace {
 
     /// Show `path` in the open folder browser (the new-session screen's, unless
     /// a session is picking its notebook).
-    pub(crate) fn browse_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub(crate) fn browse_to(&mut self, path: String, cx: &mut Context<Self>) {
         let (host, pick_for) = match &self.locate {
             Some(b) => (b.host.clone(), b.pick_for),
             None => (self.draft.host.clone(), None),
@@ -482,7 +486,7 @@ impl Workspace {
             Some(_) => self.locate = Some(browser),
             None => self.draft.browser = Some(browser),
         }
-        let Some(list) = self.ask_files(&host, Request::List { path: path.display().to_string() }, cx) else {
+        let Some(list) = self.ask_files(&host, Request::List { path: path.clone() }, cx) else {
             let name = self.hosts.name(&host);
             if let Some(browser) = self.browser_mut() {
                 browser.listing = Some(Err(format!("Can't reach {name} right now.")));
@@ -510,15 +514,15 @@ impl Workspace {
 
     /// Recent folders on the draft's host (the current one first if it isn't
     /// recent) matching the search.
-    fn folder_matches(&self, cx: &App) -> Vec<PathBuf> {
+    fn folder_matches(&self, cx: &App) -> Vec<String> {
         let query = self.draft.search.read(cx).value().trim().to_lowercase();
         let host = &self.draft.host;
-        let recent: Vec<PathBuf> = self.recent.iter().filter(|p| p.host == *host).map(|p| p.path.clone()).collect();
+        let recent: Vec<String> = self.recent.iter().filter(|p| p.host == *host).map(|p| p.path.clone()).collect();
         let current = self.draft.folder.clone().filter(|f| !recent.contains(f));
         current
             .into_iter()
             .chain(recent)
-            .filter(|p| query.is_empty() || format!("{}\n{}", p.display(), self.draft_tilde(p)).to_lowercase().contains(&query))
+            .filter(|p| query.is_empty() || format!("{p}\n{}", self.draft_tilde(p)).to_lowercase().contains(&query))
             .collect()
     }
 
@@ -536,7 +540,7 @@ impl Workspace {
     /// Sessions to pick up: open ones first (newest first), then Endeavor's past
     /// sessions by last activity.
     pub fn resumable(&self) -> Vec<Resume> {
-        let recorded = |id: &SessionId| self.session_notebooks.get(&id.to_string()).map(|place| folder_name(&place.path));
+        let recorded = |id: &SessionId| self.session_notebooks.get(&id.to_string()).map(Place::name);
         let open = self.sessions.iter().rev().map(|s| Resume {
             title: s.title.clone(),
             folder: self.folder_heading(&s.place),
@@ -720,7 +724,7 @@ impl Workspace {
                                 .cursor_pointer()
                                 .bg(theme::bg_raised())
                                 .text_color(theme::text_primary())
-                                .child("Start Julia")
+                                .button_text("Start Julia")
                                 .on_click(cx.listener(move |this, _, _, cx| this.start_host(&host, cx))),
                         )
                         .children(fixes.into_iter().map(|fix| self.fix_button(fix, true, cx))),
@@ -736,7 +740,7 @@ impl Workspace {
         let connecting = self.draft.host != HostId::ThisMac && self.draft.folder.is_none();
         let notebook_label = match &self.draft.notebook {
             NotebookChoice::New => "New notebook".to_string(),
-            NotebookChoice::Existing(path) => folder_name(path),
+            NotebookChoice::Existing(path) => self.draft.host.folder_name(path),
         };
         let mono = matches!(self.draft.notebook, NotebookChoice::Existing(_));
         let (where_icon, where_label) = match &self.draft.host {
@@ -746,7 +750,7 @@ impl Workspace {
         };
         let resources = self.draft.resources.as_ref().filter(|_| self.draft_cluster().is_some()).map(|r| (Chip::Resources, "resources", Glyph::Chip, r.summary(), false));
         let folder_label = match (&self.draft.folder, self.status(&self.draft.host)) {
-            (Some(folder), _) => folder_name(folder),
+            (Some(folder), _) => self.draft.host.folder_name(folder),
             (None, Some(Status::Failed(_) | Status::Replaced)) => "Not connected".into(),
             (None, _) => format!("Connecting to {where_label}…"),
         };
@@ -974,7 +978,7 @@ impl Workspace {
                             .bg(theme::accent())
                             .text_color(gpui::white())
                             .text_size(theme::size_meta())
-                            .child("Use these")
+                            .button_text("Use these")
                             .on_click(cx.listener(|this, _, window, cx| this.paste_salloc(window, cx))),
                     ),
                 )
@@ -997,7 +1001,7 @@ impl Workspace {
             let path = self.draft_tilde(&folder);
             menu_row(("folder-row", i), current, self.draft.selected == i)
                 .child(glyph(Glyph::Folder, theme::text_muted()))
-                .child(div().flex_shrink_0().child(folder_name(&folder)))
+                .child(div().flex_shrink_0().child(self.draft.host.folder_name(&folder)))
                 .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_right().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(path))
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
                     if this.draft.selected != i {
@@ -1049,8 +1053,9 @@ impl Workspace {
     /// folder", or, when picking a session's notebook, to pick.
     pub(crate) fn browser_menu(&self, browser: &Browser, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let path = browser.path.clone();
+        let host = browser.host.clone();
         let picking = browser.pick_for;
-        let mut crumbs: Vec<(String, PathBuf)> = path.ancestors().map(|p| (folder_name(p), p.to_path_buf())).collect();
+        let mut crumbs: Vec<(String, String)> = host.ancestors(&path).into_iter().map(|p| (host.folder_name(&p), p)).collect();
         crumbs.reverse();
         let crumbs = crumbs.into_iter().enumerate().flat_map(|(i, (name, at))| {
             let sep = (i > 1).then(|| div().text_color(theme::text_faint()).child("/").into_any_element());
@@ -1067,7 +1072,7 @@ impl Workspace {
                 .into_any_element();
             sep.into_iter().chain([crumb])
         });
-        let up = path.parent().map(Path::to_path_buf).map(|parent| {
+        let up = host.parent(&path).filter(|p| !p.is_empty()).map(|parent| {
             menu_row("browse-up", false, false)
                 .child(div().w(px(12.)).text_color(theme::text_muted()).child("↑"))
                 .child(div().text_color(theme::text_muted()).child("Up"))
@@ -1083,14 +1088,14 @@ impl Workspace {
                 .map(|(i, entry)| {
                     let name = div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis();
                     if entry.dir {
-                        let into = path.join(&entry.name);
+                        let into = host.join(&path, &entry.name);
                         menu_row(("browse-row", i), false, false)
                             .child(glyph(Glyph::Folder, theme::text_muted()))
                             .child(name.child(entry.name.clone()))
                             .on_click(cx.listener(move |this, _, _, cx| this.browse_to(into.clone(), cx)))
                             .into_any_element()
                     } else if let Some(key) = picking {
-                        let file = path.join(&entry.name).display().to_string();
+                        let file = host.join(&path, &entry.name);
                         menu_row(("browse-file", i), false, false)
                             .child(glyph(Glyph::File, theme::text_muted()))
                             .child(name.font_family(theme::MONO).text_size(theme::size_code()).child(entry.name.clone()))
@@ -1137,7 +1142,7 @@ impl Workspace {
                         .cursor_pointer()
                         .bg(theme::accent())
                         .text_color(gpui::white())
-                        .child("Choose this folder")
+                        .button_text("Choose this folder")
                         .on_click(cx.listener(move |this, _, window, cx| this.set_draft_folder(choose.clone(), window, cx))),
                 ),
             ))
@@ -1145,10 +1150,11 @@ impl Workspace {
 
     fn notebook_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let folder = self.draft.folder.clone().unwrap_or_default();
+        let host = &self.draft.host;
         let rows = self.draft.notebooks.iter().enumerate().map(|(i, found)| {
             let chosen = self.draft.notebook == NotebookChoice::Existing(found.path.clone());
-            let relative = found.path.strip_prefix(&folder).unwrap_or(&found.path);
-            let dir = relative.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| format!("{}/", p.display()));
+            let relative = host.strip_prefix(&found.path, &folder).unwrap_or_else(|| found.path.clone());
+            let dir = host.parent(&relative).filter(|p| !p.is_empty()).map(|p| format!("{p}/"));
             let path = found.path.clone();
             menu_row(("notebook-row", i), chosen, false)
                 .child(glyph(Glyph::File, theme::text_muted()))
@@ -1162,7 +1168,7 @@ impl Workspace {
                         .font_family(theme::MONO)
                         .text_size(theme::size_code())
                         .children(dir.map(|d| div().text_color(theme::text_faint()).child(d)))
-                        .child(folder_name(&found.path)),
+                        .child(host.folder_name(&found.path)),
                 )
                 .child(div().flex_shrink_0().text_size(theme::size_meta()).text_color(theme::text_faint()).child(when::ago(found.modified)))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -1183,13 +1189,13 @@ impl Workspace {
                         this.close_popover(window, cx);
                     })),
             )
-            .child(section_label(format!("In {}", folder_name(&folder))))
+            .child(section_label(format!("In {}", host.folder_name(&folder))))
             .when(rows.is_empty(), |d| d.child(div().py(px(4.)).pl(px(28.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("No Pluto notebooks in this folder")))
             .child(div().id("notebook-rows").max_h(px(300.)).overflow_y_scroll().flex().flex_col().children(rows))
     }
 
     /// The new-session screen, set to start in `folder` on `notebook` (its preview shows).
-    pub fn new_session_on(&mut self, folder: Place, notebook: PathBuf, cx: &mut Context<Self>) {
+    pub fn new_session_on(&mut self, folder: Place, notebook: String, cx: &mut Context<Self>) {
         self.active = None;
         if folder.host != self.draft.host || Some(&folder.path) != self.draft.folder.as_ref() {
             self.draft.host = folder.host;
@@ -1204,14 +1210,17 @@ impl Workspace {
     pub fn draft_pane_header(&self) -> AnyElement {
         match &self.draft.notebook {
             NotebookChoice::New => div().text_color(theme::text_muted()).child("New notebook").into_any_element(),
-            NotebookChoice::Existing(path) => notebook_title(path).into_any_element(),
+            NotebookChoice::Existing(path) => {
+                let dir = self.draft.host.parent(path).filter(|d| !d.is_empty()).map(|d| self.draft_tilde(&d));
+                notebook_title(self.draft.host.folder_name(path), dir).into_any_element()
+            }
         }
     }
 
     /// The notebook pane before the session starts (the web view is hidden).
     /// The draft's folder, while its host can be reached: the pane shows what
     /// the session will open. None: the pane shows the host's state instead.
-    pub fn draft_pane_folder(&self) -> Option<&PathBuf> {
+    pub fn draft_pane_folder(&self) -> Option<&String> {
         let host = &self.draft.host;
         let unreachable = matches!(self.status(host), Some(Status::Failed(_) | Status::Replaced)) || self.connection(host).is_some_and(|c| c.lost.is_some());
         self.draft.folder.as_ref().filter(|_| !unreachable)
@@ -1345,16 +1354,16 @@ pub fn file_name(name: String) -> Div {
 }
 
 /// A notebook pane header: the notebook's file name, then its folder, faint.
-pub fn notebook_title(path: &Path) -> Div {
+pub fn notebook_title(name: String, dir: Option<String>) -> Div {
     div()
         .flex()
         .min_w_0()
         .items_baseline()
         .gap_2()
         .font_family(theme::MONO)
-        .child(div().flex_shrink_0().text_size(theme::size_meta()).text_color(theme::text_muted()).child(folder_name(path)))
-        .children(path.parent().map(|dir| {
-            div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(theme::size_meta_small()).text_color(theme::text_section()).child(tilde(dir))
+        .child(div().flex_shrink_0().text_size(theme::size_meta()).text_color(theme::text_muted()).child(name))
+        .children(dir.map(|dir| {
+            div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(theme::size_meta_small()).text_color(theme::text_section()).child(dir)
         }))
 }
 
@@ -1867,4 +1876,19 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
     )
     .flex_shrink_0()
     .size(px(SIZE * scale))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tilde_of;
+    use crate::hosts::HostId;
+
+    #[test]
+    fn home_is_written_as_tilde_by_the_hosts_rules() {
+        let lab = HostId::Server("server-1".into());
+        assert_eq!(tilde_of(&lab, "/home/jc/qpcr/fits", "/home/jc"), "~/qpcr/fits");
+        assert_eq!(tilde_of(&lab, "/home/jc", "/home/jc/"), "~");
+        assert_eq!(tilde_of(&lab, "/home/jcb/x", "/home/jc"), "/home/jcb/x");
+        assert_eq!(tilde_of(&lab, "/srv/data", "/home/jc"), "/srv/data");
+    }
 }

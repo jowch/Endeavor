@@ -60,6 +60,7 @@ fn menu_row(id: &'static str, label: &'static str, key: &'static str, icon: Glyp
     div()
         .id(id)
         .role(Role::MenuItem)
+        .aria_label(label)
         .h(px(28.))
         .flex()
         .items_center()
@@ -463,6 +464,7 @@ impl Workspace {
                     .text_size(theme::chat_meta_small())
                     .hover(|s| s.text_color(theme::text_primary()))
                     .child("Clear")
+                    .aria_label("Clear quotes")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.composer.attachments.retain(|a| !matches!(a, Attachment::Quote(_)));
                         cx.notify();

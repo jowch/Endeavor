@@ -4,12 +4,14 @@
 //! Mac keeps working, a server's notebook stays readable but read-only, and a
 //! first launch's setup pauses.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::Workspace;
+use crate::agent::Agent;
 use crate::failure::{self, Lead};
 use crate::trouble::{Reset, Trouble};
 use crate::hosts::HostId;
@@ -23,9 +25,42 @@ use crate::theme::FocusRing as _;
 /// How long a server that can't be reached waits between tries.
 pub const RETRY_EVERY: Duration = Duration::from_secs(15);
 
-/// The account's usage limit, reached: when it resets, if Claude Code said.
+/// An agent's usage limit, reached: when it resets, if the agent said.
 pub struct UsageLimit {
     pub until: Option<SystemTime>,
+}
+
+/// Each agent's usage limit while it's reached. Claude's limit holds only
+/// Claude's sessions; Codex can still answer, and the other way round.
+#[derive(Default)]
+pub struct UsageLimits(BTreeMap<Agent, UsageLimit>);
+
+impl UsageLimits {
+    pub fn get(&self, agent: Agent) -> Option<&UsageLimit> {
+        self.0.get(&agent)
+    }
+
+    pub fn holds(&self, agent: Agent) -> bool {
+        self.0.contains_key(&agent)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn hit(&mut self, agent: Agent, until: Option<SystemTime>) {
+        self.0.insert(agent, UsageLimit { until });
+    }
+
+    /// Whether `agent` had a limit to end.
+    pub fn end(&mut self, agent: Agent) -> bool {
+        self.0.remove(&agent).is_some()
+    }
+
+    /// The agents whose limit has reset by `now`.
+    pub fn reset_by(&self, now: SystemTime) -> Vec<Agent> {
+        self.0.iter().filter(|(_, l)| l.until.is_some_and(|until| now >= until)).map(|(a, _)| *a).collect()
+    }
 }
 
 /// A connect error that means the server couldn't be reached (as opposed to,
@@ -152,44 +187,46 @@ impl Workspace {
         .detach();
     }
 
-    /// A turn hit the account's usage limit: every session's messages wait
-    /// until it resets (when the message said when), then go by themselves.
-    pub fn hit_usage_limit(&mut self, reset: Option<Reset>, cx: &mut Context<Self>) {
+    /// A turn hit `agent`'s usage limit: that agent's sessions' messages
+    /// wait until it resets (when the message said when), then go by
+    /// themselves. The other agent's sessions carry on.
+    pub fn hit_usage_limit(&mut self, agent: Agent, reset: Option<Reset>, cx: &mut Context<Self>) {
         let until = reset.and_then(|r| crate::trouble::resolve(r, SystemTime::now(), crate::trouble::local_offset()));
-        self.usage_limit = Some(UsageLimit { until });
+        self.usage_limits.hit(agent, until);
         self.sync_holds(cx);
         cx.notify();
     }
 
-    /// Every second: past the reset, the waiting messages go.
+    /// Every second: past an agent's reset, its waiting messages go.
     pub fn check_usage_limit(&mut self, cx: &mut Context<Self>) {
-        if self.usage_limit.as_ref().and_then(|l| l.until).is_some_and(|until| SystemTime::now() >= until) {
-            self.end_usage_limit(cx);
+        for agent in self.usage_limits.reset_by(SystemTime::now()) {
+            self.end_usage_limit(agent, cx);
         }
     }
 
-    /// The limit has reset, or Try now: what waited goes. If the limit
+    /// `agent`'s limit has reset, or Try now: what waited goes. If the limit
     /// still holds, the next turn says so again.
-    pub fn end_usage_limit(&mut self, cx: &mut Context<Self>) {
-        if self.usage_limit.take().is_some() {
+    pub fn end_usage_limit(&mut self, agent: Agent, cx: &mut Context<Self>) {
+        if self.usage_limits.end(agent) {
             self.sync_holds(cx);
             cx.notify();
         }
     }
 
-    /// The usage-limit line above the composer, as it reads now.
-    pub fn usage_line(&self) -> Option<String> {
-        let limit = self.usage_limit.as_ref()?;
-        let held = self.sessions.iter().find(|s| s.unanswered.is_some() || !s.outbox.items.is_empty());
-        let agent = held.map_or_else(crate::agent::Agent::default, |s| s.agent);
-        Some(crate::trouble::usage_line(limit.until, SystemTime::now(), crate::trouble::local_offset(), held.is_some(), agent))
+    /// The usage-limit line above the session's composer, as it reads now:
+    /// only while the session's own agent is at its limit.
+    pub fn usage_line(&self, session: &Session) -> Option<String> {
+        let limit = self.usage_limits.get(session.agent)?;
+        let waiting = session.unanswered.is_some() || !session.outbox.items.is_empty();
+        Some(crate::trouble::usage_line(limit.until, SystemTime::now(), crate::trouble::local_offset(), waiting, session.agent))
     }
 
-    pub fn render_usage_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let text = self.usage_line()?;
-        let until = self.usage_limit.as_ref().and_then(|l| l.until);
+    pub fn render_usage_line(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text = self.usage_line(session)?;
+        let agent = session.agent;
+        let until = self.usage_limits.get(agent).and_then(|l| l.until);
         let try_now = until.is_none().then(|| {
-            button("usage-try-now", "Try now", Look::Secondary).h(px(24.)).on_click(cx.listener(|this, _, _, cx| this.end_usage_limit(cx))).into_any_element()
+            button("usage-try-now", "Try now", Look::Secondary).h(px(24.)).on_click(cx.listener(move |this, _, _, cx| this.end_usage_limit(agent, cx))).into_any_element()
         });
         Some(failure::wait_line(Lead::Clock, text, try_now, cx).into_any_element())
     }
@@ -203,7 +240,7 @@ impl Workspace {
             State::Down => return Some(format!("Write a message. It sends once {} is running.", agent.name()).into()),
             State::Up => {}
         }
-        let limit = self.usage_limit.as_ref()?;
+        let limit = self.usage_limits.get(agent)?;
         Some(match limit.until {
             Some(at) => {
                 let when = crate::trouble::when_text(at, SystemTime::now(), crate::trouble::local_offset());
@@ -367,7 +404,7 @@ impl Workspace {
             "These send in order once you sign in.".to_owned()
         } else if !self.links.get(session.agent).process.up() {
             format!("These send in order once {} is back.", session.agent.name())
-        } else if self.usage_limit.is_some() {
+        } else if self.usage_limits.holds(session.agent) {
             "These send in order once your limit resets.".to_owned()
         } else {
             format!("These send in order once {} is back.", self.hosts.name(&session.place.host))
@@ -459,7 +496,25 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::unreachable;
+    use super::{UsageLimits, unreachable};
+    use crate::agent::Agent;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn a_claude_limit_leaves_codex_reachable() {
+        let now = SystemTime::now();
+        let mut limits = UsageLimits::default();
+        limits.hit(Agent::Claude, Some(now + Duration::from_secs(60)));
+        assert!(limits.holds(Agent::Claude));
+        assert!(!limits.holds(Agent::Codex));
+        limits.hit(Agent::Codex, None);
+        // Claude's reset ends Claude's limit only; Codex's, with no time, waits for Try now.
+        assert_eq!(limits.reset_by(now), []);
+        assert_eq!(limits.reset_by(now + Duration::from_secs(60)), [Agent::Claude]);
+        assert!(limits.end(Agent::Claude));
+        assert!(!limits.end(Agent::Claude));
+        assert!(limits.holds(Agent::Codex) && !limits.is_empty());
+    }
 
     #[test]
     fn network_failures_are_worth_retrying_and_refusals_are_not() {

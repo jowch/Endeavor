@@ -21,6 +21,8 @@ serde_json = "1"
 libc = "0.2"
 # A logger for GPUI's warnings and errors (logs.rs). Already in the tree through GPUI.
 log = "0.4"
+# Checking downloads, without needing shasum (perl) or a Windows equivalent.
+sha2 = "0.10"
 # The runtime, the helper and the skills, pinned to a commit by Cargo.lock.
 # To build against a local checkout, see docs/testing.md.
 wire = { git = "https://github.com/jowch/EndeavorMCP" }
@@ -41,11 +43,9 @@ objc2-user-notifications = { version = "0.3", default-features = false, features
 chrono = "0.4"
 # The page secret's random bytes (Unix reads /dev/urandom).
 getrandom = "0.3"
-# Checking downloads (Windows has no shasum).
-sha2 = "0.10"
 # Process creation flags, the log file as stdout and stderr, and opening the sign-in page;
 # the notebook web view's holes and keyboard focus.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_Console", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Console", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # wry embeds the notebook webview as an X11 child window, so the app runs on X11 (or XWayland).

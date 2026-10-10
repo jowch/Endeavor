@@ -328,6 +328,7 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
         crate::install::tarball(&node_dir, &format!("Node.js {NODE_VERSION}"), top, (url, sha, size), &|detail, fraction| {
             progress(Progress { fraction, ..Progress::new(Step::Agent, detail) })
         })?;
+        crate::install::remove_other_versions("node-v", NODE_VERSION, &[]);
     }
 
     let pinned = crate::install::resources().join(facts.pins);
@@ -360,10 +361,12 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
         }
         let _ = std::fs::remove_dir_all(&adapter);
         std::fs::rename(&staging, &adapter).map_err(|e| e.to_string())?;
+        crate::install::remove_other_versions(&format!("{}-", facts.installed), &pinned_adapter_version(agent)?, &[]);
     }
 
     let env = facts.env.iter().map(|(name, value)| format!("{name}={value}"));
-    Ok(env.chain([node.display().to_string(), entry.display().to_string()]).collect())
+    let program = crate::agent_job::command(node.display().to_string(), vec![entry.display().to_string()])?;
+    Ok(env.chain(program).collect())
 }
 
 /// Claude Code's own tools that read, write or run things on this Mac: off in

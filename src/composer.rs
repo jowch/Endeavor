@@ -410,7 +410,7 @@ impl Workspace {
         if matches!(self.composer.files.get(&place), Some(Files::Loading | Files::Ready(_))) {
             return;
         }
-        let Some(task) = self.ask_files(&place.host, Request::Files { path: place.path.display().to_string() }, cx) else { return };
+        let Some(task) = self.ask_files(&place.host, Request::Files { path: place.path.clone() }, cx) else { return };
         self.composer.files.insert(place.clone(), Files::Loading);
         cx.spawn(async move |this, cx| {
             let files = match task.await {
@@ -801,7 +801,7 @@ impl Workspace {
     /// folder, or the draft's.
     fn attach_folder(&self) -> attach::Folder {
         match self.composer_place() {
-            Some(Place { host: HostId::ThisMac, path }) => attach::Folder::Here(path),
+            Some(Place { host: HostId::ThisMac, path }) => attach::Folder::Here(path.into()),
             Some(Place { host, .. }) if !self.helper_saves_files(&host) => attach::Folder::Unwritable,
             _ => attach::Folder::Elsewhere,
         }
