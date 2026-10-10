@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use gpui::{App, BoxShadow, InteractiveElement, Pixels, Rgba, Styled, point, px, rgb, rgba};
+use gpui::{App, BoxShadow, InteractiveElement, ParentElement, Pixels, Rgba, SharedString, StatefulInteractiveElement, Styled, point, px, rgb, rgba};
 
 static LIGHT: AtomicBool = AtomicBool::new(false);
 
@@ -61,8 +61,9 @@ pub fn border() -> Rgba { pick(0x2A2A2E, 0xE1E1E6) }
 pub fn sidebar_edge() -> Rgba { pick(0x1C1C1F, 0xE4E4E8) }
 /// The message box's soft outline.
 pub fn composer_edge() -> Rgba { pick(0x3A3A40, 0xD6D6DC) }
-/// The message box's outline while it has the keyboard.
-pub fn composer_focus_edge() -> Rgba { pick(0x55555C, 0x8A8A92) }
+/// The message box's outline while it has the keyboard: 3:1 against the box
+/// and the page in both.
+pub fn composer_focus_edge() -> Rgba { pick(0x6A6A72, 0x8A8A92) }
 /// The message box's fill: the card colour in dark, white in light.
 pub fn composer_bg() -> Rgba { pick(0x1C1C1F, 0xFFFFFF) }
 /// The outline of Outlined buttons and text fields (3:1 in light).
@@ -198,6 +199,18 @@ pub trait FocusRing: InteractiveElement + Sized {
 }
 
 impl<E: InteractiveElement> FocusRing for E {}
+
+/// A button's (or link's) words. In GPUI its visible text isn't its accessible
+/// name (a plain string makes no node a screen reader can read), so this
+/// sets both. A later `aria_label` still replaces the name.
+pub trait TextButton: StatefulInteractiveElement + ParentElement + Sized {
+    fn button_text(self, text: impl Into<SharedString>) -> Self {
+        let text = text.into();
+        self.aria_label(text.clone()).child(text)
+    }
+}
+
+impl<E: StatefulInteractiveElement + ParentElement> TextButton for E {}
 
 /// "#2A2A2E", for the component library's theme config.
 pub fn hex(color: Rgba) -> gpui::SharedString {

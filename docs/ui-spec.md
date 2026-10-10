@@ -37,7 +37,7 @@ Replace the inline `rgb()` literals in `src/main.rs`, `src/session.rs`, `src/spl
 | `border` | `#2A2A2E` | `#E1E1E6` | Card outlines (decorative) |
 | `divider` | `#1F1F22` | `#E6E6EA` | Column dividers |
 | `composer_bg` | `#1C1C1F` | `#FFFFFF` | Message box; light adds a faint shadow (0 1px 3px) |
-| `composer_edge` / focused | `#3A3A40` / `#55555C` | `#D6D6DC` / `#8A8A92` | Message box outline |
+| `composer_edge` / focused | `#3A3A40` / `#6A6A72` | `#D6D6DC` / `#8A8A92` | Message box outline; focused is 3:1 against the box and the page |
 | `control_edge` | `#3A3A40` | `#8A8A92` | Outlined buttons, text fields (3:1 in light) |
 | `popover_bg` / `popover_edge` | `#26262A` / `#3A3A40` | `#FFFFFF` / `#D9D9DF` | Menus, popovers, dialogs, with a soft shadow |
 | `scrim` | `rgba(8,8,10,.62)` | `rgba(24,24,30,.32)` | Behind Settings and dialogs |
