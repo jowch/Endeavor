@@ -6,7 +6,8 @@
 # don't pile up. A scheduled run does nothing when the nightly already holds
 # that commit. On a pull request that changes the Mac packaging it only builds
 # the disk image from the pull request and keeps it as an Actions artifact,
-# with a screenshot of its window; nothing is published.
+# with a screenshot of its window; nothing is published. The schedule
+# publishes only while the repository variable NIGHTLY_PUBLISH is true.
 # The Mac app is signed with a Developer ID and the disk image notarized when
 # the "release" environment (main only) has the signing secrets (MACOS_CERT_P12, the certificate and
 # its key as a base64 .p12; MACOS_CERT_PASSWORD; APPLE_TEAM_ID; and an App
@@ -20,7 +21,14 @@ name: Nightly
 on:
   schedule:
     - cron: '0 9 * * *'
+  # A run by hand builds (and on main signs and notarizes) the Mac disk image
+  # and keeps it as an artifact; it publishes only when asked to.
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Replace the nightly release with this build
+        type: boolean
+        default: false
   pull_request:
     paths:
       - .github/workflows/nightly.yml
@@ -46,6 +54,7 @@ jobs:
       sha: ${{ steps.pick.outputs.sha }}
       windows_run: ${{ steps.pick.outputs.windows_run }}
       skip: ${{ steps.pick.outputs.skip }}
+      publish: ${{ steps.pick.outputs.publish }}
     steps:
       - id: pick
         env:
@@ -54,7 +63,7 @@ jobs:
         run: |
           set -eu
           if [ "${{ github.event_name }}" = pull_request ]; then
-            { echo "sha=${{ github.event.pull_request.head.sha }}"; echo "windows_run="; echo "skip=false"; } >> "$GITHUB_OUTPUT"
+            { echo "sha=${{ github.event.pull_request.head.sha }}"; echo "windows_run="; echo "skip=false"; echo "publish=false"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           sha=; windows_run=
@@ -65,9 +74,15 @@ jobs:
           done
           [ -n "$sha" ] || { echo "No recent commit on main passed both CI and the Windows build." >&2; exit 1; }
           current=$(gh api "repos/$GH_REPO/git/ref/tags/nightly" -q .object.sha 2>/dev/null || true)
-          skip=false
-          if [ "$current" = "$sha" ] && [ "${{ github.event_name }}" = schedule ]; then skip=true; fi
-          echo "main $sha (Windows run $windows_run); nightly now ${current:-none}; skip $skip"
+          skip=false; publish=false
+          if [ "${{ github.event_name }}" = schedule ]; then
+            if [ "${{ vars.NIGHTLY_PUBLISH }}" = true ]; then publish=true; else skip=true; fi
+            if [ "$current" = "$sha" ]; then skip=true; fi
+          elif [ "${{ inputs.publish }}" = true ]; then
+            publish=true
+          fi
+          echo "main $sha (Windows run $windows_run); nightly now ${current:-none}; skip $skip; publish $publish"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "windows_run=$windows_run" >> "$GITHUB_OUTPUT"
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
@@ -201,14 +216,14 @@ jobs:
         with:
           name: nightly-mac
           path: dist/
-          retention-days: ${{ github.event_name == 'pull_request' && 14 || 1 }}
+          retention-days: ${{ needs.pick.outputs.publish == 'true' && 1 || 14 }}
       - name: Remove the signing keychain
         if: always() && steps.signing.outputs.signed == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
 
   publish:
     needs: [pick, mac]
-    if: github.event_name != 'pull_request'
+    if: needs.pick.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     permissions:
       actions: read
