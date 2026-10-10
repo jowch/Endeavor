@@ -24,6 +24,7 @@ use crate::attach::{self, Attachment, Part, Quote, Quoted};
 use crate::agent::{Agent, SessionEvent, Started, Turn};
 use crate::celldiff::{self, CellCodes};
 use crate::hosts::Place;
+use wire::backend::Backend;
 use crate::permits::{Asked, Asks, Rule};
 use crate::pluto;
 use crate::motion;
@@ -341,6 +342,9 @@ pub struct Session {
     pub notebook: Option<String>,
     /// The session's one notebook file, once it has one.
     pub notebook_path: Option<String>,
+    /// Its notebook's kind, which the core is told with its folder: a new
+    /// notebook without a path is made in it.
+    pub kind: Backend,
     /// Its notebook was stopped from the notebook's ⋯ menu, or for being idle.
     pub stopped: Option<Stopped>,
     /// Its notebook file isn't there (moved, renamed or deleted outside Endeavor).
@@ -628,6 +632,7 @@ impl Session {
             run_without_asking: false,
             notebook: None,
             notebook_path: None,
+            kind: Backend::Pluto,
             stopped: None,
             missing: false,
             user_edits: Vec::new(),
