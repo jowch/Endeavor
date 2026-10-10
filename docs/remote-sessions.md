@@ -311,6 +311,12 @@ takes the prompt down and says the server stopped waiting. Through a
 ProxyJump or ProxyCommand ssh holds no TCP socket of its own, so nothing is
 watched and the prompt stays up as before.
 
+On a reconnect, what happens next depends on ssh's own error. After a
+password prompt, ssh says the connection ended, which the reconnect retries,
+so the next try asks again. After a key's passphrase prompt, ssh says
+"Permission denied", which isn't retried, so the line stops and waits for
+Reconnect (EndeavorMCP #64).
+
 ## Rejected alternatives
 
 - **An sshfs-style mount** so Claude's local tools see remote files. On macOS

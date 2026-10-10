@@ -289,7 +289,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn reads_lsofs_states() {
-        assert_eq!(os::lsof_states("p812\nf3\nTST=CLOSE_WAIT\nTQR=1\nTQS=0\n"), vec![Tcp::CloseWait]);
-        assert_eq!(os::lsof_states("p812\nf3\nTST=ESTABLISHED\n"), vec![Tcp::Established]);
+        // As captured on a Mac (ssh waiting on a passphrase prompt). The CLOSE_WAIT one wasn't captured:
+        // the app polls every 2 s, and the askpass exits as soon as it sees it.
+        assert_eq!(os::lsof_states("p35580\nf3\nTST=ESTABLISHED\nTQR=0\nTQS=0\n"), vec![Tcp::Established]);
+        assert_eq!(os::lsof_states("p35580\nf3\nTST=CLOSE_WAIT\nTQR=1\nTQS=0\n"), vec![Tcp::CloseWait]);
     }
 }
