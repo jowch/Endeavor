@@ -42,7 +42,8 @@ Cursor and Gemini are listed as **Not available yet**.
 **Settings** next to it to choose:
 
 - **Endeavor's Julia** (the default): the Julia that Endeavor installed and
-  keeps up to date.
+  keeps up to date. On Windows, Endeavor installs it with juliaup, Julia's
+  installer, and leaves your other juliaup versions alone.
 - **Another Julia on this Mac**: a Julia you installed yourself. Click
   **Choose…** (or **Change…**) and pick the file named `julia`, in a `bin`
   folder. It must be Julia 1.11 or newer.

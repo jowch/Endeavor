@@ -72,7 +72,8 @@ takes a few minutes and needs the internet once.
   package registry.
 
 Endeavor checks the Julia and Node.js downloads against fixed checksums
-before it uses them, and Claude Code's packages against a fixed list. A
+before it uses them (on Windows, Julia comes from juliaup, Julia's own
+installer, which Endeavor installs if you don't have it), and Claude Code's packages against a fixed list. A
 download that doesn't match is deleted, and setup stops and tells you.
 
 Everything goes into one folder:

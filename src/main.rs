@@ -37,6 +37,7 @@ mod find_bar;
 mod host_list;
 mod hosts;
 mod install;
+mod juliaup;
 mod logs;
 mod new_session;
 mod network;
