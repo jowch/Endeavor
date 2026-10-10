@@ -10,7 +10,8 @@ use std::io::IsTerminal;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 pub fn path() -> Option<PathBuf> {
     if cfg!(windows) {
@@ -75,11 +76,12 @@ impl log::Log for Stderr {
         if !self.enabled(record.metadata()) {
             return;
         }
-        if skipped_callback(record) {
-            // Windows delivers window messages re-entrantly while the app is busy; GPUI skips
-            // that one callback and the next frame catches up. Say so once, then only count them.
-            if SKIPPED.fetch_add(1, Ordering::Relaxed) == 0 {
-                eprintln!("GPUI skipped a window callback because the app was busy (harmless; later ones are counted, not logged)");
+        // Windows delivers window messages re-entrantly while the app is busy, and GPUI skips
+        // that callback. What that loses depends on the callback (a frame request, an input
+        // event, a resize), so the first from each line is logged with its line, then counted.
+        if let Some(count) = count_skip(&SKIPPED, record) {
+            if count == 1 {
+                eprintln!("{} {}:{}: GPUI skipped a window callback because the app was busy; later ones from this line are counted, not logged", record.level(), record.file().unwrap_or_default(), record.line().unwrap_or_default());
             }
             return;
         }
@@ -93,11 +95,23 @@ impl log::Log for Stderr {
     fn flush(&self) {}
 }
 
-/// Window callbacks GPUI skipped this run because the app was already borrowed.
-static SKIPPED: AtomicUsize = AtomicUsize::new(0);
+/// Window callbacks GPUI skipped this run because the app was already borrowed, by line in window.rs.
+static SKIPPED: Mutex<BTreeMap<u32, usize>> = Mutex::new(BTreeMap::new());
 
-pub fn skipped_callbacks() -> usize {
-    SKIPPED.load(Ordering::Relaxed)
+pub fn skipped_callbacks() -> BTreeMap<u32, usize> {
+    SKIPPED.lock().map(|counts| counts.clone()).unwrap_or_default()
+}
+
+/// Counts a skipped window callback by its line and returns how many from that line so far,
+/// or None for any other record.
+fn count_skip(counts: &Mutex<BTreeMap<u32, usize>>, record: &log::Record) -> Option<usize> {
+    if !skipped_callback(record) {
+        return None;
+    }
+    let mut counts = counts.lock().ok()?;
+    let count = counts.entry(record.line().unwrap_or_default()).or_default();
+    *count += 1;
+    Some(*count)
 }
 
 /// GPUI's `Window::new` wires each platform callback to `handle.update(..).log_err()`, which
@@ -122,19 +136,33 @@ pub fn reveal() {
 mod tests {
     use super::*;
 
-    fn record(file: &str, message: &str, check: impl FnOnce(&log::Record) -> bool) -> bool {
-        check(&log::Record::builder().level(log::Level::Error).target("").file(Some(file)).line(Some(1843)).args(format_args!("{message}")).build())
+    fn record<T>(file: &str, line: u32, message: &str, check: impl FnOnce(&log::Record) -> T) -> T {
+        check(&log::Record::builder().level(log::Level::Error).target("").file(Some(file)).line(Some(line)).args(format_args!("{message}")).build())
     }
 
     #[test]
     fn only_gpuis_skipped_window_callbacks_are_dropped() {
         let unix = "/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.6/src/window.rs";
         let windows = r"C:\Users\u\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui-pre-0.3.6\src\window.rs";
-        assert!(record(unix, "RefCell already borrowed", skipped_callback));
-        assert!(record(windows, "RefCell already borrowed", skipped_callback));
+        assert!(record(unix, 1811, "RefCell already borrowed", skipped_callback));
+        assert!(record(windows, 1811, "RefCell already borrowed", skipped_callback));
         // Any other GPUI error, or the same error from elsewhere, still comes through.
-        assert!(!record(unix, "app is quitting", skipped_callback));
-        assert!(!record("/home/u/.cargo/registry/src/x/gpui-pre-0.3.6/src/app.rs", "RefCell already borrowed", skipped_callback));
-        assert!(!record("src/window.rs", "RefCell already borrowed", skipped_callback));
+        assert!(!record(unix, 1811, "app is quitting", skipped_callback));
+        assert!(!record("/home/u/.cargo/registry/src/x/gpui-pre-0.3.6/src/app.rs", 1811, "RefCell already borrowed", skipped_callback));
+        assert!(!record("src/window.rs", 1811, "RefCell already borrowed", skipped_callback));
+    }
+
+    #[test]
+    fn skipped_window_callbacks_are_logged_once_per_line() {
+        let unix = "/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.6/src/window.rs";
+        let counts = Mutex::new(BTreeMap::new());
+        let skip = |line| record(unix, line, "RefCell already borrowed", |r| count_skip(&counts, r));
+        // A count of 1 is the one that gets written.
+        assert_eq!(skip(1811), Some(1));
+        assert_eq!(skip(1811), Some(2));
+        assert_eq!(skip(1943), Some(1));
+        assert_eq!(skip(1811), Some(3));
+        assert_eq!(record(unix, 1811, "app is quitting", |r| count_skip(&counts, r)), None);
+        assert_eq!(*counts.lock().unwrap(), BTreeMap::from([(1811, 3), (1943, 1)]));
     }
 }
