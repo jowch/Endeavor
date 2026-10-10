@@ -186,7 +186,16 @@ fn cut(name: &str, max: usize) -> String {
 
 impl Attachment {
     pub fn label(&self) -> Label {
-        let label = |plain: &str, mono: &str| Label { plain: plain.into(), mono: cut(mono, CHIP_NAME) };
+        self.label_cut_at(CHIP_NAME)
+    }
+
+    /// The label with its name whole, for a screen reader.
+    pub fn full_label(&self) -> Label {
+        self.label_cut_at(usize::MAX)
+    }
+
+    fn label_cut_at(&self, max: usize) -> Label {
+        let label = |plain: &str, mono: &str| Label { plain: plain.into(), mono: cut(mono, max) };
         match self {
             Attachment::Cells { cells, .. } if cells.len() == 1 => label("", &cells[0].name()),
             Attachment::Cells { cells, .. } => label(&format!("{} cells", cells.len()), ""),

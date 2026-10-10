@@ -1438,9 +1438,9 @@ impl Workspace {
             let selected = menu.selected == Some(i);
             let is_checked = checked(&pick);
             let text = label(&pick);
-            menu_row(ElementId::NamedInteger("filter-submenu-item".into(), i as u64), is_checked, selected)
+            menu_row(ElementId::NamedInteger("filter-submenu-item".into(), i as u64), is_checked, selected, text.clone())
                 .role(if submenu == FilterRow::Where { Role::MenuItemCheckBox } else { Role::MenuItemRadio })
-                .aria_label(text.clone())
+                .aria_toggled(if is_checked { accesskit::Toggled::True } else { accesskit::Toggled::False })
                 .child(text)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();

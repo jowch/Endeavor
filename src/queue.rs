@@ -189,6 +189,8 @@ impl Workspace {
             .child(
                 div()
                     .id(ElementId::NamedInteger("queued-words".into(), id))
+                    .role(Role::Button)
+                    .aria_label(q.text.clone())
                     .flex_1()
                     .min_w_0()
                     .flex()
@@ -227,6 +229,8 @@ impl Workspace {
         let words = (!q.text.is_empty()).then(|| {
             div()
                 .id(ElementId::NamedInteger("queued-open-words".into(), id))
+                .role(Role::Button)
+                .aria_label(q.text.clone())
                 .cursor_pointer()
                 .text_size(theme::chat_body())
                 .line_height(theme::chat_line_body())

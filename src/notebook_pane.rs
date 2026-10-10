@@ -632,12 +632,16 @@ impl Workspace {
                 HeaderTag::SafePreview => chip(Some(Glyph::Shield), label, theme::accent_text()).into_any_element(),
                 HeaderTag::PackageFailed => chip(Some(Glyph::Warning), label, theme::danger())
                     .id("package-failed")
+                    .role(Role::Button)
+                    .aria_label(format!("{label}, show status"))
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("status"), cx)))
                     .into_any_element(),
                 HeaderTag::RestartNeeded | HeaderTag::RestartRecommended => chip(Some(Glyph::Restart), label, theme::accent_text())
                     .id("restart-needed")
+                    .role(Role::Button)
+                    .aria_label(format!("{label}, restart the notebook"))
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| this.restart_notebook(key, cx)))
@@ -650,6 +654,8 @@ impl Workspace {
         let busy = header.busy.map(|text| {
             div()
                 .id("header-busy")
+                .role(Role::Button)
+                .aria_label(format!("{text}, show status"))
                 .flex_shrink_0()
                 .flex()
                 .items_center()

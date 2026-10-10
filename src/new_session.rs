@@ -429,7 +429,8 @@ impl Workspace {
         div().flex().flex_col().children(Agent::ALL.into_iter().filter(|agent| agent.available()).map(|agent| {
             let facts = agent.facts();
             let here = self.draft.host == HostId::ThisMac || facts.on_servers;
-            let row = menu_row(SharedString::from(format!("agent-{}", facts.name.to_lowercase())), agent == current, false)
+            let row = choice_row(SharedString::from(format!("agent-{}", facts.name.to_lowercase())), agent == current, false, facts.name)
+                .when(!here, |d| d.aria_description(concat!(crate::platform::this_computer!(), " only")))
                 .child(glyph(Glyph::Spark, theme::text_muted()))
                 .child(div().text_color(if here { theme::text_primary() } else { theme::text_faint() }).child(facts.name))
                 .child(div().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(facts.maker))
@@ -649,6 +650,9 @@ impl Workspace {
             let &Example { icon, prompt, uses_file } = example;
             div()
                 .id(("example", i))
+                .role(Role::Button)
+                .aria_label(prompt)
+                .aria_description(if uses_file { "Uses your file" } else { "No data needed" })
                 .flex()
                 .items_center()
                 .gap(px(8.))
@@ -819,6 +823,16 @@ impl Workspace {
         };
         let body = div()
             .id("chip-menu")
+            // The rows' container, so a screen reader can tell where the menu ends.
+            .role(if matches!(chip, Chip::Agent | Chip::Where | Chip::Notebook) { Role::Menu } else { Role::Dialog })
+            .aria_label(match chip {
+                Chip::Agent => "Assistant",
+                Chip::Where => "Where it runs",
+                Chip::Folder => "Folder",
+                Chip::Notebook => "Notebook",
+                Chip::Browse => "Browse folders",
+                Chip::Resources => "Job size",
+            })
             .occlude()
             .w(px(width))
             .p(px(if chip == Chip::Resources { 12. } else { 4. }))
@@ -901,7 +915,7 @@ impl Workspace {
         let servers = rows(false, cx);
         let clusters = rows(true, cx);
         let add = |id: &'static str, text: &'static str, cluster: bool, cx: &mut Context<Self>| {
-            menu_row(id, false, false).child(glyph(Glyph::Plus, theme::text_muted())).child(div().text_color(theme::text_muted()).child(text)).on_click(cx.listener(move |this, _, window, cx| {
+            menu_row(id, false, false, text).child(glyph(Glyph::Plus, theme::text_muted())).child(div().text_color(theme::text_muted()).child(text)).on_click(cx.listener(move |this, _, window, cx| {
                 this.close_popover(window, cx);
                 let template = Server { cluster: cluster.then(Cluster::default), ..Default::default() };
                 this.open_new_host(template, window, cx);
@@ -941,10 +955,11 @@ impl Workspace {
         let salloc = match &self.draft.salloc {
             None => div()
                 .id("paste-salloc")
+                .role(Role::Button)
                 .cursor_pointer()
                 .text_size(theme::size_meta())
                 .text_color(theme::accent_text())
-                .child("Paste an salloc line…")
+                .button_text("Paste an salloc line…")
                 .on_click(cx.listener(|this, _, window, cx| this.paste_salloc(window, cx)))
                 .into_any_element(),
             Some(input) => div()
@@ -1000,7 +1015,8 @@ impl Workspace {
         let rows = matches.into_iter().enumerate().map(|(i, folder)| {
             let current = Some(&folder) == self.draft.folder.as_ref();
             let path = self.draft_tilde(&folder);
-            menu_row(("folder-row", i), current, self.draft.selected == i)
+            choice_row(("folder-row", i), current, self.draft.selected == i, self.draft.host.folder_name(&folder))
+                .aria_description(path.clone())
                 .child(glyph(Glyph::Folder, theme::text_muted()))
                 .child(div().flex_shrink_0().child(self.draft.host.folder_name(&folder)))
                 .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_right().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(path))
@@ -1041,7 +1057,7 @@ impl Workspace {
             .children(rows)
             .child(div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge()))
             .child(
-                menu_row("browse", false, false)
+                menu_row("browse", false, false, "Browse…")
                     .child(glyph(Glyph::Folder, theme::text_muted()))
                     .child("Browse…")
                     .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_right().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(browse_hint))
@@ -1063,6 +1079,8 @@ impl Workspace {
             let name = if i == 0 { "/".to_owned() } else { name };
             let crumb = div()
                 .id(("crumb", i))
+                .role(Role::Link)
+                .aria_label(if i == 0 { "Top folder".to_owned() } else { name.clone() })
                 .px(px(3.))
                 .rounded(px(3.))
                 .cursor_pointer()
@@ -1074,7 +1092,7 @@ impl Workspace {
             sep.into_iter().chain([crumb])
         });
         let up = host.parent(&path).filter(|p| !p.is_empty()).map(|parent| {
-            menu_row("browse-up", false, false)
+            menu_row("browse-up", false, false, "Up")
                 .child(div().w(px(12.)).text_color(theme::text_muted()).child("↑"))
                 .child(div().text_color(theme::text_muted()).child("Up"))
                 .on_click(cx.listener(move |this, _, _, cx| this.browse_to(parent.clone(), cx)))
@@ -1090,14 +1108,14 @@ impl Workspace {
                     let name = div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis();
                     if entry.dir {
                         let into = host.join(&path, &entry.name);
-                        menu_row(("browse-row", i), false, false)
+                        menu_row(("browse-row", i), false, false, entry.name.clone())
                             .child(glyph(Glyph::Folder, theme::text_muted()))
                             .child(name.child(entry.name.clone()))
                             .on_click(cx.listener(move |this, _, _, cx| this.browse_to(into.clone(), cx)))
                             .into_any_element()
                     } else if let Some(key) = picking {
                         let file = host.join(&path, &entry.name);
-                        menu_row(("browse-file", i), false, false)
+                        menu_row(("browse-file", i), false, false, entry.name.clone())
                             .child(glyph(Glyph::File, theme::text_muted()))
                             .child(name.font_family(theme::MONO).text_size(theme::size_code()).child(entry.name.clone()))
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1157,7 +1175,8 @@ impl Workspace {
             let relative = host.strip_prefix(&found.path, &folder).unwrap_or_else(|| found.path.clone());
             let dir = host.parent(&relative).filter(|p| !p.is_empty()).map(|p| format!("{p}/"));
             let path = found.path.clone();
-            menu_row(("notebook-row", i), chosen, false)
+            choice_row(("notebook-row", i), chosen, false, relative.clone())
+                .aria_description(when::ago(found.modified))
                 .child(glyph(Glyph::File, theme::text_muted()))
                 .child(
                     div()
@@ -1182,7 +1201,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .child(
-                menu_row("new-notebook", self.draft.notebook == NotebookChoice::New, false)
+                choice_row("new-notebook", self.draft.notebook == NotebookChoice::New, false, "New notebook")
                     .child(glyph(Glyph::File, theme::text_muted()))
                     .child("New notebook")
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1368,10 +1387,14 @@ pub fn notebook_title(name: String, dir: Option<String>) -> Div {
         }))
 }
 
-/// A chip-menu row: a ✓ column, then the caller's icon and text.
-pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool) -> Stateful<Div> {
+/// A chip-menu row: a ✓ column, then the caller's icon and text. It's a menu
+/// item named `name` (GPUI makes no accessibility node for an element without
+/// a role); a row that picks one of several is a `choice_row`.
+pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool, name: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
+        .role(Role::MenuItem)
+        .aria_label(name)
         .flex()
         .items_center()
         .gap(px(8.))
@@ -1384,11 +1407,18 @@ pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool) 
         .child(div().w(px(10.)).flex_shrink_0().text_size(theme::size_meta()).text_color(theme::accent_text()).child(if checked { "✓" } else { "" }))
 }
 
+/// A menu row that picks one of several: a screen reader says whether it's
+/// the one checked.
+pub(crate) fn choice_row(id: impl Into<ElementId>, checked: bool, selected: bool, name: impl Into<SharedString>) -> Stateful<Div> {
+    menu_row(id, checked, selected, name).role(Role::MenuItemRadio).aria_toggled(if checked { accesskit::Toggled::True } else { accesskit::Toggled::False })
+}
+
 /// A Where menu row: ✓, the machine's icon and name (with a dot while Julia
 /// runs there), its connection state if any, and room for its gear.
 #[allow(clippy::too_many_arguments)]
 fn host_row(id: impl Into<ElementId>, checked: bool, icon: Glyph, name: String, running: bool, state: Option<&'static str>, group: impl Into<SharedString>, _: &mut Context<Workspace>) -> Stateful<Div> {
-    menu_row(id, checked, false)
+    choice_row(id, checked, false, name.clone())
+        .when_some(state, |d, s| d.aria_description(s))
         .group(group)
         .child(glyph(icon, theme::text_muted()))
         .child(
