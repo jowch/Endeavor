@@ -194,7 +194,7 @@ pub fn open(server: &Server, auth: Auth, on_event: client::OnEvent) -> Result<Se
 pub fn test(server: &Server, auth: Auth, cancel: &Cancel, on: &dyn Fn(Event)) -> Result<(), String> {
     let [_, state] = server.launcher();
     let helper = |os: &str, arch: &str| helper_for(os, arch);
-    let options = client::Options { auth, root: String::new(), state, depot: String::new(), exit_idle: false, allow_install: true, launcher: None, helper: &helper };
+    let options = client::Options { auth, root: String::new(), state, depot: String::new(), exit_idle: false, julia_when_needed: false, allow_install: true, launcher: None, helper: &helper };
     client::test(&client_server(server)?, &transport(server), &options, cancel, on)
 }
 
