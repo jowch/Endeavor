@@ -53,4 +53,4 @@ _Listed 2026-10-03._
   whether they're open, which makes AccessKit offer a screen reader Expand
   instead of Invoke. GPUI ignores Expand, so activating them from a screen
   reader may do nothing (inferred from AccessKit's code, not yet tried with
-  Narrator or NVDA).
+  Narrator or NVDA; [#68](https://github.com/jowch/Endeavor/issues/68)).
