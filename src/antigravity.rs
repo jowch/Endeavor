@@ -60,6 +60,7 @@ impl Dialect {
                     call.title = format!("{}{tool}", crate::celldiff::TOOL_PREFIX);
                     call.raw_input = call.raw_input.map(arguments);
                 } else {
+                    shell_command(&mut call.raw_input);
                     not_a_notebook_call(&mut call.title, &call.raw_input);
                 }
                 vec![SessionUpdate::ToolCall(call)]
@@ -70,8 +71,11 @@ impl Dialect {
                         update.fields.title = Some(format!("{}{tool}", crate::celldiff::TOOL_PREFIX));
                     }
                     update.fields.raw_input = update.fields.raw_input.map(arguments);
-                } else if let Some(title) = &mut update.fields.title {
-                    not_a_notebook_call(title, &update.fields.raw_input);
+                } else {
+                    shell_command(&mut update.fields.raw_input);
+                    if let Some(title) = &mut update.fields.title {
+                        not_a_notebook_call(title, &update.fields.raw_input);
+                    }
                 }
                 vec![SessionUpdate::ToolCallUpdate(update)]
             }
@@ -88,8 +92,11 @@ impl Dialect {
         if let Some(tool) = notebook_tool(call.meta.as_ref()) {
             call.fields.title = Some(format!("{}{tool}", crate::celldiff::TOOL_PREFIX));
             call.fields.raw_input = call.fields.raw_input.take().map(arguments);
-        } else if let Some(title) = &mut call.fields.title {
-            not_a_notebook_call(title, &call.fields.raw_input);
+        } else {
+            shell_command(&mut call.fields.raw_input);
+            if let Some(title) = &mut call.fields.title {
+                not_a_notebook_call(title, &call.fields.raw_input);
+            }
         }
         request.options.retain(|o| o.kind != PermissionOptionKind::AllowAlways);
     }
@@ -125,6 +132,18 @@ fn not_a_notebook_call(title: &mut String, input: &Option<serde_json::Value>) {
         // A word of its own, so neither the prefix nor a title naming only
         // the server and a tool matches any more.
         *title = format!("Antigravity: {title}");
+    }
+}
+
+/// A shell call's command where the app looks for it: Antigravity gives it
+/// as `CommandLine`, so without `command` its line says only "Ran" and an
+/// "Always this session" rule is kept for its title, not its command.
+fn shell_command(input: &mut Option<serde_json::Value>) {
+    if let Some(serde_json::Value::Object(fields)) = input
+        && !fields.contains_key("command")
+        && let Some(command) = fields.get("CommandLine").filter(|c| c.is_string()).cloned()
+    {
+        fields.insert("command".into(), command);
     }
 }
 
@@ -215,8 +234,10 @@ mod tests {
         assert_eq!(ask.tool_call.fields.raw_input, Some(serde_json::json!({"path": "C:\\Users\\me\\notebooks\\sum.jl"})));
 
         let mut shell: RequestPermissionRequest = serde_json::from_value(serde_json::from_str::<serde_json::Value>(include_str!("fixtures/antigravity/permission-shell.json")).unwrap()["params"].clone()).unwrap();
-        let before = serde_json::to_value(&shell.tool_call).unwrap();
+        let mut before = serde_json::to_value(&shell.tool_call).unwrap();
         Dialect.permission(&mut shell);
+        // Only its command is added where the app looks for it.
+        before["rawInput"]["command"] = before["rawInput"]["CommandLine"].clone();
         assert_eq!(serde_json::to_value(&shell.tool_call).unwrap(), before);
     }
 
@@ -243,6 +264,18 @@ mod tests {
         let mut ask = disguised_shell("Test-Path C:\\Users\\me");
         Dialect.permission(&mut ask);
         assert_eq!(ask.tool_call.fields.title.as_deref(), Some("Test-Path C:\\Users\\me"));
+    }
+
+    #[test]
+    fn a_shell_call_shows_its_command() {
+        let mut ask: RequestPermissionRequest = serde_json::from_value(serde_json::from_str::<serde_json::Value>(include_str!("fixtures/antigravity/permission-shell.json")).unwrap()["params"].clone()).unwrap();
+        Dialect.permission(&mut ask);
+        let input = ask.tool_call.fields.raw_input.clone().unwrap();
+        assert_eq!(input["command"], input["CommandLine"]);
+        let call = SessionUpdate::ToolCall(serde_json::from_value(serde_json::json!({"toolCallId": "1", "title": "Get-Location", "kind": "execute", "rawInput": {"CommandLine": "Get-Location"}})).unwrap());
+        let updates: [SessionUpdate; 1] = Dialect.update(call).try_into().ok().unwrap();
+        let [SessionUpdate::ToolCall(call)] = updates else { panic!() };
+        assert_eq!(call.raw_input.unwrap()["command"], "Get-Location");
     }
 
     #[test]

@@ -55,10 +55,13 @@ The findings it was built from came from a test on a Windows machine on
   is its command line, which the model writes, so one that reads like a
   notebook call is renamed ("Antigravity: …"). The session also lets a
   prompt through only when its title names a notebook tool exactly. Its
-  PowerShell commands get the usual cards, with Allow and Deny only.
-  "Allow Always" is dropped, because Antigravity would keep it as a rule of
-  its own, which the app can't show or remove and which would hold in
-  Manual too. Its `view_file` doesn't ask at all: it reads any file on this
+  PowerShell commands get the usual cards: Deny, Always this session and
+  Allow. Always this session is the app's own rule for that command in this
+  session, and Antigravity hears allow-once. Its own "Allow Always" is
+  dropped, because Antigravity would keep it as a rule of its own, which the
+  app can't show or remove and which would hold in Manual too. Its command
+  comes as `CommandLine`; the app reads it as the command, so the line says
+  "Ran Get-Location". Its `view_file` doesn't ask at all: it reads any file on this
   computer without a card.
 - **Sign-in.** The app checks for the token file before connecting. While
   signed out, a card above the composer offers **Sign in**, which sends ACP's
@@ -89,9 +92,11 @@ The findings it was built from came from a test on a Windows machine on
   card. It is listed with EndeavorMCP #53.
 - **Stop leaves a running cell running.** That is so for every agent: the
   runtime only drops a call still waiting for an answer (EndeavorMCP #59).
-- **Reopened sessions.** `_meta` comes only on a live call and its first
-  update. If a replayed call carries none, a reopened session shows it
-  under Antigravity's own name, without its diff. The Windows check says
-  which.
+- **Reopened sessions.** A reopened session keeps its title, but its
+  replay lists reads of Antigravity's own tool files (`edit_cell.json`, …)
+  that the live session didn't show, so it doesn't match the app's copy:
+  the history shows "Earlier messages were replaced" at the top. Whether
+  replayed notebook calls carry `_meta` isn't known yet; without it they
+  show under Antigravity's own names, without their diffs.
 - **Read prompts.** Reads ask too; the app answers them allow-once, so the
   user doesn't see them, but each one costs a round trip.
