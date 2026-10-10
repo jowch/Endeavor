@@ -257,7 +257,8 @@ pub fn connect(keep_running: bool, progress: &dyn Fn(Progress)) -> Result<(Chann
         command.arg("--quit-with-client");
     }
     // Its own process group: a Ctrl-C meant for the app in a terminal must not
-    // kill the helper before it can stop Julia.
+    // kill the helper before it can stop Julia. On Windows the helper is the
+    // app's own GUI program, so it opens no console window either way.
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
     #[cfg(unix)]
     command.process_group(0);
@@ -373,7 +374,9 @@ pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn F
 }
 
 fn check_version(julia: &str) -> Result<(), String> {
-    let output = Command::new(julia).arg("--version").output().map_err(|e| {
+    let mut command = Command::new(julia);
+    endeavor_mcp::client::no_window(&mut command);
+    let output = command.arg("--version").output().map_err(|e| {
         if e.kind() == ErrorKind::NotFound {
             format!(
                 "Julia wasn't found at `{julia}`. In Settings, choose a julia binary \
@@ -412,7 +415,9 @@ pub fn check_chosen(path: &Path) -> ChosenJulia {
     if !path.is_file() {
         return ChosenJulia::Gone;
     }
-    match Command::new(path).arg("--version").output() {
+    let mut command = Command::new(path);
+    endeavor_mcp::client::no_window(&mut command);
+    match command.arg("--version").output() {
         Ok(out) if out.status.success() => chosen_from_version(&String::from_utf8_lossy(&out.stdout)),
         _ => ChosenJulia::NotJulia,
     }

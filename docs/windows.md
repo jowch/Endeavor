@@ -71,8 +71,10 @@ error rather than half-work:
 
 - The helper starts the core with `CREATE_NO_WINDOW |
   CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB` (`lib.rs`, `start`).
-  `CREATE_NO_WINDOW` gives the core a console without a window, which Julia
-  and Pluto's workers inherit, so none of them opens a console window.
+  `CREATE_NO_WINDOW` gives a console-program core a console without a
+  window. In the app the core is the app's own GUI program, which gets no
+  console at all, so the core also starts Julia with `CREATE_NO_WINDOW`
+  (`core.rs`), and Pluto's workers share Julia's hidden console.
   Breaking away from a job the app runs in lets the runtime outlive the app,
   as on Unix. A job that forbids that refuses the start; the helper then
   starts the core inside it and logs that the runtime ends with the app.
@@ -145,11 +147,6 @@ under the user's own `%LOCALAPPDATA%`.
   same no-ops as on Linux.
 - `src/network.rs`, `monitor`: says the network is up once and never again.
   Needs `NotifyIpInterfaceChange`.
-- `src/logs.rs`, `start`: no redirection to the log file. Needs
-  `SetStdHandle`. `logs::path` is `%LOCALAPPDATA%\Endeavor\Logs\endeavor.log`,
-  but nothing writes there yet.
-- `src/signin.rs`, `Login::cancel`: doesn't stop the sign-in's CLI. Needs a
-  Job Object (`endeavor_mcp`'s `winproc` has the pieces).
 
 Ported for real: the app data folder (`%LOCALAPPDATA%\Endeavor`,
 `src/install.rs`), the home folder for `~/.ssh` and Downloads, the depot list
@@ -360,15 +357,21 @@ code that runs only with servers, and upload names.
 
 ### Smaller app fixes (about 1 week in total)
 
-- **Console windows (S–M).** Build as a GUI app
-  (`#![windows_subsystem = "windows"]`) and pass `CREATE_NO_WINDOW` to every
-  child process, or each one flashes a console. `logs.rs` redirects output
-  with `dup2`, which needs a Windows version.
+- **Console windows: done.** The app is a GUI program
+  (`#![windows_subsystem = "windows"]`) and starts its console children
+  (Julia's `--version`, curl, tar, Node, npm, the sign-in CLI) with
+  `CREATE_NO_WINDOW`; the core does the same for Julia. `logs.rs` makes the
+  log file the app's stdout and stderr (`SetStdHandle`), so on Windows the
+  app's output goes there even when it is started from a terminal. Run by
+  hand in cmd or PowerShell (for example with `--helper` while debugging),
+  `endeavor.exe` returns to the prompt at once and prints nothing there; pipe
+  its output (`2>&1 | Out-Host`) to see it.
 - **Network-change watch (S).** Only macOS and Linux versions exist
   (`src/network.rs`). Windows: `NotifyIpInterfaceChange` or
   `INetworkListManager`.
-- **Title bar (S–M).** The header leaves room for the macOS window buttons.
-  Windows needs its own caption buttons, drawn by GPUI or native.
+- **Title bar: native for now.** Windows keeps its own title bar, with the
+  window's buttons, above the column headers. Drawing the buttons in the
+  sidebar's header instead (GPUI's `WindowControlArea`) would save its height.
 - **Wording (S).** "This Mac" (about 60 places in `src/`), "Reveal in Finder", and
   `HostId::ThisMac`. This is shared with Linux; see
   [linux.md](linux.md#remaining-work-ranked).

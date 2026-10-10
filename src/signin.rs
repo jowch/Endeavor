@@ -163,16 +163,29 @@ pub fn browser_shim() {
 }
 
 /// The system's own opener, as the CLI would use without us.
+#[cfg(unix)]
 fn open_in_browser(url: &str) -> bool {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     std::process::Command::new(opener).arg(url).status().is_ok_and(|s| s.success())
+}
+
+/// The default browser, through the shell, as Explorer opens a link.
+#[cfg(windows)]
+fn open_in_browser(url: &str) -> bool {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (open, url) = (wide("open"), wide(url));
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    let result = unsafe { ShellExecuteW(std::ptr::null_mut(), open.as_ptr(), url.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+    // Above 32 means it opened.
+    result as usize > 32
 }
 
 /// A browser sign-in under way.
 pub struct Login {
     pub method: Method,
     id: u64,
-    #[cfg_attr(windows, allow(dead_code))]
     pid: i32,
     url_file: PathBuf,
 }
@@ -194,9 +207,16 @@ impl Login {
     }
 
     fn cancel(&self) {
-        // Not ported: Windows needs a Job Object to stop the CLI and what it started.
         #[cfg(unix)]
         unsafe { libc::kill(-self.pid, libc::SIGTERM) };
+        // Windows has no process groups to signal: taskkill ends the CLI and
+        // what it started (/T), so its callback port is free for the next try.
+        #[cfg(windows)]
+        {
+            let mut taskkill = std::process::Command::new("taskkill");
+            endeavor_mcp::client::no_window(&mut taskkill);
+            let _ = taskkill.args(["/T", "/F", "/PID", &self.pid.to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+        }
         let _ = std::fs::remove_file(&self.url_file);
     }
 

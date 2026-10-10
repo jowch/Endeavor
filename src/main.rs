@@ -2,6 +2,10 @@
 //! child webview, and ACP agent sessions (a session bar, one chat pane) wired to the
 //! same Pluto session over MCP.
 
+// A GUI program on Windows: no console window of its own, and the console
+// programs it starts are given none either (`client::no_window`).
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -357,7 +361,7 @@ fn tool_button(id: &'static str) -> Stateful<Div> {
         .hover(|s| s.bg(theme::row_active()))
 }
 /// Room the traffic lights take at the start of a header. On Linux the window
-/// manager's title bar has the window's buttons.
+/// manager's title bar has the window's buttons, and on Windows its own title bar.
 const TRAFFIC_LIGHTS: f32 = 84.;
 
 /// A 44px column header: the window's drag area (the title bar is transparent),
@@ -2633,10 +2637,11 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(WINDOW_MIN),
                 // No title bar: each column has its own 44px header, the traffic
-                // lights sit in the sidebar's.
+                // lights sit in the sidebar's. Windows keeps its own title bar,
+                // which has the window's buttons (the app draws none).
                 titlebar: Some(TitlebarOptions {
                     title: Some("Endeavor".into()),
-                    appears_transparent: true,
+                    appears_transparent: !cfg!(windows),
                     traffic_light_position: Some(point(px(16.), px(16.))),
                 }),
                 ..Default::default()
