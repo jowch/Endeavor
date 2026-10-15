@@ -1784,7 +1784,7 @@ impl Workspace {
                 // Only the assistant in use names itself: another one starting
                 // in the background doesn't take the line.
                 if self.agent_in_use(agent) {
-                    self.status = self.connected_line(agent).into();
+                    self.status = format!("{} connected.", agent.name()).into();
                 }
                 let link = self.links.get_mut(agent);
                 link.ready = true;
@@ -2169,19 +2169,6 @@ impl Workspace {
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
-    }
-
-    /// The status line for a connected agent: "connected" only when it can answer.
-    pub fn connected_line(&self, agent: agent::Agent) -> String {
-        if self.signed_out_of_agent(agent) { format!("{} isn't signed in.", agent.name()) } else { format!("{} connected.", agent.name()) }
-    }
-
-    /// After `agent`'s sign-in changes, a status line about its connection says the new state.
-    pub fn refresh_connected_line(&mut self, agent: agent::Agent) {
-        let name = agent.name();
-        if self.status == format!("{name} connected.") || self.status == format!("{name} isn't signed in.") {
-            self.status = self.connected_line(agent).into();
-        }
     }
 
     /// The new-session screen's agent, or the agent of the session in view.

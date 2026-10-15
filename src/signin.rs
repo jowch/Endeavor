@@ -408,7 +408,6 @@ impl Workspace {
             }
             None => self.signed_out(cx),
         }
-        self.refresh_connected_line(Agent::Claude);
         self.finish_setup(cx);
     }
 
@@ -1072,7 +1071,6 @@ impl Workspace {
                 cx.notify();
             }
         }
-        self.refresh_connected_line(agent);
     }
 
     /// What a check of Antigravity's sign-in found. Signed in, its sessions
@@ -1084,7 +1082,6 @@ impl Workspace {
         } else {
             self.signed_out_of(Agent::Antigravity, cx);
         }
-        self.refresh_connected_line(Agent::Antigravity);
         cx.notify();
     }
 
@@ -1119,7 +1116,6 @@ impl Workspace {
     /// waiting for that open.
     pub fn on_codex_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
         self.codex_account = if signed_in { crate::agent::Account::SignedIn } else { crate::agent::Account::SignedOut };
-        self.refresh_connected_line(Agent::Codex);
         self.open_waiting(Agent::Codex, cx);
         cx.notify();
     }
