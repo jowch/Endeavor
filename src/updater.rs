@@ -623,11 +623,14 @@ mod tests {
         let mid = bytes.len() / 2;
         bytes[mid] ^= 1;
         std::fs::write(bad.join(name), bytes).unwrap();
+        // fetch() makes the folder before stage() runs.
+        std::fs::create_dir_all(w.join("staging-bad")).unwrap();
         let err = stage(&base(&bad), &w.join("staging-bad"), &offer, &team, &|_| {}).unwrap_err();
         assert!(err.contains("didn't match"), "{err}");
 
         // The real one: hash, disk image signature, copy, app signature, notarization.
         let staging = w.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
         let staged = stage(&base(&src), &staging, &offer, &team, &|_| {}).unwrap();
         assert!(verify(&staged, "ZZZZZZZZZZ").is_err(), "another team is refused");
 
