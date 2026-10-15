@@ -190,6 +190,9 @@ impl Steps {
     /// What's left after the current step, shown faint.
     pub fn pending(&self) -> Vec<&'static str> {
         let mut left = Vec::new();
+        if self.current == pluto::OPENING {
+            return left;
+        }
         if !self.for_r && !self.current.starts_with("Starting Julia") {
             left.push("Start Julia");
         }
@@ -216,6 +219,25 @@ impl Steps {
 }
 
 impl Steps {
+    /// The notebook is still opening (`pluto::OPENING`), Julia or R being up: a step under way is done.
+    fn opening(&mut self) {
+        if self.current == pluto::OPENING {
+            return;
+        }
+        let done = self.current.trim_end_matches('…').replacen("Starting", "Started", 1).replacen("Installing", "Installed", 1);
+        self.advance(done, pluto::OPENING);
+        self.detail = Some(if self.for_r { "The first notebook can take a minute to open." } else { "The first notebook after Julia starts takes a while to compile." }.into());
+    }
+
+    /// The step log of a call that first hears `step`: a notebook already opening with Julia or R up, or `start`.
+    fn first(step: &str, start: impl FnOnce() -> Steps) -> Steps {
+        let mut steps = start();
+        if step == pluto::OPENING {
+            steps.now(pluto::OPENING);
+        }
+        steps
+    }
+
     /// R notebooks' setup, starting with R.
     fn r() -> Steps {
         Steps { for_r: true, ..Steps::new("Starting R") }
@@ -224,6 +246,9 @@ impl Steps {
     /// What the runtime said R notebooks' setup is doing (`pluto::r_installing`):
     /// installing Endeavor's own R, then Ember. A finished step stays ticked.
     fn r_step(&mut self, step: &str) {
+        if step == pluto::OPENING {
+            return self.opening();
+        }
         let next = format!("{step}…");
         if next == self.current {
             return;
@@ -241,6 +266,9 @@ impl Steps {
     /// (`pluto::julia_starting`): a download with its percentage, then Julia
     /// starting and loading Pluto, whose first time installs its packages.
     fn julia(&mut self, step: &str) {
+        if step == pluto::OPENING {
+            return self.opening();
+        }
         if step.starts_with("Downloading Julia") || step.starts_with("Checking Julia") || step.starts_with("Unpacking Julia") {
             return self.log(step);
         }
@@ -1470,7 +1498,7 @@ impl Workspace {
                                 // Opened meanwhile (the session's own open, or Claude's).
                                 Err(e) => find(&list(), &path).or_else(|| {
                                     eprintln!("Couldn't reopen {path}: {e}");
-                                    if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).is_some() {
+                                    if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).or_else(|| pluto::open_stuck(&e)).is_some() {
                                         failed.borrow_mut()[r as usize].get_or_insert(e);
                                     }
                                     None
@@ -1822,11 +1850,11 @@ impl Workspace {
                         match kind {
                             Backend::Pluto => {
                                 connection.julia_failed = None;
-                                connection.julia.get_or_insert_with(|| Steps::new("Starting Julia")).julia(&step);
+                                connection.julia.get_or_insert_with(|| Steps::first(&step, || Steps::new("Starting Julia"))).julia(&step);
                             }
                             Backend::Ember => {
                                 connection.r_failed = None;
-                                connection.r.get_or_insert_with(Steps::r).r_step(&step);
+                                connection.r.get_or_insert_with(|| Steps::first(&step, Steps::r)).r_step(&step);
                             }
                         }
                     }
@@ -1858,9 +1886,10 @@ impl Workspace {
     /// if it couldn't start, the pane says why, with Try again.
     pub fn julia_answer(&mut self, host: &HostId, kind: Backend, error: Option<&str>, cx: &mut Context<Self>) {
         // R's keeps its code: the pane offers Install R for `r_not_found`.
+        // A notebook still opening when the app stopped waiting shows the same way, with its own words.
         let failed = match kind {
-            Backend::Pluto => error.and_then(pluto::julia_failed).map(str::to_owned),
-            Backend::Ember => error.filter(|e| pluto::r_failed(e).is_some()).map(str::to_owned),
+            Backend::Pluto => error.and_then(|e| pluto::julia_failed(e).or_else(|| pluto::open_stuck(e))).map(str::to_owned),
+            Backend::Ember => error.filter(|e| pluto::r_failed(e).is_some()).map(str::to_owned).or_else(|| error.and_then(pluto::open_stuck).map(|why| format!("r_failed::{why}"))),
         };
         let Some(connection) = self.connections.get_mut(host) else { return };
         if failed.is_some() || error.is_none() {
@@ -2048,7 +2077,8 @@ impl Workspace {
                     .text_color(gpui::white())
                     .button_text("Try again")
                     .on_click(cx.listener(move |this, _, _, cx| this.retry_julia(&host, cx)));
-                resting.child(div().text_color(theme::text_muted()).child(format!("Julia couldn't start on {name}."))).child(message(pluto::julia_failed_words(&reason))).child(retry)
+                let heading = if reason == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("Julia couldn't start on {name}.") };
+                resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(&reason))).child(retry)
             }
             HostPane::RFailed(error) => {
                 let host_id = host.clone();
@@ -2077,7 +2107,8 @@ impl Workspace {
                     resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("r-install", "Install R", true))
                 } else {
                     let why = pluto::r_failed(&error).unwrap_or(&error);
-                    resting.child(div().text_color(theme::text_muted()).child(format!("R notebooks couldn't start on {name}."))).child(message(pluto::julia_failed_words(why))).child(button("r-retry", "Try again", false))
+                    let heading = if why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("R notebooks couldn't start on {name}.") };
+                    resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("r-retry", "Try again", false))
                 }
             }
             HostPane::Starting => {
@@ -2580,6 +2611,7 @@ fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaSta
 #[cfg(test)]
 mod tests {
     use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, new_failure, not_restarted, not_stopped, percent, runtime_of, try_ended};
+    use crate::pluto;
 
     fn line(state: LineState, node: &str) -> LineStatus {
         let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
@@ -2737,6 +2769,25 @@ mod tests {
         assert_eq!(steps.detail.as_deref(), Some("[ Info: Runtime ready"));
         assert_eq!(steps.done, ["Connected to lab", "Julia 1.12.6"]);
         assert_eq!(percent("Downloading Julia 1.12.6… 42%"), Some("42%"));
+    }
+
+    #[test]
+    fn a_notebook_still_opening_is_its_own_step() {
+        // Julia started for this call, then the notebook took longer than one call: Julia's step is done.
+        let mut steps = Steps::new("Starting Julia");
+        steps.julia("Julia 1.12.6 is starting and loading Pluto");
+        steps.julia(pluto::OPENING);
+        assert_eq!((steps.done.as_slice(), steps.current.as_str()), (["Started Julia 1.12.6 and Pluto".to_owned()].as_slice(), pluto::OPENING));
+        assert!(steps.pending().is_empty(), "the open is the step under way");
+        assert!(steps.detail.as_deref().is_some_and(|d| !d.contains('/')), "no path: {:?}", steps.detail);
+        // Julia was up already: no Julia step is claimed.
+        let steps = Steps::first(pluto::OPENING, || Steps::new("Starting Julia"));
+        assert_eq!((steps.done.len(), steps.current.as_str()), (0, pluto::OPENING));
+        // R's the same way.
+        let mut r = Steps::first("Installing Ember", Steps::r);
+        r.r_step("Installing Ember");
+        r.r_step(pluto::OPENING);
+        assert_eq!((r.done.as_slice(), r.current.as_str()), (["Installed Ember".to_owned()].as_slice(), pluto::OPENING));
     }
 
     #[test]

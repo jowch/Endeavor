@@ -247,12 +247,28 @@ pub fn r_installing(error: &str) -> Option<&str> {
     Some(step.split_once(", which").map_or(step, |(step, _)| step).trim())
 }
 
-/// What is still opening, from a call's answer that an open or a new notebook
-/// took longer than one call waits ("notebook_opening::Opening '/x.jl' is
-/// taking longer…"); the open goes on, and the same call again gets it.
-pub fn notebook_opening(error: &str) -> Option<&str> {
-    let step = error.strip_prefix("notebook_opening::")?;
-    Some(step.split_once(" is taking").map_or(step, |(step, _)| step).trim())
+/// The step the pane shows while a notebook is still opening.
+pub const OPENING: &str = "Opening the notebook";
+
+/// How long the app keeps calling again while a notebook is still opening.
+/// The runtime's open has no limit of its own, so a Julia that hangs while
+/// opening would otherwise leave the pane waiting for ever.
+const OPENING_LIMIT: Duration = Duration::from_secs(600);
+
+/// Why the app stopped waiting for a notebook that was still opening, for the person.
+pub const OPEN_STUCK: &str = "The notebook was still opening after 10 minutes, so Endeavor stopped waiting. Julia may be stuck; restarting it may help.";
+
+/// Whether a call's answer says an open or a new notebook took longer than one
+/// call waits ("notebook_opening::Opening '/x.jl' is taking longer…"): the open
+/// goes on, and the same call again gets it. The step is always `OPENING`.
+pub fn notebook_opening(error: &str) -> Option<&'static str> {
+    error.starts_with("notebook_opening::").then_some(OPENING)
+}
+
+/// That the app stopped waiting for a notebook still opening (`until_julia`):
+/// its words for the person.
+pub fn open_stuck(error: &str) -> Option<&str> {
+    error.strip_prefix("open_stuck::")
 }
 
 /// Why R notebooks couldn't start, from a call's error that says so.
@@ -264,11 +280,24 @@ pub fn r_failed(error: &str) -> Option<&str> {
 /// start downloads Julia and installs Pluto's packages, which takes minutes),
 /// or that R notebooks are still being set up (R, then Ember), or that the
 /// notebook is still opening, with `step` hearing what it's doing each time.
-pub fn until_julia<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn Fn(&str)) -> Result<T, String> {
+/// A notebook still opening after `OPENING_LIMIT` ends it with `open_stuck`.
+pub fn until_julia<T>(call: impl FnMut() -> Result<T, String>, step: &dyn Fn(&str)) -> Result<T, String> {
+    until_julia_within(call, step, OPENING_LIMIT)
+}
+
+fn until_julia_within<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn Fn(&str), limit: Duration) -> Result<T, String> {
+    let mut opening_since = None;
     loop {
         match call() {
             Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)).or_else(|| notebook_opening(&e)) {
                 Some(doing) => {
+                    if notebook_opening(&e).is_some() {
+                        if opening_since.get_or_insert_with(std::time::Instant::now).elapsed() >= limit {
+                            return Err(format!("open_stuck::{OPEN_STUCK}"));
+                        }
+                    } else {
+                        opening_since = None;
+                    }
                     step(doing);
                     std::thread::sleep(Duration::from_secs(1));
                 }
@@ -558,7 +587,10 @@ mod tests {
         let answers = std::cell::RefCell::new(vec![Ok(8), Err("notebook_opening::Creating '/p/a.jl' is taking longer than one call waits: the first notebook…".to_owned())]);
         let heard = std::cell::RefCell::new(Vec::new());
         assert_eq!(until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned())), Ok(8));
-        assert_eq!(*heard.borrow(), ["Creating '/p/a.jl'"]);
+        assert_eq!(*heard.borrow(), [super::OPENING]);
+        // A notebook that stays opening past the limit ends the wait, with words for the person.
+        let stuck: Result<(), String> = super::until_julia_within(|| Err("notebook_opening::Opening '/p/a.jl' is taking longer…".into()), &|_| {}, std::time::Duration::ZERO);
+        assert_eq!(stuck.as_ref().err().and_then(|e| super::open_stuck(e)), Some(super::OPEN_STUCK));
         let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
         assert_eq!(failed, Err("julia_failed::no".into()));
     }
