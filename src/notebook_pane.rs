@@ -1167,7 +1167,7 @@ impl Workspace {
                     this.apply_effects(key, vec![Effect::ShowNotebook { id, path: Some(path) }], cx);
                 }
                 // The pane says why Julia, or R, couldn't start, with Try again.
-                Err(e) if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).is_some() => {}
+                Err(e) if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).or_else(|| pluto::open_stuck(&e)).is_some() => {}
                 Err(e) => this.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &e, Some(Retry::NewNotebook(key))), cx),
             });
         })
