@@ -939,10 +939,16 @@ impl Workspace {
         let lines = |lines: &[&str]| div().flex().flex_col().gap(px(2.)).text_size(theme::size_meta()).line_height(px(17.)).text_color(theme::text_new()).children(lines.iter().map(|l| l.to_string()));
         let row = div().flex().justify_end().items_center().gap(px(6.));
         let sign_in = |label: &'static str| button("antigravity-sign-in", label, Look::Primary).on_click(cx.listener(|this, _, _, cx| this.sign_in_to_antigravity(cx)));
+        let cancel = button("antigravity-sign-in-cancel", "Cancel", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.cancel_antigravity_sign_in(cx)));
+        let waiting = match self.message_waits_for(Agent::Antigravity) {
+            true => "We opened Google's sign-in page. Sign in there; this card goes away by itself and your message sends.",
+            false => "We opened Google's sign-in page. Sign in there, and this card goes away by itself.",
+        };
         let body = match self.antigravity_account {
             Google::SigningIn => div()
                 .child(heading.child(crate::orbit::orbit("antigravity-sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
-                .child(lines(&["We opened Google's sign-in page. Sign in there; this card goes away by itself and your message sends."])),
+                .child(lines(&[waiting, "Closed the page, or want another account? Cancel, then sign in again."]))
+                .child(row.child(cancel)),
             Google::Failed => div()
                 .child(heading.child("Antigravity sign-in didn't finish"))
                 .child(lines(&["The sign-in page closed or took more than 5 minutes. Try again."]))
@@ -1097,6 +1103,22 @@ impl Workspace {
         let sent = self.links.get(Agent::Antigravity).tx.unbounded_send(crate::agent::Command::Authenticate(method)).is_ok();
         self.antigravity_account = if sent { crate::agent::Account::SigningIn } else { crate::agent::Account::Failed };
         cx.notify();
+    }
+
+    /// The waiting card's Cancel: the card goes back to Sign in at once.
+    /// Antigravity's server is asked to stop waiting for the browser.
+    pub fn cancel_antigravity_sign_in(&mut self, cx: &mut Context<Self>) {
+        if self.antigravity_account != crate::agent::Account::SigningIn {
+            return;
+        }
+        let _ = self.links.get(Agent::Antigravity).tx.unbounded_send(crate::agent::Command::CancelSignIn);
+        self.antigravity_account = crate::agent::Account::SignedOut;
+        cx.notify();
+    }
+
+    /// A message waits for `agent`: one typed while it can't answer.
+    fn message_waits_for(&self, agent: Agent) -> bool {
+        self.sessions.iter().any(|s| s.agent == agent && (!s.outbox.items.is_empty() || s.outbox.has_unanswered()))
     }
 
     /// Antigravity's sign-in ended.
