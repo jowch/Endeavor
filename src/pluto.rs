@@ -169,9 +169,12 @@ pub fn file_info(bridge: &Bridge, path: &str) -> Result<Option<f64>, String> {
 /// of it. Julia starts first if it isn't running; while it's still starting
 /// this says so (`julia_starting`).
 pub fn open_notebook(bridge: &Bridge, path: &str, run: bool) -> Result<Value, String> {
-    let result = call_tool_waiting(bridge, "open_notebook", json!({ "path": path, "run_notebook": run }), JULIA_CALL_WAIT)?;
+    answer(call_tool_waiting(bridge, "open_notebook", json!({ "path": path, "run_notebook": run }), JULIA_CALL_WAIT)?)
+}
+
+/// A tool's result, or the error it answers with, as an app call says it: `kind::message`.
+fn answer(result: Value) -> Result<Value, String> {
     match result["error"].as_str() {
-        // As an app call says it: `kind::message`.
         Some(kind) => Err(format!("{kind}::{}", result["message"].as_str().unwrap_or_default())),
         None => Ok(result),
     }
@@ -258,6 +261,9 @@ const OPENING_LIMIT: Duration = Duration::from_secs(600);
 /// Why the app stopped waiting for a notebook that was still opening, for the person.
 pub const OPEN_STUCK: &str = "The notebook was still opening after 10 minutes, so Endeavor stopped waiting. Try again to wait for it again.";
 
+/// Why the app stopped waiting for Run notebook's new Julia process, for the person.
+pub const RUN_STUCK: &str = "The notebook was still starting after 10 minutes, so Endeavor stopped waiting. Try again to wait for it again.";
+
 /// Whether a call's answer says an open or a new notebook took longer than one
 /// call waits ("notebook_opening::Opening '/x.jl' is taking longer…"): the open
 /// goes on, and the same call again gets it. The step is always `OPENING`.
@@ -323,9 +329,11 @@ pub fn new_notebook(bridge: &Bridge, owner: u64) -> Result<(String, String), Str
     }
 }
 
-/// Leave safe preview and run the notebook (the user's Run notebook).
+/// Leave safe preview and run the notebook (the user's Run notebook). Its new
+/// Julia process can take longer than one call, installing packages: then this
+/// answers `notebook_opening`, and the same call again gets the result.
 pub fn allow_execution(bridge: &Bridge, notebook_id: &str) -> Result<(), String> {
-    call_tool(bridge, "allow_execution", json!({ "notebook_id": notebook_id })).map(|_| ())
+    answer(call_tool_waiting(bridge, "allow_execution", json!({ "notebook_id": notebook_id }), JULIA_CALL_WAIT)?).map(|_| ())
 }
 
 /// GET `target` (a path and query) on Pluto's server, such as an export,
@@ -591,6 +599,9 @@ mod tests {
         // A notebook that stays opening past the limit ends the wait, with words for the person.
         let stuck: Result<(), String> = super::until_julia_within(|| Err("notebook_opening::Opening '/p/a.jl' is taking longer…".into()), &|_| {}, std::time::Duration::ZERO);
         assert_eq!(stuck.as_ref().err().and_then(|e| super::open_stuck(e)), Some(super::OPEN_STUCK));
+        // Run notebook's still-starting answer, a normal tool result (EndeavorMCP #128), is waited out the same way.
+        let answers = std::cell::RefCell::new(vec![json!({ "ran": true }), json!({ "error": "notebook_opening", "message": "Starting the notebook is taking longer than one call waits…" })]);
+        assert_eq!(until_julia(|| super::answer(answers.borrow_mut().pop().unwrap()), &|_| {}), Ok(json!({ "ran": true })));
         let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
         assert_eq!(failed, Err("julia_failed::no".into()));
     }
