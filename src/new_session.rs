@@ -1418,8 +1418,7 @@ pub fn turtle_pane() -> Div {
                     let pose = if cx.reduce_motion() {
                         Pose::default()
                     } else {
-                        window.request_animation_frame();
-                        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0., |d| (d.as_millis() % 3_600_000) as f32 / 1000.);
+                        let t = crate::motion::loop_clock(window, cx);
                         turtle::peek(t)
                     };
                     turtle::paint(window, point(bounds.left() + px(TURTLE_R), bounds.bottom()), TURTLE_R, &pose)
