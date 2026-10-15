@@ -84,6 +84,8 @@ test("unrun and author marks follow the app and survive redraws", async () => {
   window.__endeavor.receive(cellsMsg([{ cell_id: A, author: "agent" }]));
   assert.equal(cell(A).getAttribute("data-endeavor"), null);
   assert.equal(cell(A).getAttribute("data-endeavor-bar"), null);
+  // With nothing left to mark, the rail is empty.
+  assert.equal(doc.querySelectorAll("#endeavor-rail a").length, 0);
 });
 
 test("one status bar: Claude's cells in orange, queued and running in orange, the rest Pluto's own", async () => {
