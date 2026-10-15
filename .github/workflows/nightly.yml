@@ -1,12 +1,13 @@
 # Keeps one "nightly" prerelease holding the newest build of main that passed
 # CI on macOS, Linux and Windows: Endeavor-macos-arm64.dmg (scripts/bundle.sh's
 # app, with the Linux servers' helpers inside) and Endeavor-windows-x86_64-setup.exe
-# (the installer windows.yml built from that same commit). Each run replaces the
-# files and moves the tag, so the download links stay the same and releases
-# don't pile up. A scheduled run does nothing when the nightly already holds
+# (the installer windows.yml built from that same commit), and nightly.json,
+# which an installed nightly reads to find a newer build
+# (scripts/nightly-manifest.sh; app #80). Each run replaces the files and moves
+# the tag, so the download links stay the same and releases don't pile up. A scheduled run does nothing when the nightly already holds
 # that commit. On a pull request that changes the Mac packaging it only builds
 # the disk image from the pull request and keeps it as an Actions artifact,
-# with a screenshot of its window; nothing is published. The schedule
+# with a screenshot of its window and the manifest it would get; nothing is published. The schedule
 # publishes only while the repository variable NIGHTLY_PUBLISH is true.
 # The Mac app is signed with a Developer ID and the disk image notarized when
 # the "release" environment (main only) has the signing secrets (MACOS_CERT_P12, the certificate and
@@ -97,6 +98,7 @@ jobs:
     environment: ${{ github.event_name != 'pull_request' && 'release' || '' }}
     outputs:
       signed: ${{ steps.signing.outputs.signed }}
+      committed: ${{ steps.committed.outputs.committed }}
     env:
       SIGN: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERT_P12 != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
@@ -123,6 +125,11 @@ jobs:
         run: |
           git fetch -q --depth=1 origin ${{ github.sha }}
           git checkout ${{ github.sha }} -- assets/dmg
+      # The built commit's time, for the manifest: the app compares it with
+      # its own so it never offers an older build.
+      - name: Commit time
+        id: committed
+        run: echo "committed=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd)" >> "$GITHUB_OUTPUT"
       - name: Toolchain
         run: rustup toolchain install
       # Fails if EndeavorMCP's Helpers release has no build for the pinned
@@ -233,6 +240,11 @@ jobs:
           sleep 15
           screencapture -x dist/dmg-window.png
           hdiutil detach /Volumes/Endeavor || true
+      - name: The manifest it would get
+        if: github.event_name == 'pull_request'
+        run: |
+          scripts/nightly-manifest.sh dist "${{ needs.pick.outputs.sha }}" "${{ steps.committed.outputs.committed }}" > dist/nightly.json
+          cat dist/nightly.json
       - uses: actions/upload-artifact@v4
         with:
           name: nightly-mac
@@ -254,6 +266,11 @@ jobs:
       GH_REPO: ${{ github.repository }}
       SHA: ${{ needs.pick.outputs.sha }}
     steps:
+      # Only for scripts/nightly-manifest.sh, from this workflow's commit.
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: scripts
       - uses: actions/download-artifact@v4
         with:
           name: nightly-mac
@@ -290,3 +307,9 @@ jobs:
           gh release upload nightly dist/* --clobber
           gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$SHA" -F force=true >/dev/null
           gh release edit nightly --prerelease --title "Nightly build" --notes-file notes.md
+          # Last, once the files it names are up: an app that reads it earlier
+          # sees the previous build's manifest, or a hash that doesn't match
+          # yet, and keeps its build until the next check.
+          src/scripts/nightly-manifest.sh dist "$SHA" "${{ needs.mac.outputs.committed }}" > nightly.json
+          cat nightly.json
+          gh release upload nightly nightly.json --clobber

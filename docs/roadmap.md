@@ -47,6 +47,8 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   (`nightly.yml`). There are no versioned releases yet.
 - **Updates** ([#80](https://github.com/jowch/Endeavor/issues/80)). The app
   can't update itself or check for a newer version, so Check now is hidden.
+  The nightly publishes `nightly.json` (each build's commit, time and
+  SHA-256) for the updater to read; the Mac updater comes next.
 - **The Windows installer** ([#12](https://github.com/jowch/Endeavor/issues/12)):
   a per-user installer that adds WebView2 if it's missing. CI builds it; it
   is unsigned and has been tried on one Windows machine.
