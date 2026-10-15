@@ -1783,7 +1783,7 @@ impl Workspace {
             AgentEvent::Ready => {
                 // Only the assistant in use names itself: another one starting
                 // in the background doesn't take the line.
-                if agent == self.draft_agent() || self.active_session().is_some_and(|s| s.agent == agent) {
+                if self.agent_in_use(agent) {
                     self.status = format!("{} connected.", agent.name()).into();
                 }
                 let link = self.links.get_mut(agent);
@@ -1801,6 +1801,8 @@ impl Workspace {
             }
             // On the setup screen, only the assistant picked moves the steps.
             AgentEvent::Setup(_) if self.setup.as_ref().is_some_and(|s| s.agent.is_some_and(|a| a != agent)) => {}
+            // Nor does another assistant's start, after setup: it would take the status line.
+            AgentEvent::Setup(_) if self.setup.is_none() && !self.agent_in_use(agent) => {}
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
@@ -2165,6 +2167,11 @@ impl Workspace {
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
+    }
+
+    /// The new-session screen's agent, or the agent of the session in view.
+    fn agent_in_use(&self, agent: agent::Agent) -> bool {
+        agent == self.draft_agent() || self.active_session().is_some_and(|s| s.agent == agent)
     }
 
     /// Start an agent that isn't running yet. True if it starts now: its

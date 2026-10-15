@@ -1207,6 +1207,7 @@ impl Workspace {
             self.active = None;
             self.draft.host = place.host.clone();
             self.draft.folder = Some(place.path);
+            self.ensure_agent(self.draft_agent(), cx);
             self.scan_notebooks(cx);
             return cx.notify();
         }

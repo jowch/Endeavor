@@ -927,6 +927,8 @@ impl Workspace {
                 self.draft.folder = self.draft_home();
             }
             self.scan_notebooks(cx);
+            // A server's sessions are Claude's: its sign-in and options are known before the first message.
+            self.ensure_agent(self.draft_agent(), cx);
         }
         self.draft.notice = None;
         self.close_popover(window, cx);
@@ -1284,6 +1286,7 @@ impl Workspace {
             self.draft.folder = Some(folder.path);
             self.draft.notebooks.clear();
         }
+        self.ensure_agent(self.draft_agent(), cx);
         self.scan_notebooks(cx);
         self.choose_notebook(NotebookChoice::Existing(notebook), cx);
     }

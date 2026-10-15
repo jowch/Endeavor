@@ -226,10 +226,11 @@ In order. Each part is also useful to Claude, or harmless to it.
     record. The new-session screen's agent starts at launch alongside
     Julia, except during first-launch setup; Claude also starts then when
     Endeavor has Claude sessions, so their listing stays current. Only the
-    agent in use says "connected" in the status line. A session opened before its host's Julia is up waits
-    with "Starting Julia…". An agent that starts on demand (Codex) starts
-    when it is picked or one of its sessions opens. Still to do: showing the
-    agent on rows.
+    agent in use reports its start in the status line. A session opened
+    before its host's Julia is up waits with "Starting Julia…". An agent
+    that starts on demand starts when it is picked, when one of its
+    sessions opens, or (Claude) when its Settings page opens, since only
+    its start checks the sign-in. Still to do: showing the agent on rows.
 
 After that, each agent needs its own handling of whatever its answers to the
 questions below turn up, such as Cursor's plan request.

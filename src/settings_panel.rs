@@ -517,6 +517,7 @@ impl Workspace {
             (Account::SignedOut(_), _) => Status2::new("Not signed in. Claude can't answer until you sign in.", Tone::Attention),
             (_, Some(p)) => Status2::new(format!("Signed in as {}", p.email.clone().unwrap_or_else(|| p.plan.clone())), Tone::Plain),
             (Account::SignedIn, None) => Status2::new("Signed in", Tone::Plain),
+            (Account::Unknown, None) if self.links.get(Agent::Claude).rx.is_some() => Status2::new("Starts when you pick it", Tone::Quiet),
             (Account::Unknown, None) => Status2::new("Checking the sign-in…", Tone::Plain),
         });
         if signed_out && !matches!(self.account, Account::SignedOut(Stage::Waiting(_))) {
@@ -1227,6 +1228,10 @@ impl Workspace {
                 if profile.is_none() && matches!(this.account, Account::SignedIn) {
                     this.signed_out(cx);
                 }
+                // Claude hasn't started to check (another assistant is in use): this answers it.
+                if matches!(this.account, Account::Unknown) {
+                    this.on_signed_in(profile.as_ref().map(|p| p.method), cx);
+                }
                 this.settings_checks.profile = profile;
                 cx.notify();
             });
@@ -1385,6 +1390,10 @@ impl Workspace {
         let search = panel.search.clone();
         if !search.read(cx).value().is_empty() {
             search.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        // Claude's page shows its sign-in, which only Claude's start checks.
+        if page == Page::Claude {
+            self.ensure_agent(crate::agent::Agent::Claude, cx);
         }
         cx.notify();
     }
