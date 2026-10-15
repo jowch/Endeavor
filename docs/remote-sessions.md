@@ -42,9 +42,11 @@ local or remote:
   Pluto's private port.
 - The core's `Host` check looks at the host name only, not the port, so a
   local port that differs from the remote one is accepted.
-- The runtime's token protects its port from other users on a shared
-  machine: as a bearer header everywhere, or for Pluto's page as a cookie the
-  web view gets from a `?token=` link. Pluto's own secret never leaves the core.
+- Two tokens protect the runtime's port from other users on a shared
+  machine. The MCP token, a bearer header, opens `/mcp` and `/endeavor/…`
+  only. The pages' token opens Pluto's pages: as a cookie the web view gets
+  from the `?token=` link, or as a bearer header for exports. Neither opens
+  the other's paths, and Pluto's own secret never leaves the core.
 - Crash reopen, safe preview, and restart go through `/endeavor/events` and
   `open_notebook`, not local files.
 
