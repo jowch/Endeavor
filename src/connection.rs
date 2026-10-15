@@ -128,6 +128,13 @@ pub struct Connection {
     /// Where Julia is, as the runtime last said (`endeavor/julia_status`); none
     /// from a runtime too old to say.
     pub julia_status: Option<pluto::JuliaStatus>,
+    /// R notebooks' setup (R, then Ember) for an R notebook the app is opening
+    /// (the runtime says `r_installing` meanwhile): the pane's step log.
+    pub r: Option<Steps>,
+    /// The app's calls waiting for R now: `r` goes when the last ends.
+    r_waits: u32,
+    /// Why R notebooks couldn't start for the R notebook the app opened last.
+    pub r_failed: Option<String>,
 }
 
 /// A dropped server connection.
@@ -157,11 +164,13 @@ pub struct Steps {
     pub detail: Option<String>,
     /// Julia was found or reattached to, so only starting it is left.
     found_julia: bool,
+    /// R notebooks' setup, not Julia's or the runtime's.
+    for_r: bool,
 }
 
 impl Steps {
     fn new(current: impl Into<String>) -> Steps {
-        Steps { done: Vec::new(), current: current.into(), since: Instant::now(), detail: None, found_julia: false }
+        Steps { done: Vec::new(), current: current.into(), since: Instant::now(), detail: None, found_julia: false, for_r: false }
     }
 
     fn advance(&mut self, done: impl Into<String>, next: impl Into<String>) {
@@ -181,7 +190,7 @@ impl Steps {
     /// What's left after the current step, shown faint.
     pub fn pending(&self) -> Vec<&'static str> {
         let mut left = Vec::new();
-        if !self.current.starts_with("Starting Julia") {
+        if !self.for_r && !self.current.starts_with("Starting Julia") {
             left.push("Start Julia");
         }
         left.push("Open notebook");
@@ -207,6 +216,27 @@ impl Steps {
 }
 
 impl Steps {
+    /// R notebooks' setup, starting with R.
+    fn r() -> Steps {
+        Steps { for_r: true, ..Steps::new("Starting R") }
+    }
+
+    /// What the runtime said R notebooks' setup is doing (`pluto::r_installing`):
+    /// installing Endeavor's own R, then Ember. A finished step stays ticked.
+    fn r_step(&mut self, step: &str) {
+        let next = format!("{step}…");
+        if next == self.current {
+            return;
+        }
+        if self.current.starts_with("Installing") {
+            let done = self.current.trim_end_matches('…').replacen("Installing", "Installed", 1);
+            self.advance(done, next);
+        } else {
+            self.now(next);
+        }
+        self.detail = Some("The first time takes a few minutes.".into());
+    }
+
     /// What the runtime said Julia is doing while it starts it for a notebook
     /// (`pluto::julia_starting`): a download with its percentage, then Julia
     /// starting and loading Pluto, whose first time installs its packages.
@@ -260,6 +290,14 @@ enum Update {
 }
 
 impl Connection {
+    /// The app's calls waiting for `kind`'s language to start.
+    fn waits(&mut self, kind: Backend) -> &mut u32 {
+        match kind {
+            Backend::Pluto => &mut self.julia_waits,
+            Backend::Ember => &mut self.r_waits,
+        }
+    }
+
     fn new(id: u64, status: Status, steps: Steps) -> Connection {
         Connection {
             status,
@@ -292,6 +330,9 @@ impl Connection {
             julia_waits: 0,
             julia_failed: None,
             julia_status: None,
+            r: None,
+            r_waits: 0,
+            r_failed: None,
             lost: None,
             dropped: None,
             crashed: false,
@@ -355,6 +396,8 @@ impl Connection {
         self.julia = None;
         self.julia_failed = None;
         self.julia_status = None;
+        self.r = None;
+        self.r_failed = None;
         self.notebooks = serde_json::Value::Null;
         self.cells = serde_json::Value::Null;
         self.runtime.take()
@@ -476,6 +519,7 @@ impl Workspace {
                 let keep_running = self.settings.keep_running;
                 // The helper runs this Julia for as long as it lives (runtime::connect).
                 self.settings_checks.local_julia = Some(self.settings.julia.clone());
+                self.settings_checks.local_r = Some(self.settings.r.clone());
                 std::thread::spawn(move || {
                     let result = runtime::connect(keep_running).map(|(channel, hello)| (Arc::new(channel), hello));
                     report_until_closed(&tx, result);
@@ -746,7 +790,8 @@ impl Workspace {
     /// Another Julia chosen since it started needs a new helper, which a
     /// reconnect starts with it.
     pub fn restart_local(&mut self, cx: &mut Context<Self>) {
-        if self.julia_changed() {
+        // The helper was started with both: a new one takes the new choice.
+        if self.julia_changed() || self.r_changed() {
             return self.reconnect_local(false, cx);
         }
         let host = HostId::ThisMac;
@@ -1405,9 +1450,9 @@ impl Workspace {
         if paths.is_empty() {
             return;
         }
-        let steps = self.julia_steps(host, cx);
+        let steps = [self.julia_steps(host, Backend::Pluto, cx), self.julia_steps(host, Backend::Ember, cx)];
         let reopen = cx.background_executor().spawn(async move {
-            let julia_failed = std::cell::RefCell::new(None);
+            let failed = std::cell::RefCell::new([None, None]);
             let list = || pluto::call_tool(&bridge, "list_notebooks", serde_json::json!({})).ok();
             let find = |listed: &Option<serde_json::Value>, path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
             let listed = list();
@@ -1418,13 +1463,14 @@ impl Workspace {
                         Some(nb) => nb,
                         None => {
                             let run = resume.iter().any(|(p, modified)| *p == path && modified.is_none_or(|m| pluto::file_info(&bridge, &path) == Ok(Some(m))));
-                            match pluto::until_julia(|| pluto::open_notebook(&bridge, &path, run), &|step| steps.step(step)) {
+                            let r = crate::new_session::kind_of_path(&path) == Backend::Ember;
+                            match pluto::until_julia(|| pluto::open_notebook(&bridge, &path, run), &|step| steps[r as usize].step(step)) {
                                 Ok(nb) => nb,
                                 // Opened meanwhile (the session's own open, or Claude's).
                                 Err(e) => find(&list(), &path).or_else(|| {
                                     eprintln!("Couldn't reopen {path}: {e}");
-                                    if pluto::julia_failed(&e).is_some() {
-                                        julia_failed.borrow_mut().get_or_insert(e);
+                                    if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).is_some() {
+                                        failed.borrow_mut()[r as usize].get_or_insert(e);
                                     }
                                     None
                                 })?,
@@ -1435,12 +1481,15 @@ impl Workspace {
                     Some((result["notebook_id"].as_str()?.to_owned(), path, previewed))
                 })
                 .collect::<Vec<_>>();
-            (reopened, julia_failed.into_inner())
+            (reopened, failed.into_inner())
         });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
-            let (reopened, julia_failed) = reopen.await;
-            let _ = this.update(cx, |this, cx| this.julia_answer(&host, julia_failed.as_deref(), cx));
+            let (reopened, [julia_failed, r_failed]) = reopen.await;
+            let _ = this.update(cx, |this, cx| {
+                this.julia_answer(&host, Backend::Pluto, julia_failed.as_deref(), cx);
+                this.julia_answer(&host, Backend::Ember, r_failed.as_deref(), cx);
+            });
             let previewed = reopened.iter().filter(|(.., previewed)| *previewed).count();
             let reopened: Vec<(String, String)> = reopened.into_iter().map(|(id, path, _)| (id, path)).collect();
             let _ = this.update(cx, |this, cx| {
@@ -1625,6 +1674,7 @@ impl Workspace {
                         this.status = not_stopped(&this.hosts.name(&host), &e).into();
                         if host == HostId::ThisMac {
                             this.own_julia_after_stop(false, cx);
+                            this.own_r_after_stop(false, cx);
                         }
                         return this.check_host(&host, cx);
                     }
@@ -1637,6 +1687,7 @@ impl Workspace {
                 if host == HostId::ThisMac {
                     this.status = concat!("Julia on ", crate::platform::this_computer!(), " is stopped.").into();
                     this.own_julia_after_stop(true, cx);
+                    this.own_r_after_stop(true, cx);
                 }
                 cx.notify();
             });
@@ -1752,22 +1803,31 @@ impl Workspace {
         }
     }
 
-    /// For a call to `host`'s runtime that may wait for Julia to start
-    /// (`pluto::until_julia`): what it hears goes to the pane's step log until
-    /// it and every other such call end.
+    /// For a call to `host`'s runtime that may wait for Julia to start, or
+    /// for R notebooks to be set up (`kind`, `pluto::until_julia`): what it hears
+    /// goes to the pane's step log for that language until it and every other
+    /// such call end.
     // A runtime that says where Julia is (`watch_julia`) shows the same steps every second, whoever waits.
-    pub fn julia_steps(&mut self, host: &HostId, cx: &mut Context<Self>) -> JuliaSteps {
+    pub fn julia_steps(&mut self, host: &HostId, kind: Backend, cx: &mut Context<Self>) -> JuliaSteps {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<String>();
         if let Some(connection) = self.connections.get_mut(host) {
-            connection.julia_waits += 1;
+            *connection.waits(kind) += 1;
         }
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             while let Some(step) = rx.next().await {
                 let heard = this.update(cx, |this, cx| {
                     if let Some(connection) = this.connections.get_mut(&host) {
-                        connection.julia_failed = None;
-                        connection.julia.get_or_insert_with(|| Steps::new("Starting Julia")).julia(&step);
+                        match kind {
+                            Backend::Pluto => {
+                                connection.julia_failed = None;
+                                connection.julia.get_or_insert_with(|| Steps::new("Starting Julia")).julia(&step);
+                            }
+                            Backend::Ember => {
+                                connection.r_failed = None;
+                                connection.r.get_or_insert_with(Steps::r).r_step(&step);
+                            }
+                        }
                     }
                     cx.notify();
                 });
@@ -1777,9 +1837,13 @@ impl Workspace {
             }
             let _ = this.update(cx, |this, cx| {
                 if let Some(connection) = this.connections.get_mut(&host) {
-                    connection.julia_waits = connection.julia_waits.saturating_sub(1);
-                    if connection.julia_waits == 0 {
-                        connection.julia = None;
+                    let waits = connection.waits(kind);
+                    *waits = waits.saturating_sub(1);
+                    if *waits == 0 {
+                        match kind {
+                            Backend::Pluto => connection.julia = None,
+                            Backend::Ember => connection.r = None,
+                        }
                     }
                 }
                 cx.notify();
@@ -1789,13 +1853,20 @@ impl Workspace {
         JuliaSteps(tx)
     }
 
-    /// A call that needed Julia on `host` ended with `error`: if Julia couldn't
-    /// start, the pane says why, with Try again.
-    pub fn julia_answer(&mut self, host: &HostId, error: Option<&str>, cx: &mut Context<Self>) {
-        let failed = error.and_then(pluto::julia_failed).map(str::to_owned);
+    /// A call that needed Julia, or R (`kind`), on `host` ended with `error`:
+    /// if it couldn't start, the pane says why, with Try again.
+    pub fn julia_answer(&mut self, host: &HostId, kind: Backend, error: Option<&str>, cx: &mut Context<Self>) {
+        // R's keeps its code: the pane offers Install R for `r_not_found`.
+        let failed = match kind {
+            Backend::Pluto => error.and_then(pluto::julia_failed).map(str::to_owned),
+            Backend::Ember => error.filter(|e| pluto::r_failed(e).is_some()).map(str::to_owned),
+        };
         let Some(connection) = self.connections.get_mut(host) else { return };
         if failed.is_some() || error.is_none() {
-            connection.julia_failed = failed;
+            match kind {
+                Backend::Pluto => connection.julia_failed = failed,
+                Backend::Ember => connection.r_failed = failed,
+            }
             cx.notify();
         }
     }
@@ -1824,7 +1895,7 @@ impl Workspace {
                     let _ = this.update(cx, |this, cx| {
                         match started {
                             Ok(status) => this.on_julia_status(&host, status, cx),
-                            Err(e) => this.julia_answer(&host, Some(&format!("julia_failed::{e}")), cx),
+                            Err(e) => this.julia_answer(&host, Backend::Pluto, Some(&format!("julia_failed::{e}")), cx),
                         }
                         if let Some((key, path)) = open {
                             this.open_for_session(key, path, false, cx);
@@ -1842,19 +1913,58 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The pane's Try again, or Install R, after R notebooks couldn't start:
+    /// open the shown session's notebook again. `install`: first let the runtime
+    /// install Endeavor's own R, which the person has just agreed to.
+    fn retry_r(&mut self, host: &HostId, install: bool, cx: &mut Context<Self>) {
+        let bridge = self.connections.get_mut(host).and_then(|connection| {
+            connection.r_failed = None;
+            connection.bridge()
+        });
+        let waiting = self.active_session().filter(|s| s.place.host == *host && s.notebook.is_none() && s.stopped.is_none() && !s.missing);
+        // Its notebook opens again, or with none yet (the pane's New notebook), it's made again.
+        let Some(again) = waiting.map(|s| (s.key, s.notebook_path.clone())) else { return cx.notify() };
+        match bridge.filter(|_| install) {
+            Some(bridge) => {
+                let allowed = cx.background_executor().spawn(async move { pluto::allow_r_install(&bridge) });
+                let host = host.clone();
+                cx.spawn(async move |this, cx| {
+                    let allowed = allowed.await;
+                    let _ = this.update(cx, |this, cx| match allowed {
+                        Ok(()) => this.open_again(again, cx),
+                        Err(e) => this.julia_answer(&host, Backend::Ember, Some(&format!("r_failed::Couldn't install R: {e}")), cx),
+                    });
+                })
+                .detach();
+            }
+            None => self.open_again(again, cx),
+        }
+        cx.notify();
+    }
+
+    fn open_again(&mut self, (key, path): (u64, Option<String>), cx: &mut Context<Self>) {
+        match path {
+            Some(path) => self.open_for_session(key, path, false, cx),
+            None => self.new_notebook_here(key, cx),
+        }
+    }
+
     /// What the notebook pane shows while `host` isn't ready; None once it is,
     /// and while a dropped server's page stays up, read-only, as it reconnects.
-    pub fn host_pane_state(&self, host: &HostId, cx: &App) -> Option<HostPane> {
+    /// `kind`: the shown notebook's, whose language's setup the pane shows.
+    pub fn host_pane_state(&self, host: &HostId, kind: Backend, cx: &App) -> Option<HostPane> {
         let connection = self.connections.get(host);
         if let Some(lost) = connection.and_then(|c| c.lost.as_ref()) {
             let shown = crate::webcontent::url(self.webview.read(cx).raw());
             return (!lost.page.as_deref().is_some_and(|page| shown.starts_with(page))).then_some(HostPane::Lost);
         }
         Some(match connection.map_or(Status::Connecting, |c| c.status.clone()) {
-            // Ready, and Julia starting for a notebook the app opens, or unable to.
-            Status::Ready => match connection {
-                Some(Connection { julia_failed: Some(why), .. }) => HostPane::JuliaFailed(why.clone()),
-                Some(Connection { julia: Some(steps), .. }) => HostPane::JuliaStarting(steps.current.clone()),
+            // Ready, and Julia (or R) starting for a notebook the app opens, or unable to.
+            Status::Ready => match (kind, connection) {
+                (Backend::Pluto, Some(Connection { julia_failed: Some(why), .. })) => HostPane::JuliaFailed(why.clone()),
+                (Backend::Pluto, Some(Connection { julia: Some(steps), .. })) => HostPane::JuliaStarting(steps.current.clone()),
+                (Backend::Ember, Some(Connection { r_failed: Some(why), .. })) => HostPane::RFailed(why.clone()),
+                (Backend::Ember, Some(Connection { r: Some(steps), .. })) => HostPane::RStarting(steps.current.clone()),
                 _ => return None,
             },
             Status::Connecting | Status::Browsing | Status::Starting => HostPane::Starting,
@@ -1868,9 +1978,9 @@ impl Workspace {
 
     /// The notebook pane while `host` isn't ready: its state, and what to do
     /// about it. `start`: Reconnect also starts Julia, as a session needs; the
-    /// new-session screen only browses the host's files.
-    pub fn host_pane(&self, host: &HostId, start: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let state = self.host_pane_state(host, cx)?;
+    /// new-session screen only browses the host's files. `kind`: the shown notebook's.
+    pub fn host_pane(&self, host: &HostId, kind: Backend, start: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let state = self.host_pane_state(host, kind, cx)?;
         let connection = self.connections.get(host);
         let name = self.hosts.name(host);
         let action = |id: &'static str, label: &'static str, host: HostId, start_julia: bool| {
@@ -1923,6 +2033,7 @@ impl Workspace {
                 }
             }
             HostPane::JuliaStarting(_) => return connection.and_then(|c| c.julia.as_ref()).map(|steps| starting_pane(steps).into_any_element()),
+            HostPane::RStarting(_) => return connection.and_then(|c| c.r.as_ref()).map(|steps| starting_pane(steps).into_any_element()),
             HostPane::JuliaFailed(reason) => {
                 let host = host.clone();
                 let retry = div()
@@ -1937,6 +2048,36 @@ impl Workspace {
                     .button_text("Try again")
                     .on_click(cx.listener(move |this, _, _, cx| this.retry_julia(&host, cx)));
                 resting.child(div().text_color(theme::text_muted()).child(format!("Julia couldn't start on {name}."))).child(message(pluto::julia_failed_words(&reason))).child(retry)
+            }
+            HostPane::RFailed(error) => {
+                let host_id = host.clone();
+                let offer = own_r_offered().filter(|_| *host == HostId::ThisMac && error.starts_with("r_not_found::"));
+                let button = |id: &'static str, label: &'static str, install: bool| {
+                    let host = host_id.clone();
+                    div()
+                        .id(id)
+                        .role(Role::Button)
+                        .px_3()
+                        .py_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .bg(theme::accent())
+                        .text_color(gpui::white())
+                        .button_text(label)
+                        .on_click(cx.listener(move |this, _, _, cx| this.retry_r(&host, install, cx)))
+                };
+                if let Some(item) = offer {
+                    let size = item.size_mb.map(|mb| format!(", about {mb} MB")).unwrap_or_default();
+                    let words = format!(
+                        "Endeavor can install its own {}{size}, just for Endeavor. It changes nothing else on {}.",
+                        item.name,
+                        crate::platform::this_computer!(lower)
+                    );
+                    resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("r-install", "Install R", true))
+                } else {
+                    let why = pluto::r_failed(&error).unwrap_or(&error);
+                    resting.child(div().text_color(theme::text_muted()).child(format!("R notebooks couldn't start on {name}."))).child(message(pluto::julia_failed_words(why))).child(button("r-retry", "Try again", false))
+                }
             }
             HostPane::Starting => {
                 let steps = connection.map_or_else(|| Steps::new(format!("Connecting to {name}")), |c| c.steps.clone());
@@ -1996,6 +2137,12 @@ pub enum HostPane {
     JuliaStarting(String),
     /// Julia couldn't start for the notebook the app opened: why, and Try again.
     JuliaFailed(String),
+    /// The runtime is ready and R notebooks are being set up for an R notebook
+    /// the app opens: the step log, and the step under way.
+    RStarting(String),
+    /// R notebooks couldn't start for the R notebook the app opened: why, and
+    /// Try again, or Install R where Endeavor can install its own.
+    RFailed(String),
     Stopping,
     /// "Julia isn't running", and why.
     NotRunning(String),
@@ -2005,6 +2152,18 @@ pub enum HostPane {
     Replaced,
     /// "Not connected", and why.
     NotConnected(String),
+}
+
+/// What installing Endeavor's own R would be here, while it isn't installed: a Mac it has an R for.
+pub fn own_r_offered() -> Option<wire::Item> {
+    own_r_item().filter(|_| endeavor_mcp::r::own_installed().is_none())
+}
+
+/// Endeavor's own R, where this computer can have it (a Mac), installed or not.
+pub fn own_r_item() -> Option<wire::Item> {
+    // Asked once: it runs `uname` and `sw_vers`.
+    static OFFERED: std::sync::OnceLock<Option<wire::Item>> = std::sync::OnceLock::new();
+    OFFERED.get_or_init(endeavor_mcp::r::own_offered).clone()
 }
 
 /// Hears what Julia is doing for a call that waits for it (`Workspace::julia_steps`).

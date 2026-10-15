@@ -235,13 +235,26 @@ pub fn start_julia(bridge: &Bridge) -> Result<JuliaStatus, String> {
     JuliaStatus::from(&app_call(bridge, "endeavor/start_julia", json!({}))?)
 }
 
+/// What R notebooks' setup is doing, from a call's error that says it's still
+/// installing ("r_installing::Installing Ember for R notebooks, which takes…").
+pub fn r_installing(error: &str) -> Option<&str> {
+    let step = error.strip_prefix("r_installing::")?;
+    Some(step.split_once(", which").map_or(step, |(step, _)| step).trim())
+}
+
+/// Why R notebooks couldn't start, from a call's error that says so.
+pub fn r_failed(error: &str) -> Option<&str> {
+    error.strip_prefix("r_failed::").or_else(|| error.strip_prefix("r_not_found::")).map(str::trim)
+}
+
 /// `call` again while it answers that Julia is still starting (the first
 /// start downloads Julia and installs Pluto's packages, which takes minutes),
-/// with `step` hearing what Julia is doing each time.
+/// or that R notebooks are still being set up (R, then Ember), with `step`
+/// hearing what it's doing each time.
 pub fn until_julia<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn Fn(&str)) -> Result<T, String> {
     loop {
         match call() {
-            Err(e) => match julia_starting(&e) {
+            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)) {
                 Some(doing) => {
                     step(doing);
                     std::thread::sleep(Duration::from_secs(1));
@@ -251,6 +264,11 @@ pub fn until_julia<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn Fn
             done => return done,
         }
     }
+}
+
+/// Let the runtime install Endeavor's own R, which the person agreed to (EndeavorMCP interface 6).
+pub fn allow_r_install(bridge: &Bridge) -> Result<(), String> {
+    app_call(bridge, "endeavor/allow_r_install", json!({})).map(|_| ())
 }
 
 /// A new notebook in session `owner`'s folder, bound to it: (notebook id, path).
@@ -286,7 +304,7 @@ fn http_body(response: &[u8]) -> Result<Vec<u8>, String> {
     let head = String::from_utf8_lossy(&response[..split]).to_ascii_lowercase();
     let status = head.split_whitespace().nth(1).unwrap_or("");
     if status != "200" {
-        return Err(format!("Pluto answered {status}"));
+        return Err(format!("The notebook server answered {status}"));
     }
     let mut body = &response[split + 4..];
     if !head.contains("transfer-encoding: chunked") {
@@ -602,7 +620,7 @@ mod tests {
     fn reads_plain_and_chunked_http_bodies() {
         assert_eq!(super::http_body(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello").unwrap(), b"hello");
         assert_eq!(super::http_body(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nhel\r\n2\r\nlo\r\n0\r\n\r\n").unwrap(), b"hello");
-        assert_eq!(super::http_body(b"HTTP/1.1 404 Not Found\r\n\r\nno").unwrap_err(), "Pluto answered 404");
+        assert_eq!(super::http_body(b"HTTP/1.1 404 Not Found\r\n\r\nno").unwrap_err(), "The notebook server answered 404");
     }
 
     #[test]

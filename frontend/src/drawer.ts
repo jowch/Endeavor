@@ -81,7 +81,7 @@ const css = `
     background: var(--e-bg-card); color: var(--e-text-secondary); font: 11px/1.45 JuliaMono, ui-monospace, monospace; white-space: pre-wrap; }
   /* Live docs: Pluto's panel, filling the drawer under its tabs. */
   html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"] #helpbox-wrapper {
-    display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
     height: calc(var(--endeavor-drawer-h) - ${HEADER}px); z-index: 71; }
   html[data-endeavor-look="endeavor"] pluto-helpbox { position: static; width: 100%; height: 100%; right: auto;
     border-radius: 0; box-shadow: none; background: var(--e-bg-page); }
