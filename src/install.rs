@@ -133,7 +133,9 @@ pub fn download(url: &str, file: &Path, what: &str, size: u64, progress: &dyn Fn
     let mut curl = Command::new("curl");
     endeavor_mcp::client::no_window(&mut curl);
     let mut curl = curl
-        .args(["-fsSL", "--retry", "3", "-C", "-", "-o"])
+        // A connection that stalls (one that died across a sleep) fails after a
+        // minute instead of hanging until TCP gives up.
+        .args(["-fsSL", "--retry", "3", "--speed-limit", "1024", "--speed-time", "60", "-C", "-", "-o"])
         .arg(file)
         .arg(url)
         .stderr(Stdio::piped())

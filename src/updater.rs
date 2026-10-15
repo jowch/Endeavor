@@ -2,11 +2,14 @@
 //! `nightly.json` beside the dmg (scripts/nightly-manifest.sh). Once a day,
 //! and on Check now, the app reads it; when it names a build committed after
 //! this one, the app downloads the dmg, checks its SHA-256 against the
-//! manifest, copies Endeavor.app out of it, and checks that copy's signature:
-//! the same Developer ID team as the running app, and notarized. The hash only
-//! proves the file is the one the manifest names (both come from the same
-//! release); the signature is what proves it is ours. Restart, or any quit,
-//! then swaps the apps once this one has exited.
+//! manifest and its signature, copies Endeavor.app out of it, and checks that
+//! copy's signature: a Developer ID of the same team as the running app, and
+//! notarized. The hash only proves the file is the one the manifest names
+//! (both come from the same release); the signature is what proves it is ours.
+//! The manifest isn't signed, so the build it names is only trusted once the
+//! new app's own Info.plist (sealed by its signature, scripts/bundle.sh) says
+//! the same commit, committed after this build. Restart, or any quit, then
+//! swaps the apps once this one has exited.
 //!
 //! Only a build made by the nightly workflow (`ENDEAVOR_CHANNEL=nightly`,
 //! build.rs) running from a signed Endeavor.app checks. A build from source,
@@ -193,11 +196,18 @@ pub enum State {
 impl Updater {
     pub fn new() -> Self {
         let place = place();
+        let mut last_try = None;
         let state = match place {
+            // The swap at the last quit failed (`install`): say so, and try
+            // again in an hour rather than straight away.
+            Ok(_) if folder().is_ok_and(|dir| std::fs::remove_file(dir.join(FAILED)).is_ok()) => {
+                last_try = Some(Instant::now());
+                State::Failed("the last update couldn't be installed".into())
+            }
             Ok(_) => State::Waiting,
             Err(why) => State::Off(why),
         };
-        Updater { place, state, progress: Arc::default(), last_try: None }
+        Updater { place, state, progress: Arc::default(), last_try }
     }
 
     /// Whether a check should start now (Check now starts one regardless).
@@ -244,7 +254,7 @@ impl Updater {
     /// when `relaunch`). Nothing to do unless one is ready.
     pub fn install(&mut self, relaunch: bool) -> Result<bool, String> {
         let (State::Ready { staged, .. }, Ok(place)) = (&self.state, &self.place) else { return Ok(false) };
-        install(staged, &place.app, relaunch)?;
+        swap(staged, &place.app, std::process::id(), relaunch, &folder()?.join(FAILED))?;
         self.state = State::Installing;
         Ok(true)
     }
@@ -262,16 +272,17 @@ pub enum Outcome {
     Off(&'static str),
 }
 
-/// Check, and fetch a newer build when there is one. Blocking; `progress`
-/// gets the download's fraction.
-pub fn check(place: &Place, progress: &dyn Fn(f32)) -> Result<Outcome, String> {
+/// Check, and fetch a newer build when there is one: newer than the build
+/// committed as `commit` at `committed` (this one's COMMIT and COMMITTED).
+/// Blocking; `progress` gets the download's fraction.
+pub fn check(place: &Place, commit: &str, committed: &str, progress: &dyn Fn(f32)) -> Result<Outcome, String> {
     let m = parse(&manifest()?)?;
-    let Some(offer) = offer(&m, COMMIT, COMMITTED) else { return Ok(Outcome::UpToDate) };
+    let Some(offer) = offer(&m, commit, committed) else { return Ok(Outcome::UpToDate) };
     if !place.replaceable {
         return Ok(Outcome::Manual { build: offer.build() });
     }
     let Some(team) = team_of(&place.app) else { return Ok(Outcome::Off("this copy isn't signed with a Developer ID")) };
-    let staged = fetch(&offer, &team, progress)?;
+    let staged = fetch(&folder()?, &offer, &team, committed, progress)?;
     Ok(Outcome::Ready { build: offer.build(), staged })
 }
 
@@ -306,28 +317,46 @@ fn folder() -> Result<PathBuf, String> {
     Ok(crate::install::app_dir()?.join("update"))
 }
 
-/// Download the offer's disk image, check it, and copy a checked app out of
-/// it. Returns the copy's path. What other builds left in the folder goes.
-fn fetch(offer: &Offer, team: &str, progress: &dyn Fn(f32)) -> Result<PathBuf, String> {
-    let dir = folder()?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+/// Left in `folder()` by a swap that failed, for the next launch to report.
+const FAILED: &str = "failed";
+
+/// Fetch the offer into `dir` and check it, the app's own Info.plist
+/// included. Returns the checked copy. What other builds left in `dir` goes.
+fn fetch(dir: &Path, offer: &Offer, team: &str, committed: &str, progress: &dyn Fn(f32)) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
         if !entry.file_name().to_string_lossy().starts_with(&offer.commit) {
             let _ = std::fs::remove_dir_all(entry.path()).or_else(|_| std::fs::remove_file(entry.path()));
         }
     }
     let staged = dir.join(&offer.commit).join(APP);
-    if staged.is_dir() && verify(&staged, team).is_ok() {
+    if staged.is_dir() && verify(&staged, team).and_then(|()| same_build(&staged, &offer.commit, committed)).is_ok() {
         return Ok(staged);
     }
+    let staged = stage(RELEASE, dir, offer, team, progress)?;
+    if let Err(e) = same_build(&staged, &offer.commit, committed) {
+        let _ = std::fs::remove_dir_all(staged.parent().unwrap());
+        return Err(e);
+    }
+    Ok(staged)
+}
 
+/// Download the offer's disk image from `base`, check it, and copy a signed,
+/// notarized app out of it into `dir`. Returns the copy's path.
+fn stage(base: &str, dir: &Path, offer: &Offer, team: &str, progress: &dyn Fn(f32)) -> Result<PathBuf, String> {
+    let staged = dir.join(&offer.commit).join(APP);
     let dmg = dir.join(format!("{}.dmg.part", offer.commit));
-    let url = format!("{RELEASE}/{}", offer.file.name);
+    let url = format!("{base}/{}", offer.file.name);
     crate::install::download(&url, &dmg, "the update", offer.file.size, &|_, f| progress(f.unwrap_or(0.)))?;
     let got = crate::install::sha256_of(&dmg)?;
     if got != offer.file.sha256 {
         let _ = std::fs::remove_file(&dmg);
         return Err("the download didn't match the update list; it was deleted and is tried again later".into());
+    }
+    // The disk image is signed too: one that isn't ours is never mounted.
+    if let Err(e) = run(Command::new("codesign").args(["--verify", "-R"]).arg(requirement(team)).arg(&dmg), "check the disk image's signature") {
+        let _ = std::fs::remove_file(&dmg);
+        return Err(e);
     }
 
     let mount = dir.join(format!("{}.mount", offer.commit));
@@ -352,12 +381,47 @@ fn fetch(offer: &Offer, team: &str, progress: &dyn Fn(f32)) -> Result<PathBuf, S
     Ok(staged)
 }
 
+/// Signed with a Developer ID Application certificate of `team`: not the
+/// team's development or App Store certificates, which `spctl` would refuse
+/// but nothing else here would once Gatekeeper is off.
+fn requirement(team: &str) -> String {
+    format!("=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"{team}\"")
+}
+
 /// The new app is signed by the same Developer ID team as this one, and
 /// notarized.
 fn verify(app: &Path, team: &str) -> Result<(), String> {
-    let requirement = format!("=anchor apple generic and certificate leaf[subject.OU] = \"{team}\"");
-    run(Command::new("codesign").args(["--verify", "--strict", "--deep", "-R"]).arg(requirement).arg(app), "check the new app's signature")?;
+    run(Command::new("codesign").args(["--verify", "--strict", "--deep", "-R"]).arg(requirement(team)).arg(app), "check the new app's signature")?;
     run(Command::new("spctl").args(["--assess", "--type", "execute"]).arg(app), "check that the new app is notarized")
+}
+
+/// The checked app at `app` is the build `commit`, committed after
+/// `committed`, by its own Info.plist. The signature seals that file, so this
+/// is what stops a changed manifest offering an older signed build.
+fn same_build(app: &Path, commit: &str, committed: &str) -> Result<(), String> {
+    let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).map_err(|e| format!("couldn't read the new app's Info.plist ({e})"))?;
+    is_build(&plist, commit, committed)
+}
+
+fn is_build(plist: &str, commit: &str, committed: &str) -> Result<(), String> {
+    let (Some(its_commit), Some(its_time)) = (plist_string(plist, "EndeavorCommit"), plist_string(plist, "EndeavorCommitted")) else {
+        return Err("the new app doesn't say which build it is".into());
+    };
+    if its_commit != commit {
+        return Err("the new app isn't the build the update list names".into());
+    }
+    if !utc_time(its_time) || !utc_time(committed) || its_time <= committed {
+        return Err("the new app isn't newer than this one".into());
+    }
+    Ok(())
+}
+
+/// `<key>KEY</key><string>VALUE</string>` in an XML Info.plist, as
+/// scripts/bundle.sh writes it.
+fn plist_string<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
+    let rest = &plist[plist.find(&format!("<key>{key}</key>"))? + key.len() + 11..];
+    let rest = rest.trim_start().strip_prefix("<string>")?;
+    Some(&rest[..rest.find("</string>")?])
 }
 
 fn run(cmd: &mut Command, what: &str) -> Result<(), String> {
@@ -369,31 +433,36 @@ fn run(cmd: &mut Command, what: &str) -> Result<(), String> {
     }
 }
 
-/// Swap the apps once this one has exited, and start the new one when
-/// `relaunch`. A detached shell does it, since this process has to be gone
-/// first; if the second rename fails, the old app goes back.
-pub fn install(staged: &Path, app: &Path, relaunch: bool) -> Result<(), String> {
+/// Swap the apps once process `pid` (this app) has exited, and start the new
+/// one when `relaunch`. A detached shell does it, since the app has to be
+/// gone first. The new app is copied beside the old one first, so both
+/// renames stay on one volume and are atomic: a copy that fails leaves the
+/// old app untouched, and a failed rename puts it back. Either leaves
+/// `failed` for the next launch to report.
+fn swap(staged: &Path, app: &Path, pid: u32, relaunch: bool, failed: &Path) -> Result<std::process::Child, String> {
     const SCRIPT: &str = r#"
-pid=$1 app=$2 new=$3 open=$4
+pid=$1 app=$2 new=$3 open=$4 failed=$5
 while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
-old="$app.replaced"
-rm -rf "$old"
-if mv "$app" "$old"; then
-  if mv "$new" "$app"; then rm -rf "$old"; else mv "$old" "$app"; fi
+next="$app.next" old="$app.replaced"
+rm -rf "$next" "$old"
+if ditto "$new" "$next" && mv "$app" "$old"; then
+  if mv "$next" "$app"; then rm -rf "$old" "$new"; else mv "$old" "$app"; rm -rf "$next"; : > "$failed"; fi
+else
+  rm -rf "$next"; : > "$failed"
 fi
 [ -z "$open" ] || open "$app"
 "#;
     Command::new("/bin/sh")
         .args(["-c", SCRIPT, "sh"])
-        .arg(std::process::id().to_string())
+        .arg(pid.to_string())
         .arg(app)
         .arg(staged)
         .arg(if relaunch { "open" } else { "" })
+        .arg(failed)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map(drop)
         .map_err(|e| format!("couldn't start the update ({e})"))
 }
 
@@ -491,9 +560,122 @@ mod tests {
         assert_eq!(u.install(true), Ok(false));
     }
 
+    fn plist(commit: &str, committed: &str) -> String {
+        format!("<dict>\n  <key>CFBundleExecutable</key><string>endeavor</string>\n  <key>EndeavorCommit</key><string>{commit}</string>\n  <key>EndeavorCommitted</key><string>{committed}</string>\n</dict>")
+    }
+
+    #[test]
+    fn the_new_app_must_say_it_is_the_newer_build_offered() {
+        assert_eq!(is_build(&plist(B, "2026-10-16T08:00:00Z"), B, "2026-10-15T08:00:00Z"), Ok(()));
+        // An older signed build that a changed manifest calls newer.
+        assert!(is_build(&plist(B, "2026-10-14T08:00:00Z"), B, "2026-10-15T08:00:00Z").unwrap_err().contains("isn't newer"));
+        assert!(is_build(&plist(A, "2026-10-16T08:00:00Z"), B, "2026-10-15T08:00:00Z").unwrap_err().contains("isn't the build"));
+        assert!(is_build(&plist(B, ""), B, "2026-10-15T08:00:00Z").is_err());
+        // A nightly from before the Info.plist carried its build.
+        assert!(is_build("<dict><key>CFBundleExecutable</key><string>endeavor</string></dict>", B, "2026-10-15T08:00:00Z").unwrap_err().contains("doesn't say"));
+        assert_eq!(plist_string("<key>EndeavorCommit</key>\n\t<string>x</string>", "EndeavorCommit"), Some("x"));
+    }
+
     #[test]
     fn this_build_records_its_commit_and_time() {
         assert!(COMMIT.is_empty() || COMMIT.len() == 40, "{COMMIT}");
         assert!(COMMITTED.is_empty() || utc_time(COMMITTED), "{COMMITTED}");
+    }
+
+    /// The real fetch, checks and swap on a Mac, against the nightly published
+    /// now, all in a scratch folder (nothing in Applications or ~/Library):
+    ///   cargo test --locked updater::tests::real_update_on_a_mac -- --ignored --nocapture
+    /// Needs the network (the download, and `spctl`'s notarization lookup).
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn real_update_on_a_mac() {
+        use std::io::Write as _;
+        let w = std::env::temp_dir().join(format!("endeavor-update-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&w);
+        let src = w.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let name = "Endeavor-macos-arm64.dmg";
+        let dmg = src.join(name);
+        crate::install::download(&format!("{RELEASE}/{name}"), &dmg, "the nightly", 1, &|_, _| {}).unwrap();
+        let size = std::fs::metadata(&dmg).unwrap().len();
+        let sha256 = crate::install::sha256_of(&dmg).unwrap();
+
+        // The "installed" app: the same nightly, copied out by hand.
+        let apps = w.join("apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        let mount = w.join("mnt");
+        run(Command::new("hdiutil").args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint"]).arg(&mount).arg(&dmg), "attach").unwrap();
+        run(Command::new("ditto").arg(mount.join(APP)).arg(apps.join(APP)), "copy").unwrap();
+        run(Command::new("hdiutil").arg("detach").arg(&mount), "detach").unwrap();
+        let installed = apps.join(APP);
+        let team = team_of(&installed).expect("the nightly is Developer ID signed");
+        assert!(run(Command::new("codesign").args(["--verify", "-R"]).arg(requirement(&team)).arg(&dmg), "check").is_ok(), "the disk image passes");
+        assert!(run(Command::new("codesign").args(["--verify", "-R"]).arg(requirement("ZZZZZZZZZZ")).arg(&dmg), "check").is_err(), "another team's requirement fails");
+
+        let offer = Offer { commit: "c".repeat(40), file: File { name: name.into(), sha256: sha256.clone(), size } };
+        let base = |dir: &Path| format!("file://{}", dir.display());
+
+        // A disk image with one byte changed is refused by its hash.
+        let bad = w.join("bad");
+        std::fs::create_dir_all(&bad).unwrap();
+        let mut bytes = std::fs::read(&dmg).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 1;
+        std::fs::write(bad.join(name), bytes).unwrap();
+        let err = stage(&base(&bad), &w.join("staging-bad"), &offer, &team, &|_| {}).unwrap_err();
+        assert!(err.contains("didn't match"), "{err}");
+
+        // The real one: hash, disk image signature, copy, app signature, notarization.
+        let staging = w.join("staging");
+        let staged = stage(&base(&src), &staging, &offer, &team, &|_| {}).unwrap();
+        assert!(verify(&staged, "ZZZZZZZZZZ").is_err(), "another team is refused");
+
+        // Its Info.plist: refused as the wrong build either way; accepted as
+        // itself once the nightly carries its build (the first with app #80's fix).
+        assert!(same_build(&staged, &offer.commit, "2000-01-01T00:00:00Z").is_err());
+        let plist = std::fs::read_to_string(staged.join("Contents/Info.plist")).unwrap();
+        match plist_string(&plist, "EndeavorCommit") {
+            Some(commit) => same_build(&staged, commit, "2000-01-01T00:00:00Z").unwrap(),
+            None => eprintln!("note: this nightly's Info.plist doesn't name its build yet, so fetch() would refuse it"),
+        }
+
+        // A changed file inside the app breaks its signature.
+        let tampered = w.join("tampered").join(APP);
+        run(Command::new("ditto").arg(&staged).arg(&tampered), "copy").unwrap();
+        std::fs::OpenOptions::new().append(true).open(tampered.join("Contents/Resources/Endeavor.icns")).unwrap().write_all(b"x").unwrap();
+        assert!(verify(&tampered, &team).is_err(), "a changed app is refused");
+
+        // The swap, once a stand-in for the app has exited.
+        let failed = w.join(FAILED);
+        let mut app = Command::new("sleep").arg("1").spawn().unwrap();
+        let mut script = swap(&staged, &installed, app.id(), false, &failed).unwrap();
+        app.wait().unwrap();
+        script.wait().unwrap();
+        verify(&installed, &team).unwrap();
+        assert!(!failed.exists() && !staged.exists());
+        assert!(!apps.join("Endeavor.app.next").exists() && !apps.join("Endeavor.app.replaced").exists());
+
+        // On another volume with no room for the new app, the copy fails and
+        // the old app stays as it was.
+        let image = w.join("small.dmg");
+        run(Command::new("hdiutil").args(["create", "-size", "16m", "-fs", "APFS", "-volname", "EndeavorSwapTest"]).arg(&image), "create").unwrap();
+        let vol = w.join("vol");
+        run(Command::new("hdiutil").args(["attach", "-nobrowse", "-noautoopen", "-mountpoint"]).arg(&vol).arg(&image), "attach").unwrap();
+        let small = vol.join(APP);
+        std::fs::create_dir_all(small.join("Contents")).unwrap();
+        std::fs::write(small.join("Contents/Info.plist"), "old").unwrap();
+        let mut app = Command::new("true").spawn().unwrap();
+        let mut script = swap(&installed, &small, app.id(), false, &failed).unwrap();
+        app.wait().unwrap();
+        script.wait().unwrap();
+        let old = std::fs::read_to_string(small.join("Contents/Info.plist"));
+        let left: Vec<_> = std::fs::read_dir(&vol).unwrap().flatten().map(|e| e.file_name()).collect();
+        let _ = run(Command::new("hdiutil").args(["detach", "-force"]).arg(&vol), "detach");
+        assert_eq!(old.as_deref().ok(), Some("old"), "the old app is untouched");
+        assert!(failed.exists(), "the next launch reports it");
+        assert!(left.iter().all(|n| !n.to_string_lossy().contains(".next")), "{left:?}");
+
+        std::fs::remove_dir_all(&w).unwrap();
     }
 }

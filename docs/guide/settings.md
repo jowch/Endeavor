@@ -112,7 +112,8 @@ See [Troubleshooting](./troubleshooting.md).
 The version of Endeavor, and of the Claude Code adapter it uses to talk to
 Claude. The Mac test build checks for a newer test build once a day, and
 **Check now** checks straight away. A newer one downloads in the background;
-**Restart** installs it, and so does quitting Endeavor. When Endeavor isn't in
+**Restart** installs it, and so does quitting Endeavor. While an agent is
+working, Restart waits until it's done. When Endeavor isn't in
 your Applications folder it can't replace itself, so it offers **Download**
 instead. Other copies, such as one built from the source code, show only
 their version (see [Overview](./overview.md)).

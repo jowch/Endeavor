@@ -39,6 +39,8 @@ pub enum AppUpdate {
     UpToDate,
     /// Downloaded and checked; it installs when Endeavor restarts.
     Ready(String),
+    /// Ready, but an agent is working: Restart waits until it's done.
+    ReadyAfterTurn(String),
     /// Newer, but Endeavor can't replace itself where it is.
     Manual(String),
     Failed(String),
@@ -47,7 +49,7 @@ pub enum AppUpdate {
 impl AppUpdate {
     /// Something for the user to do about it.
     pub fn actionable(&self) -> bool {
-        matches!(self, AppUpdate::Ready(_) | AppUpdate::Manual(_))
+        matches!(self, AppUpdate::Ready(_) | AppUpdate::ReadyAfterTurn(_) | AppUpdate::Manual(_))
     }
 }
 
@@ -85,6 +87,7 @@ pub fn notices(updates: &Updates) -> Vec<Notice> {
     let mut rows = Vec::new();
     match &updates.app {
         AppUpdate::Ready(build) => rows.push(Notice { text: format!("Endeavor build {build} is ready to install."), button: Some(("Restart", Action::Restart, true)) }),
+        AppUpdate::ReadyAfterTurn(build) => rows.push(Notice { text: format!("Endeavor build {build} is ready to install once the agent is done."), button: None }),
         AppUpdate::Manual(build) => rows.push(Notice { text: format!("Endeavor build {build} is out."), button: Some(("Download", Action::Download, true)) }),
         _ => {}
     }
@@ -122,6 +125,7 @@ pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
         AppUpdate::Checking(Some(p)) => (format!("Downloading the newest build… {p}%"), None, false),
         AppUpdate::UpToDate => ("Up to date".to_owned(), check, false),
         AppUpdate::Ready(build) => (format!("Build {build} is ready. It installs when Endeavor restarts."), Some(("Restart", Action::Restart, true)), true),
+        AppUpdate::ReadyAfterTurn(build) => (format!("Build {build} is ready. Restart comes back once the agent is done."), None, true),
         AppUpdate::Manual(build) => (
             format!("Build {build} is out. Endeavor can't replace itself where it is: download it and drag it to Applications."),
             Some(("Download", Action::Download, true)),
@@ -495,6 +499,7 @@ mod tests {
         assert_eq!(row(AppUpdate::Checking(Some(40))), ("Downloading the newest build… 40%".into(), None, false));
         assert_eq!(row(AppUpdate::Failed("couldn't reach GitHub".into())), ("Couldn't check for a newer build: couldn't reach GitHub.".into(), Some("Check now"), false));
         assert_eq!(row(AppUpdate::Manual("abc1234".into())).1, Some("Download"));
+        assert_eq!(row(AppUpdate::ReadyAfterTurn("abc1234".into())), ("Build abc1234 is ready. Restart comes back once the agent is done.".into(), None, true));
         let manual = notices(&Updates { app: AppUpdate::Manual("abc1234".into()), adapter: Adapter::Available("0.4".into()) });
         assert_eq!(manual.iter().map(|n| n.button.map(|b| (b.1, b.2))).collect::<Vec<_>>(), [Some((Action::Download, true)), Some((Action::UpdateAdapter, false))]);
     }

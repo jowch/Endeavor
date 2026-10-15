@@ -740,7 +740,7 @@ impl Workspace {
                 this.check_usage_limit(cx);
                 !this.usage_limits.is_empty()
                     || this.app_update.percent().is_some()
-                    || this.sessions.iter().any(|s| s.busy_since.is_some())
+                    || this.working()
                     || this.connections.values().any(|c| matches!(c.status, connection::Status::Connecting | connection::Status::Starting))
             }) else {
                 break;
@@ -2185,6 +2185,7 @@ impl Workspace {
             updater::State::Waiting => about::AppUpdate::Unchecked,
             updater::State::Checking => about::AppUpdate::Checking(self.app_update.percent()),
             updater::State::UpToDate => about::AppUpdate::UpToDate,
+            updater::State::Ready { build, .. } if self.working() => about::AppUpdate::ReadyAfterTurn(build.clone()),
             updater::State::Ready { build, .. } => about::AppUpdate::Ready(build.clone()),
             updater::State::Manual { build } => about::AppUpdate::Manual(build.clone()),
             updater::State::Failed(e) => about::AppUpdate::Failed(e.clone()),
@@ -2197,7 +2198,7 @@ impl Workspace {
         let Some(place) = self.app_update.start(Instant::now()) else { return };
         let progress = self.app_update.progress.clone();
         let checked = cx.background_executor().spawn(async move {
-            updater::check(&place, &|f| progress.store((f.clamp(0., 1.) * 1000.) as u32, std::sync::atomic::Ordering::Relaxed))
+            updater::check(&place, updater::COMMIT, updater::COMMITTED, &|f| progress.store((f.clamp(0., 1.) * 1000.) as u32, std::sync::atomic::Ordering::Relaxed))
         });
         cx.spawn(async move |this, cx| {
             let result = checked.await;
@@ -2213,8 +2214,17 @@ impl Workspace {
         cx.notify();
     }
 
+    /// An agent is in the middle of a turn, in any session.
+    fn working(&self) -> bool {
+        self.sessions.iter().any(|s| s.busy_since.is_some())
+    }
+
     /// Restart: swap in the fetched build once Endeavor has quit, and open it.
+    /// Not while an agent is working: About holds Restart back until it's done.
     pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        if self.working() {
+            return;
+        }
         match self.app_update.install(true) {
             Ok(true) => cx.quit(),
             Ok(false) => {}
