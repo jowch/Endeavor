@@ -152,7 +152,8 @@ fn chips(blocks: Vec<ContentBlock>) -> Vec<Attachment> {
 fn saved(entry: &Entry) -> Option<Saved> {
     Some(match entry {
         Entry::User { text, attachments, delivery, sent, .. } => {
-            let blocks = as_replayed(attach::prompt_blocks("", attachments, &[]))
+            // Read back only as chips, which don't keep the cell links' engine.
+            let blocks = as_replayed(attach::prompt_blocks("", attachments, &[], wire::backend::Backend::Pluto))
                 .into_iter()
                 .filter(|b| !matches!(b, ContentBlock::Image(image) if image.data.len() > IMAGE_MAX))
                 .collect();
