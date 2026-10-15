@@ -223,8 +223,10 @@ In order. Each part is also useful to Claude, or harmless to it.
     agent made outside Endeavor aren't added, a failed listing changes
     nothing, and a session a complete listing (no further page) leaves
     out is marked missing for the launch but kept: only Delete removes a
-    record. Claude starts at launch alongside Julia, except during
-    first-launch setup. A session opened before its host's Julia is up waits
+    record. The new-session screen's agent starts at launch alongside
+    Julia, except during first-launch setup; Claude also starts then when
+    Endeavor has Claude sessions, so their listing stays current. Only the
+    agent in use says "connected" in the status line. A session opened before its host's Julia is up waits
     with "Starting Julia…". An agent that starts on demand (Codex) starts
     when it is picked or one of its sessions opens. Still to do: showing the
     agent on rows.

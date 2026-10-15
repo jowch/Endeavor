@@ -1153,7 +1153,8 @@ impl Workspace {
         let reattached = self.connections.get(host).and_then(|c| c.runtime.as_ref()).is_some_and(|r| r.reattached);
         if *host == HostId::ThisMac {
             // First launch: the assistant picked on the setup screen, once picked.
-            let agent = self.setup.as_ref().map_or(Some(crate::agent::Agent::Claude), |s| s.agent);
+            // Other launches start their agents at launch (`main`), or when needed.
+            let agent = self.setup.as_ref().and_then(|s| s.agent);
             if let Some(agent) = agent
                 && let Some(commands) = self.links.get_mut(agent).rx.take()
             {

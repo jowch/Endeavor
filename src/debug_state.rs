@@ -126,6 +126,7 @@ impl Workspace {
             "offline": self.offline_since.map(|since| json!({ "for_secs": since.elapsed().as_secs(), "trying": self.probing })),
             "julia_here": self.julia_here_state(),
             "claude": {
+                "started": self.links.get(Agent::Claude).rx.is_none(),
                 "state": state_name(&self.links.get(Agent::Claude).process.state),
                 "connected": self.links.get(Agent::Claude).ready,
                 "error": (!self.links.get(Agent::Claude).process.up()).then(|| self.links.get(Agent::Claude).process.error.clone()),

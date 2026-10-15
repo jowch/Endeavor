@@ -836,12 +836,16 @@ impl Workspace {
         }
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
-        // Claude starts alongside it, except on first launch, whose setup screen
-        // asks which assistant first and then goes step by step.
+        // The new-session screen's agent starts alongside it, for its sign-in and
+        // options, except on first launch, whose setup screen asks which
+        // assistant first and then goes step by step. Claude also starts when
+        // Endeavor has Claude sessions, so the sidebar's list of them stays
+        // current; otherwise it waits until something needs it.
         if this.setup.is_none() {
-            this.ensure_agent(agent::Agent::Claude, cx);
-            // The new-session screen shows the last agent picked: its sign-in and options.
             this.ensure_agent(this.draft_agent(), cx);
+            if this.records.any_of(agent::Agent::Claude) {
+                this.ensure_agent(agent::Agent::Claude, cx);
+            }
         }
         this.scan_notebooks(cx);
         this.watch_network(cx);
@@ -1777,7 +1781,11 @@ impl Workspace {
     fn on_event(&mut self, agent: agent::Agent, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::Ready => {
-                self.status = format!("{} connected.", agent.name()).into();
+                // Only the assistant in use names itself: another one starting
+                // in the background doesn't take the line.
+                if agent == self.draft_agent() || self.active_session().is_some_and(|s| s.agent == agent) {
+                    self.status = format!("{} connected.", agent.name()).into();
+                }
                 let link = self.links.get_mut(agent);
                 link.ready = true;
                 link.failed = false;
