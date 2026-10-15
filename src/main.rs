@@ -1777,7 +1777,7 @@ impl Workspace {
     fn on_event(&mut self, agent: agent::Agent, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::Ready => {
-                self.status = self.connected_status(agent).into();
+                self.status = format!("{} connected.", agent.name()).into();
                 let link = self.links.get_mut(agent);
                 link.ready = true;
                 link.failed = false;
@@ -2117,11 +2117,8 @@ impl Workspace {
 
     /// What About Endeavor shows in its update strip.
     pub fn updates(&self) -> about::Updates {
-        let claude = self.links.get(agent::Agent::Claude);
         let adapter = match agent::adapter_status(agent::Agent::Claude) {
-            Ok((version, false)) if claude.failed => about::Adapter::Available(version),
-            // Claude's start installs it; someone using another assistant may never start Claude.
-            Ok((_, false)) if claude.rx.is_some() => about::Adapter::Unused,
+            Ok((version, false)) if self.links.get(agent::Agent::Claude).failed => about::Adapter::Available(version),
             Ok((version, false)) => about::Adapter::Installing(version),
             _ => about::Adapter::Current,
         };
@@ -2147,8 +2144,9 @@ impl Workspace {
         self.restart_agent(agent::Agent::Claude, cx);
     }
 
-    fn restart_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) {
-        // The failed agent thread dropped its command channel; start with a new one.
+    pub(crate) fn restart_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) {
+        // A new command channel: a failed thread dropped its own, and a running
+        // one ends when this drops (its process with it); `start_agent` ignores its last events.
         let link = self.links.get_mut(agent);
         let commands = link.renew();
         link.ready = false;
@@ -2176,10 +2174,16 @@ impl Workspace {
             self.links.get_mut(agent).rx = Some(commands);
             return;
         }
+        let link = self.links.get_mut(agent);
+        link.generation += 1;
+        let generation = link.generation;
         let mut events = agent::start(agent, commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
-                if this.update(cx, |this, cx| this.on_event(agent, event, cx)).is_err() {
+                // A start replaced by a restart: its last words (the sign-in it was
+                // waiting for, "connection closed") are about a process already gone.
+                let current = |this: &Self| this.links.get(agent).generation == generation;
+                if this.update(cx, |this, cx| if current(this) { this.on_event(agent, event, cx) }).is_err() {
                     break;
                 }
             }

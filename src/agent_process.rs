@@ -80,12 +80,15 @@ pub struct Link {
     pub failed: bool,
     /// The "isn't running" card's Details are open.
     pub details_open: bool,
+    /// Which start of the agent this is. Events from an earlier one, ended
+    /// on purpose (`restart_agent`), are dropped.
+    pub generation: u64,
 }
 
 impl Default for Link {
     fn default() -> Self {
         let (tx, rx) = futures::channel::mpsc::unbounded();
-        Link { tx, rx: Some(rx), process: Process::default(), ready: false, failed: false, details_open: false }
+        Link { tx, rx: Some(rx), process: Process::default(), ready: false, failed: false, details_open: false, generation: 0 }
     }
 }
 

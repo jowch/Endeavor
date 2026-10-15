@@ -405,7 +405,6 @@ impl Workspace {
             Some(method) => {
                 self.account = Account::SignedIn;
                 self.remember_method(method);
-                self.signed_in_status(Agent::Claude);
             }
             None => self.signed_out(cx),
         }
@@ -1050,22 +1049,6 @@ impl Workspace {
         }
     }
 
-    /// The status line once `agent` is connected. Signed out, it can't answer
-    /// yet, so the line says what's missing rather than "connected".
-    pub fn connected_status(&self, agent: Agent) -> String {
-        match self.signed_out_of_agent(agent) {
-            true => needs_sign_in(agent),
-            false => format!("{} connected.", agent.name()),
-        }
-    }
-
-    /// Signed in from its card: the status line stops asking for it.
-    fn signed_in_status(&mut self, agent: Agent) {
-        if self.status.as_ref() == needs_sign_in(agent).as_str() {
-            self.status = format!("{} connected.", agent.name()).into();
-        }
-    }
-
     /// `agent` can't answer now: messages wait.
     pub fn out_of_reach(&self, agent: Agent) -> bool {
         self.signed_out_of_agent(agent) || self.offline_since().is_some() || self.usage_limits.holds(agent) || !self.links.get(agent).process.up()
@@ -1101,7 +1084,6 @@ impl Workspace {
     pub fn on_antigravity_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
         if signed_in {
             self.antigravity_account = crate::agent::Account::SignedIn;
-            self.signed_in_status(Agent::Antigravity);
             self.open_waiting(Agent::Antigravity, cx);
         } else {
             self.signed_out_of(Agent::Antigravity, cx);
@@ -1123,14 +1105,16 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The waiting card's Cancel: the card goes back to Sign in at once.
-    /// Antigravity's server is asked to stop waiting for the browser.
+    /// The waiting card's Cancel: the card goes back to Sign in at once, and
+    /// Antigravity's server starts again. Only stopping it ends its wait for
+    /// the browser, which holds the sign-in's port, so a second Sign in would
+    /// fail. Nothing else is lost: signed out, no Antigravity session is open.
     pub fn cancel_antigravity_sign_in(&mut self, cx: &mut Context<Self>) {
         if self.antigravity_account != crate::agent::Account::SigningIn {
             return;
         }
-        let _ = self.links.get(Agent::Antigravity).tx.unbounded_send(crate::agent::Command::CancelSignIn);
         self.antigravity_account = crate::agent::Account::SignedOut;
+        self.restart_agent(Agent::Antigravity, cx);
         cx.notify();
     }
 
@@ -1156,9 +1140,6 @@ impl Workspace {
     /// waiting for that open.
     pub fn on_codex_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
         self.codex_account = if signed_in { crate::agent::Account::SignedIn } else { crate::agent::Account::SignedOut };
-        if signed_in {
-            self.signed_in_status(Agent::Codex);
-        }
         self.open_waiting(Agent::Codex, cx);
         cx.notify();
     }
@@ -1222,11 +1203,6 @@ impl Workspace {
 }
 
 const PLANS: &str = "https://claude.com/pricing";
-
-/// The status line for an agent that's connected but signed out.
-fn needs_sign_in(agent: Agent) -> String {
-    format!("{} needs you to sign in.", agent.name())
-}
 
 #[cfg(test)]
 mod tests {

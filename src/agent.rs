@@ -658,9 +658,6 @@ pub enum Command {
     /// ACP's sign-in with this method (Antigravity's opens the browser and
     /// waits for it); answered by [`AgentEvent::SignInEnded`].
     Authenticate(&'static str),
-    /// Stop waiting for the sign-in in progress (ACP's `$/cancel_request`).
-    /// Its end is reported only if it signed in after all.
-    CancelSignIn,
 }
 
 pub enum SessionEvent {
@@ -855,7 +852,7 @@ enum Done {
     Listed(PathBuf, Result<(Vec<SessionInfo>, bool), agent_client_protocol::Error>),
     Forked(u64, PathBuf, Tools, Result<SessionId, agent_client_protocol::Error>),
     Config(SessionId, Result<SetSessionConfigOptionResponse, agent_client_protocol::Error>),
-    SignedIn(agent_client_protocol::schema::v1::RequestId, Result<AuthenticateResponse, agent_client_protocol::Error>),
+    SignedIn(Result<AuthenticateResponse, agent_client_protocol::Error>),
 }
 
 async fn run(
@@ -922,9 +919,6 @@ async fn run(
 
             let mut pending: FuturesUnordered<LocalBoxFuture<'_, Done>> = FuturesUnordered::new();
             let mut running: HashSet<SessionId> = HashSet::new();
-            // The sign-in being waited for, and the ones cancelled that haven't ended yet.
-            let mut signing_in = None;
-            let mut cancelled_sign_ins = HashSet::new();
             let emit = |session: &SessionId, event: SessionEvent| {
                 let _ = events.unbounded_send(AgentEvent::Session(session.clone(), event));
             };
@@ -1004,14 +998,8 @@ async fn run(
                         }
                         continue;
                     }
-                    Either::Left(Some(Done::SignedIn(id, result))) => {
-                        if signing_in.as_ref() == Some(&id) {
-                            signing_in = None;
-                        }
-                        // A cancelled sign-in that failed says nothing: the card already went back to Sign in.
-                        if !cancelled_sign_ins.remove(&id) || result.is_ok() {
-                            let _ = events.unbounded_send(AgentEvent::SignInEnded(result.map(|_| ()).map_err(|e| e.to_string())));
-                        }
+                    Either::Left(Some(Done::SignedIn(result))) => {
+                        let _ = events.unbounded_send(AgentEvent::SignInEnded(result.map(|_| ()).map_err(|e| e.to_string())));
                         continue;
                     }
                     Either::Left(None) => continue,
@@ -1115,19 +1103,8 @@ async fn run(
                         }
                     }
                     Command::Authenticate(method) => {
-                        let sent = connection.send_request(AuthenticateRequest::new(method));
-                        let id = sent.id().clone();
-                        signing_in = Some(id.clone());
-                        let signed_in = sent.block_task();
-                        pending.push(async move { Done::SignedIn(id, signed_in.await) }.boxed_local());
-                    }
-                    // Antigravity's server may not stop its browser wait for this; then
-                    // its answer comes when the wait ends, and only a sign-in counts.
-                    Command::CancelSignIn => {
-                        if let Some(id) = signing_in.take() {
-                            connection.send_cancel_request(id.clone())?;
-                            cancelled_sign_ins.insert(id);
-                        }
+                        let signed_in = connection.send_request(AuthenticateRequest::new(method)).block_task();
+                        pending.push(async move { Done::SignedIn(signed_in.await) }.boxed_local());
                     }
                 }
             }
