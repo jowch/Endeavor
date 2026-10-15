@@ -79,6 +79,11 @@ To wait for something, poll the dump. For example, loop until
   Settings last found it (`unknown` until Settings opens, `not_installed`, or
   its `julia` and where it came `from`), and `job` an Install or Remove under
   way, or how the last one failed.
+- `r_here`. R on this computer: the R `setting` (null finds R by itself),
+  Endeavor's own R as Settings last found it (`own`: `unknown`,
+  `not_installed`, or its `rscript` and `version`), whether this computer is
+  `offered` it (a Mac), the Install or Remove `job`, and the R failure the pane
+  `failed` with (`r_not_found::` or `r_failed::` and the core's text).
 - `claude`. Claude Code's adapter process: `state` is `up`, `restarting`
   (it stopped by itself and is starting again) or `down` (it stopped twice in
   a minute); `error` is why it last stopped, with the log's last lines (null
@@ -108,7 +113,8 @@ To wait for something, poll the dump. For example, loop until
 - `new_session`, on the new-session screen. The chips (where, resources, folder,
   notebook) with their labels, the session's notebook kind (`notebook_kind`:
   `julia` or `r`, the new notebook's or the picked file's), the new notebooks
-  the notebook chip offers (`new_notebook_kinds`), the mode, the notice and
+  the notebook chip offers (`new_notebook_kinds`), the notebooks it lists
+  (`notebooks`: each one's `file` and `language`), the mode, the notice and
   connection notice, and either `resume` (Pick up where you left off) or
   `examples`.
 - `session`, for the active session. `failed` is null unless it couldn't
@@ -145,7 +151,7 @@ To wait for something, poll the dump. For example, loop until
 - `notebook`. What the notebook pane shows, and `kind`, the session's
   notebook kind as the core is told it (`julia` or `r`):
   - `page`: the notebook's page. `page` then has the notebook id, the
-    backend, the look, safe preview, read-only and whether the page is
+    backend (`pluto`, or `ember` for an R notebook), the look, safe preview, read-only and whether the page is
     connected.
   - `opening`: "Opening <file>…". `opening` then has `secs`, how long it
     has said so while Julia has the notebook open (counted again after a
@@ -153,7 +159,8 @@ To wait for something, poll the dump. For example, loop until
     `reload_button`, whether "Reload notebook" shows.
   - `host`: the host isn't ready. `host_pane.kind` is one of `cant_reach`,
     `starting`, `julia_starting` (the runtime is up and Julia is starting,
-    for whoever asked; `reason` is the step), `julia_failed`,
+    for whoever asked; `reason` is the step), `julia_failed`, `r_starting`
+    and `r_failed` (the same for an R notebook's R and Ember),
     `stopping`, `julia_not_running`, `replaced` or `not_connected`, with the
     host and the reason.
   - `stopped`: the notebook was stopped. `stopped.idle_hours` is set when it
@@ -212,7 +219,8 @@ To wait for something, poll the dump. For example, loop until
   selection in the notebook shows), the drawer's tab, whether
   the safe-preview callout shows, and `alerts`, every `window.alert` the page
   showed. In debug builds the page's `alert` is wrapped to record its text,
-  and it still shows. Null when the page isn't on screen. While an alert is
+  and it still shows. `dialogs` is the text of each dialog open in the page:
+  an R notebook's page (Ember) shows its messages that way, not with `alert`. Null when the page isn't on screen. While an alert is
   open the page can't answer, and `page` is `{"error": …}`.
 
 A dump from a session that made a notebook, cut down:

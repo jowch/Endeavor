@@ -30,6 +30,8 @@ Claude and Endeavor stay on your Mac, as with a [server](./servers.md).
    - **Account**: the Slurm account to charge, if you have more than one.
    - **How to get Julia**: a path to `julia`, or a shell line such as
      `module load julia`. Empty finds Julia, or downloads one.
+   - **How to get R**, for R notebooks: a path to `Rscript`, or a shell line
+     such as `module load R`. Empty uses the R on the PATH.
    - **Where to keep Julia packages**: by default, the cluster's scratch
      space (`$SCRATCH/endeavor/depot`), since home folders on clusters are
      usually small. Without scratch space, `~/.cache/endeavor/depot`.

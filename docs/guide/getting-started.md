@@ -32,6 +32,11 @@ Settings › Notebooks › Julia. If Julia makes no progress for a long while, t
 pane says so; Endeavor stops a start that's stuck for 30 minutes, and the pane
 then offers **Try again**.
 
+R works the same way. The first R notebook installs Ember, the R package that
+runs R notebooks, and the pane shows each step. On a Mac with no R, the pane
+offers **Install R** first. On Linux, install R yourself, for example with
+[rig](https://github.com/r-lib/rig).
+
 If a step fails, the window shows which one, with the reason. Click **Retry**
 to try that step again, or **Show logs** to see what happened. If the
 assistant's own step fails, **Choose another assistant** takes you back to
@@ -88,7 +93,7 @@ need no data. Two use a file of your own.
 - "Simulate 1,000 coin flips and plot how often heads comes up"
 - "Load a CSV file I'll attach and show me what's in it"
 - "Fit an exponential decay to measurements I'll attach, and plot the fit"
-- "Show me the basics of Julia with a small worked example"
+- "Teach me the basics of this notebook's language with a small worked example"
 
 The chips above the message box say where the session works:
 
@@ -101,7 +106,9 @@ The chips above the message box say where the session works:
   the last folder you used, or in `~/Documents/Endeavor` the first time
   (on Windows, `Documents\Endeavor` in your user folder).
 - **The notebook**. **New Julia notebook** lets Claude create one when there
-  is code to run. You can also pick a notebook that is already in the folder.
+  is code to run, and **New R notebook** an R one (not on Windows yet). You
+  can also pick a notebook that is already in the folder, a Julia `.jl` or an
+  R `.R` file.
 
 To start:
 

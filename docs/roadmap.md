@@ -12,7 +12,7 @@ _Last updated: 2026-10-10_
 Endeavor is a native (GPUI) app with the live Pluto frontend in one pane and a
 Claude Code agent panel (over ACP) in the other. Notebooks run in a runtime
 per host: a Rust core (`endeavor core`) that serves the agent's tools,
-with Julia running Pluto behind it as an adapter
+with Julia running Pluto, or R running Ember for R notebooks, behind it as an adapter
 ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)). The runtime runs on this computer, on a
 server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)).
 
@@ -21,14 +21,9 @@ server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)
 - **A repeatable eval of the agent loop, with reproducibility checks on the
   analyses** ([EndeavorMCP #26](https://github.com/jowch/EndeavorMCP/issues/26)).
   Next after the app adopts EndeavorMCP; built to cover more than one engine.
-- **Ember (R notebooks).** In development in its own repository. It joins
-  EndeavorMCP as another adapter behind the core; on this side it needs the
-  pane, header and logo for an R notebook, the notebook chip offering New R
-  notebook and listing R files (the chip's kind already reaches the core as
-  the session's kind, #74), and an R setting in Settings and the server dialog (a server record's
-  `r` and Settings' `r` already reach the helper; nothing in the app sets them
-  yet). Starts after the first version of the eval above; Ember's own
-  groundwork (a version to pin, binaries) goes on in its repository meanwhile.
+- **R notebooks on Windows.** R notebooks (Ember) run in the app on Macs and
+  Linux, and on servers and clusters. On Windows the chip offers only Julia
+  and lists no `.R` files, until Ember runs there (Ember #48, #49).
 - **README, landing page and documentation website.**
 
 The notebook tools (runtime, MCP server, `endeavor serve`) live in

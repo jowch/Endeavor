@@ -2534,6 +2534,7 @@ pub(crate) fn file_name(path: &str) -> String {
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]` macro.
     use super::{Agent, Approval, Effect, Entry, Mode, Scope, Session, SessionEvent, Started, Turn, app_modes, is_plan_approval, plan_option};
+    use wire::backend::Backend;
     use crate::celldiff;
     use agent_client_protocol::schema::v1::RequestPermissionRequest;
     use crate::attach::Attachment;
@@ -3298,13 +3299,13 @@ mod tests {
         let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.start_context = Some(ContentBlock::Text(TextContent::new("[Endeavor] The notebook moved.")));
-        let blocks = crate::attach::prompt_blocks("/compact keep the fits", &[], &["data.csv".into()]);
+        let blocks = crate::attach::prompt_blocks("/compact keep the fits", &[], &["data.csv".into()], Backend::Pluto);
         let sent = words(&s.submit(Queued::new("/compact keep the fits".into(), vec![], blocks), false));
         assert_eq!(sent[0], "/compact keep the fits");
         assert_eq!(sent.len(), 2, "the command, then the note on @ mentions");
         // The moved-notebook note waits for a message it can go with.
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
-        let sent = words(&s.submit(Queued::new("plot it".into(), vec![], crate::attach::prompt_blocks("plot it", &[], &[])), false));
+        let sent = words(&s.submit(Queued::new("plot it".into(), vec![], crate::attach::prompt_blocks("plot it", &[], &[], Backend::Pluto)), false));
         assert_eq!(sent, ["[Endeavor] The notebook moved.", "plot it"]);
     }
 
@@ -3659,7 +3660,7 @@ mod tests {
             Attachment::Text { name: "notes.txt".into(), text: "t,y\n1,2".into() },
         ];
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
-        for event in as_replayed(crate::attach::prompt_blocks("why do these bunch up?", &sent, &[])) {
+        for event in as_replayed(crate::attach::prompt_blocks("why do these bunch up?", &sent, &[], Backend::Pluto)) {
             s.apply(event);
         }
         let [Entry::User { text, attachments, .. }] = s.entries.as_slice() else { panic!("one user entry") };

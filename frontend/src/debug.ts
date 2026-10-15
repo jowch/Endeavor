@@ -24,6 +24,8 @@ export function initDebug(): void {
       prompt: askState(),
       // Recorded by the debug build's own script, which wraps `alert`.
       alerts: (window as { __endeavorAlerts?: string[] }).__endeavorAlerts ?? null,
+      // Ember's messages are dialogs in the page, not alerts: the open ones' text.
+      dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => (d.textContent ?? "").trim().replace(/\s+/g, " ")),
     });
   });
 }

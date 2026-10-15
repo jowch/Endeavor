@@ -118,6 +118,19 @@ impl Workspace {
         json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")) })
     }
 
+    /// R on this computer: the R setting, Endeavor's own R as Settings last
+    /// found it with an Install or Remove under way, where it's offered, and
+    /// the failure the pane shows.
+    fn r_here_state(&self) -> Value {
+        let own = match &self.own_r.found {
+            None => json!("unknown"),
+            Some(None) => json!("not_installed"),
+            Some(Some(own)) => json!({ "rscript": own.rscript, "version": own.version }),
+        };
+        let failed = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.r_failed.clone());
+        json!({ "setting": self.settings.r, "own": own, "offered": crate::connection::own_r_item().is_some(), "job": self.own_r.job.as_ref().map(|j| format!("{j:?}")), "failed": failed })
+    }
+
     fn debug_state(&self, page: Value, cx: &App) -> Value {
         let active = self.active_session();
         json!({
@@ -125,6 +138,7 @@ impl Workspace {
             "log": { "skipped_window_callbacks": crate::logs::skipped_callbacks() },
             "offline": self.offline_since.map(|since| json!({ "for_secs": since.elapsed().as_secs(), "trying": self.probing })),
             "julia_here": self.julia_here_state(),
+            "r_here": self.r_here_state(),
             "claude": {
                 "state": state_name(&self.links.get(Agent::Claude).process.state),
                 "connected": self.links.get(Agent::Claude).ready,
@@ -329,7 +343,9 @@ impl Workspace {
         json!({
             "chips": chips,
             "notebook_kind": crate::new_session::kind_name(self.draft.notebook.kind()),
-            "new_notebook_kinds": crate::new_session::NEW_KINDS.iter().map(|&k| crate::new_session::new_notebook_label(k)).collect::<Vec<_>>(),
+            "new_notebook_kinds": crate::new_session::new_kinds(&self.draft.host).iter().map(|&k| crate::new_session::new_notebook_label(k)).collect::<Vec<_>>(),
+            // The folder's notebooks the chip's menu lists, newest first.
+            "notebooks": self.draft.notebooks.iter().map(|f| json!({ "file": self.draft.host.folder_name(&f.path), "language": crate::new_session::language_name(f.backend) })).collect::<Vec<_>>(),
             "mode": self.mode_label(None),
             "notice": self.draft.notice.as_ref().map(|n| n.to_string()),
             "connection_notice": self.connection_notice_text().map(|(text, _)| text),
@@ -496,7 +512,7 @@ impl Workspace {
             let reported = s.notebook.as_deref().is_some_and(|id| p.notebook == id);
             json!({
                 "notebook": s.notebook,
-                "backend": crate::viewed_notebook_id(&url).map(|_| wire::backend::Backend::Pluto.name()),
+                "backend": crate::viewed_notebook(&url).map(|(kind, _)| kind.name()),
                 "look": self.settings.notebook_theme,
                 "safe_preview": reported && p.safe,
                 "read_only": self.read_only(s),
@@ -555,7 +571,7 @@ impl Workspace {
             NotebookChoice::Existing(path) => self.draft.host.folder_name(path),
         };
         let Some(folder) = self.draft_pane_folder() else {
-            let pane = self.host_pane_state(&self.draft.host, cx);
+            let pane = self.host_pane_state(&self.draft.host, self.draft.notebook.kind(), cx);
             let shows = if pane.is_some() { "host" } else { "empty" };
             return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.hosts.name(&self.draft.host))), "header": header });
         };
@@ -717,7 +733,8 @@ fn chip_label(a: &crate::attach::Attachment) -> String {
 }
 
 /// The pane of a host that isn't ready: "cant_reach", "starting",
-/// "julia_starting" (with the step), "julia_failed", "stopping",
+/// "julia_starting" (with the step), "julia_failed", "r_starting" (with the
+/// step), "r_failed" (with the code: `r_not_found::…` offers Install R on a Mac), "stopping",
 /// "julia_not_running", "replaced" or "not_connected", the host, and why.
 fn host_pane(pane: &HostPane, host: &str) -> Value {
     let (kind, reason) = match pane {
@@ -725,6 +742,8 @@ fn host_pane(pane: &HostPane, host: &str) -> Value {
         HostPane::Starting => ("starting", None),
         HostPane::JuliaStarting(step) => ("julia_starting", Some(step)),
         HostPane::JuliaFailed(reason) => ("julia_failed", Some(reason)),
+        HostPane::RStarting(step) => ("r_starting", Some(step)),
+        HostPane::RFailed(reason) => ("r_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => ("julia_not_running", Some(reason)),
         HostPane::Crashed(reason) => ("julia_crashed", Some(reason)),
