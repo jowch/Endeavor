@@ -9,7 +9,7 @@ Not run yet: a first Claude sign-in on Windows, a browser download through
 SmartScreen, Windows 11, and servers, which the Windows build can't reach
 because it carries no server helpers. Parts of this page below still
 describe the port before those runs. User steps are in the guide's
-[On Windows](guide/overview.md#on-windows)._
+[Install Endeavor](guide/install.md#on-windows)._
 
 **Summary:** a Windows port is feasible, and no single item blocks it. It is
 about **6–8 weeks** of work for one person to reach a usable app: roughly 3–4
