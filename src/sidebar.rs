@@ -534,10 +534,12 @@ impl Workspace {
             return (Some(StatusMark::Offline), "Offline · reconnects by itself".into());
         }
         // Only for someone using Claude: a Codex or Antigravity user needn't sign in to it.
-        if self.account.signed_out() && (self.settings.agent == crate::agent::Agent::Claude || self.sessions.iter().any(|s| s.agent == crate::agent::Agent::Claude)) {
+        if self.account.signed_out() && self.uses_agent(crate::agent::Agent::Claude) {
             return (Some(StatusMark::SignedOut), "Signed out of Claude.".into());
         }
-        for agent in crate::agent::Agent::ALL {
+        // An assistant started in the background (Claude, to list its sessions)
+        // that stops doesn't take the line from the one in use.
+        for agent in crate::agent::Agent::ALL.into_iter().filter(|a| self.uses_agent(*a)) {
             match self.links.get(agent).process.state {
                 crate::agent_process::State::Restarting => return (Some(StatusMark::Waiting), format!("Restarting {}…", agent.name()).into()),
                 crate::agent_process::State::Down => return (Some(StatusMark::NeedsYou), crate::agent_process::down_title(agent).into()),
@@ -548,6 +550,11 @@ impl Workspace {
             return (Some(StatusMark::NeedsYou), format!("Julia on {host} stopped").into());
         }
         (None, self.status.clone())
+    }
+
+    /// The user uses `agent`: it's the default or the new-session screen's, or a session open now is its.
+    fn uses_agent(&self, agent: crate::agent::Agent) -> bool {
+        self.settings.agent == agent || self.draft_agent() == agent || self.sessions.iter().any(|s| s.agent == agent)
     }
 
     /// A past sidebar row's Tab-stop handle, cached by session id across renders.
