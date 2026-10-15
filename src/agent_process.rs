@@ -80,8 +80,8 @@ pub struct Link {
     pub failed: bool,
     /// The "isn't running" card's Details are open.
     pub details_open: bool,
-    /// Which start of the agent this is. Events from an earlier one, ended
-    /// on purpose (`restart_agent`), are dropped.
+    /// Which command channel is current (`renew`). Events from a start on an
+    /// earlier one, ended on purpose (`restart_agent`), are dropped.
     pub generation: u64,
 }
 
@@ -93,10 +93,12 @@ impl Default for Link {
 }
 
 impl Link {
-    /// A fresh command channel for a new thread (the failed one dropped its own).
+    /// A fresh command channel for a new thread (the failed one dropped its own;
+    /// a running one ends). The old start's events are ignored from here.
     pub fn renew(&mut self) -> UnboundedReceiver<Command> {
         let (tx, rx) = futures::channel::mpsc::unbounded();
         self.tx = tx;
+        self.generation += 1;
         rx
     }
 }

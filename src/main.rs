@@ -2177,9 +2177,7 @@ impl Workspace {
             self.links.get_mut(agent).rx = Some(commands);
             return;
         }
-        let link = self.links.get_mut(agent);
-        link.generation += 1;
-        let generation = link.generation;
+        let generation = self.links.get(agent).generation;
         let mut events = agent::start(agent, commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {

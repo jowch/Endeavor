@@ -76,8 +76,9 @@ The findings it was built from came from a test on a Windows machine on
   to Sign in at once and starts the server again, so a closed page doesn't
   cost the server's 5-minute wait. Only stopping the server ends that wait,
   which holds the sign-in's port (`127.0.0.1:57700` in one run); otherwise a
-  second Sign in would fail. Signed out, no Antigravity session is open, so
-  the restart loses nothing. Events from the stopped server are dropped. A session that fails to open for want of
+  second Sign in would fail. A session left open when its sign-in ran out
+  reopens on the new server once it's up, as after a crash, without
+  counting as one. Events from the stopped server are dropped. A session that fails to open for want of
   sign-in also brings the card back.
 - **In the app.** Antigravity is in the agent menu (where available), in
   Settings with its sign-in status, in the first-run assistant list, and in

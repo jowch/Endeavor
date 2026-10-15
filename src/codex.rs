@@ -41,7 +41,7 @@ pub fn signed_in() -> Result<bool, String> {
 /// In its own process group, so Cancel stops it and what it started.
 pub fn start_login() -> Result<std::process::Child, String> {
     let mut command = crate::agent::codex_adapter(&["login", "--client-name=endeavor", "--client-title=Endeavor"])?;
-    command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+    command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
     command.spawn().map_err(|e| format!("Couldn't start Codex's sign-in: {e}"))

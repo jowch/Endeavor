@@ -1138,12 +1138,17 @@ impl Workspace {
     /// The waiting card's Cancel: the card goes back to Sign in at once, and
     /// Antigravity's server starts again. Only stopping it ends its wait for
     /// the browser, which holds the sign-in's port, so a second Sign in would
-    /// fail. Nothing else is lost: signed out, no Antigravity session is open.
+    /// fail. A session open when the sign-in ran out reopens on the new server
+    /// once it's up, as after a crash (`agent_stopped`), without counting as one.
     pub fn cancel_antigravity_sign_in(&mut self, cx: &mut Context<Self>) {
         if self.antigravity_account != crate::agent::Account::SigningIn {
             return;
         }
         self.antigravity_account = crate::agent::Account::SignedOut;
+        for session in self.sessions.iter_mut().filter(|s| s.agent == Agent::Antigravity) {
+            session.agent_stopped();
+        }
+        self.sync_holds(cx);
         self.restart_agent(Agent::Antigravity, cx);
         cx.notify();
     }
@@ -1200,14 +1205,20 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let signed_in = done.await;
             let _ = this.update(cx, |this, cx| {
-                // Cancelled (and maybe started again): this attempt's end says nothing.
-                if this.codex_login.is_none_or(|(current, _)| current != attempt) {
+                // Cancelled (and maybe started again): this attempt's end says nothing,
+                // unless it signed in after all.
+                let current = this.codex_login.is_some_and(|(current, _)| current == attempt);
+                if !current && !matches!(signed_in, Ok(true)) {
                     return;
                 }
-                this.codex_login = None;
+                if current {
+                    this.codex_login = None;
+                }
                 match signed_in {
                     Ok(true) => this.on_codex_signed_in(true, cx),
-                    Ok(false) | Err(_) => this.codex_account = crate::agent::Account::Failed,
+                    // Not over a sign-in an earlier, cancelled attempt finished meanwhile.
+                    Ok(false) | Err(_) if this.codex_account == crate::agent::Account::SigningIn => this.codex_account = crate::agent::Account::Failed,
+                    Ok(false) | Err(_) => {}
                 }
                 if let Err(e) = signed_in {
                     eprintln!("Codex sign-in: {e}");
