@@ -40,10 +40,12 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   CI keeps a Windows build and installer to try, and a "nightly"
   prerelease holds the newest Mac app and Windows installer from `main`
   (`nightly.yml`). There are no versioned releases yet.
-- **Updates** ([#80](https://github.com/jowch/Endeavor/issues/80)). The app
-  can't update itself or check for a newer version, so Check now is hidden.
-  The nightly publishes `nightly.json` (each build's commit, time and
-  SHA-256) for the updater to read; the Mac updater comes next.
+- **Updates** ([#80](https://github.com/jowch/Endeavor/issues/80)). The
+  Mac nightly checks `nightly.json` once a day, fetches a newer build,
+  checks its Developer ID team and notarization, and installs it on Restart
+  or quit (`src/updater.rs`). The Windows installer doesn't update itself
+  yet: whether SmartScreen stops a downloaded update is unchecked. Builds
+  from source never check.
 - **The Windows installer** ([#12](https://github.com/jowch/Endeavor/issues/12)):
   a per-user installer that adds WebView2 if it's missing. CI builds it; it
   is unsigned and has been tried on one Windows machine.

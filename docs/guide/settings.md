@@ -110,6 +110,9 @@ See [Troubleshooting](./troubleshooting.md).
 ## About
 
 The version of Endeavor, and of the Claude Code adapter it uses to talk to
-Claude. Endeavor can't check for a newer version or update itself yet, so
-its row shows only the version you have. To get a newer one, build it again
-from the source code (see [Overview](./overview.md)).
+Claude. The Mac test build checks for a newer test build once a day, and
+**Check now** checks straight away. A newer one downloads in the background;
+**Restart** installs it, and so does quitting Endeavor. When Endeavor isn't in
+your Applications folder it can't replace itself, so it offers **Download**
+instead. Other copies, such as one built from the source code, show only
+their version (see [Overview](./overview.md)).

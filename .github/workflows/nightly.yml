@@ -143,7 +143,11 @@ jobs:
             echo "::error::EndeavorMCP's Helpers release has no build for the commit Cargo.lock pins: Helpers never built it, or pruned it because this app commit is older than the last 10 pins on main. No nightly this time."
             exit 1
           }
+      # A nightly checks nightly.json for a newer build and updates itself
+      # (src/updater.rs); a build from source doesn't.
       - name: Bundle
+        env:
+          ENDEAVOR_CHANNEL: nightly
         run: scripts/bundle.sh
       # A throwaway keychain holding only the Developer ID certificate, deleted
       # at the end of the job. Nothing secret is echoed.

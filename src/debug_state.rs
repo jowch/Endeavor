@@ -161,6 +161,7 @@ impl Workspace {
                 "account": format!("{:?}", self.antigravity_account),
                 "usage_limit": self.usage_limit_state(Agent::Antigravity),
             },
+            "app_update": self.app_update_debug(),
             "sign_in": self.sign_in_state(),
             "sidebar": self.sidebar_state(cx),
             "new_session": (self.active.is_none()).then(|| self.new_session_state()),
@@ -180,6 +181,27 @@ impl Workspace {
                 "details": n.details().then(|| json!({ "open": n.details_open, "text": n.raw })),
             })),
             "page": page,
+        })
+    }
+
+    fn app_update_debug(&self) -> Value {
+        let u = &self.app_update;
+        let state = match &u.state {
+            crate::updater::State::Waiting => json!({ "state": "waiting" }),
+            crate::updater::State::Checking => json!({ "state": "checking", "percent": u.percent() }),
+            crate::updater::State::UpToDate => json!({ "state": "up_to_date" }),
+            crate::updater::State::Ready { build, staged } => json!({ "state": "ready", "build": build, "staged": staged }),
+            crate::updater::State::Manual { build } => json!({ "state": "manual", "build": build }),
+            crate::updater::State::Failed(e) => json!({ "state": "failed", "error": e }),
+            crate::updater::State::Off(why) => json!({ "state": "off", "why": why }),
+            crate::updater::State::Installing => json!({ "state": "installing" }),
+        };
+        json!({
+            "channel": crate::updater::CHANNEL,
+            "commit": crate::updater::COMMIT,
+            "committed": crate::updater::COMMITTED,
+            "app": u.place.as_ref().ok().map(|p| json!({ "path": p.app, "replaceable": p.replaceable })),
+            "update": state,
         })
     }
 
