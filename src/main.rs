@@ -1777,7 +1777,7 @@ impl Workspace {
     fn on_event(&mut self, agent: agent::Agent, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::Ready => {
-                self.status = format!("{} connected.", agent.name()).into();
+                self.status = self.connected_status(agent).into();
                 let link = self.links.get_mut(agent);
                 link.ready = true;
                 link.failed = false;
