@@ -11,8 +11,9 @@ use serde_json::{Value, json};
 use wire::backend::Backend;
 
 /// One runtime as its host's listener serves it: the MCP URL the agent's
-/// config carries (its host is the app's way in too), and the bearer token
-/// every path requires. Both stay the same across that host's runtimes.
+/// config carries (its host is the app's way in too), the bearer token every
+/// path but the pages requires, and the pages' token. They stay the same
+/// across that host's runtimes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bridge {
     pub url: String,
