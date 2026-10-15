@@ -18,6 +18,9 @@
     }
   };
 
+  // src/engine.ts
+  var onEmber = () => location.pathname.startsWith("/ember/");
+
   // src/keys.ts
   var mac = /Mac/.test(navigator.platform);
   function modHeld(e) {
@@ -631,13 +634,13 @@
       if (msg.name === "present") w.present?.();
       else if (msg.name === "record") w.editor_state_set?.({ recording_waiting_to_start: true });
       else if (msg.name === "frontmatter") window.dispatchEvent(new CustomEvent("open pluto frontmatter"));
-      else if (msg.name === "shortcuts") showShortcuts();
+      else if (msg.name === "shortcuts") onEmber() ? window.dispatchEvent(new CustomEvent("ember open shortcuts")) : showShortcuts();
       else if (msg.name === "feedback") showFeedback();
     });
     window.addEventListener(
       "keydown",
       (e) => {
-        if (e.key === "F1" || e.key === "?" && (e.metaKey || e.ctrlKey)) {
+        if (!onEmber() && (e.key === "F1" || e.key === "?" && (e.metaKey || e.ctrlKey))) {
           e.preventDefault();
           e.stopImmediatePropagation();
           showShortcuts();
@@ -1707,7 +1710,9 @@
         reply: askState()?.kind === "selection" ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
         prompt: askState(),
         // Recorded by the debug build's own script, which wraps `alert`.
-        alerts: window.__endeavorAlerts ?? null
+        alerts: window.__endeavorAlerts ?? null,
+        // Ember's messages are dialogs in the page, not alerts: the open ones' text.
+        dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => (d.textContent ?? "").trim().replace(/\s+/g, " "))
       });
     });
   }
@@ -1949,7 +1954,7 @@
     background: var(--e-bg-card); color: var(--e-text-secondary); font: 11px/1.45 JuliaMono, ui-monospace, monospace; white-space: pre-wrap; }
   /* Live docs: Pluto's panel, filling the drawer under its tabs. */
   html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"] #helpbox-wrapper {
-    display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
     height: calc(var(--endeavor-drawer-h) - ${HEADER}px); z-index: 71; }
   html[data-endeavor-look="endeavor"] pluto-helpbox { position: static; width: 100%; height: 100%; right: auto;
     border-radius: 0; box-shadow: none; background: var(--e-bg-page); }
@@ -2361,7 +2366,7 @@
     const frames = body2(nb, cell.id)?.stacktrace;
     const plutoTrace = error.querySelector(":scope > section");
     let toggle = error.querySelector(":scope > .endeavor-trace");
-    if (!plutoTrace || frames && frames.length === 0) {
+    if (!plutoTrace || frames && frames.length === 0 || onEmber()) {
       toggle?.remove();
       return;
     }
@@ -2904,8 +2909,24 @@ body::before {
 }
 `;
   var classic = `
-nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group { display: none !important; }
+nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group, #ember-file-name { display: none !important; }
 `;
+  var emberLook = `
+.ember-settings-section:has(#ember-setting-theme) { display: none !important; }
+#ember-safe-preview { display: none !important; }
+`;
+  function syncTheme() {
+    const dark = window.matchMedia("(prefers-color-scheme: dark)");
+    const root = document.documentElement;
+    const sync = () => {
+      if (root.dataset.endeavorLook !== "endeavor") return;
+      const want = dark.matches ? "dark" : "light";
+      if (root.getAttribute("data-theme") !== want) root.setAttribute("data-theme", want);
+    };
+    dark.addEventListener("change", sync);
+    new MutationObserver(sync).observe(root, { attributes: true, attributeFilter: ["data-theme", "data-endeavor-look"] });
+    sync();
+  }
   var both = `
 footer form#feedback { display: none !important; }
 `;
@@ -2936,9 +2957,11 @@ footer form#feedback { display: none !important; }
     style2.id = "endeavor-theme";
     document.head.append(style2);
     on("theme", (msg) => {
-      style2.textContent = both + (msg.name === "endeavor" ? endeavorLook : classic);
+      const endeavor = msg.name === "endeavor";
+      style2.textContent = both + (endeavor ? endeavorLook + (onEmber() ? emberLook : "") : classic);
       document.documentElement.dataset.endeavorLook = msg.name;
     });
+    if (onEmber()) syncTheme();
   }
 
   // src/main.ts
