@@ -256,7 +256,7 @@ pub const OPENING: &str = "Opening the notebook";
 const OPENING_LIMIT: Duration = Duration::from_secs(600);
 
 /// Why the app stopped waiting for a notebook that was still opening, for the person.
-pub const OPEN_STUCK: &str = "The notebook was still opening after 10 minutes, so Endeavor stopped waiting. Julia may be stuck; restarting it may help.";
+pub const OPEN_STUCK: &str = "The notebook was still opening after 10 minutes, so Endeavor stopped waiting. Try again to wait for it again.";
 
 /// Whether a call's answer says an open or a new notebook took longer than one
 /// call waits ("notebook_opening::Opening '/x.jl' is taking longer…"): the open
