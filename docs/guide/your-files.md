@@ -13,7 +13,7 @@ you give Claude are copied there, so the notebook's code can load them.
 Pick the folder with the folder chip on the **Start a session** screen. It
 lists recent folders, and **Browse…** opens any other. A new session on your
 Mac starts in the last folder you used there, or in `~/Documents/Endeavor`
-the first time. On a server, the folder is on the server. See
+the first time (on Windows, `Documents\Endeavor` in your user folder). On a server, the folder is on the server. See
 [Servers](./servers.md).
 
 Use one folder per project. Put the project's data in it, and start the

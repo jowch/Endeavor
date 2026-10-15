@@ -1777,7 +1777,7 @@ impl Workspace {
     fn on_event(&mut self, agent: agent::Agent, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::Ready => {
-                self.status = format!("{} connected.", agent.name()).into();
+                self.status = self.connected_status(agent).into();
                 let link = self.links.get_mut(agent);
                 link.ready = true;
                 link.failed = false;
@@ -2117,8 +2117,11 @@ impl Workspace {
 
     /// What About Endeavor shows in its update strip.
     pub fn updates(&self) -> about::Updates {
+        let claude = self.links.get(agent::Agent::Claude);
         let adapter = match agent::adapter_status(agent::Agent::Claude) {
-            Ok((version, false)) if self.links.get(agent::Agent::Claude).failed => about::Adapter::Available(version),
+            Ok((version, false)) if claude.failed => about::Adapter::Available(version),
+            // Claude's start installs it; someone using another assistant may never start Claude.
+            Ok((_, false)) if claude.rx.is_some() => about::Adapter::Unused,
             Ok((version, false)) => about::Adapter::Installing(version),
             _ => about::Adapter::Current,
         };

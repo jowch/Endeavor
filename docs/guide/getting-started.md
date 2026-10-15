@@ -98,7 +98,8 @@ The chips above the message box say where the session works:
 - **Where** the notebook runs. **This Mac** is your computer. You can also
   pick a server or a cluster you have added.
 - **The folder** the session works in. A new session on your Mac starts in
-  the last folder you used, or in `~/Documents/Endeavor` the first time.
+  the last folder you used, or in `~/Documents/Endeavor` the first time
+  (on Windows, `Documents\Endeavor` in your user folder).
 - **The notebook**. **New Julia notebook** lets Claude create one when there
   is code to run. You can also pick a notebook that is already in the folder.
 

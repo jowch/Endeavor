@@ -189,7 +189,7 @@ pub fn default_folder(recent: &[Place]) -> String {
     if let Some(place) = recent.iter().find(|p| p.host == HostId::ThisMac) {
         return place.path.clone();
     }
-    let folder = home().join("Documents/Endeavor");
+    let folder = home().join("Documents").join("Endeavor");
     let _ = std::fs::create_dir_all(&folder);
     hosts::text(&folder)
 }
@@ -200,7 +200,17 @@ fn home() -> PathBuf {
 
 /// `path` on `host` with `home` written as `~`.
 fn tilde_of(host: &HostId, path: &str, home: &str) -> String {
+    short_of(host, path, home, cfg!(windows))
+}
+
+/// `tilde_of`, where `windows` says whether This Mac is a Windows computer.
+/// Windows doesn't write the home folder as `~`, so a folder in it reads
+/// from there in Windows' own way (`Documents\Endeavor`), and the home
+/// folder itself in full.
+fn short_of(host: &HostId, path: &str, home: &str, windows: bool) -> String {
     match host.strip_prefix(path, home) {
+        Some(rest) if windows && *host == HostId::ThisMac && rest.is_empty() => path.to_owned(),
+        Some(rest) if windows && *host == HostId::ThisMac => rest.replace('/', "\\"),
         Some(rest) if rest.is_empty() => "~".into(),
         Some(rest) => format!("~/{rest}"),
         None => path.to_owned(),
@@ -214,7 +224,7 @@ pub(crate) fn tilde(path: &Path) -> String {
 
 /// Where Browse… opens: ~/Documents/Endeavor, or ~/Documents without it.
 fn browse_start() -> PathBuf {
-    let endeavor = home().join("Documents/Endeavor");
+    let endeavor = home().join("Documents").join("Endeavor");
     if endeavor.is_dir() { endeavor } else { home().join("Documents") }
 }
 
@@ -1973,7 +1983,7 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
 
 #[cfg(test)]
 mod tests {
-    use super::{NotebookChoice, kind_of_path, tilde_of};
+    use super::{NotebookChoice, kind_of_path, short_of, tilde_of};
     use crate::hosts::HostId;
     use wire::backend::Backend;
 
@@ -1994,5 +2004,17 @@ mod tests {
         assert_eq!(tilde_of(&lab, "/home/jc", "/home/jc/"), "~");
         assert_eq!(tilde_of(&lab, "/home/jcb/x", "/home/jc"), "/home/jcb/x");
         assert_eq!(tilde_of(&lab, "/srv/data", "/home/jc"), "/srv/data");
+    }
+
+    #[test]
+    fn a_windows_folder_reads_without_a_tilde() {
+        let here = HostId::ThisMac;
+        assert_eq!(short_of(&here, "/Users/jc/Documents/Endeavor", "/Users/jc", true), "Documents\\Endeavor");
+        assert_eq!(short_of(&here, "/Users/jc", "/Users/jc", true), "/Users/jc");
+        assert_eq!(short_of(&here, "/srv/data", "/Users/jc", true), "/srv/data");
+        assert_eq!(short_of(&here, "/Users/jc/Documents", "/Users/jc", false), "~/Documents");
+        // A server's paths are Linux paths, from any computer.
+        let lab = HostId::Server("lab".into());
+        assert_eq!(short_of(&lab, "/home/jc/qpcr", "/home/jc", true), "~/qpcr");
     }
 }
