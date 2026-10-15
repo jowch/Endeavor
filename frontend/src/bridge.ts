@@ -67,6 +67,7 @@ export type ToApp =
       // The open prompt (⌘E, ✦ Claude, Reply): what it's about, its top line, and its words.
       prompt: { kind: string; about: string; text: string } | null;
       alerts: string[] | null;
+      dialogs: string[];
     };
 
 /** One cell's state, from the runtime's events (see runtime Events.jl). */
