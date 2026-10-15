@@ -1142,7 +1142,7 @@ mod tests {
     fn test_tools() -> super::Tools {
         let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
         let token = std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default();
-        super::Tools { bridge: crate::pluto::Bridge { url, token }, server: None }
+        super::Tools { bridge: crate::pluto::Bridge { url, page_token: token.clone(), token }, server: None }
     }
 
     /// This Mac's runtime, started for a live test.
@@ -1519,7 +1519,7 @@ mod tests {
         for tool in ["Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "NotebookEdit"] {
             assert!(off.as_array().unwrap().iter().any(|t| t == tool), "{tool} still on");
         }
-        let bridge = crate::pluto::Bridge { url: "http://127.0.0.1:9/mcp".into(), token: "t".into() };
+        let bridge = crate::pluto::Bridge { url: "http://127.0.0.1:9/mcp".into(), token: "t".into(), page_token: "t".into() };
         let header = |tools: super::Tools| {
             let super::McpServer::Http(http) = tools.mcp_server(7, super::Agent::Claude) else { panic!() };
             http.headers.iter().find(|h| h.name == "X-Endeavor-Host").map(|h| h.value.clone())

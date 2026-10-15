@@ -10,7 +10,9 @@
 //! live from its first frame, and only its look changes.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, App, Bounds, Element, ElementId, FollowMode, GlobalElementId, InspectorElementId, IntoElement, LayoutId, ListState, Pixels, Styled, Window, px};
@@ -35,6 +37,61 @@ pub fn quiet() -> bool {
 pub fn set_reduced(reduce: bool, cx: &mut App) {
     theme::set_reduce_motion(reduce);
     cx.set_reduce_motion(reduce);
+}
+
+/// How often something that loops for as long as it shows (the working orbit,
+/// a working row's breathing dot, the notebook pane's turtles) is redrawn: not
+/// every frame. GPUI redraws the whole window for it, and on a Mac the
+/// notebook's web view shares the main thread, so redrawing at the display's
+/// rate starved the notebook while the agent worked.
+const LOOP_FRAME: Duration = Duration::from_millis(50);
+
+thread_local! {
+    /// When each view last drew something looping, and whether a redraw is
+    /// already asked for it.
+    static LOOPS: RefCell<HashMap<gpui::EntityId, (Instant, bool)>> = RefCell::new(HashMap::new());
+}
+
+/// Seconds since the app started, for the phase of anything looping (one
+/// clock, so every loop keeps its phase; an `Instant`, so it doesn't jump with
+/// the wall clock). Asks for the next redraw of the view being drawn once
+/// `LOOP_FRAME` has passed since it last drew; a redraw for any other reason in
+/// between (a streaming reply) counts, so loops never add to them.
+pub fn loop_clock(window: &Window, cx: &mut App) -> f32 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let now = Instant::now();
+    let view = window.current_view();
+    let ask = LOOPS.with(|loops| {
+        let mut loops = loops.borrow_mut();
+        let entry = loops.entry(view).or_insert((now, false));
+        entry.0 = now;
+        !std::mem::replace(&mut entry.1, true)
+    });
+    if ask {
+        cx.spawn(async move |cx| {
+            let mut wait = LOOP_FRAME;
+            loop {
+                cx.background_executor().timer(wait).await;
+                let since = LOOPS.with(|loops| loops.borrow().get(&view).map(|(drawn, _)| drawn.elapsed()));
+                match since {
+                    Some(since) if since < LOOP_FRAME => wait = LOOP_FRAME - since,
+                    _ => break,
+                }
+            }
+            LOOPS.with(|loops| loops.borrow_mut().remove(&view));
+            cx.update(|cx| cx.notify(view));
+        })
+        .detach();
+    }
+    // Wrapped hourly, so an f32 keeps millisecond precision.
+    (now.duration_since(*START.get_or_init(|| now)).as_millis() % 3_600_000) as f32 / 1000.
+}
+
+/// How far through a loop of `period` the clock is (0 to 1), redrawing as
+/// `loop_clock` does. Call it while drawing.
+pub fn looping(period: Duration, window: &Window, cx: &mut App) -> f32 {
+    let period = period.as_secs_f32().max(0.001);
+    (loop_clock(window, cx) % period) / period
 }
 
 /// How far `now` is through `duration` from `start`: 0 to 1, and 1 for a zero
@@ -186,12 +243,21 @@ pub struct Glide {
     left: Option<(usize, Pixels)>,
     /// The current ease: where it started, when, and the end it goes to.
     from: Option<(Pixels, Instant, Pixels)>,
+    /// The current ease began before the last one ended: content keeps
+    /// arriving (a streaming reply), so it redraws as loops do.
+    chained: bool,
 }
 
 impl Glide {
     /// Following the end, held or not, for the "Jump to latest" pill.
     pub fn holding(&self) -> bool {
         self.holding
+    }
+
+    /// The ease began mid-ease, so `follow` paces it like a loop; one from rest
+    /// (sending a message) runs at the display's rate.
+    pub fn chained(&self) -> bool {
+        self.chained
     }
 
     pub fn step(&mut self, view: ListView, now: Instant, duration: Duration, quiet: bool) -> Move {
@@ -203,7 +269,7 @@ impl Glide {
             *self = Glide::default();
         }
         if view.following {
-            *self = Glide { holding: true, left: Some(view.top), from: None };
+            *self = Glide { holding: true, left: Some(view.top), from: None, chained: false };
             return Move::Hold;
         }
         if !self.holding {
@@ -215,11 +281,13 @@ impl Glide {
         };
         if end - view.scrolled <= px(0.5) {
             self.from = None;
+            self.chained = false;
             return Move::Nothing;
         }
         let (from, start) = match self.from {
             Some((from, start, to)) if to == end => (from, start),
-            _ => {
+            was => {
+                self.chained = was.is_some();
                 self.from = Some((view.scrolled, now, end));
                 (view.scrolled, now)
             }
@@ -238,8 +306,11 @@ impl Glide {
 }
 
 /// Run the transcript's glide before the list lays out. `pad`: the list's top
-/// and bottom padding, which its scroll offsets leave out.
-pub fn follow(glide: &RefCell<Glide>, list: &ListState, pad: Pixels, window: &Window) {
+/// and bottom padding, which its scroll offsets leave out. A glide from rest
+/// asks for every frame; one that began mid-ease redraws as loops do
+/// (`loop_clock`), since while a reply streams each line starts a new ease and
+/// the glide never stops.
+pub fn follow(glide: &RefCell<Glide>, list: &ListState, pad: Pixels, window: &Window, cx: &mut App) {
     let at = |list: &ListState| {
         let top = list.logical_scroll_top();
         (top.item_ix, top.offset_in_item)
@@ -254,7 +325,11 @@ pub fn follow(glide: &RefCell<Glide>, list: &ListState, pad: Pixels, window: &Wi
         Move::By(by) => {
             list.scroll_by(by);
             glide.left_at(at(list));
-            window.request_animation_frame();
+            if glide.chained() {
+                loop_clock(window, cx);
+            } else {
+                window.request_animation_frame();
+            }
         }
     }
 }
@@ -314,6 +389,21 @@ mod tests {
         glide.left_at((3, px(0.)));
         let Move::By(by) = glide.step(view(false, 3, 420., Some(480.)), t0 + 80 * MS, 160 * MS, false) else { panic!() };
         assert_eq!(by, px(0.), "a new ease starts where the view is, with no jump");
+        assert!(glide.chained(), "content arriving mid-ease paces the glide");
+    }
+
+    #[test]
+    fn a_glide_from_rest_runs_every_frame() {
+        let mut glide = Glide::default();
+        let t0 = Instant::now();
+        glide.step(view(true, 3, 400., Some(400.)), t0, 160 * MS, false);
+        glide.step(view(false, 3, 400., Some(440.)), t0, 160 * MS, false);
+        assert!(!glide.chained());
+        glide.left_at((3, px(0.)));
+        // The ease ends; the next growth starts from rest again.
+        assert_eq!(glide.step(view(false, 3, 440., Some(440.)), t0 + 200 * MS, 160 * MS, false), Move::Nothing);
+        glide.step(view(false, 3, 440., Some(480.)), t0 + 300 * MS, 160 * MS, false);
+        assert!(!glide.chained());
     }
 
     #[test]

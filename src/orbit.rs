@@ -14,23 +14,21 @@ pub fn orbit(id: ElementId, size: f32, cx: &App) -> AnyElement {
 
 /// The orbit with a dot of another colour (grey while waiting for the network).
 pub fn orbit_with(id: ElementId, size: f32, dot: Rgba, cx: &App) -> AnyElement {
-    if cx.reduce_motion() {
-        return orbit_at(0.25, size, dot).into_any_element();
-    }
-    div()
-        .size(px(size))
-        .with_animation(id, Animation::new(Duration::from_secs(1)).repeat(), move |d, t| d.child(orbit_at(t, size, dot)))
-        .into_any_element()
+    let lap = (!cx.reduce_motion()).then_some(Duration::from_secs(1));
+    div().id(id).size(px(size)).child(orbit_at(lap, size, dot)).into_any_element()
 }
 
-/// The orbit `t` of the way round a lap (0.25: in front of the disc). The dot
-/// passes behind the disc on the ring's far half, so the ring's back half, a
-/// dot there, the disc, the front half and a dot there are drawn in that order.
-fn orbit_at(t: f32, size_px: f32, dot_color: Rgba) -> impl IntoElement {
+/// The orbit going round once a `lap`, by the clock (crate::motion::looping), or
+/// standing still at the front of the disc (0.25 of the way round) with none.
+/// The dot passes behind the disc on the ring's far half, so the ring's back
+/// half, a dot there, the disc, the front half and a dot there are drawn in
+/// that order.
+fn orbit_at(lap: Option<Duration>, size_px: f32, dot_color: Rgba) -> impl IntoElement {
     use std::f32::consts::{PI, TAU};
     canvas(
         |_, _, _| (),
-        move |bounds, _, window, _| {
+        move |bounds, _, window, cx| {
+            let t = lap.map_or(0.25, |lap| crate::motion::looping(lap, window, cx));
             let center = bounds.center();
             let (rx, tilt) = (size_px * 0.36, -25f32.to_radians());
             let ry = rx * 0.36;

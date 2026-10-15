@@ -427,6 +427,9 @@ fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// How long streamed agent updates wait for a redraw (`Workspace::redraw_soon`).
+const STREAM_FRAME: Duration = Duration::from_millis(50);
+
 pub struct Workspace {
     webview: Entity<WebView>,
     /// The chat box; on the new-session screen it holds the optional first message.
@@ -598,6 +601,8 @@ pub struct Workspace {
     /// The session the last frame showed (None: the new-session screen); None
     /// before the first frame. Showing another one draws it without motion.
     drawn: Option<Option<u64>>,
+    /// A redraw for streamed agent updates is due (`redraw_soon`).
+    redraw_due: bool,
 }
 
 impl Workspace {
@@ -798,6 +803,7 @@ impl Workspace {
             lines: HashMap::new(),
             placeholder: "Type / for commands".into(),
             drawn: None,
+            redraw_due: false,
             usage_limits: offline::UsageLimits::default(),
             crashes: crash::Crashes::default(),
             notice: None,
@@ -1792,6 +1798,7 @@ impl Workspace {
     }
 
     fn on_event(&mut self, agent: agent::Agent, event: AgentEvent, cx: &mut Context<Self>) {
+        let mut streamed = false;
         match event {
             AgentEvent::Ready => {
                 // Only the assistant in use names itself: another one starting
@@ -1890,6 +1897,7 @@ impl Workspace {
                 let Some(session) = self.sessions.iter_mut().find(|s| s.id.as_ref() == Some(&id)) else { return };
                 let key = session.key;
                 let ended = matches!(event, agent::SessionEvent::TurnEnded(_));
+                streamed = matches!(event, agent::SessionEvent::Update(_));
                 let effects = session.apply(event);
                 let title = (!session.untitled && !session.named).then(|| session.title.clone());
                 if self.records.touch(&id.to_string(), title.as_deref(), ended.then(unix_now)) {
@@ -1902,7 +1910,29 @@ impl Workspace {
         if let Some(s) = self.active.and_then(|key| self.session_mut(key)) {
             s.unseen = false;
         }
-        cx.notify();
+        if streamed {
+            self.redraw_soon(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    /// Redraw within `STREAM_FRAME`, once however many updates arrive meanwhile.
+    /// A reply streams in many small updates, and each redraw lays out the
+    /// whole window, transcript included; so the window redraws at most 20
+    /// times a second for them.
+    fn redraw_soon(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.redraw_due, true) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(STREAM_FRAME).await;
+            this.update(cx, |this, cx| {
+                this.redraw_due = false;
+                cx.notify();
+            })
+        })
+        .detach();
     }
 
     /// Ids Endeavor keeps something for besides sessions.json, so a session an
