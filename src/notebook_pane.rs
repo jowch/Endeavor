@@ -834,10 +834,11 @@ impl Workspace {
         let Some(bridge) = self.session_bridge(key) else { return };
         let task = cx.background_executor().spawn({
             let notebook = notebook.clone();
-            async move { pluto::allow_execution(&bridge, &notebook) }
+            async move { pluto::until_julia(|| pluto::allow_execution(&bridge, &notebook), &|_| {}) }
         });
         cx.spawn(async move |this, cx| {
             if let Err(e) = task.await {
+                let e = if pluto::open_stuck(&e).is_some() { pluto::RUN_STUCK.to_owned() } else { e };
                 let _ = this.update(cx, |this, cx| {
                     this.show_notice(Notice::new(Spot::Pane, "Couldn't run the notebook", &e, Some(Retry::RunNotebook(notebook))), cx);
                 });
