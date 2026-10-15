@@ -2354,7 +2354,7 @@ fn runtime_of(runtime: client::RuntimeInfo) -> Runtime {
     let version = crate::older_runtime::Version::of_server(&runtime);
     Runtime {
         page_url: runtime.page_url,
-        bridge: Bridge { url: runtime.mcp_url, token: runtime.token },
+        bridge: Bridge { url: runtime.mcp_url, page_token: if runtime.page_token.is_empty() { runtime.token.clone() } else { runtime.page_token }, token: runtime.token },
         pid: runtime.pid,
         reattached: runtime.reattached,
         node: runtime.node,
@@ -2614,12 +2614,19 @@ mod tests {
         assert!(!try_ended(&trying, &connected), "signing in isn't an end");
     }
 
+    #[test]
+    fn exports_use_the_pages_token_and_an_older_runtimes_bearer_token() {
+        assert_eq!(runtime_of(runtime(7)).bridge.page_token, "p");
+        assert_eq!(runtime_of(client::RuntimeInfo { page_token: String::new(), ..runtime(7) }).bridge.page_token, "t");
+    }
+
     fn runtime(pid: u32) -> client::RuntimeInfo {
         client::RuntimeInfo {
             port: 1,
             token: "t".into(),
+            page_token: "p".into(),
             mcp_url: "http://127.0.0.1:1/mcp".into(),
-            page_url: "http://127.0.0.1:1/?token=t".into(),
+            page_url: "http://127.0.0.1:1/?token=p".into(),
             node: "lab".into(),
             pid,
             reattached: false,
