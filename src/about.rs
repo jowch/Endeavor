@@ -19,14 +19,38 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD: &str = env!("ENDEAVOR_BUILD");
 const ICON: &[u8] = include_bytes!("../assets/icon/endeavor-256.png");
 
-/// What the app knows about updates. The app can't update itself or check for
-/// a newer version yet, so `app` is always `None` for now, and nothing claims
-/// it is up to date; the notice for an update is drawn by the same code.
+/// What the app knows about updates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Updates {
-    /// A newer Endeavor, downloaded and ready once the app restarts.
-    pub app: Option<String>,
+    pub app: AppUpdate,
     pub adapter: Adapter,
+}
+
+/// Endeavor's own update (src/updater.rs). Builds are named by their short
+/// hash, as About shows them: nightlies share a version number.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppUpdate {
+    /// This copy doesn't check: a build from source, Windows, Linux.
+    Off,
+    /// It checks, but hasn't yet.
+    Unchecked,
+    /// Checking; with a percentage once a newer build is downloading.
+    Checking(Option<u8>),
+    UpToDate,
+    /// Downloaded and checked; it installs when Endeavor restarts.
+    Ready(String),
+    /// Ready, but an agent is working: Restart waits until it's done.
+    ReadyAfterTurn(String),
+    /// Newer, but Endeavor can't replace itself where it is.
+    Manual(String),
+    Failed(String),
+}
+
+impl AppUpdate {
+    /// Something for the user to do about it.
+    pub fn actionable(&self) -> bool {
+        matches!(self, AppUpdate::Ready(_) | AppUpdate::ReadyAfterTurn(_) | AppUpdate::Manual(_))
+    }
 }
 
 /// The Claude Code adapter the app pins: a new app version can pin a new one,
@@ -46,6 +70,9 @@ pub enum Adapter {
 pub enum Action {
     Restart,
     UpdateAdapter,
+    CheckNow,
+    /// Open the nightly's page, to download a build by hand.
+    Download,
 }
 
 /// One row of the update strip: its text, and its button (primary or not).
@@ -60,10 +87,13 @@ pub struct Notice {
 /// restart; the adapter's button is then secondary.
 pub fn notices(updates: &Updates) -> Vec<Notice> {
     let mut rows = Vec::new();
-    if let Some(version) = &updates.app {
-        rows.push(Notice { text: format!("Endeavor {version} is ready to install."), button: Some(("Restart", Action::Restart, true)) });
+    match &updates.app {
+        AppUpdate::Ready(build) => rows.push(Notice { text: format!("Endeavor build {build} is ready to install."), button: Some(("Restart", Action::Restart, true)) }),
+        AppUpdate::ReadyAfterTurn(build) => rows.push(Notice { text: format!("Endeavor build {build} is ready to install once the agent is done."), button: None }),
+        AppUpdate::Manual(build) => rows.push(Notice { text: format!("Endeavor build {build} is out."), button: Some(("Download", Action::Download, true)) }),
+        _ => {}
     }
-    let primary = updates.app.is_none();
+    let primary = !updates.app.actionable();
     match &updates.adapter {
         Adapter::Current | Adapter::Later => {}
         Adapter::Installing(version) => rows.push(Notice { text: format!("Installing Claude Code adapter {version}…"), button: None }),
@@ -103,12 +133,24 @@ fn works_with_these(names: &[&str]) -> String {
 
 /// The same updates as `notices`, one row per part.
 pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
-    let app = match &updates.app {
-        Some(version) => UpdateRow { key: "update-endeavor", name: "Endeavor", state: format!("Version {version} is ready. It installs when Endeavor restarts."), button: Some(("Restart", Action::Restart, true)), attention: true },
-        // No "Up to date" or Check now: the app can't check yet (see `Updates`).
-        None => UpdateRow { key: "update-endeavor", name: "Endeavor", state: format!("Version {VERSION}"), button: None, attention: false },
+    let check = Some(("Check now", Action::CheckNow, false));
+    let (state, button, attention) = match &updates.app {
+        AppUpdate::Off => (format!("Version {VERSION}"), None, false),
+        AppUpdate::Unchecked => (format!("Version {VERSION}"), check, false),
+        AppUpdate::Checking(None) => ("Checking for a newer build…".to_owned(), None, false),
+        AppUpdate::Checking(Some(p)) => (format!("Downloading the newest build… {p}%"), None, false),
+        AppUpdate::UpToDate => ("Up to date".to_owned(), check, false),
+        AppUpdate::Ready(build) => (format!("Build {build} is ready. It installs when Endeavor restarts."), Some(("Restart", Action::Restart, true)), true),
+        AppUpdate::ReadyAfterTurn(build) => (format!("Build {build} is ready. Restart comes back once the agent is done."), None, true),
+        AppUpdate::Manual(build) => (
+            format!("Build {build} is out. Endeavor can't replace itself where it is: download it and drag it to Applications."),
+            Some(("Download", Action::Download, true)),
+            true,
+        ),
+        AppUpdate::Failed(e) => (format!("Couldn't check for a newer build: {e}."), check, false),
     };
-    let primary = updates.app.is_none();
+    let app = UpdateRow { key: "update-endeavor", name: "Endeavor", state, button, attention };
+    let primary = !updates.app.actionable();
     let (state, button, attention) = match &updates.adapter {
         Adapter::Current => ("Up to date".to_owned(), None, false),
         Adapter::Later => ("Installs when you first use Claude".to_owned(), None, false),
@@ -182,8 +224,10 @@ struct About {
 impl About {
     fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         match action {
-            Action::Restart => cx.restart(),
+            Action::Restart => drop(self.workspace.update(cx, |ws, cx| ws.install_update(cx))),
             Action::UpdateAdapter => drop(self.workspace.update(cx, |ws, cx| ws.update_adapter(cx))),
+            Action::CheckNow => drop(self.workspace.update(cx, |ws, cx| ws.check_for_update(cx))),
+            Action::Download => cx.open_url(crate::updater::RELEASE_PAGE),
         }
     }
 
@@ -223,7 +267,7 @@ fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
 
 impl Render for About {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let updates = self.workspace.upgrade().map(|ws| ws.read(cx).updates()).unwrap_or(Updates { app: None, adapter: Adapter::Current });
+        let updates = self.workspace.upgrade().map(|ws| ws.read(cx).updates()).unwrap_or(Updates { app: AppUpdate::Off, adapter: Adapter::Current });
         let rows: Vec<Div> = notices(&updates).into_iter().enumerate().map(|(i, n)| self.notice_row(i, n, cx)).collect();
         let body = div()
             .flex_1()
@@ -439,7 +483,7 @@ impl Render for Licences {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Adapter, BUILD, Notice, Updates, VERSION, notices, parts};
+    use super::{Action, Adapter, AppUpdate, BUILD, Notice, Updates, VERSION, notices, parts};
 
     #[test]
     fn the_credits_name_the_assistants() {
@@ -450,25 +494,43 @@ mod tests {
 
     #[test]
     fn settings_lists_each_part_with_its_own_button() {
-        let current = parts(&Updates { app: None, adapter: Adapter::Current });
+        let current = parts(&Updates { app: AppUpdate::Off, adapter: Adapter::Current });
         let rows: Vec<_> = current.iter().map(|p| (p.name, p.state.clone(), p.button.map(|b| b.0))).collect();
         assert_eq!(rows, [("Endeavor", format!("Version {VERSION}"), None), ("Claude Code adapter", "Up to date".into(), None)]);
-        let adapter = parts(&Updates { app: None, adapter: Adapter::Available("0.4".into()) });
+        let adapter = parts(&Updates { app: AppUpdate::Off, adapter: Adapter::Available("0.4".into()) });
         assert_eq!((adapter[1].state.as_str(), adapter[1].button, adapter[1].attention), ("Version 0.4 is available", Some(("Update", Action::UpdateAdapter, true)), true));
-        let both = parts(&Updates { app: Some("0.2.0".into()), adapter: Adapter::Available("0.4".into()) });
+        let both = parts(&Updates { app: AppUpdate::Ready("abc1234".into()), adapter: Adapter::Available("0.4".into()) });
         assert_eq!((both[0].button, both[1].button), (Some(("Restart", Action::Restart, true)), Some(("Update", Action::UpdateAdapter, false))));
     }
 
-    /// The app can't check for a newer version yet, so with nothing to act on
-    /// the strip is empty rather than claiming the app is up to date.
+    /// With nothing to act on the strip is empty, checking or not.
     #[test]
     fn nothing_to_act_on_shows_no_notice() {
-        assert_eq!(notices(&Updates { app: None, adapter: Adapter::Current }), vec![]);
+        for app in [AppUpdate::Off, AppUpdate::Unchecked, AppUpdate::Checking(Some(40)), AppUpdate::UpToDate, AppUpdate::Failed("offline".into())] {
+            assert_eq!(notices(&Updates { app, adapter: Adapter::Current }), vec![]);
+        }
+    }
+
+    #[test]
+    fn a_nightly_can_check_now_and_says_what_it_found() {
+        let row = |app| {
+            let [r, _] = parts(&Updates { app, adapter: Adapter::Current });
+            (r.state, r.button.map(|b| b.0), r.attention)
+        };
+        assert_eq!(row(AppUpdate::Unchecked), (format!("Version {VERSION}"), Some("Check now"), false));
+        assert_eq!(row(AppUpdate::UpToDate), ("Up to date".into(), Some("Check now"), false));
+        assert_eq!(row(AppUpdate::Checking(None)), ("Checking for a newer build…".into(), None, false));
+        assert_eq!(row(AppUpdate::Checking(Some(40))), ("Downloading the newest build… 40%".into(), None, false));
+        assert_eq!(row(AppUpdate::Failed("couldn't reach GitHub".into())), ("Couldn't check for a newer build: couldn't reach GitHub.".into(), Some("Check now"), false));
+        assert_eq!(row(AppUpdate::Manual("abc1234".into())).1, Some("Download"));
+        assert_eq!(row(AppUpdate::ReadyAfterTurn("abc1234".into())), ("Build abc1234 is ready. Restart comes back once the agent is done.".into(), None, true));
+        let manual = notices(&Updates { app: AppUpdate::Manual("abc1234".into()), adapter: Adapter::Available("0.4".into()) });
+        assert_eq!(manual.iter().map(|n| n.button.map(|b| (b.1, b.2))).collect::<Vec<_>>(), [Some((Action::Download, true)), Some((Action::UpdateAdapter, false))]);
     }
 
     #[test]
     fn adapter_update_gets_the_primary_button_alone() {
-        let rows = notices(&Updates { app: None, adapter: Adapter::Available("0.82.0".into()) });
+        let rows = notices(&Updates { app: AppUpdate::Off, adapter: Adapter::Available("0.82.0".into()) });
         assert_eq!(
             rows,
             vec![Notice {
@@ -480,12 +542,12 @@ mod tests {
 
     #[test]
     fn app_update_comes_first_and_takes_the_primary_button() {
-        let rows = notices(&Updates { app: Some("0.2.0".into()), adapter: Adapter::Available("0.82.0".into()) });
+        let rows = notices(&Updates { app: AppUpdate::Ready("abc1234".into()), adapter: Adapter::Available("0.82.0".into()) });
         let buttons: Vec<_> = rows.iter().map(|r| (r.text.as_str(), r.button)).collect();
         assert_eq!(
             buttons,
             vec![
-                ("Endeavor 0.2.0 is ready to install.", Some(("Restart", Action::Restart, true))),
+                ("Endeavor build abc1234 is ready to install.", Some(("Restart", Action::Restart, true))),
                 ("Claude Code adapter 0.82.0 is available.", Some(("Update", Action::UpdateAdapter, false))),
             ]
         );
@@ -493,7 +555,7 @@ mod tests {
 
     #[test]
     fn installing_adapter_has_no_button() {
-        let rows = notices(&Updates { app: None, adapter: Adapter::Installing("0.82.0".into()) });
+        let rows = notices(&Updates { app: AppUpdate::Off, adapter: Adapter::Installing("0.82.0".into()) });
         assert_eq!(rows, vec![Notice { text: "Installing Claude Code adapter 0.82.0…".into(), button: None }]);
     }
 

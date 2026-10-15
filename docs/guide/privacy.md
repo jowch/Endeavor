@@ -83,8 +83,10 @@ connected to Claude Code.
   Julia and packages itself when it needs them.
 - **Links you click**, such as **Report**, open in your browser.
 
-Endeavor itself has no analytics, no usage tracking and no crash reporting,
-and it doesn't check for updates. Claude Code may contact Anthropic for its
+Endeavor itself has no analytics, no usage tracking and no crash reporting.
+The Mac test build checks GitHub once a day for a newer test build, and
+downloads it from GitHub when there is one. The check sends nothing about
+you or your work; a build from source never checks. Claude Code may contact Anthropic for its
 own purposes, such as error reports. Endeavor doesn't change Claude Code's
 settings for that.
 

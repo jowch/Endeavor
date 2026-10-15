@@ -111,33 +111,7 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     let name = if top.is_empty() { dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() } else { top.to_owned() };
     let tarball = parent.join(format!("{name}.{kind}.part"));
 
-    // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
-    // fails the SHA check and starts over. Kill it on quit if that bites.
-    let mut curl = Command::new("curl");
-    endeavor_mcp::client::no_window(&mut curl);
-    let mut curl = curl
-        .args(["-fsSL", "--retry", "3", "-C", "-", "-o"])
-        .arg(&tarball)
-        .arg(url)
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Couldn't start curl to download {what}: {e}"))?;
-    let status = loop {
-        if let Some(status) = curl.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        let got = std::fs::metadata(&tarball).map(|m| m.len()).unwrap_or(0);
-        progress(format!("Downloading {what}… {}%", got * 100 / size), Some(got as f32 / size as f32));
-        std::thread::sleep(Duration::from_millis(500));
-    };
-    if !status.success() {
-        let mut err = String::new();
-        let _ = std::io::Read::read_to_string(&mut curl.stderr.take().unwrap(), &mut err);
-        return Err(format!(
-            "Couldn't download {what} ({}). Check the internet connection and try again; the download resumes.",
-            err.trim()
-        ));
-    }
+    download(url, &tarball, what, size, progress)?;
 
     progress(format!("Checking {what}…"), None);
     let got = sha256_of(&tarball)?;
@@ -162,6 +136,41 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     Ok(())
 }
 
+/// Download `url` to `file` with curl, resuming what's already there, and
+/// report progress against the expected `size`.
+pub fn download(url: &str, file: &Path, what: &str, size: u64, progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
+    // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
+    // fails the SHA check and starts over. Kill it on quit if that bites.
+    let mut curl = Command::new("curl");
+    endeavor_mcp::client::no_window(&mut curl);
+    let mut curl = curl
+        // A connection that stalls (one that died across a sleep) fails after a
+        // minute instead of hanging until TCP gives up.
+        .args(["-fsSL", "--retry", "3", "--speed-limit", "1024", "--speed-time", "60", "-C", "-", "-o"])
+        .arg(file)
+        .arg(url)
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Couldn't start curl to download {what}: {e}"))?;
+    let status = loop {
+        if let Some(status) = curl.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        let got = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+        progress(format!("Downloading {what}… {}%", got * 100 / size.max(1)), Some(got as f32 / size.max(1) as f32));
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    if !status.success() {
+        let mut err = String::new();
+        let _ = std::io::Read::read_to_string(&mut curl.stderr.take().unwrap(), &mut err);
+        return Err(format!(
+            "Couldn't download {what} ({}). Check the internet connection and try again; the download resumes.",
+            err.trim()
+        ));
+    }
+    Ok(())
+}
+
 /// The lock for installs into `dir`, the same one for every caller in this process.
 fn install_lock(dir: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
     static LOCKS: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>> = OnceLock::new();
@@ -169,7 +178,7 @@ fn install_lock(dir: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
     locks.entry(dir.to_owned()).or_default().clone()
 }
 
-fn sha256_of(file: &Path) -> Result<String, String> {
+pub fn sha256_of(file: &Path) -> Result<String, String> {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     let mut file = std::fs::File::open(file).map_err(|e| e.to_string())?;

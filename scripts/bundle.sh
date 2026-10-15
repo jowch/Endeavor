@@ -14,6 +14,11 @@ cargo build --locked --release
 scripts/helpers.sh || echo "note: no helpers for Linux servers; this build can't connect to them" >&2
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+# The commit and its committer time (UTC), as build.rs records them. The
+# signature seals Info.plist, so a nightly updating itself (src/updater.rs)
+# reads them from a new app to know which build it really is.
+commit=$(git rev-parse HEAD 2>/dev/null || true)
+committed=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd 2>/dev/null || true)
 app=target/release/Endeavor.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -46,6 +51,8 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
+  <key>EndeavorCommit</key><string>$commit</string>
+  <key>EndeavorCommitted</key><string>$committed</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
