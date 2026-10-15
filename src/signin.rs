@@ -209,22 +209,28 @@ impl Login {
     }
 
     fn cancel(&self) {
-        #[cfg(unix)]
-        unsafe { libc::kill(-self.pid, libc::SIGTERM) };
-        // Windows has no process groups to signal: taskkill ends the CLI and
-        // what it started (/T), so its callback port is free for the next try.
-        #[cfg(windows)]
-        {
-            let mut taskkill = std::process::Command::new("taskkill");
-            endeavor_mcp::client::no_window(&mut taskkill);
-            let _ = taskkill.args(["/T", "/F", "/PID", &self.pid.to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-        }
+        end_sign_in(self.pid as u32);
         let _ = std::fs::remove_file(&self.url_file);
     }
 
     /// The sign-in page's address, once the CLI has opened it.
     fn url(&self) -> Option<String> {
         std::fs::read_to_string(&self.url_file).ok().filter(|u| u.starts_with("https://"))
+    }
+}
+
+/// Stop a browser sign-in's command (started as its own process group on
+/// Unix) and what it started, so its callback port is free for the next try.
+fn end_sign_in(pid: u32) {
+    #[cfg(unix)]
+    unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+    // Windows has no process groups to signal: taskkill ends the command and
+    // what it started (/T).
+    #[cfg(windows)]
+    {
+        let mut taskkill = std::process::Command::new("taskkill");
+        endeavor_mcp::client::no_window(&mut taskkill);
+        let _ = taskkill.args(["/T", "/F", "/PID", &pid.to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
     }
 }
 
@@ -405,6 +411,7 @@ impl Workspace {
             Some(method) => {
                 self.account = Account::SignedIn;
                 self.remember_method(method);
+                self.signed_in_status(Agent::Claude);
             }
             None => self.signed_out(cx),
         }
@@ -939,10 +946,16 @@ impl Workspace {
         let lines = |lines: &[&str]| div().flex().flex_col().gap(px(2.)).text_size(theme::size_meta()).line_height(px(17.)).text_color(theme::text_new()).children(lines.iter().map(|l| l.to_string()));
         let row = div().flex().justify_end().items_center().gap(px(6.));
         let sign_in = |label: &'static str| button("antigravity-sign-in", label, Look::Primary).on_click(cx.listener(|this, _, _, cx| this.sign_in_to_antigravity(cx)));
+        let cancel = button("antigravity-sign-in-cancel", "Cancel", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.cancel_antigravity_sign_in(cx)));
+        let waiting = match self.message_waits_for(Agent::Antigravity) {
+            true => "We opened Google's sign-in page. Sign in there; this card goes away by itself and your message sends.",
+            false => "We opened Google's sign-in page. Sign in there, and this card goes away by itself.",
+        };
         let body = match self.antigravity_account {
             Google::SigningIn => div()
                 .child(heading.child(crate::orbit::orbit("antigravity-sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
-                .child(lines(&["We opened Google's sign-in page. Sign in there; this card goes away by itself and your message sends."])),
+                .child(lines(&[waiting, "Closed the page, or want another account? Cancel, then sign in again."]))
+                .child(row.child(cancel)),
             Google::Failed => div()
                 .child(heading.child("Antigravity sign-in didn't finish"))
                 .child(lines(&["The sign-in page closed or took more than 5 minutes. Try again."]))
@@ -978,10 +991,16 @@ impl Workspace {
         let row = div().flex().justify_end().items_center().gap(px(6.));
         let check = button("codex-check", "Check again", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.recheck_codex(cx)));
         let sign_in = |label: &'static str| button("codex-sign-in", label, Look::Primary).on_click(cx.listener(|this, _, _, cx| this.sign_in_to_codex(cx)));
+        let cancel = button("codex-sign-in-cancel", "Cancel", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.cancel_codex_sign_in(cx)));
+        let waiting = match self.message_waits_for(Agent::Codex) {
+            true => "We opened ChatGPT's sign-in page. Sign in there; this card goes away by itself and your message sends.",
+            false => "We opened ChatGPT's sign-in page. Sign in there, and this card goes away by itself.",
+        };
         let body = match self.codex_account {
             Codex::SigningIn => div()
                 .child(heading.child(crate::orbit::orbit("codex-sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
-                .child(lines(&["We opened ChatGPT's sign-in page. Sign in there; this card goes away by itself and your message sends."])),
+                .child(lines(&[waiting, "Closed the page, or want another account? Cancel, then sign in again."]))
+                .child(row.child(cancel)),
             Codex::Failed => div()
                 .child(heading.child("Codex sign-in didn't finish"))
                 .child(lines(&["Try again, or run codex login in a terminal and then check again."]))
@@ -1043,6 +1062,22 @@ impl Workspace {
         }
     }
 
+    /// The status line once `agent` is connected. Signed out, it can't answer
+    /// yet, so the line says what's missing rather than "connected".
+    pub fn connected_status(&self, agent: Agent) -> String {
+        match self.signed_out_of_agent(agent) {
+            true => needs_sign_in(agent),
+            false => format!("{} connected.", agent.name()),
+        }
+    }
+
+    /// Signed in: the status line stops asking for it.
+    fn signed_in_status(&mut self, agent: Agent) {
+        if self.status.as_ref() == needs_sign_in(agent).as_str() {
+            self.status = format!("{} connected.", agent.name()).into();
+        }
+    }
+
     /// `agent` can't answer now: messages wait.
     pub fn out_of_reach(&self, agent: Agent) -> bool {
         self.signed_out_of_agent(agent) || self.offline_since().is_some() || self.usage_limits.holds(agent) || !self.links.get(agent).process.up()
@@ -1078,6 +1113,7 @@ impl Workspace {
     pub fn on_antigravity_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
         if signed_in {
             self.antigravity_account = crate::agent::Account::SignedIn;
+            self.signed_in_status(Agent::Antigravity);
             self.open_waiting(Agent::Antigravity, cx);
         } else {
             self.signed_out_of(Agent::Antigravity, cx);
@@ -1099,6 +1135,29 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The waiting card's Cancel: the card goes back to Sign in at once, and
+    /// Antigravity's server starts again. Only stopping it ends its wait for
+    /// the browser, which holds the sign-in's port, so a second Sign in would
+    /// fail. A session open when the sign-in ran out reopens on the new server
+    /// once it's up, as after a crash (`agent_stopped`), without counting as one.
+    pub fn cancel_antigravity_sign_in(&mut self, cx: &mut Context<Self>) {
+        if self.antigravity_account != crate::agent::Account::SigningIn {
+            return;
+        }
+        self.antigravity_account = crate::agent::Account::SignedOut;
+        for session in self.sessions.iter_mut().filter(|s| s.agent == Agent::Antigravity) {
+            session.agent_stopped();
+        }
+        self.sync_holds(cx);
+        self.restart_agent(Agent::Antigravity, cx);
+        cx.notify();
+    }
+
+    /// A message waits for `agent`: one typed while it can't answer.
+    fn message_waits_for(&self, agent: Agent) -> bool {
+        self.sessions.iter().any(|s| s.agent == agent && (!s.outbox.items.is_empty() || s.outbox.has_unanswered()))
+    }
+
     /// Antigravity's sign-in ended.
     pub fn on_antigravity_sign_in_ended(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
         match result {
@@ -1116,6 +1175,9 @@ impl Workspace {
     /// waiting for that open.
     pub fn on_codex_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
         self.codex_account = if signed_in { crate::agent::Account::SignedIn } else { crate::agent::Account::SignedOut };
+        if signed_in {
+            self.signed_in_status(Agent::Codex);
+        }
         self.open_waiting(Agent::Codex, cx);
         cx.notify();
     }
@@ -1126,15 +1188,37 @@ impl Workspace {
         if self.codex_account == crate::agent::Account::SigningIn {
             return;
         }
+        let child = match crate::codex::start_login() {
+            Ok(child) => child,
+            Err(e) => {
+                eprintln!("Codex sign-in: {e}");
+                self.codex_account = crate::agent::Account::Failed;
+                return cx.notify();
+            }
+        };
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let attempt = NEXT.fetch_add(1, Ordering::Relaxed);
+        self.codex_login = Some((attempt, child.id()));
         self.codex_account = crate::agent::Account::SigningIn;
         cx.notify();
-        let done = cx.background_executor().spawn(async { crate::codex::log_in().and_then(|()| crate::codex::signed_in()) });
+        let done = cx.background_executor().spawn(async move { crate::codex::finish_login(child).and_then(|()| crate::codex::signed_in()) });
         cx.spawn(async move |this, cx| {
             let signed_in = done.await;
             let _ = this.update(cx, |this, cx| {
+                // Cancelled (and maybe started again): this attempt's end says nothing,
+                // unless it signed in after all.
+                let current = this.codex_login.is_some_and(|(current, _)| current == attempt);
+                if !current && !matches!(signed_in, Ok(true)) {
+                    return;
+                }
+                if current {
+                    this.codex_login = None;
+                }
                 match signed_in {
                     Ok(true) => this.on_codex_signed_in(true, cx),
-                    Ok(false) | Err(_) => this.codex_account = crate::agent::Account::Failed,
+                    // Not over a sign-in an earlier, cancelled attempt finished meanwhile.
+                    Ok(false) | Err(_) if this.codex_account == crate::agent::Account::SigningIn => this.codex_account = crate::agent::Account::Failed,
+                    Ok(false) | Err(_) => {}
                 }
                 if let Err(e) = signed_in {
                     eprintln!("Codex sign-in: {e}");
@@ -1143,6 +1227,15 @@ impl Workspace {
             });
         })
         .detach();
+    }
+
+    /// The waiting card's Cancel: stop `codex-acp login`, and the card goes
+    /// back to Sign in.
+    pub fn cancel_codex_sign_in(&mut self, cx: &mut Context<Self>) {
+        let Some((_, pid)) = self.codex_login.take() else { return };
+        end_sign_in(pid);
+        self.codex_account = crate::agent::Account::SignedOut;
+        cx.notify();
     }
 
     /// Check Codex's sign-in again (signed in from a terminal meanwhile).
@@ -1179,6 +1272,11 @@ impl Workspace {
 }
 
 const PLANS: &str = "https://claude.com/pricing";
+
+/// The status line for an agent that's connected but signed out.
+fn needs_sign_in(agent: Agent) -> String {
+    format!("{} needs you to sign in.", agent.name())
+}
 
 #[cfg(test)]
 mod tests {
