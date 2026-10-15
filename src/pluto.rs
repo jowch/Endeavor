@@ -179,9 +179,10 @@ pub fn open_notebook(bridge: &Bridge, path: &str, run: bool) -> Result<Value, St
 
 /// How long the app's calls wait for an answer.
 const CALL_WAIT: Duration = Duration::from_secs(10);
-/// How long a call that may start Julia waits: the core waits up to 30 s for
-/// Julia before it answers that Julia is still starting.
-const JULIA_CALL_WAIT: Duration = Duration::from_secs(45);
+/// How long a call that may start Julia waits: the core answers within 45 s,
+/// that Julia is still starting or the notebook still opening if it must, and
+/// this leaves room past that for the answer to arrive (over ssh, too).
+const JULIA_CALL_WAIT: Duration = Duration::from_secs(55);
 
 /// What Julia is doing, from a call's error that says it's still starting
 /// ("julia_starting::Downloading Julia 1.12.6… 42%. The first start can take…").
@@ -246,6 +247,14 @@ pub fn r_installing(error: &str) -> Option<&str> {
     Some(step.split_once(", which").map_or(step, |(step, _)| step).trim())
 }
 
+/// What is still opening, from a call's answer that an open or a new notebook
+/// took longer than one call waits ("notebook_opening::Opening '/x.jl' is
+/// taking longer…"); the open goes on, and the same call again gets it.
+pub fn notebook_opening(error: &str) -> Option<&str> {
+    let step = error.strip_prefix("notebook_opening::")?;
+    Some(step.split_once(" is taking").map_or(step, |(step, _)| step).trim())
+}
+
 /// Why R notebooks couldn't start, from a call's error that says so.
 pub fn r_failed(error: &str) -> Option<&str> {
     error.strip_prefix("r_failed::").or_else(|| error.strip_prefix("r_not_found::")).map(str::trim)
@@ -253,12 +262,12 @@ pub fn r_failed(error: &str) -> Option<&str> {
 
 /// `call` again while it answers that Julia is still starting (the first
 /// start downloads Julia and installs Pluto's packages, which takes minutes),
-/// or that R notebooks are still being set up (R, then Ember), with `step`
-/// hearing what it's doing each time.
+/// or that R notebooks are still being set up (R, then Ember), or that the
+/// notebook is still opening, with `step` hearing what it's doing each time.
 pub fn until_julia<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn Fn(&str)) -> Result<T, String> {
     loop {
         match call() {
-            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)) {
+            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)).or_else(|| notebook_opening(&e)) {
                 Some(doing) => {
                     step(doing);
                     std::thread::sleep(Duration::from_secs(1));
@@ -545,6 +554,11 @@ mod tests {
         let result = until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned()));
         assert_eq!(result, Ok(7));
         assert_eq!(*heard.borrow(), ["Julia is starting", "Julia 1.12.6 is starting and loading Pluto"]);
+        // As the core words an open that outlasted its call (EndeavorMCP notebooks.rs `open_waited`): it goes on, and the same call again gets it.
+        let answers = std::cell::RefCell::new(vec![Ok(8), Err("notebook_opening::Creating '/p/a.jl' is taking longer than one call waits: the first notebook…".to_owned())]);
+        let heard = std::cell::RefCell::new(Vec::new());
+        assert_eq!(until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned())), Ok(8));
+        assert_eq!(*heard.borrow(), ["Creating '/p/a.jl'"]);
         let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
         assert_eq!(failed, Err("julia_failed::no".into()));
     }
