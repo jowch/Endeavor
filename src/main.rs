@@ -868,12 +868,16 @@ impl Workspace {
         }
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
-        // Claude starts alongside it, except on first launch, whose setup screen
-        // asks which assistant first and then goes step by step.
+        // The new-session screen's agent starts alongside it, for its sign-in and
+        // options, except on first launch, whose setup screen asks which
+        // assistant first and then goes step by step. Claude also starts when
+        // Endeavor has Claude sessions, so the sidebar's list of them stays
+        // current; otherwise it waits until something needs it.
         if this.setup.is_none() {
-            this.ensure_agent(agent::Agent::Claude, cx);
-            // The new-session screen shows the last agent picked: its sign-in and options.
             this.ensure_agent(this.draft_agent(), cx);
+            if this.records.any_of(agent::Agent::Claude) {
+                this.ensure_agent(agent::Agent::Claude, cx);
+            }
         }
         this.scan_notebooks(cx);
         this.watch_network(cx);
@@ -1811,7 +1815,11 @@ impl Workspace {
     fn on_event(&mut self, agent: agent::Agent, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::Ready => {
-                self.status = format!("{} connected.", agent.name()).into();
+                // Only the assistant in use names itself: another one starting
+                // in the background doesn't take the line.
+                if self.agent_in_use(agent) {
+                    self.status = format!("{} connected.", agent.name()).into();
+                }
                 let link = self.links.get_mut(agent);
                 link.ready = true;
                 link.failed = false;
@@ -1827,6 +1835,8 @@ impl Workspace {
             }
             // On the setup screen, only the assistant picked moves the steps.
             AgentEvent::Setup(_) if self.setup.as_ref().is_some_and(|s| s.agent.is_some_and(|a| a != agent)) => {}
+            // Nor does another assistant's start, after setup: it would take the status line.
+            AgentEvent::Setup(_) if self.setup.is_none() && !self.agent_in_use(agent) => {}
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
@@ -2167,6 +2177,8 @@ impl Workspace {
     pub fn updates(&self) -> about::Updates {
         let adapter = match agent::adapter_status(agent::Agent::Claude) {
             Ok((version, false)) if self.links.get(agent::Agent::Claude).failed => about::Adapter::Available(version),
+            // Claude isn't started, nor about to be (the setup screen's pick): nothing is installing.
+            Ok((_, false)) if self.links.get(agent::Agent::Claude).rx.is_some() && self.setup.as_ref().and_then(|s| s.agent) != Some(agent::Agent::Claude) => about::Adapter::Later,
             Ok((version, false)) => about::Adapter::Installing(version),
             _ => about::Adapter::Current,
         };
@@ -2261,6 +2273,11 @@ impl Workspace {
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
+    }
+
+    /// The new-session screen's agent, or the agent of the session in view.
+    fn agent_in_use(&self, agent: agent::Agent) -> bool {
+        agent == self.draft_agent() || self.active_session().is_some_and(|s| s.agent == agent)
     }
 
     /// Start an agent that isn't running yet. True if it starts now: its
