@@ -32,8 +32,7 @@ pub struct ServerDialog {
     name: Entity<InputState>,
     host: Entity<InputState>,
     julia: Entity<InputState>,
-    /// The record's R setting, which the dialog doesn't show yet; kept as it was.
-    r: Option<String>,
+    r: Entity<InputState>,
     idle_stop: Option<IdleStop>,
     idle_menu: bool,
     /// `Host` entries from ~/.ssh/config.
@@ -106,6 +105,7 @@ impl Workspace {
         let name = input(server.name.clone(), if server.cluster.is_some() { "SSH host (cluster)" } else { "Same as the SSH host" }, window, cx);
         let host = input(if server.ssh_host.is_empty() { String::new() } else { server.ssh_target() }, "alias, or user@host", window, cx);
         let julia = input(server.julia.clone().unwrap_or_default(), "module load julia", window, cx);
+        let r = input(server.r.clone().unwrap_or_default(), "module load R", window, cx);
         // The suggestions follow what's typed.
         let subscriptions = vec![cx.subscribe(&host, |_: &mut Workspace, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
@@ -134,7 +134,7 @@ impl Workspace {
             name,
             host,
             julia,
-            r: server.r.clone(),
+            r,
             idle_stop: server.idle_stop,
             idle_menu: false,
             ssh_hosts: crate::hosts::ssh_config_hosts(),
@@ -168,6 +168,7 @@ impl Workspace {
             name => name.unwrap_or(typed),
         };
         let julia = dialog.julia.read(cx).value().trim().replace('\n', "; ");
+        let r = dialog.r.read(cx).value().trim().replace('\n', "; ");
         let text = |input: &Entity<InputState>| Some(input.read(cx).value().trim().to_owned()).filter(|t| !t.is_empty());
         let cluster = dialog.cluster.as_ref().map(|c| Cluster {
             account: text(&c.account),
@@ -182,7 +183,7 @@ impl Workspace {
             ssh_host,
             port,
             julia: (!julia.is_empty()).then_some(julia),
-            r: dialog.r.clone(),
+            r: (!r.is_empty()).then_some(r),
             idle_stop: dialog.idle_stop,
             cluster,
         })
@@ -567,6 +568,8 @@ impl Workspace {
                                 d.child(row("How to get Julia", div().w(px(260.)).child(field(&dialog.julia, true)))).child(hint(
                                     "A path to julia, or a shell line that puts it on the PATH. Empty: the julia on the server's PATH, else Endeavor downloads its own.",
                                 ))
+                                .child(row("How to get R", div().w(px(260.)).child(field(&dialog.r, true))))
+                                .child(hint("For R notebooks: a path to Rscript, or a shell line that puts R on the PATH. Empty: the R on the server's PATH."))
                             })
                             .child(divider())
                             .child(section("Notebooks"))
@@ -722,6 +725,8 @@ impl Workspace {
             row("Account", div().w(px(220.)).child(field(&c.account, false))).into_any_element(),
             row("How to get Julia", div().w(px(220.)).child(field(&dialog.julia, true))).into_any_element(),
             hint("A julia path or a shell line (module load julia); empty finds or downloads one.").into_any_element(),
+            row("How to get R", div().w(px(220.)).child(field(&dialog.r, true))).into_any_element(),
+            hint("For R notebooks: an Rscript path or a shell line (module load R); empty uses the R on the PATH.").into_any_element(),
             row("Where to keep Julia packages", div().w(px(220.)).child(field(&c.depot, true))).into_any_element(),
             hint("Scratch space by default: home folders on clusters are usually small.").into_any_element(),
             divider().into_any_element(),

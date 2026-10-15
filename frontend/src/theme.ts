@@ -10,6 +10,7 @@
 // menu offers it.
 
 import { on } from "./bridge";
+import { onEmber } from "./engine";
 
 // Endeavor's own design tokens (--e-*), used by every module that draws its
 // own UI (drawer.ts, rail.ts, prompt.ts, etc.) in both notebook looks and
@@ -299,9 +300,34 @@ body::before {
 `;
 
 // Pluto classic: Pluto's page, without the file box (the app's header shows the file).
+// Ember's header has a file-name button instead, which opens its Rename or move dialog;
+// the ⋮ menu has Rename and Move.
 const classic = `
-nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group { display: none !important; }
+nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group, #ember-file-name { display: none !important; }
 `;
+
+// On Ember's page in the Endeavor look: its Theme setting would turn Ember's
+// colours against the overrides above, which follow the system's, so it's hidden
+// and the page follows the system (syncTheme). Its safe-preview banner is
+// hidden as Pluto's labels are: the safe-preview callout stands in for it.
+const emberLook = `
+.ember-settings-section:has(#ember-setting-theme) { display: none !important; }
+#ember-safe-preview { display: none !important; }
+`;
+
+/** Keep Ember's `<html data-theme>` on the system's light or dark while the Endeavor look is on. */
+function syncTheme(): void {
+  const dark = window.matchMedia("(prefers-color-scheme: dark)");
+  const root = document.documentElement;
+  const sync = () => {
+    if (root.dataset.endeavorLook !== "endeavor") return;
+    const want = dark.matches ? "dark" : "light";
+    if (root.getAttribute("data-theme") !== want) root.setAttribute("data-theme", want);
+  };
+  dark.addEventListener("change", sync);
+  new MutationObserver(sync).observe(root, { attributes: true, attributeFilter: ["data-theme", "data-endeavor-look"] });
+  sync();
+}
 
 // Instant feedback goes to Pluto's developers, not Endeavor's: the ⋮ menu offers it.
 const both = `
@@ -348,7 +374,9 @@ export function initTheme(): void {
   // After Pluto's stylesheets, so equal-specificity rules win.
   document.head.append(style);
   on("theme", (msg) => {
-    style.textContent = both + (msg.name === "endeavor" ? endeavorLook : classic);
+    const endeavor = msg.name === "endeavor";
+    style.textContent = both + (endeavor ? endeavorLook + (onEmber() ? emberLook : "") : classic);
     document.documentElement.dataset.endeavorLook = msg.name;
   });
+  if (onEmber()) syncTheme();
 }
