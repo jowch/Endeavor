@@ -503,6 +503,8 @@ pub struct Workspace {
     links: agent_process::Links,
     /// Codex's sign-in, once Codex has been started.
     codex_account: agent::Account,
+    /// Codex's browser sign-in under way: its attempt and `codex-acp login`'s pid, for Cancel.
+    codex_login: Option<(u64, u32)>,
     /// Antigravity's sign-in, kept the same way as Codex's.
     antigravity_account: agent::Account,
     /// App-level status (Julia, agent connection), shown under the session bar.
@@ -785,6 +787,7 @@ impl Workspace {
             probing: false,
             links: agent_process::Links::default(),
             codex_account: agent::Account::Unknown,
+            codex_login: None,
             antigravity_account: agent::Account::Unknown,
             status: "".into(),
             annotating: false,
@@ -1794,7 +1797,7 @@ impl Workspace {
                 // Only the assistant in use names itself: another one starting
                 // in the background doesn't take the line.
                 if self.agent_in_use(agent) {
-                    self.status = format!("{} connected.", agent.name()).into();
+                    self.status = self.connected_status(agent).into();
                 }
                 let link = self.links.get_mut(agent);
                 link.ready = true;
@@ -2180,8 +2183,9 @@ impl Workspace {
         self.restart_agent(agent::Agent::Claude, cx);
     }
 
-    fn restart_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) {
-        // The failed agent thread dropped its command channel; start with a new one.
+    pub(crate) fn restart_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) {
+        // A new command channel: a failed thread dropped its own, and a running
+        // one ends when this drops (its process with it); `start_agent` ignores its last events.
         let link = self.links.get_mut(agent);
         let commands = link.renew();
         link.ready = false;
@@ -2214,10 +2218,14 @@ impl Workspace {
             self.links.get_mut(agent).rx = Some(commands);
             return;
         }
+        let generation = self.links.get(agent).generation;
         let mut events = agent::start(agent, commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
-                if this.update(cx, |this, cx| this.on_event(agent, event, cx)).is_err() {
+                // A start replaced by a restart: its last words (the sign-in it was
+                // waiting for, "connection closed") are about a process already gone.
+                let current = |this: &Self| this.links.get(agent).generation == generation;
+                if this.update(cx, |this, cx| if current(this) { this.on_event(agent, event, cx) }).is_err() {
                     break;
                 }
             }
