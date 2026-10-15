@@ -533,7 +533,7 @@ impl Workspace {
 
     /// Settings' Sign out: asks first, then signs Claude Code out on this computer.
     pub fn sign_out_of_claude(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_confirm("Sign out of Claude?", "Claude stops answering in every session until you sign in again.", "Sign out", window, cx, |this, _, cx| {
+        self.open_confirm("Sign out of Claude?", "Claude stops answering in every session until you sign in again. This also signs out the claude command in your terminal.", "Sign out", window, cx, |this, _, cx| {
             this.sign_out_now(cx);
         });
     }
