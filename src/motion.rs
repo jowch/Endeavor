@@ -295,8 +295,10 @@ impl Glide {
 }
 
 /// Run the transcript's glide before the list lays out. `pad`: the list's top
-/// and bottom padding, which its scroll offsets leave out.
-pub fn follow(glide: &RefCell<Glide>, list: &ListState, pad: Pixels, window: &Window) {
+/// and bottom padding, which its scroll offsets leave out. The glide redraws as
+/// loops do (`loop_clock`): while a reply streams it never stops, since each
+/// line starts a new ease.
+pub fn follow(glide: &RefCell<Glide>, list: &ListState, pad: Pixels, window: &Window, cx: &mut App) {
     let at = |list: &ListState| {
         let top = list.logical_scroll_top();
         (top.item_ix, top.offset_in_item)
@@ -311,7 +313,7 @@ pub fn follow(glide: &RefCell<Glide>, list: &ListState, pad: Pixels, window: &Wi
         Move::By(by) => {
             list.scroll_by(by);
             glide.left_at(at(list));
-            window.request_animation_frame();
+            loop_clock(window, cx);
         }
     }
 }
