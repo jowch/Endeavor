@@ -79,7 +79,8 @@ function tick() {
 const ticks: Array<() => void> = [];
 
 /** Run `hook` about every `ms` while the page shows (on animation frames, so not while
- * hidden; none in tests). */
+ * hidden; none in tests). Ticks come every `TICK_MS` and a frame, so a shorter `ms`
+ * still runs only that often. */
 export function every(ms: number, hook: () => void): void {
   let lastRun = 0;
   ticks.push(() => {
