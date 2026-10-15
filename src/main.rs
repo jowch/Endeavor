@@ -1790,7 +1790,10 @@ impl Workspace {
     fn on_event(&mut self, agent: agent::Agent, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::Ready => {
-                self.status = self.connected_status(agent).into();
+                // An agent the user isn't using doesn't speak for the app.
+                if self.agent_in_use(agent) {
+                    self.status = self.connected_status(agent).into();
+                }
                 let link = self.links.get_mut(agent);
                 link.ready = true;
                 link.failed = false;
@@ -2185,6 +2188,11 @@ impl Workspace {
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
+    }
+
+    /// The new-session screen's agent, or the agent of the session in view.
+    fn agent_in_use(&self, agent: agent::Agent) -> bool {
+        agent == self.draft_agent() || self.active_session().is_some_and(|s| s.agent == agent)
     }
 
     /// Start an agent that isn't running yet. True if it starts now: its

@@ -38,9 +38,14 @@ pub fn signed_in() -> Result<bool, String> {
 
 /// Start Codex's browser sign-in (`codex-acp login`): it opens the ChatGPT
 /// sign-in page and ends once the sign-in is done or fails (`finish_login`).
+/// It runs the `codex` the adapter bundles, as the server does.
 /// In its own process group, so Cancel stops it and what it started.
 pub fn start_login() -> Result<std::process::Child, String> {
     let mut command = crate::agent::codex_adapter(&["login", "--client-name=endeavor", "--client-title=Endeavor"])?;
+    // The adapter's login runs `CODEX_PATH`, else a `codex` on PATH.
+    if let Some(codex) = crate::agent::bundled_codex() {
+        command.env("CODEX_PATH", codex);
+    }
     command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
