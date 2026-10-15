@@ -38,7 +38,7 @@ pub fn render_transcript(session: &Session, margin: Pixels, window: &Window, cx:
     if motion::quiet() {
         session.settle_arrivals();
     }
-    motion::follow(&session.glide, &session.list, LIST_TOP, window);
+    motion::follow(&session.glide, &session.list, LIST_TOP, window, cx);
     // Every reply starts parsing now, so it has its height before it is first measured.
     for (ix, entry) in session.entries.iter().enumerate() {
         if let Entry::Agent { text, .. } = entry {

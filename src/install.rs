@@ -94,6 +94,17 @@ pub fn app_dir() -> Result<PathBuf, String> {
 /// `top` is empty: a zip with its files at the top). `what` names it in
 /// progress and errors.
 pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
+    // One install per folder at a time: two agents starting together both want
+    // Node.js, and would share the download and the unpacking folder (#99). The
+    // second waits, then finds the folder the first put in place. Callers come
+    // here only when the folder's program is missing, and the folder appears
+    // only by the rename below, so a folder that's there is a finished install.
+    // The lock is per process: two Endeavors at once aren't covered.
+    let lock = install_lock(dir);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if dir.exists() {
+        return Ok(());
+    }
     let parent = dir.parent().unwrap();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let kind = if url.ends_with(".zip") { "zip" } else { "tar.gz" };
@@ -158,6 +169,13 @@ pub fn download(url: &str, file: &Path, what: &str, size: u64, progress: &dyn Fn
         ));
     }
     Ok(())
+}
+
+/// The lock for installs into `dir`, the same one for every caller in this process.
+fn install_lock(dir: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static LOCKS: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    locks.entry(dir.to_owned()).or_default().clone()
 }
 
 pub fn sha256_of(file: &Path) -> Result<String, String> {
@@ -303,6 +321,40 @@ mod tests {
         let good = tmp.join("app/good");
         tarball(&good, "Thing", "thing-1.0", (&url, &sha, size), &|_, _| {}).unwrap();
         assert!(good.join("bin/thing").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Two installs of the same thing at once (two agents wanting Node.js):
+    /// one downloads and unpacks, the other waits and finds it there (#99).
+    #[test]
+    fn two_installs_at_once_both_succeed() {
+        let tmp = std::env::temp_dir().join(format!("endeavor-install-twice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let src = tmp.join("src/thing-1.0/bin");
+        std::fs::create_dir_all(&src).unwrap();
+        // Big enough that the two would overlap without the lock.
+        std::fs::write(src.join("thing"), vec![b'x'; 8 << 20]).unwrap();
+        let kind = if cfg!(windows) { "zip" } else { "tar.gz" };
+        let archive = tmp.join(format!("thing.{kind}"));
+        #[cfg(unix)]
+        let mut pack = Command::new("tar");
+        #[cfg(unix)]
+        pack.arg("-czf");
+        #[cfg(windows)]
+        let mut pack = windows_tar();
+        #[cfg(windows)]
+        pack.arg("-a").arg("-cf");
+        assert!(pack.arg(&archive).arg("-C").arg(tmp.join("src")).arg("thing-1.0").status().unwrap().success());
+        let sha = sha256_of(&archive).unwrap();
+        let url = format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, archive.display().to_string().replace('\\', "/"));
+        let size = std::fs::metadata(&archive).unwrap().len();
+        let dir = tmp.join("app/thing-1.0");
+        let results: Vec<Result<(), String>> = std::thread::scope(|s| {
+            let installs: Vec<_> = (0..2).map(|_| s.spawn(|| tarball(&dir, "Thing", "thing-1.0", (&url, &sha, size), &|_, _| {}))).collect();
+            installs.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert!(dir.join("bin/thing").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
