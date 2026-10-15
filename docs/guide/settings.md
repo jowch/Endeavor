@@ -21,7 +21,8 @@ starts with. Click **Settings** next to Claude for these:
 - **Signed in as**, with your plan and organisation.
 - **Plan and usage**, with **Open claude.ai**, which shows your usage.
 - **Sign out**. Claude stops answering in every session until you sign in
-  again.
+  again. Endeavor uses the same sign-in as the `claude` command, so this also
+  signs out `claude` in your terminal. Signing in here signs it in too.
 
 **Codex**, by OpenAI, works in sessions on your Mac. It uses your ChatGPT
 sign-in, the same one as the `codex` command. When you're not signed in, its
