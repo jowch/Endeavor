@@ -376,6 +376,28 @@ pub(crate) fn codex_adapter(args: &[&str]) -> Result<std::process::Command, Stri
     Ok(command)
 }
 
+/// The native `codex` the Codex adapter bundles (in `@openai/codex`'s
+/// platform package), for `codex-acp login`: unlike the server, the adapter's
+/// login runs `CODEX_PATH`, else a `codex` on PATH, which a new user hasn't
+/// got. None if it isn't installed.
+pub(crate) fn bundled_codex() -> Option<PathBuf> {
+    let (_, entry) = adapter_paths(Agent::Codex).ok()?;
+    // .../node_modules/@agentclientprotocol/codex-acp/dist/index.js
+    let modules = entry.ancestors().nth(4)?;
+    let (os, exe) = match std::env::consts::OS {
+        "macos" => ("darwin", "codex"),
+        "windows" => ("win32", "codex.exe"),
+        _ => ("linux", "codex"),
+    };
+    // The app's own architecture first; Node may run under emulation.
+    let mut arches = ["x64", "arm64"];
+    if std::env::consts::ARCH == "aarch64" { arches.reverse(); }
+    arches.into_iter().find_map(|arch| {
+        let vendor = modules.join(format!("@openai/codex-{os}-{arch}/vendor"));
+        std::fs::read_dir(&vendor).ok()?.flatten().map(|triple| triple.path().join("bin").join(exe)).find(|path| path.is_file())
+    })
+}
+
 /// Debug builds only: while the file `ENDEAVOR_TEST_NO_STEERING` names exists,
 /// Cmd+Enter takes the path for an agent that can't steer (stop, then send).
 fn test_no_steering() -> bool {

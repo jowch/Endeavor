@@ -2340,7 +2340,7 @@ fn brand() -> impl IntoElement {
                         .child(format!("Version {}", about::VERSION))
                         .child(div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_muted()).child(format!("(build {})", about::BUILD))),
                 )
-                .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child("Notebooks by Pluto.jl. Runs on Julia. Works with Claude, by Anthropic.")),
+                .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(format!("Notebooks by Pluto.jl. Runs on Julia. {}", crate::about::works_with()))),
         )
 }
 
