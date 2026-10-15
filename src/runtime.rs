@@ -112,7 +112,7 @@ pub struct Runtime {
 
 impl From<client::Runtime> for Runtime {
     fn from(runtime: client::Runtime) -> Runtime {
-        let bridge = Bridge { url: runtime.mcp_url, token: runtime.token };
+        let bridge = Bridge { url: runtime.mcp_url, token: runtime.token, page_token: runtime.page_token };
         let version = Version::of(runtime.build.as_deref(), runtime.interface, crate::remote::build());
         Runtime { page_url: runtime.page_url, bridge, pid: runtime.pid, reattached: runtime.reattached, node: runtime.node, job: runtime.job, version }
     }
@@ -492,6 +492,7 @@ mod tests {
         let runtime = endeavor_mcp::client::Runtime {
             port: 1,
             token: "t".into(),
+            page_token: "p".into(),
             mcp_url: "http://127.0.0.1:1/mcp".into(),
             page_url: "http://127.0.0.1:1/".into(),
             pid: 2,

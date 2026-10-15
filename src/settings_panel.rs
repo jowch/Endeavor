@@ -459,6 +459,11 @@ fn first_sentence(text: &str) -> String {
     }
 }
 
+/// The warning for a notebook with a cell edited and not run.
+fn unrun_edit(file: &str) -> String {
+    format!("A cell in {file} has an edit that hasn't been run. It isn't in the file, so it will be lost.")
+}
+
 /// "residuals.jl closes. Its file is saved." for Stop's question.
 pub fn closes(files: &[String]) -> String {
     match files {
@@ -533,6 +538,7 @@ impl Workspace {
             (Account::SignedOut(_), _) => Status2::new("Not signed in. Claude can't answer until you sign in.", Tone::Attention),
             (_, Some(p)) => Status2::new(format!("Signed in as {}", p.email.clone().unwrap_or_else(|| p.plan.clone())), Tone::Plain),
             (Account::SignedIn, None) => Status2::new("Signed in", Tone::Plain),
+            (Account::Unknown, None) if self.links.get(Agent::Claude).rx.is_some() => Status2::new("Starts when you pick it", Tone::Quiet),
             (Account::Unknown, None) => Status2::new("Checking the sign-in…", Tone::Plain),
         });
         if signed_out && !matches!(self.account, Account::SignedOut(Stage::Waiting(_))) {
@@ -649,7 +655,7 @@ impl Workspace {
                 usage.desc = Some("See your plan, and how much of it you've used.".into());
                 usage.controls.push(Control::Link { label: "Open claude.ai", external: true, act: Act::OpenClaudeAi });
                 let mut out = row("sign-out", "Sign out");
-                out.desc = Some("Claude stops answering in every session until you sign in again.".into());
+                out.desc = Some("Claude stops answering in every session until you sign in again. This also signs out the claude command in your terminal.".into());
                 out.controls.push(button("Sign out", Look::Secondary, Act::SignOut, "Sign out of Claude"));
                 items.push(Item::Row(usage));
                 items.push(Item::Row(out));
@@ -834,6 +840,18 @@ impl Workspace {
             .filter_map(|nb| nb["path"].as_str())
             .map(|p| Path::new(p).file_name().map_or(p.to_owned(), |n| n.to_string_lossy().into_owned()))
             .collect()
+    }
+
+    /// When the notebook on screen runs on `host` and a cell has an edit not yet
+    /// run, the line saying stopping loses it: Pluto saves only code that has run.
+    pub fn unrun_edit_warning(&self, host: &HostId) -> Option<String> {
+        if !self.page.unsaved || self.session_showing(&self.page.notebook).is_none() {
+            return None;
+        }
+        let nb = self.connections.get(host)?.notebooks.as_array()?.iter().find(|nb| nb["notebook_id"].as_str() == Some(self.page.notebook.as_str()))?;
+        let path = nb["path"].as_str()?;
+        let file = Path::new(path).file_name().map_or(path.to_owned(), |n| n.to_string_lossy().into_owned());
+        Some(unrun_edit(&file))
     }
 
     /// The chosen Julia differs from the one This Mac's Julia was started with.
@@ -1339,6 +1357,10 @@ impl Workspace {
                 if profile.is_none() && matches!(this.account, Account::SignedIn) {
                     this.signed_out(cx);
                 }
+                // Claude hasn't started to check (another assistant is in use): this answers it.
+                if matches!(this.account, Account::Unknown) {
+                    this.on_signed_in(profile.as_ref().map(|p| p.method), cx);
+                }
                 this.settings_checks.profile = profile;
                 cx.notify();
             });
@@ -1418,7 +1440,13 @@ impl Workspace {
         let name = self.hosts.name(&host);
         let (title, detail, yes) = match self.host_state(&host) {
             HostState::Queued { starting: false, .. } => (format!("Cancel the job on {name}?"), "It's still waiting in the queue, so nothing is lost.".to_owned(), "Cancel job"),
-            _ => (format!("Stop Julia on {name}?"), closes(&self.open_notebook_files(&host)), "Stop"),
+            _ => {
+                let mut detail = closes(&self.open_notebook_files(&host));
+                if let Some(lost) = self.unrun_edit_warning(&host) {
+                    detail = format!("{detail}\n\n{lost}");
+                }
+                (format!("Stop Julia on {name}?"), detail, "Stop")
+            }
         };
         self.open_confirm(title, detail, yes, window, cx, move |this, _, cx| this.stop_host(&host, cx));
     }
@@ -1429,7 +1457,10 @@ impl Workspace {
             1 => "Your open notebook closes while Julia is cleared and starts again. This takes a few minutes.".to_owned(),
             n => format!("Your {n} open notebooks close while Julia is cleared and starts again. This takes a few minutes."),
         };
-        let detail = format!("{detail}\n\nYour notebooks, packages and settings stay.");
+        let mut detail = format!("{detail}\n\nYour notebooks, packages and settings stay.");
+        if let Some(lost) = self.unrun_edit_warning(&HostId::ThisMac) {
+            detail = format!("{detail}\n\n{lost}");
+        }
         self.open_confirm(concat!("Repair Julia on ", crate::platform::this_computer!(lower), "?"), detail, "Repair", window, cx, |this, _, cx| this.repair_local(cx));
     }
 
@@ -1515,6 +1546,10 @@ impl Workspace {
         let search = panel.search.clone();
         if !search.read(cx).value().is_empty() {
             search.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        // Claude's page shows its sign-in, which only Claude's start checks.
+        if page == Page::Claude {
+            self.ensure_agent(crate::agent::Agent::Claude, cx);
         }
         cx.notify();
     }
@@ -2305,7 +2340,7 @@ fn brand() -> impl IntoElement {
                         .child(format!("Version {}", about::VERSION))
                         .child(div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_muted()).child(format!("(build {})", about::BUILD))),
                 )
-                .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child("Notebooks by Pluto.jl. Runs on Julia. Works with Claude, by Anthropic.")),
+                .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(format!("Notebooks by Pluto.jl. Runs on Julia. {}", crate::about::works_with()))),
         )
 }
 
@@ -2381,7 +2416,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{Found, Page, Section, closes, marks, matches};
+    use super::{Found, Page, Section, closes, marks, matches, unrun_edit};
 
     fn found(page: Page, crumb: &str, title: &str, summary: &str) -> Found {
         Found { page, key: title.to_lowercase().into(), crumb: crumb.into(), title: title.into(), summary: Some(summary.into()), words: String::new() }
@@ -2418,5 +2453,6 @@ mod tests {
         assert_eq!(closes(&["residuals.jl".into()]), "residuals.jl closes. Its file is saved.");
         assert_eq!(closes(&["a.jl".into(), "b.jl".into(), "c.jl".into()]), "a.jl, b.jl and c.jl close. Their files are saved.");
         assert_eq!(closes(&[]), "No notebooks are open there.");
+        assert_eq!(unrun_edit("residuals.jl"), "A cell in residuals.jl has an edit that hasn't been run. It isn't in the file, so it will be lost.");
     }
 }

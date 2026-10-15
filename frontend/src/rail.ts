@@ -17,6 +17,12 @@ let rail: HTMLElement;
 
 function draw() {
   const marked = [...document.querySelectorAll<HTMLElement>('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
+  // Nothing to mark: don't measure the page. Pluto redraws often, and each
+  // measurement makes the browser lay the whole notebook out again.
+  if (!marked.length) {
+    if (rail.firstChild) rail.replaceChildren();
+    return;
+  }
   const total = Math.max(document.documentElement.scrollHeight, 1);
   rail.replaceChildren(
     ...marked.map((cell) => {

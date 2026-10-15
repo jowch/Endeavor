@@ -36,6 +36,8 @@ pub enum Adapter {
     Current,
     /// Being installed now (or about to be, once Julia is up).
     Installing(String),
+    /// Not installed, and Claude isn't in use: it installs when Claude first starts.
+    Later,
     /// Not installed because starting the agent failed; Update tries again.
     Available(String),
 }
@@ -63,7 +65,7 @@ pub fn notices(updates: &Updates) -> Vec<Notice> {
     }
     let primary = updates.app.is_none();
     match &updates.adapter {
-        Adapter::Current => {}
+        Adapter::Current | Adapter::Later => {}
         Adapter::Installing(version) => rows.push(Notice { text: format!("Installing Claude Code adapter {version}…"), button: None }),
         Adapter::Available(version) => rows.push(Notice {
             text: format!("Claude Code adapter {version} is available."),
@@ -85,6 +87,20 @@ pub struct UpdateRow {
     pub attention: bool,
 }
 
+/// "Works with Claude, Codex and Antigravity.": the assistants this computer can use.
+pub fn works_with() -> String {
+    let names: Vec<&str> = crate::agent::Agent::ALL.into_iter().filter(|a| a.available()).map(|a| a.name()).collect();
+    works_with_these(&names)
+}
+
+fn works_with_these(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!("Works with {one}."),
+        [rest @ .., last] => format!("Works with {} and {last}.", rest.join(", ")),
+    }
+}
+
 /// The same updates as `notices`, one row per part.
 pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
     let app = match &updates.app {
@@ -95,6 +111,7 @@ pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
     let primary = updates.app.is_none();
     let (state, button, attention) = match &updates.adapter {
         Adapter::Current => ("Up to date".to_owned(), None, false),
+        Adapter::Later => ("Installs when you first use Claude".to_owned(), None, false),
         Adapter::Installing(version) => (format!("Installing version {version}…"), None, false),
         Adapter::Available(version) => (format!("Version {version} is available"), Some(("Update", Action::UpdateAdapter, primary)), true),
     };
@@ -237,7 +254,7 @@ impl Render for About {
                     .line_height(px(17.))
                     .text_color(theme::text_faint())
                     .child("Notebooks by Pluto.jl. Runs on Julia.")
-                    .child("Works with Claude, by Anthropic."),
+                    .child(works_with()),
             )
             .child(
                 div()
@@ -423,6 +440,13 @@ impl Render for Licences {
 #[cfg(test)]
 mod tests {
     use super::{Action, Adapter, BUILD, Notice, Updates, VERSION, notices, parts};
+
+    #[test]
+    fn the_credits_name_the_assistants() {
+        assert_eq!(super::works_with_these(&["Claude", "Codex", "Antigravity"]), "Works with Claude, Codex and Antigravity.");
+        assert_eq!(super::works_with_these(&["Claude", "Codex"]), "Works with Claude and Codex.");
+        assert_eq!(super::works_with_these(&["Claude"]), "Works with Claude.");
+    }
 
     #[test]
     fn settings_lists_each_part_with_its_own_button() {

@@ -72,8 +72,14 @@ The findings it was built from came from a test on a Windows machine on
 - **Sign-in.** The app checks for the token file before connecting. While
   signed out, a card above the composer offers **Sign in**, which sends ACP's
   `authenticate` with `oauth-personal`; the server opens Google's page in the
-  browser. A session that fails to open for want of sign-in also brings the
-  card back.
+  browser. While it waits, the card has **Cancel**, which puts the card back
+  to Sign in at once and starts the server again, so a closed page doesn't
+  cost the server's 5-minute wait. Only stopping the server ends that wait,
+  which holds the sign-in's port (`127.0.0.1:57700` in one run); otherwise a
+  second Sign in would fail. A session left open when its sign-in ran out
+  reopens on the new server once it's up, as after a crash, without
+  counting as one. Events from the stopped server are dropped. A session that fails to open for want of
+  sign-in also brings the card back.
 - **In the app.** Antigravity is in the agent menu (where available), in
   Settings with its sign-in status, in the first-run assistant list, and in
   the state dump (`antigravity`).

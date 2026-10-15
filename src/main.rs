@@ -506,6 +506,8 @@ pub struct Workspace {
     links: agent_process::Links,
     /// Codex's sign-in, once Codex has been started.
     codex_account: agent::Account,
+    /// Codex's browser sign-in under way: its attempt and `codex-acp login`'s pid, for Cancel.
+    codex_login: Option<(u64, u32)>,
     /// Antigravity's sign-in, kept the same way as Codex's.
     antigravity_account: agent::Account,
     /// App-level status (Julia, agent connection), shown under the session bar.
@@ -790,6 +792,7 @@ impl Workspace {
             probing: false,
             links: agent_process::Links::default(),
             codex_account: agent::Account::Unknown,
+            codex_login: None,
             antigravity_account: agent::Account::Unknown,
             status: "".into(),
             annotating: false,
@@ -850,12 +853,16 @@ impl Workspace {
         }
         // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
-        // Claude starts alongside it, except on first launch, whose setup screen
-        // asks which assistant first and then goes step by step.
+        // The new-session screen's agent starts alongside it, for its sign-in and
+        // options, except on first launch, whose setup screen asks which
+        // assistant first and then goes step by step. Claude also starts when
+        // Endeavor has Claude sessions, so the sidebar's list of them stays
+        // current; otherwise it waits until something needs it.
         if this.setup.is_none() {
-            this.ensure_agent(agent::Agent::Claude, cx);
-            // The new-session screen shows the last agent picked: its sign-in and options.
             this.ensure_agent(this.draft_agent(), cx);
+            if this.records.any_of(agent::Agent::Claude) {
+                this.ensure_agent(agent::Agent::Claude, cx);
+            }
         }
         this.scan_notebooks(cx);
         this.watch_network(cx);
@@ -1794,7 +1801,11 @@ impl Workspace {
         let mut streamed = false;
         match event {
             AgentEvent::Ready => {
-                self.status = format!("{} connected.", agent.name()).into();
+                // Only the assistant in use names itself: another one starting
+                // in the background doesn't take the line.
+                if self.agent_in_use(agent) {
+                    self.status = self.connected_status(agent).into();
+                }
                 let link = self.links.get_mut(agent);
                 link.ready = true;
                 link.failed = false;
@@ -1810,6 +1821,8 @@ impl Workspace {
             }
             // On the setup screen, only the assistant picked moves the steps.
             AgentEvent::Setup(_) if self.setup.as_ref().is_some_and(|s| s.agent.is_some_and(|a| a != agent)) => {}
+            // Nor does another assistant's start, after setup: it would take the status line.
+            AgentEvent::Setup(_) if self.setup.is_none() && !self.agent_in_use(agent) => {}
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
             AgentEvent::CodexSignedIn(signed_in) => self.on_codex_signed_in(signed_in, cx),
@@ -2173,6 +2186,8 @@ impl Workspace {
     pub fn updates(&self) -> about::Updates {
         let adapter = match agent::adapter_status(agent::Agent::Claude) {
             Ok((version, false)) if self.links.get(agent::Agent::Claude).failed => about::Adapter::Available(version),
+            // Claude isn't started, nor about to be (the setup screen's pick): nothing is installing.
+            Ok((_, false)) if self.links.get(agent::Agent::Claude).rx.is_some() && self.setup.as_ref().and_then(|s| s.agent) != Some(agent::Agent::Claude) => about::Adapter::Later,
             Ok((version, false)) => about::Adapter::Installing(version),
             _ => about::Adapter::Current,
         };
@@ -2198,8 +2213,9 @@ impl Workspace {
         self.restart_agent(agent::Agent::Claude, cx);
     }
 
-    fn restart_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) {
-        // The failed agent thread dropped its command channel; start with a new one.
+    pub(crate) fn restart_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) {
+        // A new command channel: a failed thread dropped its own, and a running
+        // one ends when this drops (its process with it); `start_agent` ignores its last events.
         let link = self.links.get_mut(agent);
         let commands = link.renew();
         link.ready = false;
@@ -2211,6 +2227,11 @@ impl Workspace {
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
+    }
+
+    /// The new-session screen's agent, or the agent of the session in view.
+    fn agent_in_use(&self, agent: agent::Agent) -> bool {
+        agent == self.draft_agent() || self.active_session().is_some_and(|s| s.agent == agent)
     }
 
     /// Start an agent that isn't running yet. True if it starts now: its
@@ -2227,10 +2248,14 @@ impl Workspace {
             self.links.get_mut(agent).rx = Some(commands);
             return;
         }
+        let generation = self.links.get(agent).generation;
         let mut events = agent::start(agent, commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
-                if this.update(cx, |this, cx| this.on_event(agent, event, cx)).is_err() {
+                // A start replaced by a restart: its last words (the sign-in it was
+                // waiting for, "connection closed") are about a process already gone.
+                let current = |this: &Self| this.links.get(agent).generation == generation;
+                if this.update(cx, |this, cx| if current(this) { this.on_event(agent, event, cx) }).is_err() {
                     break;
                 }
             }

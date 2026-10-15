@@ -11,12 +11,16 @@ use serde_json::{Value, json};
 use wire::backend::Backend;
 
 /// One runtime as its host's listener serves it: the MCP URL the agent's
-/// config carries (its host is the app's way in too), and the bearer token
-/// every path requires. Both stay the same across that host's runtimes.
+/// config carries (its host is the app's way in too), the bearer token every
+/// path but the pages requires, and the pages' token. They stay the same
+/// across that host's runtimes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bridge {
     pub url: String,
     pub token: String,
+    /// What opens Pluto's pages (EndeavorMCP interface 8); `token` no longer does.
+    /// An older runtime has none and takes `token` there.
+    pub page_token: String,
 }
 
 impl Bridge {
@@ -288,11 +292,12 @@ pub fn allow_execution(bridge: &Bridge, notebook_id: &str) -> Result<(), String>
 
 /// GET `target` (a path and query) on Pluto's server, such as an export,
 /// through the host's loopback relay.
+/// The pages' token opens it; the MCP token gets a 401 there.
 pub fn fetch(bridge: &Bridge, target: &str) -> Result<Vec<u8>, String> {
     let host = bridge.host()?;
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
     stream.set_read_timeout(Some(Duration::from_secs(120))).map_err(|e| e.to_string())?;
-    write!(stream, "GET {target} HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge.token).map_err(|e| e.to_string())?;
+    write!(stream, "GET {target} HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\r\n", bridge.page_token).map_err(|e| e.to_string())?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).map_err(|e| e.to_string())?;
     http_body(&response)
@@ -637,7 +642,8 @@ mod tests {
 #[ignore]
 fn live_bridge() {
     let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
-    let bridge = Bridge { url, token: std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default() };
+    let token = std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default();
+    let bridge = Bridge { url, page_token: token.clone(), token };
     let list = call_tool(&bridge, "list_notebooks", json!({})).expect("list_notebooks");
     println!("list_notebooks: {list}\nwarnings: {:?}", run_warnings(&list));
     assert!(list.as_array().is_some_and(|a| a.iter().all(|nb| nb.get("pending_run").is_some())));
