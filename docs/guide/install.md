@@ -6,8 +6,10 @@ sidebar:
 ---
 
 Endeavor has test builds for Macs with Apple silicon and for Windows 10 or
-11 (x64). They are rebuilt from the newest working version of the app, and
-they can't update themselves yet: to get a newer one, download it again.
+11 (x64). They are rebuilt from the newest working version of the app. The
+Mac app updates itself: once a day it checks for a newer test build and
+fetches it, and it installs the next time you restart or quit Endeavor. On
+Windows, download the installer again to get a newer one.
 
 Before you start, check [What you need](./overview.md#what-you-need).
 

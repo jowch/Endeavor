@@ -94,39 +94,24 @@ pub fn app_dir() -> Result<PathBuf, String> {
 /// `top` is empty: a zip with its files at the top). `what` names it in
 /// progress and errors.
 pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
+    // One install per folder at a time: two agents starting together both want
+    // Node.js, and would share the download and the unpacking folder (#99). The
+    // second waits, then finds the folder the first put in place. Callers come
+    // here only when the folder's program is missing, and the folder appears
+    // only by the rename below, so a folder that's there is a finished install.
+    // The lock is per process: two Endeavors at once aren't covered.
+    let lock = install_lock(dir);
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if dir.exists() {
+        return Ok(());
+    }
     let parent = dir.parent().unwrap();
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let kind = if url.ends_with(".zip") { "zip" } else { "tar.gz" };
     let name = if top.is_empty() { dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() } else { top.to_owned() };
     let tarball = parent.join(format!("{name}.{kind}.part"));
 
-    // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
-    // fails the SHA check and starts over. Kill it on quit if that bites.
-    let mut curl = Command::new("curl");
-    endeavor_mcp::client::no_window(&mut curl);
-    let mut curl = curl
-        .args(["-fsSL", "--retry", "3", "-C", "-", "-o"])
-        .arg(&tarball)
-        .arg(url)
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Couldn't start curl to download {what}: {e}"))?;
-    let status = loop {
-        if let Some(status) = curl.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        let got = std::fs::metadata(&tarball).map(|m| m.len()).unwrap_or(0);
-        progress(format!("Downloading {what}… {}%", got * 100 / size), Some(got as f32 / size as f32));
-        std::thread::sleep(Duration::from_millis(500));
-    };
-    if !status.success() {
-        let mut err = String::new();
-        let _ = std::io::Read::read_to_string(&mut curl.stderr.take().unwrap(), &mut err);
-        return Err(format!(
-            "Couldn't download {what} ({}). Check the internet connection and try again; the download resumes.",
-            err.trim()
-        ));
-    }
+    download(url, &tarball, what, size, progress)?;
 
     progress(format!("Checking {what}…"), None);
     let got = sha256_of(&tarball)?;
@@ -151,7 +136,49 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     Ok(())
 }
 
-fn sha256_of(file: &Path) -> Result<String, String> {
+/// Download `url` to `file` with curl, resuming what's already there, and
+/// report progress against the expected `size`.
+pub fn download(url: &str, file: &Path, what: &str, size: u64, progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
+    // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
+    // fails the SHA check and starts over. Kill it on quit if that bites.
+    let mut curl = Command::new("curl");
+    endeavor_mcp::client::no_window(&mut curl);
+    let mut curl = curl
+        // A connection that stalls (one that died across a sleep) fails after a
+        // minute instead of hanging until TCP gives up.
+        .args(["-fsSL", "--retry", "3", "--speed-limit", "1024", "--speed-time", "60", "-C", "-", "-o"])
+        .arg(file)
+        .arg(url)
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Couldn't start curl to download {what}: {e}"))?;
+    let status = loop {
+        if let Some(status) = curl.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        let got = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+        progress(format!("Downloading {what}… {}%", got * 100 / size.max(1)), Some(got as f32 / size.max(1) as f32));
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    if !status.success() {
+        let mut err = String::new();
+        let _ = std::io::Read::read_to_string(&mut curl.stderr.take().unwrap(), &mut err);
+        return Err(format!(
+            "Couldn't download {what} ({}). Check the internet connection and try again; the download resumes.",
+            err.trim()
+        ));
+    }
+    Ok(())
+}
+
+/// The lock for installs into `dir`, the same one for every caller in this process.
+fn install_lock(dir: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static LOCKS: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    locks.entry(dir.to_owned()).or_default().clone()
+}
+
+pub fn sha256_of(file: &Path) -> Result<String, String> {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     let mut file = std::fs::File::open(file).map_err(|e| e.to_string())?;
@@ -294,6 +321,40 @@ mod tests {
         let good = tmp.join("app/good");
         tarball(&good, "Thing", "thing-1.0", (&url, &sha, size), &|_, _| {}).unwrap();
         assert!(good.join("bin/thing").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Two installs of the same thing at once (two agents wanting Node.js):
+    /// one downloads and unpacks, the other waits and finds it there (#99).
+    #[test]
+    fn two_installs_at_once_both_succeed() {
+        let tmp = std::env::temp_dir().join(format!("endeavor-install-twice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let src = tmp.join("src/thing-1.0/bin");
+        std::fs::create_dir_all(&src).unwrap();
+        // Big enough that the two would overlap without the lock.
+        std::fs::write(src.join("thing"), vec![b'x'; 8 << 20]).unwrap();
+        let kind = if cfg!(windows) { "zip" } else { "tar.gz" };
+        let archive = tmp.join(format!("thing.{kind}"));
+        #[cfg(unix)]
+        let mut pack = Command::new("tar");
+        #[cfg(unix)]
+        pack.arg("-czf");
+        #[cfg(windows)]
+        let mut pack = windows_tar();
+        #[cfg(windows)]
+        pack.arg("-a").arg("-cf");
+        assert!(pack.arg(&archive).arg("-C").arg(tmp.join("src")).arg("thing-1.0").status().unwrap().success());
+        let sha = sha256_of(&archive).unwrap();
+        let url = format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, archive.display().to_string().replace('\\', "/"));
+        let size = std::fs::metadata(&archive).unwrap().len();
+        let dir = tmp.join("app/thing-1.0");
+        let results: Vec<Result<(), String>> = std::thread::scope(|s| {
+            let installs: Vec<_> = (0..2).map(|_| s.spawn(|| tarball(&dir, "Thing", "thing-1.0", (&url, &sha, size), &|_, _| {}))).collect();
+            installs.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert!(dir.join("bin/thing").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

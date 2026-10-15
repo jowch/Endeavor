@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
 mod dialogs;
@@ -86,6 +86,7 @@ mod transcript;
 mod transcript_copy;
 mod trouble;
 mod turtle;
+mod updater;
 mod when;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -504,6 +505,8 @@ pub struct Workspace {
     probing: bool,
     /// Each agent's connection and process.
     links: agent_process::Links,
+    /// Endeavor's own update (a nightly Mac app updates itself; updater.rs).
+    app_update: updater::Updater,
     /// Codex's sign-in, once Codex has been started.
     codex_account: agent::Account,
     /// Codex's browser sign-in under way: its attempt and `codex-acp login`'s pid, for Cancel.
@@ -713,7 +716,26 @@ impl Workspace {
         // The helpers finish the job after the app is gone.
         cx.on_app_quit(|this, _| {
             this.quit_runtimes();
+            // A fetched update installs on any quit, as Settings says.
+            if let Err(e) = this.app_update.install(false) {
+                eprintln!("Couldn't install the update: {e}");
+            }
             async {}
+        })
+        .detach();
+        // A first check shortly after launch, then whenever one is due.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(20)).await;
+            loop {
+                let Ok(()) = this.update(cx, |this, cx| {
+                    if this.app_update.due(Instant::now()) {
+                        this.check_for_update(cx);
+                    }
+                }) else {
+                    break;
+                };
+                cx.background_executor().timer(Duration::from_secs(600)).await;
+            }
         })
         .detach();
 
@@ -724,7 +746,8 @@ impl Workspace {
                 this.check_opening(cx);
                 this.check_usage_limit(cx);
                 !this.usage_limits.is_empty()
-                    || this.sessions.iter().any(|s| s.busy_since.is_some())
+                    || this.app_update.percent().is_some()
+                    || this.working()
                     || this.connections.values().any(|c| matches!(c.status, connection::Status::Connecting | connection::Status::Starting))
             }) else {
                 break;
@@ -791,6 +814,7 @@ impl Workspace {
             offline_since: None,
             probing: false,
             links: agent_process::Links::default(),
+            app_update: updater::Updater::new(),
             codex_account: agent::Account::Unknown,
             codex_login: None,
             antigravity_account: agent::Account::Unknown,
@@ -2195,9 +2219,65 @@ impl Workspace {
         // an adapter update shows as available (About, Settings, the gear's dot).
         #[cfg(debug_assertions)]
         if std::env::var_os("ENDEAVOR_TEST_ADAPTER_UPDATE").is_some_and(|f| Path::new(&f).exists()) {
-            return about::Updates { app: None, adapter: about::Adapter::Available("0.4".into()) };
+            return about::Updates { app: self.app_update_state(), adapter: about::Adapter::Available("0.4".into()) };
         }
-        about::Updates { app: None, adapter }
+        about::Updates { app: self.app_update_state(), adapter }
+    }
+
+    fn app_update_state(&self) -> about::AppUpdate {
+        match &self.app_update.state {
+            updater::State::Off(_) | updater::State::Installing => about::AppUpdate::Off,
+            updater::State::Waiting => about::AppUpdate::Unchecked,
+            updater::State::Checking => about::AppUpdate::Checking(self.app_update.percent()),
+            updater::State::UpToDate => about::AppUpdate::UpToDate,
+            updater::State::Ready { build, .. } if self.working() => about::AppUpdate::ReadyAfterTurn(build.clone()),
+            updater::State::Ready { build, .. } => about::AppUpdate::Ready(build.clone()),
+            updater::State::Manual { build } => about::AppUpdate::Manual(build.clone()),
+            updater::State::Failed(e) => about::AppUpdate::Failed(e.clone()),
+        }
+    }
+
+    /// Check for a newer nightly now, and fetch it when there is one. Does
+    /// nothing when this copy doesn't update or a check is already running.
+    pub fn check_for_update(&mut self, cx: &mut Context<Self>) {
+        let Some(place) = self.app_update.start(Instant::now()) else { return };
+        let progress = self.app_update.progress.clone();
+        let checked = cx.background_executor().spawn(async move {
+            updater::check(&place, updater::COMMIT, updater::COMMITTED, &|f| progress.store((f.clamp(0., 1.) * 1000.) as u32, std::sync::atomic::Ordering::Relaxed))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = checked.await;
+            if let Err(e) = &result {
+                eprintln!("Update check: {e}");
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.app_update.finish(result);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// An agent is in the middle of a turn, in any session.
+    fn working(&self) -> bool {
+        self.sessions.iter().any(|s| s.busy_since.is_some())
+    }
+
+    /// Restart: swap in the fetched build once Endeavor has quit, and open it.
+    /// Not while an agent is working: About holds Restart back until it's done.
+    pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        if self.working() {
+            return;
+        }
+        match self.app_update.install(true) {
+            Ok(true) => cx.quit(),
+            Ok(false) => {}
+            Err(e) => {
+                self.app_update.finish(Err(e));
+                cx.notify();
+            }
+        }
     }
 
     /// About's Update: start Claude again, which installs the pinned adapter.

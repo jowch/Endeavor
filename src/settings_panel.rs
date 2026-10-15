@@ -1111,7 +1111,7 @@ impl Workspace {
             .collect();
         vec![
             group(None, vec![Item::Brand]),
-            group(Some("Updates"), rows).foot("Endeavor doesn't check for a newer version of itself yet. The adapter is how it talks to Claude, and each Endeavor version pins its own. The About window shows the same updates."),
+            group(Some("Updates"), rows).foot("A nightly build of the Mac app checks for a newer nightly once a day and fetches it in the background. The adapter is how it talks to Claude, and each Endeavor version pins its own. The About window shows the same updates."),
             group(
                 None,
                 vec![Item::Links(vec![
@@ -1214,7 +1214,7 @@ impl Workspace {
 }
 
 pub fn update_available(updates: &about::Updates) -> bool {
-    updates.app.is_some() || matches!(updates.adapter, Adapter::Available(_))
+    updates.app.actionable() || matches!(updates.adapter, Adapter::Available(_))
 }
 
 fn problem_text(problem: &ChosenJulia) -> String {
@@ -1528,8 +1528,10 @@ impl Workspace {
             Act::ShowLogs => crate::logs::reveal(),
             Act::Report => cx.open_url(about::REPORT_ISSUE),
             Act::Update(action) => match action {
-                about::Action::Restart => cx.restart(),
+                about::Action::Restart => self.install_update(cx),
                 about::Action::UpdateAdapter => self.update_adapter(cx),
+                about::Action::CheckNow => self.check_for_update(cx),
+                about::Action::Download => cx.open_url(crate::updater::RELEASE_PAGE),
             },
             Act::Website => cx.open_url(about::WEBSITE),
             Act::Help => cx.open_url(about::HELP),
