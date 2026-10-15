@@ -103,6 +103,11 @@ impl Records {
         self.records.values().any(|r| r.place.is_some())
     }
 
+    /// Whether Endeavor has any session of `agent`'s.
+    pub fn any_of(&self, agent: Agent) -> bool {
+        self.records.values().any(|r| r.agent == agent)
+    }
+
     /// Sessions with a folder, newest first (no time last).
     pub fn placed(&self) -> Vec<(&str, &Record)> {
         let mut placed: Vec<_> = self.records.iter().filter(|(_, r)| r.place.is_some()).map(|(id, r)| (id.as_str(), r)).collect();
@@ -425,6 +430,13 @@ mod tests {
         assert_eq!(records.get("b"), None);
         assert!(!records.is_missing("b"));
         assert!(records.get("a").is_some());
+    }
+
+    #[test]
+    fn any_of_an_agent() {
+        let records = Records::parse(r#"{"a":{"agent":"codex","place":null}}"#);
+        assert!(records.any_of(Agent::Codex));
+        assert!(!records.any_of(Agent::Claude));
     }
 
     #[test]

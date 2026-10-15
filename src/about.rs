@@ -36,6 +36,8 @@ pub enum Adapter {
     Current,
     /// Being installed now (or about to be, once Julia is up).
     Installing(String),
+    /// Not installed, and Claude isn't in use: it installs when Claude first starts.
+    Later,
     /// Not installed because starting the agent failed; Update tries again.
     Available(String),
 }
@@ -63,7 +65,7 @@ pub fn notices(updates: &Updates) -> Vec<Notice> {
     }
     let primary = updates.app.is_none();
     match &updates.adapter {
-        Adapter::Current => {}
+        Adapter::Current | Adapter::Later => {}
         Adapter::Installing(version) => rows.push(Notice { text: format!("Installing Claude Code adapter {version}…"), button: None }),
         Adapter::Available(version) => rows.push(Notice {
             text: format!("Claude Code adapter {version} is available."),
@@ -95,6 +97,7 @@ pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
     let primary = updates.app.is_none();
     let (state, button, attention) = match &updates.adapter {
         Adapter::Current => ("Up to date".to_owned(), None, false),
+        Adapter::Later => ("Installs when you first use Claude".to_owned(), None, false),
         Adapter::Installing(version) => (format!("Installing version {version}…"), None, false),
         Adapter::Available(version) => (format!("Version {version} is available"), Some(("Update", Action::UpdateAdapter, primary)), true),
     };
