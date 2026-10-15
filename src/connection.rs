@@ -2520,8 +2520,7 @@ fn walker() -> Canvas<()> {
             let t = if cx.reduce_motion() {
                 0.
             } else {
-                window.request_animation_frame();
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0., |d| (d.as_millis() % 3_600_000) as f32 / 1000.)
+                crate::motion::loop_clock(window, cx)
             };
             let phase = t * std::f32::consts::TAU / 1.6;
             let moving = if cx.reduce_motion() { 0. } else { 1. };

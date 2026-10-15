@@ -10,7 +10,9 @@
 //! live from its first frame, and only its look changes.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, App, Bounds, Element, ElementId, FollowMode, GlobalElementId, InspectorElementId, IntoElement, LayoutId, ListState, Pixels, Styled, Window, px};
@@ -35,6 +37,61 @@ pub fn quiet() -> bool {
 pub fn set_reduced(reduce: bool, cx: &mut App) {
     theme::set_reduce_motion(reduce);
     cx.set_reduce_motion(reduce);
+}
+
+/// How often something that loops for as long as it shows (the working orbit,
+/// a working row's breathing dot, the notebook pane's turtles) is redrawn: not
+/// every frame. GPUI redraws the whole window for it, and on a Mac the
+/// notebook's web view shares the main thread, so redrawing at the display's
+/// rate starved the notebook while the agent worked.
+const LOOP_FRAME: Duration = Duration::from_millis(50);
+
+thread_local! {
+    /// When each view last drew something looping, and whether a redraw is
+    /// already asked for it.
+    static LOOPS: RefCell<HashMap<gpui::EntityId, (Instant, bool)>> = RefCell::new(HashMap::new());
+}
+
+/// Seconds since the app started, for the phase of anything looping (one
+/// clock, so every loop keeps its phase; an `Instant`, so it doesn't jump with
+/// the wall clock). Asks for the next redraw of the view being drawn once
+/// `LOOP_FRAME` has passed since it last drew; a redraw for any other reason in
+/// between (a streaming reply) counts, so loops never add to them.
+pub fn loop_clock(window: &Window, cx: &mut App) -> f32 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let now = Instant::now();
+    let view = window.current_view();
+    let ask = LOOPS.with(|loops| {
+        let mut loops = loops.borrow_mut();
+        let entry = loops.entry(view).or_insert((now, false));
+        entry.0 = now;
+        !std::mem::replace(&mut entry.1, true)
+    });
+    if ask {
+        cx.spawn(async move |cx| {
+            let mut wait = LOOP_FRAME;
+            loop {
+                cx.background_executor().timer(wait).await;
+                let since = LOOPS.with(|loops| loops.borrow().get(&view).map(|(drawn, _)| drawn.elapsed()));
+                match since {
+                    Some(since) if since < LOOP_FRAME => wait = LOOP_FRAME - since,
+                    _ => break,
+                }
+            }
+            LOOPS.with(|loops| loops.borrow_mut().remove(&view));
+            cx.update(|cx| cx.notify(view));
+        })
+        .detach();
+    }
+    // Wrapped hourly, so an f32 keeps millisecond precision.
+    (now.duration_since(*START.get_or_init(|| now)).as_millis() % 3_600_000) as f32 / 1000.
+}
+
+/// How far through a loop of `period` the clock is (0 to 1), redrawing as
+/// `loop_clock` does. Call it while drawing.
+pub fn looping(period: Duration, window: &Window, cx: &mut App) -> f32 {
+    let period = period.as_secs_f32().max(0.001);
+    (loop_clock(window, cx) % period) / period
 }
 
 /// How far `now` is through `duration` from `start`: 0 to 1, and 1 for a zero
