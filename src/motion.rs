@@ -10,8 +10,9 @@
 //! live from its first frame, and only its look changes.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{AnyElement, App, Bounds, Element, ElementId, FollowMode, GlobalElementId, InspectorElementId, IntoElement, LayoutId, ListState, Pixels, Styled, Window, px};
 
@@ -35,6 +36,36 @@ pub fn quiet() -> bool {
 pub fn set_reduced(reduce: bool, cx: &mut App) {
     theme::set_reduce_motion(reduce);
     cx.set_reduce_motion(reduce);
+}
+
+/// How often a mark that loops while something is busy (the working orbit, a
+/// working row's breathing dot) is redrawn: not every frame. GPUI redraws the
+/// whole window for it, and on a Mac the notebook's web view shares the main
+/// thread, so redrawing at the display's rate starved the notebook while the
+/// agent worked.
+const LOOP_FRAME: Duration = Duration::from_millis(50);
+
+thread_local! {
+    /// The views with a loop redraw already asked for.
+    static LOOP_ASKED: RefCell<HashSet<gpui::EntityId>> = RefCell::new(HashSet::new());
+}
+
+/// How far through a loop of `period` the clock is (0 to 1), so looping marks
+/// keep one phase; asks for the next redraw `LOOP_FRAME` from now. Call it while
+/// drawing (it redraws the view being drawn).
+pub fn looping(period: Duration, window: &Window, cx: &mut App) -> f32 {
+    let view = window.current_view();
+    if LOOP_ASKED.with(|asked| asked.borrow_mut().insert(view)) {
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(LOOP_FRAME).await;
+            LOOP_ASKED.with(|asked| asked.borrow_mut().remove(&view));
+            cx.update(|cx| cx.notify(view));
+        })
+        .detach();
+    }
+    let period = period.as_millis().max(1);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    (now % period) as f32 / period as f32
 }
 
 /// How far `now` is through `duration` from `start`: 0 to 1, and 1 for a zero

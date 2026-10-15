@@ -239,12 +239,22 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
         RowMark::NeedsYou => dot(6.).bg(theme::accent()).into_any_element(),
         RowMark::Error => glyph_at(Glyph::Warning, theme::danger(), MARK_GLYPH).into_any_element(),
         RowMark::Working { .. } => {
-            let fill = dot(6.).bg(theme::text_muted());
             let breath = theme::motion_pulse();
             if breath.is_zero() {
-                fill.into_any_element()
+                dot(6.).bg(theme::text_muted()).into_any_element()
             } else {
-                fill.with_animation(id, Animation::new(breath).repeat(), |d, t| d.opacity(0.65 - 0.35 * (std::f32::consts::TAU * t).cos())).into_any_element()
+                // Breathing at crate::motion::looping's pace, not every frame.
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, cx| {
+                        let t = crate::motion::looping(breath, window, cx);
+                        let mut color = theme::text_muted();
+                        color.a *= 0.65 - 0.35 * (std::f32::consts::TAU * t).cos();
+                        window.paint_quad(fill(bounds, color).corner_radii(px(3.)));
+                    },
+                )
+                .size(px(6.))
+                .into_any_element()
             }
         }
         RowMark::NewReply => dot(6.).border_1().border_color(theme::accent()).into_any_element(),
