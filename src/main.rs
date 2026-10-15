@@ -496,6 +496,8 @@ pub struct Workspace {
     links: agent_process::Links,
     /// Codex's sign-in, once Codex has been started.
     codex_account: agent::Account,
+    /// Codex's browser sign-in under way: its attempt and `codex-acp login`'s pid, for Cancel.
+    codex_login: Option<(u64, u32)>,
     /// Antigravity's sign-in, kept the same way as Codex's.
     antigravity_account: agent::Account,
     /// App-level status (Julia, agent connection), shown under the session bar.
@@ -777,6 +779,7 @@ impl Workspace {
             probing: false,
             links: agent_process::Links::default(),
             codex_account: agent::Account::Unknown,
+            codex_login: None,
             antigravity_account: agent::Account::Unknown,
             status: "".into(),
             annotating: false,

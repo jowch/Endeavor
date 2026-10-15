@@ -209,22 +209,28 @@ impl Login {
     }
 
     fn cancel(&self) {
-        #[cfg(unix)]
-        unsafe { libc::kill(-self.pid, libc::SIGTERM) };
-        // Windows has no process groups to signal: taskkill ends the CLI and
-        // what it started (/T), so its callback port is free for the next try.
-        #[cfg(windows)]
-        {
-            let mut taskkill = std::process::Command::new("taskkill");
-            endeavor_mcp::client::no_window(&mut taskkill);
-            let _ = taskkill.args(["/T", "/F", "/PID", &self.pid.to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-        }
+        end_sign_in(self.pid as u32);
         let _ = std::fs::remove_file(&self.url_file);
     }
 
     /// The sign-in page's address, once the CLI has opened it.
     fn url(&self) -> Option<String> {
         std::fs::read_to_string(&self.url_file).ok().filter(|u| u.starts_with("https://"))
+    }
+}
+
+/// Stop a browser sign-in's command (started as its own process group on
+/// Unix) and what it started, so its callback port is free for the next try.
+fn end_sign_in(pid: u32) {
+    #[cfg(unix)]
+    unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+    // Windows has no process groups to signal: taskkill ends the command and
+    // what it started (/T).
+    #[cfg(windows)]
+    {
+        let mut taskkill = std::process::Command::new("taskkill");
+        endeavor_mcp::client::no_window(&mut taskkill);
+        let _ = taskkill.args(["/T", "/F", "/PID", &pid.to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
     }
 }
 
@@ -985,10 +991,16 @@ impl Workspace {
         let row = div().flex().justify_end().items_center().gap(px(6.));
         let check = button("codex-check", "Check again", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.recheck_codex(cx)));
         let sign_in = |label: &'static str| button("codex-sign-in", label, Look::Primary).on_click(cx.listener(|this, _, _, cx| this.sign_in_to_codex(cx)));
+        let cancel = button("codex-sign-in-cancel", "Cancel", Look::Plain).on_click(cx.listener(|this, _, _, cx| this.cancel_codex_sign_in(cx)));
+        let waiting = match self.message_waits_for(Agent::Codex) {
+            true => "We opened ChatGPT's sign-in page. Sign in there; this card goes away by itself and your message sends.",
+            false => "We opened ChatGPT's sign-in page. Sign in there, and this card goes away by itself.",
+        };
         let body = match self.codex_account {
             Codex::SigningIn => div()
                 .child(heading.child(crate::orbit::orbit("codex-sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
-                .child(lines(&["We opened ChatGPT's sign-in page. Sign in there; this card goes away by itself and your message sends."])),
+                .child(lines(&[waiting, "Closed the page, or want another account? Cancel, then sign in again."]))
+                .child(row.child(cancel)),
             Codex::Failed => div()
                 .child(heading.child("Codex sign-in didn't finish"))
                 .child(lines(&["Try again, or run codex login in a terminal and then check again."]))
@@ -1171,12 +1183,28 @@ impl Workspace {
         if self.codex_account == crate::agent::Account::SigningIn {
             return;
         }
+        let child = match crate::codex::start_login() {
+            Ok(child) => child,
+            Err(e) => {
+                eprintln!("Codex sign-in: {e}");
+                self.codex_account = crate::agent::Account::Failed;
+                return cx.notify();
+            }
+        };
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let attempt = NEXT.fetch_add(1, Ordering::Relaxed);
+        self.codex_login = Some((attempt, child.id()));
         self.codex_account = crate::agent::Account::SigningIn;
         cx.notify();
-        let done = cx.background_executor().spawn(async { crate::codex::log_in().and_then(|()| crate::codex::signed_in()) });
+        let done = cx.background_executor().spawn(async move { crate::codex::finish_login(child).and_then(|()| crate::codex::signed_in()) });
         cx.spawn(async move |this, cx| {
             let signed_in = done.await;
             let _ = this.update(cx, |this, cx| {
+                // Cancelled (and maybe started again): this attempt's end says nothing.
+                if this.codex_login.is_none_or(|(current, _)| current != attempt) {
+                    return;
+                }
+                this.codex_login = None;
                 match signed_in {
                     Ok(true) => this.on_codex_signed_in(true, cx),
                     Ok(false) | Err(_) => this.codex_account = crate::agent::Account::Failed,
@@ -1188,6 +1216,15 @@ impl Workspace {
             });
         })
         .detach();
+    }
+
+    /// The waiting card's Cancel: stop `codex-acp login`, and the card goes
+    /// back to Sign in.
+    pub fn cancel_codex_sign_in(&mut self, cx: &mut Context<Self>) {
+        let Some((_, pid)) = self.codex_login.take() else { return };
+        end_sign_in(pid);
+        self.codex_account = crate::agent::Account::SignedOut;
+        cx.notify();
     }
 
     /// Check Codex's sign-in again (signed in from a terminal meanwhile).
