@@ -87,6 +87,20 @@ pub struct UpdateRow {
     pub attention: bool,
 }
 
+/// "Works with Claude, Codex and Antigravity.": the assistants this computer can use.
+pub fn works_with() -> String {
+    let names: Vec<&str> = crate::agent::Agent::ALL.into_iter().filter(|a| a.available()).map(|a| a.name()).collect();
+    works_with_these(&names)
+}
+
+fn works_with_these(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!("Works with {one}."),
+        [rest @ .., last] => format!("Works with {} and {last}.", rest.join(", ")),
+    }
+}
+
 /// The same updates as `notices`, one row per part.
 pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
     let app = match &updates.app {
@@ -240,7 +254,7 @@ impl Render for About {
                     .line_height(px(17.))
                     .text_color(theme::text_faint())
                     .child("Notebooks by Pluto.jl. Runs on Julia.")
-                    .child("Works with Claude, by Anthropic."),
+                    .child(works_with()),
             )
             .child(
                 div()
@@ -426,6 +440,13 @@ impl Render for Licences {
 #[cfg(test)]
 mod tests {
     use super::{Action, Adapter, BUILD, Notice, Updates, VERSION, notices, parts};
+
+    #[test]
+    fn the_credits_name_the_assistants() {
+        assert_eq!(super::works_with_these(&["Claude", "Codex", "Antigravity"]), "Works with Claude, Codex and Antigravity.");
+        assert_eq!(super::works_with_these(&["Claude", "Codex"]), "Works with Claude and Codex.");
+        assert_eq!(super::works_with_these(&["Claude"]), "Works with Claude.");
+    }
 
     #[test]
     fn settings_lists_each_part_with_its_own_button() {
