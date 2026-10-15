@@ -96,11 +96,13 @@ pub fn app_dir() -> Result<PathBuf, String> {
 pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
     // One install per folder at a time: two agents starting together both want
     // Node.js, and would share the download and the unpacking folder (#99). The
-    // second waits, then finds the folder the first put in place.
-    let was_there = dir.exists();
+    // second waits, then finds the folder the first put in place. Callers come
+    // here only when the folder's program is missing, and the folder appears
+    // only by the rename below, so a folder that's there is a finished install.
+    // The lock is per process: two Endeavors at once aren't covered.
     let lock = install_lock(dir);
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-    if !was_there && dir.exists() {
+    if dir.exists() {
         return Ok(());
     }
     let parent = dir.parent().unwrap();
