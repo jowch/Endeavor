@@ -783,7 +783,7 @@ impl Workspace {
     }
 
     /// The active session, if it shows notebook `id`.
-    fn session_showing(&self, id: &str) -> Option<u64> {
+    pub(crate) fn session_showing(&self, id: &str) -> Option<u64> {
         self.active_session().filter(|s| s.notebook.as_deref() == Some(id)).map(|s| s.key)
     }
 
@@ -1480,7 +1480,10 @@ impl Workspace {
                             return this.start_host(&host_for_start, cx);
                         }
                         let host = host_for_start.clone();
-                        let body = "An older version of Endeavor started it. Notebooks open there stop; their files are saved.";
+                        let mut body = "An older version of Endeavor started it. Notebooks open there stop; their files are saved.".to_owned();
+                        if let Some(lost) = this.unrun_edit_warning(&host) {
+                            body = format!("{body}\n\n{lost}");
+                        }
                         this.open_confirm(format!("Restart Julia{on}?"), body, "Restart", window, cx, move |this, _, cx| this.restart_host(&host, cx));
                     })))
                     .children(fixes.into_iter().map(|fix| self.fix_button(fix, false, cx))),
