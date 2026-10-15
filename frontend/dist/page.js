@@ -487,9 +487,10 @@
       }
     });
   }
+  var TICK_MS = 250;
   function frame() {
     ticks.forEach((t) => t());
-    requestAnimationFrame(frame);
+    setTimeout(() => requestAnimationFrame(frame), TICK_MS);
   }
   function initState() {
     every(250, tick);
@@ -1286,6 +1287,10 @@
   var rail;
   function draw() {
     const marked = [...document.querySelectorAll('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
+    if (!marked.length) {
+      if (rail.firstChild) rail.replaceChildren();
+      return;
+    }
     const total = Math.max(document.documentElement.scrollHeight, 1);
     rail.replaceChildren(
       ...marked.map((cell) => {
