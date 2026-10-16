@@ -1151,12 +1151,30 @@ impl Workspace {
     /// New notebook, from the empty pages: made in the session's folder and shown.
     /// Julia starts first if it isn't running: the pane shows its steps meanwhile.
     pub(crate) fn new_notebook_here(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some(bridge) = self.session_bridge(key) else { return };
-        let Some((host, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.kind)) else { return };
+        let Some((host, kind, folder)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.kind, s.place.path.clone())) else { return };
+        let Some(bridge) = self.session_bridge(key) else {
+            eprintln!("New notebook for session {key}: its runtime isn't up");
+            // Started now, so Try again has a runtime to go to.
+            self.ensure_runtime(&host, cx);
+            return self.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", "The notebook runtime isn't running yet.", Some(Retry::NewNotebook(key))), cx);
+        };
+        eprintln!("New notebook for session {key}");
         let steps = self.julia_steps(&host, kind, cx);
-        let task = cx.background_executor().spawn(async move { pluto::until_julia(|| pluto::new_notebook(&bridge, key), &|step| steps.step(step)) });
+        let task = cx.background_executor().spawn(async move {
+            // The runtime makes it in the session's folder, and of its kind: say them first, since a
+            // session whose agent hasn't opened it yet (just after launch) hasn't said them. This
+            // waits at most `CALL_WAIT` (10 s), and a failure only leaves the notebook in Pluto's folder.
+            if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind) {
+                eprintln!("New notebook for session {key}: couldn't give the runtime its folder: {e}");
+            }
+            pluto::until_julia(|| pluto::new_notebook(&bridge, key), &|step| steps.step(step))
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
+            match &result {
+                Ok((_, path)) => eprintln!("New notebook for session {key}: made {path}"),
+                Err(e) => eprintln!("New notebook for session {key} failed: {e}"),
+            }
             let _ = this.update(cx, |this, cx| this.julia_answer(&host, kind, result.as_ref().err().map(String::as_str), cx));
             let _ = this.update(cx, |this, cx| match result {
                 Ok((id, path)) => {
@@ -1168,7 +1186,7 @@ impl Workspace {
                     this.apply_effects(key, vec![Effect::ShowNotebook { id, path: Some(path) }], cx);
                 }
                 // The pane says why Julia, or R, couldn't start, with Try again.
-                Err(e) if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).or_else(|| pluto::open_stuck(&e)).is_some() => {}
+                Err(e) if crate::connection::pane_failure(kind, &e).is_some() => {}
                 Err(e) => this.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &e, Some(Retry::NewNotebook(key))), cx),
             });
         })

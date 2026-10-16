@@ -1016,6 +1016,9 @@ impl Workspace {
             session.hold();
         }
         self.sessions.push(session);
+        // Now, not only once the agent opens the session (which can take a while just
+        // after launch): Julia starts ahead from it, and New notebook makes its notebook there.
+        self.send_session_folder(key, cx);
         if let Some(path) = existing {
             self.bind_notebook(key, path, cx);
         }
@@ -1040,9 +1043,8 @@ impl Workspace {
         let host = session.place.host.clone();
         let Some(bridge) = self.bridge(&host) else { return self.ensure_runtime(&host, cx) };
         let tools = agent::Tools { bridge: bridge.clone(), server: session.server.clone() };
-        let (folder, kind) = (session.place.path.clone(), session.kind);
         let (policy, edits) = (session.policy(), session.edits_ask());
-        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
+        self.send_session_folder(key, cx);
         self.send_policy(key, policy, edits, cx);
         let older = self.connections.get(&host).and_then(|c| c.older);
         let cwd = host.agent_cwd(&session.place.path);
@@ -1111,6 +1113,8 @@ impl Workspace {
         *session.focus.get_mut() = row_focus;
         let host = session.place.host.clone();
         self.sessions.push(session);
+        // Now, not only once the agent opens it: Julia starts ahead from it (`send_session_folder`).
+        self.send_session_folder(key, cx);
         // The recorded notebook opens as soon as its Julia is ready, without
         // waiting for the history: now if it's up, else with the runtime's
         // reopen (`reopen_notebooks`). Without one, the history's last
@@ -1341,6 +1345,13 @@ impl Workspace {
             save_json("notebooks.json", &self.session_notebooks);
         }
         self.send_binding(key, path, cx);
+    }
+
+    /// Tell session `key`'s runtime the session's folder and notebook kind, if it's up.
+    fn send_session_folder(&self, key: u64, cx: &mut Context<Self>) {
+        let Some(bridge) = self.session_bridge(key) else { return };
+        let Some((folder, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.path.clone(), s.kind)) else { return };
+        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
     }
 
     fn send_binding(&self, key: u64, path: String, cx: &mut Context<Self>) {
