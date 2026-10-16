@@ -210,6 +210,28 @@ mod tests {
         let said = std::process::Command::new(&own.julia).arg("--version").output().unwrap_or_else(|why| panic!("{} --version: {why}", own.julia.display()));
         assert_eq!(String::from_utf8_lossy(&said.stdout).trim(), format!("julia version {version}"));
         assert_eq!(endeavor_mcp::julia::own_installed().map(|own| own.julia), Some(own.julia.clone()), "Settings finds it");
+        // A juliaup with no channels makes the first one its default.
+        assert_eq!(own.from, OwnFrom::Juliaup { added: true, default: true }, "{own:?}");
+
+        // The runtime's Julia is the channel's own julia.exe, the one next to its libjulia.dll, not
+        // juliaup's launcher (the WindowsApps alias or ~/.juliaup/bin), which picks a channel each time.
+        let (found, found_version) = endeavor_mcp::julia::find(&endeavor_mcp::julia::Source::Own, false, &mut |step| eprintln!("{step}"))
+            .unwrap_or_else(|why| panic!("{}", why.message()));
+        assert_eq!(found_version, version);
+        let found = std::path::PathBuf::from(&found);
+        let file = found.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_ascii_lowercase();
+        assert_eq!(file, "julia.exe", "{}", found.display());
+        assert!(found.parent().is_some_and(|bin| bin.join("libjulia.dll").is_file()), "no libjulia.dll next to {}: juliaup's launcher, not the channel's Julia", found.display());
+        // Julia itself says where it runs from, which none of our code decides.
+        let bindir = std::process::Command::new(&found).args(["--startup-file=no", "-e", "print(Sys.BINDIR)"]).output().unwrap_or_else(|why| panic!("{}: {why}", found.display()));
+        let bindir = String::from_utf8_lossy(&bindir.stdout).trim().to_owned();
+        let canonical = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+        assert_eq!(canonical(std::path::Path::new(&bindir)), canonical(found.parent().unwrap()), "{} runs Julia from {bindir}", found.display());
+
+        // Remove leaves juliaup's default where it is and says what to do instead.
+        let why = endeavor_mcp::julia::remove_own().expect_err("juliaup's default was removed");
+        assert!(why.starts_with(&format!("juliaup uses Julia {version} as its default, so it stays.")), "{why}");
+        assert_eq!(endeavor_mcp::julia::own_installed().map(|own| own.julia), Some(own.julia.clone()), "the channel is still there");
         // For the workflow's summary.
         if let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
             use std::io::Write;
