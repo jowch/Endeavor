@@ -359,6 +359,11 @@ pub struct Session {
     pub restores: HashMap<u64, Restore>,
     /// What the user's restores put back since the agent last heard; told with the next prompt.
     pub restored: Vec<String>,
+    /// Cells a restore is putting back, and when it started or finished: the
+    /// runtime reports each as the user's edit, which the restore's own note
+    /// already says. Only for a while, so a report that never comes doesn't
+    /// hide a later edit of the user's.
+    restoring_cells: Vec<(String, Instant)>,
     /// The transcript as a virtualized list: only visible entries are laid out,
     /// and it follows new content unless the user has scrolled up to read.
     pub list: ListState,
@@ -675,6 +680,7 @@ impl Session {
             user_edits: Vec::new(),
             restores: HashMap::new(),
             restored: Vec::new(),
+            restoring_cells: Vec::new(),
             list,
             list_len: Cell::new(0),
             dirty_from: Cell::new(None),
@@ -1066,6 +1072,11 @@ impl Session {
 
     /// The user changed a cell in this session's notebook.
     pub fn note_user_edit(&mut self, cell: String, name: Option<String>) {
+        self.restoring_cells.retain(|(_, at)| at.elapsed() < Duration::from_secs(10));
+        if let Some(at) = self.restoring_cells.iter().position(|(c, _)| *c == cell) {
+            self.restoring_cells.remove(at);
+            return;
+        }
         self.note(match &name {
             Some(name) => format!("You edited `{name}`"),
             None => "You edited a cell".into(),
@@ -1175,6 +1186,9 @@ impl Session {
         if self.restore_blocked(ix).is_some() || matches!(self.restores.get(&key), Some(Restore::Restoring | Restore::Restored)) {
             return None;
         }
+        let edited: Vec<String> = cells.iter().filter(|c| c.change == celldiff::CellChange::Edited && c.restore().is_some()).map(|c| c.cell.clone()).collect();
+        self.restoring_cells.retain(|(c, _)| !edited.contains(c));
+        self.restoring_cells.extend(edited.into_iter().map(|c| (c, Instant::now())));
         self.restores.insert(key, Restore::Restoring);
         self.mark(ix);
         Some((key, notebook, restore))
@@ -1204,6 +1218,12 @@ impl Session {
                     said.push(format!("removed {}", added.join(", ")));
                 }
                 let said = said.join(" and ");
+                // The runtime's report of each cell as the user's edit may still be on its way.
+                for (id, at) in &mut self.restoring_cells {
+                    if cells.iter().any(|c| c.cell == *id) {
+                        *at = Instant::now();
+                    }
+                }
                 self.restored.push(format!("{said} as they were before one of your turns"));
                 self.restores.insert(key, Restore::Restored);
                 self.mark(ix);
@@ -1211,6 +1231,8 @@ impl Session {
                 return;
             }
         };
+        // Nothing was put back, so no edit of the user's is coming from it.
+        self.restoring_cells.retain(|(id, _)| !cells.iter().any(|c| c.cell == *id));
         self.restores.insert(key, state);
         self.mark(ix);
     }
@@ -4256,7 +4278,13 @@ more" }"#);
         let (redo_key, _, sent) = s.start_restore(redo).expect("the redo can be restored");
         assert_ne!(redo_key, key);
         assert_eq!(sent, [json!({ "cell_id": A, "expected": "rate = 0.2", "code": "rate = 0.1" })]);
+        // The runtime reports the restored cell as the user's edit; the restore's own note says it.
+        s.note_user_edit(A.to_string(), Some("rate".into()));
         s.finish_restore(redo_key, Ok(Vec::new()));
+        assert!(!s.entries.iter().any(|e| matches!(e, Entry::Note(n) if n.starts_with("You edited"))), "no second note for the restore");
+        assert!(s.user_edits.is_empty());
+        s.note_user_edit(A.to_string(), Some("rate".into()));
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.as_ref() == "You edited `rate`"), "a later edit of the user's is noted");
         assert_eq!((s.restore_state(first), s.restore_state(redo)), (Some(&super::Restore::Restored), Some(&super::Restore::Restored)));
     }
 
