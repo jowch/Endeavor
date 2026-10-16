@@ -768,7 +768,7 @@ impl Workspace {
             HostId::ThisMac => crate::platform::this_computer!().to_string(),
             host => self.hosts.name(host),
         };
-        let crash = self.notebook_at(session.key).and_then(|at| self.crashes.callout(&at)).map(|(title, body)| serde_json::json!({ "title": title, "body": body }));
+        let crash = self.notebook_at(session.key).and_then(|at| self.crashes.callout(&at, self.engine_at(&at))).map(|(title, body)| serde_json::json!({ "title": title, "body": body }));
         // The cells the card asks to run, those that re-run after them, and
         // those it needs that never ran (they run first), for their lines in the page.
         let card = crate::approval::approval_view(session);

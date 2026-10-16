@@ -1462,6 +1462,8 @@ impl Workspace {
             self.notebook_stopped((host.clone(), path), cell, cx);
         }
         for (path, language, why) in new_ended {
+            // The runtime names the file canonically; a session may have it spelled otherwise (case, links).
+            let path = self.sessions.iter().filter(|s| s.place.host == *host).filter_map(|s| s.notebook_path.as_deref()).find(|own| same_file(host, own, &path)).map_or(path.clone(), str::to_owned);
             let at = (host.clone(), path);
             self.crashes.ended(at.clone(), language, why);
             self.notebook_stopped(at, None, cx);
@@ -2660,6 +2662,12 @@ fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaSta
         pluto::JuliaStatus::Failed { message, .. } if !matches!(before, Some(pluto::JuliaStatus::Failed { .. })) => Some(message),
         _ => None,
     }
+}
+
+/// Whether `a` and `b` name the same file on `host`: spelled the same, or, on this computer, the same once
+/// canonical (a file system that ignores case, a link). A server's paths are compared as spelled.
+fn same_file(host: &HostId, a: &str, b: &str) -> bool {
+    a == b || (*host == HostId::ThisMac && matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b))
 }
 
 #[cfg(test)]

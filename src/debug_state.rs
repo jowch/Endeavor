@@ -569,7 +569,7 @@ impl Workspace {
                         "why": self.crashes.why(&at).map(|(language, why)| crate::crash::why_text(language, why)),
                         "buttons": if at.0 == crate::hosts::HostId::ThisMac { vec![restart, "Show log"] } else { vec![restart] },
                     })),
-                    "callout": self.crashes.callout(&at).map(|(title, body)| json!({ "title": title, "body": body })),
+                    "callout": self.crashes.callout(&at, self.engine_at(&at)).map(|(title, body)| json!({ "title": title, "body": body })),
                 }))
             }),
             "path": s.notebook_path,
