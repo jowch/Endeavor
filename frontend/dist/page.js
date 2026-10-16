@@ -2605,6 +2605,14 @@
   var withCode = (s) => escape4(s).replace(/`([^`]*)`/g, "<code>$1</code>");
   var shield = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1.2 12 3v3.6c0 3-2.2 5.2-5 6.2-2.8-1-5-3.2-5-6.2V3z"/></svg>`;
   var play = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="stroke: var(--e-accent-text)" stroke-width="1.3"><path d="M2.5 1.5v7l6-3.5z"/></svg>`;
+  function planText(plan) {
+    if (!plan) return "";
+    const install = plan.install ?? 0;
+    if (install > 0) return `Running starts R and installs ${install} ${install === 1 ? "package" : "packages"}.`;
+    const restart = plan.restart ?? [];
+    if (restart.length > 0) return `Running starts R; it will then restart to use a new version of: ${restart.join(", ")}.`;
+    return "";
+  }
   var callout;
   function render2() {
     const now = current();
@@ -2614,7 +2622,8 @@
     const asking = context.asking ? `<div class="asking">${escape4(context.agent)} is asking to run it. Answer in the chat, or here.</div>` : "";
     const crash = context.crash;
     const title = crash ? escape4(crash.title) : "Safe preview";
-    const body3 = crash ? withCode(crash.body) : "You're reading and editing this file without running any code.";
+    const plan = planText(now.nb.ember?.plan);
+    const body3 = (crash ? withCode(crash.body) : "You're reading and editing this file without running any code.") + (plan ? ` ${escape4(plan)}` : "");
     const html = `${shield}<div class="text"><b>${title}</b>${body3}${asking}</div><button class="run">${play}Run notebook</button>`;
     if (callout.innerHTML !== html) {
       callout.innerHTML = html;
