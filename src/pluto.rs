@@ -110,6 +110,16 @@ pub fn idle_stopped(event: &serde_json::Value) -> Vec<(String, u64, bool)> {
         .collect()
 }
 
+/// The user pressed Stop in session `owner`: the runtime interrupts the runs that session
+/// started and that are still going, which it doesn't hear of from the agent when no tool
+/// call is under way. A runtime from before the call has nothing to stop.
+pub fn stop_session(bridge: &Bridge, owner: u64) -> Result<(), String> {
+    match app_call(bridge, "endeavor/stop_session", json!({ "owner": owner.to_string() })) {
+        Err(error) if error.starts_with("Method not found") => Ok(()),
+        reply => reply.map(|_| ()),
+    }
+}
+
 /// Shut down the open notebook at `path`. Returns whether it was in safe preview,
 /// or None if it wasn't open.
 pub fn stop_notebook(bridge: &Bridge, path: &str) -> Result<Option<bool>, String> {
