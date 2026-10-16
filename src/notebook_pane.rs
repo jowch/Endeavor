@@ -1325,12 +1325,9 @@ impl Workspace {
                         .gap(px(12.))
                         .child(page_button("new-notebook", Glyph::File, "New notebook", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx))))
                         .child(page_button("open-in-new-session", Glyph::Cells, "Open a notebook in a new session…", false).on_click(cx.listener(move |this, _, _, cx| this.open_in_new_session(key, cx))))
-                        // Julia, or R, starting ahead: New notebook waits for it. Out
-                        // of the flow, so the buttons don't move when it's done.
-                        .children(match self.host_pane_state(&session.place.host, session.kind, cx) {
-                            Some(HostPane::JuliaStarting(step) | HostPane::RStarting(step)) => Some(page_text(step).absolute().top_full().left_0().w_full().max_w_full().mt(px(10.)).text_size(theme::size_meta())),
-                            _ => None,
-                        }),
+                        // Julia starting ahead: New notebook waits for it. Out of the
+                        // flow, so the buttons don't move when it's done.
+                        .children(self.starting_ahead_line(session, cx).map(|line| page_text(line).absolute().top_full().left_0().w_full().max_w_full().mt(px(10.)).text_size(theme::size_meta()))),
                 )
                 .into_any_element(),
             PaneShows::Stopped(stopped) => {
@@ -1354,6 +1351,14 @@ impl Workspace {
                 })
                 .into_any_element(),
         })
+    }
+
+    /// The empty page's line while Julia starts ahead for `session`'s host: the step, and its progress.
+    pub fn starting_ahead_line(&self, session: &Session, cx: &App) -> Option<String> {
+        match self.host_pane_state(&session.place.host, session.kind, cx)? {
+            HostPane::JuliaStarting(_) => self.julia_ahead(&session.place.host),
+            _ => None,
+        }
     }
 
     /// What the notebook pane shows for a session.

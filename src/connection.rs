@@ -1352,7 +1352,8 @@ impl Workspace {
     }
 
     /// The runtime said where Julia is: the pane shows its steps while it
-    /// starts, whoever started it (the agent, a warm-up), and why a start it
+    /// starts, whoever started it (the agent, a warm-up), except over a
+    /// session with no notebook yet (`starting_ahead`), and why a start it
     /// watched failed (a stall the runtime ended, say), with Try again.
     fn on_julia_status(&mut self, host: &HostId, status: pluto::JuliaStatus, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get_mut(host) else { return };
@@ -1882,6 +1883,11 @@ impl Workspace {
         JuliaSteps(tx)
     }
 
+    /// The empty page's line while `host`'s Julia starts ahead (`starting_ahead`).
+    pub fn julia_ahead(&self, host: &HostId) -> Option<String> {
+        self.connections.get(host)?.julia.as_ref().map(ahead_line)
+    }
+
     /// How many of the app's own calls (an open, New notebook) wait on `host`'s Julia, or R (`kind`).
     pub fn app_waits(&self, host: &HostId, kind: Backend) -> u32 {
         self.connections.get(host).map_or(0, |c| match kind {
@@ -2161,12 +2167,24 @@ impl Workspace {
 }
 
 /// Whether a session with no notebook keeps its own page, with New notebook,
-/// over the host's `state`: Julia or R starting ahead, with none of the app's
-/// calls (`waits`) waiting on it. Covering the page hid New notebook for the
-/// whole of a first setup, and the page came back at Ready, so a click looked
-/// dropped. A click counts as a wait, so the pane then shows the start.
+/// over the host's `state`: Julia starting ahead (for the session, the agent or
+/// a warm-up), with none of the app's calls (`waits`) waiting on it. Covering
+/// the page hid New notebook for the whole of a first setup, and the page came
+/// back at Ready, so a click looked dropped. A click counts as a wait, so the
+/// pane then shows the start. R only starts for an app call, which waits.
 pub fn starting_ahead(state: &HostPane, waits: u32) -> bool {
-    waits == 0 && matches!(state, HostPane::JuliaStarting(_) | HostPane::RStarting(_))
+    waits == 0 && matches!(state, HostPane::JuliaStarting(_))
+}
+
+/// The empty page's line while Julia starts ahead: the step, with a download's
+/// percentage or how long there's been no sign of progress. Not the log's
+/// other lines, so it stays one short line.
+fn ahead_line(steps: &Steps) -> String {
+    match steps.detail.as_deref() {
+        Some(pct) if pct.ends_with('%') => format!("{} {pct}", steps.current),
+        Some(stall) if stall.starts_with("No sign of progress") => format!("{}. {stall}", steps.current.trim_end_matches('…')),
+        _ => steps.current.clone(),
+    }
 }
 
 /// The notebook pane of a host that isn't ready.
@@ -2634,7 +2652,7 @@ fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaSta
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, new_failure, not_restarted, not_stopped, pane_failure, percent, runtime_of, starting_ahead, try_ended};
+    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, ahead_line, load_again, new_failure, not_restarted, not_stopped, pane_failure, percent, runtime_of, starting_ahead, try_ended};
     use wire::backend::Backend;
     use crate::pluto;
 
@@ -2660,10 +2678,23 @@ mod tests {
     fn a_start_ahead_leaves_new_notebook_showing() {
         let julia = HostPane::JuliaStarting("Installing packages".into());
         assert!(starting_ahead(&julia, 0));
-        assert!(starting_ahead(&HostPane::RStarting("Installing R packages".into()), 0));
         assert!(!starting_ahead(&julia, 1), "a click's call waits on it");
         assert!(!starting_ahead(&HostPane::JuliaFailed("Couldn't download Julia.".into()), 0), "a failure keeps Try again");
         assert!(!starting_ahead(&HostPane::Starting, 0), "the runtime itself starting");
+    }
+
+    /// The empty page's line keeps a download's percentage and a stall's warning, not the log.
+    #[test]
+    fn the_start_ahead_line_keeps_progress_and_stalls() {
+        let mut steps = Steps::new("Starting Julia");
+        steps.julia_status("Downloading Julia 1.12.6… 42%", 0);
+        assert_eq!(ahead_line(&steps), "Downloading Julia 1.12.6… 42%");
+        steps.julia_status("Julia 1.12.6 is starting and loading Pluto", 0);
+        assert_eq!(ahead_line(&steps), "Starting Julia 1.12.6 and Pluto");
+        steps.julia_status("Julia 1.12.6 is starting and loading Pluto", 180);
+        assert_eq!(ahead_line(&steps), "Starting Julia 1.12.6 and Pluto. No sign of progress for 3 minutes.");
+        steps.log("Precompiling Pluto");
+        assert_eq!(ahead_line(&steps), "Starting Julia 1.12.6 and Pluto", "the log's lines stay out");
     }
 
     fn line(state: LineState, node: &str) -> LineStatus {

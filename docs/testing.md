@@ -178,7 +178,9 @@ To wait for something, poll the dump. For example, loop until
   `title`, `text` and `buttons`, while `stopped`) and the safe-preview
   `callout` (its `title` and `body`, while `again`).
   - `missing`: its file isn't there.
-  - `no_notebook`: the turtle's "No notebook in this session yet".
+  - `no_notebook`: the turtle's "No notebook in this session yet". While
+    Julia starts ahead for it, `starting` is the muted line under its
+    buttons ("Downloading Julia 1.12.6… 42%"); null otherwise.
 
   `find` is the find bar (⌘F in the notebook), null while it's closed: its
   `text`, `found` (null before a search has an answer) and `result`, the
