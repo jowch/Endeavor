@@ -266,7 +266,7 @@ impl Steps {
         } else {
             self.now(next);
         }
-        self.detail = Some("The first time takes a few minutes.".into());
+        self.detail = step.starts_with("Installing").then(|| "The first time takes a few minutes.".into());
     }
 
     /// What the runtime said Julia is doing while it starts it for a notebook
@@ -325,6 +325,37 @@ enum Update {
 }
 
 impl Connection {
+    /// The runtime said where R notebooks' setup is: an R notebook's pane shows
+    /// its steps while it's under way, whoever is waiting (the agent opening or
+    /// making an R notebook), and why a start failed, once, with Try again (or
+    /// Install R, when there's no R). The steps go when it ends, unless one of
+    /// the app's own calls still waits. An update to Ember while R runs is not
+    /// a step: R is ready. False when nothing changed.
+    fn r_status_now(&mut self, status: pluto::RStatus) -> bool {
+        if self.r_status.as_ref() == Some(&status) {
+            return false;
+        }
+        match &status {
+            pluto::RStatus::Starting { step, .. } => {
+                self.r_failed = None;
+                self.r.get_or_insert_with(Steps::r).r_step(step);
+            }
+            other => {
+                if self.r_waits == 0 {
+                    self.r = None;
+                }
+                if matches!(other, pluto::RStatus::Ready) {
+                    self.r_failed = None;
+                }
+                if let Some(failure) = r_failure(self.r_status.as_ref(), other) {
+                    self.r_failed = Some(failure);
+                }
+            }
+        }
+        self.r_status = Some(status);
+        true
+    }
+
     /// The app's calls waiting for `kind`'s language to start.
     fn waits(&mut self, kind: Backend) -> &mut u32 {
         match kind {
@@ -1434,35 +1465,11 @@ impl Workspace {
         .detach();
     }
 
-    /// The runtime said where R notebooks' setup is: an R notebook's pane shows
-    /// its steps while it's under way, whoever is waiting (the agent opening or
-    /// making an R notebook), and why a start failed, with Try again (or
-    /// Install R, when there's no R). An update to Ember while R runs is not a
-    /// step: R is ready.
+    /// The runtime said where R notebooks' setup is (`Connection::r_status_now`).
     fn on_r_status(&mut self, host: &HostId, status: pluto::RStatus, cx: &mut Context<Self>) {
-        let Some(connection) = self.connections.get_mut(host) else { return };
-        if connection.r_status.as_ref() == Some(&status) {
-            return;
+        if self.connections.get_mut(host).is_some_and(|c| c.r_status_now(status)) {
+            cx.notify();
         }
-        match &status {
-            pluto::RStatus::Starting { step, .. } => {
-                connection.r_failed = None;
-                connection.r.get_or_insert_with(Steps::r).r_step(step);
-            }
-            other => {
-                if connection.r_waits == 0 {
-                    connection.r = None;
-                }
-                if matches!(other, pluto::RStatus::Ready) {
-                    connection.r_failed = None;
-                }
-                if let Some(failure) = r_failure(connection.r_status.as_ref(), other) {
-                    connection.r_failed = Some(failure);
-                }
-            }
-        }
-        connection.r_status = Some(status);
-        cx.notify();
     }
 
     fn on_notebooks_event(&mut self, host: &HostId, mut event: serde_json::Value, cx: &mut Context<Self>) {
@@ -1976,6 +1983,11 @@ impl Workspace {
         self.connections.get(host)?.julia.as_ref().map(ahead_line)
     }
 
+    /// The same while R notebooks' setup is under way (for another session, or the agent).
+    pub fn r_ahead(&self, host: &HostId) -> Option<String> {
+        self.connections.get(host)?.r.as_ref().map(ahead_line)
+    }
+
     /// How many of the app's own calls (an open, New notebook) wait on `host`'s Julia, or R (`kind`).
     pub fn app_waits(&self, host: &HostId, kind: Backend) -> u32 {
         self.connections.get(host).map_or(0, |c| match kind {
@@ -2259,9 +2271,10 @@ impl Workspace {
 /// a warm-up), with none of the app's calls (`waits`) waiting on it. Covering
 /// the page hid New notebook for the whole of a first setup, and the page came
 /// back at Ready, so a click looked dropped. A click counts as a wait, so the
-/// pane then shows the start. R only starts for an app call, which waits.
+/// pane then shows the start. R's setup for another session or the agent
+/// (`r_status`) leaves it showing the same way.
 pub fn starting_ahead(state: &HostPane, waits: u32) -> bool {
-    waits == 0 && matches!(state, HostPane::JuliaStarting(_))
+    waits == 0 && matches!(state, HostPane::JuliaStarting(_) | HostPane::RStarting(_))
 }
 
 /// The empty page's line while Julia starts ahead: the step, with a download's
@@ -2782,6 +2795,50 @@ mod tests {
         assert!(!starting_ahead(&julia, 1), "a click's call waits on it");
         assert!(!starting_ahead(&HostPane::JuliaFailed("Couldn't download Julia.".into()), 0), "a failure keeps Try again");
         assert!(!starting_ahead(&HostPane::Starting, 0), "the runtime itself starting");
+        let r = HostPane::RStarting("Installing Ember for R notebooks…".into());
+        assert!(starting_ahead(&r, 0), "R's setup for someone else, as Julia's");
+        assert!(!starting_ahead(&r, 1));
+        assert!(!starting_ahead(&HostPane::RFailed("r_failed::Couldn't install Ember".into()), 0));
+    }
+
+    /// What the runtime says of R's setup reaches the pane: its steps while it's
+    /// under way, a failure once, and neither after it starts again or is ready.
+    #[test]
+    fn r_status_puts_the_setup_and_a_failure_on_the_pane_once() {
+        use crate::pluto::JuliaStatus::{Failed, NotStarted, Ready, Starting};
+        let mut c = Connection::new(1, Status::Ready, Steps::new("Starting the notebook runtime"));
+        let failed = Failed { code: "r_failed".into(), message: "Couldn't install Ember".into() };
+        assert!(c.r_status_now(NotStarted));
+        assert!(!c.r_status_now(NotStarted), "nothing new");
+        assert_eq!((c.r.is_none(), c.r_failed.is_none()), (true, true));
+
+        assert!(c.r_status_now(Starting { step: "Installing Ember for R notebooks".into(), quiet: 0 }));
+        assert_eq!(c.r.as_ref().map(|s| s.current.as_str()), Some("Installing Ember for R notebooks…"));
+        assert_eq!(c.r.as_ref().and_then(|s| s.detail.as_deref()), Some("The first time takes a few minutes."));
+        assert!(c.r_status_now(failed.clone()));
+        assert_eq!(c.r_failed.as_deref(), Some("r_failed::Couldn't install Ember"), "the pane says why");
+        assert!(c.r.is_none(), "no call of the app's waits");
+
+        // Try again clears it; the runtime still says the same failure, which isn't news.
+        c.r_failed = None;
+        assert!(!c.r_status_now(failed.clone()));
+        assert_eq!(c.r_failed, None, "stays dismissed");
+
+        // Starting again, or ready, clears an old failure.
+        c.r_failed = Some("r_failed::old".into());
+        assert!(c.r_status_now(Starting { step: "Updating Ember".into(), quiet: 0 }));
+        assert_eq!(c.r_failed, None);
+        assert_eq!(c.r.as_ref().and_then(|s| s.detail.as_deref()), None, "an update isn't a first time");
+        c.r_failed = Some("r_failed::old".into());
+        assert!(c.r_status_now(Ready));
+        assert_eq!((c.r.is_none(), c.r_failed.is_none()), (true, true));
+
+        // While the app's own open waits, its steps stay, and a failure wins on the pane.
+        c.r_waits = 1;
+        assert!(c.r_status_now(Starting { step: "Starting R".into(), quiet: 0 }));
+        assert!(c.r_status_now(failed));
+        assert!(c.r.is_some(), "the app's call still waits");
+        assert_eq!(c.r_failed.as_deref(), Some("r_failed::Couldn't install Ember"));
     }
 
     /// The empty page's line keeps a download's percentage and a stall's warning, not the log.
