@@ -1320,10 +1320,17 @@ impl Workspace {
                 .child(
                     div()
                         .mt(px(6.))
+                        .relative()
                         .flex()
                         .gap(px(12.))
                         .child(page_button("new-notebook", Glyph::File, "New notebook", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx))))
-                        .child(page_button("open-in-new-session", Glyph::Cells, "Open a notebook in a new session…", false).on_click(cx.listener(move |this, _, _, cx| this.open_in_new_session(key, cx)))),
+                        .child(page_button("open-in-new-session", Glyph::Cells, "Open a notebook in a new session…", false).on_click(cx.listener(move |this, _, _, cx| this.open_in_new_session(key, cx))))
+                        // Julia, or R, starting ahead: New notebook waits for it. Out
+                        // of the flow, so the buttons don't move when it's done.
+                        .children(match self.host_pane_state(&session.place.host, session.kind, cx) {
+                            Some(HostPane::JuliaStarting(step) | HostPane::RStarting(step)) => Some(page_text(step).absolute().top_full().left_0().w_full().max_w_full().mt(px(10.)).text_size(theme::size_meta())),
+                            _ => None,
+                        }),
                 )
                 .into_any_element(),
             PaneShows::Stopped(stopped) => {
@@ -1352,7 +1359,10 @@ impl Workspace {
     /// What the notebook pane shows for a session.
     pub fn pane_shows(&self, session: &Session, cx: &App) -> PaneShows {
         if let Some(host) = self.host_pane_state(&session.place.host, session.kind, cx) {
-            return PaneShows::Host(host);
+            let empty = session.notebook_path.is_none() && session.notebook.is_none();
+            if !(empty && crate::connection::starting_ahead(&host, self.app_waits(&session.place.host, session.kind))) {
+                return PaneShows::Host(host);
+            }
         }
         if session.missing {
             return PaneShows::Missing;

@@ -1882,6 +1882,14 @@ impl Workspace {
         JuliaSteps(tx)
     }
 
+    /// How many of the app's own calls (an open, New notebook) wait on `host`'s Julia, or R (`kind`).
+    pub fn app_waits(&self, host: &HostId, kind: Backend) -> u32 {
+        self.connections.get(host).map_or(0, |c| match kind {
+            Backend::Pluto => c.julia_waits,
+            Backend::Ember => c.r_waits,
+        })
+    }
+
     /// A call that needed Julia, or R (`kind`), on `host` ended with `error`:
     /// if it couldn't start, the pane says why, with Try again.
     pub fn julia_answer(&mut self, host: &HostId, kind: Backend, error: Option<&str>, cx: &mut Context<Self>) {
@@ -2150,6 +2158,15 @@ impl Workspace {
         };
         Some(pane.into_any_element())
     }
+}
+
+/// Whether a session with no notebook keeps its own page, with New notebook,
+/// over the host's `state`: Julia or R starting ahead, with none of the app's
+/// calls (`waits`) waiting on it. Covering the page hid New notebook for the
+/// whole of a first setup, and the page came back at Ready, so a click looked
+/// dropped. A click counts as a wait, so the pane then shows the start.
+pub fn starting_ahead(state: &HostPane, waits: u32) -> bool {
+    waits == 0 && matches!(state, HostPane::JuliaStarting(_) | HostPane::RStarting(_))
 }
 
 /// The notebook pane of a host that isn't ready.
@@ -2617,7 +2634,7 @@ fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaSta
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, new_failure, not_restarted, not_stopped, pane_failure, percent, runtime_of, try_ended};
+    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, new_failure, not_restarted, not_stopped, pane_failure, percent, runtime_of, starting_ahead, try_ended};
     use wire::backend::Backend;
     use crate::pluto;
 
@@ -2635,6 +2652,18 @@ mod tests {
         assert_eq!(pane_failure(Backend::Ember, "r_not_found::No R here").as_deref(), Some("r_not_found::No R here"));
         assert_eq!(pane_failure(Backend::Ember, "open_stuck::It's still opening.").as_deref(), Some("r_failed::It's still opening."));
         assert_eq!(pane_failure(Backend::Ember, julia), None);
+    }
+
+    /// Julia starting ahead leaves an empty session's New notebook showing; a
+    /// click, or an open, waiting on Julia shows the start instead.
+    #[test]
+    fn a_start_ahead_leaves_new_notebook_showing() {
+        let julia = HostPane::JuliaStarting("Installing packages".into());
+        assert!(starting_ahead(&julia, 0));
+        assert!(starting_ahead(&HostPane::RStarting("Installing R packages".into()), 0));
+        assert!(!starting_ahead(&julia, 1), "a click's call waits on it");
+        assert!(!starting_ahead(&HostPane::JuliaFailed("Couldn't download Julia.".into()), 0), "a failure keeps Try again");
+        assert!(!starting_ahead(&HostPane::Starting, 0), "the runtime itself starting");
     }
 
     fn line(state: LineState, node: &str) -> LineStatus {
