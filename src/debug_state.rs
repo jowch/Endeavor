@@ -558,13 +558,16 @@ impl Workspace {
                     crate::crash::Crash::Again { then, .. } => ("again", then.clone()),
                 };
                 let (kept, running) = crate::crash::page_text(cell.as_deref());
+                let r = s.kind == wire::backend::Backend::Ember;
+                let restart = crate::crash::restart_label(r);
                 Some(json!({
                     "state": state,
                     "cell": cell,
                     "page": (state == "stopped").then(|| json!({
-                        "title": crate::crash::PAGE_TITLE,
+                        "title": crate::crash::page_title(r),
                         "text": running.map_or(kept.clone(), |r| format!("{kept} {r}")),
-                        "buttons": if at.0 == crate::hosts::HostId::ThisMac { vec!["Restart Julia", "Show log"] } else { vec!["Restart Julia"] },
+                        "why": self.crashes.why(&at).map(|(language, why)| crate::crash::why_text(language, why)),
+                        "buttons": if at.0 == crate::hosts::HostId::ThisMac { vec![restart, "Show log"] } else { vec![restart] },
                     })),
                     "callout": self.crashes.callout(&at).map(|(title, body)| json!({ "title": title, "body": body })),
                 }))
