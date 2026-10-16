@@ -895,6 +895,20 @@ impl Workspace {
         .detach();
     }
 
+    /// Restore on the changed-cells card at entry `ix`: the runtime puts the
+    /// turn's cells back as they were before it, all or nothing.
+    pub fn restore_turn(&mut self, key: u64, ix: usize, cx: &mut Context<Self>) {
+        let (Some(bridge), Some(id)) = (self.session_bridge(key), self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook.clone())) else { return };
+        let Some(cells) = self.session_mut(key).and_then(|s| s.start_restore(ix)) else { return };
+        cx.notify();
+        let task = cx.background_executor().spawn(async move { pluto::restore_cells(&bridge, &id, cells) });
+        cx.spawn(async move |this, cx| {
+            let answer = task.await;
+            let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.finish_restore(ix, answer)));
+        })
+        .detach();
+    }
+
     pub fn restart_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
         let (Some(bridge), Some(id)) = (self.session_bridge(key), self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook.clone())) else { return };
         let task = cx.background_executor().spawn(async move { pluto::restart_notebook(&bridge, &id) });

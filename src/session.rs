@@ -352,6 +352,10 @@ pub struct Session {
     /// Cells the user changed since the agent last heard (cell id, name); told
     /// with the next prompt.
     pub user_edits: Vec<(String, Option<String>)>,
+    /// Restore on each changed-cells card, by the card's entry index, once pressed.
+    pub restores: HashMap<usize, Restore>,
+    /// What the user's restores put back since the agent last heard; told with the next prompt.
+    pub restored: Vec<String>,
     /// The transcript as a virtualized list: only visible entries are laid out,
     /// and it follows new content unless the user has scrolled up to read.
     pub list: ListState,
@@ -476,6 +480,17 @@ pub struct Session {
     queue_focus: RefCell<HashMap<(u64, &'static str), FocusHandle>>,
     /// Each reply's parsed markdown, by its entry index (see `reply_text`).
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
+}
+
+/// Where a changed-cells card's Restore is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Restore {
+    Restoring,
+    Restored,
+    /// Nothing was restored: these cells (by name) changed since the turn.
+    Changed(Vec<String>),
+    /// Nothing was restored: the runtime's error.
+    Failed(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -636,6 +651,8 @@ impl Session {
             stopped: None,
             missing: false,
             user_edits: Vec::new(),
+            restores: HashMap::new(),
+            restored: Vec::new(),
             list,
             list_len: Cell::new(0),
             dirty_from: Cell::new(None),
@@ -805,6 +822,7 @@ impl Session {
 
     /// The history starts loading over: the replay so far goes (Endeavor's copy stays on show).
     fn clear_history(&mut self) {
+        self.restores.clear();
         match &mut self.replay {
             Some(replay) => replay.clear(),
             None => {
@@ -1034,6 +1052,51 @@ impl Session {
         if !self.user_edits.iter().any(|(id, _)| *id == cell) {
             self.user_edits.push((cell, name));
         }
+    }
+
+    /// Restore on the changed-cells card at entry `ix`: what to send the runtime
+    /// (`ChangedCell::restore`), marking it under way; none if the card has
+    /// nothing to put back or a restore is under way or done.
+    pub fn start_restore(&mut self, ix: usize) -> Option<Vec<serde_json::Value>> {
+        let Some(Entry::Changes(cells)) = self.entries.get(ix) else { return None };
+        let cells: Vec<serde_json::Value> = cells.iter().filter_map(celldiff::ChangedCell::restore).collect();
+        if cells.is_empty() || matches!(self.restores.get(&ix), Some(Restore::Restoring | Restore::Restored)) {
+            return None;
+        }
+        self.restores.insert(ix, Restore::Restoring);
+        self.mark(ix);
+        Some(cells)
+    }
+
+    /// The runtime's answer to the restore of the card at `ix`: the cells (by
+    /// id) that changed since the turn, so nothing was restored, or its error.
+    /// A restore is noted, and the agent hears of it with the next prompt.
+    pub fn finish_restore(&mut self, ix: usize, answer: Result<Vec<String>, String>) {
+        let Some(Entry::Changes(cells)) = self.entries.get(ix) else { return };
+        let name = |id: &String| cells.iter().find(|c| c.cell == *id).map_or(id.clone(), |c| c.name.clone());
+        let state = match answer {
+            Err(error) => Restore::Failed(error),
+            Ok(changed) if !changed.is_empty() => Restore::Changed(changed.iter().map(name).collect()),
+            Ok(_) => {
+                let names = |change| cells.iter().filter(|c| c.change == change && c.restore().is_some()).map(|c| format!("`{}`", c.name)).collect::<Vec<_>>();
+                let (edited, added) = (names(celldiff::CellChange::Edited), names(celldiff::CellChange::New));
+                let mut said = Vec::new();
+                if !edited.is_empty() {
+                    said.push(format!("put back {}", edited.join(", ")));
+                }
+                if !added.is_empty() {
+                    said.push(format!("removed {}", added.join(", ")));
+                }
+                let said = said.join(" and ");
+                self.restored.push(format!("{said} as they were before one of your turns"));
+                self.restores.insert(ix, Restore::Restored);
+                self.mark(ix);
+                self.note(format!("You {said}"));
+                return;
+            }
+        };
+        self.restores.insert(ix, state);
+        self.mark(ix);
     }
 
     pub fn note(&mut self, text: impl Into<SharedString>) {
@@ -4002,6 +4065,27 @@ more" }"#);
         s.submit(text("thanks"), false);
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert_eq!(changes(&s).len(), 1, "a turn that changed no cell has no card");
+
+        // Restore sends each cell's code from before the turn, and the code the turn left as expected.
+        let card = s.entries.iter().position(|e| matches!(e, Entry::Changes(_))).unwrap();
+        let sent = s.start_restore(card).expect("the card has cells to put back");
+        assert_eq!(
+            sent,
+            [json!({ "cell_id": A, "expected": "rate = 0.3\nk = 2", "code": "rate = 0.1" }), json!({ "cell_id": B, "expected": "fit = 1", "code": null })]
+        );
+        assert_eq!(s.start_restore(card), None, "not twice while it's under way");
+        s.finish_restore(card, Ok(vec![A.to_string()]));
+        assert_eq!(s.restores[&card], super::Restore::Changed(vec!["rate".into()]));
+        assert!(s.restored.is_empty(), "nothing restored, nothing to tell");
+        assert!(s.start_restore(card).is_some(), "it can be tried again");
+        s.finish_restore(card, Err("no notebook".into()));
+        assert_eq!(s.restores[&card], super::Restore::Failed("no notebook".into()));
+        s.start_restore(card);
+        s.finish_restore(card, Ok(Vec::new()));
+        assert_eq!(s.restores[&card], super::Restore::Restored);
+        assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.as_ref() == "You put back `rate` and removed `fit`"));
+        assert_eq!(s.restored, ["put back `rate` and removed `fit` as they were before one of your turns"]);
+        assert_eq!(s.start_restore(card), None, "done");
     }
 
     #[test]

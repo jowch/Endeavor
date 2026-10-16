@@ -66,6 +66,29 @@ pub struct ChangedCell {
     pub change: CellChange,
     pub added: usize,
     pub removed: usize,
+    /// Its code before the turn (none for a cell the turn added) and after it
+    /// (none for one it deleted), for Restore. A card saved before Restore
+    /// has neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+
+impl ChangedCell {
+    /// What `endeavor/restore_cells` takes to put this cell back: the code the
+    /// turn left as `expected`, and its code before the turn, or null to delete
+    /// a cell the turn added. None for a deleted cell (it can't come back yet)
+    /// or a card that doesn't know the code.
+    pub fn restore(&self) -> Option<Value> {
+        let after = self.after.as_ref()?;
+        let code = match self.change {
+            CellChange::Deleted => return None,
+            CellChange::New => Value::Null,
+            CellChange::Edited => Value::String(self.before.clone()?),
+        };
+        Some(serde_json::json!({ "cell_id": self.cell, "expected": after, "code": code }))
+    }
 }
 
 /// The cells a turn's edits changed, in the order first touched, each by its
@@ -96,7 +119,7 @@ pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>) -> Vec<Cha
                 Change::Same => (a, r),
             });
             let name = cell_label(after.as_deref().unwrap_or(old));
-            Some(ChangedCell { cell, name, change, added, removed })
+            Some(ChangedCell { cell, name, change, added, removed, before, after })
         })
         .collect()
 }
@@ -371,7 +394,19 @@ mod tests {
         call("add_cell", json!({ "code": "tmp = 0" }), json!({ "cell_id": C5, "code": "tmp = 0" }));
         call("delete_cell", json!({ "cell_id": C5 }), json!({}));
         let cells = net_changes(diffs.iter().filter_map(|d| d.edit.as_ref()));
-        let row = |cell: &str, name: &str, change, added, removed| ChangedCell { cell: cell.into(), name: name.into(), change, added, removed };
+        let row = |cell: &str, name: &str, change, added, removed| ChangedCell { cell: cell.into(), name: name.into(), change, added, removed, before: None, after: None };
+        // Restore puts each back as it was before the turn: an edit's first before-text, an added cell deleted.
+        let restores: Vec<Option<Value>> = cells.iter().map(ChangedCell::restore).collect();
+        assert_eq!(
+            restores,
+            [
+                Some(json!({ "cell_id": C1, "expected": "rate = 0.3\nk = 2\nm = 1", "code": "rate = 0.1\nk = 2" })),
+                Some(json!({ "cell_id": C2, "expected": "fit = 2\nfit2 = 3", "code": null })),
+                None,
+            ],
+            "a deleted cell can't come back yet"
+        );
+        let cells: Vec<ChangedCell> = cells.into_iter().map(|c| ChangedCell { before: None, after: None, ..c }).collect();
         assert_eq!(
             cells,
             [row(C1, "rate", CellChange::Edited, 2, 1), row(C2, "fit", CellChange::New, 2, 0), row(C3, "plot(rate)", CellChange::Deleted, 0, 1)],

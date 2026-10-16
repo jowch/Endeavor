@@ -488,6 +488,14 @@ impl Workspace {
                         "removed": c.removed,
                         "shows": c.change != CellChange::Deleted,
                     })).collect::<Vec<_>>(),
+                    // Restore: null when the card has nothing to put back.
+                    "restore": cells.iter().any(|c| c.restore().is_some()).then(|| match s.restores.get(&ix) {
+                        None => json!({ "state": "offered" }),
+                        Some(session::Restore::Restoring) => json!({ "state": "restoring" }),
+                        Some(session::Restore::Restored) => json!({ "state": "restored" }),
+                        Some(session::Restore::Changed(names)) => json!({ "state": "changed", "cells": names }),
+                        Some(session::Restore::Failed(error)) => json!({ "state": "failed", "error": error }),
+                    }),
                 })),
                 Entry::Failed(f) if f.used && matches!(f.kind, session::FailedKind::NoAnswer { .. }) => None,
                 Entry::Failed(f) if matches!(f.kind, session::FailedKind::CutOff) => Some(json!({

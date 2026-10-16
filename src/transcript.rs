@@ -18,7 +18,7 @@ use crate::new_session::Glyph;
 use crate::outbox::Delivery;
 use crate::pluto;
 use crate::runs;
-use crate::session::{Approval, Entry, Failed, FailedKind, Session, cell_label, file_name, file_path};
+use crate::session::{Approval, Entry, Failed, FailedKind, Restore, Session, cell_label, file_name, file_path};
 use crate::signin::Look;
 use crate::theme;
 use crate::theme::TextButton as _;
@@ -615,7 +615,47 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
                     .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(vec![id.clone()], cx)))
             })
     });
-    div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).overflow_hidden().children(rows).into_any_element()
+    let card = div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).overflow_hidden().children(rows);
+    // Restore: what it does, or where it got to, and the button while it can be pressed.
+    if !cells.iter().any(|c| c.restore().is_some()) {
+        return card.into_any_element();
+    }
+    let gone: Vec<String> = cells.iter().filter(|c| c.change == CellChange::Deleted).map(|c| format!("`{}`", c.name)).collect();
+    let state = session.restores.get(&ix);
+    let line = match state {
+        None if gone.is_empty() => "Restore puts back the code from before this turn. What already ran stays.".to_string(),
+        None => format!("Restore puts back the rest as it was before this turn; {} can't come back yet.", gone.join(", ")),
+        Some(Restore::Restoring) => "Restoring…".to_string(),
+        Some(Restore::Restored) => "Restored. What already ran stays; run the cells to update their outputs.".to_string(),
+        Some(Restore::Changed(names)) => {
+            let names: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+            format!("Nothing restored: {} changed since this turn.", names.join(", "))
+        }
+        Some(Restore::Failed(error)) => format!("Couldn't restore: {error}"),
+    };
+    let pressable = !matches!(state, Some(Restore::Restoring | Restore::Restored));
+    let footer = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .min_h(px(34.))
+        .px(px(8.))
+        .py(px(4.))
+        .border_t_1()
+        .border_color(theme::border())
+        .text_size(theme::chat_meta())
+        .text_color(theme::text_faint())
+        .child(div().flex_1().min_w_0().child(line))
+        .when(pressable, |d| {
+            d.child(
+                crate::signin::button(ElementId::NamedInteger("restore-turn".into(), key << 32 | ix as u64), "Restore", crate::signin::Look::Secondary)
+                    .track_focus(&session.changed_cell_focus(ix, cells.len(), cx))
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.restore_turn(key, ix, cx))),
+            )
+        });
+    card.child(footer).into_any_element()
 }
 
 /// A tool call's folded row: its line, its edits' ± counts, and its state at the end.
