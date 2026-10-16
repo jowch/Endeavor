@@ -2154,7 +2154,7 @@ impl Workspace {
                 });
                 return Some(starting_pane(&steps).children(cancel).into_any_element());
             }
-            HostPane::Stopping => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping Julia on {name}…"))),
+            HostPane::Stopping => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping {} on {name}…", self.engine_on(host)))),
             HostPane::NotRunning(reason) => return Some(self.julia_stopped_page(host, &reason, cx)),
             HostPane::Crashed(reason) => return Some(self.julia_crashed_page(host, &reason, cx)),
             HostPane::Replaced => resting

@@ -98,10 +98,10 @@ server…** and **Add cluster…** add new ones. See [Servers](./servers.md) and
 - **Light or dark**: **Dark** (the default), **Light**, or **Match macOS**,
   which follows your Mac's setting. The whole window changes, notebook
   included.
-- **Pluto notebook look**: **Endeavor** (the default) puts Pluto's controls in
-  the notebook's header, in Endeavor's colours. **Pluto classic** shows
-  Pluto's own page, as it looks outside Endeavor. You can also switch in the
-  notebook's **⋮** menu. Exported notebooks always use Pluto's standard look.
+- **Notebook look**: **Endeavor** (the default) puts the notebook's controls
+  in its header, in Endeavor's colours. **Classic** shows Pluto's or Ember's
+  own page, as it looks outside Endeavor. You can also switch in the
+  notebook's **⋮** menu. Exported notebooks always use their standard look.
 
 ## Troubleshooting
 

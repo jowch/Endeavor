@@ -161,7 +161,7 @@ To wait for something, poll the dump. For example, loop until
     `starting`, `julia_starting` (the runtime is up and Julia is starting,
     for whoever asked; `reason` is the step), `julia_failed`, `r_starting`
     and `r_failed` (the same for an R notebook's R and Ember),
-    `stopping`, `julia_not_running`, `replaced` or `not_connected`, with the
+    `stopping`, `julia_not_running` (`r_not_running` for an R session), `replaced` or `not_connected`, with the
     host and the reason.
   - `stopped`: the notebook was stopped. `stopped.idle_hours` is set when it
     stopped for being idle.
