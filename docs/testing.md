@@ -82,7 +82,10 @@ To wait for something, poll the dump. For example, loop until
 - `r_here`. R on this computer: the R `setting` (null finds R by itself),
   Endeavor's own R as Settings last found it (`own`: `unknown`,
   `not_installed`, or its `rscript` and `version`), whether this computer is
-  `offered` it (a Mac), the Install or Remove `job`, and the R failure the pane
+  `offered` it (a Mac), the Install or Remove `job`, what its runtime last said
+  of R's setup (`status`, from `endeavor/r_status`: `state` `not_started`,
+  `starting` with `step`, `ready`, or `failed` with `code` and `message`; null
+  with no runtime, or one too old to say), and the R failure the pane
   `failed` with (`r_not_found::` or `r_failed::` and the core's text).
 - `claude`. Claude Code's adapter process: `state` is `up`, `restarting`
   (it stopped by itself and is starting again) or `down` (it stopped twice in

@@ -65,6 +65,15 @@ impl Version {
             Version::NoRunGate => false,
         }
     }
+
+    /// Its core says where R notebooks' setup is (`endeavor/r_status`, interface 9 on).
+    pub fn has_r_status(self) -> bool {
+        match self {
+            Version::Usable => endeavor_mcp::CORE_INTERFACE >= 9,
+            Version::Other(interface) => interface.is_some_and(|i| i >= 9),
+            Version::NoRunGate => false,
+        }
+    }
 }
 
 /// How a core that offers `interface` compares with the app's: "an older",

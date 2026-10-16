@@ -135,8 +135,13 @@ pub struct Connection {
     pub r: Option<Steps>,
     /// The app's calls waiting for R now: `r` goes when the last ends.
     r_waits: u32,
-    /// Why R notebooks couldn't start for the R notebook the app opened last.
+    /// Why R notebooks couldn't start for the R notebook the app opened last,
+    /// or for a start the app watched (`r_status`): the error, `r_failed::…`
+    /// or `r_not_found::…`.
     pub r_failed: Option<String>,
+    /// Where R notebooks' setup is, as the runtime last said (`endeavor/r_status`);
+    /// none from a runtime too old to say.
+    pub r_status: Option<pluto::RStatus>,
 }
 
 /// A dropped server connection.
@@ -261,7 +266,7 @@ impl Steps {
         } else {
             self.now(next);
         }
-        self.detail = Some("The first time takes a few minutes.".into());
+        self.detail = step.starts_with("Installing").then(|| "The first time takes a few minutes.".into());
     }
 
     /// What the runtime said Julia is doing while it starts it for a notebook
@@ -320,6 +325,37 @@ enum Update {
 }
 
 impl Connection {
+    /// The runtime said where R notebooks' setup is: an R notebook's pane shows
+    /// its steps while it's under way, whoever is waiting (the agent opening or
+    /// making an R notebook), and why a start failed, once, with Try again (or
+    /// Install R, when there's no R). The steps go when it ends, unless one of
+    /// the app's own calls still waits. An update to Ember while R runs is not
+    /// a step: R is ready. False when nothing changed.
+    fn r_status_now(&mut self, status: pluto::RStatus) -> bool {
+        if self.r_status.as_ref() == Some(&status) {
+            return false;
+        }
+        match &status {
+            pluto::RStatus::Starting { step, .. } => {
+                self.r_failed = None;
+                self.r.get_or_insert_with(Steps::r).r_step(step);
+            }
+            other => {
+                if self.r_waits == 0 {
+                    self.r = None;
+                }
+                if matches!(other, pluto::RStatus::Ready) {
+                    self.r_failed = None;
+                }
+                if let Some(failure) = r_failure(self.r_status.as_ref(), other) {
+                    self.r_failed = Some(failure);
+                }
+            }
+        }
+        self.r_status = Some(status);
+        true
+    }
+
     /// The app's calls waiting for `kind`'s language to start.
     fn waits(&mut self, kind: Backend) -> &mut u32 {
         match kind {
@@ -364,6 +400,7 @@ impl Connection {
             r: None,
             r_waits: 0,
             r_failed: None,
+            r_status: None,
             lost: None,
             dropped: None,
             crashed: false,
@@ -429,6 +466,7 @@ impl Connection {
         self.julia_status = None;
         self.r = None;
         self.r_failed = None;
+        self.r_status = None;
         self.notebooks = serde_json::Value::Null;
         self.cells = serde_json::Value::Null;
         self.runtime.take()
@@ -1289,11 +1327,15 @@ impl Workspace {
         let Some(connection) = self.connections.get(host) else { return };
         let Some(bridge) = connection.bridge() else { return };
         let julia_status = connection.runtime.as_ref().is_some_and(|r| r.version.has_julia_status());
+        let r_status = connection.runtime.as_ref().is_some_and(|r| r.version.has_r_status());
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<serde_json::Value>();
         let watching = connection.watching.clone();
         let mine = watching.fetch_add(1, Ordering::SeqCst) + 1;
         if julia_status {
             self.watch_julia(host, bridge.clone(), watching.clone(), mine, cx);
+        }
+        if r_status {
+            self.watch_r(host, bridge.clone(), watching.clone(), mine, cx);
         }
         // A long-lived blocking read: its own thread, not the executor's pool. If the
         // stream drops it reconnects, until this runtime is replaced or dies.
@@ -1389,6 +1431,45 @@ impl Workspace {
             self.check_own_julia(cx);
         }
         cx.notify();
+    }
+
+    /// Follow where R notebooks' setup is on `host`'s runtime (`endeavor/r_status`),
+    /// as `watch_julia` does Julia's: every second while it's under way, else
+    /// every few. It never starts R.
+    fn watch_r(&mut self, host: &HostId, bridge: Bridge, watching: Arc<AtomicU64>, mine: u64, cx: &mut Context<Self>) {
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<pluto::RStatus>();
+        let current = watching.clone();
+        std::thread::spawn(move || {
+            while current.load(Ordering::SeqCst) == mine {
+                let status = pluto::r_status(&bridge);
+                let starting = matches!(status, Ok(pluto::RStatus::Starting { .. }));
+                if let Ok(status) = status
+                    && tx.unbounded_send(status).is_err()
+                {
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(if starting { 1 } else { 3 }));
+            }
+        });
+        let host = host.clone();
+        cx.spawn(async move |this, cx| {
+            while let Some(status) = rx.next().await {
+                if watching.load(Ordering::SeqCst) != mine {
+                    break;
+                }
+                if this.update(cx, |this, cx| this.on_r_status(&host, status, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The runtime said where R notebooks' setup is (`Connection::r_status_now`).
+    fn on_r_status(&mut self, host: &HostId, status: pluto::RStatus, cx: &mut Context<Self>) {
+        if self.connections.get_mut(host).is_some_and(|c| c.r_status_now(status)) {
+            cx.notify();
+        }
     }
 
     fn on_notebooks_event(&mut self, host: &HostId, mut event: serde_json::Value, cx: &mut Context<Self>) {
@@ -1902,6 +1983,11 @@ impl Workspace {
         self.connections.get(host)?.julia.as_ref().map(ahead_line)
     }
 
+    /// The same while R notebooks' setup is under way (for another session, or the agent).
+    pub fn r_ahead(&self, host: &HostId) -> Option<String> {
+        self.connections.get(host)?.r.as_ref().map(ahead_line)
+    }
+
     /// How many of the app's own calls (an open, New notebook) wait on `host`'s Julia, or R (`kind`).
     pub fn app_waits(&self, host: &HostId, kind: Backend) -> u32 {
         self.connections.get(host).map_or(0, |c| match kind {
@@ -2185,9 +2271,10 @@ impl Workspace {
 /// a warm-up), with none of the app's calls (`waits`) waiting on it. Covering
 /// the page hid New notebook for the whole of a first setup, and the page came
 /// back at Ready, so a click looked dropped. A click counts as a wait, so the
-/// pane then shows the start. R only starts for an app call, which waits.
+/// pane then shows the start. R's setup for another session or the agent
+/// (`r_status`) leaves it showing the same way.
 pub fn starting_ahead(state: &HostPane, waits: u32) -> bool {
-    waits == 0 && matches!(state, HostPane::JuliaStarting(_))
+    waits == 0 && matches!(state, HostPane::JuliaStarting(_) | HostPane::RStarting(_))
 }
 
 /// The empty page's line while Julia starts ahead: the step, with a download's
@@ -2664,6 +2751,13 @@ fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaSta
     }
 }
 
+/// A failure R's setup has just reached, as the pane keeps it (`code::message`,
+/// which `pluto::r_failed` reads), like `new_failure`.
+fn r_failure(before: Option<&pluto::RStatus>, now: &pluto::RStatus) -> Option<String> {
+    let pluto::RStatus::Failed { code, .. } = now else { return None };
+    new_failure(before, now).map(|message| format!("{}::{message}", if code == "r_not_found" { "r_not_found" } else { "r_failed" }))
+}
+
 /// Whether `a` and `b` name the same file on `host`: spelled the same, or, on this computer, the same once
 /// canonical (a file system that ignores case, a link). A server's paths are compared as spelled.
 fn same_file(host: &HostId, a: &str, b: &str) -> bool {
@@ -2672,7 +2766,7 @@ fn same_file(host: &HostId, a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, ahead_line, load_again, new_failure, not_restarted, not_stopped, pane_failure, percent, runtime_of, starting_ahead, try_ended};
+    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, ahead_line, load_again, new_failure, not_restarted, r_failure, not_stopped, pane_failure, percent, runtime_of, starting_ahead, try_ended};
     use wire::backend::Backend;
     use crate::pluto;
 
@@ -2701,6 +2795,50 @@ mod tests {
         assert!(!starting_ahead(&julia, 1), "a click's call waits on it");
         assert!(!starting_ahead(&HostPane::JuliaFailed("Couldn't download Julia.".into()), 0), "a failure keeps Try again");
         assert!(!starting_ahead(&HostPane::Starting, 0), "the runtime itself starting");
+        let r = HostPane::RStarting("Installing Ember for R notebooks…".into());
+        assert!(starting_ahead(&r, 0), "R's setup for someone else, as Julia's");
+        assert!(!starting_ahead(&r, 1));
+        assert!(!starting_ahead(&HostPane::RFailed("r_failed::Couldn't install Ember".into()), 0));
+    }
+
+    /// What the runtime says of R's setup reaches the pane: its steps while it's
+    /// under way, a failure once, and neither after it starts again or is ready.
+    #[test]
+    fn r_status_puts_the_setup_and_a_failure_on_the_pane_once() {
+        use crate::pluto::JuliaStatus::{Failed, NotStarted, Ready, Starting};
+        let mut c = Connection::new(1, Status::Ready, Steps::new("Starting the notebook runtime"));
+        let failed = Failed { code: "r_failed".into(), message: "Couldn't install Ember".into() };
+        assert!(c.r_status_now(NotStarted));
+        assert!(!c.r_status_now(NotStarted), "nothing new");
+        assert_eq!((c.r.is_none(), c.r_failed.is_none()), (true, true));
+
+        assert!(c.r_status_now(Starting { step: "Installing Ember for R notebooks".into(), quiet: 0 }));
+        assert_eq!(c.r.as_ref().map(|s| s.current.as_str()), Some("Installing Ember for R notebooks…"));
+        assert_eq!(c.r.as_ref().and_then(|s| s.detail.as_deref()), Some("The first time takes a few minutes."));
+        assert!(c.r_status_now(failed.clone()));
+        assert_eq!(c.r_failed.as_deref(), Some("r_failed::Couldn't install Ember"), "the pane says why");
+        assert!(c.r.is_none(), "no call of the app's waits");
+
+        // Try again clears it; the runtime still says the same failure, which isn't news.
+        c.r_failed = None;
+        assert!(!c.r_status_now(failed.clone()));
+        assert_eq!(c.r_failed, None, "stays dismissed");
+
+        // Starting again, or ready, clears an old failure.
+        c.r_failed = Some("r_failed::old".into());
+        assert!(c.r_status_now(Starting { step: "Updating Ember".into(), quiet: 0 }));
+        assert_eq!(c.r_failed, None);
+        assert_eq!(c.r.as_ref().and_then(|s| s.detail.as_deref()), None, "an update isn't a first time");
+        c.r_failed = Some("r_failed::old".into());
+        assert!(c.r_status_now(Ready));
+        assert_eq!((c.r.is_none(), c.r_failed.is_none()), (true, true));
+
+        // While the app's own open waits, its steps stay, and a failure wins on the pane.
+        c.r_waits = 1;
+        assert!(c.r_status_now(Starting { step: "Starting R".into(), quiet: 0 }));
+        assert!(c.r_status_now(failed));
+        assert!(c.r.is_some(), "the app's call still waits");
+        assert_eq!(c.r_failed.as_deref(), Some("r_failed::Couldn't install Ember"));
     }
 
     /// The empty page's line keeps a download's percentage and a stall's warning, not the log.
@@ -2731,6 +2869,28 @@ mod tests {
         assert_eq!(new_failure(None, &failed), Some("Couldn't download Julia."), "a first look after attaching");
         assert_eq!(new_failure(Some(&failed), &failed), None, "said once");
         assert_eq!(new_failure(Some(&NotStarted), &Ready), None);
+    }
+
+    #[test]
+    fn r_setup_the_runtime_reports_shows_its_steps_and_a_failure_the_pane_reads() {
+        use crate::pluto::JuliaStatus::{Failed, NotStarted, Ready, Starting};
+        let starting = |step: &str| Starting { step: step.into(), quiet: 0 };
+        // The steps as EndeavorMCP's `r_status` says them, one after another.
+        let mut steps = Steps::r();
+        steps.r_step("Installing Endeavor's own R 4.6.1");
+        steps.r_step("Installing Ember for R notebooks");
+        steps.r_step("Starting R");
+        assert_eq!(steps.done, vec!["Installed Endeavor's own R 4.6.1", "Installed Ember for R notebooks"]);
+        assert_eq!(steps.current, "Starting R…");
+        let failed = Failed { code: "r_failed".into(), message: "Couldn't install Ember".into() };
+        assert_eq!(r_failure(Some(&starting("Starting R")), &failed).as_deref(), Some("r_failed::Couldn't install Ember"));
+        assert_eq!(pluto::r_failed(&r_failure(None, &failed).unwrap()), Some("Couldn't install Ember"), "the pane reads it as an open's error");
+        let no_r = Failed { code: "r_not_found".into(), message: "Couldn't find R".into() };
+        assert_eq!(r_failure(Some(&NotStarted), &no_r).as_deref(), Some("r_not_found::Couldn't find R"), "the pane offers Install R");
+        assert_eq!(r_failure(Some(&failed), &failed), None, "said once");
+        assert_eq!(r_failure(Some(&starting("Starting R")), &Ready), None);
+        // R runs while a newer Ember installs: ready, not a step.
+        assert_eq!(pluto::RStatus::from(&serde_json::json!({ "state": "ready", "updating": true })), Ok(Ready));
     }
 
     #[test]

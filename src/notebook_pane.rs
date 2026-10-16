@@ -1361,10 +1361,11 @@ impl Workspace {
         })
     }
 
-    /// The empty page's line while Julia starts ahead for `session`'s host: the step, and its progress.
+    /// The empty page's line while Julia, or R's setup, starts ahead for `session`'s host: the step, and its progress.
     pub fn starting_ahead_line(&self, session: &Session, cx: &App) -> Option<String> {
         match self.host_pane_state(&session.place.host, session.kind, cx)? {
             HostPane::JuliaStarting(_) => self.julia_ahead(&session.place.host),
+            HostPane::RStarting(_) => self.r_ahead(&session.place.host),
             _ => None,
         }
     }
