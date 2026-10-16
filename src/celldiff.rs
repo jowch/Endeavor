@@ -232,7 +232,8 @@ impl CellCodes {
         self.0.get(cell_id).map(String::as_str)
     }
 
-    /// Learn cells' current code from a completed read, or from `add_cell`'s
+    /// Learn cells' current code from a completed read, from `new_notebook`'s
+    /// reply (its cells are empty), or from `add_cell`'s
     /// reply: it's the only one whose diff (built from its input, since the
     /// input has no cell id yet) doesn't already become the next baseline, so
     /// an edit right after it would otherwise diff against nothing and show
@@ -242,6 +243,12 @@ impl CellCodes {
             "read_cell" | "add_cell" => {
                 if let (Some(id), Some(code)) = (output["cell_id"].as_str(), output["code"].as_str()) {
                     self.0.insert(id.to_owned(), code.to_owned());
+                }
+            }
+            // A notebook just made: its cells are empty, as the runtime counts them read.
+            "new_notebook" if output["created"] == true => {
+                for id in output["cell_ids"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    self.0.insert(id.to_owned(), String::new());
                 }
             }
             "read_notebook_code" => {
@@ -376,6 +383,15 @@ mod tests {
         assert_eq!((d[0].label.as_str(), &d[0].lines), ("x (new)", &vec![(Added, "x = 1".into())]));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
         assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())], "not the whole cell again");
+    }
+
+    #[test]
+    fn a_new_notebooks_cells_are_known_empty() {
+        let mut codes = CellCodes::default();
+        codes.observe("new_notebook", &json!({ "created": true, "notebook_id": "nb", "cell_ids": [C1] }));
+        let d = codes.diff("edit_cell", &json!({ "notebook_id": "nb", "cell_id": C1, "code": "rate = 0.1" }), &json!({}));
+        let edit = d[0].edit.as_ref().unwrap();
+        assert_eq!((edit.before.as_deref(), edit.unseen), (Some(""), false), "Restore can empty it again");
     }
 
     #[test]
