@@ -102,6 +102,12 @@ impl Crashes {
             Some(Crash::Again { .. }) => Heard::Known,
             // The restart itself takes the old process down.
             Some(Crash::Rerunning { since, .. }) if now.duration_since(*since) < RESTART_SETTLE => Heard::Known,
+            // A rerun never seen running is done after a while, though no list came to say so (an idle R
+            // notebook's list doesn't change): a stop after that is a first one.
+            Some(Crash::Rerunning { since, ran: false, .. }) if now.duration_since(*since) > RERUN_GRACE => {
+                self.crashes.insert(at, Crash::Stopped { cell, since: now });
+                Heard::First
+            }
             Some(Crash::Rerunning { cell: first, .. }) => {
                 let first = first.clone();
                 self.crashes.insert(at, Crash::Again { first, then: cell });
@@ -271,8 +277,13 @@ impl Workspace {
         } else if self.sessions.iter().any(|s| s.key == key && s.kind == Backend::Ember) {
             // The runtime closed the notebook when R ended: opening it again starts R again. It runs only if it
             // was allowed to before; one in safe preview opens in safe preview again.
+            // One that doesn't run has no rerun to watch.
             let run = self.crashes.was_allowed(&at);
-            self.crashes.restarted(&at, now);
+            if run {
+                self.crashes.restarted(&at, now);
+            } else {
+                self.crashes.forget(&at);
+            }
             self.open_for_session(key, at.1, run, cx);
         } else {
             self.crashes.restarted(&at, now);
@@ -476,6 +487,11 @@ mod tests {
         c.progress(&at(), false, None, true, t + Duration::from_secs(9));
         assert_eq!(c.get(&at()), None);
         assert_eq!(c.stopped(at(), None, t + Duration::from_secs(60)), Heard::First, "a later stop is a first one again");
+
+        let mut idle = Crashes::default();
+        idle.stopped(at(), None, t);
+        idle.restarted(&at(), t);
+        assert_eq!(idle.stopped(at(), None, t + Duration::from_secs(121)), Heard::First, "no list said the rerun was done, but it was");
 
         let mut quiet = Crashes::default();
         quiet.stopped(at(), None, t);
