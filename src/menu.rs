@@ -330,7 +330,7 @@ impl Workspace {
                 .border_color(theme::popover_edge())
                 .text_size(theme::size_meta_small())
                 .text_color(theme::text_faint())
-                .child("Exports and recordings use Pluto's standard look.")
+                .child("Exports and recordings use the notebook's standard look.")
         });
         // Over the notebook, the web view (a native view on top) lets the menu show through.
         let hole = notebook_menu.then(|| {

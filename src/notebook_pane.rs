@@ -302,6 +302,14 @@ pub fn test_stuck_opening() -> Option<bool> {
     Some(text.trim() == "keep")
 }
 
+/// The engine that runs a notebook of `kind`, as the panes name it: "Julia" or "R".
+pub fn engine_name(kind: Backend) -> &'static str {
+    match kind {
+        Backend::Pluto => "Julia",
+        Backend::Ember => "R",
+    }
+}
+
 /// A stopped notebook's page: why it stopped, and what Start does if the file changed.
 fn stopped_text(stopped: Stopped) -> (String, Option<&'static str>) {
     if stopped.safe_preview {
@@ -1458,23 +1466,24 @@ impl Workspace {
 
     /// All of the host's Julia stopped by itself: the crash page for the
     /// session shown, as for a notebook's own Julia.
-    pub fn julia_crashed_page(&self, host: &HostId, reason: &str, cx: &mut Context<Self>) -> AnyElement {
+    pub fn julia_crashed_page(&self, host: &HostId, kind: Backend, reason: &str, cx: &mut Context<Self>) -> AnyElement {
         match self.active_session().filter(|s| s.place.host == *host && s.notebook_path.is_some()) {
             Some(session) => self.render_crash_page(session.key, cx),
-            None => self.julia_stopped_page(host, reason, cx),
+            None => self.julia_stopped_page(host, kind, reason, cx),
         }
     }
 
-    /// Julia isn't running on the session's host: Start, and on a cluster the
+    /// Julia (or R) isn't running on the session's host: Start, and on a cluster the
     /// job's resources behind a gear (the new-session screen's chip).
-    pub fn julia_stopped_page(&self, host: &HostId, reason: &str, cx: &mut Context<Self>) -> AnyElement {
+    pub fn julia_stopped_page(&self, host: &HostId, kind: Backend, reason: &str, cx: &mut Context<Self>) -> AnyElement {
         let name = self.hosts.name(host);
         let cluster = self.is_cluster(host);
         let session = self.active_session().filter(|s| s.place.host == *host);
+        let engine = engine_name(kind);
         let text = if cluster {
             "This session's notebook runs there. Starting asks Slurm for a node, which can take a few minutes.".to_string()
         } else if *host == HostId::ThisMac {
-            "This session's notebook runs here, in Endeavor's Julia.".to_string()
+            format!("This session's notebook runs here, in {engine}.")
         } else {
             "This session's notebook runs there.".to_string()
         };
@@ -1524,15 +1533,15 @@ impl Workspace {
         let older = reason == endeavor_mcp::OLDER_RUNTIME;
         let on = if cluster || *host != HostId::ThisMac { format!(" on {name}") } else { String::new() };
         let start_label = match (older, on.is_empty()) {
-            (true, _) => format!("Restart Julia{on}"),
+            (true, _) => format!("Restart {engine}{on}"),
             (false, false) => format!("Start{on}"),
-            (false, true) => "Start Julia".to_string(),
+            (false, true) => format!("Start {engine}"),
         };
         let host_for_start = host.clone();
         let fixes = self.fixes(host, reason);
         let repair = fixes.contains(&crate::connection::Fix::Repair);
         new_session::turtle_pane()
-            .child(page_title(format!("Julia isn't running on {}", if *host == HostId::ThisMac { crate::platform::this_computer!().to_string() } else { name.clone() })))
+            .child(page_title(format!("{engine} isn't running on {}", if *host == HostId::ThisMac { crate::platform::this_computer!().to_string() } else { name.clone() })))
             .child(page_text(text))
             .when(!reason.is_empty(), |d| d.child(page_text(reason.to_string()).text_size(theme::size_meta())))
             .child(
@@ -1552,7 +1561,7 @@ impl Workspace {
                         if let Some(lost) = this.unrun_edit_warning(&host) {
                             body = format!("{body}\n\n{lost}");
                         }
-                        this.open_confirm(format!("Restart Julia{on}?"), body, "Restart", window, cx, move |this, _, cx| this.restart_host(&host, cx));
+                        this.open_confirm(format!("Restart {engine}{on}?"), body, "Restart", window, cx, move |this, _, cx| this.restart_host(&host, cx));
                     })))
                     .children(fixes.into_iter().map(|fix| self.fix_button(fix, false, cx))),
             )
