@@ -110,6 +110,17 @@ pub fn idle_stopped(event: &serde_json::Value) -> Vec<(String, u64, bool)> {
         .collect()
 }
 
+/// Notebooks the runtime closed because their engine (R) ended, from its event stream:
+/// (path, the engine's language, why it ended). Listed until each opens again.
+pub fn engine_ended(event: &serde_json::Value) -> Vec<(String, String, String)> {
+    event["engine_ended"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| Some((e["path"].as_str()?.to_owned(), e["language"].as_str().unwrap_or("R").to_owned(), e["why"].as_str().unwrap_or_default().to_owned())))
+        .collect()
+}
+
 /// The user pressed Stop in session `owner`: the runtime interrupts the runs that session
 /// started and that are still going, which it doesn't hear of from the agent when no tool
 /// call is under way. A runtime from before the call has nothing to stop.
@@ -565,7 +576,15 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunWarning, cells_that_ran, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
+    use super::{RunWarning, cells_that_ran, engine_ended, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
+
+    #[test]
+    fn the_events_list_the_notebooks_r_took_with_it() {
+        // As the core sends it (EndeavorMCP notebooks.rs `compose`).
+        let event = serde_json::json!({ "engine_ended": [{ "path": "/lab/growth.R", "language": "R", "why": "exit status: 1; R's last output: Error: boom" }] });
+        assert_eq!(engine_ended(&event), [("/lab/growth.R".to_owned(), "R".to_owned(), "exit status: 1; R's last output: Error: boom".to_owned())]);
+        assert!(engine_ended(&serde_json::json!({})).is_empty(), "an older runtime sends none");
+    }
 
     #[test]
     fn a_call_that_waits_for_julia_says_what_julia_is_doing() {

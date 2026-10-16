@@ -97,6 +97,8 @@ pub struct Connection {
     pub cells: serde_json::Value,
     /// Paths the runtime listed as stopped for being idle, as last pushed.
     pub idle_stopped: HashSet<String>,
+    /// Paths the runtime listed as closed because R ended, as last pushed.
+    pub engine_ended: HashSet<String>,
     /// Bumped when the runtime starts or goes, so an old runtime's event reader stops.
     watching: Arc<AtomicU64>,
     /// A server's connection dropped by itself (not a Stop, disconnect or
@@ -352,6 +354,7 @@ impl Connection {
             notebooks: serde_json::Value::Null,
             cells: serde_json::Value::Null,
             idle_stopped: HashSet::new(),
+            engine_ended: HashSet::new(),
             watching: Arc::default(),
             older: None,
             julia: None,
@@ -1407,6 +1410,10 @@ impl Workspace {
             }
         }
         connection.idle_stopped = stops.into_iter().map(|(path, ..)| path).collect();
+        // A notebook whose R ended shows the crash page, with why. Only new entries count, as for idle stops.
+        let ended = pluto::engine_ended(&event);
+        let new_ended: Vec<(String, String, String)> = ended.iter().filter(|(path, ..)| !connection.engine_ended.contains(path)).cloned().collect();
+        connection.engine_ended = ended.into_iter().map(|(path, ..)| path).collect();
         let list = event["notebooks"].take();
         // Julia runs after all, whoever started it (the agent's own open, say): its failure is over.
         if list.as_array().is_some_and(|l| l.iter().any(|nb| nb["path"].as_str().is_some_and(|p| p.ends_with(".jl")))) {
@@ -1453,6 +1460,13 @@ impl Workspace {
         self.crash_progress(host);
         for (path, cell) in exits {
             self.notebook_stopped((host.clone(), path), cell, cx);
+        }
+        for (path, language, why) in new_ended {
+            // The runtime names the file canonically; a session may have it spelled otherwise (case, links).
+            let path = self.sessions.iter().filter(|s| s.place.host == *host).filter_map(|s| s.notebook_path.as_deref()).find(|own| same_file(host, own, &path)).map_or(path.clone(), str::to_owned);
+            let at = (host.clone(), path);
+            self.crashes.ended(at.clone(), language, why);
+            self.notebook_stopped(at, None, cx);
         }
     }
 
@@ -2648,6 +2662,12 @@ fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaSta
         pluto::JuliaStatus::Failed { message, .. } if !matches!(before, Some(pluto::JuliaStatus::Failed { .. })) => Some(message),
         _ => None,
     }
+}
+
+/// Whether `a` and `b` name the same file on `host`: spelled the same, or, on this computer, the same once
+/// canonical (a file system that ignores case, a link). A server's paths are compared as spelled.
+fn same_file(host: &HostId, a: &str, b: &str) -> bool {
+    a == b || (*host == HostId::ThisMac && matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b))
 }
 
 #[cfg(test)]
