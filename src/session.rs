@@ -352,9 +352,10 @@ pub struct Session {
     /// Cells the user changed since the agent last heard (cell id, name); told
     /// with the next prompt.
     pub user_edits: Vec<(String, Option<String>)>,
-    /// Restore on each changed-cells card, by `card_key`, once pressed. Keyed
-    /// by what the card holds, so a replay that re-indexes the entries keeps
-    /// each state on its own card.
+    /// Restore on each changed-cells card, by `Session::card_key`, once
+    /// pressed. Keyed by what the card holds and how many cards like it come
+    /// before, so a replay that re-indexes the entries keeps each state on its
+    /// own card, and a turn that redoes a restored one gets its own.
     pub restores: HashMap<u64, Restore>,
     /// What the user's restores put back since the agent last heard; told with the next prompt.
     pub restored: Vec<String>,
@@ -484,8 +485,8 @@ pub struct Session {
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
 }
 
-/// A changed-cells card by what it holds, for `Session::restores`.
-pub fn card_key(cells: &[celldiff::ChangedCell]) -> u64 {
+/// What a changed-cells card holds, as a hash (see `Session::card_key`).
+fn card_hash(cells: &[celldiff::ChangedCell]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for c in cells {
@@ -1084,7 +1085,19 @@ impl Session {
 
     /// Where the Restore of the card at entry `ix` is, once pressed.
     pub fn restore_state(&self, ix: usize) -> Option<&Restore> {
-        self.restores.get(&card_key(self.card(ix)?))
+        self.restores.get(&self.card_key(ix)?)
+    }
+
+    /// The changed-cells card at `ix`, for `restores`: what it holds, and how
+    /// many cards holding the same come before it (a turn can redo exactly
+    /// what an earlier, restored turn did).
+    fn card_key(&self, ix: usize) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let hash = card_hash(self.card(ix)?);
+        let same = self.entries[..ix].iter().filter(|e| matches!(e, Entry::Changes(cells) if card_hash(cells) == hash)).count();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (hash, same).hash(&mut hasher);
+        Some(hasher.finish())
     }
 
     /// Why the card at `ix` can't be restored now, when it can't: a later
@@ -1101,8 +1114,8 @@ impl Session {
             .iter()
             .filter(|c| c.restore().is_some())
             .filter(|c| {
-                self.entries[ix + 1..].iter().any(|e| match e {
-                    Entry::Changes(other) => other.iter().any(|o| o.cell == c.cell) && self.restores.get(&card_key(other)) != Some(&Restore::Restored),
+                (ix + 1..self.entries.len()).any(|later| match &self.entries[later] {
+                    Entry::Changes(other) => other.iter().any(|o| o.cell == c.cell) && self.restore_state(later) != Some(&Restore::Restored),
                     _ => false,
                 })
             })
@@ -1156,7 +1169,7 @@ impl Session {
     /// or done.
     pub fn start_restore(&mut self, ix: usize) -> Option<(u64, String, Vec<serde_json::Value>)> {
         let cells = self.card(ix)?;
-        let key = card_key(cells);
+        let key = self.card_key(ix)?;
         let notebook = cells.iter().find(|c| c.restore().is_some())?.notebook.clone()?;
         let restore: Vec<serde_json::Value> = cells.iter().filter_map(celldiff::ChangedCell::restore).collect();
         if self.restore_blocked(ix).is_some() || matches!(self.restores.get(&key), Some(Restore::Restoring | Restore::Restored)) {
@@ -1171,7 +1184,7 @@ impl Session {
     /// id) that changed since the turn, so nothing was restored, or its error.
     /// A restore is noted, and the agent hears of it with the next prompt.
     pub fn finish_restore(&mut self, key: u64, answer: Result<Vec<String>, String>) {
-        let Some(ix) = self.entries.iter().position(|e| matches!(e, Entry::Changes(cells) if card_key(cells) == key)) else {
+        let Some(ix) = (0..self.entries.len()).find(|&ix| self.card_key(ix) == Some(key)) else {
             self.restores.remove(&key);
             return;
         };
@@ -4212,6 +4225,39 @@ more" }"#);
             ["put back `rate` as they were before one of your turns", "put back `rate` and removed `fit` as they were before one of your turns"]
         );
         assert_eq!(s.start_restore(card + 1), None, "done");
+    }
+
+    #[test]
+    fn a_turn_that_redoes_a_restored_turn_can_be_restored_too() {
+        use serde_json::json;
+        const A: &str = "11111111-2222-4333-8444-555555555555";
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        let turn = |s: &mut Session, n: usize| {
+            s.submit(text("set the rate"), false);
+            for event in [
+                notebook_call(&format!("r{n}"), "read_cell", json!({ "notebook_id": "nb", "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" })),
+                notebook_call(&format!("e{n}"), "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true })),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                s.apply(event);
+            }
+            s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+            s.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap()
+        };
+        let first = turn(&mut s, 1);
+        let (key, _, _) = s.start_restore(first).unwrap();
+        s.finish_restore(key, Ok(Vec::new()));
+        // The agent redoes the same edit: the same card, but a turn of its own.
+        let redo = turn(&mut s, 2);
+        assert_eq!(s.restore_state(redo), None, "not restored just because the first one was");
+        let (redo_key, _, sent) = s.start_restore(redo).expect("the redo can be restored");
+        assert_ne!(redo_key, key);
+        assert_eq!(sent, [json!({ "cell_id": A, "expected": "rate = 0.2", "code": "rate = 0.1" })]);
+        s.finish_restore(redo_key, Ok(Vec::new()));
+        assert_eq!((s.restore_state(first), s.restore_state(redo)), (Some(&super::Restore::Restored), Some(&super::Restore::Restored)));
     }
 
     #[test]
