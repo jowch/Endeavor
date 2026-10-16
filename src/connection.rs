@@ -1885,12 +1885,7 @@ impl Workspace {
     /// A call that needed Julia, or R (`kind`), on `host` ended with `error`:
     /// if it couldn't start, the pane says why, with Try again.
     pub fn julia_answer(&mut self, host: &HostId, kind: Backend, error: Option<&str>, cx: &mut Context<Self>) {
-        // R's keeps its code: the pane offers Install R for `r_not_found`.
-        // A notebook still opening when the app stopped waiting shows the same way, with its own words.
-        let failed = match kind {
-            Backend::Pluto => error.and_then(|e| pluto::julia_failed(e).or_else(|| pluto::open_stuck(e))).map(str::to_owned),
-            Backend::Ember => error.filter(|e| pluto::r_failed(e).is_some()).map(str::to_owned).or_else(|| error.and_then(pluto::open_stuck).map(|why| format!("r_failed::{why}"))),
-        };
+        let failed = error.and_then(|e| pane_failure(kind, e));
         let Some(connection) = self.connections.get_mut(host) else { return };
         if failed.is_some() || error.is_none() {
             match kind {
@@ -2196,6 +2191,18 @@ pub fn own_r_item() -> Option<wire::Item> {
     // Asked once: it runs `uname` and `sw_vers`.
     static OFFERED: std::sync::OnceLock<Option<wire::Item>> = std::sync::OnceLock::new();
     OFFERED.get_or_init(endeavor_mcp::r::own_offered).clone()
+}
+
+/// The failure the notebook pane shows for a call's `error` in a session of
+/// `kind` (`julia_answer`), with Try again; None if the pane doesn't show it,
+/// so the caller must. R's keeps its code: the pane offers Install R for
+/// `r_not_found`. A notebook still opening when the app stopped waiting shows
+/// the same way, with its own words.
+pub fn pane_failure(kind: Backend, error: &str) -> Option<String> {
+    match kind {
+        Backend::Pluto => pluto::julia_failed(error).or_else(|| pluto::open_stuck(error)).map(str::to_owned),
+        Backend::Ember => pluto::r_failed(error).map(|_| error.to_owned()).or_else(|| pluto::open_stuck(error).map(|why| format!("r_failed::{why}"))),
+    }
 }
 
 /// Hears what Julia is doing for a call that waits for it (`Workspace::julia_steps`).
@@ -2610,8 +2617,25 @@ fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaSta
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, new_failure, not_restarted, not_stopped, percent, runtime_of, try_ended};
+    use super::{Change, Connection, LineState, LineStatus, Status, Steps, changes, client, elapsed, load_again, new_failure, not_restarted, not_stopped, pane_failure, percent, runtime_of, try_ended};
+    use wire::backend::Backend;
     use crate::pluto;
+
+    /// New notebook leaves an error to the pane only when the pane shows it: any
+    /// other error gets a notice, so a click never ends in nothing.
+    #[test]
+    fn the_pane_shows_only_its_own_kinds_failures() {
+        let julia = "julia_failed::Julia stopped while starting (exit 1).";
+        assert_eq!(pane_failure(Backend::Pluto, julia).as_deref(), Some("Julia stopped while starting (exit 1)."));
+        assert_eq!(pane_failure(Backend::Pluto, "open_stuck::It's still opening.").as_deref(), Some("It's still opening."));
+        // R's failure in a Julia session: the pane shows Julia's state, so the click's caller says it.
+        assert_eq!(pane_failure(Backend::Pluto, "r_failed::R stopped while starting"), None);
+        assert_eq!(pane_failure(Backend::Pluto, "invalid_path::Give an absolute path"), None);
+        assert_eq!(pane_failure(Backend::Pluto, "The connection to the runtime closed."), None);
+        assert_eq!(pane_failure(Backend::Ember, "r_not_found::No R here").as_deref(), Some("r_not_found::No R here"));
+        assert_eq!(pane_failure(Backend::Ember, "open_stuck::It's still opening.").as_deref(), Some("r_failed::It's still opening."));
+        assert_eq!(pane_failure(Backend::Ember, julia), None);
+    }
 
     fn line(state: LineState, node: &str) -> LineStatus {
         let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
