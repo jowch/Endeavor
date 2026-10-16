@@ -242,16 +242,26 @@ pub enum JuliaStatus {
 }
 
 impl JuliaStatus {
-    fn from(result: &Value) -> Result<JuliaStatus, String> {
+    pub(crate) fn from(result: &Value) -> Result<JuliaStatus, String> {
         let text = |key: &str| result[key].as_str().unwrap_or_default().to_owned();
         Ok(match result["state"].as_str() {
             Some("not_started") => JuliaStatus::NotStarted,
             Some("starting") => JuliaStatus::Starting { step: text("step"), quiet: result["quiet_seconds"].as_u64().unwrap_or(0) },
             Some("ready") => JuliaStatus::Ready,
             Some("failed") => JuliaStatus::Failed { code: text("code"), message: text("message") },
-            _ => return Err(format!("unexpected Julia status {result}")),
+            _ => return Err(format!("unexpected status {result}")),
         })
     }
+}
+
+/// Where R notebooks' setup is, as `endeavor/r_status` says it (EndeavorMCP
+/// interface 9): the same states as Julia's, with no quiet seconds, and the
+/// failure's code `r_failed` or `r_not_found`.
+pub type RStatus = JuliaStatus;
+
+/// Where R notebooks' setup is (Endeavor's own R, Ember, R starting), without starting it.
+pub fn r_status(bridge: &Bridge) -> Result<RStatus, String> {
+    JuliaStatus::from(&app_call(bridge, "endeavor/r_status", json!({}))?)
 }
 
 /// Where Julia is, without starting it.

@@ -119,16 +119,24 @@ impl Workspace {
     }
 
     /// R on this computer: the R setting, Endeavor's own R as Settings last
-    /// found it with an Install or Remove under way, where it's offered, and
-    /// the failure the pane shows.
+    /// found it with an Install or Remove under way, where it's offered, what
+    /// the runtime last said of R's setup (`r_status`; null from a runtime too
+    /// old to say), and the failure the pane shows.
     fn r_here_state(&self) -> Value {
+        use crate::pluto::RStatus;
+        let status = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.r_status.as_ref()).map(|s| match s {
+            RStatus::NotStarted => json!({ "state": "not_started" }),
+            RStatus::Starting { step, .. } => json!({ "state": "starting", "step": step }),
+            RStatus::Ready => json!({ "state": "ready" }),
+            RStatus::Failed { code, message } => json!({ "state": "failed", "code": code, "message": message }),
+        });
         let own = match &self.own_r.found {
             None => json!("unknown"),
             Some(None) => json!("not_installed"),
             Some(Some(own)) => json!({ "rscript": own.rscript, "version": own.version }),
         };
         let failed = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.r_failed.clone());
-        json!({ "setting": self.settings.r, "own": own, "offered": crate::connection::own_r_item().is_some(), "job": self.own_r.job.as_ref().map(|j| format!("{j:?}")), "failed": failed })
+        json!({ "setting": self.settings.r, "own": own, "offered": crate::connection::own_r_item().is_some(), "job": self.own_r.job.as_ref().map(|j| format!("{j:?}")), "status": status, "failed": failed })
     }
 
     fn debug_state(&self, page: Value, cx: &App) -> Value {
