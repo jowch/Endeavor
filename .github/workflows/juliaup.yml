@@ -5,7 +5,10 @@
 # runs at the first Julia notebook and Settings' Install runs; the app's test is
 # in src/own_julia.rs). GitHub's Windows runners have no
 # juliaup, so this runs that path for real, as the ignored test
-# installs_juliaup_and_julia_where_there_is_none. The job summary says which
+# installs_juliaup_and_julia_where_there_is_none. It also checks that the new
+# channel is juliaup's default, that the runtime finds the channel's own
+# julia.exe rather than juliaup's launcher, and that Remove leaves the default
+# in place (EndeavorMCP #115). The job summary says which
 # runner has winget and how long each part took; the log says which route
 # installed juliaup.
 #
