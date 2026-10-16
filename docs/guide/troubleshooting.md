@@ -64,6 +64,14 @@ shows a **Restart Julia on lab-server** button instead (**Restart Julia** on
 your Mac). It asks first, since notebooks
 open there stop. Their files are saved.
 
+## "R isn't running" or "Julia isn't running"
+
+When the notebooks on your Mac stop (for example, after you remove
+Endeavor's R in Settings), the notebook pane says which language isn't
+running, "R isn't running on This Mac" for an R notebook, with **Start R**
+(or **Start Julia**). The sidebar shows **↻ Restart notebooks**, which starts
+them again for every notebook on your Mac.
+
 ## A package won't install
 
 When a package a notebook uses fails to install, the notebook's header shows

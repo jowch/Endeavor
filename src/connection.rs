@@ -2154,11 +2154,11 @@ impl Workspace {
                 });
                 return Some(starting_pane(&steps).children(cancel).into_any_element());
             }
-            HostPane::Stopping => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping {} on {name}…", self.engine_on(host)))),
-            HostPane::NotRunning(reason) => return Some(self.julia_stopped_page(host, &reason, cx)),
-            HostPane::Crashed(reason) => return Some(self.julia_crashed_page(host, &reason, cx)),
+            HostPane::Stopping => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping {} on {name}…", crate::notebook_pane::engine_name(kind)))),
+            HostPane::NotRunning(reason) => return Some(self.julia_stopped_page(host, kind, &reason, cx)),
+            HostPane::Crashed(reason) => return Some(self.julia_crashed_page(host, kind, &reason, cx)),
             HostPane::Replaced => resting
-                .child(div().text_color(theme::text_muted()).child(format!("Another connection took over Julia on {name}.")))
+                .child(div().text_color(theme::text_muted()).child(format!("Another connection took over {} on {name}.", crate::notebook_pane::engine_name(kind))))
                 .child(action("host-reconnect", "Reconnect", host.clone(), false)),
             HostPane::NotConnected(reason) => {
                 let fixes = self.fixes(host, &reason);

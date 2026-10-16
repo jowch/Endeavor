@@ -723,13 +723,12 @@ impl Workspace {
             .collect()
     }
 
-    /// The sidebar's row above the status line while This Mac's runtime is down, named for the shown
-    /// session's engine.
+    /// The sidebar's row above the status line while This Mac's runtime is down. It restarts every
+    /// notebook here, Julia's and R's, so it names neither.
     pub(crate) fn restart_row(&self) -> Option<&'static str> {
-        let r = self.engine_on(&HostId::ThisMac) == "R";
         match self.status(&HostId::ThisMac) {
-            Some(connection::Status::Replaced) => Some(if r { "↻ Reconnect to R" } else { "↻ Reconnect to Julia" }),
-            Some(connection::Status::Died(_) | connection::Status::Failed(_)) => Some(if r { "↻ Restart R" } else { "↻ Restart Julia" }),
+            Some(connection::Status::Replaced) => Some("↻ Reconnect notebooks"),
+            Some(connection::Status::Died(_) | connection::Status::Failed(_)) => Some("↻ Restart notebooks"),
             _ => None,
         }
     }

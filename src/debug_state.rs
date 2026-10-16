@@ -547,7 +547,7 @@ impl Workspace {
         json!({
             "shows": shows,
             "file": file,
-            "host_pane": match &shown { PaneShows::Host(pane) => Some(host_pane(pane, &self.hosts.name(&s.place.host), self.engine_on(&s.place.host))), _ => None },
+            "host_pane": match &shown { PaneShows::Host(pane) => Some(host_pane(pane, &self.hosts.name(&s.place.host), s.kind)), _ => None },
             "starting": (shown == PaneShows::NoNotebook).then(|| self.starting_ahead_line(s, cx)).flatten(),
             "stopped": match &shown { PaneShows::Stopped(st) => Some(json!({ "idle_hours": st.idle_hours, "safe_preview": st.safe_preview })), _ => None },
             "crash": self.notebook_at(s.key).and_then(|at| {
@@ -602,7 +602,7 @@ impl Workspace {
         let Some(folder) = self.draft_pane_folder() else {
             let pane = self.host_pane_state(&self.draft.host, self.draft.notebook.kind(), cx);
             let shows = if pane.is_some() { "host" } else { "empty" };
-            return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.hosts.name(&self.draft.host), "Julia")), "header": header });
+            return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.hosts.name(&self.draft.host), self.draft.notebook.kind())), "header": header });
         };
         match (&self.draft.notebook, &self.draft.preview) {
             (NotebookChoice::New(_), _) => json!({ "shows": "new_notebook", "saved_in": self.draft_tilde(folder), "header": header }),
@@ -765,7 +765,7 @@ fn chip_label(a: &crate::attach::Attachment) -> String {
 /// "julia_starting" (with the step), "julia_failed", "r_starting" (with the
 /// step), "r_failed" (with the code: `r_not_found::…` offers Install R on a Mac), "stopping",
 /// "julia_not_running" ("r_not_running" for an R session's), "replaced" or "not_connected", the host, and why.
-fn host_pane(pane: &HostPane, host: &str, engine: &str) -> Value {
+fn host_pane(pane: &HostPane, host: &str, kind: wire::backend::Backend) -> Value {
     let (kind, reason) = match pane {
         HostPane::Lost => ("cant_reach", None),
         HostPane::Starting => ("starting", None),
@@ -774,7 +774,7 @@ fn host_pane(pane: &HostPane, host: &str, engine: &str) -> Value {
         HostPane::RStarting(step) => ("r_starting", Some(step)),
         HostPane::RFailed(reason) => ("r_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
-        HostPane::NotRunning(reason) => (if engine == "R" { "r_not_running" } else { "julia_not_running" }, Some(reason)),
+        HostPane::NotRunning(reason) => (if kind == wire::backend::Backend::Ember { "r_not_running" } else { "julia_not_running" }, Some(reason)),
         HostPane::Crashed(reason) => ("julia_crashed", Some(reason)),
         HostPane::Replaced => ("replaced", None),
         HostPane::NotConnected(reason) => ("not_connected", Some(reason)),

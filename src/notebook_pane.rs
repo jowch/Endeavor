@@ -302,6 +302,14 @@ pub fn test_stuck_opening() -> Option<bool> {
     Some(text.trim() == "keep")
 }
 
+/// The engine that runs a notebook of `kind`, as the panes name it: "Julia" or "R".
+pub fn engine_name(kind: Backend) -> &'static str {
+    match kind {
+        Backend::Pluto => "Julia",
+        Backend::Ember => "R",
+    }
+}
+
 /// A stopped notebook's page: why it stopped, and what Start does if the file changed.
 fn stopped_text(stopped: Stopped) -> (String, Option<&'static str>) {
     if stopped.safe_preview {
@@ -1458,31 +1466,24 @@ impl Workspace {
 
     /// All of the host's Julia stopped by itself: the crash page for the
     /// session shown, as for a notebook's own Julia.
-    pub fn julia_crashed_page(&self, host: &HostId, reason: &str, cx: &mut Context<Self>) -> AnyElement {
+    pub fn julia_crashed_page(&self, host: &HostId, kind: Backend, reason: &str, cx: &mut Context<Self>) -> AnyElement {
         match self.active_session().filter(|s| s.place.host == *host && s.notebook_path.is_some()) {
             Some(session) => self.render_crash_page(session.key, cx),
-            None => self.julia_stopped_page(host, reason, cx),
+            None => self.julia_stopped_page(host, kind, reason, cx),
         }
-    }
-
-    /// What runs the shown session's notebook on `host`, for what the pane says while the runtime there
-    /// is down: "R" for an R session, else "Julia".
-    pub fn engine_on(&self, host: &HostId) -> &'static str {
-        let session = self.active_session().filter(|s| s.place.host == *host);
-        if session.is_some_and(|s| s.kind == Backend::Ember) { "R" } else { "Julia" }
     }
 
     /// Julia (or R) isn't running on the session's host: Start, and on a cluster the
     /// job's resources behind a gear (the new-session screen's chip).
-    pub fn julia_stopped_page(&self, host: &HostId, reason: &str, cx: &mut Context<Self>) -> AnyElement {
+    pub fn julia_stopped_page(&self, host: &HostId, kind: Backend, reason: &str, cx: &mut Context<Self>) -> AnyElement {
         let name = self.hosts.name(host);
         let cluster = self.is_cluster(host);
         let session = self.active_session().filter(|s| s.place.host == *host);
-        let engine = self.engine_on(host);
+        let engine = engine_name(kind);
         let text = if cluster {
             "This session's notebook runs there. Starting asks Slurm for a node, which can take a few minutes.".to_string()
         } else if *host == HostId::ThisMac {
-            format!("This session's notebook runs here, in Endeavor's {engine}.")
+            format!("This session's notebook runs here, in {engine}.")
         } else {
             "This session's notebook runs there.".to_string()
         };
