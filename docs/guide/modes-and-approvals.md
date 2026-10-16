@@ -123,9 +123,15 @@ you run the cells, so a cell whose new code had run shows its orange bar.
 Nothing runs by itself. Claude is told what you restored with your next
 message.
 
+If a later turn changed the same cells again, restore that later turn first;
+the older card waits for it. A turn that changed more than one notebook can't
+be restored.
+
 A cell Claude deleted can't come back this way yet. Ask Claude to put it
 back, or add it by hand; the chat keeps every change Claude made, with the
-old lines.
+old lines. The same goes for a cell whose code Endeavor didn't see before the
+turn (for example, when Claude read it before you reopened the session): the
+card names it, and Restore leaves it as it is.
 
 ## When you run a cell Claude is waiting on
 

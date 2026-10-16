@@ -164,7 +164,9 @@ pub fn restart_notebook(bridge: &Bridge, notebook_id: &str) -> Result<(), String
 pub fn restore_cells(bridge: &Bridge, notebook_id: &str, cells: Vec<Value>) -> Result<Vec<String>, String> {
     let result = match app_call(bridge, "endeavor/restore_cells", json!({ "notebook_id": notebook_id, "cells": cells })) {
         Err(error) if error.starts_with("Method not found") => return Err("This notebook's runtime is from an older Endeavor. Restart it, then try again.".into()),
-        result => result?,
+        Err(error) if error.contains("notebook_not_found::") => return Err("The notebook this turn changed isn't open now. Open it, then try again.".into()),
+        Err(error) => return Err(crate::notice::reason(&error)),
+        Ok(result) => result,
     };
     Ok(result["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str().map(str::to_owned)).collect())
 }

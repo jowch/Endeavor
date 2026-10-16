@@ -18,7 +18,7 @@ use crate::new_session::Glyph;
 use crate::outbox::Delivery;
 use crate::pluto;
 use crate::runs;
-use crate::session::{Approval, Entry, Failed, FailedKind, Restore, Session, cell_label, file_name, file_path};
+use crate::session::{Approval, Entry, Failed, FailedKind, Session, cell_label, file_name, file_path};
 use crate::signin::Look;
 use crate::theme;
 use crate::theme::TextButton as _;
@@ -617,23 +617,9 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
     });
     let card = div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).overflow_hidden().children(rows);
     // Restore: what it does, or where it got to, and the button while it can be pressed.
-    if !cells.iter().any(|c| c.restore().is_some()) {
+    let Some((line, pressable)) = session.restore_footer(ix) else {
         return card.into_any_element();
-    }
-    let gone: Vec<String> = cells.iter().filter(|c| c.change == CellChange::Deleted).map(|c| format!("`{}`", c.name)).collect();
-    let state = session.restores.get(&ix);
-    let line = match state {
-        None if gone.is_empty() => "Restore puts back the code from before this turn. What already ran stays.".to_string(),
-        None => format!("Restore puts back the rest as it was before this turn; {} can't come back yet.", gone.join(", ")),
-        Some(Restore::Restoring) => "Restoring…".to_string(),
-        Some(Restore::Restored) => "Restored. What already ran stays; run the cells to update their outputs.".to_string(),
-        Some(Restore::Changed(names)) => {
-            let names: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
-            format!("Nothing restored: {} changed since this turn.", names.join(", "))
-        }
-        Some(Restore::Failed(error)) => format!("Couldn't restore: {error}"),
     };
-    let pressable = !matches!(state, Some(Restore::Restoring | Restore::Restored));
     let footer = div()
         .flex()
         .items_center()

@@ -352,8 +352,10 @@ pub struct Session {
     /// Cells the user changed since the agent last heard (cell id, name); told
     /// with the next prompt.
     pub user_edits: Vec<(String, Option<String>)>,
-    /// Restore on each changed-cells card, by the card's entry index, once pressed.
-    pub restores: HashMap<usize, Restore>,
+    /// Restore on each changed-cells card, by `card_key`, once pressed. Keyed
+    /// by what the card holds, so a replay that re-indexes the entries keeps
+    /// each state on its own card.
+    pub restores: HashMap<u64, Restore>,
     /// What the user's restores put back since the agent last heard; told with the next prompt.
     pub restored: Vec<String>,
     /// The transcript as a virtualized list: only visible entries are laid out,
@@ -480,6 +482,25 @@ pub struct Session {
     queue_focus: RefCell<HashMap<(u64, &'static str), FocusHandle>>,
     /// Each reply's parsed markdown, by its entry index (see `reply_text`).
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
+}
+
+/// A changed-cells card by what it holds, for `Session::restores`.
+pub fn card_key(cells: &[celldiff::ChangedCell]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for c in cells {
+        (&c.cell, &c.before, &c.after, &c.notebook).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Why a changed-cells card's Restore can't be pressed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RestoreBlocked {
+    /// A later turn changed these cells (by name), and it isn't restored.
+    Later(Vec<String>),
+    /// The turn changed more than one notebook.
+    Notebooks,
 }
 
 /// Where a changed-cells card's Restore is.
@@ -822,7 +843,6 @@ impl Session {
 
     /// The history starts loading over: the replay so far goes (Endeavor's copy stays on show).
     fn clear_history(&mut self) {
-        self.restores.clear();
         match &mut self.replay {
             Some(replay) => replay.clear(),
             None => {
@@ -1054,24 +1074,107 @@ impl Session {
         }
     }
 
-    /// Restore on the changed-cells card at entry `ix`: what to send the runtime
-    /// (`ChangedCell::restore`), marking it under way; none if the card has
-    /// nothing to put back or a restore is under way or done.
-    pub fn start_restore(&mut self, ix: usize) -> Option<Vec<serde_json::Value>> {
-        let Some(Entry::Changes(cells)) = self.entries.get(ix) else { return None };
-        let cells: Vec<serde_json::Value> = cells.iter().filter_map(celldiff::ChangedCell::restore).collect();
-        if cells.is_empty() || matches!(self.restores.get(&ix), Some(Restore::Restoring | Restore::Restored)) {
-            return None;
+    /// The changed-cells card at entry `ix`.
+    fn card(&self, ix: usize) -> Option<&[celldiff::ChangedCell]> {
+        match self.entries.get(ix) {
+            Some(Entry::Changes(cells)) => Some(cells),
+            _ => None,
         }
-        self.restores.insert(ix, Restore::Restoring);
-        self.mark(ix);
-        Some(cells)
     }
 
-    /// The runtime's answer to the restore of the card at `ix`: the cells (by
+    /// Where the Restore of the card at entry `ix` is, once pressed.
+    pub fn restore_state(&self, ix: usize) -> Option<&Restore> {
+        self.restores.get(&card_key(self.card(ix)?))
+    }
+
+    /// Why the card at `ix` can't be restored now, when it can't: a later
+    /// card, not yet restored, changed the same cells (restoring this one
+    /// would only meet its changes), or the turn changed more than one notebook.
+    pub fn restore_blocked(&self, ix: usize) -> Option<RestoreBlocked> {
+        let cells = self.card(ix)?;
+        let mut notebooks = cells.iter().filter(|c| c.restore().is_some()).filter_map(|c| c.notebook.as_deref());
+        let first = notebooks.next();
+        if notebooks.any(|n| Some(n) != first) {
+            return Some(RestoreBlocked::Notebooks);
+        }
+        let later: Vec<String> = cells
+            .iter()
+            .filter(|c| c.restore().is_some())
+            .filter(|c| {
+                self.entries[ix + 1..].iter().any(|e| match e {
+                    Entry::Changes(other) => other.iter().any(|o| o.cell == c.cell) && self.restores.get(&card_key(other)) != Some(&Restore::Restored),
+                    _ => false,
+                })
+            })
+            .map(|c| c.name.clone())
+            .collect();
+        (!later.is_empty()).then_some(RestoreBlocked::Later(later))
+    }
+
+    /// The footer of the changed-cells card at `ix`: its line, and whether
+    /// Restore can be pressed. None when the card has nothing to put back.
+    pub fn restore_footer(&self, ix: usize) -> Option<(String, bool)> {
+        let cells = self.card(ix)?;
+        if !cells.iter().any(|c| c.restore().is_some()) {
+            return None;
+        }
+        let names = |which: &dyn Fn(&celldiff::ChangedCell) -> bool| cells.iter().filter(|c| which(c)).map(|c| format!("`{}`", c.name)).collect::<Vec<_>>().join(", ");
+        const STAYS: &str = "What already ran stays, including files it wrote and data it downloaded.";
+        let line = match (self.restore_state(ix), self.restore_blocked(ix)) {
+            (Some(Restore::Restoring), _) => "Restoring…".to_string(),
+            (Some(Restore::Restored), _) => format!("Restored. {STAYS} Run the cells to update their outputs."),
+            (_, Some(RestoreBlocked::Later(later))) => {
+                let later: Vec<String> = later.iter().map(|n| format!("`{n}`")).collect();
+                return Some((format!("{} changed again in a later turn. Restore that turn first.", later.join(", ")), false));
+            }
+            (_, Some(RestoreBlocked::Notebooks)) => return Some(("This turn changed more than one notebook, so Restore can't put it back.".to_string(), false)),
+            (Some(Restore::Changed(changed)), None) => {
+                let changed: Vec<String> = changed.iter().map(|n| format!("`{n}`")).collect();
+                format!("Nothing restored: {} changed since this turn.", changed.join(", "))
+            }
+            (Some(Restore::Failed(error)), None) => format!("Couldn't restore. {error}"),
+            (None, None) => {
+                let gone = names(&|c| c.change == celldiff::CellChange::Deleted);
+                let unseen = names(&|c| c.unseen);
+                let mut line = if gone.is_empty() && unseen.is_empty() { "Restore puts back the code from before this turn.".to_string() } else { "Restore puts back the rest as it was before this turn.".to_string() };
+                if !gone.is_empty() {
+                    line += &format!(" {gone} can't come back yet.");
+                }
+                if !unseen.is_empty() {
+                    line += &format!(" {unseen} can't be put back: Endeavor didn't see its code before this turn.");
+                }
+                format!("{line} {STAYS}")
+            }
+        };
+        Some((line, !matches!(self.restore_state(ix), Some(Restore::Restoring | Restore::Restored))))
+    }
+
+    /// Restore on the changed-cells card at entry `ix`: the card's key, the
+    /// notebook the turn changed and what to send the runtime
+    /// (`ChangedCell::restore`), marking it under way; none if the card has
+    /// nothing to put back, can't be restored now, or a restore is under way
+    /// or done.
+    pub fn start_restore(&mut self, ix: usize) -> Option<(u64, String, Vec<serde_json::Value>)> {
+        let cells = self.card(ix)?;
+        let key = card_key(cells);
+        let notebook = cells.iter().find(|c| c.restore().is_some())?.notebook.clone()?;
+        let restore: Vec<serde_json::Value> = cells.iter().filter_map(celldiff::ChangedCell::restore).collect();
+        if self.restore_blocked(ix).is_some() || matches!(self.restores.get(&key), Some(Restore::Restoring | Restore::Restored)) {
+            return None;
+        }
+        self.restores.insert(key, Restore::Restoring);
+        self.mark(ix);
+        Some((key, notebook, restore))
+    }
+
+    /// The runtime's answer to the restore of the card `key`: the cells (by
     /// id) that changed since the turn, so nothing was restored, or its error.
     /// A restore is noted, and the agent hears of it with the next prompt.
-    pub fn finish_restore(&mut self, ix: usize, answer: Result<Vec<String>, String>) {
+    pub fn finish_restore(&mut self, key: u64, answer: Result<Vec<String>, String>) {
+        let Some(ix) = self.entries.iter().position(|e| matches!(e, Entry::Changes(cells) if card_key(cells) == key)) else {
+            self.restores.remove(&key);
+            return;
+        };
         let Some(Entry::Changes(cells)) = self.entries.get(ix) else { return };
         let name = |id: &String| cells.iter().find(|c| c.cell == *id).map_or(id.clone(), |c| c.name.clone());
         let state = match answer {
@@ -1089,13 +1192,13 @@ impl Session {
                 }
                 let said = said.join(" and ");
                 self.restored.push(format!("{said} as they were before one of your turns"));
-                self.restores.insert(ix, Restore::Restored);
+                self.restores.insert(key, Restore::Restored);
                 self.mark(ix);
                 self.note(format!("You {said}"));
                 return;
             }
         };
-        self.restores.insert(ix, state);
+        self.restores.insert(key, state);
         self.mark(ix);
     }
 
@@ -4048,10 +4151,10 @@ more" }"#);
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.submit(text("fit it"), false);
         for event in [
-            notebook_call("t1", "read_cell", json!({ "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" })),
-            notebook_call("t2", "edit_cell", json!({ "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true })),
-            notebook_call("t3", "add_cell", json!({ "code": "fit = 1" }), json!({ "cell_id": B, "code": "fit = 1" })),
-            notebook_call("t4", "edit_cell", json!({ "cell_id": A, "code": "rate = 0.3\nk = 2" }), json!({ "ok": true })),
+            notebook_call("t1", "read_cell", json!({ "notebook_id": "nb", "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" })),
+            notebook_call("t2", "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true })),
+            notebook_call("t3", "add_cell", json!({ "notebook_id": "nb", "code": "fit = 1" }), json!({ "cell_id": B, "code": "fit = 1" })),
+            notebook_call("t4", "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.3\nk = 2" }), json!({ "ok": true })),
         ]
         .into_iter()
         .flatten()
@@ -4066,26 +4169,82 @@ more" }"#);
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert_eq!(changes(&s).len(), 1, "a turn that changed no cell has no card");
 
-        // Restore sends each cell's code from before the turn, and the code the turn left as expected.
+        // Restore sends each cell's code from before the turn, and the code the turn left as expected,
+        // to the notebook the turn changed.
         let card = s.entries.iter().position(|e| matches!(e, Entry::Changes(_))).unwrap();
-        let sent = s.start_restore(card).expect("the card has cells to put back");
+        let (key, notebook, sent) = s.start_restore(card).expect("the card has cells to put back");
+        assert_eq!(notebook, "nb");
         assert_eq!(
             sent,
             [json!({ "cell_id": A, "expected": "rate = 0.3\nk = 2", "code": "rate = 0.1" }), json!({ "cell_id": B, "expected": "fit = 1", "code": null })]
         );
         assert_eq!(s.start_restore(card), None, "not twice while it's under way");
-        s.finish_restore(card, Ok(vec![A.to_string()]));
-        assert_eq!(s.restores[&card], super::Restore::Changed(vec!["rate".into()]));
+        s.finish_restore(key, Ok(vec![A.to_string()]));
+        assert_eq!(s.restore_state(card), Some(&super::Restore::Changed(vec!["rate".into()])));
         assert!(s.restored.is_empty(), "nothing restored, nothing to tell");
         assert!(s.start_restore(card).is_some(), "it can be tried again");
-        s.finish_restore(card, Err("no notebook".into()));
-        assert_eq!(s.restores[&card], super::Restore::Failed("no notebook".into()));
-        s.start_restore(card);
-        s.finish_restore(card, Ok(Vec::new()));
-        assert_eq!(s.restores[&card], super::Restore::Restored);
+        s.finish_restore(key, Err("no notebook".into()));
+        assert_eq!(s.restore_state(card), Some(&super::Restore::Failed("no notebook".into())));
+
+        // A later turn changes `rate` again: the older card waits for the later one to be restored first.
+        s.submit(text("again"), false);
+        for event in notebook_call("t5", "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.4" }), json!({ "ok": true })) {
+            s.apply(event);
+        }
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        let later = s.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
+        assert_eq!(s.restore_blocked(card), Some(super::RestoreBlocked::Later(vec!["rate".into()])));
+        assert_eq!(s.start_restore(card), None, "blocked by the later turn");
+        let (later_key, _, sent) = s.start_restore(later).unwrap();
+        assert_eq!(sent, [json!({ "cell_id": A, "expected": "rate = 0.4", "code": "rate = 0.3\nk = 2" })]);
+        s.finish_restore(later_key, Ok(Vec::new()));
+        assert_eq!(s.restore_blocked(card), None, "the later turn is restored");
+
+        // A state follows its card when the entries move, as a replay's merge moves them.
+        let (key, _, _) = s.start_restore(card).unwrap();
+        s.entries.insert(0, Entry::Note("before everything".into()));
+        s.finish_restore(key, Ok(Vec::new()));
+        assert_eq!(s.restore_state(card + 1), Some(&super::Restore::Restored));
+        assert_eq!(s.restore_state(card), None, "not on whatever is at the old index");
         assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.as_ref() == "You put back `rate` and removed `fit`"));
-        assert_eq!(s.restored, ["put back `rate` and removed `fit` as they were before one of your turns"]);
-        assert_eq!(s.start_restore(card), None, "done");
+        assert_eq!(
+            s.restored,
+            ["put back `rate` as they were before one of your turns", "put back `rate` and removed `fit` as they were before one of your turns"]
+        );
+        assert_eq!(s.start_restore(card + 1), None, "done");
+    }
+
+    #[test]
+    fn restore_leaves_out_a_cell_it_never_saw_and_wont_span_notebooks() {
+        use serde_json::json;
+        const A: &str = "11111111-2222-4333-8444-555555555555";
+        const B: &str = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("edit"), false);
+        // No read of A in this transcript (it came before a reopen): its before-text is unknown.
+        for event in notebook_call("t1", "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true })) {
+            s.apply(event);
+        }
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        let card = s.entries.iter().position(|e| matches!(e, Entry::Changes(_))).unwrap();
+        assert!(matches!(&s.entries[card], Entry::Changes(cells) if cells[0].unseen && cells[0].restore().is_none()));
+        assert_eq!(s.start_restore(card), None, "nothing it can put back");
+
+        s.submit(text("two notebooks"), false);
+        for event in [
+            notebook_call("t2", "add_cell", json!({ "notebook_id": "nb", "code": "x = 1" }), json!({ "cell_id": A, "code": "x = 1" })),
+            notebook_call("t3", "add_cell", json!({ "notebook_id": "other", "code": "y = 1" }), json!({ "cell_id": B, "code": "y = 1" })),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            s.apply(event);
+        }
+        s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        let card = s.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
+        assert_eq!(s.restore_blocked(card), Some(super::RestoreBlocked::Notebooks));
+        assert_eq!(s.start_restore(card), None);
     }
 
     #[test]

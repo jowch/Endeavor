@@ -896,15 +896,21 @@ impl Workspace {
     }
 
     /// Restore on the changed-cells card at entry `ix`: the runtime puts the
-    /// turn's cells back as they were before it, all or nothing.
+    /// turn's cells back as they were before it, all or nothing, in the
+    /// notebook the turn changed (not necessarily the one on show).
     pub fn restore_turn(&mut self, key: u64, ix: usize, cx: &mut Context<Self>) {
-        let (Some(bridge), Some(id)) = (self.session_bridge(key), self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook.clone())) else { return };
-        let Some(cells) = self.session_mut(key).and_then(|s| s.start_restore(ix)) else { return };
+        let bridge = self.session_bridge(key);
+        let Some((card, notebook, cells)) = self.session_mut(key).and_then(|s| s.start_restore(ix)) else { return };
         cx.notify();
-        let task = cx.background_executor().spawn(async move { pluto::restore_cells(&bridge, &id, cells) });
+        let Some(bridge) = bridge else {
+            let answer = Err("This session's runtime isn't running. Try again once its notebook shows.".to_string());
+            self.with_session(key, cx, |s| s.finish_restore(card, answer));
+            return;
+        };
+        let task = cx.background_executor().spawn(async move { pluto::restore_cells(&bridge, &notebook, cells) });
         cx.spawn(async move |this, cx| {
             let answer = task.await;
-            let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.finish_restore(ix, answer)));
+            let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.finish_restore(card, answer)));
         })
         .detach();
     }

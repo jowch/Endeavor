@@ -434,7 +434,7 @@ mod tests {
                 approval: Some(Approval::ForSession),
             },
             Entry::Agent { text: "The rate is 0.09.".into(), at: Some(at) },
-            Entry::Changes(vec![ChangedCell { cell: "c1".into(), name: "rates".into(), change: CellChange::Edited, added: 1, removed: 1, before: Some("rate = 1".into()), after: Some("rate = 2".into()) }]),
+            Entry::Changes(vec![ChangedCell { cell: "c1".into(), name: "rates".into(), change: CellChange::Edited, added: 1, removed: 1, before: Some("rate = 1".into()), after: Some("rate = 2".into()), notebook: None, unseen: false }]),
             Entry::Note("You stopped Claude".into()),
             Entry::Reopened(at),
             Entry::RunState(Vec::new()),
