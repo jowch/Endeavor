@@ -548,6 +548,7 @@ impl Workspace {
             "shows": shows,
             "file": file,
             "host_pane": match &shown { PaneShows::Host(pane) => Some(host_pane(pane, &self.hosts.name(&s.place.host))), _ => None },
+            "starting": (shown == PaneShows::NoNotebook).then(|| self.starting_ahead_line(s, cx)).flatten(),
             "stopped": match &shown { PaneShows::Stopped(st) => Some(json!({ "idle_hours": st.idle_hours, "safe_preview": st.safe_preview })), _ => None },
             "crash": self.notebook_at(s.key).and_then(|at| {
                 let crash = self.crashes.get(&at)?;
