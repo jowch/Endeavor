@@ -1113,6 +1113,8 @@ impl Workspace {
         *session.focus.get_mut() = row_focus;
         let host = session.place.host.clone();
         self.sessions.push(session);
+        // Now, not only once the agent opens it: Julia starts ahead from it (`send_session_folder`).
+        self.send_session_folder(key, cx);
         // The recorded notebook opens as soon as its Julia is ready, without
         // waiting for the history: now if it's up, else with the runtime's
         // reopen (`reopen_notebooks`). Without one, the history's last

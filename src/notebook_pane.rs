@@ -1154,13 +1154,16 @@ impl Workspace {
         let Some((host, kind, folder)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.kind, s.place.path.clone())) else { return };
         let Some(bridge) = self.session_bridge(key) else {
             eprintln!("New notebook for session {key}: its runtime isn't up");
+            // Started now, so Try again has a runtime to go to.
+            self.ensure_runtime(&host, cx);
             return self.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", "The notebook runtime isn't running yet.", Some(Retry::NewNotebook(key))), cx);
         };
         eprintln!("New notebook for session {key}");
         let steps = self.julia_steps(&host, kind, cx);
         let task = cx.background_executor().spawn(async move {
             // The runtime makes it in the session's folder, and of its kind: say them first, since a
-            // session whose agent hasn't opened it yet (just after launch) hasn't said them.
+            // session whose agent hasn't opened it yet (just after launch) hasn't said them. This
+            // waits at most `CALL_WAIT` (10 s), and a failure only leaves the notebook in Pluto's folder.
             if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind) {
                 eprintln!("New notebook for session {key}: couldn't give the runtime its folder: {e}");
             }
