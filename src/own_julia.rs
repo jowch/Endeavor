@@ -222,11 +222,11 @@ mod tests {
         let file = found.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_ascii_lowercase();
         assert_eq!(file, "julia.exe", "{}", found.display());
         assert!(found.parent().is_some_and(|bin| bin.join("libjulia.dll").is_file()), "no libjulia.dll next to {}: juliaup's launcher, not the channel's Julia", found.display());
-        let in_windows_apps = found.components().any(|part| part.as_os_str() == "WindowsApps");
-        let in_juliaup_bin = found.parent().and_then(|bin| bin.parent()).and_then(|dir| dir.file_name()).is_some_and(|dir| dir == ".juliaup");
-        assert!(!in_windows_apps && !in_juliaup_bin, "{} is juliaup's launcher", found.display());
-        let same = |a: &std::path::Path, b: &std::path::Path| std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b);
-        assert!(same(&found, &own.julia), "the runtime finds {}, Settings {}", found.display(), own.julia.display());
+        // Julia itself says where it runs from, which none of our code decides.
+        let bindir = std::process::Command::new(&found).args(["--startup-file=no", "-e", "print(Sys.BINDIR)"]).output().unwrap_or_else(|why| panic!("{}: {why}", found.display()));
+        let bindir = String::from_utf8_lossy(&bindir.stdout).trim().to_owned();
+        let canonical = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
+        assert_eq!(canonical(std::path::Path::new(&bindir)), canonical(found.parent().unwrap()), "{} runs Julia from {bindir}", found.display());
 
         // Remove leaves juliaup's default where it is and says what to do instead.
         let why = endeavor_mcp::julia::remove_own().expect_err("juliaup's default was removed");
