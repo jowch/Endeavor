@@ -279,6 +279,13 @@ impl Updater {
     /// when `relaunch`). Nothing to do unless one is ready.
     pub fn install(&mut self, relaunch: bool) -> Result<bool, String> {
         let (State::Ready { staged, commit, .. }, Ok(place)) = (&self.state, &self.place) else { return Ok(false) };
+        // A quit because Windows is logging off or shutting down (GPUI runs
+        // the quit callbacks then) leaves the build ready for the next quit:
+        // Windows kills what's still running, and an installer killed partway
+        // can leave a broken app. Keep this check.
+        if !relaunch && session_ending() {
+            return Ok(false);
+        }
         if cfg!(windows) {
             run_installer(staged, commit, &folder()?, relaunch)?;
         } else {
@@ -507,7 +514,7 @@ fn fetch_installer(base: &str, dir: &Path, offer: &Offer, progress: &dyn Fn(f32)
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(&offer.commit) && name != INSTALLING {
+        if !name.starts_with(&offer.commit) && name != INSTALLING && name != INSTALL_LOG {
             let _ = std::fs::remove_dir_all(entry.path()).or_else(|_| std::fs::remove_file(entry.path()));
         }
     }
@@ -525,20 +532,39 @@ fn fetch_installer(base: &str, dir: &Path, offer: &Offer, progress: &dyn Fn(f32)
     Ok(setup)
 }
 
+/// Windows is logging off or shutting down.
+fn session_ending() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+        // SAFETY: no arguments to get wrong.
+        unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+    }
+    #[cfg(not(windows))]
+    false
+}
+
 /// Left in `folder()` while a Windows update installs, naming the build it
 /// installs, for the next launch to check.
 const INSTALLING: &str = "installing";
+/// The last installer's log, kept for whoever looks into a failed update.
+const INSTALL_LOG: &str = "install.log";
 
 /// Whether the update the last quit started didn't take: the Mac swap left
 /// its marker, or the installer ran and this is still not the build it was
-/// installing. Either marker is gone afterwards.
+/// installing. Either marker is gone afterwards, and so is an installer that
+/// worked.
 fn last_install_failed(dir: &Path, commit: &str) -> bool {
     let swap_failed = std::fs::remove_file(dir.join(FAILED)).is_ok();
     let installing = std::fs::read_to_string(dir.join(INSTALLING)).ok();
     if installing.is_some() {
         let _ = std::fs::remove_file(dir.join(INSTALLING));
     }
-    swap_failed || installing.is_some_and(|c| c.trim() != commit)
+    let installed = installing.as_deref().is_some_and(|c| c.trim() == commit);
+    if installed {
+        let _ = std::fs::remove_file(dir.join(format!("{commit}-setup.exe")));
+    }
+    swap_failed || (installing.is_some() && !installed)
 }
 
 /// Windows: run the fetched installer silently. It waits for this app to
@@ -547,7 +573,7 @@ fn last_install_failed(dir: &Path, commit: &str) -> bool {
 fn run_installer(setup: &Path, commit: &str, dir: &Path, relaunch: bool) -> Result<(), String> {
     std::fs::write(dir.join(INSTALLING), commit).map_err(|e| format!("couldn't start the update ({e})"))?;
     let mut cmd = Command::new(setup);
-    cmd.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/UPDATE"]).arg(format!("/LOG={}", dir.join("install.log").display()));
+    cmd.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/UPDATE"]).arg(format!("/LOG={}", dir.join(INSTALL_LOG).display()));
     if relaunch {
         cmd.arg("/RELAUNCH");
     }
@@ -693,10 +719,12 @@ mod tests {
         let dir = w.join("update");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("{A}-setup.exe")), b"older").unwrap();
+        std::fs::write(dir.join(INSTALL_LOG), b"log").unwrap();
         let base = format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, src.display().to_string().replace('\\', "/"));
         let setup = fetch_installer(&base, &dir, &offer, &|_| {}).unwrap();
         assert_eq!(setup, dir.join(format!("{B}-setup.exe")));
         assert!(!dir.join(format!("{A}-setup.exe")).exists(), "another build's installer goes");
+        assert!(dir.join(INSTALL_LOG).exists(), "the last log stays");
         // Kept, not fetched again, once it's there.
         std::fs::remove_file(src.join("Endeavor-windows-x86_64-setup.exe")).unwrap();
         assert_eq!(fetch_installer(&base, &dir, &offer, &|_| {}).unwrap(), setup);
@@ -715,8 +743,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!last_install_failed(&dir, A), "nothing was installing");
         std::fs::write(dir.join(INSTALLING), B).unwrap();
+        std::fs::write(dir.join(format!("{B}-setup.exe")), b"installer").unwrap();
         assert!(!last_install_failed(&dir, B), "this is the build it installed");
-        assert!(!dir.join(INSTALLING).exists());
+        assert!(!dir.join(INSTALLING).exists() && !dir.join(format!("{B}-setup.exe")).exists());
         std::fs::write(dir.join(INSTALLING), B).unwrap();
         assert!(last_install_failed(&dir, A), "still the old build");
         assert!(!last_install_failed(&dir, A), "said once");

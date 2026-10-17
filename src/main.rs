@@ -716,7 +716,8 @@ impl Workspace {
         // The helpers finish the job after the app is gone.
         cx.on_app_quit(|this, _| {
             this.quit_runtimes();
-            // A fetched update installs on any quit, as Settings says.
+            // A fetched update installs on any quit, as Settings says,
+            // except while Windows is logging off (install skips it then).
             if let Err(e) = this.app_update.install(false) {
                 eprintln!("Couldn't install the update: {e}");
             }
