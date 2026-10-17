@@ -201,7 +201,7 @@ impl Workspace {
             crate::updater::State::Waiting => json!({ "state": "waiting" }),
             crate::updater::State::Checking => json!({ "state": "checking", "percent": u.percent() }),
             crate::updater::State::UpToDate => json!({ "state": "up_to_date" }),
-            crate::updater::State::Ready { build, staged } => json!({ "state": "ready", "build": build, "staged": staged }),
+            crate::updater::State::Ready { build, staged, .. } => json!({ "state": "ready", "build": build, "staged": staged }),
             crate::updater::State::Manual { build } => json!({ "state": "manual", "build": build }),
             crate::updater::State::Failed(e) => json!({ "state": "failed", "error": e }),
             crate::updater::State::Off(why) => json!({ "state": "off", "why": why }),

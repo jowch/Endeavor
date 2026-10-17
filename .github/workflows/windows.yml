@@ -60,9 +60,12 @@ jobs:
       # The C runtime linked in, so the exe doesn't need the Visual C++
       # Redistributable. WebView2's loader is linked in on MSVC already
       # (webview2-com-sys links WebView2LoaderStatic).
+      # A build of main is the one the nightly publishes, and updates itself
+      # (src/updater.rs); a pull request's doesn't.
       - name: Build
         env:
           RUSTFLAGS: -C target-feature=+crt-static
+          ENDEAVOR_CHANNEL: ${{ github.event_name == 'push' && 'nightly' || 'dev' }}
         run: cargo build --locked --release -p endeavor --bin endeavor
       # Fails if the exe needs a DLL that a fresh Windows doesn't have.
       - name: Check the DLLs it needs
