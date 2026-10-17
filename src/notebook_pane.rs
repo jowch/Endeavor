@@ -1402,6 +1402,8 @@ impl Workspace {
     pub fn check_opening(&mut self, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         self.test_blank_page(cx);
+        #[cfg(debug_assertions)]
+        crate::cell_shot::test_view_cell(self);
         let stuck = self.active_session().filter(|s| self.pane_shows(s, cx) == PaneShows::Opening && self.runtime_has_open(s)).map(|s| (s.key, s.notebook_path.clone().unwrap_or_default()));
         let file = stuck.as_ref().map(|(_, path)| folder_name(Path::new(path))).unwrap_or_default();
         match self.opening.step(stuck.as_ref().map(|(key, _)| *key), Instant::now()) {
