@@ -496,6 +496,24 @@ impl Workspace {
                         "removed": c.removed,
                         "shows": c.change != CellChange::Deleted,
                     })).collect::<Vec<_>>(),
+                    // Restore: null when the card has nothing to put back.
+                    "restore": s.restore_footer(ix).map(|(line, pressable)| json!({
+                        "state": match s.restore_state(ix) {
+                            None | Some(session::Restore::Changed(_) | session::Restore::Failed(_)) if s.restore_blocked(ix).is_some() => "blocked",
+                            None => "offered",
+                            Some(session::Restore::Restoring) => "restoring",
+                            Some(session::Restore::Restored) => "restored",
+                            Some(session::Restore::Changed(_)) => "changed",
+                            Some(session::Restore::Failed(_)) => "failed",
+                        },
+                        "cells": match s.restore_state(ix) {
+                            Some(session::Restore::Changed(names)) => json!(names),
+                            _ => json!(null),
+                        },
+                        "line": line,
+                        "button": pressable,
+                        "left_out": cells.iter().filter(|c| c.restore().is_none()).map(|c| &c.name).collect::<Vec<_>>(),
+                    })),
                 })),
                 Entry::Failed(f) if f.used && matches!(f.kind, session::FailedKind::NoAnswer { .. }) => None,
                 Entry::Failed(f) if matches!(f.kind, session::FailedKind::CutOff) => Some(json!({

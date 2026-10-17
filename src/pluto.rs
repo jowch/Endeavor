@@ -157,6 +157,20 @@ pub fn restart_notebook(bridge: &Bridge, notebook_id: &str) -> Result<(), String
     app_call(bridge, "endeavor/restart_notebook", json!({ "notebook_id": notebook_id })).map(|_| ())
 }
 
+/// Restore on a turn's card: put `cells` (`ChangedCell::restore`) back as they
+/// were before the turn, all or nothing. Ok with the cells that changed since
+/// the turn, by id, when nothing was restored for that reason; empty when it
+/// was.
+pub fn restore_cells(bridge: &Bridge, notebook_id: &str, cells: Vec<Value>) -> Result<Vec<String>, String> {
+    let result = match app_call(bridge, "endeavor/restore_cells", json!({ "notebook_id": notebook_id, "cells": cells })) {
+        Err(error) if error.starts_with("Method not found") => return Err("This notebook's runtime is from an older Endeavor. Restart it, then try again.".into()),
+        Err(error) if error.contains("notebook_not_found::") => return Err("The notebook this turn changed isn't open now. Open it, then try again.".into()),
+        Err(error) => return Err(crate::notice::reason(&error)),
+        Ok(result) => result,
+    };
+    Ok(result["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str().map(str::to_owned)).collect())
+}
+
 /// The user's run reached `cells` (with each one's `last_run` before it),
 /// which the agent's waiting cards ask to run: an older runtime won't run
 /// them again for the approved calls. A runtime from this build hears it in
