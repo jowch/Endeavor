@@ -490,6 +490,15 @@ pub struct Session {
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
 }
 
+/// A card's key in `Session::restores`: what it holds, and how many cards
+/// holding the same come before it.
+fn key_of(hash: u64, same: usize) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (hash, same).hash(&mut hasher);
+    hasher.finish()
+}
+
 /// What a changed-cells card holds, as a hash (see `Session::card_key`).
 fn card_hash(cells: &[celldiff::ChangedCell]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -889,10 +898,9 @@ impl Session {
     /// loads: read-only, at its end. The replay replaces it once it's all in.
     pub fn show_copy(&mut self, copy: crate::transcript_copy::Copy) {
         self.entries = copy.entries;
-        for ix in copy.restored {
-            if let Some(key) = self.card_key(ix) {
-                self.restores.insert(key, Restore::Restored);
-            }
+        let keys: Vec<(usize, u64)> = self.card_keys().filter(|(ix, _)| copy.restored.contains(ix)).collect();
+        for (_, key) in keys {
+            self.restores.insert(key, Restore::Restored);
         }
         self.replay = Some(Vec::new());
         self.mark(0);
@@ -1107,19 +1115,35 @@ impl Session {
     /// The changed-cells cards the user restored, by entry, for Endeavor's
     /// copy of the transcript.
     pub fn restored_cards(&self) -> Vec<usize> {
-        (0..self.entries.len()).filter(|&ix| self.restore_state(ix) == Some(&Restore::Restored)).collect()
+        // This runs at every save, so it skips the walk when nothing is restored.
+        if !self.restores.values().any(|r| *r == Restore::Restored) {
+            return Vec::new();
+        }
+        self.card_keys().filter(|(_, key)| self.restores.get(key) == Some(&Restore::Restored)).map(|(ix, _)| ix).collect()
+    }
+
+    /// Every changed-cells card's entry and `card_key`, in one pass.
+    fn card_keys(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
+        let mut seen: HashMap<u64, usize> = HashMap::new();
+        self.entries.iter().enumerate().filter_map(move |(ix, e)| match e {
+            Entry::Changes(cells) => {
+                let hash = card_hash(cells);
+                let same = seen.entry(hash).or_insert(0);
+                let key = key_of(hash, *same);
+                *same += 1;
+                Some((ix, key))
+            }
+            _ => None,
+        })
     }
 
     /// The changed-cells card at `ix`, for `restores`: what it holds, and how
     /// many cards holding the same come before it (a turn can redo exactly
     /// what an earlier, restored turn did).
     fn card_key(&self, ix: usize) -> Option<u64> {
-        use std::hash::{Hash, Hasher};
         let hash = card_hash(self.card(ix)?);
         let same = self.entries[..ix].iter().filter(|e| matches!(e, Entry::Changes(cells) if card_hash(cells) == hash)).count();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (hash, same).hash(&mut hasher);
-        Some(hasher.finish())
+        Some(key_of(hash, same))
     }
 
     /// Why the card at `ix` can't be restored now, when it can't: a later
@@ -1209,7 +1233,7 @@ impl Session {
     /// id) that changed since the turn, so nothing was restored, or its error.
     /// A restore is noted, and the agent hears of it with the next prompt.
     pub fn finish_restore(&mut self, key: u64, answer: Result<Vec<String>, String>) {
-        let Some(ix) = (0..self.entries.len()).find(|&ix| self.card_key(ix) == Some(key)) else {
+        let Some(ix) = self.card_keys().find(|&(_, k)| k == key).map(|(ix, _)| ix) else {
             self.restores.remove(&key);
             return;
         };
@@ -4342,6 +4366,11 @@ more" }"#);
         s.note_user_edit(A.to_string(), Some("rate".into()));
         assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.as_ref() == "You edited `rate`"), "a later edit of the user's is noted");
         assert_eq!((s.restore_state(first), s.restore_state(redo)), (Some(&super::Restore::Restored), Some(&super::Restore::Restored)));
+        // A third redo, not restored: the one-pass keys match each card's own.
+        let again = turn(&mut s, 3);
+        assert_eq!(s.restored_cards(), [first, redo]);
+        assert!(s.card_keys().all(|(ix, key)| s.card_key(ix) == Some(key)));
+        assert_eq!(s.card_keys().map(|(ix, _)| ix).collect::<Vec<_>>(), [first, redo, again]);
     }
 
     #[test]

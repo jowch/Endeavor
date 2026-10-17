@@ -156,7 +156,8 @@ fn chips(blocks: Vec<ContentBlock>) -> Vec<Attachment> {
     }
 }
 
-fn saved(entry: &Entry) -> Option<Saved> {
+/// `restored`: the entry is a changed-cells card the user restored.
+fn saved(entry: &Entry, restored: bool) -> Option<Saved> {
     Some(match entry {
         Entry::User { text, attachments, delivery, sent, .. } => {
             // Read back only as chips, which don't keep the cell links' engine.
@@ -181,7 +182,7 @@ fn saved(entry: &Entry) -> Option<Saved> {
         Entry::Thought { text, took, .. } => Saved::Thought { text: text.clone(), took_ms: took.map(|t| t.as_millis() as u64) },
         Entry::Plan(entries) => Saved::Plan { entries: entries.clone() },
         Entry::Note(text) => Saved::Note { text: text.to_string() },
-        Entry::Changes(cells) => Saved::Changes { cells: cells.clone(), restored: false },
+        Entry::Changes(cells) => Saved::Changes { cells: cells.clone(), restored },
         Entry::Reopened(at) => Saved::Reopened { at: secs(*at) },
         Entry::Permission { .. } | Entry::RunState(_) | Entry::Failed(_) => return None,
     })
@@ -219,10 +220,7 @@ pub fn to_json(entries: &[Entry], restored: &[usize]) -> Option<String> {
     let entries = entries
         .iter()
         .enumerate()
-        .filter_map(|(ix, e)| match saved(e)? {
-            Saved::Changes { cells, .. } => Some(Saved::Changes { cells, restored: restored.contains(&ix) }),
-            other => Some(other),
-        })
+        .filter_map(|(ix, e)| saved(e, restored.contains(&ix)))
         .filter_map(|s| serde_json::to_value(s).ok())
         .collect();
     serde_json::to_string(&File { version: 1, entries }).ok()
