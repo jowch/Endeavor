@@ -1498,7 +1498,7 @@ mod tests {
             .collect();
         let asks = [
             "edit_cell", "edit_cells", "add_cell", "delete_cell", "move_cell", "fold_cell", "execute_cell", "submit_changes", "run_all_cells",
-            "allow_execution", "new_notebook", "open_notebook", "keep_notebook_alive", "run_shell",
+            "allow_execution", "new_notebook", "open_notebook", "keep_notebook_alive", "interrupt_notebook", "run_shell",
         ];
         for mode in [false, true] {
             let allowed = session_options(false, "/p", mode)["claudeCode"]["options"]["allowedTools"].clone();

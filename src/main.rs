@@ -1564,10 +1564,11 @@ impl Workspace {
         }
         let url = crate::webcontent::url(self.webview.read(cx).raw());
         let id = viewed_notebook_id(&url)?.to_owned();
-        let mut edits = Vec::new();
+        let (mut edits, mut restored) = (Vec::new(), Vec::new());
         if let Some(session) = self.active.and_then(|key| self.session_mut(key)) {
             session.notebook = Some(id.clone());
             edits = std::mem::take(&mut session.user_edits);
+            restored = std::mem::take(&mut session.restored);
         }
         let mut text = format!(
             "[Endeavor] The user is viewing notebook {id} in the notebook pane. \
@@ -1576,6 +1577,9 @@ impl Workspace {
         if !edits.is_empty() {
             let cells: Vec<String> = edits.iter().map(|(cell, name)| name.as_ref().map_or(cell.clone(), |n| format!("`{n}` ({cell})"))).collect();
             text += &format!(" Since you last heard, the user edited these cells: {}. Re-read them before relying on their code.", cells.join(", "));
+        }
+        for restored in restored {
+            text += &format!(" With Restore, the user {restored}. Re-read the notebook before relying on that turn's changes.");
         }
         Some(ContentBlock::Text(TextContent::new(text)))
     }

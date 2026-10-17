@@ -615,7 +615,33 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
                     .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(vec![id.clone()], cx)))
             })
     });
-    div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).overflow_hidden().children(rows).into_any_element()
+    let card = div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).overflow_hidden().children(rows);
+    // Restore: what it does, or where it got to, and the button while it can be pressed.
+    let Some((line, pressable)) = session.restore_footer(ix) else {
+        return card.into_any_element();
+    };
+    let footer = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .min_h(px(34.))
+        .px(px(8.))
+        .py(px(4.))
+        .border_t_1()
+        .border_color(theme::border())
+        .text_size(theme::chat_meta())
+        .text_color(theme::text_faint())
+        .child(div().flex_1().min_w_0().child(line))
+        .when(pressable, |d| {
+            d.child(
+                crate::signin::button(ElementId::NamedInteger("restore-turn".into(), key << 32 | ix as u64), "Restore", crate::signin::Look::Secondary)
+                    .track_focus(&session.changed_cell_focus(ix, cells.len(), cx))
+                    .tab_stop(true)
+                    .focus_visible(|s| s.border_color(theme::focus_ring()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.restore_turn(key, ix, cx))),
+            )
+        });
+    card.child(footer).into_any_element()
 }
 
 /// A tool call's folded row: its line, its edits' ± counts, and its state at the end.
@@ -958,6 +984,7 @@ fn tool_verb(title: &str) -> String {
         "read_file" => "Read",
         "run_shell" => "Ran",
         "keep_notebook_alive" => "Kept notebook running",
+        "interrupt_notebook" => "Stopped the notebook's run",
         other => other,
     }
     .to_string()

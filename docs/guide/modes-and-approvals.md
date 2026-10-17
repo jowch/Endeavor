@@ -109,10 +109,29 @@ Deny never leaves the notebook half changed:
   meant to run afterwards.
 - For a run on its own, nothing runs. For a delete, the cell stays.
 
-Endeavor has no undo for Claude's edits yet. To go back, change the cell by
-hand, or ask Claude to put the old code back. That works for a cell Claude
-deleted too: ⌘Z in the notebook doesn't bring it back. The chat keeps every
-change Claude made, with the old lines.
+## Undo a turn's changes
+
+At the end of each turn that changed cells, a card lists them. **Restore** on
+that card puts every one of those cells back as it was before the turn: edited
+cells get their old code, and cells Claude added are removed. It's all or
+nothing. If you or Claude changed one of those cells since, nothing changes,
+and the card says which cell.
+
+Restore puts back code. What the cells already did stays: files they wrote,
+data they downloaded, packages they installed. Their outputs stay too until
+you run the cells, so a cell whose new code had run shows its orange bar.
+Nothing runs by itself. Claude is told what you restored with your next
+message.
+
+If a later turn changed the same cells again, restore that later turn first;
+the older card waits for it. A turn that changed more than one notebook can't
+be restored.
+
+A cell Claude deleted can't come back this way yet. Ask Claude to put it
+back, or add it by hand; the chat keeps every change Claude made, with the
+old lines. The same goes for a cell whose code Endeavor didn't see before the
+turn (for example, when Claude read it before you reopened the session): the
+card names it, and Restore leaves it as it is.
 
 ## When you run a cell Claude is waiting on
 

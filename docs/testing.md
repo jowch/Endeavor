@@ -141,7 +141,11 @@ To wait for something, poll the dump. For example, loop until
   its cell diffs. A `changes` entry is the end-of-turn card: its `cells`,
   each with the `name` shown, the `cell` id, `tag` (`new`, `deleted` or
   null), the net `added` and `removed` line counts over the turn, and
-  `shows` (false for a deleted cell, whose row has no `›`). Also `wait_line` ("Starting the notebook runtime…", or "Starting Julia on lab-server…", while the session waits to open until its host's runtime is up, else null), `activity` (the working line), `pinned_plan`, and
+  `shows` (false for a deleted cell, whose row has no `›`), and `restore`:
+  null when the card has nothing to put back, else its `state` (`offered`,
+  `blocked`, `restoring`, `restored`, `changed` with the changed `cells`, or
+  `failed`), the footer's `line`, whether the `button` shows, and the cells
+  Restore leaves out (`left_out`). Also `wait_line` ("Starting the notebook runtime…", or "Starting Julia on lab-server…", while the session waits to open until its host's runtime is up, else null), `activity` (the working line), `pinned_plan`, and
   `approval`: the card above the composer (`approval` or `plan`) with its
   title, code, lines, `plan` (its title, numbered `steps`, whether it's
   `open`, and the `text` shown when it is) and buttons (each with its label, key and `weight`:
