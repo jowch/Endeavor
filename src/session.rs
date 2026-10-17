@@ -490,6 +490,15 @@ pub struct Session {
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
 }
 
+/// A card's key in `Session::restores`: what it holds, and how many cards
+/// holding the same come before it.
+fn key_of(hash: u64, same: usize) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (hash, same).hash(&mut hasher);
+    hasher.finish()
+}
+
 /// What a changed-cells card holds, as a hash (see `Session::card_key`).
 fn card_hash(cells: &[celldiff::ChangedCell]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -887,8 +896,12 @@ impl Session {
 
     /// Show Endeavor's copy of this session's transcript while its history
     /// loads: read-only, at its end. The replay replaces it once it's all in.
-    pub fn show_copy(&mut self, entries: Vec<Entry>) {
-        self.entries = entries;
+    pub fn show_copy(&mut self, copy: crate::transcript_copy::Copy) {
+        self.entries = copy.entries;
+        let keys: Vec<(usize, u64)> = self.card_keys().filter(|(ix, _)| copy.restored.contains(ix)).collect();
+        for (_, key) in keys {
+            self.restores.insert(key, Restore::Restored);
+        }
         self.replay = Some(Vec::new());
         self.mark(0);
         self.list.set_follow_mode(FollowMode::Tail);
@@ -1099,16 +1112,38 @@ impl Session {
         self.restores.get(&self.card_key(ix)?)
     }
 
+    /// The changed-cells cards the user restored, by entry, for Endeavor's
+    /// copy of the transcript.
+    pub fn restored_cards(&self) -> Vec<usize> {
+        // This runs at every save, so it skips the walk when nothing is restored.
+        if !self.restores.values().any(|r| *r == Restore::Restored) {
+            return Vec::new();
+        }
+        self.card_keys().filter(|(_, key)| self.restores.get(key) == Some(&Restore::Restored)).map(|(ix, _)| ix).collect()
+    }
+
+    /// Every changed-cells card's entry and `card_key`, in one pass.
+    fn card_keys(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
+        let mut seen: HashMap<u64, usize> = HashMap::new();
+        self.entries.iter().enumerate().filter_map(move |(ix, e)| match e {
+            Entry::Changes(cells) => {
+                let hash = card_hash(cells);
+                let same = seen.entry(hash).or_insert(0);
+                let key = key_of(hash, *same);
+                *same += 1;
+                Some((ix, key))
+            }
+            _ => None,
+        })
+    }
+
     /// The changed-cells card at `ix`, for `restores`: what it holds, and how
     /// many cards holding the same come before it (a turn can redo exactly
     /// what an earlier, restored turn did).
     fn card_key(&self, ix: usize) -> Option<u64> {
-        use std::hash::{Hash, Hasher};
         let hash = card_hash(self.card(ix)?);
         let same = self.entries[..ix].iter().filter(|e| matches!(e, Entry::Changes(cells) if card_hash(cells) == hash)).count();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (hash, same).hash(&mut hasher);
-        Some(hasher.finish())
+        Some(key_of(hash, same))
     }
 
     /// Why the card at `ix` can't be restored now, when it can't: a later
@@ -1198,7 +1233,7 @@ impl Session {
     /// id) that changed since the turn, so nothing was restored, or its error.
     /// A restore is noted, and the agent hears of it with the next prompt.
     pub fn finish_restore(&mut self, key: u64, answer: Result<Vec<String>, String>) {
-        let Some(ix) = (0..self.entries.len()).find(|&ix| self.card_key(ix) == Some(key)) else {
+        let Some(ix) = self.card_keys().find(|&(_, k)| k == key).map(|(ix, _)| ix) else {
             self.restores.remove(&key);
             return;
         };
@@ -3754,10 +3789,13 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Fit".into());
-        s.show_copy(vec![
-            Entry::User { text: "fit it".into(), expanded: false, attachments: Vec::new(), delivery: crate::outbox::Delivery::Turn, sent: None },
-            Entry::Agent { text: "Done.".into(), at: None },
-        ]);
+        s.show_copy(crate::transcript_copy::Copy {
+            entries: vec![
+                Entry::User { text: "fit it".into(), expanded: false, attachments: Vec::new(), delivery: crate::outbox::Delivery::Turn, sent: None },
+                Entry::Agent { text: "Done.".into(), at: None },
+            ],
+            restored: Vec::new(),
+        });
         assert!(s.showing_copy());
         s.apply(said("fit it"));
         s.apply(reply("Done."));
@@ -4250,6 +4288,48 @@ more" }"#);
     }
 
     #[test]
+    fn a_restored_card_stays_restored_after_the_app_reopens_the_session() {
+        use serde_json::json;
+        const A: &str = "11111111-2222-4333-8444-555555555555";
+        let turn = |s: &mut Session| {
+            for event in [
+                notebook_call("r1", "read_cell", json!({ "notebook_id": "nb", "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" })),
+                notebook_call("e1", "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true })),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                s.apply(event);
+            }
+            s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        };
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("set the rate"), false);
+        turn(&mut s);
+        let card = s.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
+        let (key, _, _) = s.start_restore(card).unwrap();
+        s.finish_restore(key, Ok(Vec::new()));
+        assert_eq!(s.restored_cards(), [card]);
+
+        // The app quits and opens the session again: its copy shows, then the agent's replay arrives.
+        let copy = crate::transcript_copy::from_json(&crate::transcript_copy::to_json(&s.entries, &s.restored_cards()).unwrap()).unwrap();
+        let mut again = Session::loading(2, SessionId::new("abc"), Place::local("/tmp"), None, "Rate".into());
+        again.show_copy(copy);
+        let card = again.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
+        assert_eq!(again.restore_state(card), Some(&super::Restore::Restored));
+        {
+            use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+            again.apply(SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("set the rate"))))));
+        }
+        turn(&mut again);
+        again.started(Started::new(SessionId::new("abc"), None, None));
+        let card = again.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
+        assert_eq!(again.restore_state(card), Some(&super::Restore::Restored), "the replay keeps it restored");
+        assert!(again.start_restore(card).is_none(), "no second restore");
+    }
+
+    #[test]
     fn a_turn_that_redoes_a_restored_turn_can_be_restored_too() {
         use serde_json::json;
         const A: &str = "11111111-2222-4333-8444-555555555555";
@@ -4286,6 +4366,11 @@ more" }"#);
         s.note_user_edit(A.to_string(), Some("rate".into()));
         assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.as_ref() == "You edited `rate`"), "a later edit of the user's is noted");
         assert_eq!((s.restore_state(first), s.restore_state(redo)), (Some(&super::Restore::Restored), Some(&super::Restore::Restored)));
+        // A third redo, not restored: the one-pass keys match each card's own.
+        let again = turn(&mut s, 3);
+        assert_eq!(s.restored_cards(), [first, redo]);
+        assert!(s.card_keys().all(|(ix, key)| s.card_key(ix) == Some(key)));
+        assert_eq!(s.card_keys().map(|(ix, _)| ix).collect::<Vec<_>>(), [first, redo, again]);
     }
 
     #[test]
