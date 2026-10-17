@@ -1154,7 +1154,7 @@ impl Workspace {
     fn keep_transcript(&self, key: u64) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         if let Some(id) = session.id.as_ref().filter(|_| !session.opening() && session.failed.is_none()) {
-            transcript_copy::save(&id.to_string(), &session.entries);
+            transcript_copy::save(&id.to_string(), &session.entries, &session.restored_cards());
         }
     }
 

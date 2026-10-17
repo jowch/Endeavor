@@ -918,7 +918,11 @@ impl Workspace {
         let task = cx.background_executor().spawn(async move { pluto::restore_cells(&bridge, &notebook, cells) });
         cx.spawn(async move |this, cx| {
             let answer = task.await;
-            let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.finish_restore(card, answer)));
+            let _ = this.update(cx, |this, cx| {
+                this.with_session(key, cx, |s| s.finish_restore(card, answer));
+                // So a restored card stays restored after the app quits.
+                this.keep_transcript(key);
+            });
         })
         .detach();
     }
