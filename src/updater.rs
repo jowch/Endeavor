@@ -613,7 +613,8 @@ mod tests {
     fn a_later_build_is_offered() {
         let m = parse(&manifest(B, "2026-10-16T08:00:00Z")).unwrap();
         let o = offer(&m, A, "2026-10-15T08:00:00Z").unwrap();
-        assert_eq!((o.build().as_str(), o.file.name.as_str(), o.file.size), ("bbbbbbb", "Endeavor-macos-arm64.dmg", 123));
+        let this = if cfg!(windows) { ("Endeavor-windows-x86_64-setup.exe", 45) } else { ("Endeavor-macos-arm64.dmg", 123) };
+        assert_eq!((o.build().as_str(), o.file.name.as_str(), o.file.size), ("bbbbbbb", this.0, this.1));
     }
 
     #[test]
@@ -630,10 +631,10 @@ mod tests {
     }
 
     #[test]
-    fn no_mac_build_or_an_odd_name_is_not_offered() {
-        let json = manifest(B, "2026-10-16T08:00:00Z").replace("macos-arm64", "macos-x86_64");
+    fn no_build_for_this_platform_or_an_odd_name_is_not_offered() {
+        let json = manifest(B, "2026-10-16T08:00:00Z").replace(&format!("\"{PLATFORM}\""), "\"other\"");
         assert_eq!(offer(&parse(&json).unwrap(), A, "2026-10-15T08:00:00Z"), None);
-        let json = manifest(B, "2026-10-16T08:00:00Z").replace("Endeavor-macos-arm64.dmg", "../x.dmg");
+        let json = manifest(B, "2026-10-16T08:00:00Z").replace(&format!("Endeavor-{PLATFORM}"), "../x");
         assert_eq!(offer(&parse(&json).unwrap(), A, "2026-10-15T08:00:00Z"), None);
     }
 

@@ -79,8 +79,9 @@ const
   WebView2Client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 
 var
-  { Setup got as far as installing ({app} is known), and then finished. }
-  Prepared, Installed: Boolean;
+  { Setup got as far as installing ({app} is known); it moved the old
+  Resources aside; and then it finished. }
+  Prepared, Moved, Installed: Boolean;
 
 { Installed for the machine or for this user, as Microsoft's docs say to check. }
 function HasWebView2: Boolean;
@@ -151,7 +152,11 @@ begin
   Res := ExpandConstant('{app}\Resources');
   if DirExists(Res + '.old') then
     DelTree(Res + '.old', True, True, True);
-  if DirExists(Res) and not RenameFile(Res, Res + '.old') then
+  if not DirExists(Res) then
+    Exit;
+  if RenameFile(Res, Res + '.old') then
+    Moved := True
+  else
     Result := 'Something has a file in ' + Res + ' open. Close it, then run Setup again.';
 end;
 
@@ -208,7 +213,9 @@ begin
   if Installed or not Prepared then
     Exit;
   Res := ExpandConstant('{app}\Resources');
-  if DirExists(Res + '.old') then
+  { Only a Resources this run moved: a Resources.old left by an earlier run
+    is older than the one in use. }
+  if Moved then
   begin
     DelTree(Res, True, True, True);
     if not RenameFile(Res + '.old', Res) then
