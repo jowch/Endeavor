@@ -723,11 +723,12 @@ impl Workspace {
             .collect()
     }
 
-    /// The sidebar's row above the status line while This Mac's Julia is down.
+    /// The sidebar's row above the status line while This Mac's runtime is down. It restarts every
+    /// notebook here, Julia's and R's, so it names neither.
     pub(crate) fn restart_row(&self) -> Option<&'static str> {
         match self.status(&HostId::ThisMac) {
-            Some(connection::Status::Replaced) => Some("↻ Reconnect to Julia"),
-            Some(connection::Status::Died(_) | connection::Status::Failed(_)) => Some("↻ Restart Julia"),
+            Some(connection::Status::Replaced) => Some("↻ Reconnect notebooks"),
+            Some(connection::Status::Died(_) | connection::Status::Failed(_)) => Some("↻ Restart notebooks"),
             _ => None,
         }
     }

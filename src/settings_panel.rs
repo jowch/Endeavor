@@ -1031,13 +1031,13 @@ impl Workspace {
                 "The whole window changes, notebook included. Match system follows your desktop's dark style setting."
             }),
             group(
-                Some("Pluto notebook look"),
+                Some("Notebook look"),
                 vec![Item::Pictures(vec![
-                    pic("look-endeavor", Thumb::Endeavor, "Endeavor", Some("Pluto's controls sit in the pane's header, in Endeavor's colours."), s.notebook_theme == NotebookTheme::Endeavor, Act::Look(NotebookTheme::Endeavor)),
-                    pic("look-classic", Thumb::Classic, "Pluto classic", Some("Pluto's own page, as it looks outside Endeavor."), s.notebook_theme == NotebookTheme::Pluto, Act::Look(NotebookTheme::Pluto)),
+                    pic("look-endeavor", Thumb::Endeavor, "Endeavor", Some("The notebook's controls sit in the pane's header, in Endeavor's colours."), s.notebook_theme == NotebookTheme::Endeavor, Act::Look(NotebookTheme::Endeavor)),
+                    pic("look-classic", Thumb::Classic, "Classic", Some("Pluto's or Ember's own page, as it looks outside Endeavor."), s.notebook_theme == NotebookTheme::Pluto, Act::Look(NotebookTheme::Pluto)),
                 ])],
             )
-            .foot("You can also switch from the notebook's ⋮ menu. Shared and exported notebooks always use Pluto's standard look."),
+            .foot("You can also switch from the notebook's ⋮ menu. Shared and exported notebooks always use their standard look."),
         ]
     }
 
@@ -2159,7 +2159,7 @@ impl Workspace {
         div()
             .id(if big { "notebook-look" } else { "light-or-dark" })
             .role(Role::RadioGroup)
-            .aria_label(if big { "Pluto notebook look" } else { "Light or dark" })
+            .aria_label(if big { "Notebook look" } else { "Light or dark" })
             .flex()
             .gap(px(if big { 24. } else { 22. }))
             .px(px(16.))

@@ -36,6 +36,18 @@ const withCode = (s: string) => escape(s).replace(/`([^`]*)`/g, "<code>$1</code>
 const shield = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1.2 12 3v3.6c0 3-2.2 5.2-5 6.2-2.8-1-5-3.2-5-6.2V3z"/></svg>`;
 const play = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="stroke: var(--e-accent-text)" stroke-width="1.3"><path d="M2.5 1.5v7l6-3.5z"/></svg>`;
 
+/** What running would do on Ember's page, as Ember's own banner says it (its
+ * `plan_text`, from `notebook.ember.plan`); "" when running installs and
+ * restarts nothing, and on Pluto's page, which has no plan. */
+export function planText(plan: { install?: number; restart?: string[] } | null | undefined): string {
+  if (!plan) return "";
+  const install = plan.install ?? 0;
+  if (install > 0) return `Running starts R and installs ${install} ${install === 1 ? "package" : "packages"}.`;
+  const restart = plan.restart ?? [];
+  if (restart.length > 0) return `Running starts R; it will then restart to use a new version of: ${restart.join(", ")}.`;
+  return "";
+}
+
 let callout: HTMLElement;
 
 function render() {
@@ -46,7 +58,8 @@ function render() {
   const asking = context.asking ? `<div class="asking">${escape(context.agent)} is asking to run it. Answer in the chat, or here.</div>` : "";
   const crash = context.crash;
   const title = crash ? escape(crash.title) : "Safe preview";
-  const body = crash ? withCode(crash.body) : "You're reading and editing this file without running any code.";
+  const plan = planText((now.nb as { ember?: { plan?: Parameters<typeof planText>[0] } }).ember?.plan);
+  const body = (crash ? withCode(crash.body) : "You're reading and editing this file without running any code.") + (plan ? ` ${escape(plan)}` : "");
   const html =
     `${shield}<div class="text"><b>${title}</b>` +
     `${body}${asking}</div>` +

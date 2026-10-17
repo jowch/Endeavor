@@ -984,6 +984,7 @@ fn tool_verb(title: &str) -> String {
         "read_file" => "Read",
         "run_shell" => "Ran",
         "keep_notebook_alive" => "Kept notebook running",
+        "interrupt_notebook" => "Stopped the notebook's run",
         other => other,
     }
     .to_string()
