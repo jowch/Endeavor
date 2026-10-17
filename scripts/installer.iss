@@ -79,7 +79,7 @@ const
   WebView2Client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 
 var
-  { Setup got as far as installing ({app} is known); it moved the old
+  { Setup got as far as installing (the install folder is known); it moved the old
   Resources aside; and then it finished. }
   Prepared, Moved, Installed: Boolean;
 
