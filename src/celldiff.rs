@@ -35,6 +35,13 @@ pub struct CellEdit {
     pub cell: String,
     pub before: Option<String>,
     pub after: Option<String>,
+    /// The notebook the call changed (its `notebook_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notebook: Option<String>,
+    /// The app never saw the cell's code before this edit (a read it missed, or
+    /// one from before a reopen), so `before` is a guess: empty.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
 }
 
 impl CellEdit {
@@ -66,6 +73,38 @@ pub struct ChangedCell {
     pub change: CellChange,
     pub added: usize,
     pub removed: usize,
+    /// Its code before the turn (none for a cell the turn added, or one whose
+    /// code the app never saw) and after it (none for one it deleted), for
+    /// Restore. A card saved before Restore has neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    /// The notebook the turn changed it in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notebook: Option<String>,
+    /// An edited cell whose code before the turn the app never saw, so Restore
+    /// can't put it back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
+}
+
+impl ChangedCell {
+    /// What `endeavor/restore_cells` takes to put this cell back: the code the
+    /// turn left as `expected`, and its code before the turn, or null to delete
+    /// a cell the turn added. None for a deleted cell (it can't come back yet),
+    /// one whose code before the turn the app never saw, or a card that doesn't
+    /// know the code or the notebook.
+    pub fn restore(&self) -> Option<Value> {
+        let after = self.after.as_ref()?;
+        self.notebook.as_ref()?;
+        let code = match self.change {
+            CellChange::Deleted => return None,
+            CellChange::New => Value::Null,
+            CellChange::Edited => Value::String(self.before.clone()?),
+        };
+        Some(serde_json::json!({ "cell_id": self.cell, "expected": after, "code": code }))
+    }
 }
 
 /// The cells a turn's edits changed, in the order first touched, each by its
@@ -81,7 +120,7 @@ pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>) -> Vec<Cha
     }
     cells
         .into_iter()
-        .filter_map(|CellEdit { cell, before, after }| {
+        .filter_map(|CellEdit { cell, before, after, notebook, unseen }| {
             let change = match (&before, &after) {
                 (None, None) => return None,
                 (Some(b), Some(a)) if b == a => return None,
@@ -96,7 +135,9 @@ pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>) -> Vec<Cha
                 Change::Same => (a, r),
             });
             let name = cell_label(after.as_deref().unwrap_or(old));
-            Some(ChangedCell { cell, name, change, added, removed })
+            // A guessed before is drawn (as all added) but never put back.
+            let before = before.filter(|_| !unseen);
+            Some(ChangedCell { cell, name, change, added, removed, before, after, notebook, unseen })
         })
         .collect()
 }
@@ -191,7 +232,8 @@ impl CellCodes {
         self.0.get(cell_id).map(String::as_str)
     }
 
-    /// Learn cells' current code from a completed read, or from `add_cell`'s
+    /// Learn cells' current code from a completed read, from `new_notebook`'s
+    /// reply (its cells are empty), or from `add_cell`'s
     /// reply: it's the only one whose diff (built from its input, since the
     /// input has no cell id yet) doesn't already become the next baseline, so
     /// an edit right after it would otherwise diff against nothing and show
@@ -201,6 +243,12 @@ impl CellCodes {
             "read_cell" | "add_cell" => {
                 if let (Some(id), Some(code)) = (output["cell_id"].as_str(), output["code"].as_str()) {
                     self.0.insert(id.to_owned(), code.to_owned());
+                }
+            }
+            // A notebook just made: its cells are empty, as the runtime counts them read.
+            "new_notebook" if output["created"] == true => {
+                for id in output["cell_ids"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    self.0.insert(id.to_owned(), String::new());
                 }
             }
             "read_notebook_code" => {
@@ -215,9 +263,11 @@ impl CellCodes {
     /// Diffs for a completed edit tool call, from its input (and its result,
     /// which has a new cell's id), recording the new code.
     pub fn diff(&mut self, tool: &str, input: &Value, result: &Value) -> Vec<CellDiff> {
+        let notebook = input["notebook_id"].as_str().map(str::to_owned);
         let mut edit = |id: &str, new: &str| {
-            let old = self.0.insert(id.to_owned(), new.to_owned()).unwrap_or_default();
-            CellEdit { cell: id.to_owned(), before: Some(old), after: Some(new.to_owned()) }.diff()
+            let old = self.0.insert(id.to_owned(), new.to_owned());
+            let unseen = old.is_none();
+            CellEdit { cell: id.to_owned(), before: Some(old.unwrap_or_default()), after: Some(new.to_owned()), notebook: notebook.clone(), unseen }.diff()
         };
         match tool {
             "edit_cell" => match (input["cell_id"].as_str(), input["code"].as_str()) {
@@ -231,7 +281,7 @@ impl CellCodes {
                 .filter_map(|c| Some(edit(c["cell_id"].as_str()?, c["code"].as_str()?)))
                 .collect(),
             "add_cell" => match (input["code"].as_str(), result["cell_id"].as_str()) {
-                (Some(code), Some(id)) => vec![CellEdit { cell: id.to_owned(), before: None, after: Some(code.to_owned()) }.diff()],
+                (Some(code), Some(id)) => vec![CellEdit { cell: id.to_owned(), before: None, after: Some(code.to_owned()), notebook, unseen: false }.diff()],
                 (Some(code), None) => vec![CellDiff { label: format!("{} (new)", cell_label(code)), lines: line_diff("", code), edit: None }],
                 (None, _) => vec![],
             },
@@ -239,7 +289,7 @@ impl CellCodes {
                 .as_str()
                 .and_then(|id| {
                     let old = self.0.remove(id)?;
-                    Some(vec![CellEdit { cell: id.to_owned(), before: Some(old), after: None }.diff()])
+                    Some(vec![CellEdit { cell: id.to_owned(), before: Some(old), after: None, notebook, unseen: false }.diff()])
                 })
                 .unwrap_or_default(),
             _ => vec![],
@@ -336,6 +386,15 @@ mod tests {
     }
 
     #[test]
+    fn a_new_notebooks_cells_are_known_empty() {
+        let mut codes = CellCodes::default();
+        codes.observe("new_notebook", &json!({ "created": true, "notebook_id": "nb", "cell_ids": [C1] }));
+        let d = codes.diff("edit_cell", &json!({ "notebook_id": "nb", "cell_id": C1, "code": "rate = 0.1" }), &json!({}));
+        let edit = d[0].edit.as_ref().unwrap();
+        assert_eq!((edit.before.as_deref(), edit.unseen), (Some(""), false), "Restore can empty it again");
+    }
+
+    #[test]
     fn learns_every_cell_from_read_notebook_code() {
         let code = format!("{MARKER}{C1}\nusing Plots\n\n{MARKER}{C2}\n# md:\nmd\"# Title\"");
         let mut codes = CellCodes::default();
@@ -354,9 +413,11 @@ mod tests {
         const C3: &str = "bbbbbbbb-7777-4888-9999-aaaaaaaaaaaa";
         const C4: &str = "cccccccc-7777-4888-9999-aaaaaaaaaaaa";
         const C5: &str = "dddddddd-7777-4888-9999-aaaaaaaaaaaa";
+        const C6: &str = "eeeeeeee-7777-4888-9999-aaaaaaaaaaaa";
         let mut codes = CellCodes::default();
         let mut diffs = Vec::new();
-        let mut call = |tool: &str, input: Value, result: Value| {
+        let mut call = |tool: &str, mut input: Value, result: Value| {
+            input["notebook_id"] = json!("nb1");
             codes.observe(tool, &result);
             diffs.extend(codes.diff(tool, &input, &result));
         };
@@ -370,11 +431,27 @@ mod tests {
         call("delete_cell", json!({ "cell_id": C3 }), json!({}));
         call("add_cell", json!({ "code": "tmp = 0" }), json!({ "cell_id": C5, "code": "tmp = 0" }));
         call("delete_cell", json!({ "cell_id": C5 }), json!({}));
+        // An edit to a cell the app never saw the code of: a read it missed.
+        call("edit_cell", json!({ "cell_id": C6, "code": "y = 2" }), json!({}));
         let cells = net_changes(diffs.iter().filter_map(|d| d.edit.as_ref()));
-        let row = |cell: &str, name: &str, change, added, removed| ChangedCell { cell: cell.into(), name: name.into(), change, added, removed };
+        let row = |cell: &str, name: &str, change, added, removed| ChangedCell { cell: cell.into(), name: name.into(), change, added, removed, before: None, after: None, notebook: Some("nb1".into()), unseen: false };
+        // Restore puts each back as it was before the turn: an edit's first before-text, an added cell deleted.
+        let restores: Vec<Option<Value>> = cells.iter().map(ChangedCell::restore).collect();
+        assert_eq!(
+            restores,
+            [
+                Some(json!({ "cell_id": C1, "expected": "rate = 0.3\nk = 2\nm = 1", "code": "rate = 0.1\nk = 2" })),
+                Some(json!({ "cell_id": C2, "expected": "fit = 2\nfit2 = 3", "code": null })),
+                None,
+                None,
+            ],
+            "a deleted cell can't come back yet, nor one whose code before the turn the app never saw"
+        );
+        assert!(cells[3].unseen && cells[3].before.is_none(), "its guessed before-text is never kept to put back");
+        let cells: Vec<ChangedCell> = cells.into_iter().map(|c| ChangedCell { before: None, after: None, ..c }).collect();
         assert_eq!(
             cells,
-            [row(C1, "rate", CellChange::Edited, 2, 1), row(C2, "fit", CellChange::New, 2, 0), row(C3, "plot(rate)", CellChange::Deleted, 0, 1)],
+            [row(C1, "rate", CellChange::Edited, 2, 1), row(C2, "fit", CellChange::New, 2, 0), row(C3, "plot(rate)", CellChange::Deleted, 0, 1), ChangedCell { unseen: true, ..row(C6, "y", CellChange::Edited, 1, 0) }],
             "C4 is back as it was; C5 was added and deleted again"
         );
     }
