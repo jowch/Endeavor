@@ -58,6 +58,7 @@ mod permits;
 mod notify;
 mod pluto;
 mod queue;
+mod cell_shot;
 mod quotes;
 mod records;
 mod remote;
@@ -518,6 +519,11 @@ pub struct Workspace {
     annotating: bool,
     /// Pictures the page asked for (`Shoot`), by id, until its quote takes them.
     shots: HashMap<u32, Arc<Vec<u8>>>,
+    /// Where the listeners ask for a picture of a cell's output for the agent (`cell_shot`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    cell_shots: futures::channel::mpsc::UnboundedSender<cell_shot::Ask>,
+    /// The second web view those pictures are taken from.
+    second: cell_shot::Second,
     /// "Two ways to add your file" shows over the composer (a "Uses your file"
     /// example was clicked and the tip isn't done yet).
     file_tip: bool,
@@ -650,6 +656,18 @@ impl Workspace {
             webcontent::on_process_ended(&webview, move || drop(ended_tx.unbounded_send(())));
             WebView::new(webview, window, cx)
         });
+
+        let (cell_shots, mut cell_shot_rx) = futures::channel::mpsc::unbounded::<cell_shot::Ask>();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(ask) = cell_shot_rx.next().await {
+                let Ok(job) = this.update_in(cx, |this, window, cx| this.shoot_cell(ask, window, cx)) else { break };
+                let outcome = job.await;
+                if this.update(cx, |this, cx| this.cell_shot_done(outcome, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         cx.spawn(async move |this, cx| {
             while ended_rx.next().await.is_some() {
@@ -821,6 +839,8 @@ impl Workspace {
             status: "".into(),
             annotating: false,
             shots: HashMap::new(),
+            cell_shots,
+            second: cell_shot::Second::default(),
             file_tip: false,
             connections: HashMap::new(),
             listeners: HashMap::new(),
