@@ -70,6 +70,8 @@ Name: "{autoprograms}\Endeavor"; Filename: "{app}\bin\endeavor.exe"; IconFilenam
 
 [Run]
 Filename: "{app}\bin\endeavor.exe"; Description: "Open Endeavor"; Flags: nowait postinstall skipifsilent
+; An update the app started with Restart (src/updater.rs) opens it again.
+Filename: "{app}\bin\endeavor.exe"; Flags: nowait; Check: HasParam('/RELAUNCH')
 
 ; WebView2 keeps its data next to the exe.
 [UninstallDelete]
@@ -101,13 +103,36 @@ begin
     Exec(Exe, '--stop-runtime', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
+{ A switch on Setup's command line, such as /UPDATE. }
+function HasParam(const Name: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), Name) = 0 then
+      Result := True;
+end;
+
 { The app holds this mutex while it's open (platform::init). Wait for it to
   quit before stopping its runtime: an app set to keep its runtime starts a
   new one when the old one stops, and Restart Manager then can't close that
-  one (it has no window) and says so. }
+  one (it has no window) and says so. An update the app started (/UPDATE)
+  runs as the app quits, so it waits up to 30 seconds for that rather than
+  asking; after that, run silently, the question's answer is Cancel and the
+  install stops with the old app in place. }
 function AppQuit(const Action: String): Boolean;
+var
+  Waited: Integer;
 begin
   Result := True;
+  Waited := 0;
+  if HasParam('/UPDATE') then
+    while CheckForMutexes('{#AppMutex}') and (Waited < 60) do
+    begin
+      Sleep(500);
+      Waited := Waited + 1;
+    end;
   while Result and CheckForMutexes('{#AppMutex}') do
     Result := SuppressibleMsgBox('Endeavor is open. Quit it, then click OK to ' + Action + '.', mbError, MB_OKCANCEL, IDCANCEL) = IDOK;
 end;

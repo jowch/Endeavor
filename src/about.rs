@@ -143,7 +143,7 @@ pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
         AppUpdate::Ready(build) => (format!("Build {build} is ready. It installs when Endeavor restarts."), Some(("Restart", Action::Restart, true)), true),
         AppUpdate::ReadyAfterTurn(build) => (format!("Build {build} is ready. Restart comes back once the agent is done."), None, true),
         AppUpdate::Manual(build) => (
-            format!("Build {build} is out. Endeavor can't replace itself where it is: download it and drag it to Applications."),
+            format!("Build {build} is out. Endeavor can't replace itself where it is: {}.", if cfg!(windows) { "download the installer and run it" } else { "download it and drag it to Applications" }),
             Some(("Download", Action::Download, true)),
             true,
         ),

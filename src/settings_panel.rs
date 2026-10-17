@@ -1111,7 +1111,7 @@ impl Workspace {
             .collect();
         vec![
             group(None, vec![Item::Brand]),
-            group(Some("Updates"), rows).foot("A nightly build of the Mac app checks for a newer nightly once a day and fetches it in the background. The adapter is how it talks to Claude, and each Endeavor version pins its own. The About window shows the same updates."),
+            group(Some("Updates"), rows).foot("A nightly build of the Mac or Windows app checks for a newer nightly once a day and fetches it in the background. The adapter is how it talks to Claude, and each Endeavor version pins its own. The About window shows the same updates."),
             group(
                 None,
                 vec![Item::Links(vec![
