@@ -9,7 +9,9 @@
 //!
 //! The second view is another Pluto client of the notebook. It loads the page
 //! as a reload would, so it shows the outputs as Pluto draws them fresh: what
-//! the user did inside a widget (a selection) isn't in the picture.
+//! the user did inside a widget (a selection) isn't in the picture. It has none
+//! of the user's view's setup (page.js), so Pluto there loads JuliaMono from its
+//! CDN: offline, code in a picture is in another monospace font.
 // ponytail: Mac only. Windows (WebView2's captureScreenshot) and Linux (WebKitGTK's snapshot) come later.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
@@ -17,11 +19,16 @@ use std::time::Duration;
 
 use crate::hosts::HostId;
 
+/// Why there's no picture while the pane isn't on screen.
+const NOT_ON_SCREEN: &str = "the notebook pane isn't on screen";
+
 /// One picture the listener waits for.
 pub struct Ask {
     pub host: HostId,
     pub notebook: String,
     pub cell: String,
+    /// When the listener asked: once it has stopped waiting (`WAIT`), the ask is dropped.
+    pub asked: std::time::Instant,
     /// The PNG, in base64; None when there's no picture.
     pub reply: std::sync::mpsc::Sender<Option<String>>,
 }
@@ -43,7 +50,7 @@ pub fn snapshot(host: HostId, asks: futures::channel::mpsc::UnboundedSender<Ask>
     let asks = std::sync::Mutex::new(asks);
     Box::new(move |_session, notebook, cell| {
         let (reply, answer) = std::sync::mpsc::channel();
-        let ask = Ask { host: host.clone(), notebook: notebook.to_owned(), cell: cell.to_owned(), reply };
+        let ask = Ask { host: host.clone(), notebook: notebook.to_owned(), cell: cell.to_owned(), asked: std::time::Instant::now(), reply };
         asks.lock().unwrap().unbounded_send(ask).ok()?;
         answer.recv_timeout(WAIT).ok().flatten()
     })
@@ -95,21 +102,25 @@ pub use mac::Shooter;
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2::msg_send;
+    use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use wry::WebViewExtMacOS;
 
-    /// The second web view, and the page it has loaded.
+    use crate::overlay::CGRect;
+
+    /// The second web view, the page it has loaded, and the user's view it hides behind.
     pub struct Shooter {
         pub view: wry::WebView,
         pub url: std::cell::RefCell<String>,
+        main: Retained<AnyObject>,
     }
 
     impl Shooter {
-        pub fn new(window: &gpui::Window) -> Option<Shooter> {
+        pub fn new(window: &gpui::Window, main: &wry::WebView) -> Option<Shooter> {
             let view = wry::WebViewBuilder::new().with_url("about:blank").build_as_child(&crate::platform::webview_parent(window)).ok()?;
             let _ = view.set_visible(false);
-            crate::settings::set_webview_appearance(&view, crate::theme::is_light());
-            Some(Shooter { view, url: std::cell::RefCell::new(String::new()) })
+            let main = unsafe { Retained::cast_unchecked(main.webview()) };
+            Some(Shooter { view, url: std::cell::RefCell::new(String::new()), main })
         }
 
         /// Show `url`, unless it is the page already loaded. Whether it loads now.
@@ -122,45 +133,64 @@ mod mac {
             true
         }
 
-        /// Put the second view exactly behind `main`, the user's view, where it draws but can't be seen.
-        pub fn place(&self, main: &wry::WebView) {
-            if let Ok(bounds) = main.bounds() {
-                let _ = self.view.set_bounds(bounds);
+        /// Whether the user's view is shown, in a window on screen and not covered: behind
+        /// anything else the second view would show, and a hidden window draws nothing.
+        pub fn pane_shows(&self) -> bool {
+            unsafe {
+                let hidden: bool = msg_send![&*self.main, isHiddenOrHasHiddenAncestor];
+                let window: *mut AnyObject = msg_send![&*self.main, window];
+                if hidden || window.is_null() {
+                    return false;
+                }
+                // NSWindowOcclusionStateVisible.
+                let state: usize = msg_send![window, occlusionState];
+                state & (1 << 1) != 0
+            }
+        }
+
+        /// Put the second view exactly behind the user's view, where it draws but can't be seen,
+        /// and keep it there: called again as the picture is taken, it follows the pane's
+        /// frame. False, with the second view hidden, once the pane isn't on screen.
+        pub fn keep_behind(&self) -> bool {
+            if !self.pane_shows() {
+                self.hide();
+                return false;
             }
             unsafe {
-                let (ours, theirs) = (self.view.webview(), main.webview());
-                let superview: *mut AnyObject = msg_send![&*theirs, superview];
-                if !superview.is_null() {
-                    // NSWindowBelow: in the same superview, this only reorders.
-                    let _: () = msg_send![superview, addSubview: &*ours, positioned: -1isize, relativeTo: &*theirs];
+                let ours = self.view.webview();
+                let frame: CGRect = msg_send![&*self.main, frame];
+                let now: CGRect = msg_send![&*ours, frame];
+                if now != frame {
+                    let _: () = msg_send![&*ours, setFrame: frame];
+                }
+                let superview: *mut AnyObject = msg_send![&*self.main, superview];
+                let behind: *mut AnyObject = msg_send![&*ours, superview];
+                if !superview.is_null() && behind != superview {
+                    // NSWindowBelow.
+                    let _: () = msg_send![superview, addSubview: &*ours, positioned: -1isize, relativeTo: &*self.main];
                 }
             }
-            let _ = self.view.set_visible(true);
+            if !self.shown() {
+                // The theme may have changed since the last picture.
+                crate::settings::set_webview_appearance(&self.view, crate::theme::is_light());
+                let _ = self.view.set_visible(true);
+            }
+            true
+        }
+
+        fn shown(&self) -> bool {
+            unsafe {
+                let hidden: bool = msg_send![&*self.view.webview(), isHidden];
+                !hidden
+            }
         }
 
         pub fn hide(&self) {
             let _ = self.view.set_visible(false);
         }
     }
-
-    /// Whether the window of `main` is on screen and not covered: a window
-    /// that isn't draws nothing, and its snapshots come back blank.
-    pub fn window_shows(main: &wry::WebView) -> bool {
-        unsafe {
-            let view = main.webview();
-            let window: *mut AnyObject = msg_send![&*view, window];
-            if window.is_null() {
-                return false;
-            }
-            // NSWindowOcclusionStateVisible.
-            let state: usize = msg_send![window, occlusionState];
-            state & (1 << 1) != 0
-        }
-    }
 }
 
-#[cfg(target_os = "macos")]
-pub use mac::window_shows;
 
 #[cfg(test)]
 mod tests {
@@ -253,18 +283,18 @@ impl crate::Workspace {
         }
         let runtime = self.connection(&ask.host).and_then(|c| c.runtime.as_ref()).ok_or("no runtime")?;
         let url = Backend::Pluto.notebook_url(&runtime.page_url, &ask.notebook);
-        // ponytail: only while the notebook pane is on screen. Behind any other screen the second
-        // view would show, and in a hidden window it draws nothing.
-        let main = self.webview.read(cx);
-        if !main.visible() || !window_shows(main.raw()) {
-            return Err("the notebook pane isn't on screen");
+        if ask.asked.elapsed() >= WAIT {
+            return Err("the agent stopped waiting");
         }
         if self.second.shooter.is_none() {
-            self.second.shooter = Shooter::new(window).map(std::rc::Rc::new);
+            self.second.shooter = Shooter::new(window, self.webview.read(cx).raw()).map(std::rc::Rc::new);
         }
         let shooter = self.second.shooter.clone().ok_or("no second web view")?;
+        // ponytail: only while the notebook pane is on screen (`keep_behind`).
+        if !shooter.keep_behind() {
+            return Err(NOT_ON_SCREEN);
+        }
         let fresh = shooter.load(&url);
-        shooter.place(main.raw());
         self.second.used = Some(std::time::Instant::now());
         let executor = cx.background_executor().clone();
         let cell = ask.cell.clone();
@@ -276,12 +306,17 @@ impl crate::Workspace {
     }
 }
 
-/// Wait for the cell's output in the second view, scroll it into view, and take its picture.
+/// Wait for the cell's output in the second view, scroll it into view, and take its picture. The
+/// pane is checked at each step: once it isn't on screen (Settings opened), the second view hides,
+/// within a step (at most about a second), and there is no picture.
 #[cfg(target_os = "macos")]
 async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::BackgroundExecutor) -> Result<Vec<u8>, &'static str> {
     let deadline = std::time::Instant::now() + DEADLINE;
+    let behind = || if shooter.keep_behind() { Ok(()) } else { Err(NOT_ON_SCREEN) };
     loop {
-        match eval(&shooter.view, &find_script(cell), executor).await.as_deref() {
+        let found = eval(&shooter.view, &find_script(cell), executor).await;
+        behind()?;
+        match found.as_deref() {
             Some("\"scrolled\"") => break,
             // An empty output gives the agent a blank picture: the runtime's answer says more.
             Some("\"empty\"") => return Err("the output is empty"),
@@ -291,12 +326,21 @@ async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::Backg
             return Err("the cell's output wasn't drawn in time");
         }
         executor.timer(Duration::from_millis(200)).await;
+        behind()?;
     }
     // Two frames after the scroll; and on a page just loaded, time for a widget that draws after it (WebGL).
     executor.timer(Duration::from_millis(if fresh { 800 } else { 100 })).await;
+    behind()?;
     let measured = eval(&shooter.view, &measure_script(cell), executor).await.ok_or("the output couldn't be measured")?;
+    behind()?;
     let rect = visible_rect(&measured).ok_or("the output is empty")?;
-    crate::snapshot::png(&shooter.view, rect).await.ok().flatten().ok_or("WebKit couldn't draw the output")
+    let shot = crate::snapshot::png(&shooter.view, rect);
+    let timeout = executor.timer(Duration::from_secs(3));
+    let png = match futures::future::select(shot, timeout).await {
+        futures::future::Either::Left((png, _)) => png.ok().flatten(),
+        futures::future::Either::Right(_) => None,
+    };
+    png.ok_or("WebKit couldn't draw the output")
 }
 
 /// The JSON of what `js` gives in `view`; None if it fails or takes over a second.
