@@ -227,6 +227,9 @@ To wait for something, poll the dump. For example, loop until
   and it still shows. `dialogs` is the text of each dialog open in the page:
   an R notebook's page (Ember) shows its messages that way, not with `alert`. Null when the page isn't on screen. While an alert is
   open the page can't answer, and `page` is `{"error": …}`.
+- `cell_shot`. How the last picture of a cell's output for the agent went
+  (Mac): `picture`, or why there was none, such as "the output is empty" or
+  "the notebook pane isn't on screen". Null before the first one.
 
 A dump from a session that made a notebook, cut down:
 
@@ -362,6 +365,12 @@ These are read by debug builds only.
 - `ENDEAVOR_TEST_MCP_URL` and `ENDEAVOR_TEST_TOKEN`: a runtime's `/mcp`
   address and its token, for the ignored live tests in `src/agent.rs` that
   bring their own runtime (`cargo test -- --ignored live_list_and_load`).
+- `ENDEAVOR_TEST_VIEW_CELL`: a file path. Write `<notebook id> <cell id>`
+  to it, and the app makes the agent's `view_cell_output` call for the open
+  session's notebook on this computer, through its own port as the agent
+  would. It writes the result's text to `<file>.json` and the picture, if
+  any, to `<file>.png`, then deletes the file. It checks the app's picture
+  of an HTML output without an agent turn.
 - `ENDEAVOR_TEST_STUCK_OPENING`: a file path. When the file appears, the
   notebook's page is taken down, as a runtime going away does, and the pane
   says "Opening". After 5 s the app loads the page again by itself. While the
