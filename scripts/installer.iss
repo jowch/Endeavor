@@ -40,7 +40,9 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 ; PrepareToInstall asks to quit a running Endeavor; this is the fallback for
-; one opened after that. Don't reopen it.
+; one opened after that. Don't reopen it. Silent, it closes any program
+; holding a file without asking, so the app's updates pass
+; /NOCLOSEAPPLICATIONS (src/updater.rs).
 CloseApplications=yes
 RestartApplications=no
 SetupIconFile=..\assets\icon\endeavor.ico

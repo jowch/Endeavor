@@ -569,11 +569,14 @@ fn last_install_failed(dir: &Path, commit: &str) -> bool {
 
 /// Windows: run the fetched installer silently. It waits for this app to
 /// quit (/UPDATE), replaces it, and opens the new one when `relaunch`
-/// (/RELAUNCH). Its log goes beside it.
+/// (/RELAUNCH). Its log goes beside it. Silent, Setup's Restart Manager
+/// would close any program holding one of the app's files (an editor, a
+/// terminal) without asking; /NOCLOSEAPPLICATIONS makes it give up and roll
+/// back instead, and the next launch says the update didn't take.
 fn run_installer(setup: &Path, commit: &str, dir: &Path, relaunch: bool) -> Result<(), String> {
     std::fs::write(dir.join(INSTALLING), commit).map_err(|e| format!("couldn't start the update ({e})"))?;
     let mut cmd = Command::new(setup);
-    cmd.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/UPDATE"]).arg(format!("/LOG={}", dir.join(INSTALL_LOG).display()));
+    cmd.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCLOSEAPPLICATIONS", "/UPDATE"]).arg(format!("/LOG={}", dir.join(INSTALL_LOG).display()));
     if relaunch {
         cmd.arg("/RELAUNCH");
     }
