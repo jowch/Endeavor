@@ -887,8 +887,13 @@ impl Session {
 
     /// Show Endeavor's copy of this session's transcript while its history
     /// loads: read-only, at its end. The replay replaces it once it's all in.
-    pub fn show_copy(&mut self, entries: Vec<Entry>) {
-        self.entries = entries;
+    pub fn show_copy(&mut self, copy: crate::transcript_copy::Copy) {
+        self.entries = copy.entries;
+        for ix in copy.restored {
+            if let Some(key) = self.card_key(ix) {
+                self.restores.insert(key, Restore::Restored);
+            }
+        }
         self.replay = Some(Vec::new());
         self.mark(0);
         self.list.set_follow_mode(FollowMode::Tail);
@@ -1097,6 +1102,12 @@ impl Session {
     /// Where the Restore of the card at entry `ix` is, once pressed.
     pub fn restore_state(&self, ix: usize) -> Option<&Restore> {
         self.restores.get(&self.card_key(ix)?)
+    }
+
+    /// The changed-cells cards the user restored, by entry, for Endeavor's
+    /// copy of the transcript.
+    pub fn restored_cards(&self) -> Vec<usize> {
+        (0..self.entries.len()).filter(|&ix| self.restore_state(ix) == Some(&Restore::Restored)).collect()
     }
 
     /// The changed-cells card at `ix`, for `restores`: what it holds, and how
@@ -3754,10 +3765,13 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Fit".into());
-        s.show_copy(vec![
-            Entry::User { text: "fit it".into(), expanded: false, attachments: Vec::new(), delivery: crate::outbox::Delivery::Turn, sent: None },
-            Entry::Agent { text: "Done.".into(), at: None },
-        ]);
+        s.show_copy(crate::transcript_copy::Copy {
+            entries: vec![
+                Entry::User { text: "fit it".into(), expanded: false, attachments: Vec::new(), delivery: crate::outbox::Delivery::Turn, sent: None },
+                Entry::Agent { text: "Done.".into(), at: None },
+            ],
+            restored: Vec::new(),
+        });
         assert!(s.showing_copy());
         s.apply(said("fit it"));
         s.apply(reply("Done."));
@@ -4247,6 +4261,48 @@ more" }"#);
             ["put back `rate` as they were before one of your turns", "put back `rate` and removed `fit` as they were before one of your turns"]
         );
         assert_eq!(s.start_restore(card + 1), None, "done");
+    }
+
+    #[test]
+    fn a_restored_card_stays_restored_after_the_app_reopens_the_session() {
+        use serde_json::json;
+        const A: &str = "11111111-2222-4333-8444-555555555555";
+        let turn = |s: &mut Session| {
+            for event in [
+                notebook_call("r1", "read_cell", json!({ "notebook_id": "nb", "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" })),
+                notebook_call("e1", "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true })),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                s.apply(event);
+            }
+            s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
+        };
+        let mut s = Session::new(1, Place::local("/tmp"), None);
+        s.started(Started::new(SessionId::new("abc"), None, None));
+        s.submit(text("set the rate"), false);
+        turn(&mut s);
+        let card = s.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
+        let (key, _, _) = s.start_restore(card).unwrap();
+        s.finish_restore(key, Ok(Vec::new()));
+        assert_eq!(s.restored_cards(), [card]);
+
+        // The app quits and opens the session again: its copy shows, then the agent's replay arrives.
+        let copy = crate::transcript_copy::from_json(&crate::transcript_copy::to_json(&s.entries, &s.restored_cards()).unwrap()).unwrap();
+        let mut again = Session::loading(2, SessionId::new("abc"), Place::local("/tmp"), None, "Rate".into());
+        again.show_copy(copy);
+        let card = again.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
+        assert_eq!(again.restore_state(card), Some(&super::Restore::Restored));
+        {
+            use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+            again.apply(SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("set the rate"))))));
+        }
+        turn(&mut again);
+        again.started(Started::new(SessionId::new("abc"), None, None));
+        let card = again.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
+        assert_eq!(again.restore_state(card), Some(&super::Restore::Restored), "the replay keeps it restored");
+        assert!(again.start_restore(card).is_none(), "no second restore");
     }
 
     #[test]

@@ -78,10 +78,17 @@ enum Saved {
     },
     Changes {
         cells: Vec<ChangedCell>,
+        /// The user pressed Restore on this card and it put the cells back.
+        #[serde(default, skip_serializing_if = "is_false")]
+        restored: bool,
     },
     Reopened {
         at: u64,
     },
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_turn(delivery: &Delivery) -> bool {
@@ -174,7 +181,7 @@ fn saved(entry: &Entry) -> Option<Saved> {
         Entry::Thought { text, took, .. } => Saved::Thought { text: text.clone(), took_ms: took.map(|t| t.as_millis() as u64) },
         Entry::Plan(entries) => Saved::Plan { entries: entries.clone() },
         Entry::Note(text) => Saved::Note { text: text.to_string() },
-        Entry::Changes(cells) => Saved::Changes { cells: cells.clone() },
+        Entry::Changes(cells) => Saved::Changes { cells: cells.clone(), restored: false },
         Entry::Reopened(at) => Saved::Reopened { at: secs(*at) },
         Entry::Permission { .. } | Entry::RunState(_) | Entry::Failed(_) => return None,
     })
@@ -190,25 +197,48 @@ fn entry(saved: Saved) -> Entry {
         Saved::Thought { text, took_ms } => Entry::Thought { text, expanded: false, started: None, took: took_ms.map(Duration::from_millis) },
         Saved::Plan { entries } => Entry::Plan(entries),
         Saved::Note { text } => Entry::Note(text.into()),
-        Saved::Changes { cells } => Entry::Changes(cells),
+        Saved::Changes { cells, .. } => Entry::Changes(cells),
         Saved::Reopened { at } => Entry::Reopened(time(at)),
     }
 }
 
+/// A copy read back: its entries, and where among them the changed-cells
+/// cards the user restored are.
+#[derive(Default)]
+pub struct Copy {
+    pub entries: Vec<Entry>,
+    pub restored: Vec<usize>,
+}
+
 /// The copy's file contents, or None when there's nothing worth keeping.
-pub fn to_json(entries: &[Entry]) -> Option<String> {
+/// `restored`: the entries that are changed-cells cards the user restored.
+pub fn to_json(entries: &[Entry], restored: &[usize]) -> Option<String> {
     if !entries.iter().any(keyed) {
         return None;
     }
-    let entries = entries.iter().filter_map(saved).filter_map(|s| serde_json::to_value(s).ok()).collect();
+    let entries = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, e)| match saved(e)? {
+            Saved::Changes { cells, .. } => Some(Saved::Changes { cells, restored: restored.contains(&ix) }),
+            other => Some(other),
+        })
+        .filter_map(|s| serde_json::to_value(s).ok())
+        .collect();
     serde_json::to_string(&File { version: 1, entries }).ok()
 }
 
 /// A copy read back. Entries this version doesn't know are left out.
-pub fn from_json(json: &str) -> Option<Vec<Entry>> {
+pub fn from_json(json: &str) -> Option<Copy> {
     let file: File = serde_json::from_str(json).ok()?;
-    let entries: Vec<Entry> = file.entries.into_iter().filter_map(|v| serde_json::from_value::<Saved>(v).ok()).map(entry).collect();
-    entries.iter().any(keyed).then_some(entries)
+    let mut copy = Copy::default();
+    for saved in file.entries.into_iter().filter_map(|v| serde_json::from_value::<Saved>(v).ok()) {
+        if matches!(saved, Saved::Changes { restored: true, .. }) {
+            copy.restored.push(copy.entries.len());
+        }
+        copy.entries.push(entry(saved));
+    }
+    copy.entries.iter().any(keyed).then_some(copy)
 }
 
 /// Where a session's copy lives; None for an id that isn't a plain file name.
@@ -217,12 +247,12 @@ fn file(id: &str) -> Option<PathBuf> {
     plain.then(|| crate::app_file(&format!("transcripts/{id}.json"))).flatten()
 }
 
-pub fn load(id: &str) -> Option<Vec<Entry>> {
+pub fn load(id: &str) -> Option<Copy> {
     from_json(&std::fs::read_to_string(file(id)?).ok()?)
 }
 
-pub fn save(id: &str, entries: &[Entry]) {
-    let (Some(path), Some(json)) = (file(id), to_json(entries)) else { return };
+pub fn save(id: &str, entries: &[Entry], restored: &[usize]) {
+    let (Some(path), Some(json)) = (file(id), to_json(entries, restored)) else { return };
     // ponytail: best effort; without a copy the session opens on its summary as before.
     let _ = crate::write_atomic(&path, json.as_bytes());
 }
@@ -439,7 +469,9 @@ mod tests {
             Entry::Reopened(at),
             Entry::RunState(Vec::new()),
         ];
-        let back = from_json(&to_json(&saved).unwrap()).unwrap();
+        let copy = from_json(&to_json(&saved, &[]).unwrap()).unwrap();
+        assert_eq!(copy.restored, Vec::<usize>::new());
+        let back = copy.entries;
         assert_eq!(words(&back), ["you: Fit the decay", "thought", "tool: mcp__pluto__edit_cell", "claude: The rate is 0.09.", "changes", "note: You stopped Claude", "reopened"]);
         let Entry::User { attachments, delivery, sent, .. } = &back[0] else { panic!() };
         assert_eq!((attachments.as_slice(), *delivery, *sent), ([quote].as_slice(), Delivery::Joined, Some(at)));
@@ -458,10 +490,24 @@ mod tests {
 
     #[test]
     fn a_copy_with_no_messages_isnt_kept_and_unknown_entries_are_skipped() {
-        assert_eq!(to_json(&[Entry::Note("Notebook moved".into())]), None);
+        assert_eq!(to_json(&[Entry::Note("Notebook moved".into())], &[]), None);
         assert!(from_json("not json").is_none());
         let back = from_json(r#"{"version": 2, "entries": [{"type": "hologram"}, {"type": "agent", "text": "Hi"}]}"#).unwrap();
-        assert_eq!(words(&back), ["claude: Hi"]);
+        assert_eq!(words(&back.entries), ["claude: Hi"]);
+    }
+
+    #[test]
+    fn a_restored_card_is_saved_as_restored_where_it_ends_up() {
+        let card = |n: &str| Entry::Changes(vec![ChangedCell { cell: n.into(), name: n.into(), change: CellChange::Edited, added: 1, removed: 1, before: Some("a = 1".into()), after: Some("a = 2".into()), notebook: None, unseen: false }]);
+        // The run-state entry isn't kept, so the restored card moves up one.
+        let entries = vec![Entry::RunState(Vec::new()), agent("Done."), card("a"), card("b")];
+        let json = to_json(&entries, &[3]).unwrap();
+        assert!(!json.contains(r#""restored":false"#), "only a restored card says so: {json}");
+        let back = from_json(&json).unwrap();
+        assert_eq!((words(&back.entries).len(), back.restored), (3, vec![2]));
+        // A copy saved before this reads as nothing restored.
+        let old = from_json(r#"{"version": 1, "entries": [{"type": "agent", "text": "Hi"}, {"type": "changes", "cells": []}]}"#).unwrap();
+        assert_eq!(old.restored, Vec::<usize>::new());
     }
 
     #[test]
