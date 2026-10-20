@@ -228,7 +228,7 @@ impl About {
             Action::Restart => drop(self.workspace.update(cx, |ws, cx| ws.install_update(cx))),
             Action::UpdateAdapter => drop(self.workspace.update(cx, |ws, cx| ws.update_adapter(cx))),
             Action::CheckNow => drop(self.workspace.update(cx, |ws, cx| ws.check_for_update(cx))),
-            Action::Download => cx.open_url(crate::updater::RELEASE_PAGE),
+            Action::Download => crate::platform::open_url(crate::updater::RELEASE_PAGE, cx),
         }
     }
 
@@ -307,7 +307,7 @@ impl Render for About {
                     .flex()
                     .gap(px(14.))
                     .text_size(theme::size_meta())
-                    .child(link("website", "Website").on_click(|_, _, cx| cx.open_url(WEBSITE)))
+                    .child(link("website", "Website").on_click(|_, _, cx| crate::platform::open_url(WEBSITE, cx)))
                     .child(link("licences", "Licences").on_click(|_, _, cx| open_licences(cx))),
             );
         div()
@@ -426,7 +426,7 @@ impl Render for Licences {
                             cx.notify();
                         })),
                 ),
-                (None, Some(url)) => Some(link("open", "Licence").id(("open", i)).on_click(move |_, _, cx| cx.open_url(url))),
+                (None, Some(url)) => Some(link("open", "Licence").id(("open", i)).on_click(move |_, _, cx| crate::platform::open_url(url, cx))),
                 (None, None) => None,
             };
             div()

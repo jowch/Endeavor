@@ -2793,13 +2793,15 @@ impl Render for Workspace {
 fn main() {
     // X11 only, through XWayland on a Wayland desktop: wry embeds the notebook
     // only in an X11 window, and GPUI is built without its Wayland client, so
-    // seeing WAYLAND_DISPLAY it would choose Wayland and panic.
+    // seeing WAYLAND_DISPLAY it would choose Wayland and panic. Kept aside for
+    // the programs that open links (platform::opener). GTK is told in
+    // platform::init, so nothing the app starts inherits an X11-only GTK.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+    if let Some(display) = std::env::var_os("WAYLAND_DISPLAY") {
         // SAFETY: first thing in main, before any other thread exists.
         unsafe {
+            std::env::set_var(platform::WAYLAND_DISPLAY_KEPT, display);
             std::env::remove_var("WAYLAND_DISPLAY");
-            std::env::set_var("GDK_BACKEND", "x11");
         }
     }
     // `claude auth login` opens its page through this app (signin::Login).
@@ -2869,8 +2871,8 @@ fn main() {
         ]);
         cx.bind_keys(composer::key_bindings());
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.on_action(|_: &OpenHelp, cx| cx.open_url(about::HELP));
-        cx.on_action(|_: &ReportIssue, cx| cx.open_url(about::REPORT_ISSUE));
+        cx.on_action(|_: &OpenHelp, cx| crate::platform::open_url(about::HELP, cx));
+        cx.on_action(|_: &ReportIssue, cx| crate::platform::open_url(about::REPORT_ISSUE, cx));
         cx.on_action(|_: &BringAllToFront, cx| platform::bring_all_to_front(cx));
         // Deferred: from a focused view the action runs inside the active window,
         // which can't be updated until it returns.

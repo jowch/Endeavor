@@ -926,7 +926,7 @@ impl Workspace {
     pub fn apply_fix(&mut self, fix: &Fix, cx: &mut Context<Self>) {
         match fix {
             Fix::Repair => self.repair_local(cx),
-            Fix::Download => cx.open_url(crate::about::WEBSITE),
+            Fix::Download => crate::platform::open_url(crate::about::WEBSITE, cx),
             Fix::CopyCommand(command) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
                 self.status = "Copied the command; paste it in Terminal.".into();
