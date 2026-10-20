@@ -183,6 +183,7 @@ fn small_window(title: &'static str, size: Size<Pixels>, cx: &App) -> WindowOpti
         titlebar: Some(TitlebarOptions { title: Some(title.into()), appears_transparent: !cfg!(windows), traffic_light_position: Some(point(px(14.), px(12.))) }),
         is_resizable: false,
         is_minimizable: true,
+        app_id: cfg!(target_os = "linux").then(|| "endeavor".into()),
         ..Default::default()
     }
 }

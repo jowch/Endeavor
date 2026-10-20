@@ -2956,6 +2956,8 @@ fn main() {
                     appears_transparent: !cfg!(windows),
                     traffic_light_position: Some(point(px(16.), px(16.))),
                 }),
+                // X11's WM_CLASS, which a dock matches to endeavor.desktop.
+                app_id: cfg!(target_os = "linux").then(|| "endeavor".into()),
                 ..Default::default()
             },
             |window, cx| {
