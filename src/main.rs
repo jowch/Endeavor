@@ -2791,6 +2791,17 @@ impl Render for Workspace {
 }
 
 fn main() {
+    // X11 only, through XWayland on a Wayland desktop: wry embeds the notebook
+    // only in an X11 window, and GPUI is built without its Wayland client, so
+    // seeing WAYLAND_DISPLAY it would choose Wayland and panic.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        // SAFETY: first thing in main, before any other thread exists.
+        unsafe {
+            std::env::remove_var("WAYLAND_DISPLAY");
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+    }
     // `claude auth login` opens its page through this app (signin::Login).
     signin::browser_shim();
     // An agent's adapter, in a job that ends its whole tree (agent_job).
