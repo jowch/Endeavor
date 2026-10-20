@@ -2583,7 +2583,11 @@ impl Render for Workspace {
         let modal = self.server_dialog.is_some() || !self.asks.is_empty() || self.login_node_warning.is_some();
         let show_webview = self.setup.is_none() && active.is_some() && stand_in.is_none() && !modal;
         if self.webview.read(cx).visible() != show_webview {
-            self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
+            // Notified, so its cached frame (below) is redrawn and placed again.
+            self.webview.update(cx, |w, cx| {
+                if show_webview { w.show() } else { w.hide() }
+                cx.notify();
+            });
         }
         overlay::set_dimmed(self.webview.read(cx).raw(), self.settings_panel.is_some() || self.confirm.is_some());
         let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
@@ -2697,7 +2701,11 @@ impl Render for Workspace {
         let notebook = match (active, stand_in) {
             (None, _) => self.render_draft_pane(cx),
             (Some(_), Some(stand_in)) => stand_in,
-            (Some(_), None) => self.webview.clone().into_any_element(),
+            // Cached: gpui-wry sets the native view's frame in every prepaint, and
+            // on macOS each setFrame: reaches WebKit. The notebook lagged while a
+            // spinner redraws the window 20 times a second. A cached view
+            // prepaints again only when its bounds change or it's notified.
+            (Some(_), None) => AnyView::from(self.webview.clone()).cached(StyleRefinement::default().size_full()).into_any_element(),
         };
         div()
             .key_context("Workspace")
