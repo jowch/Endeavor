@@ -1,6 +1,7 @@
 name: Something got in your way
 description: Trying Endeavor or its plugin, and something stopped you, confused you or took too long. Bugs welcome too.
 title: "Got in my way: "
+labels: ["feedback"]
 body:
   - type: markdown
     attributes:
