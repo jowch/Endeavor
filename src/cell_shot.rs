@@ -178,7 +178,7 @@ mod mac {
             true
         }
 
-        fn shown(&self) -> bool {
+        pub fn shown(&self) -> bool {
             unsafe {
                 let hidden: bool = msg_send![&*self.view.webview(), isHidden];
                 !hidden
@@ -231,6 +231,18 @@ pub struct Second {
     #[cfg(target_os = "macos")]
     used: Option<std::time::Instant>,
     pub last: Option<&'static str>,
+}
+
+impl Second {
+    /// The second view, for the state dump: "none" (not made, or let go), "hidden", or "shown"
+    /// (behind the user's view, while a picture is taken).
+    pub fn view(&self) -> &'static str {
+        #[cfg(target_os = "macos")]
+        if let Some(shooter) = &self.shooter {
+            return if shooter.shown() { "shown" } else { "hidden" };
+        }
+        "none"
+    }
 }
 
 impl crate::Workspace {
@@ -344,7 +356,6 @@ async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::Backg
 }
 
 /// The JSON of what `js` gives in `view`; None if it fails or takes over a second.
-#[cfg(target_os = "macos")]
 async fn eval(view: &wry::WebView, js: &str, executor: &gpui::BackgroundExecutor) -> Option<String> {
     let (tx, rx) = futures::channel::oneshot::channel();
     let tx = std::sync::Mutex::new(Some(tx));
@@ -405,4 +416,73 @@ fn view(bridge: &crate::pluto::Bridge, key: u64, call: &str) -> Result<serde_jso
     let (_, body) = response.split_once("\r\n\r\n").ok_or("malformed HTTP response")?;
     let message: serde_json::Value = serde_json::from_str(body).map_err(|e| format!("bad JSON-RPC reply: {e}: {body}"))?;
     Ok(message["result"].clone())
+}
+
+/// Debug builds: the file `ENDEAVOR_TEST_ACTION` names holds one thing for the app to do as the
+/// user would, so the Mac check needs no clicks. The app deletes the file, does it, and writes
+/// what happened to `<file>.done`:
+/// - `open <notebook path>`: start a session on This Mac in the notebook's folder, on that
+///   notebook (it opens in safe preview), as the new-session screen does.
+/// - `run`: the callout's Run notebook, for the notebook on screen.
+/// - `settings` and `close settings`: open or close Settings (⌘, and Esc).
+/// - `js <script>`: run the script in the user's notebook page; `.done` has the JSON of what it
+///   gives once it has run (`null` for nothing).
+#[cfg(debug_assertions)]
+impl crate::Workspace {
+    pub(crate) fn watch_test_actions(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {
+        let Some(path) = std::env::var_os("ENDEAVOR_TEST_ACTION").map(std::path::PathBuf::from) else { return };
+        let done = std::path::PathBuf::from(format!("{}.done", path.to_string_lossy()));
+        cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(200)).await;
+            let Ok(action) = std::fs::read_to_string(&path) else { continue };
+            let _ = std::fs::remove_file(&path);
+            let done = done.clone();
+            if this.update_in(cx, |this, window, cx| this.test_action(action.trim(), done, window, cx)).is_err() {
+                return;
+            }
+        })
+        .detach();
+    }
+
+    fn test_action(&mut self, action: &str, done: std::path::PathBuf, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {
+        let (verb, rest) = action.split_once(' ').unwrap_or((action, ""));
+        let said = match (verb, rest.trim()) {
+            ("open", path) => {
+                let folder = std::path::Path::new(path).parent().map(|p| p.to_string_lossy().into_owned());
+                self.draft.host = HostId::ThisMac;
+                self.draft.folder = folder;
+                self.draft.notebook = crate::new_session::NotebookChoice::Existing(path.to_owned());
+                self.input.update(cx, |s, cx| s.set_value("Look at this notebook.", window, cx));
+                self.start_session(window, cx);
+                "started".to_owned()
+            }
+            ("run", _) => match self.active_session().and_then(|s| s.notebook.clone()) {
+                Some(notebook) => {
+                    self.run_notebook(notebook, cx);
+                    "running".to_owned()
+                }
+                None => "no notebook on screen".to_owned(),
+            },
+            ("settings", _) => {
+                self.open_settings_last(window, cx);
+                "open".to_owned()
+            }
+            ("close", "settings") => {
+                self.close_settings(window, cx);
+                "closed".to_owned()
+            }
+            ("js", script) => {
+                let answer = done.clone();
+                let asked = self.webview.read(cx).raw().evaluate_script_with_callback(script, move |value| {
+                    let _ = std::fs::write(&answer, if value.is_empty() { "null".to_owned() } else { value });
+                });
+                match asked {
+                    Ok(()) => return,
+                    Err(e) => format!("couldn't run it: {e}"),
+                }
+            }
+            _ => format!("unknown action: {action}"),
+        };
+        let _ = std::fs::write(&done, said);
+    }
 }

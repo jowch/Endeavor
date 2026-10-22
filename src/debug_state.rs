@@ -193,6 +193,7 @@ impl Workspace {
             })),
             "page": page,
             "cell_shot": self.second.last,
+            "cell_shot_view": self.second.view(),
         })
     }
 

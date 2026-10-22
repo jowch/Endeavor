@@ -913,6 +913,8 @@ impl Workspace {
         this.watch_network(cx);
         #[cfg(debug_assertions)]
         this.watch_state_requests(cx);
+        #[cfg(debug_assertions)]
+        this.watch_test_actions(window, cx);
         this
     }
 

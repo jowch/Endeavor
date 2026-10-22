@@ -234,6 +234,9 @@ To wait for something, poll the dump. For example, loop until
 - `cell_shot`. How the last picture of a cell's output for the agent went
   (Mac): `picture`, or why there was none, such as "the output is empty" or
   "the notebook pane isn't on screen". Null before the first one.
+  `cell_shot_view` is the second web view that takes it: `none` (not made
+  yet, or let go after 5 idle minutes), `hidden`, or `shown` (behind the
+  user's view, only while a picture is taken).
 
 A dump from a session that made a notebook, cut down:
 
@@ -375,6 +378,16 @@ These are read by debug builds only.
   would. It writes the result's text to `<file>.json` and the picture, if
   any, to `<file>.png`, then deletes the file. It checks the app's picture
   of an HTML output without an agent turn.
+- `ENDEAVOR_TEST_ACTION`: a file path. Write one action to it, and the app
+  does it as the user would, deletes the file, and writes what happened to
+  `<file>.done`. It lets a check run on a computer where nothing can click.
+  - `open <notebook path>` starts a session on this computer in the
+    notebook's folder, on that notebook, which opens in safe preview.
+  - `run` is the callout's Run notebook.
+  - `settings` and `close settings` open and close Settings.
+  - `js <script>` runs the script in the notebook page the user sees, and
+    `<file>.done` gets the JSON of what it gives. For example, set a slider
+    and send its `input` event, or read `scrollY`.
 - `ENDEAVOR_TEST_STUCK_OPENING`: a file path. When the file appears, the
   notebook's page is taken down, as a runtime going away does, and the pane
   says "Opening". After 5 s the app loads the page again by itself. While the
