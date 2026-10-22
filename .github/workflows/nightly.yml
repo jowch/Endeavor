@@ -223,10 +223,11 @@ jobs:
           fi
           rm -f "$key"
           # Stapling fetches the ticket from Apple's CloudKit, which drops the
-          # connection now and then (10-17, 10-22). Try again before failing.
-          for wait in 15 30 60 120 0; do
+          # connection now and then, sometimes for hours (10-17, and twice on
+          # 10-22). Try again for about a quarter of an hour before failing.
+          for wait in 30 60 120 240 480 0; do
             xcrun stapler staple "$dmg" && break
-            [ "$wait" != 0 ] || { echo "::error::Stapling failed five times."; exit 1; }
+            [ "$wait" != 0 ] || { echo "::error::Stapling failed six times."; exit 1; }
             echo "Stapling failed; trying again in ${wait}s."
             sleep "$wait"
           done
