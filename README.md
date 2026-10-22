@@ -98,6 +98,9 @@ Codex or Antigravity, on your computer, a workstation or a cluster node (the
 block above has the commands). See
 [EndeavorMCP's README](https://github.com/jowch/EndeavorMCP#readme).
 
+Something got in your way? [Tell us](https://jowch.github.io/Endeavor/feedback/),
+with no account, or open an issue here.
+
 ## Build it
 
 ```
