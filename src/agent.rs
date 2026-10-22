@@ -546,7 +546,7 @@ const LOCAL_TOOLS: [&str; 8] = ["Bash", "Read", "Write", "Edit", "MultiEdit", "G
 /// Claude Code's own reads do in its default mode. Claude Code prompts for any
 /// MCP tool without an allow rule, `readOnlyHint` or not (2.1.280). Every other
 /// notebook and host tool (edits, runs, `run_shell`) still asks in Manual.
-const READ_ONLY_TOOLS: [&str; 15] = [
+const READ_ONLY_TOOLS: [&str; 16] = [
     "mcp__notebook__list_notebooks",
     "mcp__notebook__session_status",
     "mcp__notebook__read_cell",
@@ -560,6 +560,7 @@ const READ_ONLY_TOOLS: [&str; 15] = [
     "mcp__notebook__find_symbol_references",
     "mcp__notebook__search_code",
     "mcp__notebook__validate_cell",
+    "mcp__notebook__preview_package_update",
     "mcp__notebook__list_folder",
     "mcp__notebook__read_file",
 ];
@@ -1498,7 +1499,8 @@ mod tests {
             .collect();
         let asks = [
             "edit_cell", "edit_cells", "add_cell", "delete_cell", "move_cell", "fold_cell", "execute_cell", "submit_changes", "run_all_cells",
-            "allow_execution", "new_notebook", "open_notebook", "keep_notebook_alive", "interrupt_notebook", "run_shell",
+            "allow_execution", "new_notebook", "open_notebook", "keep_notebook_alive", "interrupt_notebook", "restart_notebook",
+            "apply_package_update", "run_shell",
         ];
         for mode in [false, true] {
             let allowed = session_options(false, "/p", mode)["claudeCode"]["options"]["allowedTools"].clone();
