@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(d.output, vec![Part::Error("No cell c-9abcdef012".into())]);
         let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c", "code": "x = 1", "output": "1", "errored": false})), false, false);
         assert_eq!(d.output, vec![Part::Code("x = 1".into()), Part::Text("1".into())]);
-        let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c-9abcdef012", "code_unchanged": true, "output": "1", "errored": false})), false, false);
+        let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c-9abcdef012", "code_unchanged": true, "code_sha": "0123456789ab", "output": "1", "errored": false})), false, false);
         assert_eq!(d.output, vec![Part::Line("cell c-9abcde: code unchanged since the agent last saw it".into()), Part::Text("1".into())]);
         let d = open("mcp__notebook__list_notebooks", ToolKind::Other, json!({}), out(json!([{"path": "/w/a.jl", "cell_count": 4, "execution_allowed": false}])), false, false);
         assert_eq!(d.output, vec![Part::Text("/w/a.jl · 4 cells · safe preview".into())]);

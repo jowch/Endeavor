@@ -243,6 +243,13 @@ impl CellCodes {
             "read_cell" | "add_cell" => {
                 if let (Some(id), Some(code)) = (output["cell_id"].as_str(), output["code"].as_str()) {
                     self.0.insert(id.to_owned(), code.to_owned());
+                } else if let (Some(id), true) = (output["cell_id"].as_str(), output["code_unchanged"] == true) {
+                    // A read that leaves the code out, as what the agent last saw: the copy here is
+                    // kept only if it is that code. An edit the app never saw complete (a stopped
+                    // turn) would otherwise stay as a wrong "before" in every later diff.
+                    if self.0.get(id).is_none_or(|code| Some(code_sha(code).as_str()) != output["code_sha"].as_str()) {
+                        self.0.remove(id);
+                    }
                 }
             }
             // A notebook just made: its cells are empty, as the runtime counts them read.
@@ -281,8 +288,10 @@ impl CellCodes {
                 .filter_map(|c| Some(edit(c["cell_id"].as_str()?, c["code"].as_str()?)))
                 .collect(),
             "add_cell" => match (input["code"].as_str(), result["cell_id"].as_str()) {
-                // The new cell's code comes from the call, so a reply that doesn't send it back still records it.
+                // The new cell's code comes from the call, so a reply that doesn't send it back still
+                // records it; a reply that does has the engine's copy, which wins.
                 (Some(code), Some(id)) => {
+                    let code = result["code"].as_str().unwrap_or(code);
                     self.0.insert(id.to_owned(), code.to_owned());
                     vec![CellEdit { cell: id.to_owned(), before: None, after: Some(code.to_owned()), notebook, unseen: false }.diff()]
                 }
@@ -299,6 +308,13 @@ impl CellCodes {
             _ => vec![],
         }
     }
+}
+
+/// The first 12 hex digits of the code's SHA-256: what the runtime sends as `code_sha` with
+/// `code_unchanged`, to say which code it means.
+pub fn code_sha(code: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(code.as_bytes()).iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
 /// Per-cell code from `read_notebook_code`, undoing its markdown/empty markers.
@@ -396,10 +412,36 @@ mod tests {
         codes.observe("add_cell", &reply);
         codes.diff("add_cell", &json!({ "code": "x = 1" }), &reply);
         // A read that leaves the code out, as it does for code the session already has, keeps it.
-        codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true }));
+        codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true, "code_sha": code_sha("x = 1") }));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
         assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())]);
         assert!(!d[0].edit.as_ref().unwrap().unseen);
+    }
+
+    #[test]
+    fn a_read_without_code_drops_a_copy_that_isnt_the_code_it_names() {
+        let mut codes = CellCodes::default();
+        codes.observe("read_cell", &json!({ "cell_id": C1, "code": "x = 1" }));
+        // The agent's edit to x = 2 was stopped after the runtime applied it, so the app never saw it.
+        codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true, "code_sha": code_sha("x = 2") }));
+        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 3" }), &json!({}));
+        assert!(d[0].edit.as_ref().unwrap().unseen, "the whole cell, not a wrong diff");
+        // Without a hash, the copy isn't trusted either.
+        codes.observe("read_cell", &json!({ "cell_id": C1, "code": "x = 3" }));
+        codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true }));
+        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 4" }), &json!({}));
+        assert!(d[0].edit.as_ref().unwrap().unseen);
+        assert_eq!(code_sha("x = 1").len(), 12);
+    }
+
+    #[test]
+    fn a_new_cell_takes_the_engines_code_when_the_reply_has_it() {
+        let mut codes = CellCodes::default();
+        let reply = json!({ "cell_id": C1, "code": "x = 1\n" });
+        codes.observe("add_cell", &reply);
+        codes.diff("add_cell", &json!({ "code": "x = 1" }), &reply);
+        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
+        assert_eq!(d[0].edit.as_ref().unwrap().before.as_deref(), Some("x = 1\n"));
     }
 
     #[test]
