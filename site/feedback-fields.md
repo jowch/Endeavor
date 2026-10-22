@@ -12,8 +12,10 @@ together.
 | Email, if you'd like a reply | email, optional; used only to reply | visible | none (GitHub has the account) | the person |
 | Build, such as `0.1.0-6ed0c03` | short text | hidden | `build` | the app |
 | OS: `macos`, `windows`, `linux` | short text | hidden | `os` | the app |
-| Agent: `claude`, `codex`, `antigravity`, `plugin` | short text | hidden | `agent` | the app, or the plugin skill (`plugin`) |
+| Agent: `claude`, `codex`, `antigravity` | short text | hidden | `agent` | the app, or the agent itself with the plugin |
 | From: `app`, `site`, `plugin` | short text | hidden | `source` | the link |
+
+`bug.yml` uses the same ids for build, os and agent.
 
 The app fills build, os, agent and source in the link it opens
 (`src/about.rs`, `feedback_url` and `github_feedback_url`). The site's

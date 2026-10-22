@@ -9,32 +9,25 @@ body:
 
         Before you paste anything, take out what you don't want public: passwords, the value after `token=` or `secret=` in any link or log line, server names, user names, folder paths and data.
   - type: input
-    id: version
+    id: build
     attributes:
-      label: Endeavor version and build
-      description: "Settings ▸ About shows them (on a Mac, Endeavor ▸ About Endeavor too)."
-      placeholder: "Version 0.1.0 (build 6ed0c03)"
+      label: Build
+      description: "Settings ▸ About shows the version and build, such as Version 0.1.0 (build 6ed0c03). On a Mac, Endeavor ▸ About Endeavor too."
+      placeholder: "0.1.0-6ed0c03"
     validations:
       required: true
-  - type: dropdown
-    id: platform
+  - type: input
+    id: os
     attributes:
-      label: Computer
-      options:
-        - Mac
-        - Windows
-        - Linux
+      label: OS
+      description: "macos, windows or linux"
     validations:
       required: true
-  - type: dropdown
+  - type: input
     id: agent
     attributes:
       label: Agent
-      options:
-        - Claude
-        - Codex
-        - Antigravity
-        - Not sure
+      description: "claude, codex or antigravity"
   - type: dropdown
     id: where
     attributes:
