@@ -4,7 +4,7 @@
 export const meta = {
 	title: 'Endeavor: work through your data with an AI agent in a live notebook',
 	description:
-		'Endeavor is a desktop app for working through your data together with an AI agent, in a live notebook that keeps every step as code that runs the same way every time, for you or anyone you share it with. Test builds for Mac and Windows.',
+		'Endeavor is a desktop app for analyzing data with an AI agent, reproducibly. Claude Code, Codex or Antigravity writes and runs code in a live Julia or R notebook that keeps every step, for you or anyone you share it with. Test builds for Mac and Windows.',
 	imageAlt: 'The Endeavor window, with the chat on the left and a Julia notebook with a plot on the right',
 };
 
@@ -16,7 +16,7 @@ export const nav = {
 export const hero = {
 	name: 'Endeavor',
 	tagline: 'Build our future',
-	lead: 'Work through your data with an AI agent in a live notebook. Explore, test ideas and learn what it says together, in code that runs the same way every time.',
+	lead: 'Work through your data with an AI agent in a live Julia or R notebook. Explore, test ideas and learn what it says together, in code that runs the same way every time.',
 	// The nightly release's files keep these names from build to build (.github/workflows/nightly.yml).
 	downloads: [
 		{ text: 'Download for Mac', href: 'https://github.com/jowch/Endeavor/releases/download/nightly/Endeavor-macos-arm64.dmg' },
@@ -35,12 +35,18 @@ export const hero = {
 	primary: { text: 'Read the guide', href: '/overview/' },
 };
 
+// Under the hero and in the footer: the issue form for first tries (.github/ISSUE_TEMPLATE/got-in-the-way.yml).
+export const feedback = {
+	text: 'Tell us what got in your way',
+	href: 'https://github.com/jowch/Endeavor/issues/new?template=got-in-the-way.yml',
+};
+
 export const record = {
 	heading: 'The notebook is the record',
 	paragraphs: [
-		'You describe what you want in the chat. Claude writes the code and runs it in a Pluto notebook next to it, and you see each step as it happens.',
+		'You describe what you want in the chat. The agent, Claude Code or Codex, writes the code and runs it in a notebook next to it, and you see each step as it happens. Notebooks are Julia (Pluto) or R (Ember). Python, through marimo, is coming soon.',
 		'The chat is where you talk. The notebook is what you keep. It holds every step of the analysis as code, with the result under it, so you or a colleague can read it, check it and run it again later.',
-		'Endeavor is made for scientists who are taking on their own analysis and are new to code or notebooks. If you already write Julia, you can edit any cell yourself and give Claude more room.',
+		'Endeavor is made for scientists who are taking on their own analysis and are new to code or notebooks. If you already write Julia or R, you can edit any cell yourself and give the agent more room.',
 	],
 	alt: 'The Endeavor window. On the left, the list of sessions. In the middle, the chat, with a request to simulate 1,000 coin flips and Claude’s reply. On the right, the notebook with its cells and a plot of the share of heads.',
 	link: { text: 'What Endeavor is', href: '/overview/' },
@@ -51,8 +57,8 @@ export const features = [
 		id: 'approvals',
 		heading: 'You decide what runs',
 		paragraphs: [
-			'Before Claude runs code, a card above the message box shows what will run, including the cells that will run again with it. You answer with one key. In Manual, Claude asks before every change to the notebook too.',
-			'Pick a mode for how much Claude may do on its own. Manual asks before every change. Ask to run lets Claude edit and asks before running. Auto runs without asking. Plan only reads, then proposes a plan.',
+			'Before the agent runs code, a card above the message box shows what will run, including the cells that will run again with it. You answer with one key. In Manual, the agent asks before every change to the notebook too.',
+			'Pick a mode for how much the agent may do on its own. Manual asks before every change. Ask to run lets it edit and asks before running. Auto runs without asking. Plan only reads, then proposes a plan.',
 		],
 		image: 'approval-card',
 		alt: 'An approval card above the message box asking “Edit fit and run it?”, with the change shown as a diff and the buttons Deny, Always this session, and Edit and run.',
@@ -82,9 +88,9 @@ export const features = [
 	},
 	{
 		id: 'where',
-		heading: 'Run on this Mac, a server or a cluster',
+		heading: 'Run on your computer, a server or a cluster',
 		paragraphs: [
-			'Each session runs its notebook where you choose: on this Mac, on a lab server over SSH, or as a job on a Slurm cluster. Claude stays on your Mac either way.',
+			'Each session runs its notebook where you choose: on your computer, on a lab server over SSH, or as a job on a Slurm cluster. The agent stays on your computer either way. Servers and clusters work from a Mac or Linux; not from Windows yet.',
 			'On a cluster, pick a preset or set the partition, CPUs, memory and time limit, and Endeavor submits the job for you.',
 		],
 		image: 'cluster-resources',
@@ -96,11 +102,11 @@ export const features = [
 export const withoutApp = {
 	heading: 'Use the notebook tools without the app',
 	paragraphs: [
-		'If you already work with Claude Code, Codex or Gemini CLI, you can use Endeavor’s notebook tools on their own. They are a separate program, EndeavorMCP, that runs on your computer, a lab server or a cluster node.',
-		'Run it in the folder for your notebooks. It prints a link to watch the notebook in your browser, and the settings to connect your agent over MCP.',
+		'If you already work with Claude Code, Codex or Antigravity, you can use Endeavor’s notebook tools on their own, as a plugin. The agent can run notebooks on your computer, a lab server or a cluster node, and you watch them in your browser.',
+		'For Claude Code, run these two lines, then start Claude Code in the folder for your notebooks. Codex and Antigravity are in “Installing with an agent?” above.',
 	],
-	code: ['cargo install --git https://github.com/jowch/EndeavorMCP endeavor-mcp', 'cd ~/my-analysis', 'endeavor serve'],
-	codeLabel: 'Install EndeavorMCP and start the notebook tools',
+	code: ['claude plugin marketplace add jowch/EndeavorMCP', 'claude plugin install endeavor@endeavor'],
+	codeLabel: 'Install the Endeavor plugin for Claude Code',
 	link: { text: 'EndeavorMCP on GitHub', href: 'https://github.com/jowch/EndeavorMCP#readme' },
 };
 
@@ -109,6 +115,7 @@ export const footer = {
 		{ text: 'Docs', href: '/overview/' },
 		{ text: 'GitHub', href: 'https://github.com/jowch/Endeavor' },
 		{ text: 'EndeavorMCP', href: 'https://github.com/jowch/EndeavorMCP' },
+		feedback,
 		{ text: 'MIT licence', href: 'https://github.com/jowch/Endeavor/blob/main/LICENSE' },
 	],
 };

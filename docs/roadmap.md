@@ -5,41 +5,57 @@ Living plan; update it as items land. Design rationale lives in
 [design-notes.md](design-notes.md). Open gaps are
 [GitHub issues](https://github.com/jowch/Endeavor/issues).
 
-_Last updated: 2026-10-10_
+_Last updated: 2026-10-22_
 
 ## Where things stand
 
-Endeavor is a native (GPUI) app with the live Pluto frontend in one pane and a
-Claude Code agent panel (over ACP) in the other. Notebooks run in a runtime
-per host: a Rust core (`endeavor core`) that serves the agent's tools,
+Endeavor is a native (GPUI) app for analyzing data with an agent,
+reproducibly: the live notebook in one pane and an ACP agent panel in the
+other, with Claude Code or Codex (Antigravity tested less). Notebooks run in a
+runtime per host: a Rust core (`endeavor core`) that serves the agent's tools,
 with Julia running Pluto, or R running Ember for R notebooks, behind it as an adapter
 ([runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)). The runtime runs on this computer, on a
 server, or in a Slurm job on a cluster ([remote-sessions.md](remote-sessions.md)).
 
+A "nightly" prerelease (`nightly.yml`) holds a Mac build, signed with a
+Developer ID and notarized, and an unsigned Windows installer. Both update
+themselves once a day (#80; the check that a real nightly updates itself on
+each is still to pass). Linux builds from source. The changed-cells card can
+put a turn's cells back as they were (Restore, #124). What has to hold before
+it is announced is tracked in [#156](https://github.com/jowch/Endeavor/issues/156).
+
 ## Next
 
-- **A repeatable eval of the agent loop, with reproducibility checks on the
-  analyses** ([EndeavorMCP #26](https://github.com/jowch/EndeavorMCP/issues/26)).
-  Next after the app adopts EndeavorMCP; built to cover more than one engine.
+- **The release bar** ([#156](https://github.com/jowch/Endeavor/issues/156)):
+  an agent installs the plugin from one link to the site (#154); an old helper
+  or runtime never silently hides features (EndeavorMCP #226, #97); a nightly
+  updates itself on Mac and Windows (#80); commands reachable on every
+  platform (#148 on Linux, #10 on Windows); a newcomer reaches a first finished
+  analysis with no help.
+- **Python notebooks through marimo** ([#1](https://github.com/jowch/Endeavor/issues/1),
+  [marimo.md](marimo.md)). Next engine after Ember; the design needs a refresh
+  against the engine router before any code.
 - **R notebooks on Windows.** R notebooks (Ember) run in the app on Macs and
   Linux, and on servers and clusters. On Windows the chip offers only Julia
   and lists no `.R` files, until Ember runs there (Ember #48, #49).
-- **README, landing page and documentation website.**
+- **Checking the agent loop.** The smoke suite in EndeavorMCP
+  ([smoke.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/smoke.md))
+  runs fixed notebook tasks through Claude Code, and runs before a skill or
+  runtime change lands. A check that an analysis reruns the same is not
+  designed yet.
 
 The notebook tools (runtime, MCP server, `endeavor serve`) live in
 [EndeavorMCP](https://github.com/jowch/EndeavorMCP); their open work is in its
 [docs/status.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/status.md).
 
-## Before sharing the app
+## Before sharing the app widely
 
-- **Signing and notarization.** `scripts/bundle.sh` builds an ad-hoc signed
-  `Endeavor.app` (resources in `Contents/Resources`); sharing it needs a
-  Developer ID signature, hardened runtime, and notarization. The Windows
-  build isn't signed either.
-- **A release pipeline** ([#13](https://github.com/jowch/Endeavor/issues/13)).
-  CI keeps a Windows build and installer to try, and a "nightly"
-  prerelease holds the newest Mac app and Windows installer from `main`
-  (`nightly.yml`). There are no versioned releases yet.
+- **Windows signing** ([#12](https://github.com/jowch/Endeavor/issues/12)).
+  The Mac nightly is signed and notarized. The Windows installer isn't
+  signed, so SmartScreen warns, and Windows 11's Smart App Control is
+  unchecked.
+- **Versioned releases** ([#13](https://github.com/jowch/Endeavor/issues/13)).
+  There is only the nightly prerelease so far.
 - **Updates** ([#80](https://github.com/jowch/Endeavor/issues/80)). The
   Mac nightly checks `nightly.json` once a day, fetches a newer build,
   checks its Developer ID team and notarization and that its signed
@@ -48,16 +64,12 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   SHA-256 (it isn't signed, #12, so that's the only check), and runs it
   silently on Restart or quit. A download the app makes carries no Mark of
   the Web, so SmartScreen's file check doesn't stop it (checked on Windows
-  10; Windows 11's Smart App Control is unchecked). Builds from source never
-  check.
-- **The Windows installer** ([#12](https://github.com/jowch/Endeavor/issues/12)):
-  a per-user installer that adds WebView2 if it's missing. CI builds it; it
-  is unsigned and has been tried on one Windows machine.
+  10). Builds from source never check.
 
 ## Later
 
-- **Other ACP agents** (Codex, Antigravity, Gemini). Antigravity is pinned
-  for Windows, Mac and Linux, and has run on Windows only so far
+- **More ACP agents** (Gemini, and finishing Antigravity). Antigravity is
+  pinned for Windows, Mac and Linux, and has run on Windows only so far
   ([antigravity-agent.md](antigravity-agent.md)).
   The work that makes Endeavor
   agent-neutral is partly done; what is left, and what to find out about each
@@ -69,8 +81,7 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 - **Windows.** It builds and its tests pass in CI, which also keeps a
   build to try and a per-user installer ([windows.md](windows.md#install)).
   A local notebook with a real Claude session has run from the installer on
-  Windows 10; servers (the build has no server helpers), a download page and
-  signing are left. See [windows.md](windows.md), and [linux.md](linux.md)
+  Windows 10; servers (the build has no server helpers) and signing are left. See [windows.md](windows.md), and [linux.md](linux.md)
   for the Linux port's remaining work.
 - **Upstream to mthelm85/PlutoMCP.jl.** The runtime started from a fork of
   PlutoMCP that carried several general improvements (`new_notebook`, run
