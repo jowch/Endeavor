@@ -94,6 +94,7 @@ pub const WAYLAND_DISPLAY_KEPT: &str = "ENDEAVOR_WAYLAND_DISPLAY";
 /// `program`, to open a link or folder, with the desktop's own display: a
 /// browser already running on Wayland takes a link only from an opener that
 /// can reach it there, so without WAYLAND_DISPLAY the link is lost.
+#[cfg(unix)]
 pub fn opener(program: &str) -> std::process::Command {
     #[allow(unused_mut)]
     let mut command = std::process::Command::new(program);
