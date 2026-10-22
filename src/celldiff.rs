@@ -431,7 +431,7 @@ mod tests {
         codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true }));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 4" }), &json!({}));
         assert!(d[0].edit.as_ref().unwrap().unseen);
-        assert_eq!(code_sha("x = 1").len(), 12);
+        assert_eq!(code_sha("a = 1"), "b5bc1ffd9091", "the runtime's hash of the same code");
     }
 
     #[test]
