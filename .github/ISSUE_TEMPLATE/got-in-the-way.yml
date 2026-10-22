@@ -1,7 +1,6 @@
 name: Something got in your way
 description: Trying Endeavor or its plugin, and something stopped you, confused you or took too long. Bugs welcome too.
 title: "Got in my way: "
-labels: ["feedback"]
 body:
   - type: markdown
     attributes:
@@ -39,6 +38,6 @@ body:
     id: version
     attributes:
       label: Version
-      description: In the app, Endeavor ▸ About Endeavor shows the version and build. Leave empty if you don't know.
+      description: In the app, Settings ▸ About shows the version and build (on a Mac, Endeavor ▸ About Endeavor too). Leave empty if you don't know.
     validations:
       required: false

@@ -17,8 +17,8 @@ of the analysis that you keep, check and run again.
 - **Where they run:** on your computer, on a server you reach over ssh, or in
   a Slurm job on a cluster. Servers and clusters aren't on Windows yet.
 - **Agents:** Claude Code and Codex. Antigravity is tested less.
-- **Platforms:** test builds for Apple silicon Macs and Windows 10 or 11 update
-  themselves. On Linux, [build it from source](#build-it). It runs under X11;
+- **Platforms:** test builds for Apple silicon Macs and Windows 10 or 11, which
+  check for a newer build once a day. On Linux, [build it from source](#build-it). It runs under X11;
   under Wayland it should run through XWayland, which hasn't been tested.
 
 <!-- agent-install: start. A copy of Endeavor's site/agent-install.md; edit it there and run site/scripts/agent-install.mjs. -->
@@ -54,8 +54,13 @@ are then missing.
 agy plugin install https://github.com/jowch/EndeavorMCP/tree/main/antigravity-plugin
 ```
 
-On Windows, Antigravity needs Git for Windows' `bin` folder on the PATH, and
-Codex isn't supported.
+Codex and Antigravity don't tell the plugin the project folder, so notebook
+paths must be absolute. Under `codex exec`, every tool that changes something
+fails until the plugin's server is approved in `~/.codex/config.toml`
+([how](https://github.com/jowch/EndeavorMCP#install)).
+
+On Windows, Antigravity needs Git for Windows' `bin` folder on the PATH,
+Codex isn't supported, and the Claude Code plugin hasn't been tried yet.
 
 **Check that it worked.** `claude plugin list` (or `codex plugin list`) shows
 `endeavor@endeavor` enabled. The tools load when a session starts, so ask the

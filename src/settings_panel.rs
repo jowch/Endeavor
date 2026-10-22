@@ -387,6 +387,7 @@ pub enum Act {
     Update(about::Action),
     Website,
     Help,
+    Feedback,
     Licences,
 }
 
@@ -1117,6 +1118,7 @@ impl Workspace {
                 vec![Item::Links(vec![
                     Control::Link { label: "Website", external: true, act: Act::Website },
                     Control::Link { label: "Endeavor Help", external: true, act: Act::Help },
+                    Control::Link { label: "Feedback", external: true, act: Act::Feedback },
                     Control::Link { label: "Licences", external: false, act: Act::Licences },
                 ])],
             ),
@@ -1535,6 +1537,7 @@ impl Workspace {
             },
             Act::Website => cx.open_url(about::WEBSITE),
             Act::Help => cx.open_url(about::HELP),
+            Act::Feedback => cx.open_url(about::FEEDBACK),
             Act::Licences => about::open_licences(cx),
         }
         cx.notify();
