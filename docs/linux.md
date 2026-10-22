@@ -11,8 +11,9 @@ window opens with the window manager's frame, setup installs Node and the
 adapter, the local Julia runtime starts, and the Pluto notebook shows in the
 web view and runs cells. The keyboard moves between the app and the notebook,
 menus and Settings show over the notebook, light and dark follow the desktop,
-and a session on a server works from a Linux client. The main gaps left are
-packaging and the macOS menu bar's items.
+and a session on a server works from a Linux client. The menu button at the
+start of the sidebar's header has the macOS menu bar's items. The main gap
+left is packaging.
 
 The remaining work is ranked at the end of this page.
 
@@ -237,11 +238,13 @@ changes.
    (Reply to a selection) and Ctrl+↩ in its prompt and comment boxes, and
    its hints say Ctrl (`frontend/src/keys.ts`).
    Pluto has no Ctrl+E or Ctrl+J of its own.
-3. **The menu bar's items (S).** GPUI shows no menu bar on Linux, so the
-   About window, Help ▸ Endeavor Help, Report an Issue and Window ▸ Zoom have
-   no way in. Settings ▸ About has the version, updates, Help and Licences,
-   and Troubleshooting has Report a problem, so the About window is the only
-   thing missing. It needs a way in, such as a link in Settings ▸ About.
+3. **The menu bar's items (done).** GPUI shows no menu bar on Linux, so the
+   app draws one menu from the same list (`cx.get_menus()`, `menu.rs`): the
+   button with three lines at the start of the sidebar's header, or of the
+   chat's when the sidebar is closed. It has every item but the Window menu's,
+   which the window manager's title bar has, with each item's shortcut. Edit's
+   Cut, Copy, Paste and Select All act in the notebook when it had the
+   keyboard. Windows can use the same menu (#10).
 4. **Wayland (L).** wry can embed a child web view only in an X11 window. The
    app builds GPUI with only the `x11` feature, so on a Wayland desktop it runs
    through XWayland. That should work but is untested. Native Wayland needs a

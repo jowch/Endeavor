@@ -406,4 +406,11 @@ pub mod webcontent {
     pub fn has_keyboard(_: &wry::WebView) -> bool {
         false
     }
+
+    pub fn had_keyboard(webview: &wry::WebView) -> bool {
+        has_keyboard(webview)
+    }
+
+    // ponytail: the app menu's Edit items act on GPUI's text boxes only; WebView2's clipboard commands come with #10.
+    pub fn edit(_: &wry::WebView, _: gpui::OsAction) {}
 }

@@ -8,7 +8,7 @@ pub mod overlay;
 pub mod webcontent;
 pub mod webkeys;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use gpui::{App, IntoElement, MouseDownEvent, Styled, Window, canvas};
 use gtk::glib::Propagation;
@@ -41,6 +41,8 @@ pub(super) fn xid_of(window: &gtk::gdk::Window) -> Option<u64> {
 thread_local! {
     /// The notebook's web view, to tell GTK when the keyboard leaves it.
     static WEB_VIEW: RefCell<Option<webkit2gtk::WebView>> = const { RefCell::new(None) };
+    /// The web view had the keyboard when GPUI's window was last clicked.
+    static HAD_KEYBOARD: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Keyboard handling for the notebook's web view in `window`. The order counts:
@@ -72,6 +74,8 @@ pub fn web_view_hooks() -> impl IntoElement {
             let Some(xid) = gpui_xid(window) else { return };
             window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx: &mut App| {
                 if phase.capture() {
+                    // GTK's focus, not X's: a window manager may move X's before GPUI sees the click.
+                    HAD_KEYBOARD.with(|h| h.set(gtk_focused()));
                     cx.defer(move |_| focus_gpui(xid));
                 }
             });
@@ -97,6 +101,16 @@ pub(super) fn focus_web(view: &webkit2gtk::WebView) {
         focus(xid);
     }
     web_view_focused(true);
+}
+
+/// The web view has the keyboard, or had it until GPUI's window was clicked.
+pub(super) fn web_view_had_keyboard() -> bool {
+    gtk_focused() || HAD_KEYBOARD.with(Cell::get)
+}
+
+/// What `web_view_focused` last told GTK.
+fn gtk_focused() -> bool {
+    WEB_VIEW.with(|v| v.borrow().as_ref().and_then(|view| view.toplevel()).and_then(|w| w.downcast::<gtk::Window>().ok()).is_some_and(|w| w.has_toplevel_focus()))
 }
 
 /// Whether X input focus is on the web view's own window.
