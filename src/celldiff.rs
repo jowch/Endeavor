@@ -281,7 +281,11 @@ impl CellCodes {
                 .filter_map(|c| Some(edit(c["cell_id"].as_str()?, c["code"].as_str()?)))
                 .collect(),
             "add_cell" => match (input["code"].as_str(), result["cell_id"].as_str()) {
-                (Some(code), Some(id)) => vec![CellEdit { cell: id.to_owned(), before: None, after: Some(code.to_owned()), notebook, unseen: false }.diff()],
+                // The new cell's code comes from the call, so a reply that doesn't send it back still records it.
+                (Some(code), Some(id)) => {
+                    self.0.insert(id.to_owned(), code.to_owned());
+                    vec![CellEdit { cell: id.to_owned(), before: None, after: Some(code.to_owned()), notebook, unseen: false }.diff()]
+                }
                 (Some(code), None) => vec![CellDiff { label: format!("{} (new)", cell_label(code)), lines: line_diff("", code), edit: None }],
                 (None, _) => vec![],
             },
@@ -383,6 +387,19 @@ mod tests {
         assert_eq!((d[0].label.as_str(), &d[0].lines), ("x (new)", &vec![(Added, "x = 1".into())]));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
         assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())], "not the whole cell again");
+    }
+
+    #[test]
+    fn a_new_cell_is_known_from_add_cells_call_when_the_reply_leaves_its_code_out() {
+        let mut codes = CellCodes::default();
+        let reply = json!({ "cell_id": C1 });
+        codes.observe("add_cell", &reply);
+        codes.diff("add_cell", &json!({ "code": "x = 1" }), &reply);
+        // A read that leaves the code out, as it does for code the session already has, keeps it.
+        codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true }));
+        let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
+        assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())]);
+        assert!(!d[0].edit.as_ref().unwrap().unseen);
     }
 
     #[test]
