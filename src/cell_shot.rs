@@ -78,7 +78,9 @@ pub fn find_script(cell: &str) -> String {
 
 /// The page script that measures the output: its rect and the viewport's size, in CSS pixels. A
 /// bar fixed over the top of the page (Pluto's) is cut off the top of a tall output; "covered" if
-/// something else on the page (a popup) is drawn over the middle of what's left in view.
+/// something else on the page (a popup) is drawn over the middle of what's left in view. A hit on
+/// an element around the output counts as the output: the point fell through a layer of it that
+/// takes no clicks (`pointer-events: none`).
 pub fn measure_script(cell: &str) -> String {
     format!(
         r#"(() => {{
@@ -89,12 +91,12 @@ pub fn measure_script(cell: &str) -> String {
   let top = Math.max(r.top, 0);
   while (top < bottom) {{
     const at = document.elementFromPoint(x, top + 1);
-    if (!at || out.contains(at)) break;
+    if (!at || out.contains(at) || at.contains(out)) break;
     const bar = at.getBoundingClientRect().bottom;
     top = bar > top ? bar : top + 4;
   }}
   const over = document.elementFromPoint(x, (top + bottom) / 2);
-  if (top >= bottom || (over && !out.contains(over))) return "covered";
+  if (top >= bottom || (over && !out.contains(over) && !over.contains(out))) return "covered";
   return [r.left, top, r.width, r.bottom - top, innerWidth, innerHeight];
 }})()"#
     )
