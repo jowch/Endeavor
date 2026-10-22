@@ -76,18 +76,26 @@ pub fn find_script(cell: &str) -> String {
     )
 }
 
-/// The page script that measures the output: its rect and the viewport's size, in CSS pixels;
-/// "covered" if something else on the page (a bar, a popup) is drawn over the middle of what's in view.
+/// The page script that measures the output: its rect and the viewport's size, in CSS pixels. A
+/// bar fixed over the top of the page (Pluto's) is cut off the top of a tall output; "covered" if
+/// something else on the page (a popup) is drawn over the middle of what's left in view.
 pub fn measure_script(cell: &str) -> String {
     format!(
         r#"(() => {{
   const out = document.querySelector('pluto-cell[id="{cell}"] > pluto-output');
   if (!out) return null;
   const r = out.getBoundingClientRect();
-  const top = Math.max(r.top, 0), bottom = Math.min(r.bottom, innerHeight);
-  const over = document.elementFromPoint(r.left + r.width / 2, (top + bottom) / 2);
-  if (bottom > top && over && !out.contains(over)) return "covered";
-  return [r.left, r.top, r.width, r.height, innerWidth, innerHeight];
+  const x = r.left + r.width / 2, bottom = Math.min(r.bottom, innerHeight);
+  let top = Math.max(r.top, 0);
+  while (top < bottom) {{
+    const at = document.elementFromPoint(x, top + 1);
+    if (!at || out.contains(at)) break;
+    const bar = at.getBoundingClientRect().bottom;
+    top = bar > top ? bar : top + 4;
+  }}
+  const over = document.elementFromPoint(x, (top + bottom) / 2);
+  if (top >= bottom || (over && !out.contains(over))) return "covered";
+  return [r.left, top, r.width, r.bottom - top, innerWidth, innerHeight];
 }})()"#
     )
 }
