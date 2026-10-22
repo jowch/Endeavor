@@ -68,7 +68,8 @@ pub fn web_view_hooks() -> impl IntoElement {
         |_, _, window, _| {
             gtk_loop::wake();
             // GPUI's window is inactive while the web view has the keyboard too.
-            if !window.is_window_active() && !web_view_has_keyboard() {
+            // GTK's state first: it's free, and X is asked only when it says focused.
+            if !window.is_window_active() && gtk_focused() && !web_view_has_keyboard() {
                 web_view_focused(false);
             }
             let Some(xid) = gpui_xid(window) else { return };
