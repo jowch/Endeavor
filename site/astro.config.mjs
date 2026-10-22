@@ -18,7 +18,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Endeavor',
-			description: 'The user guide for Endeavor, a Mac app for data analysis with Claude in a Julia notebook.',
+			description: 'The user guide for Endeavor, a desktop app for analyzing data with an AI agent in a live Julia or R notebook.',
 			logo: {
 				light: '../assets/icon/logo-light.svg',
 				dark: '../assets/icon/logo-dark.svg',
