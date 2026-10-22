@@ -56,31 +56,37 @@ pub fn snapshot(host: HostId, asks: futures::channel::mpsc::UnboundedSender<Ask>
     })
 }
 
-/// The page script that finds the cell's output and scrolls it to the top:
+/// The page script that finds the cell's output and scrolls it into view:
 /// "scrolled", "busy" (it is running or queued), "empty" (nothing to see: a
-/// cell that hasn't run), or "absent" (the page hasn't drawn the cell yet).
+/// cell that hasn't run, or safe preview's "Code not executed"), or "absent"
+/// (the page hasn't drawn the cell yet). An output shorter than the window
+/// goes to the middle, clear of Pluto's bars at the top; a taller one to the top.
 /// `cell` is a UUID (the library checked it).
 pub fn find_script(cell: &str) -> String {
     format!(
         r#"(() => {{
   const out = document.querySelector('pluto-cell[id="{cell}"] > pluto-output');
   if (!out) return "absent";
-  if (!out.firstElementChild || out.getBoundingClientRect().height < 2) return "empty";
   const c = out.parentElement.classList;
+  if (!out.firstElementChild || c.contains("no_output_yet") || out.querySelector(".safe-preview-output") || out.getBoundingClientRect().height < 2) return "empty";
   if (c.contains("running") || c.contains("queued")) return "busy";
-  out.scrollIntoView({{ block: "start" }});
+  out.scrollIntoView({{ block: out.getBoundingClientRect().height < innerHeight * 0.8 ? "center" : "start" }});
   return "scrolled";
 }})()"#
     )
 }
 
-/// The page script that measures the output: its rect and the viewport's size, in CSS pixels.
+/// The page script that measures the output: its rect and the viewport's size, in CSS pixels;
+/// "covered" if something else on the page (a bar, a popup) is drawn over the middle of what's in view.
 pub fn measure_script(cell: &str) -> String {
     format!(
         r#"(() => {{
   const out = document.querySelector('pluto-cell[id="{cell}"] > pluto-output');
   if (!out) return null;
   const r = out.getBoundingClientRect();
+  const top = Math.max(r.top, 0), bottom = Math.min(r.bottom, innerHeight);
+  const over = document.elementFromPoint(r.left + r.width / 2, (top + bottom) / 2);
+  if (bottom > top && over && !out.contains(over)) return "covered";
   return [r.left, r.top, r.width, r.height, innerWidth, innerHeight];
 }})()"#
     )
@@ -133,13 +139,22 @@ mod mac {
             true
         }
 
-        /// Whether the user's view is shown, in a window on screen and not covered: behind
-        /// anything else the second view would show, and a hidden window draws nothing.
+        /// Whether the user's view is shown whole, in a window on screen and not covered: behind
+        /// anything else the second view would show, and a hidden window draws nothing. Settings,
+        /// a dialog, a menu or a notice over the pane doesn't hide the user's view: it dims it
+        /// (`overlay::set_dimmed`) or cuts holes in it (`overlay::set_hole`, a layer mask), and the
+        /// second view would show through both.
         pub fn pane_shows(&self) -> bool {
             unsafe {
                 let hidden: bool = msg_send![&*self.main, isHiddenOrHasHiddenAncestor];
                 let window: *mut AnyObject = msg_send![&*self.main, window];
                 if hidden || window.is_null() {
+                    return false;
+                }
+                let alpha: f64 = msg_send![&*self.main, alphaValue];
+                let layer: *mut AnyObject = msg_send![&*self.main, layer];
+                let holes: *mut AnyObject = if layer.is_null() { std::ptr::null_mut() } else { msg_send![layer, mask] };
+                if alpha < 1. || !holes.is_null() {
                     return false;
                 }
                 // NSWindowOcclusionStateVisible.
@@ -345,6 +360,9 @@ async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::Backg
     behind()?;
     let measured = eval(&shooter.view, &measure_script(cell), executor).await.ok_or("the output couldn't be measured")?;
     behind()?;
+    if measured == "\"covered\"" {
+        return Err("the output is covered on the page");
+    }
     let rect = visible_rect(&measured).ok_or("the output is empty")?;
     let shot = crate::snapshot::png(&shooter.view, rect);
     let timeout = executor.timer(Duration::from_secs(3));
