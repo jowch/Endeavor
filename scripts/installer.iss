@@ -40,7 +40,9 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 ; PrepareToInstall asks to quit a running Endeavor; this is the fallback for
-; one opened after that. Don't reopen it.
+; one opened after that. Don't reopen it. Silent, it closes any program
+; holding a file without asking, so the app's updates pass
+; /NOCLOSEAPPLICATIONS (src/updater.rs).
 CloseApplications=yes
 RestartApplications=no
 SetupIconFile=..\assets\icon\endeavor.ico
@@ -60,24 +62,28 @@ Source: "..\assets\icon\endeavor.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#WebView2Setup}"; Flags: dontcopy
 #endif
 
-; An upgrade replaces Resources whole, so a file the new version dropped
-; can't linger.
-[InstallDelete]
-Type: filesandordirs; Name: "{app}\Resources"
-
 [Icons]
 Name: "{autoprograms}\Endeavor"; Filename: "{app}\bin\endeavor.exe"; IconFilename: "{app}\endeavor.ico"
 
 [Run]
 Filename: "{app}\bin\endeavor.exe"; Description: "Open Endeavor"; Flags: nowait postinstall skipifsilent
+; An update the app started with Restart (src/updater.rs) opens it again.
+Filename: "{app}\bin\endeavor.exe"; Flags: nowait; Check: HasParam('/RELAUNCH')
 
-; WebView2 keeps its data next to the exe.
+; WebView2 keeps its data next to the exe. Resources.old is left only if
+; an install stopped partway and couldn't put the old one back.
 [UninstallDelete]
+Type: filesandordirs; Name: "{app}\Resources.old"
 Type: filesandordirs; Name: "{app}\bin\endeavor.exe.WebView2"
 
 [Code]
 const
   WebView2Client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
+var
+  { Setup got as far as installing (the install folder is known); it moved the old
+  Resources aside; and then it finished. }
+  Prepared, Moved, Installed: Boolean;
 
 { Installed for the machine or for this user, as Microsoft's docs say to check. }
 function HasWebView2: Boolean;
@@ -101,24 +107,72 @@ begin
     Exec(Exe, '--stop-runtime', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
+{ A switch on Setup's command line, such as /UPDATE. }
+function HasParam(const Name: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), Name) = 0 then
+      Result := True;
+end;
+
 { The app holds this mutex while it's open (platform::init). Wait for it to
   quit before stopping its runtime: an app set to keep its runtime starts a
   new one when the old one stops, and Restart Manager then can't close that
-  one (it has no window) and says so. }
+  one (it has no window) and says so. An update the app started (/UPDATE)
+  runs as the app quits, so it waits up to 30 seconds for that rather than
+  asking; after that, run silently, the question's answer is Cancel and the
+  install stops with the old app in place. }
 function AppQuit(const Action: String): Boolean;
+var
+  Waited: Integer;
 begin
   Result := True;
+  Waited := 0;
+  if HasParam('/UPDATE') then
+    while CheckForMutexes('{#AppMutex}') and (Waited < 60) do
+    begin
+      Sleep(500);
+      Waited := Waited + 1;
+    end;
   while Result and CheckForMutexes('{#AppMutex}') do
     Result := SuppressibleMsgBox('Endeavor is open. Quit it, then click OK to ' + Action + '.', mbError, MB_OKCANCEL, IDCANCEL) = IDOK;
+end;
+
+{ An upgrade replaces Resources whole, so a file the new version dropped
+  can't linger. The old one is moved aside rather than deleted, so an install
+  that stops partway (a file held open, say) puts it back and the old app
+  still works. Moving it also fails at once, before anything changed, when
+  something holds a file in it. }
+function MoveResourcesAside: String;
+var
+  Res: String;
+begin
+  Result := '';
+  Res := ExpandConstant('{app}\Resources');
+  if DirExists(Res + '.old') then
+    DelTree(Res + '.old', True, True, True);
+  if not DirExists(Res) then
+    Exit;
+  if RenameFile(Res, Res + '.old') then
+    Moved := True
+  else
+    Result := 'Something has a file in ' + Res + ' open. Close it, then run Setup again.';
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
+  Prepared := True;
   if not AppQuit('install the new version') then
     Result := 'Quit Endeavor, then run Setup again.'
   else
+  begin
     StopRuntime;
+    Result := MoveResourcesAside;
+  end;
 end;
 
 procedure InstallWebView2;
@@ -143,8 +197,38 @@ begin
     PrepareToInstall and now, and it left its runtime running. }
   if CurStep = ssInstall then
     StopRuntime;
-  if (CurStep = ssPostInstall) and not HasWebView2 then
-    InstallWebView2;
+  if CurStep = ssPostInstall then
+  begin
+    Installed := True;
+    DelTree(ExpandConstant('{app}\Resources.old'), True, True, True);
+    if not HasWebView2 then
+      InstallWebView2;
+  end;
+end;
+
+{ Setup is ending, installed or not. }
+procedure DeinitializeSetup;
+var
+  Res, Exe: String;
+  Code: Integer;
+begin
+  if Installed or not Prepared then
+    Exit;
+  Res := ExpandConstant('{app}\Resources');
+  { Only a Resources this run moved: a Resources.old left by an earlier run
+    is older than the one in use. }
+  if Moved then
+  begin
+    DelTree(Res, True, True, True);
+    if not RenameFile(Res + '.old', Res) then
+      Log('Couldn''t put the old Resources back.');
+  end;
+  { Restart quit the app for this update; reopen the old one so the user
+    isn't left with nothing. Not when it's still open (the update waited for
+    it and gave up). }
+  Exe := ExpandConstant('{app}\bin\endeavor.exe');
+  if HasParam('/RELAUNCH') and FileExists(Exe) and not CheckForMutexes('{#AppMutex}') then
+    Exec(Exe, '', '', SW_SHOW, ewNoWait, Code);
 end;
 
 { An open exe can't be removed. }

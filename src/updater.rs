@@ -1,4 +1,4 @@
-//! A nightly Mac app updating itself to the newest nightly (app #80). The nightly workflow publishes
+//! A nightly app updating itself to the newest nightly (app #80). The nightly workflow publishes
 //! `nightly.json` beside the dmg (scripts/nightly-manifest.sh). Once a day,
 //! and on Check now, the app reads it; when it names a build committed after
 //! this one, the app downloads the dmg, checks its SHA-256 against the
@@ -11,11 +11,19 @@
 //! the same commit, committed after this build. Restart, or any quit, then
 //! swaps the apps once this one has exited.
 //!
+//! On Windows the app downloads the installer and checks its SHA-256, and
+//! Restart, or any quit, runs it silently once the app has exited (it waits
+//! for the app with /UPDATE, scripts/installer.iss). The installer isn't
+//! signed (#12), so the hash is the only check: a nightly Windows user trusts
+//! the release as much as when they first installed from it, and someone who
+//! can change the release could ship any program, not just an older one.
+//!
 //! Only a build made by the nightly workflow (`ENDEAVOR_CHANNEL=nightly`,
-//! build.rs) running from a signed Endeavor.app checks. A build from source,
-//! the Windows installer and Linux never do. When the app's folder isn't
-//! writable (not in Applications, or run from the disk image), the newer build
-//! is offered as a download instead.
+//! build.rs) checks: on a Mac from a signed Endeavor.app, on Windows from
+//! where the installer put it. A build from source and Linux never do. When
+//! the app can't replace itself (a Mac app not in Applications or run from the
+//! disk image, a Windows build unzipped by hand), the newer build is offered
+//! as a download instead.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -33,7 +41,8 @@ pub const CHANNEL: &str = env!("ENDEAVOR_CHANNEL");
 const RELEASE: &str = "https://github.com/jowch/Endeavor/releases/download/nightly";
 /// Where a newer build is offered when the app can't replace itself.
 pub const RELEASE_PAGE: &str = "https://github.com/jowch/Endeavor/releases/tag/nightly";
-const PLATFORM: &str = "macos-arm64";
+/// This app's build in the manifest.
+const PLATFORM: &str = if cfg!(windows) { "windows-x86_64" } else { "macos-arm64" };
 /// The app's own name inside the disk image, and the bundle it replaces.
 const APP: &str = "Endeavor.app";
 
@@ -126,13 +135,20 @@ pub fn place() -> Result<Place, &'static str> {
     if test_manifest().is_some() {
         return Ok(Place { app: std::env::current_exe().unwrap_or_default(), replaceable: false });
     }
-    if !cfg!(target_os = "macos") {
-        return Err("only the Mac app updates itself");
+    if !cfg!(any(target_os = "macos", windows)) {
+        return Err("only the Mac and Windows apps update themselves");
     }
     if CHANNEL != "nightly" {
         return Err("a build from source doesn't update itself");
     }
     let exe = std::env::current_exe().map_err(|_| "can't tell where the app is")?;
+    if cfg!(windows) {
+        let app = install_of(&exe).ok_or("can't tell where the app is")?;
+        // Installed by the installer, which can replace it; not a build
+        // unzipped by hand.
+        let replaceable = app.join(UNINSTALLER).is_file();
+        return Ok(Place { app, replaceable });
+    }
     let app = bundle_of(&exe).ok_or("not running from Endeavor.app")?;
     let replaceable = app.parent().is_some_and(writable) && writable(&app);
     Ok(Place { app, replaceable })
@@ -147,6 +163,15 @@ fn test_manifest() -> Option<PathBuf> {
 fn bundle_of(exe: &Path) -> Option<PathBuf> {
     let app = exe.parent()?.parent()?.parent()?;
     (app.extension()? == "app" && exe.parent()?.ends_with("Contents/MacOS")).then(|| app.to_owned())
+}
+
+/// The installer's own uninstaller, beside bin\ in the folder it installs to.
+const UNINSTALLER: &str = "unins000.exe";
+
+/// `…\Endeavor` from `…\Endeavor\bin\endeavor.exe`.
+fn install_of(exe: &Path) -> Option<PathBuf> {
+    let bin = exe.parent()?;
+    (bin.file_name()? == "bin").then(|| bin.parent().map(Path::to_owned)).flatten()
 }
 
 #[cfg(not(unix))]
@@ -184,7 +209,7 @@ pub enum State {
     /// Checking, then downloading when there's a newer build.
     Checking,
     UpToDate,
-    Ready { build: String, staged: PathBuf },
+    Ready { build: String, commit: String, staged: PathBuf },
     Manual { build: String },
     Failed(String),
     /// This copy can't update (see `Outcome::Off`).
@@ -200,7 +225,7 @@ impl Updater {
         let state = match place {
             // The swap at the last quit failed (`install`): say so, and try
             // again in an hour rather than straight away.
-            Ok(_) if folder().is_ok_and(|dir| std::fs::remove_file(dir.join(FAILED)).is_ok()) => {
+            Ok(_) if folder().is_ok_and(|dir| last_install_failed(&dir, COMMIT)) => {
                 last_try = Some(Instant::now());
                 State::Failed("the last update couldn't be installed".into())
             }
@@ -237,7 +262,7 @@ impl Updater {
     pub fn finish(&mut self, result: Result<Outcome, String>) {
         self.state = match result {
             Ok(Outcome::UpToDate) => State::UpToDate,
-            Ok(Outcome::Ready { build, staged }) => State::Ready { build, staged },
+            Ok(Outcome::Ready { build, commit, staged }) => State::Ready { build, commit, staged },
             Ok(Outcome::Manual { build }) => State::Manual { build },
             Ok(Outcome::Off(why)) => State::Off(why),
             Err(e) => State::Failed(e),
@@ -253,8 +278,19 @@ impl Updater {
     /// Swap in the fetched build once the app has exited (and start it again
     /// when `relaunch`). Nothing to do unless one is ready.
     pub fn install(&mut self, relaunch: bool) -> Result<bool, String> {
-        let (State::Ready { staged, .. }, Ok(place)) = (&self.state, &self.place) else { return Ok(false) };
-        swap(staged, &place.app, std::process::id(), relaunch, &folder()?.join(FAILED))?;
+        let (State::Ready { staged, commit, .. }, Ok(place)) = (&self.state, &self.place) else { return Ok(false) };
+        // A quit because Windows is logging off or shutting down (GPUI runs
+        // the quit callbacks then) leaves the build ready for the next quit:
+        // Windows kills what's still running, and an installer killed partway
+        // can leave a broken app. Keep this check.
+        if !relaunch && session_ending() {
+            return Ok(false);
+        }
+        if cfg!(windows) {
+            run_installer(staged, commit, &folder()?, relaunch)?;
+        } else {
+            swap(staged, &place.app, std::process::id(), relaunch, &folder()?.join(FAILED))?;
+        }
         self.state = State::Installing;
         Ok(true)
     }
@@ -265,7 +301,7 @@ impl Updater {
 pub enum Outcome {
     UpToDate,
     /// Downloaded and checked, waiting for a restart.
-    Ready { build: String, staged: PathBuf },
+    Ready { build: String, commit: String, staged: PathBuf },
     /// Newer, but the app can't replace itself where it is.
     Manual { build: String },
     /// This copy of the app isn't one that can update (not Developer ID signed).
@@ -281,9 +317,13 @@ pub fn check(place: &Place, commit: &str, committed: &str, progress: &dyn Fn(f32
     if !place.replaceable {
         return Ok(Outcome::Manual { build: offer.build() });
     }
-    let Some(team) = team_of(&place.app) else { return Ok(Outcome::Off("this copy isn't signed with a Developer ID")) };
-    let staged = fetch(&folder()?, &offer, &team, committed, progress)?;
-    Ok(Outcome::Ready { build: offer.build(), staged })
+    let staged = if cfg!(windows) {
+        fetch_installer(RELEASE, &folder()?, &offer, progress)?
+    } else {
+        let Some(team) = team_of(&place.app) else { return Ok(Outcome::Off("this copy isn't signed with a Developer ID")) };
+        fetch(&folder()?, &offer, &team, committed, progress)?
+    };
+    Ok(Outcome::Ready { build: offer.build(), commit: offer.commit, staged })
 }
 
 fn manifest() -> Result<String, String> {
@@ -292,6 +332,7 @@ fn manifest() -> Result<String, String> {
         return std::fs::read_to_string(&file).map_err(|e| format!("couldn't read {} ({e})", file.display()));
     }
     let mut curl = Command::new("curl");
+    endeavor_mcp::client::no_window(&mut curl);
     curl.args(["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "60"]).arg(format!("{RELEASE}/nightly.json"));
     let out = curl.stdin(Stdio::null()).output().map_err(|e| format!("couldn't start curl ({e})"))?;
     if !out.status.success() {
@@ -466,6 +507,93 @@ fi
         .map_err(|e| format!("couldn't start the update ({e})"))
 }
 
+/// Windows: download the offer's installer from `base` into `dir` and check
+/// its SHA-256, keeping one already there that matches. Returns its path.
+/// What other builds left in `dir` goes.
+fn fetch_installer(base: &str, dir: &Path, offer: &Offer, progress: &dyn Fn(f32)) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(&offer.commit) && name != INSTALLING && name != INSTALL_LOG {
+            let _ = std::fs::remove_dir_all(entry.path()).or_else(|_| std::fs::remove_file(entry.path()));
+        }
+    }
+    let setup = dir.join(format!("{}-setup.exe", offer.commit));
+    if setup.is_file() && crate::install::sha256_of(&setup).is_ok_and(|h| h == offer.file.sha256) {
+        return Ok(setup);
+    }
+    let part = dir.join(format!("{}-setup.exe.part", offer.commit));
+    crate::install::download(&format!("{base}/{}", offer.file.name), &part, "the update", offer.file.size, &|_, f| progress(f.unwrap_or(0.)))?;
+    if crate::install::sha256_of(&part)? != offer.file.sha256 {
+        let _ = std::fs::remove_file(&part);
+        return Err("the download didn't match the update list; it was deleted and is tried again later".into());
+    }
+    std::fs::rename(&part, &setup).map_err(|e| e.to_string())?;
+    Ok(setup)
+}
+
+/// Windows is logging off or shutting down.
+fn session_ending() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+        // SAFETY: no arguments to get wrong.
+        unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+/// Left in `folder()` while a Windows update installs, naming the build it
+/// installs, for the next launch to check.
+const INSTALLING: &str = "installing";
+/// The last installer's log, kept for whoever looks into a failed update.
+const INSTALL_LOG: &str = "install.log";
+
+/// Whether the update the last quit started didn't take: the Mac swap left
+/// its marker, or the installer ran and this is still not the build it was
+/// installing. Either marker is gone afterwards, and so is an installer that
+/// worked.
+fn last_install_failed(dir: &Path, commit: &str) -> bool {
+    let swap_failed = std::fs::remove_file(dir.join(FAILED)).is_ok();
+    let installing = std::fs::read_to_string(dir.join(INSTALLING)).ok();
+    if installing.is_some() {
+        let _ = std::fs::remove_file(dir.join(INSTALLING));
+    }
+    let installed = installing.as_deref().is_some_and(|c| c.trim() == commit);
+    if installed {
+        let _ = std::fs::remove_file(dir.join(format!("{commit}-setup.exe")));
+    }
+    swap_failed || (installing.is_some() && !installed)
+}
+
+/// Windows: run the fetched installer silently. It waits for this app to
+/// quit (/UPDATE), replaces it, and opens the new one when `relaunch`
+/// (/RELAUNCH). Its log goes beside it. Silent, Setup's Restart Manager
+/// would close any program holding one of the app's files (an editor, a
+/// terminal) without asking; /NOCLOSEAPPLICATIONS makes it give up and roll
+/// back instead, and the next launch says the update didn't take.
+fn run_installer(setup: &Path, commit: &str, dir: &Path, relaunch: bool) -> Result<(), String> {
+    std::fs::write(dir.join(INSTALLING), commit).map_err(|e| format!("couldn't start the update ({e})"))?;
+    let mut cmd = Command::new(setup);
+    cmd.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCLOSEAPPLICATIONS", "/UPDATE"]).arg(format!("/LOG={}", dir.join(INSTALL_LOG).display()));
+    if relaunch {
+        cmd.arg("/RELAUNCH");
+    }
+    // Not tied to this app's console or process group: it outlives the app.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(drop).map_err(|e| {
+        let _ = std::fs::remove_file(dir.join(INSTALLING));
+        format!("couldn't start the update ({e})")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,7 +616,8 @@ mod tests {
     fn a_later_build_is_offered() {
         let m = parse(&manifest(B, "2026-10-16T08:00:00Z")).unwrap();
         let o = offer(&m, A, "2026-10-15T08:00:00Z").unwrap();
-        assert_eq!((o.build().as_str(), o.file.name.as_str(), o.file.size), ("bbbbbbb", "Endeavor-macos-arm64.dmg", 123));
+        let this = if cfg!(windows) { ("Endeavor-windows-x86_64-setup.exe", 45) } else { ("Endeavor-macos-arm64.dmg", 123) };
+        assert_eq!((o.build().as_str(), o.file.name.as_str(), o.file.size), ("bbbbbbb", this.0, this.1));
     }
 
     #[test]
@@ -505,10 +634,10 @@ mod tests {
     }
 
     #[test]
-    fn no_mac_build_or_an_odd_name_is_not_offered() {
-        let json = manifest(B, "2026-10-16T08:00:00Z").replace("macos-arm64", "macos-x86_64");
+    fn no_build_for_this_platform_or_an_odd_name_is_not_offered() {
+        let json = manifest(B, "2026-10-16T08:00:00Z").replace(&format!("\"{PLATFORM}\""), "\"other\"");
         assert_eq!(offer(&parse(&json).unwrap(), A, "2026-10-15T08:00:00Z"), None);
-        let json = manifest(B, "2026-10-16T08:00:00Z").replace("Endeavor-macos-arm64.dmg", "../x.dmg");
+        let json = manifest(B, "2026-10-16T08:00:00Z").replace(&format!("Endeavor-{PLATFORM}"), "../x");
         assert_eq!(offer(&parse(&json).unwrap(), A, "2026-10-15T08:00:00Z"), None);
     }
 
@@ -548,7 +677,7 @@ mod tests {
         u.finish(Ok(Outcome::UpToDate));
         assert!(!u.due(t0 + RETRY * 2) && u.due(t0 + RETRY + DAILY));
         u.start(t0 + RETRY + DAILY);
-        u.finish(Ok(Outcome::Ready { build: "bbbbbbb".into(), staged: PathBuf::from("/x/Endeavor.app") }));
+        u.finish(Ok(Outcome::Ready { build: "bbbbbbb".into(), commit: B.into(), staged: PathBuf::from("/x/Endeavor.app") }));
         assert!(!u.due(t0 + DAILY * 9) && u.start(t0).is_none(), "nothing more once one is ready");
     }
 
@@ -574,6 +703,59 @@ mod tests {
         // A nightly from before the Info.plist carried its build.
         assert!(is_build("<dict><key>CFBundleExecutable</key><string>endeavor</string></dict>", B, "2026-10-15T08:00:00Z").unwrap_err().contains("doesn't say"));
         assert_eq!(plist_string("<key>EndeavorCommit</key>\n\t<string>x</string>", "EndeavorCommit"), Some("x"));
+    }
+
+    #[test]
+    fn the_windows_install_folder_is_above_bin() {
+        assert_eq!(install_of(Path::new("/u/AppData/Local/Programs/Endeavor/bin/endeavor.exe")), Some(PathBuf::from("/u/AppData/Local/Programs/Endeavor")));
+        assert_eq!(install_of(Path::new("/u/Downloads/endeavor.exe")), None);
+    }
+
+    #[test]
+    fn the_installer_is_fetched_once_and_checked() {
+        let w = std::env::temp_dir().join(format!("endeavor-installer-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&w);
+        let src = w.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Endeavor-windows-x86_64-setup.exe"), b"installer").unwrap();
+        let sha256 = crate::install::sha256_of(&src.join("Endeavor-windows-x86_64-setup.exe")).unwrap();
+        let offer = Offer { commit: B.into(), file: File { name: "Endeavor-windows-x86_64-setup.exe".into(), sha256, size: 9 } };
+        let dir = w.join("update");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{A}-setup.exe")), b"older").unwrap();
+        std::fs::write(dir.join(INSTALL_LOG), b"log").unwrap();
+        let base = format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, src.display().to_string().replace('\\', "/"));
+        let setup = fetch_installer(&base, &dir, &offer, &|_| {}).unwrap();
+        assert_eq!(setup, dir.join(format!("{B}-setup.exe")));
+        assert!(!dir.join(format!("{A}-setup.exe")).exists(), "another build's installer goes");
+        assert!(dir.join(INSTALL_LOG).exists(), "the last log stays");
+        // Kept, not fetched again, once it's there.
+        std::fs::remove_file(src.join("Endeavor-windows-x86_64-setup.exe")).unwrap();
+        assert_eq!(fetch_installer(&base, &dir, &offer, &|_| {}).unwrap(), setup);
+        // A changed file is refused and deleted.
+        std::fs::write(src.join("Endeavor-windows-x86_64-setup.exe"), b"installed").unwrap();
+        std::fs::remove_file(&setup).unwrap();
+        assert!(fetch_installer(&base, &dir, &offer, &|_| {}).unwrap_err().contains("didn't match"));
+        assert!(!setup.exists() && !dir.join(format!("{B}-setup.exe.part")).exists());
+        std::fs::remove_dir_all(&w).unwrap();
+    }
+
+    #[test]
+    fn the_next_launch_says_when_the_last_install_didnt_take() {
+        let dir = std::env::temp_dir().join(format!("endeavor-marker-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!last_install_failed(&dir, A), "nothing was installing");
+        std::fs::write(dir.join(INSTALLING), B).unwrap();
+        std::fs::write(dir.join(format!("{B}-setup.exe")), b"installer").unwrap();
+        assert!(!last_install_failed(&dir, B), "this is the build it installed");
+        assert!(!dir.join(INSTALLING).exists() && !dir.join(format!("{B}-setup.exe")).exists());
+        std::fs::write(dir.join(INSTALLING), B).unwrap();
+        assert!(last_install_failed(&dir, A), "still the old build");
+        assert!(!last_install_failed(&dir, A), "said once");
+        std::fs::write(dir.join(FAILED), "").unwrap();
+        assert!(last_install_failed(&dir, A), "the Mac swap's marker");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
