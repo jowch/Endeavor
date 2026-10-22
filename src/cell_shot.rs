@@ -129,6 +129,8 @@ mod mac {
         pub view: wry::WebView,
         pub url: std::cell::RefCell<String>,
         main: Retained<AnyObject>,
+        /// The holes cut in the user's view (a tip, a menu, a notice), cut in this one too.
+        holes: std::cell::RefCell<Vec<(CGRect, f64)>>,
     }
 
     impl Shooter {
@@ -136,7 +138,7 @@ mod mac {
             let view = wry::WebViewBuilder::new().with_url("about:blank").build_as_child(&crate::platform::webview_parent(window)).ok()?;
             let _ = view.set_visible(false);
             let main = unsafe { Retained::cast_unchecked(main.webview()) };
-            Some(Shooter { view, url: std::cell::RefCell::new(String::new()), main })
+            Some(Shooter { view, url: std::cell::RefCell::new(String::new()), main, holes: Default::default() })
         }
 
         /// Show `url`, unless it is the page already loaded. Whether it loads now.
@@ -149,11 +151,12 @@ mod mac {
             true
         }
 
-        /// Whether the user's view is shown whole, in a window on screen and not covered: behind
-        /// anything else the second view would show, and a hidden window draws nothing. Settings,
-        /// a dialog, a menu or a notice over the pane doesn't hide the user's view: it dims it
-        /// (`overlay::set_dimmed`) or cuts holes in it (`overlay::set_hole`, a layer mask), and the
-        /// second view would show through both.
+        /// Whether the user's view is shown, not dimmed, in a window on screen and not covered:
+        /// behind anything else the second view would show, and a hidden window draws nothing.
+        /// Settings or a dialog over the pane doesn't hide the user's view but dims it
+        /// (`overlay::set_dimmed`), and the second view would show through. The holes a tip, a
+        /// menu or a notice cuts in it (`overlay::set_hole`) are cut in the second view too
+        /// (`keep_behind`).
         pub fn pane_shows(&self) -> bool {
             unsafe {
                 let hidden: bool = msg_send![&*self.main, isHiddenOrHasHiddenAncestor];
@@ -162,9 +165,7 @@ mod mac {
                     return false;
                 }
                 let alpha: f64 = msg_send![&*self.main, alphaValue];
-                let layer: *mut AnyObject = msg_send![&*self.main, layer];
-                let holes: *mut AnyObject = if layer.is_null() { std::ptr::null_mut() } else { msg_send![layer, mask] };
-                if alpha < 1. || !holes.is_null() {
+                if alpha < 1. {
                     return false;
                 }
                 // NSWindowOcclusionStateVisible.
@@ -194,6 +195,11 @@ mod mac {
                     // NSWindowBelow.
                     let _: () = msg_send![superview, addSubview: &*ours, positioned: -1isize, relativeTo: &*self.main];
                 }
+            }
+            let holes = crate::overlay::holes();
+            if *self.holes.borrow() != holes {
+                crate::overlay::cut_holes(&self.view, &holes);
+                *self.holes.borrow_mut() = holes;
             }
             if !self.shown() {
                 // The theme may have changed since the last picture.
@@ -327,12 +333,13 @@ impl crate::Workspace {
             self.second.shooter = Shooter::new(window, self.webview.read(cx).raw()).map(std::rc::Rc::new);
         }
         let shooter = self.second.shooter.clone().ok_or("no second web view")?;
+        // Counts even when refused, so the idle second view is let go.
+        self.second.used = Some(std::time::Instant::now());
         // ponytail: only while the notebook pane is on screen (`keep_behind`).
         if !shooter.keep_behind() {
             return Err(NOT_ON_SCREEN);
         }
         let fresh = shooter.load(&url);
-        self.second.used = Some(std::time::Instant::now());
         let executor = cx.background_executor().clone();
         let cell = ask.cell.clone();
         Ok(Box::pin(async move {
