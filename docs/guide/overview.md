@@ -5,18 +5,20 @@ sidebar:
   order: 10
 ---
 
-Endeavor is a Mac app for doing your own data analysis with Claude, an AI
-assistant made by Anthropic. You describe what you want in a chat. Claude
-writes the code and runs it in a notebook next to the chat, and you watch each
-step, change what you like, and decide what runs.
+Endeavor is an app for doing your own data analysis with an AI assistant,
+such as Claude, made by Anthropic. You describe what you want in a chat. The
+assistant writes the code and runs it in a Julia or R notebook next to the
+chat, and you watch each step, change what you like, and decide what runs.
+It is made for macOS, and runs on Windows and Linux too. Python notebooks are
+coming soon.
 
 ![The Endeavor window: the list of sessions on the left, the chat in the middle, and the notebook on the right](images/main-window.png)
 
 ## The words this guide uses
 
-- **Julia** is the programming language the code is written in. You don't
-  need to know it to start. Claude writes the code, and you can ask it to
-  explain any part.
+- **Julia** and **R** are the programming languages the code is written in.
+  You don't need to know either to start. The assistant writes the code, and
+  you can ask it to explain any part.
 - **A notebook** is a file that holds code together with its results:
   numbers, tables and plots. Endeavor uses [Pluto](https://plutojl.org)
   notebooks, which are plain Julia files ending in `.jl`.

@@ -5,7 +5,8 @@ import '@fontsource/schibsted-grotesk/700.css';
 import '../styles/fonts.css';
 import { Image, getImage } from 'astro:assets';
 import Splash from '../components/Splash.astro';
-import { meta, nav, hero, record, features, withoutApp, footer } from '../landing';
+import { Content as AgentInstall } from '../../agent-install.md';
+import { meta, nav, hero, feedback, record, features, withoutApp, footer } from '../landing';
 import logoLight from '../../../assets/icon/logo-light.svg';
 import logoDark from '../../../assets/icon/logo-dark.svg';
 import mainWindow from '../../../docs/guide/images/main-window.png';
@@ -41,6 +42,7 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 		<meta name="description" content={meta.description} />
 		<link rel="canonical" href={pageUrl} />
 		<link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+		<link rel="alternate" type="text/plain" href={`${base}/llms.txt`} title="Endeavor for agents (llms.txt)" />
 		<meta property="og:type" content="website" />
 		<meta property="og:site_name" content="Endeavor" />
 		<meta property="og:title" content={meta.title} />
@@ -82,6 +84,10 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 					<a class="button primary phone" href={href(hero.phone.href)}>{hero.phone.text}</a>
 					<a class="button secondary" href={href(hero.primary.href)}>{hero.primary.text}</a>
 				</div>
+				<div class="agents">
+					<AgentInstall />
+				</div>
+				<p class="feedback"><a href={feedback.href}>{feedback.text}</a></p>
 			</div>
 		</div>
 
@@ -355,6 +361,74 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 	}
 	.button.secondary:hover {
 		background: rgb(255 255 255 / 0.08);
+	}
+
+	/* The "Installing with an agent?" block (site/agent-install.md): collapsed, but in the page's text. */
+	.agents {
+		width: 100%;
+		max-width: 44rem;
+		margin-top: 28px;
+		text-align: left;
+		font-size: 0.9375rem;
+	}
+	.agents details {
+		border-radius: 10px;
+		box-shadow: inset 0 0 0 1px #3a3a40;
+	}
+	.agents summary {
+		padding: 10px 16px;
+		cursor: pointer;
+		color: var(--sky-muted);
+		text-align: center;
+	}
+	.agents summary strong {
+		color: var(--sky-text);
+	}
+	.agents details[open] summary {
+		border-bottom: 1px solid #3a3a40;
+	}
+	.agents details > :not(summary) {
+		margin: 14px 18px;
+	}
+	/* Code blocks come as Expressive Code's terminal frames (Starlight's), whose figure is also
+	   .frame and whose colours follow Starlight's theme, which this page doesn't set. Plain blocks here. */
+	.agents .expressive-code {
+		margin: 8px 18px 14px;
+	}
+	.agents .expressive-code .frame {
+		padding: 0;
+		border: 0;
+		border-radius: 8px;
+		box-shadow: none;
+		background: #000000;
+	}
+	.agents .expressive-code .frame .header {
+		display: none;
+	}
+	.agents .expressive-code pre {
+		margin: 0;
+		padding: 12px 16px;
+		border: 0;
+		background: none;
+		font: 400 0.8125rem/1.7 var(--mono);
+	}
+	.agents .expressive-code pre span[style] {
+		color: var(--0) !important;
+	}
+	.agents code {
+		font-family: var(--mono);
+		font-size: 0.875em;
+	}
+
+	.feedback {
+		margin: 16px 0 0;
+		font-size: 0.875rem;
+	}
+	.feedback a {
+		color: var(--sky-muted);
+	}
+	.feedback a:hover {
+		color: var(--sky-text);
 	}
 
 	.frame {

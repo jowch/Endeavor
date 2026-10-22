@@ -9,12 +9,14 @@ on:
     paths:
       - docs/guide/**
       - site/**
+      - README.md
       - assets/icon/**
       - .github/workflows/docs.yml
   pull_request:
     paths:
       - docs/guide/**
       - site/**
+      - README.md
       - assets/icon/**
       - .github/workflows/docs.yml
   workflow_dispatch:
