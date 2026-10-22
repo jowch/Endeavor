@@ -288,6 +288,14 @@ struct Prompt {
 /// edit as a diff, a new cell's code, a deleted cell struck through.
 fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview: Option<&pluto::RunPreview>) -> Prompt {
     let question = run_question(tool, preview, input);
+    let what = match tool {
+        "restart_notebook" => Some("Every value is cleared. A Julia notebook then runs every cell again; an R notebook's cells wait to be run."),
+        "apply_package_update" => Some("The notebook's package date and versions change and the new packages install. If R had one of them loaded, it restarts."),
+        _ => None,
+    };
+    if let Some(what) = what {
+        return Prompt { heading: question.heading, verb: question.button, lines: vec![(what.into(), Tone::Muted)], ..Default::default() };
+    }
     let mut lines = Vec::new();
     if question.names.len() > 1 && preview.is_none_or(|p| !p.all) {
         const SHOWN: usize = 5;
@@ -857,6 +865,12 @@ pub(crate) fn cut_line(text: &str, max: usize) -> String {
     }
 }
 
+/// Whether a run card asks the runtime which cells a call would run: not for
+/// a shell command, or a call on the whole notebook that names no cells.
+pub(crate) fn previews_cells(tool: &str) -> bool {
+    !matches!(tool, "run_shell" | "restart_notebook" | "apply_package_update")
+}
+
 /// A run card's question ("Run `fit`?", "Delete a cell?", "Add `x` and run
 /// it?"), the word on its ⏎ button, and the cells it would run.
 pub(crate) struct RunQuestion {
@@ -871,6 +885,18 @@ pub(crate) struct RunQuestion {
 /// it defines, else by its first line; a cell being edited or added by its new
 /// code, since the preview only knows the code before the edit.
 fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_json::Value) -> RunQuestion {
+    // Whole-notebook runs that name no cells: their own question, never "Run 0 cells?".
+    match tool {
+        "restart_notebook" => return RunQuestion { heading: "Restart the notebook?".into(), button: "Restart", names: vec![] },
+        "apply_package_update" => {
+            let heading = match input["date"].as_str().filter(|d| !d.trim().is_empty()) {
+                Some(date) => format!("Update the packages to {date}?"),
+                None => "Update the notebook's packages?".into(),
+            };
+            return RunQuestion { heading, button: "Update", names: vec![] };
+        }
+        _ => {}
+    }
     // The runtime can't say what a cell that doesn't exist yet would run.
     let preview = preview.filter(|_| tool != "add_cell");
     let new_code = input["code"].as_str().filter(|_| matches!(tool, "edit_cell" | "add_cell"));
@@ -1271,6 +1297,10 @@ mod tests {
         assert_eq!(ask("add_cell", None, json!({ "code": "plot(x, y)" })), ("Add `plot(x, y)` and run it?".into(), "Add and run"));
         assert_eq!(ask("edit_cells", None, json!({ "cells": [{}, {}] })), ("Edit 2 cells and run them?".into(), "Edit and run"));
         assert_eq!(ask("delete_cell", None, json!({ "cell_id": "a" })), ("Delete a cell?".into(), "Delete"));
+        assert_eq!(ask("restart_notebook", cells(0, false), json!({ "notebook_id": "n" })), ("Restart the notebook?".into(), "Restart"), "never \"Run 0 cells?\"");
+        assert_eq!(ask("apply_package_update", cells(0, false), json!({ "notebook_id": "n", "date": "2026-10-01" })), ("Update the packages to 2026-10-01?".into(), "Update"));
+        assert_eq!(ask("apply_package_update", None, json!({})), ("Update the notebook's packages?".into(), "Update"));
+        assert!(!super::previews_cells("restart_notebook") && !super::previews_cells("apply_package_update") && super::previews_cells("execute_cell"));
     }
 
     #[test]

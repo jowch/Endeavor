@@ -1697,7 +1697,7 @@ impl Session {
                     input["code"].as_str().map(str::to_owned).or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned))
                 });
                 let tool = celldiff::notebook_tool(&title).map(str::to_owned);
-                if let Some(tool) = tool.clone().filter(|t| runs_code && t != "run_shell") {
+                if let Some(tool) = tool.clone().filter(|t| runs_code && crate::approval::previews_cells(t)) {
                     effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
                 }
                 if plan.is_some() {
@@ -2495,7 +2495,7 @@ impl Session {
         ];
         let code = input["code"].as_str().map(str::to_owned).or_else(|| input["cell_id"].as_str().and_then(|c| self.cell_codes.get(c)).map(str::to_owned));
         let mut effects = Vec::new();
-        if runs_code && tool != "run_shell" {
+        if runs_code && crate::approval::previews_cells(&tool) {
             effects.push(Effect::PreviewRun { ix: self.entries.len(), tool: tool.clone(), input: input.clone() });
         }
         self.asks.asked(self.waiting_prompts().len());
