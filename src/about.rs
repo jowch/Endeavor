@@ -1,5 +1,5 @@
 //! Endeavor ▸ About Endeavor: a small window with the icon, version and build,
-//! credits, Website and Licences links, and, when there is an update to act
+//! credits, Website, Feedback and Licences links, and, when there is an update to act
 //! on, a strip of update notices at the bottom. Licences opens a second window
 //! listing the parts Endeavor ships or installs and their licences.
 
@@ -14,6 +14,8 @@ use crate::theme::TextButton as _;
 pub const WEBSITE: &str = "https://github.com/jowch/Endeavor";
 pub const HELP: &str = "https://github.com/jowch/Endeavor#readme";
 pub const REPORT_ISSUE: &str = "https://github.com/jowch/Endeavor/issues/new";
+/// The issue form for anything that got in a new user's way (.github/ISSUE_TEMPLATE).
+pub const FEEDBACK: &str = "https://github.com/jowch/Endeavor/issues/new?template=got-in-the-way.yml";
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD: &str = env!("ENDEAVOR_BUILD");
@@ -298,7 +300,7 @@ impl Render for About {
                     .text_size(theme::size_meta_small())
                     .line_height(px(17.))
                     .text_color(theme::text_faint())
-                    .child("Notebooks by Pluto.jl. Runs on Julia.")
+                    .child("Notebooks by Pluto.jl and Ember. Runs on Julia and R.")
                     .child(works_with()),
             )
             .child(
@@ -308,6 +310,7 @@ impl Render for About {
                     .gap(px(14.))
                     .text_size(theme::size_meta())
                     .child(link("website", "Website").on_click(|_, _, cx| crate::platform::open_url(WEBSITE, cx)))
+                    .child(link("feedback", "Feedback").on_click(|_, _, cx| crate::platform::open_url(FEEDBACK, cx)))
                     .child(link("licences", "Licences").on_click(|_, _, cx| open_licences(cx))),
             );
         div()

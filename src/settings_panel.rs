@@ -387,6 +387,7 @@ pub enum Act {
     Update(about::Action),
     Website,
     Help,
+    Feedback,
     Licences,
 }
 
@@ -1117,6 +1118,7 @@ impl Workspace {
                 vec![Item::Links(vec![
                     Control::Link { label: "Website", external: true, act: Act::Website },
                     Control::Link { label: "Endeavor Help", external: true, act: Act::Help },
+                    Control::Link { label: "Feedback", external: true, act: Act::Feedback },
                     Control::Link { label: "Licences", external: false, act: Act::Licences },
                 ])],
             ),
@@ -1535,6 +1537,7 @@ impl Workspace {
             },
             Act::Website => crate::platform::open_url(about::WEBSITE, cx),
             Act::Help => crate::platform::open_url(about::HELP, cx),
+            Act::Feedback => crate::platform::open_url(about::FEEDBACK, cx),
             Act::Licences => about::open_licences(cx),
         }
         cx.notify();
@@ -2342,7 +2345,7 @@ fn brand() -> impl IntoElement {
                         .child(format!("Version {}", about::VERSION))
                         .child(div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_muted()).child(format!("(build {})", about::BUILD))),
                 )
-                .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(format!("Notebooks by Pluto.jl. Runs on Julia. {}", crate::about::works_with()))),
+                .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(format!("Notebooks by Pluto.jl and Ember. Runs on Julia and R. {}", crate::about::works_with()))),
         )
 }
 
