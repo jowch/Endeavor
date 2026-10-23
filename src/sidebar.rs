@@ -1010,7 +1010,15 @@ impl Workspace {
             .tab_index(0)
             .track_focus(&self.sidebar_focus)
             // The traffic lights sit in this header (see TitlebarOptions in main()).
-            .child(column_header("sidebar-header").mx(px(-6.)).justify_end().px(px(10.)).child(sidebar_toggle(self, cx)))
+            .child(
+                column_header("sidebar-header")
+                    .mx(px(-6.))
+                    .justify_end()
+                    .px(px(10.))
+                    // Where there's no menu bar, the app's menu starts the header.
+                    .when(!cfg!(target_os = "macos"), |d| d.justify_between().child(self.app_menu_button(cx)))
+                    .child(sidebar_toggle(self, cx)),
+            )
             .child(
                 sidebar_row("new-session".into(), false)
                     .aria_label("New session")

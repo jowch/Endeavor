@@ -1,5 +1,6 @@
 //! The popup ⋮ / ⋯ menu: a sidebar row's actions or a notebook's Share/⋮
-//! menu, whichever `MenuTarget` it's opened for.
+//! menu, whichever `MenuTarget` it's opened for. On Linux and Windows it is
+//! also the app's menu, drawn from the menu bar macOS shows.
 
 use std::path::Path;
 
@@ -26,6 +27,8 @@ pub(crate) enum MenuTarget {
     Share(u64),
     /// The session menu's "Allowed in this folder": the agent's own rules for its folder.
     FolderRules(u64),
+    /// The app's menu, where there's no menu bar (Linux and Windows).
+    App,
 }
 
 impl MenuTarget {
@@ -35,7 +38,7 @@ impl MenuTarget {
         match self {
             MenuTarget::Row(row) => Some((row.clone(), false)),
             MenuTarget::Session(key) => Some((Row::Open(*key), true)),
-            MenuTarget::Notebook(_) | MenuTarget::Share(_) | MenuTarget::FolderRules(_) => None,
+            MenuTarget::Notebook(_) | MenuTarget::Share(_) | MenuTarget::FolderRules(_) | MenuTarget::App => None,
         }
     }
 }
@@ -46,20 +49,81 @@ impl MenuTarget {
 enum MenuPick {
     Row { row: Row, action: RowAction, in_header: bool },
     Notebook(u64, NotebookAction),
+    /// The app menu's item, and its group (the menu bar menu it's in).
+    App(usize, u8),
+}
+
+/// An item of the app's menu, read from the menu bar's menus when it opens.
+pub(crate) struct AppItem {
+    /// The menu bar menu it's in: items of one menu are a group, under its name.
+    menu: SharedString,
+    group: u8,
+    label: String,
+    /// Its shortcut, as the app's other menus write one.
+    keys: String,
+    action: Box<dyn Action>,
+    /// Cut, Copy, Paste or Select All: done in the notebook when it had the keyboard.
+    edit: Option<OsAction>,
+}
+
+impl Workspace {
+    /// The menu bar's menus as the app's menu: all but Window, whose items the
+    /// window's own title bar has.
+    fn app_items(cx: &App) -> Vec<AppItem> {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let mut items = Vec::new();
+        for (group, menu) in cx.get_menus().unwrap_or_default().into_iter().filter(|m| m.name.as_ref() != "Window").enumerate() {
+            for item in menu.items {
+                if let OwnedMenuItem::Action { name, action, os_action, disabled: false, .. } = item {
+                    // The last binding wins; one that works everywhere (no context) is the one to show.
+                    let bindings: Vec<_> = keymap.bindings_for_action(action.as_ref()).collect();
+                    let binding = bindings.iter().rev().find(|b| b.predicate().is_none()).or(bindings.last());
+                    let keys = binding.map(|b| b.keystrokes().iter().map(keystroke_text).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+                    items.push(AppItem { menu: menu.name.clone(), group: group as u8, label: name, keys, action, edit: os_action });
+                }
+            }
+        }
+        items
+    }
+}
+
+/// "Ctrl+Shift+E", the way `platform::shortcut!` writes a shortcut.
+fn keystroke_text(keystroke: &KeybindingKeystroke) -> String {
+    let k = keystroke.inner();
+    let m = &k.modifiers;
+    let mut text = String::new();
+    for (on, name) in [(m.control || m.platform && !cfg!(target_os = "macos"), "Ctrl+"), (m.alt, "Alt+"), (m.shift, "Shift+"), (m.platform && cfg!(target_os = "macos"), "⌘")] {
+        if on {
+            text.push_str(name);
+        }
+    }
+    let key = match k.key.as_str() {
+        "escape" => "Esc".to_string(),
+        key if key.chars().count() == 1 => key.to_uppercase(),
+        key => {
+            let mut c = key.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+        }
+    };
+    text + &key
 }
 
 impl MenuPick {
-    fn label(&self) -> &'static str {
+    fn label<'a>(&'a self, menu: &'a PopupMenu) -> &'a str {
         match self {
             MenuPick::Row { action, .. } => action.label(),
             MenuPick::Notebook(_, action) => action.label(),
+            MenuPick::App(i, _) => &menu.app[*i].label,
         }
     }
 
-    fn shortcut(&self) -> (&'static str, &'static str) {
+    /// The key that picks it while the menu is open, and the shortcut shown.
+    fn shortcut<'a>(&'a self, menu: &'a PopupMenu) -> (&'a str, &'a str) {
         match self {
             MenuPick::Row { action, .. } => action.shortcut(),
             MenuPick::Notebook(_, action) => action.shortcut(),
+            MenuPick::App(i, _) => ("", &menu.app[*i].keys),
         }
     }
 
@@ -68,6 +132,7 @@ impl MenuPick {
         match self {
             MenuPick::Row { action, .. } => *action == RowAction::Delete,
             MenuPick::Notebook(_, action) => action.danger(),
+            MenuPick::App(..) => false,
         }
     }
 
@@ -76,6 +141,16 @@ impl MenuPick {
         match self {
             MenuPick::Row { action, .. } => (*action == RowAction::Delete) as u8,
             MenuPick::Notebook(_, action) => action.group(),
+            MenuPick::App(_, group) => *group,
+        }
+    }
+
+    /// A small heading over the group this item starts.
+    fn section<'a>(&self, menu: &'a PopupMenu, starts_group: bool) -> Option<&'a str> {
+        match self {
+            MenuPick::Notebook(_, action) => action.section(),
+            MenuPick::App(i, _) => starts_group.then(|| menu.app[*i].menu.as_ref()),
+            MenuPick::Row { .. } => None,
         }
     }
 }
@@ -92,6 +167,10 @@ pub(crate) struct PopupMenu {
     focus: FocusHandle,
     /// Focus to give back when the menu closes.
     restore: Option<FocusHandle>,
+    /// The app menu's items (`MenuTarget::App`).
+    app: Vec<AppItem>,
+    /// The notebook had the keyboard before the menu opened, so Edit's items act there.
+    notebook_had_keyboard: bool,
 }
 
 impl Workspace {
@@ -110,6 +189,7 @@ impl Workspace {
                 actions.into_iter().map(|action| MenuPick::Row { row: row.clone(), action, in_header }).collect()
             }
             MenuTarget::FolderRules(_) => Vec::new(),
+            MenuTarget::App => self.menu.as_ref().map_or(Vec::new(), |m| m.app.iter().enumerate().map(|(i, item)| MenuPick::App(i, item.group)).collect()),
             MenuTarget::Notebook(key) => {
                 let session = self.sessions.iter().find(|s| s.key == *key);
                 let open = session.is_some_and(|s| s.notebook.is_some() && s.stopped.is_none() && !s.missing);
@@ -132,15 +212,17 @@ impl Workspace {
             MenuTarget::Notebook(_) => "notebook",
             MenuTarget::Share(_) => "share",
             MenuTarget::FolderRules(_) => "folder_rules",
+            MenuTarget::App => "app",
         };
         if matches!(menu.target, MenuTarget::FolderRules(_)) {
             return Some(serde_json::json!({ "for": target, "rules": menu.rules, "words": menu.rules.iter().map(|r| crate::permits::rule_words(r)).collect::<Vec<_>>() }));
         }
-        let items: Vec<_> = self.menu_picks(&menu.target).iter().map(|p| serde_json::json!({ "label": p.label(), "key": p.shortcut().1 })).collect();
+        let items: Vec<_> = self.menu_picks(&menu.target).iter().map(|p| serde_json::json!({ "label": p.label(menu), "key": p.shortcut(menu).1 })).collect();
         Some(serde_json::json!({ "for": target, "items": items }))
     }
 
     pub(crate) fn open_menu(&mut self, target: MenuTarget, at: Option<Point<Pixels>>, window: &mut Window, cx: &mut Context<Self>) {
+        let notebook_had_keyboard = self.menu.as_ref().map_or_else(|| crate::webcontent::had_keyboard(self.webview.read(cx).raw()), |m| m.notebook_had_keyboard);
         let restore = match self.menu.take() {
             Some(menu) => menu.restore,
             None => window.focused(cx),
@@ -151,7 +233,8 @@ impl Workspace {
             MenuTarget::FolderRules(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| crate::permits::folder_rules(Path::new(&s.place.path))).unwrap_or_default(),
             _ => Vec::new(),
         };
-        self.menu = Some(PopupMenu { target, rules, at, selected: None, focus, restore });
+        let app = if target == MenuTarget::App { Self::app_items(cx) } else { Vec::new() };
+        self.menu = Some(PopupMenu { target, rules, at, selected: None, focus, restore, app, notebook_had_keyboard });
         cx.notify();
     }
 
@@ -163,8 +246,29 @@ impl Workspace {
     }
 
     fn pick(&mut self, pick: MenuPick, window: &mut Window, cx: &mut Context<Self>) {
+        let app_item = match pick {
+            MenuPick::App(i, _) => self.menu.as_ref().and_then(|m| Some((m.app.get(i)?.action.boxed_clone(), m.app[i].edit, m.notebook_had_keyboard))),
+            _ => None,
+        };
         self.close_menu(window, cx);
         match pick {
+            MenuPick::App(..) => {
+                let Some((action, edit, notebook_had_keyboard)) = app_item else { return };
+                // The web view takes the clipboard commands itself; GPUI's own text boxes take the actions.
+                let webview = self.webview.read(cx).raw();
+                match edit.filter(|_| notebook_had_keyboard) {
+                    Some(edit) => {
+                        crate::webcontent::give_keyboard(webview);
+                        // ponytail: a fixed wait for the page to take its focus back; a paste sent at once finds no editor.
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
+                            let _ = this.update(cx, |this, cx| crate::webcontent::edit(this.webview.read(cx).raw(), edit));
+                        })
+                        .detach();
+                    }
+                    None => window.dispatch_action(action, cx),
+                }
+            }
             MenuPick::Row { row, action: RowAction::Rename, in_header: true } => self.start_rename(row, true, window, cx),
             MenuPick::Row { row, action, .. } => self.row_action(row, action, window, cx),
             MenuPick::Notebook(key, action) => self.notebook_action(key, action, window, cx),
@@ -240,16 +344,18 @@ impl Workspace {
         let picks = self.menu_picks(&menu.target);
         let groups: Vec<u8> = picks.iter().map(MenuPick::group).collect();
         let notebook_menu = matches!(menu.target, MenuTarget::Notebook(_) | MenuTarget::Share(_));
+        // The app menu can reach over the notebook when the sidebar is narrow.
+        let over_notebook = notebook_menu || menu.target == MenuTarget::App;
         let items = picks.into_iter().enumerate().flat_map(|(i, pick)| {
             let danger = pick.danger();
             let new_group = i > 0 && groups[i - 1] != groups[i];
             let separator = new_group.then(|| div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge()).into_any_element());
             let action = match &pick {
                 MenuPick::Notebook(_, action) => Some(*action),
-                MenuPick::Row { .. } => None,
+                MenuPick::Row { .. } | MenuPick::App(..) => None,
             };
-            let section = action.and_then(|a| a.section()).map(|heading| {
-                div().px(px(8.)).pt(px(4.)).pb(px(2.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(heading).into_any_element()
+            let section = pick.section(menu, i == 0 || new_group).map(|heading| {
+                div().px(px(8.)).pt(px(4.)).pb(px(2.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(SharedString::from(heading.to_string())).into_any_element()
             });
             let checked = match action {
                 Some(NotebookAction::LookEndeavor) => Some(self.settings.notebook_theme == NotebookTheme::Endeavor),
@@ -264,11 +370,11 @@ impl Workspace {
                 (None, None) => None,
             };
             let detail = action.and_then(|a| a.detail());
-            let (label, shortcut) = (pick.label(), pick.shortcut().1);
+            let (label, shortcut) = (SharedString::from(pick.label(menu).to_string()), SharedString::from(pick.shortcut(menu).1.to_string()));
             let item = div()
                 .id(ElementId::NamedInteger("menu-item".into(), i as u64))
                 .role(Role::MenuItem)
-                .aria_label(label)
+                .aria_label(label.clone())
                 .flex()
                 .items_center()
                 .gap(px(8.))
@@ -333,7 +439,7 @@ impl Workspace {
                 .child("Exports and recordings use the notebook's standard look.")
         });
         // Over the notebook, the web view (a native view on top) lets the menu show through.
-        let hole = notebook_menu.then(|| {
+        let hole = over_notebook.then(|| {
             let webview = self.webview.read(cx);
             let (handle, under) = (webview.handle(), webview.bounds());
             canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Menu, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ()).absolute().size_full()
@@ -343,7 +449,7 @@ impl Workspace {
             .role(Role::Menu)
             .track_focus(&menu.focus)
             .occlude()
-            .w(px(if notebook_menu || rules_body.is_some() { 290. } else { 210. }))
+            .w(px(if notebook_menu || rules_body.is_some() { 290. } else if menu.target == MenuTarget::App { 240. } else { 210. }))
             .p(px(4.))
             .flex()
             .flex_col()
@@ -360,7 +466,7 @@ impl Workspace {
             .children(foot);
         // The session menu hangs from the title's left edge; an un-positioned
         // menu otherwise hangs from its button's right edge.
-        let from_left = matches!(menu.target, MenuTarget::Session(_) | MenuTarget::FolderRules(_));
+        let from_left = matches!(menu.target, MenuTarget::Session(_) | MenuTarget::FolderRules(_) | MenuTarget::App);
         let placed = match menu.at {
             Some(at) => anchored().position(at),
             None if from_left => anchored().anchor(Anchor::TopLeft),
@@ -369,7 +475,7 @@ impl Workspace {
         let wrapper = div().absolute().top(px(28.));
         let wrapper = if from_left { wrapper.left_0() } else { wrapper.right_0() };
         // Over the notebook it shows at once: its hole in the web view can't fade with it.
-        let body = if notebook_menu { body.into_any_element() } else { crate::motion::arriving(body, "popup-menu-in", true).into_any_element() };
+        let body = if over_notebook { body.into_any_element() } else { crate::motion::arriving(body, "popup-menu-in", true).into_any_element() };
         wrapper.child(deferred(placed.child(body)).with_priority(1))
     }
 
@@ -377,7 +483,7 @@ impl Workspace {
         let Some(target) = self.menu.as_ref().map(|menu| menu.target.clone()) else { return };
         let picks = self.menu_picks(&target);
         if !e.keystroke.modifiers.modified()
-            && let Some(pick) = picks.iter().find(|p| p.shortcut().0 == e.keystroke.key)
+            && let Some(pick) = self.menu.as_ref().and_then(|menu| picks.iter().find(|p| p.shortcut(menu).0 == e.keystroke.key))
         {
             cx.stop_propagation();
             return self.pick(pick.clone(), window, cx);
@@ -418,6 +524,19 @@ mod tests {
         assert!(!MenuPick::Notebook(1, NotebookAction::Reveal).danger());
         assert_ne!(MenuPick::Notebook(1, NotebookAction::Rename).group(), MenuPick::Notebook(1, NotebookAction::LookEndeavor).group());
         assert_eq!(MenuPick::Row { row: Row::Open(1), action: RowAction::Delete, in_header: false }.group(), 1);
+    }
+
+    #[test]
+    fn app_menu_shortcuts_read_like_the_apps_others() {
+        let text = |s: &str| super::keystroke_text(&gpui::KeybindingKeystroke::from_keystroke(gpui::Keystroke::parse(s).unwrap()));
+        if cfg!(target_os = "macos") {
+            assert_eq!(text("secondary-shift-e"), "Shift+⌘E");
+        } else {
+            assert_eq!(text("secondary-shift-e"), "Ctrl+Shift+E");
+            assert_eq!(text("ctrl-shift-g"), "Ctrl+Shift+G");
+            assert_eq!(text("ctrl-,"), "Ctrl+,");
+        }
+        assert_eq!(text("f1"), "F1");
     }
 
     #[test]

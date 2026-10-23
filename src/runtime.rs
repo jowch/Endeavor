@@ -73,6 +73,12 @@ impl Listener {
         Ok(Arc::new(Listener { relay, version }))
     }
 
+    /// The agent's `view_cell_output` gets `snapshot`'s picture when the runtime has none (`cell_shot`).
+    #[cfg(target_os = "macos")]
+    pub fn set_snapshot(&self, snapshot: Box<endeavor_mcp::Snapshot>) {
+        self.relay.set_snapshot(snapshot);
+    }
+
     /// This Mac's Julia is restarting (Settings → Restart Julia).
     pub fn restarting(&self) {
         self.relay.restarting();

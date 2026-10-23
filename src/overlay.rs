@@ -348,6 +348,19 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
     unsafe { mask(view as *mut AnyObject, &rects) }
 }
 
+/// The web view's open holes, with their corner radii.
+pub fn holes() -> Vec<(CGRect, f64)> {
+    HOLES.lock().unwrap().rects.iter().map(|(owner, rect)| (*rect, owner.radius())).collect()
+}
+
+/// Cut `holes` in another web view at the same frame (the cell picture's second view, behind
+/// this one), so it doesn't cover what GPUI draws in them.
+pub fn cut_holes(other: &wry::WebView, holes: &[(CGRect, f64)]) {
+    use wry::WebViewExtMacOS;
+    let view = other.webview();
+    unsafe { mask(&*view as *const _ as *mut AnyObject, holes) }
+}
+
 /// Mask the web view's layer around `holes`, or not at all when there are none.
 unsafe fn mask(view: *mut AnyObject, holes: &[(CGRect, f64)]) {
     unsafe {

@@ -387,6 +387,7 @@ pub enum Act {
     Update(about::Action),
     Website,
     Help,
+    Feedback,
     Licences,
 }
 
@@ -1089,8 +1090,9 @@ impl Workspace {
         logs.desc = Some("What Endeavor did this time and the time before. Attach them when you report a problem.".into());
         logs.controls.push(Control::Button { label: crate::platform::SHOW_LOGS.0, look: Look::Secondary, icon: Some(Glyph::Finder), act: Some(Act::ShowLogs), aria: crate::platform::SHOW_LOGS.1.into() });
         let mut report = row("report", "Report a problem");
-        report.desc = Some("Opens a new issue on GitHub, where you can describe what happened.".into());
-        report.controls.push(Control::Link { label: "Report", external: true, act: Act::Report });
+        report.desc = Some("Send Feedback opens a short form that needs no account. Report on GitHub opens a public issue there.".into());
+        report.controls.push(Control::Link { label: "Send Feedback", external: true, act: Act::Feedback });
+        report.controls.push(Control::Link { label: "Report on GitHub", external: true, act: Act::Report });
         vec![
             group(Some(concat!("Julia on ", crate::platform::this_computer!(lower))), vec![Item::Row(restart), Item::Row(fix)]).foot("R and Python get their own group here when they arrive."),
             group(Some("Report a problem"), vec![Item::Row(logs), Item::Row(report)]),
@@ -1117,6 +1119,7 @@ impl Workspace {
                 vec![Item::Links(vec![
                     Control::Link { label: "Website", external: true, act: Act::Website },
                     Control::Link { label: "Endeavor Help", external: true, act: Act::Help },
+                    Control::Link { label: "Send Feedback", external: true, act: Act::Feedback },
                     Control::Link { label: "Licences", external: false, act: Act::Licences },
                 ])],
             ),
@@ -1479,7 +1482,7 @@ impl Workspace {
             Act::CancelSignIn => drop(self.cancel_sign_in(cx)),
             Act::ReopenSignIn => self.open_sign_in_again(cx),
             Act::SignOut => self.sign_out_of_claude(window, cx),
-            Act::OpenClaudeAi => cx.open_url("https://claude.ai/settings/usage"),
+            Act::OpenClaudeAi => crate::platform::open_url("https://claude.ai/settings/usage", cx),
             Act::UseAgent(agent) => {
                 self.update_settings(cx, |s| s.agent = agent);
                 self.draft.agent = agent;
@@ -1526,15 +1529,16 @@ impl Workspace {
                 self.apply_look(cx);
             }
             Act::ShowLogs => crate::logs::reveal(),
-            Act::Report => cx.open_url(about::REPORT_ISSUE),
+            Act::Report => crate::platform::open_url(&about::github_feedback_url(self.settings.agent), cx),
             Act::Update(action) => match action {
                 about::Action::Restart => self.install_update(cx),
                 about::Action::UpdateAdapter => self.update_adapter(cx),
                 about::Action::CheckNow => self.check_for_update(cx),
-                about::Action::Download => cx.open_url(crate::updater::RELEASE_PAGE),
+                about::Action::Download => crate::platform::open_url(crate::updater::RELEASE_PAGE, cx),
             },
-            Act::Website => cx.open_url(about::WEBSITE),
-            Act::Help => cx.open_url(about::HELP),
+            Act::Website => crate::platform::open_url(about::WEBSITE, cx),
+            Act::Help => crate::platform::open_url(about::HELP, cx),
+            Act::Feedback => crate::platform::open_url(&about::feedback_url(self.settings.agent), cx),
             Act::Licences => about::open_licences(cx),
         }
         cx.notify();
@@ -2342,7 +2346,7 @@ fn brand() -> impl IntoElement {
                         .child(format!("Version {}", about::VERSION))
                         .child(div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_muted()).child(format!("(build {})", about::BUILD))),
                 )
-                .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(format!("Notebooks by Pluto.jl. Runs on Julia. {}", crate::about::works_with()))),
+                .child(div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(format!("Notebooks by Pluto.jl and Ember. Runs on Julia and R. {}", crate::about::works_with()))),
         )
 }
 

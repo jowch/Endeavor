@@ -88,13 +88,28 @@ pub fn clear_find(webview: &wry::WebView) {
     }
 }
 
-/// Give the web view the keyboard: X input focus to WebKit's own window.
+/// Give the web view the keyboard.
 pub fn give_keyboard(webview: &wry::WebView) {
-    use gtk::prelude::WidgetExt;
     use wry::WebViewExtUnix;
-    if let Some(xid) = webview.webview().window().as_ref().and_then(super::xid_of) {
-        super::focus(xid);
-    }
+    super::focus_web(&webview.webview());
+}
+
+/// The web view has the keyboard, or had it until the click that opened a menu.
+pub fn had_keyboard(_: &wry::WebView) -> bool {
+    super::web_view_had_keyboard()
+}
+
+/// Cut, Copy, Paste or Select All in the page, as its own keys would.
+pub fn edit(webview: &wry::WebView, action: gpui::OsAction) {
+    use wry::WebViewExtUnix;
+    let command = match action {
+        gpui::OsAction::Cut => "Cut",
+        gpui::OsAction::Copy => "Copy",
+        gpui::OsAction::Paste => "Paste",
+        gpui::OsAction::SelectAll => "SelectAll",
+        _ => return,
+    };
+    webview.webview().execute_editing_command(command);
 }
 
 pub fn has_keyboard(webview: &wry::WebView) -> bool {

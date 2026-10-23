@@ -83,8 +83,37 @@ pub fn reveal(path: &Path) {
     }
     #[cfg(target_os = "linux")]
     if let Some(folder) = if path.is_dir() { Some(path) } else { path.parent() } {
-        let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
+        let _ = opener("xdg-open").arg(folder).spawn().map(|mut c| std::thread::spawn(move || c.wait()));
     }
+}
+
+/// Where main keeps the WAYLAND_DISPLAY it hides from GPUI.
+#[cfg(target_os = "linux")]
+pub const WAYLAND_DISPLAY_KEPT: &str = "ENDEAVOR_WAYLAND_DISPLAY";
+
+/// `program`, to open a link or folder, with the desktop's own display: a
+/// browser already running on Wayland takes a link only from an opener that
+/// can reach it there, so without WAYLAND_DISPLAY the link is lost.
+#[cfg(unix)]
+pub fn opener(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut command = std::process::Command::new(program);
+    #[cfg(target_os = "linux")]
+    if let Some(display) = std::env::var_os(WAYLAND_DISPLAY_KEPT) {
+        command.env("WAYLAND_DISPLAY", display);
+    }
+    command
+}
+
+/// Open a link in the default browser. GPUI's own xdg-open on Linux runs
+/// without WAYLAND_DISPLAY (main hides it), so Linux goes through `opener`.
+pub fn open_url(url: &str, cx: &gpui::App) {
+    #[cfg(target_os = "linux")]
+    if let Ok(mut child) = opener("xdg-open").arg(url).spawn() {
+        std::thread::spawn(move || child.wait());
+        return;
+    }
+    cx.open_url(url);
 }
 
 /// Accessibility's Reduce motion, which GPUI doesn't read itself.
@@ -246,6 +275,8 @@ pub use crate::linux::web_view_hooks;
 /// Start GTK and keep its events flowing from GPUI's main loop.
 #[cfg(target_os = "linux")]
 pub fn init(cx: &mut gpui::App) {
+    // wry embeds the web view only in an X11 window (main hides WAYLAND_DISPLAY from GPUI).
+    gtk::gdk::set_allowed_backends("x11");
     if let Err(e) = gtk::init() {
         eprintln!("GTK didn't start, so the notebook can't show: {e}");
         return;
@@ -406,4 +437,11 @@ pub mod webcontent {
     pub fn has_keyboard(_: &wry::WebView) -> bool {
         false
     }
+
+    pub fn had_keyboard(webview: &wry::WebView) -> bool {
+        has_keyboard(webview)
+    }
+
+    // ponytail: the app menu's Edit items act on GPUI's text boxes only; WebView2's clipboard commands come with #10.
+    pub fn edit(_: &wry::WebView, _: gpui::OsAction) {}
 }
