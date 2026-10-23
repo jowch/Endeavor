@@ -1,0 +1,60 @@
+name: Something in the app is broken
+description: Endeavor crashed, showed an error, or did something you didn't expect.
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. No GitHub account, or rather not post in public? Use the form at https://jowch.github.io/Endeavor/feedback/ instead.
+
+        Before you paste anything, take out what you don't want public: passwords, the value after `token=` or `secret=` in any link or log line, server names, user names, folder paths and data.
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: "Settings ▸ About shows the version and build, such as Version 0.1.0 (build 6ed0c03). On a Mac, Endeavor ▸ About Endeavor too."
+      placeholder: "0.1.0-6ed0c03"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: "macos, windows or linux"
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      description: "claude, codex or antigravity"
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where the notebook ran
+      options:
+        - This computer
+        - A server over ssh
+        - A Slurm cluster
+        - Not sure
+  - type: dropdown
+    id: language
+    attributes:
+      label: Notebook language
+      options:
+        - Julia
+        - R
+        - Not sure
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead. An error message or a screenshot helps.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, if you can share them
+      description: "Settings ▸ Troubleshooting ▸ Log files opens the folder. The last lines of `endeavor.log` around the problem help most. Replace your user name in paths with `~` and server names with `server1`; cut the value after `secret=` or `token=`."
+      render: text

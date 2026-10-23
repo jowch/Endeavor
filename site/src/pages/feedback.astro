@@ -1,0 +1,117 @@
+---
+import '@fontsource/schibsted-grotesk/400.css';
+import '@fontsource/schibsted-grotesk/600.css';
+import { tallyForm, githubForm, fields } from '../feedback';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const withSite = (url: string) => url + (url.includes('?') ? '&' : '?') + 'source=site';
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<title>Send feedback · Endeavor</title>
+		<meta name="description" content="Tell us what got in your way with Endeavor or its plugin." />
+		<link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+	</head>
+	<body>
+		<main>
+			<p class="home"><a href={`${base}/`}>Endeavor</a></p>
+			<h1>Tell us what got in your way</h1>
+			<p>Something stopped you, confused you or took too long? A few lines is plenty.</p>
+			{
+				tallyForm && (
+					<p>
+						<a class="button" data-form href={withSite(tallyForm)}>Send feedback</a>
+						<br />
+						<span class="note">A short form. It needs no account, and only we read it.</span>
+					</p>
+				)
+			}
+			<p>
+				<a class={tallyForm ? 'more' : 'button'} data-form href={withSite(githubForm)}>{tallyForm ? 'Or open an issue on GitHub' : 'Open an issue on GitHub'}</a>
+				<br />
+				<span class="note">Public, and needs a GitHub account. Leave out passwords, tokens, server names and folder paths.</span>
+			</p>
+			<p class="note">Something about how the agent used a notebook? <a href="https://github.com/jowch/EndeavorMCP/issues/new/choose">EndeavorMCP's issues</a> has a form for that.</p>
+		</main>
+		<script is:inline define:vars={{ fields }}>
+			// The app links here with its build, platform and agent; pass them on to the forms.
+			const given = new URLSearchParams(location.search);
+			for (const a of document.querySelectorAll('a[data-form]')) {
+				const url = new URL(a.href);
+				for (const name of fields) {
+					const value = given.get(name);
+					if (value) url.searchParams.set(name, value.slice(0, 80));
+				}
+				a.href = url.href;
+			}
+		</script>
+	</body>
+</html>
+
+<style is:global>
+	:root {
+		--page: #ffffff;
+		--text: #1a1a1c;
+		--muted: #56565c;
+		--link: #b23600;
+		--accent: #cc3f00;
+		color-scheme: light dark;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--page: #151517;
+			--text: #ececec;
+			--muted: #a3a3a3;
+			--link: #ff8c57;
+		}
+	}
+	body {
+		margin: 0;
+		background: var(--page);
+		color: var(--text);
+		font: 400 1.0625rem/1.6 'Schibsted Grotesk', system-ui, sans-serif;
+	}
+	main {
+		max-width: 36rem;
+		margin: 0 auto;
+		padding: 48px 16px;
+	}
+	a {
+		color: var(--link);
+	}
+	.home a {
+		font-weight: 600;
+		text-decoration: none;
+	}
+	h1 {
+		margin: 24px 0 12px;
+		font-size: 2rem;
+		font-weight: 600;
+		line-height: 1.2;
+	}
+	p {
+		margin: 0 0 24px;
+	}
+	.button {
+		display: inline-block;
+		margin-bottom: 6px;
+		padding: 11px 20px;
+		border-radius: 8px;
+		background: var(--accent);
+		color: #ffffff;
+		font-weight: 600;
+		text-decoration: none;
+	}
+	.more {
+		font-weight: 600;
+	}
+	.note {
+		color: var(--muted);
+		font-size: 0.9375rem;
+	}
+</style>

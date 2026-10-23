@@ -192,6 +192,8 @@ impl Workspace {
                 "details": n.details().then(|| json!({ "open": n.details_open, "text": n.raw })),
             })),
             "page": page,
+            "cell_shot": self.second.last,
+            "cell_shot_view": self.second.view(),
         })
     }
 

@@ -24,6 +24,7 @@ ${body}
 - [Install Endeavor](${site}/install/): the desktop app for Mac and Windows, and building on Linux
 - [EndeavorMCP README](https://github.com/jowch/EndeavorMCP#readme): the plugin, servers and clusters, updating and removing it
 - [Troubleshooting](${site}/troubleshooting/)
+- [Send feedback](${site}/feedback/): a short form with no account, or a GitHub issue
 `;
 
 export function GET() {

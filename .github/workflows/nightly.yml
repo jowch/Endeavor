@@ -222,7 +222,15 @@ jobs:
             exit 1
           fi
           rm -f "$key"
-          xcrun stapler staple "$dmg"
+          # Stapling fetches the ticket from Apple's CloudKit, which drops the
+          # connection now and then, sometimes for hours (10-17, and twice on
+          # 10-22). Try again for about a quarter of an hour before failing.
+          for wait in 30 60 120 240 480 0; do
+            xcrun stapler staple "$dmg" && break
+            [ "$wait" != 0 ] || { echo "::error::Stapling failed six times."; exit 1; }
+            echo "Stapling failed; trying again in ${wait}s."
+            sleep "$wait"
+          done
           spctl --assess --type open --context context:primary-signature -v "$dmg"
       - name: Check the disk image
         run: |

@@ -392,6 +392,12 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
             parts.extend(cell_output(&json));
             parts
         }
+        // A read of a cell whose code the agent already has leaves the code out.
+        _ if json["code_unchanged"] == true && json["cell_id"].is_string() => {
+            let mut parts = vec![Part::Line(format!("{}: code unchanged since the agent last saw it", named(json["cell_id"].as_str().unwrap_or_default())))];
+            parts.extend(cell_output(&json));
+            parts
+        }
         _ => {
             let rows = facts(&json, &["notebook_id", "cell_order", "execution_order"]);
             if rows.is_empty() { Vec::new() } else { vec![Part::Fields(rows)] }
@@ -608,6 +614,8 @@ mod tests {
         assert_eq!(d.output, vec![Part::Error("No cell c-9abcdef012".into())]);
         let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c", "code": "x = 1", "output": "1", "errored": false})), false, false);
         assert_eq!(d.output, vec![Part::Code("x = 1".into()), Part::Text("1".into())]);
+        let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c-9abcdef012", "code_unchanged": true, "code_sha": "0123456789ab", "output": "1", "errored": false})), false, false);
+        assert_eq!(d.output, vec![Part::Line("cell c-9abcde: code unchanged since the agent last saw it".into()), Part::Text("1".into())]);
         let d = open("mcp__notebook__list_notebooks", ToolKind::Other, json!({}), out(json!([{"path": "/w/a.jl", "cell_count": 4, "execution_allowed": false}])), false, false);
         assert_eq!(d.output, vec![Part::Text("/w/a.jl · 4 cells · safe preview".into())]);
         let code = "# ╔═╡ 11111111-2222-4333-8444-555555555555\nusing Plots\n\n# ╔═╡ 66666666-7777-4888-9999-aaaaaaaaaaaa\n# (empty)\n\n# ╔═╡ 77777777-7777-4888-9999-aaaaaaaaaaaa\nx = 1\ny = 2";
