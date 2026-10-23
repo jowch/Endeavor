@@ -152,6 +152,15 @@ is `endeavor.old.log` next to it. Julia's own log on your Mac is
 
 ## Report a problem
 
-In Settings, under **Troubleshooting**, click **Report** next to **Report a
-problem**. It opens a new issue on GitHub, where you can describe what happened. Attach the log
-files. Read them first: they can contain file names and output from Julia.
+In Settings, under **Troubleshooting**, next to **Report a problem**:
+
+- **Send Feedback** opens a short form. It needs no account, and only the
+  people who make Endeavor read it.
+- **Report on GitHub** opens a public issue on GitHub, which needs a GitHub
+  account. You can attach the log files there. Read them first: they can
+  contain file names and output from Julia.
+
+Both fill in your Endeavor build, your kind of computer and your agent, and
+nothing else. **Send Feedback** is also in Settings ▸ About, and on a Mac in
+the **Help** menu. Without the app, use the
+[feedback page](https://jowch.github.io/Endeavor/feedback/).

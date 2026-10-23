@@ -35,10 +35,10 @@ export const hero = {
 	primary: { text: 'Read the guide', href: '/overview/' },
 };
 
-// Under the hero and in the footer: the issue form for first tries (.github/ISSUE_TEMPLATE/got-in-the-way.yml).
+// Under the hero and in the footer: the feedback page (src/pages/feedback.astro).
 export const feedback = {
 	text: 'Tell us what got in your way',
-	href: 'https://github.com/jowch/Endeavor/issues/new?template=got-in-the-way.yml',
+	href: '/feedback/',
 };
 
 export const record = {

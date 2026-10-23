@@ -1,5 +1,5 @@
 //! Endeavor ▸ About Endeavor: a small window with the icon, version and build,
-//! credits, Website, Feedback and Licences links, and, when there is an update to act
+//! credits, Website, Send Feedback and Licences links, and, when there is an update to act
 //! on, a strip of update notices at the bottom. Licences opens a second window
 //! listing the parts Endeavor ships or installs and their licences.
 
@@ -13,13 +13,32 @@ use crate::theme::TextButton as _;
 
 pub const WEBSITE: &str = "https://github.com/jowch/Endeavor";
 pub const HELP: &str = "https://github.com/jowch/Endeavor#readme";
-pub const REPORT_ISSUE: &str = "https://github.com/jowch/Endeavor/issues/new";
-/// The issue form for anything that got in a new user's way (.github/ISSUE_TEMPLATE).
-pub const FEEDBACK: &str = "https://github.com/jowch/Endeavor/issues/new?template=got-in-the-way.yml";
+/// The feedback issue form on GitHub (.github/ISSUE_TEMPLATE/feedback.yml): public,
+/// and needs an account.
+const GITHUB_FEEDBACK: &str = "https://github.com/jowch/Endeavor/issues/new?template=feedback.yml";
+/// The site's feedback page (site/src/pages/feedback.astro): a form that needs no
+/// account, or GitHub. The form's link lives on the site, so it changes without a release.
+const FEEDBACK_PAGE: &str = "https://jowch.github.io/Endeavor/feedback/";
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD: &str = env!("ENDEAVOR_BUILD");
 const ICON: &[u8] = include_bytes!("../assets/icon/endeavor-256.png");
+
+/// The feedback page, with what both feedback forms record about this copy
+/// (site/feedback-fields.md): the build, the platform and the agent new sessions
+/// start with. Nothing else goes in the link.
+pub fn feedback_url(agent: crate::agent::Agent) -> String {
+    format!("{FEEDBACK_PAGE}?{}", feedback_fields(agent))
+}
+
+/// The feedback issue form on GitHub, with the same fields filled in.
+pub fn github_feedback_url(agent: crate::agent::Agent) -> String {
+    format!("{GITHUB_FEEDBACK}&{}", feedback_fields(agent))
+}
+
+fn feedback_fields(agent: crate::agent::Agent) -> String {
+    format!("source=app&build={VERSION}-{BUILD}&os={}&agent={}", std::env::consts::OS, agent.name().to_lowercase())
+}
 
 /// What the app knows about updates.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -310,7 +329,7 @@ impl Render for About {
                     .gap(px(14.))
                     .text_size(theme::size_meta())
                     .child(link("website", "Website").on_click(|_, _, cx| crate::platform::open_url(WEBSITE, cx)))
-                    .child(link("feedback", "Feedback").on_click(|_, _, cx| crate::platform::open_url(FEEDBACK, cx)))
+                    .child(link("feedback", "Send Feedback").on_click(|_, _, cx| crate::platform::open_url(&feedback_url(crate::settings::Settings::load().agent), cx)))
                     .child(link("licences", "Licences").on_click(|_, _, cx| open_licences(cx))),
             );
         div()
@@ -488,6 +507,23 @@ impl Render for Licences {
 #[cfg(test)]
 mod tests {
     use super::{Action, Adapter, AppUpdate, BUILD, Notice, Updates, VERSION, notices, parts};
+
+    #[test]
+    fn the_feedback_link_carries_only_build_platform_and_agent() {
+        let url = super::feedback_url(crate::agent::Agent::Codex);
+        assert!(url.starts_with("https://jowch.github.io/Endeavor/feedback/?source=app&build="), "{url}");
+        assert!(url.ends_with("&agent=codex"), "{url}");
+        let keys = |url: &str| -> Vec<String> { url.split_once('?').unwrap().1.split('&').map(|kv| kv.split_once('=').unwrap().0.to_string()).collect() };
+        assert_eq!(keys(&url), ["source", "build", "os", "agent"]);
+        assert!(!url.contains(' '), "{url}");
+        // The GitHub form's field ids are the same (.github/ISSUE_TEMPLATE/feedback.yml).
+        let github = super::github_feedback_url(crate::agent::Agent::Claude);
+        assert_eq!(keys(&github), ["template", "source", "build", "os", "agent"]);
+        let form = include_str!("../.github/ISSUE_TEMPLATE/feedback.yml");
+        for id in ["build", "os", "agent", "source"] {
+            assert!(form.contains(&format!("id: {id}")), "feedback.yml has no field {id}");
+        }
+    }
 
     #[test]
     fn the_credits_name_the_assistants() {

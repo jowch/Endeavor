@@ -152,6 +152,7 @@ actions!(
         ZoomWindow,
         BringAllToFront,
         OpenHelp,
+        SendFeedback,
         ReportIssue
     ]
 );
@@ -2894,7 +2895,8 @@ fn main() {
         cx.bind_keys(composer::key_bindings());
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &OpenHelp, cx| crate::platform::open_url(about::HELP, cx));
-        cx.on_action(|_: &ReportIssue, cx| crate::platform::open_url(about::REPORT_ISSUE, cx));
+        cx.on_action(|_: &SendFeedback, cx| crate::platform::open_url(&about::feedback_url(crate::settings::Settings::load().agent), cx));
+        cx.on_action(|_: &ReportIssue, cx| crate::platform::open_url(&about::github_feedback_url(crate::settings::Settings::load().agent), cx));
         cx.on_action(|_: &BringAllToFront, cx| platform::bring_all_to_front(cx));
         // Deferred: from a focused view the action runs inside the active window,
         // which can't be updated until it returns.
@@ -2965,7 +2967,7 @@ fn main() {
                     MenuItem::action("Bring All to Front", BringAllToFront),
                 ],
             ),
-            menu("Help", vec![MenuItem::action("Endeavor Help", OpenHelp), MenuItem::action("Report an Issue…", ReportIssue)]),
+            menu("Help", vec![MenuItem::action("Endeavor Help", OpenHelp), MenuItem::action("Send Feedback…", SendFeedback), MenuItem::action("Report an Issue on GitHub…", ReportIssue)]),
         ]);
         let bounds = Bounds::centered(None, size(px(1560.), px(900.)), cx);
         let main_window = cx.open_window(

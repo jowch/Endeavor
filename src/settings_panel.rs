@@ -1090,8 +1090,9 @@ impl Workspace {
         logs.desc = Some("What Endeavor did this time and the time before. Attach them when you report a problem.".into());
         logs.controls.push(Control::Button { label: crate::platform::SHOW_LOGS.0, look: Look::Secondary, icon: Some(Glyph::Finder), act: Some(Act::ShowLogs), aria: crate::platform::SHOW_LOGS.1.into() });
         let mut report = row("report", "Report a problem");
-        report.desc = Some("Opens a new issue on GitHub, where you can describe what happened.".into());
-        report.controls.push(Control::Link { label: "Report", external: true, act: Act::Report });
+        report.desc = Some("Send Feedback opens a short form that needs no account. Report on GitHub opens a public issue there.".into());
+        report.controls.push(Control::Link { label: "Send Feedback", external: true, act: Act::Feedback });
+        report.controls.push(Control::Link { label: "Report on GitHub", external: true, act: Act::Report });
         vec![
             group(Some(concat!("Julia on ", crate::platform::this_computer!(lower))), vec![Item::Row(restart), Item::Row(fix)]).foot("R and Python get their own group here when they arrive."),
             group(Some("Report a problem"), vec![Item::Row(logs), Item::Row(report)]),
@@ -1118,7 +1119,7 @@ impl Workspace {
                 vec![Item::Links(vec![
                     Control::Link { label: "Website", external: true, act: Act::Website },
                     Control::Link { label: "Endeavor Help", external: true, act: Act::Help },
-                    Control::Link { label: "Feedback", external: true, act: Act::Feedback },
+                    Control::Link { label: "Send Feedback", external: true, act: Act::Feedback },
                     Control::Link { label: "Licences", external: false, act: Act::Licences },
                 ])],
             ),
@@ -1528,7 +1529,7 @@ impl Workspace {
                 self.apply_look(cx);
             }
             Act::ShowLogs => crate::logs::reveal(),
-            Act::Report => crate::platform::open_url(about::REPORT_ISSUE, cx),
+            Act::Report => crate::platform::open_url(&about::github_feedback_url(self.settings.agent), cx),
             Act::Update(action) => match action {
                 about::Action::Restart => self.install_update(cx),
                 about::Action::UpdateAdapter => self.update_adapter(cx),
@@ -1537,7 +1538,7 @@ impl Workspace {
             },
             Act::Website => crate::platform::open_url(about::WEBSITE, cx),
             Act::Help => crate::platform::open_url(about::HELP, cx),
-            Act::Feedback => crate::platform::open_url(about::FEEDBACK, cx),
+            Act::Feedback => crate::platform::open_url(&about::feedback_url(self.settings.agent), cx),
             Act::Licences => about::open_licences(cx),
         }
         cx.notify();
