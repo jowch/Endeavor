@@ -113,6 +113,7 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `main.rs` `save_json_at`, `settings.rs`, `transcript_copy.rs` | small files are saved best effort: a failed save keeps the last good file (`write_atomic`) and loses only that change; without a transcript copy a session opens on its summary | a lost change is seen |
 | `main.rs` `write_atomic` | `sync_all` runs on the caller's thread, the UI thread for most saves | a save on a hot path |
 | `main.rs` context ring | arcs drawn as 48-segment polylines | it looks faceted |
+| `menu.rs` `pick` | the app menu's Cut, Copy, Paste and Select All reach the notebook 100 ms after it gets the keyboard back, on Linux only; on Windows they act on the app's own text boxes | a paste is lost, or Windows' menu (#10) |
 | `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
 | `install.rs` first-run installs | Node 24.21.0 pinned in code (bump URL, SHA-256, size per release; Julia's pin is EndeavorMCP's, checked by `runtime.rs`); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
 | `own_julia.rs` `install_own_julia` | Settings' Install and a Julia notebook opened meanwhile can both download Endeavor's Julia at once (Install waits while the runtime is starting Julia, not the other way round); the second fails its check or rename, and trying again works | it bites |

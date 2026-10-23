@@ -120,6 +120,13 @@ pub fn give_keyboard(webview: &wry::WebView) {
     let _ = webview.focus();
 }
 
+/// The menu bar's Edit items reach the web view by themselves on macOS: no app menu.
+pub fn had_keyboard(webview: &wry::WebView) -> bool {
+    has_keyboard(webview)
+}
+
+pub fn edit(_: &wry::WebView, _: gpui::OsAction) {}
+
 /// The keyboard is in the web view: it, or a view inside it, is its window's first responder.
 pub fn has_keyboard(webview: &wry::WebView) -> bool {
     use wry::WebViewExtMacOS;
