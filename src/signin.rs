@@ -168,7 +168,7 @@ pub fn browser_shim() {
 #[cfg(unix)]
 fn open_in_browser(url: &str) -> bool {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    std::process::Command::new(opener).arg(url).status().is_ok_and(|s| s.success())
+    crate::platform::opener(opener).arg(url).status().is_ok_and(|s| s.success())
 }
 
 /// The default browser, through the shell, as Explorer opens a link.
@@ -775,7 +775,7 @@ impl Workspace {
                     .child(
                         link("see-plans", "Have neither? See Claude's plans")
                             .child(glyph_at(Glyph::External, theme::accent_text(), 11. / 12.))
-                            .on_click(|_, _, cx| cx.open_url(PLANS)),
+                            .on_click(|_, _, cx| crate::platform::open_url(PLANS, cx)),
                     )
                     .into_any_element(),
             ),
