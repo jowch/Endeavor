@@ -242,9 +242,17 @@ changes.
    no way in. Settings ▸ About has the version, updates, Help and Licences,
    and Troubleshooting has Report a problem, so the About window is the only
    thing missing. It needs a way in, such as a link in Settings ▸ About.
-4. **Wayland (L).** wry can embed a child web view only in an X11 window. The
-   app builds GPUI with only the `x11` feature, so on a Wayland desktop it runs
-   through XWayland. That should work but is untested. Native Wayland needs a
+4. **Wayland (L).** wry can embed a child web view only in an X11 window, and
+   the app builds GPUI with only the `x11` feature. On a Wayland desktop `main`
+   moves `WAYLAND_DISPLAY` to `ENDEAVOR_WAYLAND_DISPLAY`, and `platform::init`
+   limits GTK to X11 (`gdk::set_allowed_backends`), so GPUI and GTK both run
+   through XWayland. Without that, GPUI saw `WAYLAND_DISPLAY`, chose Wayland
+   and panicked. `platform::opener` puts the display back for `xdg-open`
+   (sign-in, links, Show in Files): a browser already running on Wayland,
+   such as Ubuntu's Firefox, otherwise never gets the link. Links that GPUI
+   or gpui-component open themselves don't go through it. On Ubuntu 26.04's
+   GNOME (Wayland) the app starts and reaches sign-in; nothing past that was
+   tried there. Native Wayland needs a
    different way to embed the web view, likely including upstream work in
    wry and gpui-wry.
 5. **Untested on Linux (S each):**

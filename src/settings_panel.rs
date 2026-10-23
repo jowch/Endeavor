@@ -1482,7 +1482,7 @@ impl Workspace {
             Act::CancelSignIn => drop(self.cancel_sign_in(cx)),
             Act::ReopenSignIn => self.open_sign_in_again(cx),
             Act::SignOut => self.sign_out_of_claude(window, cx),
-            Act::OpenClaudeAi => cx.open_url("https://claude.ai/settings/usage"),
+            Act::OpenClaudeAi => crate::platform::open_url("https://claude.ai/settings/usage", cx),
             Act::UseAgent(agent) => {
                 self.update_settings(cx, |s| s.agent = agent);
                 self.draft.agent = agent;
@@ -1529,16 +1529,16 @@ impl Workspace {
                 self.apply_look(cx);
             }
             Act::ShowLogs => crate::logs::reveal(),
-            Act::Report => cx.open_url(&about::github_feedback_url(self.settings.agent)),
+            Act::Report => crate::platform::open_url(&about::github_feedback_url(self.settings.agent), cx),
             Act::Update(action) => match action {
                 about::Action::Restart => self.install_update(cx),
                 about::Action::UpdateAdapter => self.update_adapter(cx),
                 about::Action::CheckNow => self.check_for_update(cx),
-                about::Action::Download => cx.open_url(crate::updater::RELEASE_PAGE),
+                about::Action::Download => crate::platform::open_url(crate::updater::RELEASE_PAGE, cx),
             },
-            Act::Website => cx.open_url(about::WEBSITE),
-            Act::Help => cx.open_url(about::HELP),
-            Act::Feedback => cx.open_url(&about::feedback_url(self.settings.agent)),
+            Act::Website => crate::platform::open_url(about::WEBSITE, cx),
+            Act::Help => crate::platform::open_url(about::HELP, cx),
+            Act::Feedback => crate::platform::open_url(&about::feedback_url(self.settings.agent), cx),
             Act::Licences => about::open_licences(cx),
         }
         cx.notify();

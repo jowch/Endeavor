@@ -88,13 +88,10 @@ pub fn clear_find(webview: &wry::WebView) {
     }
 }
 
-/// Give the web view the keyboard: X input focus to WebKit's own window.
+/// Give the web view the keyboard.
 pub fn give_keyboard(webview: &wry::WebView) {
-    use gtk::prelude::WidgetExt;
     use wry::WebViewExtUnix;
-    if let Some(xid) = webview.webview().window().as_ref().and_then(super::xid_of) {
-        super::focus(xid);
-    }
+    super::focus_web(&webview.webview());
 }
 
 pub fn has_keyboard(webview: &wry::WebView) -> bool {

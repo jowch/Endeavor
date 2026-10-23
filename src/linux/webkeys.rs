@@ -45,7 +45,7 @@ pub fn forward_app_keys(webview: &wry::WebView, handle: AnyWindowHandle, gpui: u
                 cx.defer(move |cx| {
                     let _ = handle.update(cx, |_, window, cx| {
                         if window.focused(cx) != before {
-                            super::focus(gpui);
+                            super::focus_gpui(gpui);
                         }
                     });
                 });

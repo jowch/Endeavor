@@ -58,6 +58,7 @@ mod permits;
 mod notify;
 mod pluto;
 mod queue;
+mod cell_shot;
 mod quotes;
 mod records;
 mod remote;
@@ -519,6 +520,11 @@ pub struct Workspace {
     annotating: bool,
     /// Pictures the page asked for (`Shoot`), by id, until its quote takes them.
     shots: HashMap<u32, Arc<Vec<u8>>>,
+    /// Where the listeners ask for a picture of a cell's output for the agent (`cell_shot`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    cell_shots: futures::channel::mpsc::UnboundedSender<cell_shot::Ask>,
+    /// The second web view those pictures are taken from.
+    second: cell_shot::Second,
     /// "Two ways to add your file" shows over the composer (a "Uses your file"
     /// example was clicked and the tip isn't done yet).
     file_tip: bool,
@@ -651,6 +657,18 @@ impl Workspace {
             webcontent::on_process_ended(&webview, move || drop(ended_tx.unbounded_send(())));
             WebView::new(webview, window, cx)
         });
+
+        let (cell_shots, mut cell_shot_rx) = futures::channel::mpsc::unbounded::<cell_shot::Ask>();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(ask) = cell_shot_rx.next().await {
+                let Ok(job) = this.update_in(cx, |this, window, cx| this.shoot_cell(ask, window, cx)) else { break };
+                let outcome = job.await;
+                if this.update(cx, |this, cx| this.cell_shot_done(outcome, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         cx.spawn(async move |this, cx| {
             while ended_rx.next().await.is_some() {
@@ -823,6 +841,8 @@ impl Workspace {
             status: "".into(),
             annotating: false,
             shots: HashMap::new(),
+            cell_shots,
+            second: cell_shot::Second::default(),
             file_tip: false,
             connections: HashMap::new(),
             listeners: HashMap::new(),
@@ -894,6 +914,8 @@ impl Workspace {
         this.watch_network(cx);
         #[cfg(debug_assertions)]
         this.watch_state_requests(cx);
+        #[cfg(debug_assertions)]
+        this.watch_test_actions(window, cx);
         this
     }
 
@@ -2792,6 +2814,19 @@ impl Render for Workspace {
 }
 
 fn main() {
+    // X11 only, through XWayland on a Wayland desktop: wry embeds the notebook
+    // only in an X11 window, and GPUI is built without its Wayland client, so
+    // seeing WAYLAND_DISPLAY it would choose Wayland and panic. Kept aside for
+    // the programs that open links (platform::opener). GTK is told in
+    // platform::init, so nothing the app starts inherits an X11-only GTK.
+    #[cfg(target_os = "linux")]
+    if let Some(display) = std::env::var_os("WAYLAND_DISPLAY") {
+        // SAFETY: first thing in main, before any other thread exists.
+        unsafe {
+            std::env::set_var(platform::WAYLAND_DISPLAY_KEPT, display);
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+    }
     // `claude auth login` opens its page through this app (signin::Login).
     signin::browser_shim();
     // An agent's adapter, in a job that ends its whole tree (agent_job).
@@ -2859,9 +2894,9 @@ fn main() {
         ]);
         cx.bind_keys(composer::key_bindings());
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.on_action(|_: &OpenHelp, cx| cx.open_url(about::HELP));
-        cx.on_action(|_: &SendFeedback, cx| cx.open_url(&about::feedback_url(crate::settings::Settings::load().agent)));
-        cx.on_action(|_: &ReportIssue, cx| cx.open_url(&about::github_feedback_url(crate::settings::Settings::load().agent)));
+        cx.on_action(|_: &OpenHelp, cx| crate::platform::open_url(about::HELP, cx));
+        cx.on_action(|_: &SendFeedback, cx| crate::platform::open_url(&about::feedback_url(crate::settings::Settings::load().agent), cx));
+        cx.on_action(|_: &ReportIssue, cx| crate::platform::open_url(&about::github_feedback_url(crate::settings::Settings::load().agent), cx));
         cx.on_action(|_: &BringAllToFront, cx| platform::bring_all_to_front(cx));
         // Deferred: from a focused view the action runs inside the active window,
         // which can't be updated until it returns.
@@ -2947,6 +2982,8 @@ fn main() {
                     appears_transparent: !cfg!(windows),
                     traffic_light_position: Some(point(px(16.), px(16.))),
                 }),
+                // X11's WM_CLASS, which a dock matches to endeavor.desktop.
+                app_id: cfg!(target_os = "linux").then(|| "endeavor".into()),
                 ..Default::default()
             },
             |window, cx| {
