@@ -541,6 +541,8 @@ impl Workspace {
             return Ok(listener.clone());
         }
         let listener = Listener::start(&self.hosts.name(host))?;
+        #[cfg(target_os = "macos")]
+        listener.set_snapshot(crate::cell_shot::snapshot(host.clone(), self.cell_shots.clone()));
         self.listeners.insert(host.clone(), listener.clone());
         Ok(listener)
     }

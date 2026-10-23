@@ -8,6 +8,8 @@ pub mod overlay;
 pub mod webcontent;
 pub mod webkeys;
 
+use std::cell::RefCell;
+
 use gpui::{App, IntoElement, MouseDownEvent, Styled, Window, canvas};
 use gtk::glib::Propagation;
 use gtk::prelude::*;
@@ -36,10 +38,17 @@ pub(super) fn xid_of(window: &gtk::gdk::Window) -> Option<u64> {
     Some(window.clone().downcast::<gdkx11::X11Window>().ok()?.xid())
 }
 
+thread_local! {
+    /// The notebook's web view, to tell GTK when the keyboard leaves it.
+    static WEB_VIEW: RefCell<Option<webkit2gtk::WebView>> = const { RefCell::new(None) };
+}
+
 /// Keyboard handling for the notebook's web view in `window`. The order counts:
 /// GTK runs key handlers in the order they're connected.
 pub fn attach(webview: &wry::WebView, window: &Window, cx: &mut App) {
+    use wry::WebViewExtUnix;
     let Some(gpui) = gpui_xid(window) else { return };
+    WEB_VIEW.with(|v| v.replace(Some(webview.webview())));
     focus_on_click(webview);
     keys_follow_focus(webview, gpui);
     webkeys::forward_app_keys(webview, window.window_handle(), gpui, cx);
@@ -50,15 +59,20 @@ pub fn attach(webview: &wry::WebView, window: &Window, cx: &mut App) {
 /// gpui-wry answers the same click by focusing the web view's container
 /// window, so this runs after it: deferred, and on GDK's connection so the X
 /// server sees it second. And GTK runs once the frame has moved the web view.
+/// When another app's window takes the keyboard, the page loses it too.
 pub fn web_view_hooks() -> impl IntoElement {
     canvas(
         |_, _, _| (),
         |_, _, window, _| {
             gtk_loop::wake();
+            // GPUI's window is inactive while the web view has the keyboard too.
+            if !window.is_window_active() && !web_view_has_keyboard() {
+                web_view_focused(false);
+            }
             let Some(xid) = gpui_xid(window) else { return };
             window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx: &mut App| {
                 if phase.capture() {
-                    cx.defer(move |_| focus(xid));
+                    cx.defer(move |_| focus_gpui(xid));
                 }
             });
         },
@@ -71,11 +85,59 @@ pub fn web_view_hooks() -> impl IntoElement {
 fn focus_on_click(webview: &wry::WebView) {
     use wry::WebViewExtUnix;
     webview.webview().connect_button_press_event(move |view, _| {
-        if let Some(xid) = view.window().as_ref().and_then(xid_of) {
-            focus(xid);
-        }
+        focus_web(view);
         Propagation::Proceed
     });
+}
+
+/// The keyboard to the web view: X input focus to WebKit's own window, and
+/// GTK told as well.
+pub(super) fn focus_web(view: &webkit2gtk::WebView) {
+    if let Some(xid) = view.window().as_ref().and_then(xid_of) {
+        focus(xid);
+    }
+    web_view_focused(true);
+}
+
+/// Whether X input focus is on the web view's own window.
+fn web_view_has_keyboard() -> bool {
+    WEB_VIEW.with(|v| v.borrow().as_ref().and_then(|view| view.window()).as_ref().and_then(xid_of).is_some_and(focused))
+}
+
+/// The keyboard back to GPUI's window, `gpui`.
+pub(super) fn focus_gpui(gpui: u64) {
+    focus(gpui);
+    web_view_focused(false);
+}
+
+/// Tell GTK whether the web view has the keyboard. WebKit takes the page's
+/// focus from wry's GTK window around the web view, but GDK only follows X
+/// focus for top-level windows, and that one sits in an X child window of
+/// GPUI's. So GTK never sees it focused, and the page always thinks it's in
+/// the background: editors draw no text cursor (#145), and paste does nothing
+/// (#147). The window gets the focus event a window manager would give it.
+fn web_view_focused(focused: bool) {
+    use gtk::glib::translate::{ToGlibPtr, ToGlibPtrMut};
+    let Some(view) = WEB_VIEW.with(|v| v.borrow().clone()) else { return };
+    let Some(toplevel) = view.toplevel().and_then(|w| w.downcast::<gtk::Window>().ok()) else { return };
+    if toplevel.has_toplevel_focus() == focused {
+        return;
+    }
+    let Some(gdk_window) = toplevel.window() else { return };
+    if focused {
+        // The widget the window's focus goes to.
+        view.grab_focus();
+    }
+    let mut event = gtk::gdk::Event::new(gtk::gdk::EventType::FocusChange);
+    unsafe {
+        let focus: *mut gtk::gdk::ffi::GdkEvent = event.to_glib_none_mut().0;
+        let focus = focus as *mut gtk::gdk::ffi::GdkEventFocus;
+        // The event's free unrefs it.
+        (*focus).window = gdk_window.to_glib_full();
+        (*focus).send_event = 1;
+        (*focus).in_ = focused as i16;
+    }
+    toplevel.send_focus_change(&event);
 }
 
 fn focus(xid: u64) {
