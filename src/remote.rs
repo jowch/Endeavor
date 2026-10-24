@@ -172,9 +172,11 @@ fn messages() -> client::Messages {
 }
 
 /// A `Session` for `server`, connecting in a thread of its own: the helper is
-/// installed without asking, Julia keeps running when the app goes, and its
+/// installed without asking, the runtime keeps running when the app goes, and its
 /// state folder is the one this app has always used there, so a runtime that
-/// already runs is found. `on_event` hears its steps and trouble.
+/// already runs is found. A runtime it starts starts Julia only when a Julia
+/// notebook needs it, as on this computer, so an R session doesn't wait for Julia.
+/// `on_event` hears its steps and trouble.
 pub fn open(server: &Server, auth: Auth, on_event: client::OnEvent) -> Result<Session, String> {
     let mut config = client::Config::new(client_server(server)?, |os: &str, arch: &str| helper_for(os, arch));
     config.transport = transport(server);
@@ -182,6 +184,7 @@ pub fn open(server: &Server, auth: Auth, on_event: client::OnEvent) -> Result<Se
     config.state = state;
     config.allow_install = true;
     config.exit_idle = false;
+    config.julia_when_needed = true;
     config.auth = auth;
     config.messages = messages();
     config.on_event = on_event;
@@ -194,7 +197,8 @@ pub fn open(server: &Server, auth: Auth, on_event: client::OnEvent) -> Result<Se
 pub fn test(server: &Server, auth: Auth, cancel: &Cancel, on: &dyn Fn(Event)) -> Result<(), String> {
     let [_, state] = server.launcher();
     let helper = |os: &str, arch: &str| helper_for(os, arch);
-    // The app finds Julia itself before the core starts, until #73 hands that to the core.
+    // A runtime the test starts starts Julia at once, so the test shows Julia starts there. One already running
+    // is only pinged, and with lazy Julia it may not have started Julia yet.
     let options = client::Options { auth, root: String::new(), state, depot: String::new(), exit_idle: false, julia_when_needed: false, allow_install: true, launcher: None, helper: &helper };
     client::test(&client_server(server)?, &transport(server), &options, cancel, on)
 }
