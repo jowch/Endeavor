@@ -1500,7 +1500,7 @@ mod tests {
         let asks = [
             "edit_cell", "edit_cells", "add_cell", "delete_cell", "move_cell", "fold_cell", "execute_cell", "submit_changes", "run_all_cells",
             "allow_execution", "new_notebook", "open_notebook", "keep_notebook_alive", "interrupt_notebook", "restart_notebook",
-            "apply_package_update", "approve_install", "answer_prompt", "run_shell",
+            "apply_package_update", "approve_install", "answer_prompt", "set_input", "run_shell",
         ];
         for mode in [false, true] {
             let allowed = session_options(false, "/p", mode)["claudeCode"]["options"]["allowedTools"].clone();
