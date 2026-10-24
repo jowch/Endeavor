@@ -291,10 +291,13 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
     let what = match tool {
         "restart_notebook" => Some("Every value is cleared. A Julia notebook then runs every cell again; an R notebook's cells wait to be run."),
         "apply_package_update" => Some("The notebook's package date and versions change and the new packages install. If R had one of them loaded, it restarts."),
+        "approve_install" => Some("The packages download and install, then the cells waiting on them run."),
+        "answer_prompt" => Some("The cell goes on with this answer."),
         _ => None,
     };
     if let Some(what) = what {
-        return Prompt { heading: question.heading, verb: question.button, lines: vec![(what.into(), Tone::Muted)], ..Default::default() };
+        let code = (tool == "answer_prompt").then(|| CardCode::Plain(input["text"].as_str().unwrap_or("").to_owned()));
+        return Prompt { heading: question.heading, verb: question.button, code, lines: vec![(what.into(), Tone::Muted)], ..Default::default() };
     }
     let mut lines = Vec::new();
     if question.names.len() > 1 && preview.is_none_or(|p| !p.all) {
@@ -868,7 +871,7 @@ pub(crate) fn cut_line(text: &str, max: usize) -> String {
 /// Whether a run card asks the runtime which cells a call would run: not for
 /// a shell command, or a call on the whole notebook that names no cells.
 pub(crate) fn previews_cells(tool: &str) -> bool {
-    !matches!(tool, "run_shell" | "restart_notebook" | "apply_package_update")
+    !matches!(tool, "run_shell" | "restart_notebook" | "apply_package_update" | "approve_install" | "answer_prompt")
 }
 
 /// A run card's question ("Run `fit`?", "Delete a cell?", "Add `x` and run
@@ -888,6 +891,8 @@ fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_j
     // Whole-notebook runs that name no cells: their own question, never "Run 0 cells?".
     match tool {
         "restart_notebook" => return RunQuestion { heading: "Restart the notebook?".into(), button: "Restart", names: vec![] },
+        "approve_install" => return RunQuestion { heading: "Download and install the packages?".into(), button: "Download", names: vec![] },
+        "answer_prompt" => return RunQuestion { heading: "Answer the cell's question?".into(), button: "Answer", names: vec![] },
         "apply_package_update" => {
             let heading = match input["date"].as_str().filter(|d| !d.trim().is_empty()) {
                 Some(date) => format!("Update the packages to {date}?"),
@@ -1300,7 +1305,12 @@ mod tests {
         assert_eq!(ask("restart_notebook", cells(0, false), json!({ "notebook_id": "n" })), ("Restart the notebook?".into(), "Restart"), "never \"Run 0 cells?\"");
         assert_eq!(ask("apply_package_update", cells(0, false), json!({ "notebook_id": "n", "date": "2026-10-01" })), ("Update the packages to 2026-10-01?".into(), "Update"));
         assert_eq!(ask("apply_package_update", None, json!({})), ("Update the notebook's packages?".into(), "Update"));
-        assert!(!super::previews_cells("restart_notebook") && !super::previews_cells("apply_package_update") && super::previews_cells("execute_cell"));
+        assert_eq!(ask("approve_install", cells(0, false), json!({ "notebook_id": "n" })), ("Download and install the packages?".into(), "Download"));
+        assert_eq!(ask("answer_prompt", cells(1, false), json!({ "notebook_id": "n", "cell_id": "a", "text": "y" })), ("Answer the cell's question?".into(), "Answer"));
+        for tool in ["restart_notebook", "apply_package_update", "approve_install", "answer_prompt"] {
+            assert!(!super::previews_cells(tool), "{tool}");
+        }
+        assert!(super::previews_cells("execute_cell"));
     }
 
     #[test]
