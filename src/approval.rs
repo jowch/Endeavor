@@ -248,6 +248,10 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
         // The same question as the notebook's safe-preview callout: once, not "always".
         buttons.extend(deny.map(|d| ("Not now".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
+    } else if matches!(tool, "approve_install" | "answer_prompt") && *runs_code {
+        // One download, one answer: "always" would turn on Auto for every later run.
+        buttons.extend(deny.map(|d| ("Deny".into(), "esc", d.clone(), Scope::Once)));
+        buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
     } else if let Some(allow) = allow {
         buttons.extend(deny.map(|d| ("Deny".into(), "esc", d.clone(), Scope::Once)));
         buttons.push(("Always this session".into(), crate::platform::shortcut!("⏎"), allow.clone(), Scope::Session));
@@ -1140,6 +1144,12 @@ mod tests {
         };
         let safe = waiting("mcp__notebook__allow_execution", json!({ "notebook_id": "n" }));
         assert_eq!(super::command_enter_scope(&safe), Scope::Once, "Let this notebook run? has no Always");
+        for tool in ["mcp__notebook__approve_install", "mcp__notebook__answer_prompt"] {
+            let once = waiting(tool, json!({ "notebook_id": "n", "text": "y" }));
+            assert_eq!(super::command_enter_scope(&once), Scope::Once, "{tool} has no Always");
+            let view = super::approval_view(&once).unwrap();
+            assert!(view.buttons.iter().all(|b| b.scope == Scope::Once), "{tool}: {:?}", view.buttons.iter().map(|b| &b.label).collect::<Vec<_>>());
+        }
         let run = waiting("mcp__notebook__execute_cell", json!({ "notebook_id": "n", "cell_id": "c1" }));
         assert_eq!(super::command_enter_scope(&run), Scope::Session);
     }
