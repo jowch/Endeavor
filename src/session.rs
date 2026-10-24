@@ -2537,9 +2537,10 @@ impl Session {
 
     /// How a prompt arriving now is answered without a card: in Auto for
     /// runs, by an "Always this session" rule for the agent's own prompts.
+    /// A large download (`approve_install`) always gets its card.
     fn answer_on_arrival(&self, asked: &Asked, runs_code: bool, plan: bool) -> Option<Approval> {
         match () {
-            _ if plan => None,
+            _ if plan || celldiff::notebook_tool(asked.title) == Some("approve_install") => None,
             _ if runs_code => self.run_without_asking.then_some(Approval::WithoutAsking),
             _ => self.asks.allowed(asked).then_some(Approval::ForSession),
         }
@@ -2849,6 +2850,8 @@ mod tests {
         let run_input = serde_json::json!({ "cell_id": "b" });
         let run = Asked { title: "mcp__notebook__execute_cell", kind: Some(ToolKind::Other), input: &run_input, path: None };
         assert_eq!(s.answer_on_arrival(&run, true, false), Some(Approval::WithoutAsking));
+        let download = Asked { title: "mcp__notebook__approve_install", kind: Some(ToolKind::Other), input: &serde_json::json!({ "notebook_id": "n" }), path: None };
+        assert_eq!(s.answer_on_arrival(&download, true, false), None, "a large download asks in Auto too");
     }
 
     #[test]
@@ -2909,6 +2912,18 @@ mod tests {
 
     fn answers(effects: &[Effect]) -> Vec<Answered<'_>> {
         effects.iter().filter_map(|e| if let Effect::AnswerRun { ask, allow, user_ran } = e { Some((*ask, *allow, user_ran.as_slice())) } else { None }).collect()
+    }
+
+    #[test]
+    fn a_large_download_the_runtime_holds_gets_its_card_in_auto() {
+        let mut s = asking_session();
+        s.run_without_asking = true;
+        let run = s.runtime_asks_now(&[ask(40, None)]);
+        assert_eq!(answers(&run), [(40, true, &[][..])], "a run in Auto is let through");
+        let download = serde_json::json!({ "id": 41, "owner": "7", "tool": "approve_install", "arguments": { "notebook_id": "n" }, "since": 1.0 });
+        let effects = s.runtime_asks_now(&[download]);
+        assert!(answers(&effects).is_empty() && matches!(effects.as_slice(), [Effect::Asked(_)]), "the download waits for the user");
+        assert!(s.pending_permission().is_some());
     }
 
     #[test]
