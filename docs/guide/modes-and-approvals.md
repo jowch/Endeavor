@@ -27,6 +27,10 @@ editing, deleting, moving or folding a cell, or creating the notebook.
 Deleting a cell asks in **Ask to run** too, because the cells that used it
 run again. Reading the notebook never asks.
 
+A large download of R packages, such as Bioconductor data, asks in every
+mode, **Auto** included. Its card has no **Always this session**, so each
+download asks.
+
 With the cursor in the message box, press Shift-Tab to step through **Ask
 to run**, **Auto** and **Plan**. From **Manual**, the first press goes to
 **Plan**. To go back to **Manual**, choose it from the menu. You can also type
