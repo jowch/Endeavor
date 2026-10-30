@@ -64,6 +64,7 @@ mod records;
 mod remote;
 mod row_marks;
 mod resources;
+mod restart_ask;
 mod runs;
 mod runtime;
 mod server_dialog;
@@ -523,6 +524,10 @@ pub struct Workspace {
     /// Where the listeners ask for a picture of a cell's output for the agent (`cell_shot`).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     cell_shots: futures::channel::mpsc::UnboundedSender<cell_shot::Ask>,
+    /// Where the listeners hand on an agent's request to restart its runtime (`restart_ask`).
+    restart_asks: futures::channel::mpsc::UnboundedSender<restart_ask::Ask>,
+    /// Those requests whose card is up, by the card's id: where the user's answer goes.
+    restart_replies: HashMap<u64, std::sync::mpsc::Sender<endeavor_mcp::RestartAnswer>>,
     /// The second web view those pictures are taken from.
     second: cell_shot::Second,
     /// "Two ways to add your file" shows over the composer (a "Uses your file"
@@ -664,6 +669,16 @@ impl Workspace {
                 let Ok(job) = this.update_in(cx, |this, window, cx| this.shoot_cell(ask, window, cx)) else { break };
                 let outcome = job.await;
                 if this.update(cx, |this, cx| this.cell_shot_done(outcome, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        let (restart_asks, mut restart_ask_rx) = futures::channel::mpsc::unbounded::<restart_ask::Ask>();
+        cx.spawn(async move |this, cx| {
+            while let Some(ask) = restart_ask_rx.next().await {
+                if this.update(cx, |this, cx| this.restart_asked(ask, cx)).is_err() {
                     break;
                 }
             }
@@ -842,6 +857,8 @@ impl Workspace {
             annotating: false,
             shots: HashMap::new(),
             cell_shots,
+            restart_asks,
+            restart_replies: HashMap::new(),
             second: cell_shot::Second::default(),
             file_tip: false,
             connections: HashMap::new(),
@@ -1519,6 +1536,7 @@ impl Workspace {
                     })
                     .detach();
                 }
+                Effect::AnswerRestart { id, restart } => self.restart_answered(key, id, restart, cx),
                 Effect::AnswerRun { ask, allow, user_ran } => {
                     let Some(bridge) = self.session_bridge(key) else { continue };
                     cx.background_executor()

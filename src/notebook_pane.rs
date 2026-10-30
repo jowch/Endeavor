@@ -1584,10 +1584,7 @@ impl Workspace {
                             return this.start_host(&host_for_start, cx);
                         }
                         let host = host_for_start.clone();
-                        let mut body = "An older version of Endeavor started it. Notebooks open there stop; their files are saved.".to_owned();
-                        if let Some(lost) = this.unrun_edit_warning(&host) {
-                            body = format!("{body}\n\n{lost}");
-                        }
+                        let body = this.restart_body(&host);
                         this.open_confirm(format!("Restart {engine}{on}?"), body, "Restart", window, cx, move |this, _, cx| this.restart_host(&host, cx));
                     })))
                     .children(fixes.into_iter().map(|fix| self.fix_button(fix, false, cx))),

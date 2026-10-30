@@ -543,6 +543,7 @@ impl Workspace {
         let listener = Listener::start(&self.hosts.name(host))?;
         #[cfg(target_os = "macos")]
         listener.set_snapshot(crate::cell_shot::snapshot(host.clone(), self.cell_shots.clone()));
+        listener.set_restart(crate::restart_ask::hook(host.clone(), self.restart_asks.clone()));
         self.listeners.insert(host.clone(), listener.clone());
         Ok(listener)
     }
@@ -1179,9 +1180,10 @@ impl Workspace {
                     if let Some(setup) = &mut self.setup {
                         setup.fail(e);
                     }
-                    if let Some(listener) = self.listeners.get(&host) {
-                        listener.restart_failed();
-                    }
+                }
+                // A restart on a server (`restart_host`) said it was restarting too.
+                if let Some(listener) = self.listeners.get(&host) {
+                    listener.restart_failed();
                 }
             }
             // Heard already, from the runtime or the helper's end.
@@ -1824,11 +1826,16 @@ impl Workspace {
     }
 
     /// Stop Julia on `host` and start it again: for Julia an older Endeavor
-    /// started, which this one can't attach to.
+    /// started, which this one can't attach to or keeps as it is, or that the
+    /// agent asked the user to restart (`restart_ask`).
     pub fn restart_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         self.stop_host(host, cx);
         if let Some(connection) = self.connections.get_mut(host).filter(|c| c.stopping) {
             connection.start_after_stop = true;
+            // The agent's calls meanwhile hear that it is restarting, not that it was disconnected.
+            if let Some(listener) = self.listeners.get(host) {
+                listener.restarting();
+            }
         }
     }
 

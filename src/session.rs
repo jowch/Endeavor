@@ -100,6 +100,8 @@ pub enum Entry {
 pub enum Asker {
     Agent(Responder<RequestPermissionResponse>),
     Runtime(u64),
+    /// The agent's request to restart the runtime (`restart_ask`), by its card's id.
+    Restart(u64),
 }
 
 /// The option ids of the cards the app makes for the runtime's asks.
@@ -244,6 +246,8 @@ pub enum Effect {
     /// Answer a call the runtime holds (`ask`), with the cells the user's own
     /// run reached meanwhile (each with its `last_run` before that run).
     AnswerRun { ask: u64, allow: bool, user_ran: Vec<(String, f64)> },
+    /// The user answered the agent's request to restart the runtime (card `id`): Restart restarts it.
+    AnswerRestart { id: u64, restart: bool },
     /// Tell the runtime this session's policy changed ("plan" | "ask" |
     /// "auto"), and whether its edits ask too (Manual).
     SetPolicy(&'static str, bool),
@@ -448,6 +452,9 @@ pub struct Session {
     runtime_version: Option<crate::older_runtime::Version>,
     /// The runtime's note still to show (after the history, for a reopened session).
     older_note: Option<String>,
+    /// The entry of the note shown for a runtime the app can't use as it is, with its text: it
+    /// gets a Restart while that runtime lasts.
+    pub older_note_at: Option<(usize, SharedString)>,
     /// The runtime's asks this session has shown or answered, so none shows twice.
     seen_asks: HashSet<u64>,
     /// This session's asks no call waits on now (the agent stopped waiting
@@ -725,6 +732,7 @@ impl Session {
             policy_sent: ("ask", false),
             runtime_older: None,
             older_note: None,
+            older_note_at: None,
             runtime_version: None,
             seen_asks: HashSet::new(),
             left_up: HashSet::new(),
@@ -1058,6 +1066,9 @@ impl Session {
         }
         let was = self.runtime_version.replace(version);
         self.runtime_older = Some(!version.usable());
+        if version.usable() {
+            self.older_note_at = None;
+        }
         let host = self.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());
         let shown = was.is_some_and(|v| !v.usable()) && self.older_note.is_none();
         self.older_note = crate::older_runtime::note(&host, self.agent, version).or_else(|| shown.then(|| crate::older_runtime::restarted(&host)));
@@ -1066,8 +1077,67 @@ impl Session {
 
     fn note_older_runtime(&mut self) {
         if !self.replaying && let Some(note) = self.older_note.take() {
-            self.note(note);
+            let note = SharedString::from(note);
+            self.note(note.clone());
+            self.older_note_at = (self.runtime_older == Some(true)).then(|| (self.entries.len() - 1, note));
         }
+    }
+
+    /// Whether entry `ix` is the note about a runtime the app can't use as it is, while it lasts:
+    /// it gets a Restart.
+    pub fn restart_offered_at(&self, ix: usize) -> bool {
+        self.runtime_older == Some(true)
+            && matches!((&self.older_note_at, self.entries.get(ix)), (Some((at, text)), Some(Entry::Note(shown))) if *at == ix && text == shown)
+    }
+
+    /// The agent asks the user to restart the runtime, for `reason`; `stops` says which notebooks
+    /// stop. A card asks, whatever the mode: none of the session's rules or Auto answers it. A
+    /// request already up gets the new reason and stays the one card. Its id, and the effects.
+    pub fn ask_restart(&mut self, reason: &str, stops: &str) -> (u64, Vec<Effect>) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let input = serde_json::json!({ "reason": reason, "stops": stops });
+        let up = self.waiting_prompts().into_iter().find_map(|ix| match &self.entries[ix] {
+            Entry::Permission { responder: Some(Asker::Restart(id)), .. } => Some((ix, *id)),
+            _ => None,
+        });
+        if let Some((ix, id)) = up {
+            if let Some(Entry::Permission { input: shown, .. }) = self.entries.get_mut(ix) {
+                *shown = input;
+            }
+            return (id, Vec::new());
+        }
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tool = endeavor_mcp::REQUEST_RESTART;
+        let under_way = |status: &ToolCallStatus| matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
+        let call = self
+            .entries
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Entry::Tool { id, title, status, .. } if under_way(status) && celldiff::notebook_tool(title) == Some(tool) => Some(id.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| ToolCallId::new(format!("restart-{id}")));
+        let options = vec![
+            PermissionOption::new(RUN_ALLOW, "Restart", PermissionOptionKind::AllowOnce),
+            PermissionOption::new(RUN_DENY, "Not now", PermissionOptionKind::RejectOnce),
+        ];
+        self.asks.asked(self.waiting_prompts().len());
+        self.push(Entry::Permission {
+            call,
+            title: format!("{}{tool}", celldiff::TOOL_PREFIX),
+            code: None,
+            options,
+            responder: Some(Asker::Restart(id)),
+            runs_code: true,
+            tool: Some(tool.to_owned()),
+            input,
+            kind: None,
+            path: None,
+            preview: None,
+            plan: None,
+        });
+        (id, vec![Effect::Asked(self.entries.len() - 1)])
     }
 
     fn sync_policy(&mut self, effects: &mut Vec<Effect>) {
@@ -2227,6 +2297,15 @@ impl Session {
                         self.later.push(Effect::AnswerRun { ask, allow: false, user_ran: Vec::new() });
                         notes.extend(heading.map(|h| format!("{agent} stopped waiting for your answer to “{h}”")));
                     }
+                    // Its Restart still restarts after the turn: the user's press is what restarts.
+                    Some(Asker::Restart(id)) if keep_left_up => {
+                        *responder = Some(Asker::Restart(id));
+                        continue;
+                    }
+                    Some(Asker::Restart(id)) => {
+                        self.later.push(Effect::AnswerRestart { id, restart: false });
+                        notes.extend(heading.map(|h| format!("{agent} stopped waiting for your answer to “{h}”")));
+                    }
                     None => {}
                 }
             }
@@ -2415,6 +2494,12 @@ impl Session {
                     return;
                 }
             }
+            Asker::Restart(id) => {
+                let restart = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
+                self.later.push(Effect::AnswerRestart { id, restart });
+                // Once, whatever the button: a restart is never a rule for the session.
+                return self.record_answer(ix, option, Scope::Once);
+            }
         }
         self.record_answer(ix, option, scope);
     }
@@ -2434,6 +2519,10 @@ impl Session {
     /// shell command's title is its command line, which the model writes.
     /// (Its kind can't decide it: Codex marks its notebook calls `execute`.)
     fn runtime_asks_instead<'a>(&self, title: &str, input: &serde_json::Value, plan: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
+        // The app's own card asks about a restart (`ask_restart`), whatever the runtime and the mode.
+        if celldiff::notebook_tool(title) == Some(endeavor_mcp::REQUEST_RESTART) {
+            return option_of_kind(options, PermissionOptionKind::AllowOnce);
+        }
         let tool = celldiff::notebook_tool(title).filter(|tool| endeavor_mcp::is_tool(tool) && !plan && self.runtime_older == Some(false))?;
         let decides = self.agent.facts().asks_every_write || self.runtime_holds(tool, input);
         option_of_kind(options, PermissionOptionKind::AllowOnce).filter(|_| decides)
@@ -3256,6 +3345,55 @@ mod tests {
         assert!(s.runtime_holds("add_cell", &serde_json::json!({ "code": "b = 1" })));
         s.runtime_asks_now(&[held(42, "add_cell", serde_json::json!({ "code": "b = 1" }))]);
         assert!(s.pending_permission().is_some(), "an edit still asks");
+    }
+
+    #[test]
+    fn a_restart_the_agent_asks_for_always_gets_a_card_and_only_restart_restarts() {
+        use agent_client_protocol::schema::v1::PermissionOption;
+        let restarts = |effects: Vec<Effect>| effects.into_iter().filter_map(|e| if let Effect::AnswerRestart { id, restart } = e { Some((id, restart)) } else { None }).collect::<Vec<_>>();
+        // Auto: runs don't ask, a restart does.
+        let mut s = asking_session();
+        s.run_without_asking = true;
+        let (id, effects) = s.ask_restart("Julia stopped answering.", "fit.jl stops; its file is saved.");
+        assert!(matches!(effects.as_slice(), [Effect::Asked(_)]));
+        assert_eq!(s.waiting_prompts().len(), 1);
+        let ix = s.pending_permission().unwrap();
+        assert_eq!(crate::approval::heading_at(&s, ix).unwrap(), format!("Restart Endeavor on {}?", crate::platform::this_computer!()));
+        // The agent's own prompt for the call goes through: the card is the question, even on an older runtime.
+        s.runtime_build(crate::older_runtime::Version::Other(None));
+        let options = [PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce)];
+        assert!(s.runtime_asks_instead("mcp__notebook__request_restart", &serde_json::json!({ "reason": "x" }), false, &options).is_some());
+        // Asked again while it's up: the same card, with the new reason.
+        let (again, effects) = s.ask_restart("Still stuck.", "");
+        assert_eq!((again, effects.len(), s.waiting_prompts().len()), (id, 0, 1));
+        // The turn ends: the card stays, and its Restart still restarts.
+        s.drop_prompts(true);
+        assert_eq!(s.waiting_prompts().len(), 1);
+        assert!(restarts(s.take_later()).is_empty());
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Session));
+        assert_eq!(restarts(s.take_later()), [(id, true)]);
+        assert!(!s.asks.allowed(&crate::permits::Asked { title: "mcp__notebook__request_restart", kind: None, input: &serde_json::json!({}), path: None }), "never a rule for the session");
+
+        // Not now declines; a stopped turn takes the card down unanswered.
+        let (id, _) = s.ask_restart("Older version.", "");
+        assert!(s.answer_pending(PermissionOptionKind::RejectOnce, Scope::Once));
+        assert_eq!(restarts(s.take_later()), [(id, false)]);
+        let (id, _) = s.ask_restart("Older version.", "");
+        s.drop_prompts(false);
+        assert_eq!(restarts(s.take_later()), [(id, false)]);
+        assert!(s.waiting_prompts().is_empty());
+    }
+
+    #[test]
+    fn the_older_runtime_note_offers_restart_until_the_runtime_is_this_versions() {
+        let mut s = asking_session();
+        s.runtime_build(crate::older_runtime::Version::Other(None));
+        let ix = s.entries.len() - 1;
+        assert!(matches!(&s.entries[ix], Entry::Note(_)) && s.restart_offered_at(ix));
+        s.note("Something else");
+        assert!(!s.restart_offered_at(ix + 1), "only the note itself");
+        s.runtime_build(crate::older_runtime::Version::Usable);
+        assert!(!s.restart_offered_at(ix), "gone once this version runs there");
     }
 
     #[test]

@@ -217,6 +217,15 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
             lines: vec![(format!("In {cwd}"), Tone::Muted)],
             ..Default::default()
         }
+    } else if tool == endeavor_mcp::REQUEST_RESTART {
+        let host = session.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());
+        let mut lines = Vec::new();
+        if let Some(reason) = input["reason"].as_str().filter(|r| !r.trim().is_empty()) {
+            lines.push((reason.trim().to_owned(), Tone::Secondary));
+        }
+        let stops = input["stops"].as_str().unwrap_or("Notebooks open there stop; their files are saved.");
+        lines.push((format!("Julia and R stop there and start again. {stops} The notebooks that were running open and run again."), Tone::Muted));
+        Prompt { heading: format!("Restart Endeavor on {host}?"), verb: "Restart", code: None, lines, ..Default::default() }
     } else if tool == "allow_execution" {
         let file = session.notebook_path.as_deref().map(|p| folder_name(Path::new(p)));
         let host = session.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());
@@ -244,7 +253,7 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
     let mut buttons: Vec<(String, &'static str, PermissionOption, Scope)> = Vec::new();
     let allow = option_of_kind(options, PermissionOptionKind::AllowOnce);
     let deny = option_of_kind(options, PermissionOptionKind::RejectOnce);
-    if tool == "allow_execution" && *runs_code {
+    if matches!(tool, "allow_execution" | endeavor_mcp::REQUEST_RESTART) && *runs_code {
         // The same question as the notebook's safe-preview callout: once, not "always".
         buttons.extend(deny.map(|d| ("Not now".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));

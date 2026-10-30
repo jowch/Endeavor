@@ -79,7 +79,12 @@ impl Listener {
         self.relay.set_snapshot(snapshot);
     }
 
-    /// This Mac's Julia is restarting (Settings → Restart Julia).
+    /// The agent can ask the user to restart the runtime (`restart_ask`).
+    pub fn set_restart(&self, ask: Box<endeavor_mcp::AskRestart>) {
+        self.relay.set_restart(ask);
+    }
+
+    /// Julia is restarting (Settings → Restart Julia, or `restart_host`).
     pub fn restarting(&self) {
         self.relay.restarting();
     }

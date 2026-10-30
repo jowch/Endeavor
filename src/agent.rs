@@ -565,6 +565,10 @@ const READ_ONLY_TOOLS: [&str; 16] = [
     "mcp__notebook__read_file",
 ];
 
+/// Tools the app asks the user about itself, in every mode (`restart_ask`): Claude Code's own
+/// prompt would be a second question.
+const ASKS_ITSELF: [&str; 1] = ["mcp__notebook__request_restart"];
+
 /// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
 /// skills and guards) always; the project's settings and CLAUDE.md (from the
 /// working directory) always; the user's personal setup (user settings, their MCP
@@ -575,7 +579,7 @@ const READ_ONLY_TOOLS: [&str; 16] = [
 fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
     let disallowed: &[&str] = if on_server { &LOCAL_TOOLS } else { &[] };
-    let allowed: Vec<String> = READ_ONLY_TOOLS.iter().map(|t| t.to_string()).chain(plugin_rules(plugin_dir)).collect();
+    let allowed: Vec<String> = READ_ONLY_TOOLS.iter().chain(&ASKS_ITSELF).map(|t| t.to_string()).chain(plugin_rules(plugin_dir)).collect();
     serde_json::json!({
         "claudeCode": { "options": {
             "settingSources": sources,
@@ -1495,7 +1499,7 @@ mod tests {
             .unwrap()
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_owned())
-            .chain(["list_folder", "read_file", "run_shell"].map(String::from))
+            .chain(["list_folder", "read_file", "run_shell", "request_restart"].map(String::from))
             .collect();
         let asks = [
             "edit_cell", "edit_cells", "add_cell", "delete_cell", "move_cell", "fold_cell", "execute_cell", "submit_changes", "run_all_cells",
