@@ -35,7 +35,22 @@
   pluto-cell.endeavor-flash { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px;
     transition: outline-color 0.3s; }
   pluto-cell.endeavor-flash.fading { outline-color: transparent; }
+  .endeavor-gone { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000;
+    padding: 6px 12px; border-radius: 6px; font: 13px system-ui, sans-serif;
+    background: var(--e-bg-raised, #26262A); color: var(--e-text-primary, #F0EFEC);
+    border: 1px solid var(--e-border, #2A2A2E); transition: opacity 0.3s; }
+  .endeavor-gone.fading { opacity: 0; }
 `;
+  function sayGone() {
+    document.querySelector(".endeavor-gone")?.remove();
+    const note = document.createElement("div");
+    note.className = "endeavor-gone";
+    note.setAttribute("role", "status");
+    note.textContent = "That cell isn't in this notebook.";
+    document.body.append(note);
+    setTimeout(() => note.classList.add("fading"), 2200);
+    setTimeout(() => note.remove(), 2600);
+  }
   function cellCode(cell) {
     const content = cell?.querySelector("pluto-input .cm-content");
     const view = content?.cmTile?.root?.view;
@@ -45,7 +60,7 @@
   }
   function reveal(ids) {
     const cells = ids.map((id) => document.getElementById(id)).filter((c) => !!c);
-    if (!cells.length) return;
+    if (!cells.length) return sayGone();
     cells[0].scrollIntoView({ block: "center", behavior: "smooth" });
     for (const cell of cells) {
       cell.classList.remove("fading");
@@ -74,10 +89,17 @@
       label = (lines.find((l) => l.startsWith("#")) ?? lines[0] ?? "markdown").replace(/^#+/, "").trim();
     } else {
       const first = codeLines(code)[0];
-      label = first === void 0 ? "cell" : definedName(code) ?? inferredName(code) ?? first;
+      label = commentName(code) ?? (first === void 0 ? "cell" : definedName(code) ?? inferredName(code) ?? first);
     }
     const chars = [...label];
     return chars.length > 28 ? `${chars.slice(0, 27).join("")}\u2026` : label;
+  }
+  function commentName(code) {
+    const line = code.split("\n").map((l) => l.trim()).find((l) => l);
+    if (!line?.startsWith("# ")) return null;
+    const text = line.slice(2).trim();
+    const codeLike = /[A-Za-z0-9_]\(/.test(text) || text.includes("=") || text.includes("<-") || ["using ", "import ", "library("].some((k) => text.startsWith(k));
+    return text && !codeLike ? text : null;
   }
   function definedName(code) {
     const lines = codeLines(code);
@@ -176,6 +198,8 @@
     return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
   }
   function cellName2(nb, id) {
+    const named = commentName(nb.cell_inputs[id]?.code ?? "");
+    if (named) return cellName(nb.cell_inputs[id].code);
     const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
     if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
     return cellName(nb.cell_inputs[id]?.code ?? "");

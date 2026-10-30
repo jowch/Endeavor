@@ -295,6 +295,14 @@ pub fn cell_uri(backend: Backend, notebook: &str, cell: &str) -> String {
     format!("notebook://{}/{notebook}/cell/{cell}", backend.name())
 }
 
+/// The cell id in an agent's link to a cell, `cell_uri`'s form for any
+/// notebook: the cell is looked for in the pane's notebook, so a link with a
+/// wrong notebook id still finds it.
+pub fn linked_cell(uri: &str) -> Option<&str> {
+    let cell = uri.strip_prefix("notebook://")?.split_once("/cell/")?.1.trim_end_matches('/');
+    (!cell.is_empty() && cell.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then_some(cell)
+}
+
 /// The cell id in a link to a cell of `notebook`: `cell_uri`'s form, or
 /// `pluto://notebook/…/cell/…`, which sessions from before it used.
 pub fn uri_cell<'a>(uri: &'a str, notebook: &str) -> Option<&'a str> {
@@ -315,6 +323,15 @@ mod tests {
 
     fn cell(code: &str) -> Cell {
         Cell { id: C1.into(), code: code.into() }
+    }
+
+    #[test]
+    fn agent_links_name_their_cell() {
+        assert_eq!(linked_cell(&cell_uri(Backend::Pluto, NB, C1)), Some(C1));
+        assert_eq!(linked_cell(&format!("notebook://ember/{NB}/cell/c_12/")), Some("c_12"));
+        assert_eq!(linked_cell("https://example.com/cell/x"), None);
+        assert_eq!(linked_cell(&format!("notebook://pluto/{NB}/cell/")), None);
+        assert_eq!(linked_cell(&format!("notebook://pluto/{NB}/cell/a\"b")), None);
     }
 
     #[test]

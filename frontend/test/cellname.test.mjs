@@ -32,7 +32,15 @@ test("a cell is named by what it defines, its heading, or its first line", () =>
     ["splot(x)", "splot(x)"],
     ["x == 1", "x == 1"],
     ["using Plots", "using Plots"],
-    ["# just a note", "cell"],
+    ["# just a note", "just a note"],
+    ["# Growth curves (by strain)\nlet\n  p = plot(t, y)\nend", "Growth curves (by strain)"],
+    ["\n  # Outliers removed\nclean = filter(ok, data)", "Outliers removed"],
+    ["# plot(t, y)\nscatter(t, y)", "scatter(t, y)"],
+    ["# using CSV\ndata = 1", "data"],
+    ["# data <- read.csv(f)\ndata <- 1", "data <- 1"],
+    ["x = 1\n# Not a name", "x"],
+    ["#= Draws =#\nn = 1", "n"],
+    ["#' Roxygen\nf <- function(x) x", "f <- function(x) x"],
     ["a_rather_long_variable_name_for_tests = 1", "a_rather_long_variable_name…"],
   ];
   for (const [code, name] of cases) assert.equal(cellName(code), name, code);

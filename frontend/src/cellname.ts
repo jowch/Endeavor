@@ -1,7 +1,7 @@
 // How cells are named for the user, the same way as the app's `cell_label` (src/session.rs).
 
 /**
- * A cell's name, as the app names it (`cell_label`): what it defines (`rates = …` → `rates`),
+ * A cell's name, as the app names it (`cell_label`): its first line's comment (`commentName`), else what it defines (`rates = …` → `rates`),
  * a markdown cell's first heading or words, "plot" for a cell that draws one, "text" for one
  * that builds Markdown, a `let` or `begin` block's last value, else its first line of code;
  * at most 28 characters.
@@ -14,10 +14,19 @@ export function cellName(code: string): string {
     label = (lines.find((l) => l.startsWith("#")) ?? lines[0] ?? "markdown").replace(/^#+/, "").trim();
   } else {
     const first = codeLines(code)[0];
-    label = first === undefined ? "cell" : (definedName(code) ?? inferredName(code) ?? first);
+    label = commentName(code) ?? (first === undefined ? "cell" : (definedName(code) ?? inferredName(code) ?? first));
   }
   const chars = [...label];
   return chars.length > 28 ? `${chars.slice(0, 27).join("")}…` : label;
+}
+
+/** A name the cell gives itself: its first line, when that is a `# ` comment in words, not code commented out. */
+export function commentName(code: string): string | null {
+  const line = code.split("\n").map((l) => l.trim()).find((l) => l);
+  if (!line?.startsWith("# ")) return null;
+  const text = line.slice(2).trim();
+  const codeLike = /[A-Za-z0-9_]\(/.test(text) || text.includes("=") || text.includes("<-") || ["using ", "import ", "library("].some((k) => text.startsWith(k));
+  return text && !codeLike ? text : null;
 }
 
 function definedName(code: string): string | null {

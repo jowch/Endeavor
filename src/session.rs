@@ -2752,7 +2752,8 @@ pub(crate) fn option_of_kind(options: &[PermissionOption], kind: PermissionOptio
     options.iter().find(|o| o.kind == kind)
 }
 
-/// A cell's name wherever the user sees one: what it defines (`model(S, p) = …`
+/// A cell's name wherever the user sees one: its first line's comment
+/// (`comment_name`), else what it defines (`model(S, p) = …`
 /// → `model`), a markdown cell's first heading or words, "plot" for a cell that
 /// draws one, "text" for one that builds Markdown, a `let` or `begin` block's last value, else its first line of
 /// code; cut to `LABEL_MAX` characters.
@@ -2763,9 +2764,10 @@ pub(crate) fn cell_label(code: &str) -> String {
             let heading = lines.clone().find(|l| l.starts_with('#'));
             heading.or_else(|| lines.next()).map_or("markdown", |l| l.trim_start_matches('#').trim()).to_owned()
         }
-        None => match code_lines(code).next() {
-            Some(first) => defined_name(code).or_else(|| inferred_name(code)).unwrap_or_else(|| first.to_owned()),
-            None => "cell".to_owned(),
+        None => match (comment_name(code), code_lines(code).next()) {
+            (Some(name), _) => name.to_owned(),
+            (None, Some(first)) => defined_name(code).or_else(|| inferred_name(code)).unwrap_or_else(|| first.to_owned()),
+            (None, None) => "cell".to_owned(),
         },
     };
     if label.chars().count() > LABEL_MAX {
@@ -2776,6 +2778,19 @@ pub(crate) fn cell_label(code: &str) -> String {
 }
 
 const LABEL_MAX: usize = 28;
+
+/// A name the cell gives itself: its first line, when that is a `# ` comment
+/// in words (`# Growth curves by strain`), not code commented out.
+fn comment_name(code: &str) -> Option<&str> {
+    let text = code.lines().map(str::trim).find(|l| !l.is_empty())?.strip_prefix("# ")?.trim();
+    (!text.is_empty() && !looks_like_code(text)).then_some(text)
+}
+
+/// Whether text reads as code rather than words: a call, `=`, `<-`, or `using`, `import`, `library(`.
+pub(crate) fn looks_like_code(text: &str) -> bool {
+    let call = text.as_bytes().windows(2).any(|w| (w[0].is_ascii_alphanumeric() || w[0] == b'_') && w[1] == b'(');
+    call || text.contains('=') || text.contains("<-") || ["using ", "import ", "library("].iter().any(|k| text.starts_with(k))
+}
 
 /// What code defines, from its first line of code: `x = …` → `x`. A Pluto
 /// `begin` block is named by its first line inside.
@@ -4590,7 +4605,7 @@ more" }"#);
     }
 
     #[test]
-    fn a_cell_is_named_by_what_it_defines_its_heading_or_its_first_line() {
+    fn a_cell_is_named_by_its_first_line_comment_what_it_defines_its_heading_or_its_first_line() {
         use super::cell_label;
         let cases = [
             ("flips = rand(Bool, 100)", "flips"),
@@ -4612,7 +4627,15 @@ more" }"#);
             ("splot(x)", "splot(x)"),
             ("x == 1", "x == 1"),
             ("using Plots", "using Plots"),
-            ("# just a note", "cell"),
+            ("# just a note", "just a note"),
+            ("# Growth curves (by strain)\nlet\n  p = plot(t, y)\nend", "Growth curves (by strain)"),
+            ("\n  # Outliers removed\nclean = filter(ok, data)", "Outliers removed"),
+            ("# plot(t, y)\nscatter(t, y)", "scatter(t, y)"),
+            ("# using CSV\ndata = 1", "data"),
+            ("# data <- read.csv(f)\ndata <- 1", "data <- 1"),
+            ("x = 1\n# Not a name", "x"),
+            ("#= Draws =#\nn = 1", "n"),
+            ("#' Roxygen\nf <- function(x) x", "f <- function(x) x"),
             ("a_rather_long_variable_name_for_tests = 1", "a_rather_long_variable_name…"),
         ];
         for (code, label) in cases {
