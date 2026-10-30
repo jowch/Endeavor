@@ -480,6 +480,7 @@ impl Workspace {
                     "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text(s.agent)),
                 })),
                 Entry::Agent { text, at } => Some(json!({ "kind": "reply", "text": text, "actions": message_actions(true, *at, s.copied == Some(ix)) })),
+                Entry::Note(text) if s.restart_offered_at(ix) => Some(json!({ "kind": "note", "text": text.to_string(), "actions": ["Restart…"] })),
                 Entry::Note(text) => Some(json!({ "kind": "note", "text": text.to_string() })),
                 Entry::Reopened(at) => Some(json!({ "kind": "divider", "text": format!("Reopened {}", crate::when::day_at(*at)) })),
                 Entry::Plan(entries) => Some(json!({ "kind": "plan", "progress": approval::progress(entries), "items": plan_items(entries) })),

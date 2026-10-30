@@ -297,6 +297,28 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .child(markdown(&session.reply_text(ix, text, cx), cx))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
+        Entry::Note(text) if session.restart_offered_at(ix) => {
+            let host = session.place.host.clone();
+            div()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(4.))
+                .text_size(theme::chat_meta())
+                .text_color(muted)
+                .child(text.clone())
+                .child(
+                    div()
+                        .id(id("older-restart"))
+                        .role(Role::Button)
+                        .cursor_pointer()
+                        .text_color(theme::text_secondary())
+                        .hover(|s| s.text_color(theme::text_primary()))
+                        .button_text("Restart…")
+                        .on_click(cx.listener(move |this, _, window, cx| this.confirm_restart(&host, window, cx))),
+                )
+                .into_any_element()
+        }
         Entry::Note(text) => div().text_size(theme::chat_meta()).text_color(muted).child(text.clone()).into_any_element(),
         Entry::Reopened(at) => {
             let rule = || div().flex_1().h(px(1.)).bg(theme::border());

@@ -53,11 +53,22 @@ a run. Then the note says "too old to ask before a run", and
 Claude can read and edit the notebook but can't run code until you restart
 it.
 
-To restart it:
+To restart it, click **Restart…** under that note. It asks first, and lists
+the notebooks open there, since they stop. Their files are saved. You can also:
 
 - On your Mac, use **Restart Julia** in Settings, under **Troubleshooting**.
 - On a server, click **Stop** next to the server in Settings, under **Where
   notebooks run**. Then click **Start on lab-server** in the notebook pane.
+
+## Claude asks to restart
+
+When a restart would fix something Claude can't, such as Julia that an older
+Endeavor started, or Julia or R that stopped or stopped answering, Claude can
+ask you. The chat shows "Restart Endeavor on lab-server?" with Claude's
+reason and the notebooks that stop. Nothing restarts unless you click
+**Restart**, in every mode, Auto included. **Not now** tells Claude you chose
+not to. If you answer after Claude has stopped waiting, **Restart** still
+restarts.
 
 When Endeavor can't connect to the older Julia at all, the notebook pane
 shows a **Restart Julia on lab-server** button instead (**Restart Julia** on

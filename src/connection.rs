@@ -543,6 +543,7 @@ impl Workspace {
         let listener = Listener::start(&self.hosts.name(host))?;
         #[cfg(target_os = "macos")]
         listener.set_snapshot(crate::cell_shot::snapshot(host.clone(), self.cell_shots.clone()));
+        listener.set_restart(crate::restart_ask::hook(host.clone(), self.restart_asks.clone()));
         self.listeners.insert(host.clone(), listener.clone());
         Ok(listener)
     }
@@ -872,13 +873,15 @@ impl Workspace {
         let gone = connection.forget_runtime();
         connection.status = Status::Starting;
         connection.steps = Steps::new("Stopping Julia");
-        if let Some(listener) = self.listeners.get(&host) {
-            listener.restarting();
-        }
+        let listener = self.listeners.get(&host).cloned();
         self.close_page(gone, cx);
         self.status = "Restarting Julia…".into();
         let stop = cx.background_executor().spawn(async move {
+            // Asked before the listener turns the app's calls away too.
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
+            if let Some(listener) = listener {
+                listener.restarting();
+            }
             (resume, channel.stop())
         });
         cx.spawn(async move |this, cx| {
@@ -1179,9 +1182,10 @@ impl Workspace {
                     if let Some(setup) = &mut self.setup {
                         setup.fail(e);
                     }
-                    if let Some(listener) = self.listeners.get(&host) {
-                        listener.restart_failed();
-                    }
+                }
+                // A restart on a server (`restart_host`) said it was restarting too.
+                if let Some(listener) = self.listeners.get(&host) {
+                    listener.restart_failed();
                 }
             }
             // Heard already, from the runtime or the helper's end.
@@ -1747,6 +1751,12 @@ impl Workspace {
     /// to it. A host that isn't connected connects first. Sessions on it then
     /// show Julia stopped, with Start.
     pub fn stop_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        self.stop_host_then(host, false, cx);
+    }
+
+    /// Stop Julia on `host`, and with `start`, start it again once it stopped, reopening the
+    /// notebooks the user had let run to run again.
+    fn stop_host_then(&mut self, host: &HostId, start: bool, cx: &mut Context<Self>) {
         match self.status(host) {
             Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) => {}
             Some(Status::Connecting) => {
@@ -1766,13 +1776,16 @@ impl Workspace {
         let helper = self.helper(host);
         let Some(connection) = self.connections.get_mut(host) else { return };
         let Some(helper) = helper.filter(|_| !connection.stopping) else { return };
+        // What runs now resumes after the start, as after Settings → Restart Julia.
+        let running = connection.bridge().filter(|_| start && connection.status == Status::Ready).map(|bridge| (bridge, connection.notebooks.clone()));
         let gone = if connection.status == Status::Starting {
             // The start under way ends as cancelled (Update::Started).
             connection.cancelling = true;
             None
         } else {
             connection.status = Status::Died(String::new());
-            if let Some(listener) = self.listeners.get(host) {
+            // With notebooks to look at first, the listener is told once they have been (below).
+            if let Some(listener) = self.listeners.get(host).filter(|_| running.is_none()) {
                 listener.disconnected();
             }
             connection.forget_runtime()
@@ -1782,15 +1795,25 @@ impl Workspace {
         connection.stopping = true;
         connection.found = None;
         connection.check += 1;
+        connection.start_after_stop = start;
         let id = connection.id;
         self.close_page(gone, cx);
         if *host == HostId::ThisMac {
             self.status = "Stopping Julia…".into();
         }
-        let stop = cx.background_executor().spawn(async move { helper.stop() });
+        // The agent's calls meanwhile hear that it is restarting, not that it was disconnected.
+        let listener = self.listeners.get(host).filter(|_| start).cloned();
+        let stop = cx.background_executor().spawn(async move {
+            // The app's calls go through the listener too: which notebooks run is asked before it turns them away.
+            let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
+            if let Some(listener) = listener {
+                listener.restarting();
+            }
+            (resume, helper.stop())
+        });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
-            let stopped = stop.await;
+            let (resume, stopped) = stop.await;
             let _ = this.update(cx, |this, cx| {
                 let mut restart = false;
                 if let Some(connection) = this.connections.get_mut(&host).filter(|c| c.id == id) {
@@ -1807,6 +1830,9 @@ impl Workspace {
                     }
                     connection.found = Some(Ok(RuntimeState::NotRunning));
                     restart = std::mem::take(&mut connection.start_after_stop);
+                    if restart {
+                        connection.resume = resume;
+                    }
                 }
                 if restart {
                     return this.start_host(&host, cx);
@@ -1824,12 +1850,10 @@ impl Workspace {
     }
 
     /// Stop Julia on `host` and start it again: for Julia an older Endeavor
-    /// started, which this one can't attach to.
+    /// started, which this one can't attach to or keeps as it is, or that the
+    /// agent asked the user to restart (`restart_ask`).
     pub fn restart_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
-        self.stop_host(host, cx);
-        if let Some(connection) = self.connections.get_mut(host).filter(|c| c.stopping) {
-            connection.start_after_stop = true;
-        }
+        self.stop_host_then(host, true, cx);
     }
 
     /// What runs on `host`, as far as the app knows, for the host list and the Where menu.
