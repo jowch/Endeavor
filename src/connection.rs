@@ -873,13 +873,15 @@ impl Workspace {
         let gone = connection.forget_runtime();
         connection.status = Status::Starting;
         connection.steps = Steps::new("Stopping Julia");
-        if let Some(listener) = self.listeners.get(&host) {
-            listener.restarting();
-        }
+        let listener = self.listeners.get(&host).cloned();
         self.close_page(gone, cx);
         self.status = "Restarting Julia…".into();
         let stop = cx.background_executor().spawn(async move {
+            // Asked before the listener turns the app's calls away too.
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
+            if let Some(listener) = listener {
+                listener.restarting();
+            }
             (resume, channel.stop())
         });
         cx.spawn(async move |this, cx| {
@@ -1782,7 +1784,8 @@ impl Workspace {
             None
         } else {
             connection.status = Status::Died(String::new());
-            if let Some(listener) = self.listeners.get(host) {
+            // With notebooks to look at first, the listener is told once they have been (below).
+            if let Some(listener) = self.listeners.get(host).filter(|_| running.is_none()) {
                 listener.disconnected();
             }
             connection.forget_runtime()
@@ -1798,14 +1801,14 @@ impl Workspace {
         if *host == HostId::ThisMac {
             self.status = "Stopping Julia…".into();
         }
-        if start {
-            // The agent's calls meanwhile hear that it is restarting, not that it was disconnected.
-            if let Some(listener) = self.listeners.get(host) {
+        // The agent's calls meanwhile hear that it is restarting, not that it was disconnected.
+        let listener = self.listeners.get(host).filter(|_| start).cloned();
+        let stop = cx.background_executor().spawn(async move {
+            // The app's calls go through the listener too: which notebooks run is asked before it turns them away.
+            let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
+            if let Some(listener) = listener {
                 listener.restarting();
             }
-        }
-        let stop = cx.background_executor().spawn(async move {
-            let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             (resume, helper.stop())
         });
         let host = host.clone();

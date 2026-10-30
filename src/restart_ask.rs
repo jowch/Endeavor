@@ -129,8 +129,9 @@ impl Workspace {
             let host = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone());
             let name = host.map_or_else(String::new, |h| self.hosts.name(&h));
             let _ = pending.reply.send(RestartAnswer::Unavailable(already_restarted(&name)));
+            let what = if pending.only_notebook { "the notebook".to_owned() } else { format!("Julia on {name}") };
             if let Some(session) = self.session_mut(key) {
-                session.note(format!("Nothing was restarted: Julia on {name} started again since the agent asked."));
+                session.note(format!("Nothing was restarted: {what} started again since the agent asked."));
             }
             return cx.notify();
         }
