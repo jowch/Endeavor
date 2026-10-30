@@ -27,6 +27,11 @@ sha2 = "0.10"
 # To build against a local checkout, see docs/testing.md.
 wire = { git = "https://github.com/jowch/EndeavorMCP" }
 endeavor-mcp = { git = "https://github.com/jowch/EndeavorMCP" }
+# Mermaid diagrams in replies, drawn without a browser (diagram.rs). Young
+# and fast-moving, so pinned exactly.
+mermaid = { package = "bezel-mermaid", version = "=0.2.22" }
+# The state dump finds a reply's diagrams. Already in the tree through gpui-base.
+markdown = "=1.0.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Same versions wry uses: the webview's light/dark appearance.

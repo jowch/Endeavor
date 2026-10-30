@@ -12,6 +12,7 @@ use gpui_component::tooltip::Tooltip;
 use crate::Workspace;
 use crate::celldiff;
 use crate::details;
+use crate::diagram;
 use crate::failure;
 use crate::motion;
 use crate::new_session::Glyph;
@@ -294,7 +295,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .flex()
             .flex_col()
             .gap(px(2.))
-            .child(markdown(&session.reply_text(ix, text, cx)))
+            .child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
         Entry::Note(text) if session.restart_offered_at(ix) => {
@@ -461,35 +462,62 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
     div().flex().items_center().gap(px(4.)).h(px(20.)).children(copy).children(time).into_any_element()
 }
 
-/// An agent reply's markdown, with a copy button on each code block.
-fn markdown(state: &Entity<TextViewState>) -> TextView {
-    TextView::new(state).style(markdown_style()).code_block_actions(|block, _, _| {
-        let code = block.code().to_string();
-        div()
-            .id("copy")
-            .role(Role::Button)
-            .px(px(6.))
-            .py(px(2.))
-            .rounded(px(4.))
-            .cursor_pointer()
-            .font_family(theme::SANS)
-            .text_size(theme::chat_meta_small())
-            .text_color(theme::text_faint())
-            // Out of the flow so the library's opaque holder for it stays empty and
-            // doesn't hide the code's top-right corner while the button is invisible.
-            // Changing display on hover instead panics when hover flips mid-frame.
-            .absolute()
-            .top_0()
-            .right_0()
-            .whitespace_nowrap()
-            .bg(theme::bg_card())
-            .opacity(0.)
-            .group_hover(MESSAGE, |s| s.opacity(1.))
-            .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
-            .button_text("Copy")
-            .aria_label("Copy code")
-            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(code.clone())))
-    })
+/// An agent reply's markdown, with a copy button on each code block. A
+/// finished `mermaid` block is drawn as a diagram (diagram.rs).
+fn markdown(state: &Entity<TextViewState>, chat_width: f32) -> TextView {
+    // The diagram's card pads it by 10 px on each side.
+    let width = (chat_width - 2. * crate::chat_margin(chat_width)).min(crate::CHAT_CONTENT_MAX) - 20.;
+    TextView::new(state)
+        .style(markdown_style())
+        .code_block_actions(|block, _, _| copy_button(block.code().to_string(), "Copy code"))
+        .markdown_block_parser(diagram::parse_block)
+        .markdown_block_renderer(diagram::NODE, move |node, _, _| {
+            let Some(block) = node.data::<diagram::Block>() else { return div().into_any_element() };
+            let Ok(d) = diagram::fitted(&block.source, width) else { return div().into_any_element() };
+            div()
+                .relative()
+                .w_full()
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(theme::bg_card())
+                .child(
+                    img(d.image(theme::is_light()))
+                        .w(px(d.width))
+                        .max_w_full()
+                        .aspect_ratio(d.width / d.height)
+                        .aria_label(node.accessibility_name().to_owned()),
+                )
+                .child(copy_button(block.source.clone(), "Copy diagram source"))
+                .into_any_element()
+        })
+}
+
+/// The Copy button in a code block's or a diagram's corner, shown on hover.
+fn copy_button(text: String, label: &'static str) -> impl IntoElement {
+    div()
+        .id("copy")
+        .role(Role::Button)
+        .px(px(6.))
+        .py(px(2.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .font_family(theme::SANS)
+        .text_size(theme::chat_meta_small())
+        .text_color(theme::text_faint())
+        // Out of the flow so the library's opaque holder for it stays empty and
+        // doesn't hide the code's top-right corner while the button is invisible.
+        // Changing display on hover instead panics when hover flips mid-frame.
+        .absolute()
+        .top_0()
+        .right_0()
+        .whitespace_nowrap()
+        .bg(theme::bg_card())
+        .opacity(0.)
+        .group_hover(MESSAGE, |s| s.opacity(1.))
+        .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
+        .button_text("Copy")
+        .aria_label(label)
+        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone())))
 }
 
 /// Markdown on the chat type scale: headings at 16 px (h1, h2) and 14 px (h3

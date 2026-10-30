@@ -479,7 +479,14 @@ impl Workspace {
                     "quotes": quotes(attachments),
                     "unanswered": (s.unanswered == Some(ix)).then(|| self.unanswered_text(s.agent)),
                 })),
-                Entry::Agent { text, at } => Some(json!({ "kind": "reply", "text": text, "actions": message_actions(true, *at, s.copied == Some(ix)) })),
+                Entry::Agent { text, at } => {
+                    let mut reply = json!({ "kind": "reply", "text": text, "actions": message_actions(true, *at, s.copied == Some(ix)) });
+                    let diagrams = crate::diagram::summary(text);
+                    if !diagrams.is_empty() {
+                        reply["diagrams"] = json!(diagrams);
+                    }
+                    Some(reply)
+                }
                 Entry::Note(text) if s.restart_offered_at(ix) => Some(json!({ "kind": "note", "text": text.to_string(), "actions": ["Restart…"] })),
                 Entry::Note(text) => Some(json!({ "kind": "note", "text": text.to_string() })),
                 Entry::Reopened(at) => Some(json!({ "kind": "divider", "text": format!("Reopened {}", crate::when::day_at(*at)) })),
