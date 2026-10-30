@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 use agent_client_protocol::schema::v1::{ToolCallStatus, ToolKind};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::text::{TextView, TextViewState, TextViewStyle};
+use gpui_component::text::{MarkdownNode, MarkdownParseContext, MarkdownPlugin, TextView, TextViewState, TextViewStyle, markdown_ast};
 use gpui_component::tooltip::Tooltip;
 
 use crate::Workspace;
@@ -462,7 +462,8 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
 }
 
 /// An agent reply's markdown, with a copy button on each code block. A link
-/// to a cell (`notebook://…/cell/<id>`) shows that cell in the notebook.
+/// to a cell (`notebook://…/cell/<id>`) is a pill that shows that cell in the
+/// notebook (`CellLinks`).
 fn markdown(state: &Entity<TextViewState>, cx: &mut Context<Workspace>) -> TextView {
     let workspace = cx.entity().downgrade();
     let link = move |url: &SharedString, event: &ClickEvent, _: &mut Window, cx: &mut App| match crate::annotate::linked_cell(url) {
@@ -474,7 +475,8 @@ fn markdown(state: &Entity<TextViewState>, cx: &mut Context<Workspace>) -> TextV
         }
         None => crate::platform::open_url(url, cx),
     };
-    TextView::new(state).style(markdown_style()).on_link_click(link).code_block_actions(|block, _, _| {
+    let cell_links = CellLinks(cx.entity().downgrade());
+    TextView::new(state).style(markdown_style()).on_link_click(link).plugin(cell_links).code_block_actions(|block, _, _| {
         let code = block.code().to_string();
         div()
             .id("copy")
@@ -501,6 +503,72 @@ fn markdown(state: &Entity<TextViewState>, cx: &mut Context<Workspace>) -> TextV
             .aria_label("Copy code")
             .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(code.clone())))
     })
+}
+
+/// The name of a reply's cell-link nodes.
+const CELL_LINK: &str = "cell-link";
+
+/// A cell link's cell id and the agent's words for it.
+struct CellLink {
+    cell: String,
+    words: SharedString,
+}
+
+/// Draws a reply's links to cells as pills: the agent's words after a cell
+/// glyph, in the accent colour. Clicking one shows the cell in the notebook.
+/// A cell the notebook no longer has is a faded, struck-through pill that
+/// doesn't click.
+struct CellLinks(WeakEntity<Workspace>);
+
+impl MarkdownPlugin for CellLinks {
+    fn name(&self) -> &str {
+        CELL_LINK
+    }
+
+    fn parse(&self, node: &markdown_ast::Node, _: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
+        let markdown_ast::Node::Link(link) = node else { return None };
+        let cell = crate::annotate::linked_cell(&link.url)?.to_owned();
+        let words: SharedString = node.to_string().into();
+        Some(MarkdownNode::new(CELL_LINK, CellLink { cell, words: words.clone() }).text(words.clone()).accessibility_label(words))
+    }
+
+    fn render(&self, node: &MarkdownNode, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Some(link) = node.data::<CellLink>() else { return div().into_any_element() };
+        let gone = self.0.upgrade().is_some_and(|w| cell_here(w.read(cx), &link.cell) == Some(false));
+        let color = if gone { theme::text_faint() } else { theme::accent_text() };
+        let pill = div()
+            .id(SharedString::from(format!("cell-link-{}-{}", link.cell, node.source_range().map_or(0, |r| r.start))))
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(6.))
+            .rounded(px(5.))
+            .bg(if gone { theme::bg_tag() } else { theme::lit_bg() })
+            .text_color(color)
+            .whitespace_nowrap()
+            .child(crate::new_session::glyph(crate::new_session::Glyph::Code, color))
+            .child(div().when(gone, |d| d.line_through()).child(link.words.clone()));
+        if gone {
+            return pill.tooltip(|window, cx| Tooltip::new("This cell isn't in the notebook any more").build(window, cx)).into_any_element();
+        }
+        let workspace = self.0.clone();
+        let cell = link.cell.clone();
+        pill.role(Role::Link)
+            .cursor_pointer()
+            .hover(|s| s.bg(theme::mark_bg()))
+            .on_click(move |_, _, cx| {
+                let _ = workspace.update(cx, |this, cx| this.reveal_cells(vec![cell.clone()], cx));
+            })
+            .into_any_element()
+    }
+}
+
+/// Whether the shown session's notebook has this cell, as its runtime last
+/// said: `None` when the app doesn't know that notebook's cells yet.
+fn cell_here(workspace: &Workspace, cell: &str) -> Option<bool> {
+    let notebook = workspace.active_session()?.notebook.as_deref()?;
+    let cells = workspace.connections.values().find_map(|c| c.cells.get(notebook)?.as_array())?;
+    Some(cells.iter().any(|c| c["cell_id"] == cell))
 }
 
 /// Whether a click opens a link, as the text view decides without a handler:

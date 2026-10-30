@@ -75,15 +75,16 @@ describing it in words.
 - **✦ Claude between cells**. Hover between two cells and click **✦ Claude**
   to ask Claude to write a new cell in that spot.
 
-Claude can also point at a cell in its reply: click a link to a cell, and
-the notebook scrolls to it. Cells are named by what they define. To give a
-cell a name of your own, start it with a comment in words, such as
-`# Growth curves by strain`.
-
 In each of these, Return sends your question now as its own message.
 ⌘Return adds it to the message box instead, so you can collect several
 before you send them together. Esc closes the question and keeps what you
 typed for next time.
+
+Claude can also point at a cell in its reply. A cell shows as an orange
+pill with the cell icon: click it, and the notebook scrolls to that cell. A
+faded, struck-through pill is a cell that isn't in the notebook any more.
+Cells are named by what they define. To give a cell a name of your own,
+start it with a comment in words, such as `# Growth curves by strain`.
 
 ![Point turned on: a plot is picked, and a bar under it holds the question for Claude](images/point.png)
 
