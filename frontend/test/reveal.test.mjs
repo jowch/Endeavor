@@ -20,6 +20,9 @@ test("reveal outlines the cells; code answers with a cell's code", async () => {
 
   window.__endeavor.receive({ type: "reveal", cells: [C, "missing"] });
   assert.ok(window.document.getElementById(C).classList.contains("endeavor-flash"));
+  assert.equal(window.document.querySelector(".endeavor-gone"), null, "a found cell says nothing");
+  window.__endeavor.receive({ type: "reveal", cells: ["deleted"] });
+  assert.match(window.document.querySelector(".endeavor-gone").textContent, /isn't in this notebook/);
 
   window.__endeavor.receive({ type: "code", cell: C });
   assert.deepEqual(sent.at(-1), { type: "code", cell: C, code: "rates = 1\nrates + 1" });

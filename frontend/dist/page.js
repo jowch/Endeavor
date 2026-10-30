@@ -35,7 +35,22 @@
   pluto-cell.endeavor-flash { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px;
     transition: outline-color 0.3s; }
   pluto-cell.endeavor-flash.fading { outline-color: transparent; }
+  .endeavor-gone { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000;
+    padding: 6px 12px; border-radius: 6px; font: 13px system-ui, sans-serif;
+    background: var(--e-bg-raised, #26262A); color: var(--e-text-primary, #F0EFEC);
+    border: 1px solid var(--e-border, #2A2A2E); transition: opacity 0.3s; }
+  .endeavor-gone.fading { opacity: 0; }
 `;
+  function sayGone() {
+    document.querySelector(".endeavor-gone")?.remove();
+    const note = document.createElement("div");
+    note.className = "endeavor-gone";
+    note.setAttribute("role", "status");
+    note.textContent = "That cell isn't in this notebook any more.";
+    document.body.append(note);
+    setTimeout(() => note.classList.add("fading"), 2200);
+    setTimeout(() => note.remove(), 2600);
+  }
   function cellCode(cell) {
     const content = cell?.querySelector("pluto-input .cm-content");
     const view = content?.cmTile?.root?.view;
@@ -45,7 +60,7 @@
   }
   function reveal(ids) {
     const cells = ids.map((id) => document.getElementById(id)).filter((c) => !!c);
-    if (!cells.length) return;
+    if (!cells.length) return sayGone();
     cells[0].scrollIntoView({ block: "center", behavior: "smooth" });
     for (const cell of cells) {
       cell.classList.remove("fading");

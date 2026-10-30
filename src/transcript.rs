@@ -294,7 +294,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .flex()
             .flex_col()
             .gap(px(2.))
-            .child(markdown(&session.reply_text(ix, text, cx)))
+            .child(markdown(&session.reply_text(ix, text, cx), cx))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
         Entry::Note(text) => div().text_size(theme::chat_meta()).text_color(muted).child(text.clone()).into_any_element(),
@@ -439,9 +439,18 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
     div().flex().items_center().gap(px(4.)).h(px(20.)).children(copy).children(time).into_any_element()
 }
 
-/// An agent reply's markdown, with a copy button on each code block.
-fn markdown(state: &Entity<TextViewState>) -> TextView {
-    TextView::new(state).style(markdown_style()).code_block_actions(|block, _, _| {
+/// An agent reply's markdown, with a copy button on each code block. A link
+/// to a cell (`notebook://…/cell/<id>`) shows that cell in the notebook.
+fn markdown(state: &Entity<TextViewState>, cx: &mut Context<Workspace>) -> TextView {
+    let workspace = cx.entity().downgrade();
+    let link = move |url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App| match crate::annotate::linked_cell(url) {
+        Some(cell) => {
+            let cell = cell.to_owned();
+            let _ = workspace.update(cx, |this, cx| this.reveal_cells(vec![cell], cx));
+        }
+        None => crate::platform::open_url(url, cx),
+    };
+    TextView::new(state).style(markdown_style()).on_link_click(link).code_block_actions(|block, _, _| {
         let code = block.code().to_string();
         div()
             .id("copy")
