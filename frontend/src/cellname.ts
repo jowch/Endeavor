@@ -21,7 +21,7 @@ export function cellName(code: string): string {
 }
 
 /** A name the cell gives itself: its first line, when that is a `# ` comment in words, not code commented out. */
-function commentName(code: string): string | null {
+export function commentName(code: string): string | null {
   const line = code.split("\n").map((l) => l.trim()).find((l) => l);
   if (!line?.startsWith("# ")) return null;
   const text = line.slice(2).trim();

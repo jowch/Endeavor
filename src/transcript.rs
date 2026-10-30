@@ -443,7 +443,9 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
 /// to a cell (`notebook://…/cell/<id>`) shows that cell in the notebook.
 fn markdown(state: &Entity<TextViewState>, cx: &mut Context<Workspace>) -> TextView {
     let workspace = cx.entity().downgrade();
-    let link = move |url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App| match crate::annotate::linked_cell(url) {
+    let link = move |url: &SharedString, event: &ClickEvent, _: &mut Window, cx: &mut App| match crate::annotate::linked_cell(url) {
+        // Setting a handler skips the library's own check of which button clicked.
+        _ if !activates(event) => {}
         Some(cell) => {
             let cell = cell.to_owned();
             let _ = workspace.update(cx, |this, cx| this.reveal_cells(vec![cell], cx));
@@ -477,6 +479,16 @@ fn markdown(state: &Entity<TextViewState>, cx: &mut Context<Workspace>) -> TextV
             .aria_label("Copy code")
             .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(code.clone())))
     })
+}
+
+/// Whether a click opens a link, as the text view decides without a handler:
+/// the left or middle button, a key, or a touch that isn't a long press.
+fn activates(event: &ClickEvent) -> bool {
+    match event {
+        ClickEvent::Mouse(click) => matches!(click.up.button, MouseButton::Left | MouseButton::Middle),
+        ClickEvent::Keyboard(_) => true,
+        ClickEvent::Touch(click) => !click.long_press,
+    }
 }
 
 /// Markdown on the chat type scale: headings at 16 px (h1, h2) and 14 px (h3

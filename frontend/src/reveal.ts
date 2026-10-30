@@ -1,7 +1,7 @@
 // Chips in the chat point back into the notebook: clicking a cell chip scrolls
 // to its cells and outlines them briefly, and a chip's popover asks for a
 // cell's code now, to say whether it changed since the message was sent. A
-// link in an agent's reply to a cell that is gone says so instead.
+// link in an agent's reply to a cell that isn't here says so instead.
 
 import { on, send } from "./bridge";
 
@@ -22,7 +22,7 @@ function sayGone() {
   const note = document.createElement("div");
   note.className = "endeavor-gone";
   note.setAttribute("role", "status");
-  note.textContent = "That cell isn't in this notebook any more.";
+  note.textContent = "That cell isn't in this notebook.";
   document.body.append(note);
   setTimeout(() => note.classList.add("fading"), 2200);
   setTimeout(() => note.remove(), 2600);

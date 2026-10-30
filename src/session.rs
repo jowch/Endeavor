@@ -2691,9 +2691,13 @@ const LABEL_MAX: usize = 28;
 /// in words (`# Growth curves by strain`), not code commented out.
 fn comment_name(code: &str) -> Option<&str> {
     let text = code.lines().map(str::trim).find(|l| !l.is_empty())?.strip_prefix("# ")?.trim();
+    (!text.is_empty() && !looks_like_code(text)).then_some(text)
+}
+
+/// Whether text reads as code rather than words: a call, `=`, `<-`, or `using`, `import`, `library(`.
+pub(crate) fn looks_like_code(text: &str) -> bool {
     let call = text.as_bytes().windows(2).any(|w| (w[0].is_ascii_alphanumeric() || w[0] == b'_') && w[1] == b'(');
-    let code_like = call || text.contains('=') || text.contains("<-") || ["using ", "import ", "library("].iter().any(|k| text.starts_with(k));
-    (!text.is_empty() && !code_like).then_some(text)
+    call || text.contains('=') || text.contains("<-") || ["using ", "import ", "library("].iter().any(|k| text.starts_with(k))
 }
 
 /// What code defines, from its first line of code: `x = …` → `x`. A Pluto

@@ -46,7 +46,7 @@
     const note = document.createElement("div");
     note.className = "endeavor-gone";
     note.setAttribute("role", "status");
-    note.textContent = "That cell isn't in this notebook any more.";
+    note.textContent = "That cell isn't in this notebook.";
     document.body.append(note);
     setTimeout(() => note.classList.add("fading"), 2200);
     setTimeout(() => note.remove(), 2600);
@@ -198,6 +198,8 @@
     return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
   }
   function cellName2(nb, id) {
+    const named = commentName(nb.cell_inputs[id]?.code ?? "");
+    if (named) return cellName(nb.cell_inputs[id].code);
     const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
     if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
     return cellName(nb.cell_inputs[id]?.code ?? "");
