@@ -8,6 +8,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use gpui::{Image, ImageFormat};
 use gpui_component::text::{MarkdownNode, MarkdownParseContext, markdown_ast as mdast};
+#[cfg(debug_assertions)]
 use serde_json::{Value, json};
 
 /// The custom Markdown node a drawn block becomes. Its data is a [`Block`].
@@ -65,25 +66,48 @@ fn is_mermaid(lang: Option<&str>) -> bool {
     lang.is_some_and(|lang| lang.eq_ignore_ascii_case("mermaid"))
 }
 
-/// Whether a fenced block's source has its closing fence. A block still
-/// streaming in runs to the end of the reply without one, and drawing it
-/// half-written would flicker between errors and partial drawings.
+/// Whether a fenced block's source has its closing fence: a line of the
+/// opener's character, at least as long. A block still streaming in runs to
+/// the end of the reply without one, and drawing it half-written would
+/// flicker between errors and partial drawings.
 fn closed(source: &str) -> bool {
     let source = source.trim_end();
-    let Some((_, last)) = source.rsplit_once('\n') else { return false };
-    let last = last.trim();
-    last.len() >= 3 && (last.chars().all(|c| c == '`') || last.chars().all(|c| c == '~'))
+    let Some((first, rest)) = source.split_once('\n') else { return false };
+    let first = first.trim_start();
+    let Some(fence) = first.chars().next().filter(|c| *c == '`' || *c == '~') else { return false };
+    let opener = first.chars().take_while(|c| *c == fence).count();
+    let last = rest.rsplit('\n').next().unwrap_or(rest).trim();
+    last.len() >= opener && last.chars().all(|c| c == fence)
 }
 
 /// `source` drawn to fit `width`: as wide as it likes when that fits, else
-/// laid out again for the width. Kept for the last few diagrams and widths,
-/// since the chat draws every frame.
+/// laid out again for the width. The wide drawing decides whether the block
+/// draws at all, so a block never draws at one chat width and stays code at
+/// another; a narrow layout that fails or is too big falls back to it,
+/// scaled down. Kept for the last few diagrams and widths, since the chat
+/// draws every frame.
 pub fn fitted(source: &str, width: f32) -> Result<Arc<Diagram>, String> {
+    fit(source, width, SIDE_MAX)
+}
+
+fn fit(source: &str, width: f32, side_max: f64) -> Result<Arc<Diagram>, String> {
     let wide = cached(source, crate::CHAT_CONTENT_MAX)?;
+    fits(&wide, side_max)?;
     if wide.width <= width {
         return Ok(wide);
     }
-    cached(source, (width / WIDTH_STEP).floor().max(1.) * WIDTH_STEP)
+    match cached(source, (width / WIDTH_STEP).floor().max(1.) * WIDTH_STEP) {
+        Ok(narrow) if fits(&narrow, side_max).is_ok() => Ok(narrow),
+        _ => Ok(wide),
+    }
+}
+
+fn fits(d: &Diagram, side_max: f64) -> Result<(), String> {
+    let (w, h) = (d.width as f64, d.height as f64);
+    if w > side_max || h > side_max || w <= 0. || h <= 0. {
+        return Err(format!("{w:.0} × {h:.0} px"));
+    }
+    Ok(())
 }
 
 // ponytail: an image GPUI has rasterized stays in its cache for the window's
@@ -92,18 +116,30 @@ pub fn fitted(source: &str, width: f32) -> Result<Arc<Diagram>, String> {
 fn cached(source: &str, width: f32) -> Result<Arc<Diagram>, String> {
     type Entry = ((u64, u32), Result<Arc<Diagram>, String>);
     static CACHE: LazyLock<Mutex<VecDeque<Entry>>> = LazyLock::new(Default::default);
+    let lock = || CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
     let key = (hasher.finish(), width as u32);
-    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, hit)) = cache.iter().find(|(k, _)| *k == key) {
-        return hit.clone();
+    {
+        let mut cache = lock();
+        if let Some(at) = cache.iter().position(|(k, _)| *k == key) {
+            // Most recently used goes last, so it is dropped last.
+            let entry = cache.remove(at).expect("found");
+            let hit = entry.1.clone();
+            cache.push_back(entry);
+            return hit;
+        }
     }
+    // Drawn outside the lock: a big diagram on the background parser
+    // mustn't hold up the chat's drawing of others.
     let drawn = draw(source, width).map(Arc::new);
-    if cache.len() >= 32 {
-        cache.pop_front();
+    let mut cache = lock();
+    if !cache.iter().any(|(k, _)| *k == key) {
+        if cache.len() >= 32 {
+            cache.pop_front();
+        }
+        cache.push_back((key, drawn.clone()));
     }
-    cache.push_back((key, drawn.clone()));
     drawn
 }
 
@@ -115,9 +151,6 @@ fn draw(source: &str, width: f32) -> Result<Diagram, String> {
     }
     let dark = mermaid::render(source, &options(DARK, width), &mermaid::Metrics).map_err(|e| e.message)?;
     let light = mermaid::render(source, &options(LIGHT, width), &mermaid::Metrics).map_err(|e| e.message)?;
-    if dark.width > SIDE_MAX || dark.height > SIDE_MAX || dark.width <= 0. || dark.height <= 0. {
-        return Err(format!("{:.0} × {:.0} px", dark.width, dark.height));
-    }
     let image = |svg: &str| Arc::new(Image::from_bytes(ImageFormat::Svg, for_gpui(svg, SCALE).into_bytes()));
     Ok(Diagram {
         kind: format!("{:?}", dark.kind).to_lowercase(),
@@ -203,6 +236,7 @@ const fn rgb(hex: u32) -> mermaid::Rgba {
 }
 
 /// For the state dump: each `mermaid` block in a reply, and whether it drew.
+#[cfg(debug_assertions)]
 pub fn summary(text: &str) -> Vec<Value> {
     let Ok(root) = markdown::to_mdast(text, &markdown::ParseOptions::gfm()) else { return Vec::new() };
     let mut out = Vec::new();
@@ -210,6 +244,7 @@ pub fn summary(text: &str) -> Vec<Value> {
     out
 }
 
+#[cfg(debug_assertions)]
 fn walk(node: &mdast::Node, text: &str, out: &mut Vec<Value>) {
     if let mdast::Node::Code(code) = node
         && is_mermaid(code.lang.as_deref())
@@ -240,6 +275,9 @@ mod tests {
         assert!(!closed("```mermaid\nflowchart LR\n  A --> B"));
         assert!(!closed("```mermaid\nflowchart LR\n``"));
         assert!(!closed("```mermaid"));
+        assert!(!closed("````mermaid\nA\n```"), "shorter than the opener");
+        assert!(!closed("```mermaid\nA\n~~~"), "another character");
+        assert!(closed("````mermaid\nA\n`````"));
     }
 
     #[test]
@@ -254,9 +292,24 @@ mod tests {
 
     #[test]
     fn errors_and_limits_stay_code() {
-        assert!(draw("flowchart LR\n  A -->", 760.).is_err());
-        assert!(draw("not a diagram", 760.).is_err());
-        assert!(draw(&"flowchart LR\n".repeat(SOURCE_MAX), 760.).is_err());
+        assert!(fitted("flowchart LR\n  A -->", 760.).is_err());
+        assert!(fitted("not a diagram", 760.).is_err());
+        assert!(fitted(&"flowchart LR\n".repeat(SOURCE_MAX), 760.).is_err());
+        let chain = "flowchart LR\n  A --> B --> C";
+        let wide = fitted(chain, 760.).unwrap();
+        assert!(fit(chain, 760., (wide.width.max(wide.height) - 1.) as f64).is_err(), "too big at full width");
+    }
+
+    #[test]
+    fn a_narrow_layout_too_big_falls_back_to_the_wide_one() {
+        let chain = "flowchart LR\n  N0 --> N1 --> N2 --> N3 --> N4 --> N5 --> N6 --> N7";
+        let wide = fitted(chain, 760.).unwrap();
+        let narrow = fitted(chain, 200.).unwrap();
+        assert!(narrow.height > wide.width.max(wide.height), "{} × {} vs {} × {}", narrow.width, narrow.height, wide.width, wide.height);
+        // A cap the wide drawing fits and the narrow one doesn't.
+        let cap = wide.width.max(wide.height) as f64 + 1.;
+        let shown = fit(chain, 200., cap).unwrap();
+        assert!(Arc::ptr_eq(&shown, &wide), "shows the wide drawing, scaled down");
     }
 
     #[test]
@@ -269,6 +322,7 @@ mod tests {
         assert!(Arc::ptr_eq(&narrow, &fitted(source, 410.).unwrap()), "same step, same drawing");
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn summary_reports_each_block() {
         let text = "Here:\n\n```mermaid\npie\n  \"a\" : 1\n```\n\n```mermaid\nflowchart LR\n  A -->\n```\n\n```mermaid\nflowchart LR\n  A --> B";

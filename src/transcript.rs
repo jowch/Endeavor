@@ -473,7 +473,10 @@ fn markdown(state: &Entity<TextViewState>, chat_width: f32) -> TextView {
         .markdown_block_parser(diagram::parse_block)
         .markdown_block_renderer(diagram::NODE, move |node, _, _| {
             let Some(block) = node.data::<diagram::Block>() else { return div().into_any_element() };
-            let Ok(d) = diagram::fitted(&block.source, width) else { return div().into_any_element() };
+            // The parser drew it, so this holds; if it ever doesn't, show the source.
+            let Ok(d) = diagram::fitted(&block.source, width) else {
+                return div().font_family(theme::MONO).text_size(theme::chat_code()).whitespace_normal().child(block.source.clone()).into_any_element();
+            };
             div()
                 .relative()
                 .w_full()
