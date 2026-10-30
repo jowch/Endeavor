@@ -455,7 +455,7 @@ mod tests {
         // The library leaves the refusal off unless a client sets it (EndeavorMCP #43).
         let words = messages().no_run_gate.expect("the app sets the refusal");
         assert!(words("lab").starts_with("ArgumentError: older_runtime::Julia on lab was started by a version of Endeavor too old"), "{}", words("lab"));
-        assert!(words("lab").contains("tell the user to restart Julia"), "{}", words("lab"));
+        assert!(words("lab").contains("call request_restart"), "{}", words("lab"));
     }
 
     #[test]
