@@ -1093,9 +1093,12 @@ impl Session {
     /// The agent asks the user to restart the runtime, for `reason`; `stops` says which notebooks
     /// stop. A card asks, whatever the mode: none of the session's rules or Auto answers it. A
     /// request already up gets the new reason and stays the one card. Its id, and the effects.
-    pub fn ask_restart(&mut self, reason: &str, stops: &str) -> (u64, Vec<Effect>) {
+    pub fn ask_restart(&mut self, reason: &str, stops: &str, only: Option<&str>) -> (u64, Vec<Effect>) {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let input = serde_json::json!({ "reason": reason, "stops": stops });
+        let mut input = serde_json::json!({ "reason": reason, "stops": stops });
+        if let Some(only) = only {
+            input["only"] = only.into();
+        }
         let up = self.waiting_prompts().into_iter().find_map(|ix| match &self.entries[ix] {
             Entry::Permission { responder: Some(Asker::Restart(id)), .. } => Some((ix, *id)),
             _ => None,
@@ -3354,7 +3357,7 @@ mod tests {
         // Auto: runs don't ask, a restart does.
         let mut s = asking_session();
         s.run_without_asking = true;
-        let (id, effects) = s.ask_restart("Julia stopped answering.", "fit.jl stops; its file is saved.");
+        let (id, effects) = s.ask_restart("Julia stopped answering.", "fit.jl stops; its file is saved.", None);
         assert!(matches!(effects.as_slice(), [Effect::Asked(_)]));
         assert_eq!(s.waiting_prompts().len(), 1);
         let ix = s.pending_permission().unwrap();
@@ -3364,7 +3367,7 @@ mod tests {
         let options = [PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce)];
         assert!(s.runtime_asks_instead("mcp__notebook__request_restart", &serde_json::json!({ "reason": "x" }), false, &options).is_some());
         // Asked again while it's up: the same card, with the new reason.
-        let (again, effects) = s.ask_restart("Still stuck.", "");
+        let (again, effects) = s.ask_restart("Still stuck.", "", None);
         assert_eq!((again, effects.len(), s.waiting_prompts().len()), (id, 0, 1));
         // The turn ends: the card stays, and its Restart still restarts.
         s.drop_prompts(true);
@@ -3375,13 +3378,18 @@ mod tests {
         assert!(!s.asks.allowed(&crate::permits::Asked { title: "mcp__notebook__request_restart", kind: None, input: &serde_json::json!({}), path: None }), "never a rule for the session");
 
         // Not now declines; a stopped turn takes the card down unanswered.
-        let (id, _) = s.ask_restart("Older version.", "");
+        let (id, _) = s.ask_restart("Older version.", "", None);
         assert!(s.answer_pending(PermissionOptionKind::RejectOnce, Scope::Once));
         assert_eq!(restarts(s.take_later()), [(id, false)]);
-        let (id, _) = s.ask_restart("Older version.", "");
+        let (id, _) = s.ask_restart("Older version.", "", None);
         s.drop_prompts(false);
         assert_eq!(restarts(s.take_later()), [(id, false)]);
         assert!(s.waiting_prompts().is_empty());
+
+        // Only the session's notebook crashed: the card says only it starts again.
+        s.ask_restart("The notebook's process ended.", "fit.jl stops; its file is saved.", Some("fit.jl"));
+        let ix = s.pending_permission().unwrap();
+        assert_eq!(crate::approval::heading_at(&s, ix).unwrap(), "Restart fit.jl?");
     }
 
     #[test]

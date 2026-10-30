@@ -223,9 +223,16 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
         if let Some(reason) = input["reason"].as_str().filter(|r| !r.trim().is_empty()) {
             lines.push((reason.trim().to_owned(), Tone::Secondary));
         }
-        let stops = input["stops"].as_str().unwrap_or("Notebooks open there stop; their files are saved.");
-        lines.push((format!("Julia and R stop there and start again. {stops} The notebooks that were running open and run again."), Tone::Muted));
-        Prompt { heading: format!("Restart Endeavor on {host}?"), verb: "Restart", code: None, lines, ..Default::default() }
+        // Only the session's notebook crashed: only it starts again (`restart_ask::only_notebook_crashed`).
+        let heading = if let Some(only) = input["only"].as_str() {
+            lines.push((format!("Only {only} starts again; its file is saved. Other notebooks on {host} keep running."), Tone::Muted));
+            format!("Restart {only}?")
+        } else {
+            let stops = input["stops"].as_str().unwrap_or("Notebooks open there stop; their files are saved.");
+            lines.push((format!("Julia and R stop there and start again. {stops} The notebooks that were running open and run again."), Tone::Muted));
+            format!("Restart Endeavor on {host}?")
+        };
+        Prompt { heading, verb: "Restart", code: None, lines, ..Default::default() }
     } else if tool == "allow_execution" {
         let file = session.notebook_path.as_deref().map(|p| folder_name(Path::new(p)));
         let host = session.server.clone().unwrap_or_else(|| crate::platform::this_computer!().into());

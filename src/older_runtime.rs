@@ -126,7 +126,7 @@ pub fn no_run_gate(host: &str) -> String {
 fn refused(whose: &str) -> String {
     format!(
         "ArgumentError: older_runtime::{whose} was started by a version of Endeavor too old to ask the user before a run, so Endeavor doesn't let it run code. \
-         Don't run code: tell the user to restart Julia. Reading and editing cells still work."
+         Don't run code, and don't stop it yourself: call request_restart, which asks the user whether to restart Endeavor there. Reading and editing cells still work."
     )
 }
 
@@ -172,5 +172,7 @@ mod tests {
         assert!(!refused(Version::Other(None), "execute_cell", json!({ "cell_id": "a" })), "it holds runs itself");
         assert!(!refused(Version::Other(Some(CORE_INTERFACE + 1)), "execute_cell", json!({ "cell_id": "a" })));
         assert!(!refused(Version::Usable, "execute_cell", json!({ "cell_id": "a" })));
+        let why = refusal(Version::NoRunGate, "execute_cell", &json!({ "cell_id": "a" })).unwrap();
+        assert!(why.contains("call request_restart") && why.contains("don't stop it yourself"), "the agent asks the user, and only that: {why}");
     }
 }

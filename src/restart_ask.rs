@@ -25,6 +25,18 @@ pub struct Ask {
     pub reply: mpsc::Sender<RestartAnswer>,
 }
 
+/// A request whose card is up, by the card's id (`Workspace::restart_replies`).
+pub struct Pending {
+    /// The session it was asked in.
+    pub key: u64,
+    /// Where the user's answer goes.
+    pub reply: mpsc::Sender<RestartAnswer>,
+    /// The runtime it was asked about, if one ran: a press after another one started does nothing.
+    pid: Option<u32>,
+    /// Only the session's notebook crashed: a press after it runs again does nothing.
+    only_notebook: bool,
+}
+
 /// How often a waiting request checks whether the agent hung up.
 const CHECK: Duration = Duration::from_millis(250);
 
@@ -62,6 +74,11 @@ fn already(name: &str) -> String {
     format!("ArgumentError: restarting::Endeavor on {name} is already stopping or starting, so nothing was asked. Wait a moment, then make your call again.")
 }
 
+/// The agent's reason when the user pressed Restart after its runtime had started again.
+fn already_restarted(name: &str) -> String {
+    format!("ArgumentError: restarted::Endeavor on {name} started again since you asked, so nothing was restarted. Check whether the problem is still there.")
+}
+
 /// What the restart confirmations say stops: every notebook open on the host, by file name.
 pub fn stops_text(notebooks: &serde_json::Value) -> String {
     let names: Vec<String> = notebooks
@@ -92,24 +109,63 @@ impl Workspace {
             let _ = reply.send(RestartAnswer::Unavailable(already(&self.hosts.name(&host))));
             return;
         }
+        let pid = self.runtime_pid(&host);
+        let only = self.only_notebook_crashed(key);
         let stops = stops_text(&self.connection(&host).map(|c| c.notebooks.clone()).unwrap_or_default());
         let Some(session) = self.session_mut(key) else { return };
-        let (id, effects) = session.ask_restart(&reason, &stops);
+        let (id, effects) = session.ask_restart(&reason, &stops, only.as_deref());
         // A request already up for the session is this one now; the call that waited on it stops waiting.
-        self.restart_replies.insert(id, reply);
+        self.restart_replies.insert(id, Pending { key, reply, pid, only_notebook: only.is_some() });
         self.apply_effects(key, effects, cx);
         cx.notify();
     }
 
     /// The user answered the card of request `id` in session `key`: Restart restarts its runtime.
+    /// A card left up from an earlier turn whose runtime has restarted since, or whose crashed
+    /// notebook runs again, restarts nothing: it would stop what runs well now.
     pub fn restart_answered(&mut self, key: u64, id: u64, restart: bool, cx: &mut Context<Self>) {
-        if let Some(reply) = self.restart_replies.remove(&id) {
-            // The call may have stopped waiting: the restart goes ahead all the same.
-            let _ = reply.send(if restart { RestartAnswer::Restarting } else { RestartAnswer::Declined });
+        let Some(pending) = self.restart_replies.remove(&id) else { return };
+        if restart && self.restart_outdated(&pending) {
+            let host = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone());
+            let name = host.map_or_else(String::new, |h| self.hosts.name(&h));
+            let _ = pending.reply.send(RestartAnswer::Unavailable(already_restarted(&name)));
+            if let Some(session) = self.session_mut(key) {
+                session.note(format!("Nothing was restarted: Julia on {name} started again since the agent asked."));
+            }
+            return cx.notify();
         }
+        // The call may have stopped waiting: the restart goes ahead all the same.
+        let _ = pending.reply.send(if restart { RestartAnswer::Restarting } else { RestartAnswer::Declined });
         if restart {
             self.restart_session_runtime(key, cx);
         }
+    }
+
+    /// A session closed: its requests are let go (their calls hear no answer).
+    pub fn restart_session_closed(&mut self, key: u64) {
+        self.restart_replies.retain(|_, pending| pending.key != key);
+    }
+
+    /// Another runtime runs on the host than the one asked about, or the crashed notebook runs again.
+    fn restart_outdated(&self, pending: &Pending) -> bool {
+        let Some(host) = self.sessions.iter().find(|s| s.key == pending.key).map(|s| s.place.host.clone()) else { return true };
+        let now = self.runtime_pid(&host);
+        (now.is_some() && now != pending.pid) || (pending.only_notebook && self.only_notebook_crashed(pending.key).is_none())
+    }
+
+    fn runtime_pid(&self, host: &HostId) -> Option<u32> {
+        self.connection(host).and_then(|c| c.runtime.as_ref()).map(|r| r.pid)
+    }
+
+    /// The file name of session `key`'s notebook when only it crashed, not its host's runtime:
+    /// a restart then restarts only that notebook (`restart_after_crash`).
+    fn only_notebook_crashed(&self, key: u64) -> Option<String> {
+        let at = self.notebook_at(key)?;
+        self.crashes.stopped_at(&at)?;
+        if self.connection(&at.0).is_some_and(|c| c.crashed) {
+            return None;
+        }
+        Some(std::path::Path::new(&at.1).file_name().map_or(at.1.clone(), |n| n.to_string_lossy().into_owned()))
     }
 
     /// Restart what session `key`'s notebook runs on: after a crash, as the crash page's Restart

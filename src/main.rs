@@ -527,7 +527,7 @@ pub struct Workspace {
     /// Where the listeners hand on an agent's request to restart its runtime (`restart_ask`).
     restart_asks: futures::channel::mpsc::UnboundedSender<restart_ask::Ask>,
     /// Those requests whose card is up, by the card's id: where the user's answer goes.
-    restart_replies: HashMap<u64, std::sync::mpsc::Sender<endeavor_mcp::RestartAnswer>>,
+    restart_replies: HashMap<u64, restart_ask::Pending>,
     /// The second web view those pictures are taken from.
     second: cell_shot::Second,
     /// "Two ways to add your file" shows over the composer (a "Uses your file"
@@ -1184,6 +1184,7 @@ impl Workspace {
         let Some(ix) = self.sessions.iter().position(|s| s.key == key) else { return };
         self.keep_transcript(key);
         let session = self.sessions.remove(ix);
+        self.restart_session_closed(key);
         if let Some(id) = session.id {
             self.links.send(session.agent, Command::CloseSession(id));
         }

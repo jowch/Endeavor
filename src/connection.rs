@@ -1749,6 +1749,12 @@ impl Workspace {
     /// to it. A host that isn't connected connects first. Sessions on it then
     /// show Julia stopped, with Start.
     pub fn stop_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        self.stop_host_then(host, false, cx);
+    }
+
+    /// Stop Julia on `host`, and with `start`, start it again once it stopped, reopening the
+    /// notebooks the user had let run to run again.
+    fn stop_host_then(&mut self, host: &HostId, start: bool, cx: &mut Context<Self>) {
         match self.status(host) {
             Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) => {}
             Some(Status::Connecting) => {
@@ -1768,6 +1774,8 @@ impl Workspace {
         let helper = self.helper(host);
         let Some(connection) = self.connections.get_mut(host) else { return };
         let Some(helper) = helper.filter(|_| !connection.stopping) else { return };
+        // What runs now resumes after the start, as after Settings → Restart Julia.
+        let running = connection.bridge().filter(|_| start && connection.status == Status::Ready).map(|bridge| (bridge, connection.notebooks.clone()));
         let gone = if connection.status == Status::Starting {
             // The start under way ends as cancelled (Update::Started).
             connection.cancelling = true;
@@ -1784,15 +1792,25 @@ impl Workspace {
         connection.stopping = true;
         connection.found = None;
         connection.check += 1;
+        connection.start_after_stop = start;
         let id = connection.id;
         self.close_page(gone, cx);
         if *host == HostId::ThisMac {
             self.status = "Stopping Julia…".into();
         }
-        let stop = cx.background_executor().spawn(async move { helper.stop() });
+        if start {
+            // The agent's calls meanwhile hear that it is restarting, not that it was disconnected.
+            if let Some(listener) = self.listeners.get(host) {
+                listener.restarting();
+            }
+        }
+        let stop = cx.background_executor().spawn(async move {
+            let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
+            (resume, helper.stop())
+        });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
-            let stopped = stop.await;
+            let (resume, stopped) = stop.await;
             let _ = this.update(cx, |this, cx| {
                 let mut restart = false;
                 if let Some(connection) = this.connections.get_mut(&host).filter(|c| c.id == id) {
@@ -1809,6 +1827,9 @@ impl Workspace {
                     }
                     connection.found = Some(Ok(RuntimeState::NotRunning));
                     restart = std::mem::take(&mut connection.start_after_stop);
+                    if restart {
+                        connection.resume = resume;
+                    }
                 }
                 if restart {
                     return this.start_host(&host, cx);
@@ -1829,14 +1850,7 @@ impl Workspace {
     /// started, which this one can't attach to or keeps as it is, or that the
     /// agent asked the user to restart (`restart_ask`).
     pub fn restart_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
-        self.stop_host(host, cx);
-        if let Some(connection) = self.connections.get_mut(host).filter(|c| c.stopping) {
-            connection.start_after_stop = true;
-            // The agent's calls meanwhile hear that it is restarting, not that it was disconnected.
-            if let Some(listener) = self.listeners.get(host) {
-                listener.restarting();
-            }
-        }
+        self.stop_host_then(host, true, cx);
     }
 
     /// What runs on `host`, as far as the app knows, for the host list and the Where menu.
