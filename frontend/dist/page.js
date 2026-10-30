@@ -89,10 +89,17 @@
       label = (lines.find((l) => l.startsWith("#")) ?? lines[0] ?? "markdown").replace(/^#+/, "").trim();
     } else {
       const first = codeLines(code)[0];
-      label = first === void 0 ? "cell" : definedName(code) ?? inferredName(code) ?? first;
+      label = commentName(code) ?? (first === void 0 ? "cell" : definedName(code) ?? inferredName(code) ?? first);
     }
     const chars = [...label];
     return chars.length > 28 ? `${chars.slice(0, 27).join("")}\u2026` : label;
+  }
+  function commentName(code) {
+    const line = code.split("\n").map((l) => l.trim()).find((l) => l);
+    if (!line?.startsWith("# ")) return null;
+    const text = line.slice(2).trim();
+    const codeLike = /[A-Za-z0-9_]\(/.test(text) || text.includes("=") || text.includes("<-") || ["using ", "import ", "library("].some((k) => text.startsWith(k));
+    return text && !codeLike ? text : null;
   }
   function definedName(code) {
     const lines = codeLines(code);
