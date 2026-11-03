@@ -2786,9 +2786,13 @@ fn comment_name(code: &str) -> Option<&str> {
     (!text.is_empty() && !looks_like_code(text)).then_some(text)
 }
 
-/// Whether text reads as code rather than words: a call, `=`, `<-`, or `using`, `import`, `library(`.
+/// Whether text reads as code rather than words: it starts with a call
+/// (`plot(t, y)`, `Base.show(x)`), or has `=` or `<-`, or starts with
+/// `using`, `import` or `library(`. A call later on, as in "Plot of sin(x)",
+/// is words.
 pub(crate) fn looks_like_code(text: &str) -> bool {
-    let call = text.as_bytes().windows(2).any(|w| (w[0].is_ascii_alphanumeric() || w[0] == b'_') && w[1] == b'(');
+    let callee = text.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '!');
+    let call = callee.len() < text.len() && callee.starts_with('(');
     call || text.contains('=') || text.contains("<-") || ["using ", "import ", "library("].iter().any(|k| text.starts_with(k))
 }
 
@@ -4631,6 +4635,8 @@ more" }"#);
             ("# Growth curves (by strain)\nlet\n  p = plot(t, y)\nend", "Growth curves (by strain)"),
             ("\n  # Outliers removed\nclean = filter(ok, data)", "Outliers removed"),
             ("# plot(t, y)\nscatter(t, y)", "scatter(t, y)"),
+            ("# Plot of sin(x)\nplot(sin, 0, 2π)", "Plot of sin(x)"),
+            ("# Base.show(io, x)\nshow(x)", "show(x)"),
             ("# using CSV\ndata = 1", "data"),
             ("# data <- read.csv(f)\ndata <- 1", "data <- 1"),
             ("x = 1\n# Not a name", "x"),

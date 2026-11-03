@@ -25,7 +25,7 @@ export function commentName(code: string): string | null {
   const line = code.split("\n").map((l) => l.trim()).find((l) => l);
   if (!line?.startsWith("# ")) return null;
   const text = line.slice(2).trim();
-  const codeLike = /[A-Za-z0-9_]\(/.test(text) || text.includes("=") || text.includes("<-") || ["using ", "import ", "library("].some((k) => text.startsWith(k));
+  const codeLike = /^[\p{L}\p{N}_.!]+\(/u.test(text) || text.includes("=") || text.includes("<-") || ["using ", "import ", "library("].some((k) => text.startsWith(k));
   return text && !codeLike ? text : null;
 }
 

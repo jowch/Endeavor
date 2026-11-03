@@ -36,6 +36,8 @@ test("a cell is named by what it defines, its heading, or its first line", () =>
     ["# Growth curves (by strain)\nlet\n  p = plot(t, y)\nend", "Growth curves (by strain)"],
     ["\n  # Outliers removed\nclean = filter(ok, data)", "Outliers removed"],
     ["# plot(t, y)\nscatter(t, y)", "scatter(t, y)"],
+    ["# Plot of sin(x)\nplot(sin, 0, 2π)", "Plot of sin(x)"],
+    ["# Base.show(io, x)\nshow(x)", "show(x)"],
     ["# using CSV\ndata = 1", "data"],
     ["# data <- read.csv(f)\ndata <- 1", "data <- 1"],
     ["x = 1\n# Not a name", "x"],
