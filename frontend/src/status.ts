@@ -5,7 +5,7 @@
 // dependency count (the manifest's added packages). Pure: tested with literal
 // fixtures (test/status.test.mjs).
 
-import { cellName as cellLabel } from "./cellname";
+import { cellName as cellLabel, commentName } from "./cellname";
 
 export type Phase = "waiting" | "busy" | "done" | "failed";
 export type PkgState = "waiting" | "installing" | "precompiling" | "ready" | "failed";
@@ -128,6 +128,8 @@ export function definedNames(map: Record<string, unknown> | undefined): string[]
 }
 
 function cellName(nb: NotebookLike, id: string): string {
+  const named = commentName(nb.cell_inputs[id]?.code ?? "");
+  if (named) return cellLabel(nb.cell_inputs[id].code);
   const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
   if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", …" : "");
   return cellLabel(nb.cell_inputs[id]?.code ?? "");
