@@ -459,7 +459,7 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
             .tooltip(move |window, cx| Tooltip::new(clock.clone()).build(window, cx))
             .child(crate::when::ago(at))
     });
-    div().flex().items_center().gap(px(4.)).h(px(20.)).children(copy).children(time).into_any_element()
+    div().flex().items_center().gap(px(4.)).h(theme::chat_px(20.)).children(copy).children(time).into_any_element()
 }
 
 /// An agent reply's markdown, with a copy button on each code block. A link
@@ -737,7 +737,7 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
             .flex()
             .items_center()
             .gap(px(6.))
-            .h(px(28.))
+            .h(theme::chat_px(28.))
             .px(px(8.))
             .when(n > 0, |d| d.border_t_1().border_color(theme::border()))
             .text_size(theme::chat_meta())
@@ -924,9 +924,9 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             )
             .when(*expanded, |d| {
                 d.child(
-                    scroll_y(div().id(id("thought-text")).max_h(px(DETAIL_MAX_H)), window, cx)
+                    scroll_y(div().id(id("thought-text")).max_h(theme::chat_px(DETAIL_MAX_H)), window, cx)
                         .when_some(opening, |d, p| d.opacity(p))
-                        .line_height(px(DETAIL_LINE))
+                        .line_height(theme::chat_px(DETAIL_LINE))
                         .pl(px(10.))
                         .border_l_1()
                         .border_color(theme::border())
@@ -1056,7 +1056,7 @@ fn render_parts(parts: Vec<details::Part>, id: ElementId, window: &mut Window, c
                 .child(mono(code.join("\n"), theme::text_muted()).min_w_0().overflow_hidden().whitespace_nowrap())
         }
     });
-    Some(scroll_y(div().id(id).max_h(px(DETAIL_MAX_H)), window, cx).line_height(px(DETAIL_LINE)).flex().flex_col().gap(px(4.)).children(parts))
+    Some(scroll_y(div().id(id).max_h(theme::chat_px(DETAIL_MAX_H)), window, cx).line_height(theme::chat_px(DETAIL_LINE)).flex().flex_col().gap(px(4.)).children(parts))
 }
 
 /// A panel that scrolls up to its max height, and hands the wheel on to the

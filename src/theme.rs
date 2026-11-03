@@ -8,7 +8,7 @@
 //! view reads the resolved colour without being handed the appearance.
 
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use gpui::{App, BoxShadow, InteractiveElement, ParentElement, Pixels, Rgba, SharedString, StatefulInteractiveElement, Styled, point, px, rgb, rgba};
@@ -267,23 +267,52 @@ pub fn size_code() -> Pixels { px(12.) }
 // The chat column (the transcript, the composer and its cards): the same ladder,
 // one step up, so chat's reading text sits a size larger than the rest of the
 // interface (sidebar, Settings, menus, the notebook header), which keeps
-// `size_meta_small` .. `size_code` unchanged.
+// `size_meta_small` .. `size_code` unchanged. The chat's text size (⌘= / ⌘−
+// / ⌘0 while the chat was last clicked) scales all of these, and every
+// other text or line size in the chat column goes through `chat_px`.
+
+/// The chat's text size as a multiple of the sizes below, as f32 bits. Like
+/// the appearance, one process-wide value, so a view reads a size without
+/// being handed the setting.
+static CHAT_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000); // 1.0
+
+/// The smallest and largest chat text size, as multiples of the default.
+pub const CHAT_SCALE_RANGE: (f32, f32) = (0.75, 2.);
+
+pub fn set_chat_scale(scale: f32) {
+    let scale = if scale > 0. { scale.clamp(CHAT_SCALE_RANGE.0, CHAT_SCALE_RANGE.1) } else { 1. };
+    CHAT_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+}
+
+pub fn chat_scale() -> f32 {
+    f32::from_bits(CHAT_SCALE.load(Ordering::Relaxed))
+}
+
+/// A text or line size in the chat column, at the chat's text size: `n` at
+/// the default size, to the nearest half pixel otherwise.
+pub fn chat_px(n: f32) -> Pixels {
+    px(scaled_size(n, chat_scale()))
+}
+
+pub(crate) fn scaled_size(n: f32, scale: f32) -> f32 {
+    (n * scale * 2.).round() / 2.
+}
 
 /// Chat: keyboard hints. One step up from `size_meta_small`.
-pub fn chat_meta_small() -> Pixels { px(12.) }
+pub fn chat_meta_small() -> Pixels { chat_px(12.) }
 /// Chat: tool lines, timestamps, "Edited…"/"Ran…" rows, notes ("You stopped
 /// Claude"), the chips row under the composer. One step up from `size_meta`.
-pub fn chat_meta() -> Pixels { px(13.) }
+pub fn chat_meta() -> Pixels { chat_px(13.) }
 /// Chat: message text (user bubbles and replies, including markdown), the
 /// composer's typed text and placeholder, and the approval/plan cards' body
 /// text. One step up from `size_body`.
-pub fn chat_body() -> Pixels { px(14.) }
-pub fn chat_line_body() -> Pixels { px(21.) }
+pub fn chat_body() -> Pixels { chat_px(14.) }
+pub fn chat_line_body() -> Pixels { chat_px(21.) }
 /// Chat: card titles ("Run 3 cells?"). One step up from `size_subhead`.
-pub fn chat_subhead() -> Pixels { px(16.) }
+pub fn chat_subhead() -> Pixels { chat_px(16.) }
 /// JuliaMono inside chat text: a size smaller than `chat_body`, as `size_code`
 /// is for `size_body`.
-pub fn chat_code() -> Pixels { px(13.) }
+pub fn chat_code() -> Pixels { chat_px(13.) }
 
 // Motion: short fades and small slides, nothing at all with Reduce motion.
 // Like the appearance, one process-wide switch (`set_reduce_motion`), so a
@@ -351,5 +380,14 @@ mod tests {
         set_light(false);
         assert_eq!(light, ("#FCFCFD".into(), "#CC3F00".into(), "#CC3F00".into(), rgba(0x18181E52)));
         assert_eq!(hex(focus_ring()).as_ref(), "#E08A5E");
+    }
+
+    // The process-wide scale is left alone: other tests read chat sizes.
+    #[test]
+    fn chat_sizes_scale_to_half_pixels() {
+        assert_eq!(scaled_size(14., 1.), 14.);
+        assert_eq!(scaled_size(14., 1.1), 15.5);
+        assert_eq!(scaled_size(13., 1. / 1.1), 12.);
+        assert_eq!(scaled_size(21., 2.), 42.);
     }
 }

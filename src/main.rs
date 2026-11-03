@@ -602,6 +602,11 @@ pub struct Workspace {
     /// should open the sidebar search (focus is in the sidebar) or, when
     /// Settings is open instead, its own search.
     sidebar_focus: FocusHandle,
+    /// The last click in the window was in the chat column, so ⌘= / ⌘− / ⌘0
+    /// size the chat's text, not the notebook (unless the notebook has the
+    /// keyboard since). A flag, not a focus handle: a tracked element takes
+    /// focus when clicked.
+    zoom_chat: bool,
     /// The open confirm dialog (Stop a host, Cancel a job, Repair Julia, Sign
     /// out, Delete session), if any.
     confirm: Option<confirm::Confirm>,
@@ -808,6 +813,7 @@ impl Workspace {
 
         let recent = load_recent();
         let settings = Settings::load();
+        theme::set_chat_scale(settings.chat_zoom as f32);
         let mut draft = Draft::new(new_session::default_folder(&recent), new_session::new_kind(&settings, &HostId::ThisMac), window, cx);
         draft.agent = settings.agent;
         let mut this = Self {
@@ -893,6 +899,7 @@ impl Workspace {
             past_row_focus: std::cell::RefCell::new(HashMap::new()),
             keyboard_home: cx.focus_handle(),
             sidebar_focus: cx.focus_handle(),
+            zoom_chat: false,
             confirm: None,
             find: None,
             queue_edit: None,
@@ -1768,8 +1775,18 @@ impl Workspace {
         self.find_in_page(true, cx);
     }
 
-    /// Zoom the notebook by `step` (or back to 100%), kept in settings.
+    /// ⌘= / ⌘− / ⌘0: zoom by `step` (or back to 100%) whichever pane was used
+    /// last: the notebook while it has the keyboard, else the chat after a
+    /// click in it, else the notebook. Both sizes are kept in settings.
     fn zoom(&mut self, step: f64, reset: bool, cx: &mut Context<Self>) {
+        if self.zooms_chat(cx) {
+            let current = if self.settings.chat_zoom > 0. { self.settings.chat_zoom } else { 1. };
+            let (min, max) = theme::CHAT_SCALE_RANGE;
+            self.settings.chat_zoom = if reset { 1. } else { (current * step).clamp(min as f64, max as f64) };
+            self.settings.save();
+            theme::set_chat_scale(self.settings.chat_zoom as f32);
+            return cx.notify();
+        }
         if self.missing_files.is_some() {
             return;
         }
@@ -1777,6 +1794,12 @@ impl Workspace {
         self.settings.zoom = if reset { 1. } else { (current * step).clamp(0.5, 3.) };
         self.settings.save();
         let _ = self.webview.read(cx).raw().zoom(self.settings.zoom);
+    }
+
+    /// Whether ⌘= / ⌘− / ⌘0 size the chat's text now (see `zoom`).
+    pub(crate) fn zooms_chat(&self, cx: &App) -> bool {
+        let webview = self.webview.read(cx);
+        self.zoom_chat && !(webview.visible() && webcontent::had_keyboard(webview.raw()))
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
@@ -2798,6 +2821,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::find_previous))
             .on_action(cx.listener(Self::add_files))
             .on_mouse_move(cx.listener(Self::drag_divider))
+            // Outside the chat column, ⌘= zooms the notebook again (the chat
+            // column's own capture runs after this one and sets it back).
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| this.zoom_chat = false))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| {
@@ -2829,6 +2855,9 @@ impl Render for Workspace {
                     // (paint order alone doesn't put them in this order).
                     .tab_group()
                     .tab_index(1)
+                    .capture_any_mouse_down(cx.listener(|this, _, _, _| this.zoom_chat = true))
+                    // Text that sets no line height of its own scales with the chat's text size.
+                    .line_height(theme::chat_px(19.5))
                     .child(chat_header)
                     .child(chat),
             )
