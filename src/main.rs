@@ -1781,10 +1781,13 @@ impl Workspace {
     fn zoom(&mut self, step: f64, reset: bool, cx: &mut Context<Self>) {
         if self.zooms_chat(cx) {
             let current = if self.settings.chat_zoom > 0. { self.settings.chat_zoom } else { 1. };
-            let (min, max) = theme::CHAT_SCALE_RANGE;
-            self.settings.chat_zoom = if reset { 1. } else { (current * step).clamp(min as f64, max as f64) };
+            self.settings.chat_zoom = if reset { 1. } else { theme::chat_scale_step(current as f32, step > 1.) as f64 };
             self.settings.save();
             theme::set_chat_scale(self.settings.chat_zoom as f32);
+            // Every row's height changed, including rows out of view and other sessions'.
+            for session in &self.sessions {
+                session.list.remeasure();
+            }
             return cx.notify();
         }
         if self.missing_files.is_some() {
@@ -1798,6 +1801,10 @@ impl Workspace {
 
     /// Whether ⌘= / ⌘− / ⌘0 size the chat's text now (see `zoom`).
     pub(crate) fn zooms_chat(&self, cx: &App) -> bool {
+        // Settings covers the chat: sizing it there would happen out of sight.
+        if self.settings_panel.is_some() {
+            return false;
+        }
         let webview = self.webview.read(cx);
         self.zoom_chat && !(webview.visible() && webcontent::had_keyboard(webview.raw()))
     }
@@ -2624,6 +2631,9 @@ impl Workspace {
             .flex()
             .flex_col()
             .min_h_0()
+            // Chat text that sets no line height of its own scales with the
+            // chat's text size (19.5 px at 100%, as elsewhere in the window).
+            .line_height(theme::chat_px(19.5))
             .children(summary)
             .map(|d| match &session.failed {
                 Some(failure) => d.child(div().flex_1().min_h_0().child(self.render_open_failure(session, failure, cx))),
@@ -2856,8 +2866,6 @@ impl Render for Workspace {
                     .tab_group()
                     .tab_index(1)
                     .capture_any_mouse_down(cx.listener(|this, _, _, _| this.zoom_chat = true))
-                    // Text that sets no line height of its own scales with the chat's text size.
-                    .line_height(theme::chat_px(19.5))
                     .child(chat_header)
                     .child(chat),
             )

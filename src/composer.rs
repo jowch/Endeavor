@@ -1017,6 +1017,8 @@ impl Workspace {
             .children(self.render_list(session, slash, cx))
             .children(self.render_hover_preview(session));
         div()
+            // As the transcript's (render_chat): the new session's composer isn't inside it.
+            .line_height(theme::chat_px(19.5))
             .key_context(list_context)
             .on_action(cx.listener(Self::list_up))
             .on_action(cx.listener(Self::list_down))

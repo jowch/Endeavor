@@ -276,11 +276,26 @@ pub fn size_code() -> Pixels { px(12.) }
 /// being handed the setting.
 static CHAT_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000); // 1.0
 
-/// The smallest and largest chat text size, as multiples of the default.
-pub const CHAT_SCALE_RANGE: (f32, f32) = (0.75, 2.);
+/// The chat's text sizes are 1.1 to a whole power: three steps down (75%)
+/// to seven up (195%). Staying on these, ⌘− after ⌘= lands back on 100%.
+const CHAT_STEPS: (i32, i32) = (-3, 7);
+
+fn chat_step_of(scale: f32) -> i32 {
+    (scale.ln() / 1.1f32.ln()).round() as i32
+}
+
+fn chat_scale_at(step: i32) -> f32 {
+    1.1f32.powi(step.clamp(CHAT_STEPS.0, CHAT_STEPS.1))
+}
+
+/// The chat text size one step bigger (or smaller) than `scale`.
+pub fn chat_scale_step(scale: f32, bigger: bool) -> f32 {
+    let step = if scale > 0. { chat_step_of(scale) } else { 0 };
+    chat_scale_at(step + if bigger { 1 } else { -1 })
+}
 
 pub fn set_chat_scale(scale: f32) {
-    let scale = if scale > 0. { scale.clamp(CHAT_SCALE_RANGE.0, CHAT_SCALE_RANGE.1) } else { 1. };
+    let scale = if scale > 0. { chat_scale_at(chat_step_of(scale)) } else { 1. };
     CHAT_SCALE.store(scale.to_bits(), Ordering::Relaxed);
 }
 
@@ -389,5 +404,24 @@ mod tests {
         assert_eq!(scaled_size(14., 1.1), 15.5);
         assert_eq!(scaled_size(13., 1. / 1.1), 12.);
         assert_eq!(scaled_size(21., 2.), 42.);
+    }
+
+    #[test]
+    fn chat_steps_come_back_to_the_default() {
+        let mut scale = 1.;
+        for _ in 0..12 {
+            scale = chat_scale_step(scale, true);
+        }
+        assert_eq!(scale, chat_scale_at(7));
+        for _ in 0..7 {
+            scale = chat_scale_step(scale, false);
+        }
+        assert_eq!(scale, 1.);
+        for _ in 0..12 {
+            scale = chat_scale_step(scale, false);
+        }
+        assert_eq!(scaled_size(14., scale), 10.5);
+        // A saved size off the ladder joins it at the nearest step.
+        assert_eq!(chat_scale_step(1.33, false), chat_scale_at(2));
     }
 }
