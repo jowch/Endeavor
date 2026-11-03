@@ -295,6 +295,10 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .flex()
             .flex_col()
             .gap(px(2.))
+            // The markdown takes the ambient text style: without this it was the
+            // window's 13 px, so it didn't follow the chat's text size.
+            .text_size(theme::chat_body())
+            .line_height(theme::chat_line_body())
             .child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
