@@ -469,7 +469,7 @@ fn markdown(state: &Entity<TextViewState>, chat_width: f32) -> TextView {
     let width = (chat_width - 2. * crate::chat_margin(chat_width)).min(crate::CHAT_CONTENT_MAX) - 20.;
     TextView::new(state)
         .style(markdown_style())
-        .code_block_actions(|block, _, _| copy_button(block.code().to_string(), "Copy code"))
+        .code_block_actions(|block, _, _| copy_button("copy".into(), block.code().to_string(), "Copy code"))
         .markdown_block_parser(diagram::parse_block)
         .markdown_block_renderer(diagram::NODE, move |node, _, _| {
             let Some(block) = node.data::<diagram::Block>() else { return div().into_any_element() };
@@ -490,15 +490,18 @@ fn markdown(state: &Entity<TextViewState>, chat_width: f32) -> TextView {
                         .aspect_ratio(d.width / d.height)
                         .aria_label(node.accessibility_name().to_owned()),
                 )
-                .child(copy_button(block.source.clone(), "Copy diagram source"))
+                // Its own id: the library gives a custom block no id of its own, so
+                // two diagrams' buttons named alike were one to GPUI, and a
+                // click on the second never reached its handler.
+                .child(copy_button(("copy-diagram", node.source_range().map_or(0, |r| r.start)).into(), block.source.clone(), "Copy diagram source"))
                 .into_any_element()
         })
 }
 
 /// The Copy button in a code block's or a diagram's corner, shown on hover.
-fn copy_button(text: String, label: &'static str) -> impl IntoElement {
+fn copy_button(id: ElementId, text: String, label: &'static str) -> impl IntoElement {
     div()
-        .id("copy")
+        .id(id)
         .role(Role::Button)
         .px(px(6.))
         .py(px(2.))
