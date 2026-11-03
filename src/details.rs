@@ -141,10 +141,16 @@ fn notebook_input(tool: &str, input: &Value, diffed: bool, name: &dyn Fn(&str) -
     }
 }
 
-/// A cell by what it defines, else its id's first characters.
+/// A cell's name as code (`rates`), unless it is words from the cell's first-line comment.
+fn code_name(name: String) -> String {
+    let words = name.contains(' ') && !name.contains(',') && !crate::session::looks_like_code(&name);
+    if words { name } else { format!("`{name}`") }
+}
+
+/// A cell by its name, else its id's first characters.
 fn cell_label(id: &str, name: &dyn Fn(&str) -> Option<String>) -> String {
     match name(id) {
-        Some(n) => format!("`{n}`"),
+        Some(n) => code_name(n),
         None => format!("cell {}", id.get(..8).unwrap_or(id)),
     }
 }
@@ -309,7 +315,7 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
     }
     // A cell's name from the answer's own code, else from what the transcript has seen.
     let named = |id: &str| match (json["cell_id"].as_str() == Some(id)).then(|| json["code"].as_str()).flatten().map(crate::session::cell_label) {
-        Some(n) => format!("`{n}`"),
+        Some(n) => code_name(n),
         None => cell_label(id, name),
     };
     match tool {
@@ -491,6 +497,14 @@ mod tests {
 
     fn fields(rows: &[(&str, &str)]) -> Part {
         Part::Fields(rows.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+    }
+
+    #[test]
+    fn a_cell_named_in_words_isnt_shown_as_code() {
+        assert_eq!(super::code_name("rates".into()), "`rates`");
+        assert_eq!(super::code_name("a, b".into()), "`a, b`");
+        assert_eq!(super::code_name("scatter(t, y)".into()), "`scatter(t, y)`");
+        assert_eq!(super::code_name("Growth curves (by strain)".into()), "Growth curves (by strain)");
     }
 
     #[test]
