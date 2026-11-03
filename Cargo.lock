@@ -639,6 +639,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "bezel-mermaid"
+version = "0.2.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c3ca64c44a502a974161fc1843abdd1b76b6206e34159a4592937ce676de21e"
+dependencies = [
+ "chrono",
+ "indexmap 2.14.2",
+ "memchr",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "serde_with",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1813,6 +1828,7 @@ name = "endeavor"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "bezel-mermaid",
  "block2 0.6.2",
  "chrono",
  "endeavor-mcp",
@@ -1828,6 +1844,7 @@ dependencies = [
  "lb-wry",
  "libc",
  "log",
+ "markdown",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",

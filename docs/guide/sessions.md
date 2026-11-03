@@ -24,7 +24,10 @@ choose **Open in a new session…**.
 
 - **The chat** shows Claude's replies. Each step it takes, such as reading a
   cell or editing one, is a single grey line. Click **›** on a line to see
-  the details, such as the change to the code.
+  the details, such as the change to the code. When a diagram explains
+  something better than words, such as the steps of an analysis, Claude
+  can draw one in its reply. Ask for one if you want it. **Copy** in the
+  diagram's corner copies its source.
 - **A progress list** above the message box shows Claude's plan for longer
   tasks, with the current step highlighted.
 - **The notebook** changes as Claude works. A cell Claude has changed but not

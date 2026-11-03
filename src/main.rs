@@ -33,6 +33,7 @@ mod connection;
 mod crash;
 #[cfg(debug_assertions)]
 mod debug_state;
+mod diagram;
 mod details;
 mod failure;
 mod find_bar;

@@ -12,6 +12,7 @@ use gpui_component::tooltip::Tooltip;
 use crate::Workspace;
 use crate::celldiff;
 use crate::details;
+use crate::diagram;
 use crate::failure;
 use crate::motion;
 use crate::new_session::Glyph;
@@ -294,7 +295,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .flex()
             .flex_col()
             .gap(px(2.))
-            .child(markdown(&session.reply_text(ix, text, cx), cx))
+            .child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
         Entry::Note(text) if session.restart_offered_at(ix) => {
@@ -463,8 +464,9 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
 
 /// An agent reply's markdown, with a copy button on each code block. A link
 /// to a cell (`notebook://…/cell/<id>`) is a pill that shows that cell in the
-/// notebook (`CellLinks`).
-fn markdown(state: &Entity<TextViewState>, cx: &mut Context<Workspace>) -> TextView {
+/// notebook (`CellLinks`). A finished `mermaid` block is drawn as a diagram
+/// (diagram.rs).
+fn markdown(state: &Entity<TextViewState>, chat_width: f32, cx: &mut Context<Workspace>) -> TextView {
     let workspace = cx.entity().downgrade();
     let link = move |url: &SharedString, event: &ClickEvent, _: &mut Window, cx: &mut App| match crate::annotate::linked_cell(url) {
         // Setting a handler skips the library's own check of which button clicked.
@@ -476,33 +478,67 @@ fn markdown(state: &Entity<TextViewState>, cx: &mut Context<Workspace>) -> TextV
         None => crate::platform::open_url(url, cx),
     };
     let cell_links = CellLinks(cx.entity().downgrade());
-    TextView::new(state).style(markdown_style()).on_link_click(link).plugin(cell_links).code_block_actions(|block, _, _| {
-        let code = block.code().to_string();
-        div()
-            .id("copy")
-            .role(Role::Button)
-            .px(px(6.))
-            .py(px(2.))
-            .rounded(px(4.))
-            .cursor_pointer()
-            .font_family(theme::SANS)
-            .text_size(theme::chat_meta_small())
-            .text_color(theme::text_faint())
-            // Out of the flow so the library's opaque holder for it stays empty and
-            // doesn't hide the code's top-right corner while the button is invisible.
-            // Changing display on hover instead panics when hover flips mid-frame.
-            .absolute()
-            .top_0()
-            .right_0()
-            .whitespace_nowrap()
-            .bg(theme::bg_card())
-            .opacity(0.)
-            .group_hover(MESSAGE, |s| s.opacity(1.))
-            .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
-            .button_text("Copy")
-            .aria_label("Copy code")
-            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(code.clone())))
-    })
+    // The diagram's card pads it by 10 px on each side.
+    let width = (chat_width - 2. * crate::chat_margin(chat_width)).min(crate::CHAT_CONTENT_MAX) - 20.;
+    TextView::new(state)
+        .style(markdown_style())
+        .on_link_click(link)
+        .plugin(cell_links)
+        .code_block_actions(|block, _, _| copy_button("copy".into(), block.code().to_string(), "Copy code"))
+        .markdown_block_parser(diagram::parse_block)
+        .markdown_block_renderer(diagram::NODE, move |node, _, _| {
+            let Some(block) = node.data::<diagram::Block>() else { return div().into_any_element() };
+            // The parser drew it, so this holds; if it ever doesn't, show the source.
+            let Ok(d) = diagram::fitted(&block.source, width) else {
+                return div().font_family(theme::MONO).text_size(theme::chat_code()).whitespace_normal().child(block.source.clone()).into_any_element();
+            };
+            div()
+                .relative()
+                .w_full()
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(theme::bg_card())
+                .child(
+                    img(d.image(theme::is_light()))
+                        .w(px(d.width))
+                        .max_w_full()
+                        .aspect_ratio(d.width / d.height)
+                        .aria_label(node.accessibility_name().to_owned()),
+                )
+                // Its own id: the library gives a custom block no id of its own, so
+                // two diagrams' buttons named alike were one to GPUI, and a
+                // click on the second never reached its handler.
+                .child(copy_button(("copy-diagram", node.source_range().map_or(0, |r| r.start)).into(), block.source.clone(), "Copy diagram source"))
+                .into_any_element()
+        })
+}
+
+/// The Copy button in a code block's or a diagram's corner, shown on hover.
+fn copy_button(id: ElementId, text: String, label: &'static str) -> impl IntoElement {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .px(px(6.))
+        .py(px(2.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .font_family(theme::SANS)
+        .text_size(theme::chat_meta_small())
+        .text_color(theme::text_faint())
+        // Out of the flow so the library's opaque holder for it stays empty and
+        // doesn't hide the code's top-right corner while the button is invisible.
+        // Changing display on hover instead panics when hover flips mid-frame.
+        .absolute()
+        .top_0()
+        .right_0()
+        .whitespace_nowrap()
+        .bg(theme::bg_card())
+        .opacity(0.)
+        .group_hover(MESSAGE, |s| s.opacity(1.))
+        .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
+        .button_text("Copy")
+        .aria_label(label)
+        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone())))
 }
 
 /// The name of a reply's cell-link nodes.
