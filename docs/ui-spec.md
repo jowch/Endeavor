@@ -241,7 +241,7 @@ Boards XTurn, XStopped, XOpen. Three tiers. **Waiting** (Endeavor fixes it by it
 
 ## Shortcuts
 
-Enter send · ⌘⏎ steer running turn · with an approval card and an empty box: ⏎ answer (also in the notebook with nothing focused), ⌘⏎ always this session, Esc deny · ⌘E reply to the selection, or ask about the cell (⌘J also replies; in the prompt and Point's bar, ⏎ send, ⌘⏎ add to message) · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧E pointing · ⌘N new session.
+Enter send · ⌘⏎ steer running turn · with an approval card and an empty box: ⏎ answer (also in the notebook with nothing focused), ⌘⏎ always this session, Esc deny · ⌘E reply to the selection, or ask about the cell (⌘J also replies; in the prompt and Point's bar, ⏎ send, ⌘⏎ add to message) · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧E pointing · ⌘N new session · ⌘= / ⌘− / ⌘0 text size (View ▸ Zoom In / Zoom Out / Actual Size) of the pane used last: the notebook while it has the keyboard, else the chat after a click in its column, else the notebook. The chat's sizes scale from its type ladder in steps of 1.1× (three down to 75%, seven up to 195%, half pixels), with the transcript's and composer's line heights; its spacing and widths stay. Not while Settings covers the chat.
 
 ## Open decisions
 

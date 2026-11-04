@@ -212,7 +212,7 @@ pub fn chip(id: ElementId, attachment: &Attachment) -> Stateful<Div> {
     div()
         .id(id)
         .flex_shrink_0()
-        .h(px(22.))
+        .h(theme::chat_px(22.))
         .max_w(px(240.))
         .flex()
         .items_center()
@@ -263,7 +263,7 @@ fn text_panel(text: &str, lines: usize, color: Rgba) -> Div {
         .bg(theme::bg_page())
         .font_family(theme::MONO)
         .text_size(theme::chat_meta_small())
-        .line_height(px(16.))
+        .line_height(theme::chat_px(16.))
         .text_color(color)
         .overflow_hidden()
         .child(shown.join("\n").replace('\t', "    "))
@@ -1017,6 +1017,8 @@ impl Workspace {
             .children(self.render_list(session, slash, cx))
             .children(self.render_hover_preview(session));
         div()
+            // As the transcript's (render_chat): the new session's composer isn't inside it.
+            .line_height(theme::chat_px(19.5))
             .key_context(list_context)
             .on_action(cx.listener(Self::list_up))
             .on_action(cx.listener(Self::list_down))
@@ -1396,14 +1398,15 @@ impl Workspace {
     }
 
     fn render_toolbar(&self, session: Option<&Session>, notebook_open: bool, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let narrow = self.settings.layout.chat_width < 400.;
+        // Narrow for its text: a bigger chat text size needs the room as a narrower column would.
+        let narrow = self.settings.layout.chat_width < 400. * theme::chat_scale();
         let mode = self.mode_label(session);
         let open = |menu: Menu| self.composer.menu == Some(menu);
         div()
             .flex()
             .items_center()
             .gap(px(2.))
-            .h(px(24.))
+            .h(theme::chat_px(24.))
             // Lines the + up with the text in the box, and the ring with the send button.
             .pl(px(4.5))
             .pr(px(8.))
@@ -1435,7 +1438,7 @@ impl Workspace {
             } else {
                 div()
                     .id("point")
-                    .h(px(24.))
+                    .h(theme::chat_px(24.))
                     .flex()
                     .items_center()
                     .gap(px(4.))
