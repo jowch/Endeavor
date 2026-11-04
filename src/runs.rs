@@ -39,6 +39,24 @@ pub fn failed(status: ToolCallStatus, title: &str, output: Option<&Value>) -> bo
             || (celldiff::notebook_tool(title).is_some() && output.and_then(celldiff::tool_json).as_ref().is_some_and(is_refusal)))
 }
 
+/// Whether a notebook call's answer says a cell it ran or read has an error
+/// (the call itself went through).
+pub fn cell_error(title: &str, output: Option<&Value>) -> bool {
+    if celldiff::notebook_tool(title).is_none() {
+        return false;
+    }
+    let Some(reply) = output.and_then(celldiff::tool_json) else { return false };
+    let has_error = |v: &Value| v.get("error").is_some_and(|e| !e.is_null());
+    (reply["errored"] == true || (reply["cell_id"].is_string() && has_error(&reply)))
+        || reply["outputs"]["changed"].as_array().into_iter().flatten().any(has_error)
+}
+
+/// Tools the transcript leaves out: Claude Code's own plumbing, which says
+/// nothing about the work (ToolSearch loads the descriptions of more tools).
+pub fn hidden(title: &str) -> bool {
+    title == "ToolSearch"
+}
+
 fn is_refusal(reply: &Value) -> bool {
     reply.as_object().is_some_and(|o| o.len() == 2 && o.contains_key("error") && o.contains_key("message"))
 }
@@ -226,6 +244,20 @@ mod tests {
     use crate::session::Entry;
     use agent_client_protocol::schema::v1::{ToolCallStatus, ToolKind};
     use serde_json::{Value, json};
+
+    #[test]
+    fn a_cell_error_marks_the_call_that_ran_or_read_it() {
+        let out = |v: Value| json!([{"type": "text", "text": v.to_string()}]);
+        let read = out(json!({"cell_id": "c", "errored": true, "error": {"msg": "UndefVarError"}}));
+        assert!(super::cell_error("mcp__notebook__read_cell", Some(&read)));
+        let ran = out(json!({"mutation": {"cell_id": "c"}, "outputs": {"changed": [{"cell_id": "c", "error": {"msg": "boom"}}]}}));
+        assert!(super::cell_error("mcp__notebook__edit_cell", Some(&ran)));
+        let fine = out(json!({"cell_id": "c", "errored": false, "error": null, "output": "1"}));
+        assert!(!super::cell_error("mcp__notebook__read_cell", Some(&fine)));
+        assert!(!super::cell_error("mcp__notebook__read_cell", Some(&out(json!({"error": "not_found", "message": "No cell"})))), "a refused call failed; no cell has an error");
+        assert!(!super::cell_error("Bash", Some(&read)), "only notebook tools");
+        assert!(super::hidden("ToolSearch") && !super::hidden("Read"));
+    }
 
     fn tool(title: &str) -> Entry {
         Entry::Tool {

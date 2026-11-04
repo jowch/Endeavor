@@ -11,7 +11,9 @@ use crate::celldiff;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Part {
-    /// A command or code, in a mono block.
+    /// A shell command, on the strip at the top of the call's box.
+    Command(String),
+    /// Code, in a mono block.
     Code(String),
     /// Label and value rows.
     Fields(Vec<(String, String)>),
@@ -25,10 +27,25 @@ pub enum Part {
     Numbered(Vec<(usize, String)>),
 }
 
+impl Part {
+    /// The part as plain text, as Copy puts it on the clipboard.
+    pub fn text(&self) -> String {
+        match self {
+            Part::Command(t) | Part::Code(t) | Part::Text(t) | Part::Error(t) => t.clone(),
+            Part::Line(t) => t.replace('`', ""),
+            Part::Fields(rows) => rows.iter().map(|(k, v)| format!("{k}: {}", v.replace('`', ""))).collect::<Vec<_>>().join("\n"),
+            Part::Numbered(lines) => lines.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join("\n"),
+        }
+    }
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Details {
     pub input: Vec<Part>,
     pub output: Vec<Part>,
+    /// How a command ended, when that was a failure: "Exit code 2",
+    /// "Timed out". Shown under the output.
+    pub status: Option<String>,
 }
 
 /// Long outputs are cut to this much.
@@ -52,14 +69,53 @@ pub fn details(
         Some(tool) => notebook_input(tool, input, diffed, name),
         None => call_input(kind, path, input, diffed),
     };
-    let output_parts = match output {
+    let mut output_parts = match output {
         None => Vec::new(),
         Some(output) => match tool {
             Some(tool) => notebook_output(tool, output, name),
             None => call_output(kind, output, failed, diffed),
         },
     };
-    Details { input: input_parts, output: output_parts }
+    // An exit code or a timeout says how the call ended, not what it printed.
+    let mut status = Vec::new();
+    output_parts.retain(|part| match part {
+        Part::Error(text) if is_ending(text) => {
+            status.push(text.clone());
+            false
+        }
+        _ => true,
+    });
+    let status = (!status.is_empty()).then(|| status.join(" · "));
+    Details { input: input_parts, output: output_parts, status }
+}
+
+/// "Exit code 2", "Timed out", "Stopped by a signal".
+fn is_ending(text: &str) -> bool {
+    text == "Timed out" || text == "Stopped by a signal" || text.strip_prefix("Exit code ").is_some_and(|n| n.trim().parse::<i64>().is_ok())
+}
+
+/// A cell's error as the notebook shows it: the message (`msg`, else
+/// `message`, else the plain text), without Julia's name for the notebook's
+/// module.
+fn error_text(error: &Value) -> Option<String> {
+    let text = ["msg", "message", "plain_error"].iter().find_map(|k| error[*k].as_str()).or(error.as_str()).map(str::to_owned).or_else(|| compact(error))?;
+    Some(without_module(&text))
+}
+
+/// "not defined in `Main.var\"workspace#4\"`" reads "not defined in this notebook".
+fn without_module(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("`Main.var\"workspace#") {
+        let end = rest[start + 1..].find('`').map(|e| start + e + 2);
+        let Some(end) = end else { break };
+        let before = rest[..start].strip_suffix("in ").map(|b| (b, true)).unwrap_or((&rest[..start], false));
+        out.push_str(before.0);
+        out.push_str(if before.1 { "in this notebook" } else { "this notebook" });
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn field<'a>(input: &'a Value, name: &str) -> Option<&'a str> {
@@ -79,7 +135,7 @@ fn line_range(first: Option<u64>, count: Option<u64>) -> Option<String> {
 fn call_input(kind: ToolKind, path: Option<&Path>, input: &Value, diffed: bool) -> Vec<Part> {
     let file = path.map(|p| p.display().to_string()).or_else(|| ["file_path", "notebook_path", "path"].iter().find_map(|f| field(input, f)).map(str::to_owned));
     match kind {
-        ToolKind::Execute if field(input, "command").is_some() => vec![Part::Code(input["command"].as_str().unwrap_or_default().to_string())],
+        ToolKind::Execute if field(input, "command").is_some() => vec![Part::Command(input["command"].as_str().unwrap_or_default().to_string())],
         ToolKind::Read if file.is_some() => {
             let mut rows = vec![("file".to_string(), file.unwrap_or_default())];
             rows.extend(line_range(input["offset"].as_u64(), input["limit"].as_u64()).map(|r| ("lines".to_string(), r)));
@@ -106,7 +162,7 @@ fn call_input(kind: ToolKind, path: Option<&Path>, input: &Value, diffed: bool) 
 fn notebook_input(tool: &str, input: &Value, diffed: bool, name: &dyn Fn(&str) -> Option<String>) -> Vec<Part> {
     match tool {
         "run_shell" => {
-            let mut parts = vec![Part::Code(input["command"].as_str().unwrap_or_default().to_string())];
+            let mut parts = vec![Part::Command(input["command"].as_str().unwrap_or_default().to_string())];
             if let Some(cwd) = field(input, "cwd") {
                 parts.push(Part::Fields(vec![("in".into(), cwd.into())]));
             }
@@ -251,10 +307,10 @@ fn without_reminders(text: &str) -> String {
 }
 
 /// A file read back with its line numbers ("    12\tcode" or "12→code"), or
-/// None when the text isn't numbered.
+/// None when the text isn't numbered. Once the first line is, a line that
+/// isn't (a "[File truncated…]" note) keeps its place with no number (0).
 fn numbered(text: &str) -> Option<Vec<(usize, String)>> {
-    let mut lines = Vec::new();
-    for line in text.lines().take(MAX_LINES) {
+    let one = |line: &str| -> Option<(usize, String)> {
         let trimmed = line.trim_start();
         let digits = trimmed.len() - trimmed.trim_start_matches(|c: char| c.is_ascii_digit()).len();
         if digits == 0 {
@@ -262,9 +318,12 @@ fn numbered(text: &str) -> Option<Vec<(usize, String)>> {
         }
         let rest = &trimmed[digits..];
         let code = rest.strip_prefix('\t').or_else(|| rest.strip_prefix('→'))?;
-        lines.push((trimmed[..digits].parse().ok()?, code.to_string()));
-    }
-    (!lines.is_empty()).then_some(lines)
+        Some((trimmed[..digits].parse().ok()?, code.to_string()))
+    };
+    let mut lines = text.lines().take(MAX_LINES);
+    let mut out = vec![one(lines.next()?)?];
+    out.extend(lines.map(|line| one(line).unwrap_or_else(|| (0, line.to_string()))));
+    Some(out)
 }
 
 /// A failure's text: "Exit code 2" on its own line, in the error colour, then
@@ -398,12 +457,9 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
             parts.extend(cell_output(&json));
             parts
         }
-        // A read of a cell whose code the agent already has leaves the code out.
-        _ if json["code_unchanged"] == true && json["cell_id"].is_string() => {
-            let mut parts = vec![Part::Line(format!("{}: code unchanged since the agent last saw it", named(json["cell_id"].as_str().unwrap_or_default())))];
-            parts.extend(cell_output(&json));
-            parts
-        }
+        // A read of a cell whose code the agent already has leaves the code
+        // out; the input names the cell.
+        _ if json["code_unchanged"] == true && json["cell_id"].is_string() => cell_output(&json),
         _ => {
             let rows = facts(&json, &["notebook_id", "cell_order", "execution_order"]);
             if rows.is_empty() { Vec::new() } else { vec![Part::Fields(rows)] }
@@ -414,8 +470,7 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
 /// A cell's output, or its error.
 fn cell_output(cell: &Value) -> Vec<Part> {
     if let Some(error) = cell.get("error").filter(|e| !e.is_null()) {
-        let message = error["message"].as_str().or(error.as_str()).map(str::to_owned).or_else(|| compact(error));
-        return message.map(Part::Error).into_iter().collect();
+        return error_text(error).map(Part::Error).into_iter().collect();
     }
     field(cell, "output").map(|o| Part::Text(cut(o))).into_iter().collect()
 }
@@ -451,6 +506,8 @@ fn receipt(json: &Value, named: &dyn Fn(&str) -> String) -> Vec<Part> {
             "completed" => "finished",
             "staged" => "not run yet",
             "timeout" => "timed out",
+            // When the call answered; it may have finished since.
+            "running" => "started",
             other => other,
         };
         rows.push(("status".to_string(), status.to_string()));
@@ -465,7 +522,7 @@ fn receipt(json: &Value, named: &dyn Fn(&str) -> String) -> Vec<Part> {
         let who = named(changed["cell_id"].as_str().unwrap_or_default());
         match changed.get("error").filter(|e| !e.is_null()) {
             Some(error) => {
-                let message = error["message"].as_str().map(str::to_owned).or_else(|| compact(error)).unwrap_or_default();
+                let message = error_text(error).unwrap_or_default();
                 parts.push(Part::Error(format!("{who}: {message}")));
             }
             None => {
@@ -476,7 +533,8 @@ fn receipt(json: &Value, named: &dyn Fn(&str) -> String) -> Vec<Part> {
             }
         }
     }
-    for warning in json["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+    // Notes for the agent ("cells running; read them for the result") are left out.
+    for warning in json["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|w| !w.starts_with("async_execution::")) {
         let text = warning.split_once("::").map_or(warning, |(_, m)| m);
         parts.push(Part::Line(text.to_string()));
     }
@@ -510,9 +568,10 @@ mod tests {
     #[test]
     fn commands_show_as_code_and_their_output_as_text() {
         let d = open("ls -la", ToolKind::Execute, json!({"command": "ls -la", "description": "List files"}), Some(json!("a.txt\nb.txt")), false, false);
-        assert_eq!(d, Details { input: vec![Part::Code("ls -la".into())], output: vec![Part::Text("a.txt\nb.txt".into())] });
+        assert_eq!(d, Details { input: vec![Part::Command("ls -la".into())], output: vec![Part::Text("a.txt\nb.txt".into())], status: None });
         let d = open("false", ToolKind::Execute, json!({"command": "false"}), Some(json!("Exit code 1\nno such file")), true, false);
-        assert_eq!(d.output, vec![Part::Error("Exit code 1".into()), Part::Text("no such file".into())]);
+        assert_eq!(d.output, vec![Part::Text("no such file".into())]);
+        assert_eq!(d.status.as_deref(), Some("Exit code 1"), "how it ended goes under the output");
     }
 
     #[test]
@@ -535,6 +594,26 @@ mod tests {
     fn edits_leave_their_input_and_success_to_the_diff() {
         let d = open("Edit a.rs", ToolKind::Edit, json!({"file_path": "/a.rs", "old_string": "a", "new_string": "b"}), Some(json!("The file /a.rs has been updated successfully.")), false, true);
         assert_eq!(d, Details::default());
+    }
+
+    #[test]
+    fn a_read_keeps_its_numbers_past_a_line_without_one() {
+        let d = open("Read a", ToolKind::Read, json!({"file_path": "/a"}), Some(json!("1\tx\n2\ty\n[File truncated: showing 2 of 9 lines]")), false, false);
+        assert_eq!(d.output, vec![Part::Numbered(vec![(1, "x".into()), (2, "y".into()), (0, "[File truncated: showing 2 of 9 lines]".into())])]);
+        let d = open("Read a", ToolKind::Read, json!({"file_path": "/a"}), Some(json!("not numbered\n2\ty")), false, false);
+        assert_eq!(d.output, vec![Part::Text("not numbered\n2\ty".into())]);
+    }
+
+    #[test]
+    fn a_cell_error_shows_its_message_once_in_the_notebooks_words() {
+        let out = |v: Value| Some(json!([{"type": "text", "text": v.to_string()}]));
+        let msg = "UndefVarError: `f` not defined in `Main.var\"workspace#4\"`\nSuggestion: check for spelling errors or missing imports.";
+        let reply = json!({"cell_id": "c", "code_unchanged": true, "errored": true, "error": {"kind": "runtime", "msg": msg, "plain_error": msg}});
+        let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({"cell_id": "c"}), out(reply), false, false);
+        assert_eq!(d.output, vec![Part::Error("UndefVarError: `f` not defined in this notebook\nSuggestion: check for spelling errors or missing imports.".into())]);
+        let receipt = json!({"mutation": {"type": "add_cell", "cell_id": "c"}, "execution": {"status": "running"}});
+        let d = open("mcp__notebook__add_cell", ToolKind::Other, json!({}), out(receipt), false, true);
+        assert_eq!(d.output, vec![Part::Line("Applied to cell c".into()), fields(&[("status", "started")])], "running when it answered: it may be done now");
     }
 
     #[test]
@@ -569,8 +648,9 @@ mod tests {
             true,
             false,
         );
-        assert_eq!(d.input, vec![Part::Code("make".into()), fields(&[("in", "/w")])]);
-        assert_eq!(d.output, vec![Part::Text("cc a.c".into()), Part::Text("a.c:1: error".into()), Part::Error("Exit code 2".into())]);
+        assert_eq!(d.input, vec![Part::Command("make".into()), fields(&[("in", "/w")])]);
+        assert_eq!(d.output, vec![Part::Text("cc a.c".into()), Part::Text("a.c:1: error".into())]);
+        assert_eq!(d.status.as_deref(), Some("Exit code 2"));
         let d = open(
             "mcp__notebook__read_file",
             ToolKind::Other,
@@ -618,8 +698,8 @@ mod tests {
                 Part::Line("`residuals` →".into()),
                 Part::Text("0.25".into()),
                 Part::Error("`fit`: UndefVarError: `z`".into()),
-                Part::Line("cells running; pending_run clears when execution finishes".into()),
-            ]
+            ],
+            "the agent's note about running cells is left out"
         );
         let d = open("mcp__notebook__execute_cell", ToolKind::Other, json!({"notebook_id": "n", "cell_id": "c-fit", "wait_for_completion": true}), None, false, false);
         assert_eq!(d.input, vec![fields(&[("cell", "`fit`"), ("wait for completion", "yes")])]);
@@ -629,7 +709,7 @@ mod tests {
         let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c", "code": "x = 1", "output": "1", "errored": false})), false, false);
         assert_eq!(d.output, vec![Part::Code("x = 1".into()), Part::Text("1".into())]);
         let d = open("mcp__notebook__read_cell", ToolKind::Other, json!({}), out(json!({"cell_id": "c-9abcdef012", "code_unchanged": true, "code_sha": "0123456789ab", "output": "1", "errored": false})), false, false);
-        assert_eq!(d.output, vec![Part::Line("cell c-9abcde: code unchanged since the agent last saw it".into()), Part::Text("1".into())]);
+        assert_eq!(d.output, vec![Part::Text("1".into())], "no note that the agent has the code already");
         let d = open("mcp__notebook__list_notebooks", ToolKind::Other, json!({}), out(json!([{"path": "/w/a.jl", "cell_count": 4, "execution_allowed": false}])), false, false);
         assert_eq!(d.output, vec![Part::Text("/w/a.jl · 4 cells · safe preview".into())]);
         let code = "# ╔═╡ 11111111-2222-4333-8444-555555555555\nusing Plots\n\n# ╔═╡ 66666666-7777-4888-9999-aaaaaaaaaaaa\n# (empty)\n\n# ╔═╡ 77777777-7777-4888-9999-aaaaaaaaaaaa\nx = 1\ny = 2";
