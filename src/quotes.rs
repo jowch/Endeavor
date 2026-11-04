@@ -61,7 +61,7 @@ fn menu_row(id: &'static str, label: &'static str, key: &'static str, icon: Glyp
         .id(id)
         .role(Role::MenuItem)
         .aria_label(label)
-        .h(px(28.))
+        .h(theme::chat_px(28.))
         .flex()
         .items_center()
         .gap(px(8.))
@@ -202,13 +202,13 @@ impl Workspace {
                     .id("reply-pill")
                     .role(Role::Button)
                     .aria_label("Reply")
-                    .h(px(30.))
+                    .h(theme::chat_px(30.))
                     .p(px(3.))
                     .flex()
                     .items_center()
                     .child(
                         div()
-                            .h(px(24.))
+                            .h(theme::chat_px(24.))
                             .flex()
                             .items_center()
                             .gap(px(6.))
@@ -219,7 +219,7 @@ impl Workspace {
                             .text_color(theme::text_primary())
                             .child(glyph(Glyph::Bubble, theme::icon_grey()))
                             .child("Reply")
-                            .child(div().text_size(px(11.)).text_color(theme::text_faint()).child(crate::platform::shortcut!("E"))),
+                            .child(div().text_size(theme::chat_px(11.)).text_color(theme::text_faint()).child(crate::platform::shortcut!("E"))),
                     )
                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                         if matches!(this.reply, Some(Reply::Pill(_))) {
@@ -269,7 +269,7 @@ impl Workspace {
                     .aria_label("Send options")
                     .flex_shrink_0()
                     .w(px(18.))
-                    .h(px(24.))
+                    .h(theme::chat_px(24.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -291,11 +291,11 @@ impl Workspace {
                     .pl(px(4.))
                     .pr(px(2.))
                     .text_size(theme::chat_meta_small())
-                    .line_height(px(17.))
+                    .line_height(theme::chat_px(17.))
                     .text_color(theme::text_faint())
                     .whitespace_nowrap()
                     .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.)).overflow_hidden().child(glyph(Glyph::Lines, theme::text_faint())).child(format!("{}'s reply", agent.name())))
-                    .child(div().flex_shrink_0().text_size(px(11.)).child(format!("{SEND_KEY} {} · {ADD_KEY} add to message", if working { "queue" } else { "send" })));
+                    .child(div().flex_shrink_0().text_size(theme::chat_px(11.)).child(format!("{SEND_KEY} {} · {ADD_KEY} add to message", if working { "queue" } else { "send" })));
                 place(
                     prompt_width,
                     frame()
@@ -317,8 +317,8 @@ impl Workspace {
                                 .border_l_2()
                                 .border_color(theme::control_edge())
                                 .pl(px(8.))
-                                .text_size(px(11.5))
-                                .line_height(px(17.))
+                                .text_size(theme::chat_px(11.5))
+                                .line_height(theme::chat_px(17.))
                                 .text_color(theme::text_faint())
                                 .whitespace_nowrap()
                                 .overflow_hidden()
@@ -345,7 +345,7 @@ impl Workspace {
                                         .flex_1()
                                         .min_w_0()
                                         .my(px(-2.5))
-                                        .child(Textarea::new(input).appearance(false).aria_label(format!("Reply to {}", agent.name())).text_size(theme::chat_body()).line_height(px(21.))),
+                                        .child(Textarea::new(input).appearance(false).aria_label(format!("Reply to {}", agent.name())).text_size(theme::chat_body()).line_height(theme::chat_line_body())),
                                 )
                                 .child(send)
                                 .child(options),
@@ -380,14 +380,14 @@ fn excerpt(quote: &Quote, max_lines: usize) -> Option<Div> {
     let text = quote.excerpt()?;
     let ruled = div().border_l_2().border_color(theme::composer_edge()).pl(px(8.)).min_w_0().overflow_hidden().text_color(theme::text_secondary());
     let Some(first) = quote.first_line() else {
-        return Some(ruled.text_size(px(13.)).line_height(px(19.)).line_clamp(max_lines).text_ellipsis().child(text.trim().to_string()));
+        return Some(ruled.text_size(theme::chat_px(13.)).line_height(theme::chat_px(19.)).line_clamp(max_lines).text_ellipsis().child(text.trim().to_string()));
     };
     let mut lines: Vec<(String, String)> = text.lines().enumerate().take(max_lines).map(|(i, l)| ((first + i).to_string(), l.replace('\t', "    "))).collect();
     if text.lines().count() > max_lines {
         lines.push((String::new(), "…".into()));
     }
     let width = lines.iter().map(|(n, _)| n.len()).max().unwrap_or(1);
-    Some(ruled.font_family(theme::MONO).text_size(theme::chat_meta_small()).line_height(px(18.)).children(lines.into_iter().map(|(n, line)| {
+    Some(ruled.font_family(theme::MONO).text_size(theme::chat_meta_small()).line_height(theme::chat_px(18.)).children(lines.into_iter().map(|(n, line)| {
         div()
             .flex()
             .gap(px(8.))
@@ -471,7 +471,7 @@ impl Workspace {
                     })),
             );
         let cards = quotes.into_iter().map(|(i, quote)| {
-            let remove = icon_button(ElementId::NamedInteger("remove-quote".into(), i as u64), "Remove quote", div().text_size(px(15.)).child("×")).on_click(cx.listener(
+            let remove = icon_button(ElementId::NamedInteger("remove-quote".into(), i as u64), "Remove quote", div().text_size(theme::chat_px(15.)).child("×")).on_click(cx.listener(
                 move |this, _, _, cx| {
                     if matches!(this.composer.attachments.get(i), Some(Attachment::Quote(_))) {
                         this.composer.attachments.remove(i);
@@ -492,7 +492,7 @@ impl Workspace {
                     c => div().text_color(theme::text_primary()).child(c.lines().next().unwrap_or_default().to_string()),
                 };
                 return card
-                    .h(px(32.))
+                    .h(theme::chat_px(32.))
                     .flex()
                     .items_center()
                     .gap(px(8.))
@@ -554,7 +554,7 @@ impl Workspace {
                                 .id(ElementId::NamedInteger("sent-quote".into(), (key << 32) | ((entry as u64) << 8) | i as u64))
                                 .role(Role::Button)
                                 .aria_label(format!("{label}, show in notebook"))
-                                .h(px(22.))
+                                .h(theme::chat_px(22.))
                                 .flex()
                                 .items_center()
                                 .gap(px(5.))
@@ -568,7 +568,7 @@ impl Workspace {
                                 .text_size(theme::chat_meta_small())
                                 .text_color(theme::text_secondary())
                                 .child(glyph(quote_glyph(quote), theme::text_muted()))
-                                .child(div().font_family(theme::MONO).text_size(px(11.5)).child(label))
+                                .child(div().font_family(theme::MONO).text_size(theme::chat_px(11.5)).child(label))
                                 .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(cells.clone(), cx))),
                         )
                         .into_any_element(),

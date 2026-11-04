@@ -174,11 +174,11 @@ impl Workspace {
         let q = &session.outbox.items[ix];
         let id = q.id;
         let group: SharedString = format!("queued-{id}").into();
-        let chips = q.attachments.iter().take(ROW_CHIPS).enumerate().map(|(i, a)| chip(ElementId::NamedInteger("queued-chip".into(), (id << 8) | i as u64), a).h(px(20.)));
+        let chips = q.attachments.iter().take(ROW_CHIPS).enumerate().map(|(i, a)| chip(ElementId::NamedInteger("queued-chip".into(), (id << 8) | i as u64), a).h(theme::chat_px(20.)));
         let more = q.attachments.len().saturating_sub(ROW_CHIPS);
         let words = q.text.lines().next().unwrap_or("").to_string();
         row_frame(&group, id)
-            .h(px(32.))
+            .h(theme::chat_px(32.))
             .flex()
             .items_center()
             .gap(px(8.))
@@ -220,7 +220,7 @@ impl Workspace {
             .iter()
             .enumerate()
             .filter(|(_, a)| !matches!(a, Attachment::Quote(_)))
-            .map(|(i, a)| chip(ElementId::NamedInteger("queued-chip".into(), (id << 8) | i as u64), a).h(px(20.)))
+            .map(|(i, a)| chip(ElementId::NamedInteger("queued-chip".into(), (id << 8) | i as u64), a).h(theme::chat_px(20.)))
             .collect();
         // The bubble's quote parts, under ids of their own.
         let quotes = self.render_sent_quotes(key, 0xF0_0000 | (id as usize & 0xFFFF), &q.attachments, cx);
@@ -327,12 +327,12 @@ impl Workspace {
         let key = session.key;
         let focus = session.outbox.removed_at(Instant::now()).map(|r| session.queue_focus(r.message.id, "queued-undo", cx));
         div()
-            .h(px(32.))
+            .h(theme::chat_px(32.))
             .flex()
             .items_center()
             .gap(px(8.))
             .px(px(10.))
-            .text_size(px(12.5))
+            .text_size(theme::chat_px(12.5))
             .text_color(theme::text_muted())
             .child(div().flex_1().min_w_0().truncate().child(format!("Removed “{}”", text.lines().next().unwrap_or(""))))
             .child(
@@ -383,7 +383,7 @@ fn number(n: usize) -> Div {
 /// The row of the message being edited: a dashed placeholder that keeps its place.
 fn editing_row(n: Option<usize>) -> AnyElement {
     div()
-        .h(px(32.))
+        .h(theme::chat_px(32.))
         .flex()
         .items_center()
         .gap(px(8.))
@@ -392,13 +392,13 @@ fn editing_row(n: Option<usize>) -> AnyElement {
         .border_1()
         .border_dashed()
         .border_color(theme::composer_edge())
-        .text_size(px(12.5))
+        .text_size(theme::chat_px(12.5))
         .text_color(theme::text_muted())
         .children(n.map(number))
         .child(glyph(Glyph::Pencil, theme::text_muted()))
         .child(div().flex_1().min_w_0().truncate().child("Editing in the box below · keeps its place"))
         .child(div().flex_shrink_0().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("esc"))
-        .child(div().flex_shrink_0().text_size(px(11.5)).text_color(theme::text_faint()).child("puts it back"))
+        .child(div().flex_shrink_0().text_size(theme::chat_px(11.5)).text_color(theme::text_faint()).child("puts it back"))
         .into_any_element()
 }
 

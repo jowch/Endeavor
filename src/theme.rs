@@ -8,7 +8,7 @@
 //! view reads the resolved colour without being handed the appearance.
 
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use gpui::{App, BoxShadow, InteractiveElement, ParentElement, Pixels, Rgba, SharedString, StatefulInteractiveElement, Styled, point, px, rgb, rgba};
@@ -267,23 +267,67 @@ pub fn size_code() -> Pixels { px(12.) }
 // The chat column (the transcript, the composer and its cards): the same ladder,
 // one step up, so chat's reading text sits a size larger than the rest of the
 // interface (sidebar, Settings, menus, the notebook header), which keeps
-// `size_meta_small` .. `size_code` unchanged.
+// `size_meta_small` .. `size_code` unchanged. The chat's text size (⌘= / ⌘−
+// / ⌘0 while the chat was last clicked) scales all of these, and every
+// other text or line size in the chat column goes through `chat_px`.
+
+/// The chat's text size as a multiple of the sizes below, as f32 bits. Like
+/// the appearance, one process-wide value, so a view reads a size without
+/// being handed the setting.
+static CHAT_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000); // 1.0
+
+/// The chat's text sizes are 1.1 to a whole power: three steps down (75%)
+/// to seven up (195%). Staying on these, ⌘− after ⌘= lands back on 100%.
+const CHAT_STEPS: (i32, i32) = (-3, 7);
+
+fn chat_step_of(scale: f32) -> i32 {
+    (scale.ln() / 1.1f32.ln()).round() as i32
+}
+
+fn chat_scale_at(step: i32) -> f32 {
+    1.1f32.powi(step.clamp(CHAT_STEPS.0, CHAT_STEPS.1))
+}
+
+/// The chat text size one step bigger (or smaller) than `scale`.
+pub fn chat_scale_step(scale: f32, bigger: bool) -> f32 {
+    let step = if scale > 0. { chat_step_of(scale) } else { 0 };
+    chat_scale_at(step + if bigger { 1 } else { -1 })
+}
+
+pub fn set_chat_scale(scale: f32) {
+    let scale = if scale > 0. { chat_scale_at(chat_step_of(scale)) } else { 1. };
+    CHAT_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+}
+
+pub fn chat_scale() -> f32 {
+    f32::from_bits(CHAT_SCALE.load(Ordering::Relaxed))
+}
+
+/// A text or line size in the chat column, at the chat's text size: `n` at
+/// the default size, to the nearest half pixel otherwise.
+pub fn chat_px(n: f32) -> Pixels {
+    px(scaled_size(n, chat_scale()))
+}
+
+pub(crate) fn scaled_size(n: f32, scale: f32) -> f32 {
+    (n * scale * 2.).round() / 2.
+}
 
 /// Chat: keyboard hints. One step up from `size_meta_small`.
-pub fn chat_meta_small() -> Pixels { px(12.) }
+pub fn chat_meta_small() -> Pixels { chat_px(12.) }
 /// Chat: tool lines, timestamps, "Edited…"/"Ran…" rows, notes ("You stopped
 /// Claude"), the chips row under the composer. One step up from `size_meta`.
-pub fn chat_meta() -> Pixels { px(13.) }
+pub fn chat_meta() -> Pixels { chat_px(13.) }
 /// Chat: message text (user bubbles and replies, including markdown), the
 /// composer's typed text and placeholder, and the approval/plan cards' body
 /// text. One step up from `size_body`.
-pub fn chat_body() -> Pixels { px(14.) }
-pub fn chat_line_body() -> Pixels { px(21.) }
+pub fn chat_body() -> Pixels { chat_px(14.) }
+pub fn chat_line_body() -> Pixels { chat_px(21.) }
 /// Chat: card titles ("Run 3 cells?"). One step up from `size_subhead`.
-pub fn chat_subhead() -> Pixels { px(16.) }
+pub fn chat_subhead() -> Pixels { chat_px(16.) }
 /// JuliaMono inside chat text: a size smaller than `chat_body`, as `size_code`
 /// is for `size_body`.
-pub fn chat_code() -> Pixels { px(13.) }
+pub fn chat_code() -> Pixels { chat_px(13.) }
 
 // Motion: short fades and small slides, nothing at all with Reduce motion.
 // Like the appearance, one process-wide switch (`set_reduce_motion`), so a
@@ -351,5 +395,33 @@ mod tests {
         set_light(false);
         assert_eq!(light, ("#FCFCFD".into(), "#CC3F00".into(), "#CC3F00".into(), rgba(0x18181E52)));
         assert_eq!(hex(focus_ring()).as_ref(), "#E08A5E");
+    }
+
+    // The process-wide scale is left alone: other tests read chat sizes.
+    #[test]
+    fn chat_sizes_scale_to_half_pixels() {
+        assert_eq!(scaled_size(14., 1.), 14.);
+        assert_eq!(scaled_size(14., 1.1), 15.5);
+        assert_eq!(scaled_size(13., 1. / 1.1), 12.);
+        assert_eq!(scaled_size(21., 2.), 42.);
+    }
+
+    #[test]
+    fn chat_steps_come_back_to_the_default() {
+        let mut scale = 1.;
+        for _ in 0..12 {
+            scale = chat_scale_step(scale, true);
+        }
+        assert_eq!(scale, chat_scale_at(7));
+        for _ in 0..7 {
+            scale = chat_scale_step(scale, false);
+        }
+        assert_eq!(scale, 1.);
+        for _ in 0..12 {
+            scale = chat_scale_step(scale, false);
+        }
+        assert_eq!(scaled_size(14., scale), 10.5);
+        // A saved size off the ladder joins it at the nearest step.
+        assert_eq!(chat_scale_step(1.33, false), chat_scale_at(2));
     }
 }

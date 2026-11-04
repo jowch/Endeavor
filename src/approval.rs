@@ -622,7 +622,7 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
         .items_center()
         .justify_center()
         .w(px(20.))
-        .h(px(30.))
+        .h(theme::chat_px(30.))
         .rounded_r(px(5.))
         .border_2()
         .border_l_0()
@@ -991,7 +991,9 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
                 .border_t_1()
                 .border_color(theme::accent().opacity(0.25))
                 .children(left.into_iter().map(|(_, b)| b.into_any_element()))
-                .child(div().flex_1().flex().justify_end().gap(px(4.)).children(right.into_iter().map(|(_, b)| b))),
+                // Wraps too: at a large chat text size, Always this session and the
+                // filled answer don't fit side by side.
+                .child(div().flex_1().flex().flex_wrap().justify_end().gap(px(4.)).children(right.into_iter().map(|(_, b)| b))),
         )
         .into_any_element()
 }
@@ -1022,7 +1024,7 @@ fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus
         .flex()
         .items_center()
         .gap(px(4.))
-        .h(px(30.))
+        .h(theme::chat_px(30.))
         .px(px(match weight {
             Weight::Primary => 10.,
             Weight::Outlined => 8.,

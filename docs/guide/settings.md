@@ -102,6 +102,11 @@ server…** and **Add cluster…** add new ones. See [Servers](./servers.md) and
   in its header, in Endeavor's colours. **Classic** shows Pluto's or Ember's
   own page, as it looks outside Endeavor. You can also switch in the
   notebook's **⋮** menu. Exported notebooks always use their standard look.
+- **Text size** isn't in Settings. Press ⌘= to make text bigger, ⌘− to make
+  it smaller and ⌘0 to go back to the usual size (Ctrl on Windows and Linux),
+  or use the **View** menu on a Mac. They change the pane you used last:
+  after a click in the chat, the chat's text; after a click in the notebook,
+  the notebook. Endeavor keeps both sizes for next time.
 
 ## Troubleshooting
 

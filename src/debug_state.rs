@@ -183,6 +183,13 @@ impl Workspace {
             },
             "composer": self.composer_state(active, cx),
             "settings": self.settings_debug(cx),
+            // ⌘= / ⌘− / ⌘0: which pane they size now, and each pane's size (1 is 100%).
+            "zoom": {
+                "target": if self.zooms_chat(cx) { "chat" } else { "notebook" },
+                "notebook": if self.settings.zoom > 0. { self.settings.zoom } else { 1. },
+                "chat": crate::theme::chat_scale(),
+                "chat_body_px": f32::from(crate::theme::chat_body()),
+            },
             "confirm": self.confirm.as_ref().map(crate::confirm::Confirm::debug_state),
             "notice": self.notice.as_ref().map(|n| json!({
                 "spot": n.spot.label(),

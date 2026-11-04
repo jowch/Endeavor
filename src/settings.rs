@@ -46,6 +46,9 @@ pub struct Settings {
     pub collapsed_folders: HashSet<Place>,
     /// The notebook's zoom (⌘= / ⌘− / ⌘0); 0 means unset (1.0).
     pub zoom: f64,
+    /// The chat's text size, as a multiple of the default (⌘= / ⌘− / ⌘0
+    /// after a click in the chat); 0 means unset (1.0).
+    pub chat_zoom: f64,
     /// Open notebooks with no turns, edits or running cells for this long stop.
     pub idle_stop: IdleStop,
     /// Julia and its open notebooks keep running after Endeavor quits; the next

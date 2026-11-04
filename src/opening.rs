@@ -168,7 +168,7 @@ impl Workspace {
                     .gap(px(8.))
                     .pl(px(2.))
                     .text_size(theme::chat_meta())
-                    .line_height(px(18.))
+                    .line_height(theme::chat_px(18.))
                     .text_color(theme::text_muted())
                     .child(glyph_at(Glyph::WifiOff, theme::text_muted(), 13. / 12.))
                     .child(div().flex_1().min_w_0().child(text))
