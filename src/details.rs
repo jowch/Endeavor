@@ -46,6 +46,14 @@ pub struct Details {
     /// How a command ended, when that was a failure: "Exit code 2",
     /// "Timed out". Shown under the output.
     pub status: Option<String>,
+    /// Some of the output was left out: past `MAX_CHARS` or `MAX_LINES`, or
+    /// by the saved transcript's own cut. What's shown is only the start.
+    pub cut: bool,
+}
+
+thread_local! {
+    /// Set by `cut` and `numbered` when they leave something out.
+    static LEFT_OUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Long outputs are cut to this much.
@@ -64,6 +72,7 @@ pub fn details(
     diffed: bool,
     name: &dyn Fn(&str) -> Option<String>,
 ) -> Details {
+    LEFT_OUT.set(false);
     let tool = celldiff::notebook_tool(title);
     let input_parts = match tool {
         Some(tool) => notebook_input(tool, input, diffed, name),
@@ -86,7 +95,8 @@ pub fn details(
         _ => true,
     });
     let status = (!status.is_empty()).then(|| status.join(" · "));
-    Details { input: input_parts, output: output_parts, status }
+    let cut = LEFT_OUT.get() || output.is_some_and(crate::transcript_copy::was_trimmed);
+    Details { input: input_parts, output: output_parts, status, cut }
 }
 
 /// "Exit code 2", "Timed out", "Stopped by a signal".
@@ -284,7 +294,10 @@ pub fn plain_text(value: &Value) -> String {
 
 fn cut(text: &str) -> String {
     match text.char_indices().nth(MAX_CHARS) {
-        Some((at, _)) => format!("{}\n…", &text[..at]),
+        Some((at, _)) => {
+            LEFT_OUT.set(true);
+            format!("{}\n…", &text[..at])
+        }
         None => text.to_string(),
     }
 }
@@ -320,9 +333,12 @@ fn numbered(text: &str) -> Option<Vec<(usize, String)>> {
         let code = rest.strip_prefix('\t').or_else(|| rest.strip_prefix('→'))?;
         Some((trimmed[..digits].parse().ok()?, code.to_string()))
     };
-    let mut lines = text.lines().take(MAX_LINES);
+    let mut lines = text.lines();
     let mut out = vec![one(lines.next()?)?];
-    out.extend(lines.map(|line| one(line).unwrap_or_else(|| (0, line.to_string()))));
+    out.extend(lines.by_ref().take(MAX_LINES - 1).map(|line| one(line).unwrap_or_else(|| (0, line.to_string()))));
+    if lines.next().is_some() {
+        LEFT_OUT.set(true);
+    }
     Some(out)
 }
 
@@ -553,6 +569,19 @@ mod tests {
         details(title, kind, None, &input, output.as_ref(), failed, diffed, &names)
     }
 
+    #[test]
+    fn an_output_cut_short_says_so() {
+        let long = "x\n".repeat(super::MAX_CHARS);
+        assert!(open("Bash", ToolKind::Execute, json!({"command": "cat big"}), Some(json!(long)), false, false).cut);
+        let read: String = (1..=super::MAX_LINES + 5).map(|n| format!("{n}\tline\n")).collect();
+        let d = open("Read", ToolKind::Read, json!({"file_path": "/a/b.jl"}), Some(json!(read)), false, false);
+        assert!(d.cut && matches!(&d.output[..], [Part::Numbered(lines)] if lines.len() == super::MAX_LINES));
+        // The saved transcript's own cut, after a reopen.
+        let saved: String = "y".repeat(4000) + "…";
+        assert!(open("Bash", ToolKind::Execute, json!({"command": "cat big"}), Some(json!(saved)), false, false).cut);
+        assert!(!open("Bash", ToolKind::Execute, json!({"command": "ls"}), Some(json!("a\nb")), false, false).cut);
+    }
+
     fn fields(rows: &[(&str, &str)]) -> Part {
         Part::Fields(rows.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
     }
@@ -568,7 +597,7 @@ mod tests {
     #[test]
     fn commands_show_as_code_and_their_output_as_text() {
         let d = open("ls -la", ToolKind::Execute, json!({"command": "ls -la", "description": "List files"}), Some(json!("a.txt\nb.txt")), false, false);
-        assert_eq!(d, Details { input: vec![Part::Command("ls -la".into())], output: vec![Part::Text("a.txt\nb.txt".into())], status: None });
+        assert_eq!(d, Details { input: vec![Part::Command("ls -la".into())], output: vec![Part::Text("a.txt\nb.txt".into())], status: None, cut: false });
         let d = open("false", ToolKind::Execute, json!({"command": "false"}), Some(json!("Exit code 1\nno such file")), true, false);
         assert_eq!(d.output, vec![Part::Text("no such file".into())]);
         assert_eq!(d.status.as_deref(), Some("Exit code 1"), "how it ended goes under the output");

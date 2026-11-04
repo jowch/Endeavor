@@ -57,7 +57,7 @@ pub fn render_transcript(session: &Session, margin: Pixels, window: &Window, cx:
                 };
                 // A run of tool calls is drawn whole at its first entry.
                 let element = match runs::run_at(&session.entries, ix) {
-                    Some(run) if run.start == ix => Some(render_run(session, run, window, cx)),
+                    Some(run) if run.start == ix => render_run(session, run, window, cx),
                     Some(_) => None,
                     None => render_entry(this, session, ix, entry, window, cx),
                 };
@@ -652,19 +652,20 @@ const DETAIL_LINE: f32 = 16.;
 /// A run of tool calls: one line summing it up ("Read 2 files, ran a command ›")
 /// that opens into a bordered list with a row per call. While the run is still
 /// going, its latest call shows under the line. A lone call is just its row.
-fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Window, cx: &mut Context<Workspace>) -> AnyElement {
+fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let key = session.key;
     let rows: Vec<usize> = run
         .clone()
         .filter(|&i| match &session.entries[i] {
-            Entry::Tool { title, .. } => !runs::hidden(title),
+            Entry::Tool { title, status, output, .. } => !runs::hidden(title, *status, output.as_ref()),
             Entry::Thought { .. } => true,
             _ => false,
         })
         .collect();
     match rows[..] {
-        [] => return div().into_any_element(),
-        [only] => return render_row(session, only, true, window, cx),
+        // Only hidden calls: no row, and no gap for one.
+        [] => return None,
+        [only] => return Some(render_row(session, only, true, window, cx)),
         _ => {}
     }
     let calls: Vec<usize> = rows.iter().copied().filter(|&i| matches!(session.entries[i], Entry::Tool { .. })).collect();
@@ -723,7 +724,7 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
     });
     // The header appears when a second call joins the first.
     let header = if live { motion::arriving(header, id("run-header"), false).into_any_element() } else { header.into_any_element() };
-    div().flex().flex_col().gap(px(6.)).child(header).children(list).into_any_element()
+    Some(div().flex().flex_col().gap(px(6.)).child(header).children(list).into_any_element())
 }
 
 /// The end-of-turn card: a row per cell the turn changed (icon, name, a
@@ -874,7 +875,7 @@ pub(crate) fn run_summary(session: &Session, run: std::ops::Range<usize>) -> (St
     let mut summed = Vec::new();
     for entry in &session.entries[run] {
         let Entry::Tool { title, kind, status, input, output, approval, .. } = entry else { continue };
-        if runs::hidden(title) {
+        if runs::hidden(title, *status, output.as_ref()) {
             continue;
         }
         if *approval == Some(Approval::Denied) || runs::denied(output.as_ref()) {
@@ -957,7 +958,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 )
             })
             .into_any_element(),
-        Entry::Tool { title, .. } if runs::hidden(title) => div().into_any_element(),
+        Entry::Tool { title, status, output, .. } if runs::hidden(title, *status, output.as_ref()) => div().into_any_element(),
         Entry::Tool { id: call, title, kind, path, input, output, diffs, expanded, approval, .. } => {
             let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
             // An opened row that was asked about ends with the answer and its time.
@@ -1055,7 +1056,7 @@ const FADE: f32 = 32.;
 fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key: u64, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     use details::Part;
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key);
-    let details::Details { input, output, status } = details;
+    let details::Details { input, output, status, cut } = details;
     let (strip, code_in): (Vec<Part>, Vec<Part>) = input.into_iter().partition(|p| !matches!(p, Part::Code(_)));
     // Errors are sentences: they wrap, under the output.
     let (errors, output): (Vec<Part>, Vec<Part>) = output.into_iter().partition(|p| matches!(p, Part::Error(_)));
@@ -1063,7 +1064,9 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     if strip.is_empty() && body.is_empty() && errors.is_empty() && diffs.is_empty() && status.is_none() {
         return None;
     }
+    // Copy takes what the box shows; when the output was cut, the footer says so.
     let copy_text = body.iter().chain(&errors).map(details::Part::text).collect::<Vec<_>>().join("\n");
+    let shown_text = body.iter().map(details::Part::text).collect::<Vec<_>>().join("\n");
     let show_all = window.use_keyed_state(id("call-all"), cx, |_, _| false);
     let all = *show_all.read(cx);
     let line = theme::chat_px(DETAIL_LINE);
@@ -1097,20 +1100,29 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     let cut_below = !all && max.y > px(0.5);
     let more_below = cut_below && offset.y > -max.y + px(1.);
     let more_right = max.x > px(0.5) && offset.x > -max.x + px(1.);
-    let lines = copy_text.lines().count();
+    // The marker `details` adds where it cut ("…") isn't a line of the output.
+    let lines = shown_text.lines().count() - (cut && shown_text.ends_with("\n…")) as usize;
     let output_area = (!body.is_empty()).then(|| {
         let parts = div().flex().flex_col().items_start().gap(px(4.)).px(px(10.)).py(px(6.)).children(body.into_iter().map(output_part));
         let area = scroll_xy(div().id(id("call-out")).flex().flex_col().items_start().when(!all, |d| d.max_h(cap)), handle.clone()).line_height(line).child(parts.flex_none().min_w_full());
         div()
             .relative()
             .child(area)
+            .child(remeasure(&handle, max))
             .when(more_below, |d| d.child(fade(FadeEdge::Bottom, theme::bg_sunken())))
             .when(more_right, |d| d.child(fade(FadeEdge::Right, theme::bg_sunken())))
     });
 
+    // Errors wrap, under the output; with output above they take half the
+    // cap, so the box stays within it. Show all opens them too.
+    let errors_handle = window.use_keyed_state(id("call-errors-scroll"), cx, |_, _| ScrollHandle::new()).read(cx).clone();
+    let (err_offset, err_max) = (errors_handle.offset(), errors_handle.max_offset());
+    let errors_cut = !all && !errors.is_empty() && err_max.y > px(0.5);
     let errors = (!errors.is_empty()).then(|| {
-        let panel = scroll_y(div().id(id("call-errors")).max_h(cap), window, cx);
-        panel
+        let errors_cap = if output_area.is_some() { cap * 0.5 } else { cap };
+        let panel = div()
+            .id(id("call-errors"))
+            .when(!all, |d| d.max_h(errors_cap))
             .flex()
             .flex_col()
             .gap(px(4.))
@@ -1118,11 +1130,16 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .py(px(6.))
             .line_height(line)
             .text_color(theme::danger())
+            .children(errors.into_iter().map(|e| div().child(e.text())));
+        div()
+            .relative()
             .when(output_area.is_some(), |d| d.border_t_1().border_color(theme::border()))
-            .children(errors.into_iter().map(|e| div().child(e.text())))
+            .child(hand_on(panel.overflow_y_scroll().track_scroll(&errors_handle), errors_handle.clone()))
+            .child(remeasure(&errors_handle, err_max))
+            .when(errors_cut && err_offset.y > -err_max.y + px(1.), |d| d.child(fade(FadeEdge::Bottom, theme::bg_sunken())))
     });
 
-    let shown_all = all || cut_below;
+    let shown_all = all || cut_below || errors_cut;
     let footer = (shown_all || status.is_some() || !copy_text.is_empty()).then(|| {
         let toggle = show_all.clone();
         div()
@@ -1137,8 +1154,16 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .text_size(theme::chat_meta_small())
             .text_color(theme::text_faint())
             .children(status.map(|s| div().flex_none().text_color(theme::danger()).child(s)))
+            .when(cut || (shown_all && lines > 0), |d| {
+                let count = match (cut, lines) {
+                    (true, n) => format!("first {n} {}", if n == 1 { "line" } else { "lines" }),
+                    (false, 1) => "1 line".to_string(),
+                    (false, n) => format!("{n} lines"),
+                };
+                d.child(div().flex_none().child(count))
+            })
             .when(shown_all, |d| {
-                d.child(div().flex_none().child(if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") })).child(
+                d.child(
                     div()
                         .id(id("call-show-all"))
                         .role(Role::Button)
@@ -1159,7 +1184,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
                     div()
                         .id(id("call-copy"))
                         .role(Role::Button)
-                        .aria_label("Copy the output")
+                        .aria_label(if cut { "Copy what's shown" } else { "Copy the output" })
                         .flex_none()
                         .cursor_pointer()
                         .text_color(theme::text_secondary())
@@ -1217,6 +1242,7 @@ fn strip_part(part: details::Part, id: ElementId, window: &mut Window, cx: &mut 
             .relative()
             .min_w_0()
             .flex_1()
+            .child(remeasure(&handle, handle.max_offset()))
             .child(scroll_x(div().id(id).flex(), handle).child(div().flex_none().whitespace_nowrap().child(content)))
             .when(more_right, |d| d.child(fade(FadeEdge::Right, theme::bg_card())))
     };
@@ -1297,6 +1323,21 @@ fn output_part(part: details::Part) -> AnyElement {
     }
 }
 
+/// Draws nothing. A scroll area learns how far it can scroll only as it's
+/// laid out, after the render that chose its fades and Show all; when that
+/// changed (opened, Show less, a resize or zoom), this draws the box once more.
+fn remeasure(handle: &ScrollHandle, used: Point<Pixels>) -> impl IntoElement {
+    let handle = handle.clone();
+    canvas(|_, _, _| {}, move |_, _, window, _| {
+        let now = handle.max_offset();
+        if (now.x - used.x).abs() > px(0.5) || (now.y - used.y).abs() > px(0.5) {
+            window.on_next_frame(|window, _| window.refresh());
+        }
+    })
+    .absolute()
+    .size_0()
+}
+
 /// A panel that scrolls up to its max height, and hands the wheel on to the
 /// transcript only once it can't scroll further that way.
 fn scroll_y(mut panel: Stateful<Div>, window: &mut Window, cx: &mut App) -> Stateful<Div> {
@@ -1356,8 +1397,8 @@ fn render_diff(diff: &celldiff::CellDiff, id: ElementId, window: &mut Window, cx
         "−" => theme::diff_del(),
         _ => theme::text_faint(),
     };
-    let signs = div().flex_none().flex().flex_col().w(px(22.)).children(shown.iter().map(|(sign, tint, _)| {
-        div().h(line).pl(px(10.)).when_some(*tint, |d, t| d.bg(t)).text_color(sign_color(sign)).child(sign.to_string())
+    let signs = div().flex_none().flex().flex_col().w(theme::chat_px(22.)).children(shown.iter().map(|(sign, tint, _)| {
+        div().h(line).pl(theme::chat_px(10.)).when_some(*tint, |d, t| d.bg(t)).text_color(sign_color(sign)).child(sign.to_string())
     }));
     let code = div().flex().flex_col().min_w_full().children(shown.iter().map(|(_, tint, text)| {
         div().h(line).pr(px(10.)).whitespace_nowrap().when_some(*tint, |d, t| d.bg(t)).child(text.to_string())
@@ -1377,6 +1418,7 @@ fn render_diff(diff: &celldiff::CellDiff, id: ElementId, window: &mut Window, cx
                         .relative()
                         .flex_1()
                         .min_w_0()
+                        .child(remeasure(&handle, handle.max_offset()))
                         .child(scroll_x(div().id(id).flex().flex_col().items_start(), handle).child(code))
                         .when(more_right, |d| d.child(fade(FadeEdge::Right, theme::bg_sunken()))),
                 ),

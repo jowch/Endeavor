@@ -51,10 +51,11 @@ pub fn cell_error(title: &str, output: Option<&Value>) -> bool {
         || reply["outputs"]["changed"].as_array().into_iter().flatten().any(has_error)
 }
 
-/// Tools the transcript leaves out: Claude Code's own plumbing, which says
+/// Calls the transcript leaves out: Claude Code's own plumbing, which says
 /// nothing about the work (ToolSearch loads the descriptions of more tools).
-pub fn hidden(title: &str) -> bool {
-    title == "ToolSearch"
+/// One that failed or was denied stays, since it can explain what came next.
+pub fn hidden(title: &str, status: ToolCallStatus, output: Option<&Value>) -> bool {
+    title == "ToolSearch" && !failed(status, title, output) && !denied(output)
 }
 
 fn is_refusal(reply: &Value) -> bool {
@@ -256,7 +257,14 @@ mod tests {
         assert!(!super::cell_error("mcp__notebook__read_cell", Some(&fine)));
         assert!(!super::cell_error("mcp__notebook__read_cell", Some(&out(json!({"error": "not_found", "message": "No cell"})))), "a refused call failed; no cell has an error");
         assert!(!super::cell_error("Bash", Some(&read)), "only notebook tools");
-        assert!(super::hidden("ToolSearch") && !super::hidden("Read"));
+    }
+
+    #[test]
+    fn a_tool_lookup_is_hidden_unless_it_failed_or_was_denied() {
+        let done = ToolCallStatus::Completed;
+        assert!(super::hidden("ToolSearch", done, None) && !super::hidden("Read", done, None));
+        assert!(!super::hidden("ToolSearch", ToolCallStatus::Failed, None), "a failure can explain what the agent did next");
+        assert!(!super::hidden("ToolSearch", done, Some(&json!(super::DENIED_TEXT))));
     }
 
     fn tool(title: &str) -> Entry {
