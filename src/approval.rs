@@ -991,7 +991,9 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
                 .border_t_1()
                 .border_color(theme::accent().opacity(0.25))
                 .children(left.into_iter().map(|(_, b)| b.into_any_element()))
-                .child(div().flex_1().flex().justify_end().gap(px(4.)).children(right.into_iter().map(|(_, b)| b))),
+                // Wraps too: at a large chat text size, Always this session and the
+                // filled answer don't fit side by side.
+                .child(div().flex_1().flex().flex_wrap().justify_end().gap(px(4.)).children(right.into_iter().map(|(_, b)| b))),
         )
         .into_any_element()
 }

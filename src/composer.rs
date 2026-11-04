@@ -1398,7 +1398,8 @@ impl Workspace {
     }
 
     fn render_toolbar(&self, session: Option<&Session>, notebook_open: bool, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let narrow = self.settings.layout.chat_width < 400.;
+        // Narrow for its text: a bigger chat text size needs the room as a narrower column would.
+        let narrow = self.settings.layout.chat_width < 400. * theme::chat_scale();
         let mode = self.mode_label(session);
         let open = |menu: Menu| self.composer.menu == Some(menu);
         div()
