@@ -101,6 +101,7 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | Where | Shortcut | Upgrade when |
 |---|---|---|
 | `transcript.rs` | long diffs are cut, not scrollable | real notebooks hit it |
+| `Cargo.toml` `[patch.crates-io]`, `vendor/gpui-pre` | a copy of GPUI 0.3.6 with a fixed line wrapper, so a `.`, `?` or `)` never starts a chat line alone (vendor/README.md) | the next GPUI upgrade: GPUI 0.3.11 fixes two of the three gaps; the third, a mark after a code span as wide as the line, needs the patch carried or taken upstream |
 | `diagram.rs` `cached` | GPUI keeps each picture it has drawn for the window's life, so each width a diagram is laid out at keeps its pixels (about 1 to 3 MB) | a session with many diagrams, resized often, grows noticeably |
 | `cell_shot.rs` | the agent's picture of an HTML output is taken only on a Mac, and only while the notebook pane is on screen | Windows and Linux snapshots; a picture asked for behind Settings |
 | `frontend/src/diff.ts` | the page's diff is an O(n·m) table; when the two versions' line counts multiply past 250,000, no diff is shown | big cells need a diff |

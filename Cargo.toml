@@ -62,3 +62,11 @@ gdkx11 = "0.18"
 x11 = { version = "2.21", features = ["xlib"] }
 # The same WebKitGTK wry's web view uses: its web process ending, and its find (src/linux/webcontent.rs).
 webkit2gtk = { version = "=2.0.1", features = ["v2_38"] }
+
+# GPUI's line wrapper with three fixes, so a closing mark never starts a line
+# alone: a `.` after an inline code span, a `?`, and the mark after a word or
+# span as wide as the line. The crates.io 0.3.6 source otherwise unchanged
+# (examples left out); vendor/README.md says what changed and how to drop it.
+# ponytail: drop when we upgrade GPUI and upstream carries the fixes.
+[patch.crates-io]
+gpui = { package = "gpui-pre", path = "vendor/gpui-pre" }
