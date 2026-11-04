@@ -750,6 +750,7 @@ impl Workspace {
         .detach();
         // The helpers finish the job after the app is gone.
         cx.on_app_quit(|this, _| {
+            eprintln!("Endeavor is quitting");
             this.quit_runtimes();
             // A fetched update installs on any quit, as Settings says,
             // except while Windows is logging off (install skips it then).
@@ -3054,6 +3055,14 @@ fn main() {
                     return cx.new(|cx| Root::new(preview, window, cx));
                 }
                 let workspace = cx.new(|cx| Workspace::new(window, cx));
+                // Closing this window quits while it is still open. GPUI holds
+                // the quit handlers (the update install, quit_runtimes) by a
+                // weak handle, and the window's views, the workspace among
+                // them, go once it has closed.
+                window.on_window_should_close(cx, |_, cx| {
+                    cx.quit();
+                    false
+                });
                 let ws = workspace.downgrade();
                 cx.on_action(move |_: &ShowAbout, cx| about::open_about(ws.clone(), cx));
                 // Menu items and shortcuts pressed while the notebook has the keyboard reach
