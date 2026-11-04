@@ -24,14 +24,20 @@ closing mark from starting a chat line alone:
   punctuation does in print.
 
 The tests are in the same file (`test_wrap_line_keeps_closing_marks_with_their_word`).
-They don't run with the app's `cargo test`; to run them, copy this folder out
-of the tree and run `cargo test --lib --features test-support line_wrapper`
-there (the crate's other tests need assets the published crate leaves out).
+They don't run with the app's `cargo test`. `scripts/test-vendored-gpui.sh`
+runs them: it copies this folder out of the tree, stubs the image and fonts
+that the crate's other tests `include_bytes!` (the published crate leaves them
+out), and runs the wrapper's tests.
+
+CJK closing marks (`。，、）」`) still break before themselves, as before; the
+hanging rule covers the Latin marks listed in `hangs_at_line_end`. At most
+two marks hang, and only right after a word, so a run of `!!!!` or `....`
+still wraps.
 
 To compare with the registry:
 
 ```sh
-diff -r ~/.cargo/registry/src/*/gpui-pre-0.3.6/src vendor/gpui-pre/src
+diff -r ~/.cargo/registry/src/*/gpui-pre-0.3.6/src vendor/gpui-pre/src   # after cargo fetch on main
 ```
 
 Drop this copy when GPUI is upgraded. GPUI 0.3.11 (gpui-kit 0.9) rewrites

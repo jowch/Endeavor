@@ -1,3 +1,4 @@
+// Modified for Endeavor: see vendor/README.md in the Endeavor repository.
 use crate::{FontId, Pixels, SharedString, TextRun, TextSystem, px};
 use collections::HashMap;
 use std::{borrow::Cow, iter, sync::Arc};
@@ -49,7 +50,7 @@ impl LineWrapper {
         let mut last_candidate_width = px(0.);
         let mut last_wrap_ix = 0;
         let mut prev_c = '\0';
-        let mut hanging = false;
+        let mut hung = 0;
         let mut index = 0;
         let mut candidates = fragments
             .iter()
@@ -121,16 +122,21 @@ impl LineWrapper {
                 // A closing mark that overflows a line with nowhere else to
                 // break hangs past the edge rather than starting the next line
                 // alone (e.g. the `.` after a code span as wide as the line).
+                // At most `MAX_HUNG` marks hang, so a run of them still wraps.
                 let hangs = match candidate {
                     WrapBoundaryCandidate::Char { character } => {
                         last_candidate_ix == 0
                             && Self::hangs_at_line_end(character)
-                            && (hanging || width - item_width <= wrap_width)
+                            && (if hung == 0 {
+                                width - item_width <= wrap_width && !Self::hangs_at_line_end(prev_c)
+                            } else {
+                                hung < Self::MAX_HUNG
+                            })
                             && !matches!(prev_c, ' ' | '\0')
                     }
                     WrapBoundaryCandidate::Element { .. } => false,
                 };
-                hanging = hangs && width > wrap_width;
+                hung = if hangs && width > wrap_width { hung + 1 } else { 0 };
                 if width > wrap_width && ix > last_wrap_ix && !hangs {
                     if let (None, Some(first_non_whitespace_ix)) = (indent, first_non_whitespace_ix)
                     {
@@ -476,10 +482,11 @@ impl LineWrapper {
         (text, Cow::Borrowed(runs))
     }
 
-    /// Any character in this list should be treated as a word character,
-    /// meaning it can be part of a word that should not be wrapped.
     /// Stands for an inline element in `prev_c`: a word, not a space.
     const ELEMENT_CHAR: char = '\u{FFFC}';
+
+    /// How many closing marks in a row may hang past the end of a line.
+    const MAX_HUNG: u32 = 2;
 
     /// Marks a line may break after but never before (UAX #14 LB13).
     fn is_break_after(c: char) -> bool {
@@ -495,6 +502,8 @@ impl LineWrapper {
         )
     }
 
+    /// Any character in this list should be treated as a word character,
+    /// meaning it can be part of a word that should not be wrapped.
     pub(crate) fn is_word_char(c: char) -> bool {
         // ASCII alphanumeric characters, for English, numbers: `Hello123`, etc.
         c.is_ascii_alphanumeric() ||
@@ -801,6 +810,11 @@ mod tests {
         // A word longer than the line still breaks inside, and its period
         // hangs instead of starting a line.
         assert_eq!(wrap(&[LineFragment::text("aaaaaaaa.")], w * 4.), [4]);
+        // At most two marks hang, and only after a word; a longer run
+        // still wraps, a line's width at a time.
+        assert_eq!(wrap(&[LineFragment::text("aaaa..")], w * 4.), Vec::<usize>::new());
+        assert_eq!(wrap(&[LineFragment::text(&format!("aaaa{}", ".".repeat(24)))], w * 4.), [6, 10, 14, 18, 22, 26]);
+        assert_eq!(wrap(&[LineFragment::text(&format!("x wow{}", "!".repeat(20)))], w * 6.), [2, 8, 14, 20]);
 
         // Elements side by side with a space between still break there.
         let fragments = [
