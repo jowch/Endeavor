@@ -1237,13 +1237,14 @@ fn strip_part(part: details::Part, id: ElementId, window: &mut Window, cx: &mut 
     use details::Part;
     let one_line = |content: AnyElement, id: ElementId, window: &mut Window, cx: &mut App| {
         let handle = window.use_keyed_state(id.clone(), cx, |_, _| ScrollHandle::new()).read(cx).clone();
-        let more_right = handle.max_offset().x > px(0.5) && handle.offset().x > -handle.max_offset().x + px(1.);
+        let max = handle.max_offset();
+        let more_right = max.x > px(0.5) && handle.offset().x > -max.x + px(1.);
         div()
             .relative()
             .min_w_0()
             .flex_1()
-            .child(remeasure(&handle, handle.max_offset()))
-            .child(scroll_x(div().id(id).flex(), handle).child(div().flex_none().whitespace_nowrap().child(content)))
+            .child(scroll_x(div().id(id).flex(), handle.clone()).child(div().flex_none().whitespace_nowrap().child(content)))
+            .child(remeasure(&handle, max))
             .when(more_right, |d| d.child(fade(FadeEdge::Right, theme::bg_card())))
     };
     match part {
@@ -1323,7 +1324,8 @@ fn output_part(part: details::Part) -> AnyElement {
     }
 }
 
-/// Draws nothing. A scroll area learns how far it can scroll only as it's
+/// Draws nothing; goes after the area it watches, so it sees its new extent.
+/// A scroll area learns how far it can scroll only as it's
 /// laid out, after the render that chose its fades and Show all; when that
 /// changed (opened, Show less, a resize or zoom), this draws the box once more.
 fn remeasure(handle: &ScrollHandle, used: Point<Pixels>) -> impl IntoElement {
@@ -1391,7 +1393,8 @@ fn render_diff(diff: &celldiff::CellDiff, id: ElementId, window: &mut Window, cx
         })
         .collect();
     let handle = window.use_keyed_state(id.clone(), cx, |_, _| ScrollHandle::new()).read(cx).clone();
-    let more_right = handle.max_offset().x > px(0.5) && handle.offset().x > -handle.max_offset().x + px(1.);
+    let max = handle.max_offset();
+    let more_right = max.x > px(0.5) && handle.offset().x > -max.x + px(1.);
     let sign_color = |sign: &str| match sign {
         "+" => theme::diff_add(),
         "−" => theme::diff_del(),
@@ -1418,8 +1421,8 @@ fn render_diff(diff: &celldiff::CellDiff, id: ElementId, window: &mut Window, cx
                         .relative()
                         .flex_1()
                         .min_w_0()
-                        .child(remeasure(&handle, handle.max_offset()))
-                        .child(scroll_x(div().id(id).flex().flex_col().items_start(), handle).child(code))
+                        .child(scroll_x(div().id(id).flex().flex_col().items_start(), handle.clone()).child(code))
+                        .child(remeasure(&handle, max))
                         .when(more_right, |d| d.child(fade(FadeEdge::Right, theme::bg_sunken()))),
                 ),
         )
