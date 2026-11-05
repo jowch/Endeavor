@@ -170,6 +170,7 @@ Quiet motion only: short fades and small slides for what appears, no springs, bo
   | Plan | none (read-only) | none; ends with a plan to approve |
   | Ask to run (default) | land live | ask first |
   | Auto | land live | no asking |
+  New sessions start in the last of Manual, Ask to run and Auto picked from the menu or /mode on the new-session screen, or from the menu, /mode or ⇧⇥ in a session (Settings keeps it; Manual until then). Plan is never kept, and neither is the plan card's Start in Auto. A pick on the new-session screen is for the session it starts; the next one starts from what Settings keeps. A kept Auto starts a session on an existing notebook in Ask to run instead, since that notebook opens in safe preview and Auto would let Claude run it without asking; the toolbar shows Ask to run there, and picking Auto on the screen starts that session in Auto.
 
 ## Notebook (Pluto)
 
