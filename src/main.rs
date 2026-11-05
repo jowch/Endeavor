@@ -68,6 +68,8 @@ mod resources;
 mod restart_ask;
 mod runs;
 mod runtime;
+#[cfg(not(windows))]
+mod save_image;
 mod server_dialog;
 mod menu;
 mod motion;
@@ -630,9 +632,11 @@ impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (page_tx, mut page_rx) = futures::channel::mpsc::unbounded::<String>();
         let (ended_tx, mut ended_rx) = futures::channel::mpsc::unbounded::<()>();
+        #[cfg(not(windows))]
+        let (image_asks, mut image_ask_rx) = futures::channel::mpsc::unbounded::<save_image::Ask>();
         let webview = cx.new(|cx| {
             let handle = platform::webview_parent(window);
-            let webview = wry::WebViewBuilder::new()
+            let builder = wry::WebViewBuilder::new()
                 // wry's url() panics on a web view that has never loaded a page.
                 .with_url("about:blank")
                 .with_devtools(true)
@@ -654,9 +658,12 @@ impl Workspace {
                 })
                 .with_ipc_handler(move |request| {
                     let _ = page_tx.unbounded_send(request.into_body());
-                })
-                .build_as_child(&handle)
-                .expect("child webview");
+                });
+            #[cfg(target_os = "linux")]
+            let builder = builder.with_download_started_handler(save_image::started(image_asks.clone()));
+            let webview = builder.build_as_child(&handle).expect("child webview");
+            #[cfg(target_os = "macos")]
+            save_image::attach(&webview, image_asks.clone());
             #[cfg(target_os = "macos")]
             {
                 webkeys::fix_key_handling();
@@ -675,6 +682,16 @@ impl Workspace {
                 let Ok(job) = this.update_in(cx, |this, window, cx| this.shoot_cell(ask, window, cx)) else { break };
                 let outcome = job.await;
                 if this.update(cx, |this, cx| this.cell_shot_done(outcome, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        #[cfg(not(windows))]
+        cx.spawn(async move |this, cx| {
+            while let Some(ask) = image_ask_rx.next().await {
+                if this.update(cx, |this, cx| this.save_image(ask, cx)).is_err() {
                     break;
                 }
             }

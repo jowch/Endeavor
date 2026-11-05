@@ -22,7 +22,7 @@ type Prompt =
 /// NSAlertFirstButtonReturn.
 const FIRST_BUTTON: isize = 1000;
 
-unsafe fn string_of(ns: *mut AnyObject) -> String {
+pub(crate) unsafe fn string_of(ns: *mut AnyObject) -> String {
     if ns.is_null() {
         return String::new();
     }
@@ -32,7 +32,7 @@ unsafe fn string_of(ns: *mut AnyObject) -> String {
     }
 }
 
-unsafe fn ns_string(text: &str) -> Retained<AnyObject> {
+pub(crate) unsafe fn ns_string(text: &str) -> Retained<AnyObject> {
     let text = CString::new(text.replace('\0', "")).unwrap_or_default();
     unsafe { msg_send![class!(NSString), stringWithUTF8String: text.as_ptr()] }
 }
