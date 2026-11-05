@@ -2844,7 +2844,9 @@ fn inferred_name(code: &str) -> Option<String> {
         return None;
     }
     let last = lines[lines.len() - 2];
-    let names = last.split(',').map(str::trim).all(|n| !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_'));
+    // `end` closes an inner block; it names nothing.
+    const KEYWORDS: [&str; 5] = ["end", "nothing", "true", "false", "missing"];
+    let names = last.split(',').map(str::trim).all(|n| !n.is_empty() && !KEYWORDS.contains(&n) && n.chars().all(|c| c.is_alphanumeric() || c == '_'));
     names.then(|| last.to_owned())
 }
 
@@ -4628,6 +4630,7 @@ more" }"#);
             ("let\n  A, k = coef(fit)\n  Markdown.parse(\"k = $k\")\nend", "text"),
             ("let\n  a = sum(xs)\n  b = length(xs)\n  a, b\nend", "a, b"),
             ("let\n  a = sum(xs)\n  a / 2\nend", "let"),
+            ("begin\n  for x in xs\n    println(x)\n  end\nend", "begin"),
             ("splot(x)", "splot(x)"),
             ("x == 1", "x == 1"),
             ("using Plots", "using Plots"),

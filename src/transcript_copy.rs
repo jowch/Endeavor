@@ -120,6 +120,17 @@ fn trimmed(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Whether a saved tool call's output had a string cut short by `trimmed`.
+pub(crate) fn was_trimmed(value: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match value {
+        Value::String(s) => s.ends_with('…') && s.chars().count() == STRING_MAX + 1,
+        Value::Array(items) => items.iter().any(was_trimmed),
+        Value::Object(fields) => fields.values().any(was_trimmed),
+        _ => false,
+    }
+}
+
 /// A sent message's blocks as the agent replays them: links and text files
 /// come back as text, a text file's contents after the rest
 /// (claude-agent-acp's `promptToClaude`).
