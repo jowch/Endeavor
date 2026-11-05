@@ -122,9 +122,10 @@ To start:
 4. Watch the notebook on the right. The cells and the plot appear as Claude
    works.
 
-New sessions start in the **Manual** mode, where Claude asks before every
-change to the notebook. Once you're comfortable, you can let it do more on
-its own. See [Modes and approvals](./modes-and-approvals.md).
+Your first session starts in the **Manual** mode, where Claude asks before
+every change to the notebook. Once you're comfortable, you can let it do more
+on its own; new sessions start in the mode you chose last. See
+[Modes and approvals](./modes-and-approvals.md).
 
 ## Ask about what you see
 
