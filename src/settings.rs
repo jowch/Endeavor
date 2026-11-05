@@ -23,6 +23,9 @@ pub struct Settings {
     pub r: Option<String>,
     /// New sessions run notebook code without asking first.
     pub run_without_asking: bool,
+    /// The mode new sessions start in: the last Manual, Ask to run or Auto
+    /// picked (`remember_mode`). None is Manual.
+    pub mode: Option<crate::session::Mode>,
     /// Light, dark, or follow macOS: the whole window, notebook included.
     pub appearance: Appearance,
     pub notebook_theme: NotebookTheme,
@@ -62,6 +65,25 @@ pub struct Settings {
     pub sign_in_method: Option<crate::signin::Method>,
     /// The kind of new notebook last picked on the notebook chip; None is Julia's.
     pub notebook_kind: Option<wire::backend::Backend>,
+}
+
+impl Settings {
+    /// Keep `mode` for new sessions, if it is one of the app's modes other
+    /// than Plan, which is a step in a task rather than a way of working.
+    /// Whether it changed.
+    pub fn remember_mode(&mut self, mode: &crate::session::Mode) -> bool {
+        let keeps = mode.agent != "plan" && crate::session::app_modes().iter().any(|c| c.mode() == *mode);
+        if !keeps || self.mode.as_ref() == Some(mode) {
+            return false;
+        }
+        self.mode = Some(mode.clone());
+        true
+    }
+
+    /// Where the kept mode sits in `app_modes()`: Manual when none is kept.
+    pub fn start_mode(&self) -> usize {
+        self.mode.as_ref().and_then(|m| crate::session::app_modes().iter().position(|c| c.mode() == *m)).unwrap_or(crate::session::MANUAL)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -218,4 +240,28 @@ pub fn set_webview_appearance(_: &wry::WebView, light: bool) {
 pub fn set_webview_appearance(webview: &wry::WebView, light: bool) {
     use wry::WebViewExtWindows;
     let _ = webview.set_theme(if light { wry::Theme::Light } else { wry::Theme::Dark });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+    use crate::session::{Mode, app_modes};
+
+    #[test]
+    fn new_sessions_keep_the_last_mode_but_plan() {
+        let mut settings = Settings::default();
+        let mode = |name: &str| app_modes().into_iter().find(|c| c.name == name).unwrap().mode();
+        assert!(settings.remember_mode(&mode("Auto")));
+        assert!(!settings.remember_mode(&mode("Auto")), "the same mode again changes nothing");
+        assert!(!settings.remember_mode(&mode("Plan")));
+        assert!(!settings.remember_mode(&Mode { agent: "bypassPermissions".into(), run_without_asking: false }), "only the app's modes");
+        assert_eq!(settings.mode, Some(mode("Auto")));
+        assert_eq!(app_modes()[settings.start_mode()].name, "Auto");
+        assert_eq!(Settings::default().start_mode(), crate::session::MANUAL);
+        assert!(settings.remember_mode(&mode("Ask to run")));
+        // Saved and read back, as Settings::load reads it; a file from before has none.
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(back.mode, Some(mode("Ask to run")));
+        assert_eq!(serde_json::from_str::<Settings>("{}").unwrap().mode, None);
+    }
 }
