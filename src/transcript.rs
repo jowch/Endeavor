@@ -990,7 +990,9 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             });
             let call_box = (*expanded).then(|| {
                 let details = details::details(title, *kind, path.as_deref(), args, output.as_ref(), failed, !all_diffs.is_empty(), &name);
-                render_call_box(details, &all_diffs, key << 32 | ix as u64, window, cx)
+                // The list's item that holds this row: its run's first entry.
+                let item = runs::run_at(&session.entries, ix).map_or(ix, |run| run.start);
+                render_call_box(details, &all_diffs, key << 32 | ix as u64, (session.list.clone(), item), window, cx)
             }).flatten();
             div()
                 .flex()
@@ -1053,7 +1055,7 @@ const FADE: f32 = 32.;
 /// strip at the top; its edits and output below, up to `DETAIL_LINES` lines
 /// unless shown in full, each line on one line, scrolling sideways; and a
 /// footer with how it ended, how long the output is, Show all and Copy.
-fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key: u64, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key: u64, (list, item): (ListState, usize), window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     use details::Part;
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key);
     let details::Details { input, output, status, cut } = details;
@@ -1118,8 +1120,8 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     let errors_handle = window.use_keyed_state(id("call-errors-scroll"), cx, |_, _| ScrollHandle::new()).read(cx).clone();
     let (err_offset, err_max) = (errors_handle.offset(), errors_handle.max_offset());
     let errors_cut = !all && !errors.is_empty() && err_max.y > px(0.5);
+    let errors_cap = if output_area.is_some() { cap * 0.5 } else { cap };
     let errors = (!errors.is_empty()).then(|| {
-        let errors_cap = if output_area.is_some() { cap * 0.5 } else { cap };
         let panel = div()
             .id(id("call-errors"))
             .when(!all, |d| d.max_h(errors_cap))
@@ -1142,6 +1144,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     let shown_all = all || cut_below || errors_cut;
     let footer = (shown_all || status.is_some() || !copy_text.is_empty()).then(|| {
         let toggle = show_all.clone();
+        let (out_handle, err_handle) = (handle.clone(), errors_handle.clone());
         div()
             .flex()
             .items_center()
@@ -1173,6 +1176,14 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
                         .hover(|s| s.text_color(theme::text_primary()))
                         .child(if all { "Show less" } else { "Show all" })
                         .on_click(move |_, _, cx| toggle.update(cx, |all, cx| {
+                            // Show less with the box's top scrolled away: the
+                            // view moves up by what the box loses, so its
+                            // footer stays where it was, under the pointer.
+                            let top = list.logical_scroll_top();
+                            if *all && top.item_ix == item {
+                                let lost = (out_handle.bounds().size.height - cap).max(px(0.)) + (err_handle.bounds().size.height - errors_cap).max(px(0.));
+                                list.scroll_to(ListOffset { item_ix: item, offset_in_item: (top.offset_in_item - lost).max(px(0.)) });
+                            }
                             *all = !*all;
                             cx.notify();
                         })),
