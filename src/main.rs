@@ -817,7 +817,7 @@ impl Workspace {
         theme::set_chat_scale(settings.chat_zoom as f32);
         let mut draft = Draft::new(new_session::default_folder(&recent), new_session::new_kind(&settings, &HostId::ThisMac), window, cx);
         draft.agent = settings.agent;
-        draft.mode = settings.mode.as_ref().and_then(|m| session::app_modes().iter().position(|c| c.mode() == *m)).unwrap_or(session::MANUAL);
+        draft.mode = settings.start_mode();
         let mut this = Self {
             webview,
             input,
@@ -1090,6 +1090,9 @@ impl Workspace {
         self.request_agent(key, cx);
         self.draft.notebook = self.new_notebook_choice();
         self.draft.preview = None;
+        // A pick on the screen was for this session: the next starts from what Settings keeps.
+        self.draft.mode = self.settings.start_mode();
+        self.draft.mode_picked = false;
         self.activate(key, cx);
         self.send(key, None, false, window, cx);
     }

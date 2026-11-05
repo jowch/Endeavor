@@ -79,6 +79,11 @@ impl Settings {
         self.mode = Some(mode.clone());
         true
     }
+
+    /// Where the kept mode sits in `app_modes()`: Manual when none is kept.
+    pub fn start_mode(&self) -> usize {
+        self.mode.as_ref().and_then(|m| crate::session::app_modes().iter().position(|c| c.mode() == *m)).unwrap_or(crate::session::MANUAL)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -251,6 +256,8 @@ mod tests {
         assert!(!settings.remember_mode(&mode("Plan")));
         assert!(!settings.remember_mode(&Mode { agent: "bypassPermissions".into(), run_without_asking: false }), "only the app's modes");
         assert_eq!(settings.mode, Some(mode("Auto")));
+        assert_eq!(app_modes()[settings.start_mode()].name, "Auto");
+        assert_eq!(Settings::default().start_mode(), crate::session::MANUAL);
         assert!(settings.remember_mode(&mode("Ask to run")));
         // Saved and read back, as Settings::load reads it; a file from before has none.
         let back: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
