@@ -176,8 +176,15 @@ mod imp {
 
     unsafe extern "C-unwind" fn download_failed(_: *mut AnyObject, _: Sel, _: *mut AnyObject, error: *mut AnyObject, _: *mut AnyObject) {
         unsafe {
-            let text = if error.is_null() { String::new() } else { string_of(msg_send![error, localizedDescription]) };
-            eprintln!("Couldn't save the image: {text}");
+            if error.is_null() {
+                return;
+            }
+            // NSURLErrorCancelled: the user pressed Cancel.
+            let code: isize = msg_send![error, code];
+            if code == -999 {
+                return;
+            }
+            eprintln!("Couldn't save the image: {}", string_of(msg_send![error, localizedDescription]));
         }
     }
 
@@ -228,13 +235,27 @@ mod imp {
 
 pub use imp::*;
 
+/// The folder the last image was saved in, where the next Save dialog opens.
+/// Only for this run of the app.
+static LAST_FOLDER: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// Where the Save dialog opens: the last folder used, else Downloads, else home.
+fn start_folder() -> std::path::PathBuf {
+    let last = LAST_FOLDER.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let home = wire::files::home();
+    [last, Some(home.join("Downloads"))].into_iter().flatten().find(|dir| dir.is_dir()).unwrap_or(home)
+}
+
 impl crate::Workspace {
     /// Ask where the image `ask` goes, then save it there (or drop it).
     pub(crate) fn save_image(&mut self, ask: Ask, cx: &mut gpui::Context<Self>) {
-        let picked = cx.prompt_for_new_path(&wire::files::home().join("Downloads"), Some(&ask.file_name()));
+        let picked = cx.prompt_for_new_path(&start_folder(), Some(&ask.file_name()));
         let webview = self.webview.clone();
         cx.spawn(async move |_, cx| {
             let to = picked.await.ok().and_then(Result::ok).flatten();
+            if let Some(folder) = to.as_deref().and_then(std::path::Path::parent) {
+                *LAST_FOLDER.lock().unwrap_or_else(|e| e.into_inner()) = Some(folder.to_path_buf());
+            }
             webview.update(cx, |view, _| save(view.raw(), ask, to));
         })
         .detach();
