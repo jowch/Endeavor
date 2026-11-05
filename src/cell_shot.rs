@@ -127,7 +127,8 @@ mod mac {
     /// The second web view, the page it has loaded, and the user's view it hides behind.
     pub struct Shooter {
         pub view: wry::WebView,
-        pub url: std::cell::RefCell<String>,
+        /// Cleared when its web content process ends, so the next picture loads the page again.
+        pub url: std::rc::Rc<std::cell::RefCell<String>>,
         main: Retained<AnyObject>,
         /// The holes cut in the user's view (a tip, a menu, a notice), cut in this one too.
         holes: std::cell::RefCell<Vec<(CGRect, f64)>>,
@@ -137,8 +138,16 @@ mod mac {
         pub fn new(window: &gpui::Window, main: &wry::WebView) -> Option<Shooter> {
             let view = wry::WebViewBuilder::new().with_url("about:blank").build_as_child(&crate::platform::webview_parent(window)).ok()?;
             let _ = view.set_visible(false);
+            let url = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+            // macOS ends a hidden view's process first when memory is short. That is this view's
+            // own: the user's notebook is fine and isn't loaded again.
+            let page = url.clone();
+            crate::webcontent::on_process_ended(&view, move || {
+                eprintln!("The second web view's web content process ended; the next cell picture loads its page again");
+                page.borrow_mut().clear();
+            });
             let main = unsafe { Retained::cast_unchecked(main.webview()) };
-            Some(Shooter { view, url: std::cell::RefCell::new(String::new()), main, holes: Default::default() })
+            Some(Shooter { view, url, main, holes: Default::default() })
         }
 
         /// Show `url`, unless it is the page already loaded. Whether it loads now.
@@ -218,6 +227,12 @@ mod mac {
 
         pub fn hide(&self) {
             let _ = self.view.set_visible(false);
+        }
+    }
+
+    impl Drop for Shooter {
+        fn drop(&mut self) {
+            crate::webcontent::forget(&self.view);
         }
     }
 }
