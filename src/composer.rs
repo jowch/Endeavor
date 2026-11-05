@@ -467,7 +467,7 @@ impl Workspace {
     fn mode_list(&self) -> (Vec<ModeChoice>, Option<usize>) {
         match self.active_session() {
             Some(session) => (session.mode_choices(), session.current_mode()),
-            None => (session::app_modes(), Some(self.draft.mode)),
+            None => (session::app_modes(), Some(self.draft.start_mode())),
         }
     }
 
@@ -478,9 +478,16 @@ impl Workspace {
         match self.active {
             Some(key) => {
                 let effects = self.session_mut(key).map(|s| s.choose_mode(&choice)).unwrap_or_default();
+                self.remember_mode(key);
                 self.apply_effects(key, effects, cx);
             }
-            None => self.draft.mode = i,
+            None => {
+                self.draft.mode = i;
+                self.draft.mode_picked = true;
+                if self.settings.remember_mode(&choice.mode()) {
+                    self.settings.save();
+                }
+            }
         }
         cx.notify();
     }

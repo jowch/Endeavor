@@ -132,8 +132,11 @@ pub struct Draft {
     /// The resources popover's "Paste an salloc line…" box, while it's open.
     pub salloc: Option<Entity<InputState>>,
     pub salloc_error: Option<String>,
-    /// The mode to start in: an index into `session::app_modes()`.
+    /// The mode to start in: an index into `session::app_modes()`. Settings
+    /// keeps the last pick; see `start_mode` for what a session starts in.
     pub mode: usize,
+    /// `mode` was picked on this screen since launch, not only remembered.
+    pub mode_picked: bool,
     /// The agent picked (Settings keeps the last pick). A server session
     /// runs on Claude whatever this says, when the agent can't (`draft_agent`).
     pub agent: Agent,
@@ -286,9 +289,28 @@ impl Draft {
             salloc: None,
             salloc_error: None,
             mode: 0,
+            mode_picked: false,
             agent: Agent::Claude,
         }
     }
+
+    /// The mode a session started now starts in, as the toolbar shows it. A
+    /// remembered Auto doesn't carry to an existing notebook, which opens in
+    /// safe preview: in Auto the agent could let it run without asking, so it
+    /// starts in Ask to run unless Auto was picked here.
+    pub fn start_mode(&self) -> usize {
+        start_mode(self.mode, self.mode_picked, matches!(self.notebook, NotebookChoice::Existing(_)))
+    }
+}
+
+/// `Draft::start_mode` for mode `mode`, `picked` on the screen or not, for an
+/// `existing` notebook or a new one.
+fn start_mode(mode: usize, picked: bool, existing: bool) -> usize {
+    let modes = crate::session::app_modes();
+    if existing && !picked && modes.get(mode).is_some_and(|c| c.run_without_asking) {
+        return modes.iter().position(|c| c.mode == "auto" && !c.run_without_asking).unwrap_or(crate::session::MANUAL);
+    }
+    mode
 }
 
 impl Workspace {
@@ -2000,6 +2022,24 @@ mod tests {
     use super::{NotebookChoice, kind_of_path, short_of, tilde_of};
     use crate::hosts::HostId;
     use wire::backend::Backend;
+
+    #[test]
+    fn a_remembered_auto_asks_to_run_on_an_existing_notebook() {
+        let modes = crate::session::app_modes();
+        let at = |name: &str| modes.iter().position(|c| c.name == name).unwrap();
+        let (manual, ask, auto, plan) = (at("Manual"), at("Ask to run"), at("Auto"), at("Plan"));
+        // A new notebook starts in what was remembered or picked.
+        for mode in [manual, ask, auto, plan] {
+            assert_eq!(super::start_mode(mode, false, false), mode);
+            assert_eq!(super::start_mode(mode, true, false), mode);
+        }
+        // An existing notebook opens in safe preview: only Auto picked on the screen lets it run without asking.
+        assert_eq!(super::start_mode(auto, false, true), ask);
+        assert_eq!(super::start_mode(auto, true, true), auto);
+        for mode in [manual, ask, plan] {
+            assert_eq!(super::start_mode(mode, false, true), mode);
+        }
+    }
 
     #[test]
     fn a_sessions_kind_is_the_new_notebooks_or_the_files() {

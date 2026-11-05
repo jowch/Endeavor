@@ -22,8 +22,14 @@ session starts.
 | **Auto** | Runs code without asking | happen at once | happen at once |
 | **Plan** | Reads only, then proposes a plan | none | none |
 
-New sessions start in **Manual**. A change to the notebook means adding,
-editing, deleting, moving or folding a cell, or creating the notebook.
+New sessions start in the mode you last chose, or **Manual** the first time.
+**Plan** is never kept. If you last chose **Auto** and start a session on a
+notebook you already have, it starts in **Ask to run**, so the notebook
+doesn't run before you've seen it. Choose **Auto** on the **Start a session**
+screen to start it in **Auto** anyway.
+
+A change to the notebook means adding, editing, deleting, moving or folding a
+cell, or creating the notebook.
 Deleting a cell asks in **Ask to run** too, because the cells that used it
 run again. Reading the notebook never asks.
 
