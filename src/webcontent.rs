@@ -3,6 +3,7 @@
 //! page, and whether the web view has the keyboard.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use block2::RcBlock;
 use futures::channel::oneshot;
@@ -12,29 +13,45 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
 use objc2::{class, msg_send, sel};
 
 thread_local! {
-    static ENDED: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
+    /// Each web view's handler, by its WKWebView: the user's notebook view and
+    /// the second view for cell pictures share one delegate class, so the
+    /// handler must go by which view's process ended.
+    static ENDED: RefCell<Vec<(usize, Rc<dyn Fn()>)>> = const { RefCell::new(Vec::new()) };
     /// The text last found, so the same text goes on from its match.
     static FOUND: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-unsafe extern "C-unwind" fn process_did_terminate(_: *mut AnyObject, _: Sel, _: *mut AnyObject) {
-    ENDED.with(|ended| {
-        if let Some(ended) = ended.borrow().as_ref() {
-            ended();
-        }
-    });
+unsafe extern "C-unwind" fn process_did_terminate(_: *mut AnyObject, _: Sel, view: *mut AnyObject) {
+    // Taken out first: the handler may add or remove handlers.
+    let ended = ENDED.with(|ended| ended.borrow().iter().find(|(v, _)| *v == view as usize).map(|(_, f)| f.clone()));
+    match ended {
+        Some(ended) => ended(),
+        None => eprintln!("The web content process of a web view the app doesn't know ended"),
+    }
 }
 
-/// Call `ended` when the page's web content process ends (a crash, or macOS
-/// ending it for memory), which leaves the web view blank. Having this handler
-/// also stops WebKit reloading the page by itself; `ended` does that.
+fn key(webview: &wry::WebView) -> usize {
+    use wry::WebViewExtMacOS;
+    Retained::as_ptr(&webview.webview()) as usize
+}
+
+/// Call `ended` when this web view's web content process ends (a crash, or
+/// macOS ending it for memory), which leaves the web view blank. Having this
+/// handler also stops WebKit reloading the page by itself; `ended` does that.
+/// Another web view's process ending doesn't call it.
 ///
 /// wry's navigation delegate has no such method, so it's added to the
 /// delegate's class, and the delegate set again: WebKit reads which methods a
 /// delegate has when it's set.
 pub fn on_process_ended(webview: &wry::WebView, ended: impl Fn() + 'static) {
     use wry::WebViewExtMacOS;
-    ENDED.with(|slot| *slot.borrow_mut() = Some(Box::new(ended)));
+    let id = key(webview);
+    let ended: Rc<dyn Fn()> = Rc::new(ended);
+    ENDED.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        slot.retain(|(v, _)| *v != id);
+        slot.push((id, ended));
+    });
     let view = webview.webview();
     unsafe {
         let delegate: *mut AnyObject = msg_send![&*view, navigationDelegate];
@@ -48,6 +65,12 @@ pub fn on_process_ended(webview: &wry::WebView, ended: impl Fn() + 'static) {
         let _ = class_addMethod(class, sel!(webViewWebContentProcessDidTerminate:), imp, c"v@:@".as_ptr());
         let _: () = msg_send![&*view, setNavigationDelegate: delegate];
     }
+}
+
+/// The web view is going away: its handler goes with it.
+pub fn forget(webview: &wry::WebView) {
+    let id = key(webview);
+    ENDED.with(|slot| slot.borrow_mut().retain(|(v, _)| *v != id));
 }
 
 /// Find `text` in the page with WebKit's find (macOS 13+): it selects the
