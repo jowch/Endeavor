@@ -1179,8 +1179,9 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
                             // Show less with the box's top scrolled away: the
                             // view moves up by what the box loses, so its
                             // footer stays where it was, under the pointer.
+                            // While following the turn's end, the list stays there.
                             let top = list.logical_scroll_top();
-                            if *all && top.item_ix == item {
+                            if *all && !list.is_following_tail() && top.item_ix == item {
                                 let lost = (out_handle.bounds().size.height - cap).max(px(0.)) + (err_handle.bounds().size.height - errors_cap).max(px(0.));
                                 list.scroll_to(ListOffset { item_ix: item, offset_in_item: (top.offset_in_item - lost).max(px(0.)) });
                             }
