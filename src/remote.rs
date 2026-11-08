@@ -263,7 +263,8 @@ fn helper_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     match endeavor_mcp::embedded::RELEASE_KEY {
         Some(key) if supported(os, arch) => {
             let cache = crate::install::app_dir()?.join("helpers");
-            endeavor_mcp::release_helper(&os.to_lowercase(), arch, key, &cache, &|_, _, _| removed_build(os, arch))
+            let removed = removed_build(os, arch);
+            endeavor_mcp::release_helper(&os.to_lowercase(), arch, key, &cache, &|_, _, _| removed.clone()).map_err(|e| if e == removed { e } else { download_failed(os, arch, &e) })
         }
         _ => Err(missing_helper(os, arch, crate::install::bundled())),
     }
@@ -282,6 +283,13 @@ fn is_this_mac(os: &str, arch: &str) -> bool {
 /// A server's platform as the user knows it: "Linux x86_64", "macOS arm64".
 fn platform_words(os: &str, arch: &str) -> String {
     if os.eq_ignore_ascii_case("darwin") { format!("macOS {}", if arch == "aarch64" { "arm64" } else { arch }) } else { format!("{os} {arch}") }
+}
+
+/// Why the first connect to a server of this platform failed when the
+/// download did (offline, a proxy, GitHub down), in the user's words, then
+/// the library's.
+fn download_failed(os: &str, arch: &str, why: &str) -> String {
+    format!("Couldn't download the runtime helper for {} servers, which Endeavor needs the first time it connects to one. Check that this computer is online, then connect again. ({why})", platform_words(os, arch))
 }
 
 /// What to say when the Helpers release no longer has this app's build, so a
@@ -539,6 +547,9 @@ mod tests {
         let old = removed_build("Linux", "x86_64");
         assert_eq!(old, "This copy of Endeavor is too old to download the runtime helper for Linux x86_64 servers. Restart Endeavor to finish updating, or Download Endeavor again to get a newer one.");
         assert_eq!(HelperFix::of(&old), Some(HelperFix::Download));
+        let offline = download_failed("Darwin", "x86_64", "Couldn't download https://example (curl: (6) Could not resolve host).");
+        assert_eq!(offline, "Couldn't download the runtime helper for macOS x86_64 servers, which Endeavor needs the first time it connects to one. Check that this computer is online, then connect again. (Couldn't download https://example (curl: (6) Could not resolve host).)");
+        assert_eq!(HelperFix::of(&offline), None);
         assert_eq!(removed_build("Darwin", "x86_64"), "This copy of Endeavor is too old to download the runtime helper for macOS x86_64 servers. Restart Endeavor to finish updating, or Download Endeavor again to get a newer one.");
     }
 }
