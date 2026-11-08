@@ -20,8 +20,9 @@ instead.
 - You can already sign in to the server from Terminal on your Mac, for
   example with `ssh lab-server`. Endeavor uses the same `ssh` program, so
   your `~/.ssh/config`, your keys and any jump hosts work the same way.
-- The server runs Linux (on Intel or ARM processors), or macOS on the same
-  kind of processor as your Mac.
+- The server runs Linux or macOS, on Intel or ARM processors. The first
+  time Endeavor connects to a kind of server it hasn't set up before, it may
+  download a small program for it (about 5 MB) and keeps it for next time.
 
 If the server asks for a password or a two-factor code, Endeavor shows the
 prompt in a dialog. If an answer doesn't work, the dialog says so and asks

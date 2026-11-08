@@ -6,8 +6,9 @@ real Claude session, and reinstall and uninstall worked (October 2026, one
 machine that already had Julia, Node, a Claude sign-in and Git for Windows;
 the build predates the switch to Julia through juliaup).
 Not run yet: a first Claude sign-in on Windows, a browser download through
-SmartScreen, Windows 11, and servers, which the Windows build can't reach
-because it carries no server helpers. Parts of this page below still
+SmartScreen, Windows 11, and servers. The Windows build carries no server
+helpers; it downloads the one a server needs the first time it connects
+(November 2026, not yet tried on Windows). Parts of this page below still
 describe the port before those runs. User steps are in the guide's
 [Install Endeavor](guide/install.md#on-windows)._
 
@@ -61,7 +62,10 @@ On Windows the app should open, install Node and the agent, get Julia
 through juliaup on first run, start the local runtime and run a notebook. None of that has been tried
 yet. Servers go through EndeavorMCP's ssh client (`client::Session`), whose
 password and two-factor prompts reach the app over loopback TCP, as on the
-Mac; the app hasn't tried a server from Windows yet. These refuse with a plain
+Mac. The app ships no server helpers on Windows: it downloads the one for
+the server's platform from EndeavorMCP's Helpers release, by the key of the
+build it pins, and keeps it in `%LOCALAPPDATA%\Endeavor\helpers`
+(`remote::helper_for`). The app hasn't tried a server from Windows yet. These refuse with a plain
 error rather than half-work:
 
 | Where | What it says | What it needs |

@@ -17,7 +17,8 @@
 # signed, and a run that publishes fails rather than publish a Mac build
 # Gatekeeper blocks. Pull requests never sign or publish.
 # ponytail: the installer isn't signed (SmartScreen warns). Apple Silicon
-# only. The Windows build has no server helpers (windows.yml).
+# only. The Windows build ships no server helpers and downloads them
+# (windows.yml).
 name: Nightly
 
 on:
@@ -137,12 +138,15 @@ jobs:
       # commit, rather than shipping an app that can't reach Linux servers.
       # That happens when Helpers never built that commit, or when its build
       # was pruned (scripts/prune-helpers.sh keeps the last 10 pins on main).
+      # The build embeds that build's key, so it downloads the helper for a
+      # server it doesn't carry one for, an Intel Mac's say (src/remote.rs).
       - name: Linux servers' helpers
         run: |
           scripts/helpers.sh --fetch-only || {
             echo "::error::EndeavorMCP's Helpers release has no build for the commit Cargo.lock pins: Helpers never built it, or pruned it because this app commit is older than the last 10 pins on main. No nightly this time."
             exit 1
           }
+          echo "ENDEAVOR_RELEASE_KEY=$(scripts/helpers.sh --key)" >> "$GITHUB_ENV"
       # A nightly checks nightly.json for a newer build and updates itself
       # (src/updater.rs); a build from source doesn't.
       - name: Bundle
@@ -311,7 +315,7 @@ jobs:
           The newest build of main that passed CI: build $short, $(date -u +%Y-%m-%d). It is replaced every day main changes. It is a test build: expect rough edges.
 
           - **Mac** (Apple Silicon, macOS 13 or later): open Endeavor-macos-arm64.dmg and drag Endeavor to Applications.
-          - **Windows** (10 or 11, 64-bit): run Endeavor-windows-x86_64-setup.exe. It isn't signed, so Windows may say it protected your PC: click More info, then Run anyway. The Windows build can't connect to servers yet.
+          - **Windows** (10 or 11, 64-bit): run Endeavor-windows-x86_64-setup.exe. It isn't signed, so Windows may say it protected your PC: click More info, then Run anyway.
           - **Linux**: build it from source (docs/development.md).
           EOF
           # Written first, so a bad input stops the run before the release

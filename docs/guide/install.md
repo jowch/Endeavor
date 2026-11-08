@@ -105,7 +105,9 @@ settings and the programs Endeavor set up stay in
 
 The Windows build has rough edges:
 
-- It can't use servers or clusters yet. Notebooks run on your computer.
+- Servers and clusters haven't been tried from Windows yet. The first time
+  you connect to one, Endeavor downloads a small program for it (about
+  5 MB), so that first connection needs the internet.
 - Signing in to Claude for the first time hasn't been tried on Windows yet.
 - Claude Code on Windows has needed [Git for Windows](https://git-scm.com/downloads/win).
   Install it first if you don't have it.
