@@ -946,8 +946,6 @@ footer form#feedback { display: none !important; }
   // src/view.ts
   var FORMAT = "A quote's uri, notebook://pluto/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was quoted when it isn't code: `output` (text from the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). No picture comes with a figure or box here: read current code and outputs with the notebook MCP tools.";
   var QUOTE_NOTE = "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + FORMAT;
-  var CONTEXT_NOTE = "[Endeavor] At some point in this conversation the user pointed at these parts of the notebook in the notebook view, each as a <quote> followed by their comment on it. A later message of theirs may refer to them; they are not a request on their own, and the notebook may have changed since. " + FORMAT;
-  var KEPT = 10;
   var uri = (notebook, cell) => `notebook://pluto/${notebook}/cell/${cell}`;
   function quoteBlock(notebook, pick) {
     if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c)).join(" ")}"/>`;
@@ -1016,29 +1014,14 @@ ${comment}` : blocks.join("\n\n");
       if (msg.type !== "quote" || !msg.picks.length) return;
       const text = quoteText(notebook, msg.picks, msg.comment);
       if (msg.add) {
-        if (!host2.canAdd) return giveBack(msg.comment, `This chat can't take context from the notebook: press ${mac ? "\u21A9" : "Enter"} to send.`);
         added.push(text);
-        added.splice(0, Math.max(0, added.length - KEPT));
-        host2.context(`${CONTEXT_NOTE}
-
-${added.join("\n\n")}`).then(
-          () => say("Given to Claude as context"),
-          (e) => {
-            added.pop();
-            failed(msg.comment)(e);
-          }
-        );
-        return;
+        return say(`${added.length} added. ${mac ? "\u21A9" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
       }
       const earlier = added.splice(0);
       host2.send(`${QUOTE_NOTE}
 
 ${[...earlier, text].join("\n\n")}`).then(
-        () => {
-          say("Sent to Claude");
-          if (earlier.length) host2.context("").catch(() => {
-          });
-        },
+        () => say("Passed to the chat"),
         (e) => {
           added.unshift(...earlier);
           failed(msg.comment)(e);

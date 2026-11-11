@@ -19,8 +19,8 @@ function page() {
   const { window } = dom;
   Object.defineProperty(window.navigator, "platform", { value: "MacIntel" });
   window.eval(readFileSync(new URL("../dist/view.js", import.meta.url), "utf8"));
-  const told = { sent: [], context: [] };
-  window.EndeavorView.start(NB, { canSend: true, canAdd: true, send: async (t) => void told.sent.push(t), context: async (t) => void told.context.push(t) });
+  const told = { sent: [] };
+  window.EndeavorView.start(NB, { canSend: true, send: async (t) => void told.sent.push(t) });
   return { window, told, $: (s) => window.document.querySelector(s) };
 }
 
@@ -64,7 +64,7 @@ test("a chat that takes no messages from the view gets the look and no Point; st
   const dom = new JSDOM(`<head></head><body></body>`, { url: "http://localhost/", runScripts: "outside-only", pretendToBeVisual: true });
   const { window } = dom;
   window.eval(readFileSync(new URL("../dist/view.js", import.meta.url), "utf8"));
-  const host = { canSend: false, canAdd: false, send: async () => {}, context: async () => {} };
+  const host = { canSend: false, send: async () => {} };
   window.EndeavorView.start(NB, host);
   assert.ok(window.document.getElementById("endeavor-theme"));
   assert.equal(window.document.getElementById("endeavor-point"), null);
