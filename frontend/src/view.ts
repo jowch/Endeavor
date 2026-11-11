@@ -1,9 +1,11 @@
 // Endeavor's script for the notebook view in Claude's desktop app (EndeavorMCP's
 // views/notebook.html, which vendors the built dist/view.js): the Endeavor look
 // and Point on Pluto's page, without the app. The view passes a host: Point's
-// ↩ sends the picks and the comment as the user's message in Claude's chat,
-// and ⌘↩ gives them to Claude as context (MCP Apps' ui/update-model-context),
-// which the host may keep for every later turn, not only the next one. Pictures of
+// ↩ and ⌘↩ both pass the picks and the comment to Claude's chat as the user's
+// message (MCP Apps' ui/message). Claude's desktop app puts it in its message box
+// for the user to send (checked 2026-11-11), so it is the user who sends it.
+// Context for later turns (ui/update-model-context) isn't used: the desktop
+// app's Code tab gave it to Claude on no turn at all. Pictures of
 // figures and boxes aren't taken here (the app takes them natively), so
 // those picks name their cells and Claude reads the output with its tools.
 
@@ -19,12 +21,8 @@ import { initTheme } from "./theme";
 export type Host = {
   /** Whether the host takes messages from the view (`send`); without it there is no Point. */
   canSend: boolean;
-  /** Whether it takes context from the view (`context`); without it ⌘↩ says to use ↩. */
-  canAdd: boolean;
-  /** Send `text` as the user's message now. */
+  /** Pass `text` to the chat as the user's message (the host may wait for the user to send it). */
   send(text: string): Promise<void>;
-  /** Give Claude `text` as context, replacing what was given before; the host may keep it for later turns. */
-  context(text: string): Promise<void>;
 };
 
 /** How the quotes read. Keep in step with the app's attach::quote_note and quote_block (src/attach.rs). */
@@ -37,15 +35,6 @@ const FORMAT =
 /** What Claude is told once in a message that quotes the notebook. */
 export const QUOTE_NOTE =
   "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + FORMAT;
-
-/** What Claude is told with quotes given as context (⌘↩): true whenever Claude reads it, on any later turn. */
-export const CONTEXT_NOTE =
-  "[Endeavor] At some point in this conversation the user pointed at these parts of the notebook in the notebook view, " +
-  "each as a <quote> followed by their comment on it. A later message of theirs may refer to them; they are not a request " +
-  "on their own, and the notebook may have changed since. " + FORMAT;
-
-/** At most this many ⌘↩ quotes are kept as context: the host gives no sign that the user's own message took them. */
-const KEPT = 10;
 
 const uri = (notebook: string, cell: string) => `notebook://pluto/${notebook}/cell/${cell}`;
 
@@ -92,8 +81,6 @@ export function start(notebook: string, host: Host): void {
   // Once: a later call (a notebook's own script, say) can't take Point's way into the chat.
   if (started) return;
   started = true;
-  // ⌘↩ quotes since the last ↩, given to Claude as context.
-  const added: string[] = [];
   let toPage: ((msg: object) => void) | null = null;
   const sent = document.createElement("div");
   sent.id = "endeavor-sent";
@@ -118,31 +105,8 @@ export function start(notebook: string, host: Host): void {
     if (msg.type === "shoot") return setTimeout(() => toPage?.({ type: "shot", id: msg.id }));
     if (msg.type !== "quote" || !msg.picks.length) return;
     const text = quoteText(notebook, msg.picks, msg.comment);
-    if (msg.add) {
-      if (!host.canAdd) return giveBack(msg.comment, `This chat can't take context from the notebook: press ${mac ? "↩" : "Enter"} to send.`);
-      added.push(text);
-      added.splice(0, Math.max(0, added.length - KEPT));
-      host.context(`${CONTEXT_NOTE}\n\n${added.join("\n\n")}`).then(
-        () => say("Given to Claude as context"),
-        (e) => {
-          added.pop();
-          failed(msg.comment)(e);
-        },
-      );
-      return;
-    }
-    // What ⌘↩ added goes with this message, then no longer.
-    const earlier = added.splice(0);
-    host.send(`${QUOTE_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
-      () => {
-        say("Sent to Claude");
-        if (earlier.length) host.context("").catch(() => {});
-      },
-      (e) => {
-        added.unshift(...earlier);
-        failed(msg.comment)(e);
-      },
-    );
+    // ⌘↩ (add to message) and ↩ alike: the chat's message box is where the user adds to it.
+    host.send(`${QUOTE_NOTE}\n\n${text}`).then(() => say("Passed to the chat"), failed(msg.comment));
   });
   initTheme();
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
