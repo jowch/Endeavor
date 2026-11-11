@@ -47,7 +47,8 @@ Working in a Claude Code cloud session (no display, Linux) is in
 - Page script (the code injected into the notebook page): `frontend/`,
   TypeScript. After changing it, run `cd frontend && npm install && npm test`.
   That builds `dist/page.js`, which is committed so `cargo build` needs no
-  Node.
+  Node, and `dist/view.js`, the look and Point for EndeavorMCP's notebook view
+  in Claude's desktop app (`src/view.ts`; EndeavorMCP keeps a copy).
 - The user guide is in [guide/](guide/). Its conventions are in
   [guide/README.md](guide/README.md). The documentation site publishes it;
   see below.

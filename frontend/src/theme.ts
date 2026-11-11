@@ -251,15 +251,10 @@ const endeavorLook = `
   nav#slide_controls > button { border-radius: 5px; opacity: 0.8; }
   nav#slide_controls > button:hover { background: #EAEAED; opacity: 1; }
 }
-header#pluto-nav, footer { display: none !important; }
-/* Not display: none — Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
-/* Pluto shows the panel only from 500px wide; a narrower notebook pane would alert on every panel it opens. */
-#helpbox-wrapper { display: block !important; }
-html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
-  position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
-.outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
-pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
-pluto-editor > main { padding-top: 16px; }
+`;
+
+// The cells' layout in the Endeavor look, in the app and in Claude's notebook view.
+const layout = `
 /* The cells' side gap is the chat column's margin (main.rs, chat_margin): 50px,
    shrinking with the pane's width (50 per 860) at narrow widths, but never under
    28px, which Pluto's shoulder (the show/hide-code eye, the status bar) needs
@@ -279,6 +274,20 @@ pluto-editor main { margin-left: calc(var(--e-side) - 20px) !important; margin-r
    strip above the first cell is gone, and the button floats over the top. */
 pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; overflow: visible; }
 pluto-runarea > span { font-size: 10px; }
+`;
+
+// What the app's own header, drawer and safe-preview callout stand in for (not
+// in Claude's notebook view, which has none of them), and the fade under the header.
+const appChrome = `
+header#pluto-nav, footer { display: none !important; }
+/* Not display: none — Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
+/* Pluto shows the panel only from 500px wide; a narrower notebook pane would alert on every panel it opens. */
+#helpbox-wrapper { display: block !important; }
+html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
+  position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
+.outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
+pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
+pluto-editor > main { padding-top: 16px; }
 /* The web view draws over native views, so the notebook header can't blur
    what's under it (docs/ui-spec.md, "Fades, not blur").
    Instead, the top of the page fades into the page background, so a cell
@@ -375,8 +384,8 @@ export function initTheme(): void {
   document.head.append(style);
   on("theme", (msg) => {
     const endeavor = msg.name === "endeavor";
-    style.textContent = both + (endeavor ? endeavorLook + (onEmber() ? emberLook : "") : classic);
-    document.documentElement.dataset.endeavorLook = msg.name;
+    style.textContent = both + (endeavor ? endeavorLook + layout + appChrome + (onEmber() ? emberLook : "") : msg.name === "view" ? endeavorLook + layout : classic);
+    document.documentElement.dataset.endeavorLook = msg.name === "view" ? "endeavor" : msg.name;
   });
   if (onEmber()) syncTheme();
 }
