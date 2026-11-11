@@ -5,10 +5,12 @@
   var nonce = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
   var handler = window.webkit?.messageHandlers?.ipc;
   var post = handler ? handler.postMessage.bind(handler) : (body3) => window.ipc?.postMessage(body3);
+  var host = null;
   function send(msg) {
+    if (host) return host(msg);
     post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
   }
-  var byUser = (e) => e.isTrusted || !nonce;
+  var byUser = (e) => e.isTrusted || !nonce && !host;
   function on(type, handler2) {
     (handlers[type] ??= []).push(handler2);
   }
@@ -2050,7 +2052,7 @@
     const steps = m.steps.map((s, i) => `${i ? `<span class="line"></span>` : ""}<span class="step ${s.phase}">${markFor(s.phase)}${s.name}</span>`).join("");
     const version = String(nb.julia_version ?? "").replace(/^v/, "");
     const julia = version ? `Julia ${escape3(version)} \xB7 ` : "";
-    const host = `<div class="host">${julia}${escape3(hostName)}</div>`;
+    const host2 = `<div class="host">${julia}${escape3(hostName)}</div>`;
     const pkgBusy = m.steps[1].phase === "busy";
     const readyCount = m.packages.filter((p) => p.state === "ready").length;
     const stateText = { waiting: "waiting", installing: "installing", precompiling: "precompiling", ready: "", failed: "failed" };
@@ -2082,7 +2084,7 @@
     const log = (nb.nbpkg?.terminal_outputs?.nbpkg_sync ?? "").replace(/\x1b\[[0-9;]*m/g, "");
     const logBlock = showLog ? `<pre class="log">${escape3(log || "Nothing from Pkg yet.")}</pre>` : "";
     const foot = `<div class="foot"><button class="showlog">\u2261 ${showLog ? "Hide log" : "Show log"}</button></div>${logBlock}`;
-    return `<div class="headline${m.failure ? " failed" : ""}">${escape3(m.headline)}</div><div class="steps">${steps}</div>${host}${packages}${cells}${foot}`;
+    return `<div class="headline${m.failure ? " failed" : ""}">${escape3(m.headline)}</div><div class="steps">${steps}</div>${host2}${packages}${cells}${foot}`;
   }
   var hostName = "This Mac";
   var lastHtml = "";
@@ -2899,15 +2901,8 @@
   nav#slide_controls > button { border-radius: 5px; opacity: 0.8; }
   nav#slide_controls > button:hover { background: #EAEAED; opacity: 1; }
 }
-header#pluto-nav, footer { display: none !important; }
-/* Not display: none \u2014 Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
-/* Pluto shows the panel only from 500px wide; a narrower notebook pane would alert on every panel it opens. */
-#helpbox-wrapper { display: block !important; }
-html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
-  position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
-.outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
-pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
-pluto-editor > main { padding-top: 16px; }
+`;
+  var layout = `
 /* The cells' side gap is the chat column's margin (main.rs, chat_margin): 50px,
    shrinking with the pane's width (50 per 860) at narrow widths, but never under
    28px, which Pluto's shoulder (the show/hide-code eye, the status bar) needs
@@ -2927,6 +2922,17 @@ pluto-editor main { margin-left: calc(var(--e-side) - 20px) !important; margin-r
    strip above the first cell is gone, and the button floats over the top. */
 pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; overflow: visible; }
 pluto-runarea > span { font-size: 10px; }
+`;
+  var appChrome = `
+header#pluto-nav, footer { display: none !important; }
+/* Not display: none \u2014 Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
+/* Pluto shows the panel only from 500px wide; a narrower notebook pane would alert on every panel it opens. */
+#helpbox-wrapper { display: block !important; }
+html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
+  position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
+.outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
+pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
+pluto-editor > main { padding-top: 16px; }
 /* The web view draws over native views, so the notebook header can't blur
    what's under it (docs/ui-spec.md, "Fades, not blur").
    Instead, the top of the page fades into the page background, so a cell
@@ -2996,8 +3002,8 @@ footer form#feedback { display: none !important; }
     document.head.append(style2);
     on("theme", (msg) => {
       const endeavor = msg.name === "endeavor";
-      style2.textContent = both + (endeavor ? endeavorLook + (onEmber() ? emberLook : "") : classic);
-      document.documentElement.dataset.endeavorLook = msg.name;
+      style2.textContent = both + (endeavor ? endeavorLook + layout + appChrome + (onEmber() ? emberLook : "") : msg.name === "view" ? endeavorLook + layout : classic);
+      document.documentElement.dataset.endeavorLook = msg.name === "view" ? "endeavor" : msg.name;
     });
     if (onEmber()) syncTheme();
   }

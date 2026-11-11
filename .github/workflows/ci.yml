@@ -57,7 +57,7 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: npm run -s check
-      # npm test rebuilds dist/page.js first; the committed copy must match it.
+      # npm test rebuilds dist/page.js and dist/view.js first; the committed copies must match them.
       - run: npm test
-      - name: dist/page.js is up to date
-        run: git diff --exit-code -- dist/page.js
+      - name: dist/page.js and dist/view.js are up to date
+        run: git diff --exit-code -- dist/page.js dist/view.js
