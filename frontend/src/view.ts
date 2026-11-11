@@ -1,11 +1,12 @@
 // Endeavor's script for the notebook view in Claude's desktop app (EndeavorMCP's
 // views/notebook.html, which vendors the built dist/view.js): the Endeavor look
 // and Point on Pluto's page, without the app. The view passes a host: Point's
-// ↩ and ⌘↩ both pass the picks and the comment to Claude's chat as the user's
-// message (MCP Apps' ui/message). Claude's desktop app puts it in its message box
-// for the user to send (checked 2026-11-11), so it is the user who sends it.
-// Context for later turns (ui/update-model-context) isn't used: the desktop
-// app's Code tab gave it to Claude on no turn at all. Pictures of
+// ↩ passes the picks and the comment to Claude's chat as the user's message
+// (MCP Apps' ui/message), with any that ⌘↩ added first: ⌘↩ keeps them here, in
+// the view, so they don't depend on what the host does with a second message.
+// Claude's desktop app puts the message in its message box for the user to send
+// (checked 2026-11-11). Context for later turns (ui/update-model-context) isn't
+// used: the desktop app's Code tab gave it to Claude on no turn at all. Pictures of
 // figures and boxes aren't taken here (the app takes them natively), so
 // those picks name their cells and Claude reads the output with its tools.
 
@@ -81,6 +82,8 @@ export function start(notebook: string, host: Host): void {
   // Once: a later call (a notebook's own script, say) can't take Point's way into the chat.
   if (started) return;
   started = true;
+  // What ⌘↩ added since the last ↩.
+  const added: string[] = [];
   let toPage: ((msg: object) => void) | null = null;
   const sent = document.createElement("div");
   sent.id = "endeavor-sent";
@@ -105,8 +108,19 @@ export function start(notebook: string, host: Host): void {
     if (msg.type === "shoot") return setTimeout(() => toPage?.({ type: "shot", id: msg.id }));
     if (msg.type !== "quote" || !msg.picks.length) return;
     const text = quoteText(notebook, msg.picks, msg.comment);
-    // ⌘↩ (add to message) and ↩ alike: the chat's message box is where the user adds to it.
-    host.send(`${QUOTE_NOTE}\n\n${text}`).then(() => say("Passed to the chat"), failed(msg.comment));
+    // ⌘↩ adds to the message the next ↩ passes, kept here.
+    if (msg.add) {
+      added.push(text);
+      return say(`${added.length} added. ${mac ? "↩" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
+    }
+    const earlier = added.splice(0);
+    host.send(`${QUOTE_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
+      () => say("Passed to the chat"),
+      (e) => {
+        added.unshift(...earlier);
+        failed(msg.comment)(e);
+      },
+    );
   });
   initTheme();
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
