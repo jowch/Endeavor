@@ -2,7 +2,8 @@
 // views/notebook.html, which vendors the built dist/view.js): the Endeavor look
 // and Point on Pluto's page, without the app. The view passes a host: Point's
 // ↩ sends the picks and the comment as the user's message in Claude's chat,
-// and ⌘↩ adds them to what Claude reads with the next one. Pictures of
+// and ⌘↩ gives them to Claude as context (MCP Apps' ui/update-model-context),
+// which the host may keep for every later turn, not only the next one. Pictures of
 // figures and boxes aren't taken here (the app takes them natively), so
 // those picks name their cells and Claude reads the output with its tools.
 
@@ -16,19 +17,35 @@ import { initTheme } from "./theme";
 
 /** What the view gives the page: Claude's chat. */
 export type Host = {
+  /** Whether the host takes messages from the view (`send`); without it there is no Point. */
+  canSend: boolean;
+  /** Whether it takes context from the view (`context`); without it ⌘↩ says to use ↩. */
+  canAdd: boolean;
   /** Send `text` as the user's message now. */
   send(text: string): Promise<void>;
-  /** Give Claude `text` with the user's next message (replaces what was given before). */
+  /** Give Claude `text` as context, replacing what was given before; the host may keep it for later turns. */
   context(text: string): Promise<void>;
 };
 
-/** What Claude is told once in a message that quotes the notebook (the app's attach::quote_note, without pictures). */
-export const QUOTE_NOTE =
-  "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " +
+/** How the quotes read. Keep in step with the app's attach::quote_note and quote_block (src/attach.rs). */
+const FORMAT =
   "A quote's uri, notebook://pluto/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are " +
   "line numbers in the cell's code, counting from 1. `part` says what was quoted when it isn't code: `output` (text from " +
   "the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists " +
   "the cells under it). No picture comes with a figure or box here: read current code and outputs with the notebook MCP tools.";
+
+/** What Claude is told once in a message that quotes the notebook. */
+export const QUOTE_NOTE =
+  "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + FORMAT;
+
+/** What Claude is told with quotes given as context (⌘↩): true whenever Claude reads it, on any later turn. */
+export const CONTEXT_NOTE =
+  "[Endeavor] At some point in this conversation the user pointed at these parts of the notebook in the notebook view, " +
+  "each as a <quote> followed by their comment on it. A later message of theirs may refer to them; they are not a request " +
+  "on their own, and the notebook may have changed since. " + FORMAT;
+
+/** At most this many ⌘↩ quotes are kept as context: the host gives no sign that the user's own message took them. */
+const KEPT = 10;
 
 const uri = (notebook: string, cell: string) => `notebook://pluto/${notebook}/cell/${cell}`;
 
@@ -69,7 +86,13 @@ const css = `
 `;
 
 /** Start the look and Point on this page, which shows notebook `notebook`. */
+let started = false;
+
 export function start(notebook: string, host: Host): void {
+  // Once: a later call (a notebook's own script, say) can't take Point's way into the chat.
+  if (started) return;
+  started = true;
+  // ⌘↩ quotes since the last ↩, given to Claude as context.
   const added: string[] = [];
   let toPage: ((msg: object) => void) | null = null;
   const sent = document.createElement("div");
@@ -79,16 +102,33 @@ export function start(notebook: string, host: Host): void {
     sent.textContent = text;
     sent.classList.add("shown");
     clearTimeout(hide);
-    hide = window.setTimeout(() => sent.classList.remove("shown"), 2500);
+    hide = window.setTimeout(() => sent.classList.remove("shown"), 4000);
   };
-  const agentSays = (e: unknown) => say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}`);
+  // Point clears its comment as it sends: when the chat doesn't take it, it goes back in the box.
+  const giveBack = (comment: string, why: string) => {
+    const box = document.querySelector<HTMLTextAreaElement>("#annotate-bar textarea");
+    if (box && !box.value.trim() && comment) {
+      box.value = comment;
+      box.dispatchEvent(new Event("input"));
+    }
+    say(comment ? `${why} Your comment is back in the box.` : why);
+  };
+  const failed = (comment: string) => (e: unknown) => giveBack(comment, `Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}.`);
   setHost((msg: ToApp) => {
     if (msg.type === "shoot") return setTimeout(() => toPage?.({ type: "shot", id: msg.id }));
     if (msg.type !== "quote" || !msg.picks.length) return;
     const text = quoteText(notebook, msg.picks, msg.comment);
     if (msg.add) {
+      if (!host.canAdd) return giveBack(msg.comment, `This chat can't take context from the notebook: press ${mac ? "↩" : "Enter"} to send.`);
       added.push(text);
-      host.context(`${QUOTE_NOTE}\n\n${added.join("\n\n")}`).then(() => say("Added for your next message"), agentSays);
+      added.splice(0, Math.max(0, added.length - KEPT));
+      host.context(`${CONTEXT_NOTE}\n\n${added.join("\n\n")}`).then(
+        () => say("Given to Claude as context"),
+        (e) => {
+          added.pop();
+          failed(msg.comment)(e);
+        },
+      );
       return;
     }
     // What ⌘↩ added goes with this message, then no longer.
@@ -100,16 +140,18 @@ export function start(notebook: string, host: Host): void {
       },
       (e) => {
         added.unshift(...earlier);
-        agentSays(e);
+        failed(msg.comment)(e);
       },
     );
   });
   initTheme();
-  initAskBox();
-  initAnnotate();
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
   toPage = receive;
   receive({ type: "theme", name: "view" });
+  // A chat that doesn't take messages from the view gets the look only.
+  if (!host.canSend) return;
+  initAskBox();
+  initAnnotate();
 
   const style = document.createElement("style");
   style.textContent = css;
