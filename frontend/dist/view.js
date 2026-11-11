@@ -135,6 +135,45 @@
   var DOWN = svg(`<path d="M4.5 6.25 8 9.75l3.5-3.5"></path>`);
   var QUOTE = svg(`<path d="M3 4.5h3.75v3.75H5c0 1.6-.6 2.6-2 3.25"></path><path d="M9.25 4.5H13v3.75h-1.75c0 1.6-.6 2.6-2 3.25"></path>`, 14);
   var KEYS = mac ? { send: "\u21A9", add: "\u2318\u21A9" } : { send: "Enter", add: "Ctrl+Enter" };
+  var WORKING = "endeavorWorking";
+  var css = `
+  .endeavor-prompt { box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; font: 13px/18px system-ui, sans-serif;
+    color: var(--e-text-primary); text-align: left; }
+  .endeavor-prompt.popover { position: fixed; z-index: 1000; padding: 7px 8px 8px; border-radius: 10px; border: 1px solid var(--e-popover-edge);
+    background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); }
+  .endeavor-prompt .head { display: flex; align-items: center; gap: 8px; padding: 0 2px 0 4px; font-size: 12px; line-height: 17px;
+    color: var(--e-text-faint); white-space: nowrap; }
+  .endeavor-prompt .what { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
+  .endeavor-prompt .what svg { flex: none; }
+  .endeavor-prompt .what .name { font-family: JuliaMono, ui-monospace, monospace; font-size: 11.5px; color: var(--e-text-secondary); }
+  .endeavor-prompt .keys { flex: none; font-size: 11px; }
+  .endeavor-prompt .quote { margin: 0 4px; border-left: 2px solid var(--e-control-edge); padding-left: 8px; font-size: 11.5px; line-height: 17px;
+    color: var(--e-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .endeavor-prompt .quote.code { font-family: JuliaMono, ui-monospace, monospace; }
+  .endeavor-prompt .note { padding: 0 4px; font-size: 12px; color: var(--e-text-faint); }
+  .endeavor-field { position: relative; display: flex; align-items: flex-end; gap: 4px; min-height: 34px; box-sizing: border-box;
+    padding: 4px 4px 4px 9px; border-radius: 6px; border: 1px solid var(--e-control-edge); background: var(--e-bg-page); }
+  .endeavor-field:focus-within { border-color: var(--e-focus-ring); }
+  .endeavor-field textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: transparent; padding: 1.5px 0;
+    height: 21px; max-height: 126px; overflow-y: auto; color: var(--e-text-primary); font: 14px/21px system-ui, sans-serif; }
+  .endeavor-field textarea::placeholder { color: var(--e-text-muted); }
+  .endeavor-field .send { flex: none; width: 24px; height: 24px; border: 0; padding: 0; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; background: var(--e-bg-raised); color: var(--e-text-faint); }
+  .endeavor-field .send.ready { background: var(--e-accent); color: #fff; }
+  .endeavor-field .options { flex: none; width: 18px; height: 24px; border: 0; padding: 0; border-radius: 5px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; background: transparent; color: var(--e-text-muted); }
+  .endeavor-field .options:hover, .endeavor-field .options[aria-expanded="true"] { background: var(--e-control-edge); color: var(--e-text-primary); }
+  .endeavor-field [role="menu"] { position: absolute; right: -6px; top: calc(100% + 6px); z-index: 5; width: ${mac ? 216 : 236}px; box-sizing: border-box;
+    display: flex; flex-direction: column; padding: 4px; border-radius: 10px; border: 1px solid var(--e-popover-edge);
+    background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); font: 13px system-ui, sans-serif; }
+  .endeavor-field [role="menu"][hidden] { display: none; }
+  .endeavor-field [role="menuitem"] { height: 28px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--e-text-primary); font: inherit; cursor: pointer; text-align: left; }
+  .endeavor-field [role="menuitem"]:hover { background: var(--e-menu-hover); }
+  .endeavor-field [role="menuitem"] svg { color: var(--e-text-muted); }
+  .endeavor-field [role="menuitem"] .key { margin-left: auto; padding-left: 12px; font-size: 12px; color: var(--e-text-faint); white-space: nowrap; }
+  html:not([data-endeavor-working]) .endeavor-prompt .working, html[data-endeavor-working] .endeavor-prompt .idle { display: none; }
+`;
   function askBox(o) {
     const root = document.createElement("div");
     root.className = "endeavor-prompt";
@@ -199,6 +238,15 @@
     };
     return { root, text, what, setWhat };
   }
+  function initAskBox() {
+    const style = document.createElement("style");
+    style.textContent = css;
+    document.head.append(style);
+    on("context", (msg) => {
+      if (msg.working) document.documentElement.dataset[WORKING] = "";
+      else delete document.documentElement.dataset[WORKING];
+    });
+  }
 
   // src/quote.ts
   var SHOOTING = "endeavor-shooting";
@@ -236,7 +284,7 @@
   }
 
   // src/annotate.ts
-  var css = `
+  var css2 = `
   /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
   body.annotating pluto-cell:hover, body.annotating pluto-cell :hover { cursor: crosshair !important; }
   /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
@@ -333,7 +381,7 @@
     const active = () => document.body.classList.contains("annotating");
     const cells = () => [...document.querySelectorAll("pluto-cell")];
     const style = document.createElement("style");
-    style.textContent = css;
+    style.textContent = css2;
     const frame = document.createElement("div");
     frame.id = "annotate-frame";
     const box = document.createElement("div");
@@ -924,7 +972,7 @@ ${pick.text}
     return comment ? `${blocks.join("\n\n")}
 ${comment}` : blocks.join("\n\n");
   }
-  var css2 = `
+  var css3 = `
   #endeavor-point { position: fixed; right: 16px; bottom: 16px; z-index: 9998; display: flex; align-items: center; gap: 6px;
     height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--e-popover-edge);
     background: var(--e-popover-bg); color: var(--e-text-secondary); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -932,7 +980,7 @@ ${comment}` : blocks.join("\n\n");
   #endeavor-point:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
   #endeavor-point .key { color: var(--e-text-faint); }
   body.annotating #endeavor-point { display: none; }
-  #endeavor-sent { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10001; display: none;
+  #endeavor-sent { position: fixed; right: 16px; bottom: 16px; z-index: 10001; display: none;
     padding: 4px 12px; border-radius: 999px; background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
   #endeavor-sent.shown { display: block; }
 `;
@@ -976,12 +1024,13 @@ ${[...earlier, text].join("\n\n")}`).then(
       );
     });
     initTheme();
+    initAskBox();
     initAnnotate();
     const receive = (msg) => window.__endeavor?.receive(msg);
     toPage = receive;
     receive({ type: "theme", name: "view" });
     const style = document.createElement("style");
-    style.textContent = css2;
+    style.textContent = css3;
     document.head.append(style);
     const button = document.createElement("button");
     button.id = "endeavor-point";

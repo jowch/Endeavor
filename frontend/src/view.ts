@@ -7,6 +7,7 @@
 // those picks name their cells and Claude reads the output with its tools.
 
 import { initAnnotate } from "./annotate";
+import { initAskBox } from "./askbox";
 import { setHost, type ToApp } from "./bridge";
 import { cellName } from "./cellname";
 import { mac, modHeld } from "./keys";
@@ -62,7 +63,7 @@ const css = `
   #endeavor-point:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
   #endeavor-point .key { color: var(--e-text-faint); }
   body.annotating #endeavor-point { display: none; }
-  #endeavor-sent { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10001; display: none;
+  #endeavor-sent { position: fixed; right: 16px; bottom: 16px; z-index: 10001; display: none;
     padding: 4px 12px; border-radius: 999px; background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
   #endeavor-sent.shown { display: block; }
 `;
@@ -104,6 +105,7 @@ export function start(notebook: string, host: Host): void {
     );
   });
   initTheme();
+  initAskBox();
   initAnnotate();
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
   toPage = receive;
