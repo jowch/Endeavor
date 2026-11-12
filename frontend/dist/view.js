@@ -477,6 +477,7 @@
   var DRAG = 4;
   var FIGURE = "img, svg, canvas, video";
   var PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
+  var TREE = "pluto-tree, table.pluto-table";
   function targetAt(el) {
     const cell = el?.closest("pluto-cell");
     if (!el || !cell) return null;
@@ -487,9 +488,34 @@
     let figure = el.closest(FIGURE);
     while (figure?.parentElement?.closest(FIGURE) && output.contains(figure.parentElement.closest(FIGURE))) figure = figure.parentElement.closest(FIGURE);
     if (figure && output.contains(figure)) return { part: "figure", cell, el: figure };
+    let tree = el.closest(TREE);
+    while (tree?.parentElement?.closest(TREE) && output.contains(tree.parentElement.closest(TREE))) tree = tree.parentElement.closest(TREE);
+    if (tree && output.contains(tree)) return { part: "output", cell, el: tree };
     const paragraph = el.closest(PARAGRAPH);
     if (paragraph && output.contains(paragraph)) return { part: "output", cell, el: paragraph };
     return { part: output.querySelector(FIGURE) ? "figure" : "output", cell, el: output };
+  }
+  var inside = (r, x, y) => r.width > 0 && r.height > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  function pointTarget(e) {
+    const found = targetAt(e.target);
+    if (found && found.part !== "cell") return found;
+    const [x, y] = [e.clientX, e.clientY];
+    for (const el of document.elementsFromPoint?.(x, y) ?? []) {
+      const under = el.closest("pluto-output, pluto-input") ? targetAt(el) : null;
+      if (under && (!found || under.cell === found.cell)) return under;
+    }
+    const cells = found ? [found.cell] : [...document.querySelectorAll("pluto-cell")].filter((c) => inside(c.getBoundingClientRect(), x, y));
+    for (const cell of cells)
+      for (const part of cell.querySelectorAll("pluto-output, pluto-input"))
+        if (inside(part.getBoundingClientRect(), x, y)) return targetAt(part);
+    return found;
+  }
+  function widgetValues(el) {
+    return [...el.querySelectorAll("input, select, textarea")].filter((i) => !(i instanceof HTMLInputElement) || !["hidden", "button", "submit"].includes(i.type)).map((i) => {
+      const kind = i instanceof HTMLInputElement ? i.type : i.tagName.toLowerCase();
+      const value = i instanceof HTMLInputElement && (i.type === "checkbox" || i.type === "radio") ? String(i.checked) : i.value;
+      return `${kind}: ${value}`;
+    }).join("\n");
   }
   var pageBox = (r) => ({
     left: r.left + window.scrollX,
@@ -628,7 +654,7 @@
           return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el };
         }
         case "output":
-          return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() }, el };
+          return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() || widgetValues(el) }, el };
         case "figure":
           return { pick: { part: "figure", cell: cell.id, code }, el };
       }
@@ -701,7 +727,7 @@
         justDragged = false;
         return;
       }
-      const found = targetAt(target);
+      const found = pointTarget(m);
       if (found) choose(targetPick(found), m.shiftKey);
     };
     for (const type of ["pointerdown", "mousedown", "click"]) document.addEventListener(type, swallow, true);
@@ -709,7 +735,7 @@
       "mousemove",
       (e) => {
         if (!active()) return;
-        if (!drag) return showHover(ours(e.target) ? null : targetAt(e.target));
+        if (!drag) return showHover(ours(e.target) ? null : pointTarget(e));
         if (!drag.moved && Math.hypot(e.clientX + window.scrollX - drag.x, e.clientY + window.scrollY - drag.y) < DRAG) return;
         drag.moved = true;
         e.preventDefault();
