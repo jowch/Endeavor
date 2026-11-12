@@ -1126,7 +1126,7 @@
       const line = el2?.closest(".cm-line");
       return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
     };
-    const ours = (target) => bar2.contains(target) || hint.contains(target);
+    const ours = (target) => bar2.contains(target) || hint.contains(target) || !!target.closest?.("#endeavor-bar");
     const swallow = (e) => {
       const target = e.target;
       if (!active() || ours(target)) return;

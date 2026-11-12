@@ -10,8 +10,9 @@
 // figures and boxes aren't taken here (the app takes them natively), so
 // those picks name their cells and Claude reads the output with its tools.
 // Unlike the app, Point ends once ↩'s message is on its way: the user sends it from Claude's
-// box, where the view's keys don't reach. The view also tidies what Pluto shows there (its
-// overlays at the bottom, a completion list nobody uses) and follows the cells Claude adds.
+// box, where the view's keys don't reach. The view fills Claude's panel: Pluto's header, footer and
+// floating tabs give way to one slim toolbar (the file, what Pluto is doing, Docs, Point). It also
+// closes a completion list nobody uses and follows the cells Claude adds.
 
 import { initAnnotate, pointState } from "./annotate";
 import { initAskBox } from "./askbox";
@@ -19,6 +20,7 @@ import { setHost, type ToApp } from "./bridge";
 import { cellName } from "./cellname";
 import { mac, modHeld } from "./keys";
 import type { Pick } from "./quote";
+import { statusModel, type NotebookLike } from "./status";
 import { initTheme } from "./theme";
 
 /** What the view gives the page: Claude's chat. */
@@ -72,27 +74,126 @@ export function quoteText(notebook: string, picks: Pick[], comment: string): str
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
+/** The toolbar's height, without Claude's inset above it. */
+const BAR = 36;
+
+// The view fills Claude's panel edge to edge, as an app does, not a website in a box: Pluto's own
+// website chrome (its header with the file box and Move, the share menu, the footer with Settings and
+// FAQ, the floating Live docs and Status tabs) gives way to one slim toolbar: the file's name, what
+// Pluto is doing, Docs and Point. Pluto's header stays only as the band it turns into when the
+// notebook needs the user (Safe preview's Run notebook code, Restart, Julia stopped, Reconnecting),
+// under the toolbar. (Claude's desktop app reports no safe-area insets in its panel, 2026-11-12.)
+const chrome = `
+  :root { --endeavor-bar: ${BAR}px; }
+  body { padding-top: var(--endeavor-bar); box-sizing: border-box; }
+  footer { display: none !important; }
+  pluto-editor > header#pluto-nav { display: none !important; }
+  pluto-editor:is(.process_waiting_for_permission, .process_dead, .nbpkg_restart_required, .nbpkg_restart_recommended, .disconnected) > header#pluto-nav {
+    display: block !important; position: sticky; top: var(--endeavor-bar); z-index: 60; }
+  pluto-editor > header#pluto-nav nav#at_the_top > :not(#process_status) { display: none !important; }
+  pluto-editor > header#pluto-nav nav#at_the_top { justify-content: center; }
+  pluto-editor > main { padding-top: 16px; }
+  #endeavor-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 9997; box-sizing: border-box; height: var(--endeavor-bar);
+    display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px;
+    background: var(--e-bg-page); border-bottom: 1px solid var(--e-divider); color: var(--e-text-secondary);
+    font: 12.5px var(--font-sans, system-ui), -apple-system, "Segoe UI", sans-serif; }
+  #endeavor-bar .file { font-weight: 600; color: var(--e-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #endeavor-bar .doing { color: var(--e-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+  #endeavor-bar .grow { flex: 1; }
+  #endeavor-bar button { flex: none; display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: none; border-radius: 6px;
+    background: none; color: var(--e-text-secondary); font: inherit; cursor: pointer; }
+  #endeavor-bar button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
+  #endeavor-bar button.on { color: var(--e-text-primary); background: var(--e-bg-raised); }
+  #endeavor-bar .key { color: var(--e-text-faint); }
+  /* Live docs: Pluto's own panel, as a sheet down the right side under the toolbar, opened from Docs.
+     Not display: none when shut: Pluto alerts "window too small to show docs" whenever it opens a panel
+     it finds undisplayed, and it hides the panel below 500px wide. Its Status tab isn't offered here. */
+  #helpbox-wrapper { display: block !important; }
+  pluto-helpbox.hidden, pluto-helpbox.helpbox-process { display: none !important; }
+  pluto-helpbox { position: fixed !important; top: var(--endeavor-bar) !important; bottom: 0 !important;
+    right: 0 !important; height: auto !important; width: min(380px, 100vw) !important;
+    border-radius: 0 !important; border-left: 1px solid var(--e-divider); box-shadow: -8px 0 24px var(--e-shadow-popover) !important; }
+  /* Its own tabs and close button: Docs in the toolbar opens and closes it. */
+  pluto-helpbox > header { display: none !important; }
+  /* A narrow panel: the name before the shortcut, and the sheet over the whole width. */
+  @media (max-width: 420px) {
+    #endeavor-bar .key { display: none; }
+    pluto-helpbox { border-left: none; }
+  }
+  /* Pluto's floating safe-preview badge is hidden, as in the app: its band and each cell's
+     "Code not executed in Safe preview" already say it. */
+  .outline-frame-actions-container.safe-preview { display: none !important; }
+`;
+
+// Point, from the toolbar, and what it says once ↩ has passed the picks on.
 const css = `
-  #endeavor-point { position: fixed; right: 16px; bottom: 16px; z-index: 9998; display: flex; align-items: center; gap: 6px;
-    height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--e-popover-edge);
-    background: var(--e-popover-bg); color: var(--e-text-secondary); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
-    box-shadow: 0 4px 16px var(--e-shadow-popover); cursor: pointer; }
-  #endeavor-point:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
-  #endeavor-point .key { color: var(--e-text-faint); }
-  body.annotating #endeavor-point { display: none; }
-  /* At the top, under Point's hint, where nothing of Pluto's sits over it. */
-  #endeavor-sent { position: fixed; left: 50%; top: 44px; transform: translateX(-50%); z-index: 10001; display: none;
+  #annotate-hint { top: calc(var(--endeavor-bar) + 8px) !important; }
+  #endeavor-sent { position: fixed; left: 50%; top: calc(var(--endeavor-bar) + 8px); transform: translateX(-50%); z-index: 10001; display: none;
     max-width: calc(100vw - 32px); box-sizing: border-box; text-align: center;
     padding: 4px 12px; border-radius: 12px; background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
   #endeavor-sent.shown { display: block; }
-  /* Pluto's own overlays at the bottom, laid out round Point's button: the Live docs and Status tabs just above it,
-     and Settings and FAQ, at the end of the page, above both. Pluto's floating safe-preview badge is hidden, as
-     in the app: wherever it floats, Settings and FAQ pass under it as the page scrolls, and the header's
-     Run notebook code and each cell's "Code not executed in Safe preview" already say it. */
-  pluto-helpbox { bottom: 52px !important; }
-  .outline-frame-actions-container.safe-preview { display: none !important; }
-  pluto-editor footer { padding-bottom: 104px; }
 `;
+
+/** What Pluto is doing, in words, for the toolbar: nothing when it's idle. What needs the user (Safe preview, Restart, Julia stopped, Reconnecting) is Pluto's own band. */
+export function doing(nb: NotebookLike | undefined): string {
+  if (!nb?.cell_order) return "";
+  const model = statusModel(nb);
+  if (model.busy) return model.busy;
+  if (model.saveFailed) return "Couldn't save";
+  return "";
+}
+
+/** The file's name, without its folder. */
+export const fileName = (path: string | undefined): string => (path ? path.split(/[\\/]/).pop() || "Notebook" : "Notebook");
+
+const book = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 3.2c1.8-.6 3.7-.4 5.5.8 1.8-1.2 3.7-1.4 5.5-.8v9.6c-1.8-.6-3.7-.4-5.5.8-1.8-1.2-3.7-1.4-5.5-.8z"/><path d="M8 4v9.6"/></svg>`;
+
+/** The toolbar: the file's name, what Pluto is doing, Docs, and Point when the chat takes messages. */
+function initBar(withPoint: boolean, point: (on: boolean) => void): void {
+  const style = document.createElement("style");
+  style.id = "endeavor-chrome";
+  style.textContent = chrome;
+  document.head.append(style);
+  const bar = document.createElement("div");
+  bar.id = "endeavor-bar";
+  bar.innerHTML =
+    `<span class="file">Notebook</span><span class="doing"></span><span class="grow"></span>` +
+    `<button type="button" class="docs" title="Live docs: what the code under the cursor does">${book}<span>Docs</span></button>` +
+    (withPoint
+      ? `<button type="button" id="endeavor-point" title="Point at a cell, its code or its output, and comment on it for Claude"><span>Point</span><span class="key">${mac ? "⌘⇧E" : "Ctrl+Shift+E"}</span></button>`
+      : "");
+  document.body.prepend(bar);
+  const file = bar.querySelector<HTMLElement>(".file")!;
+  const words = bar.querySelector<HTMLElement>(".doing")!;
+  const docs = bar.querySelector<HTMLButtonElement>(".docs")!;
+  const pointButton = bar.querySelector<HTMLButtonElement>("#endeavor-point");
+  const docsOpen = () => !!document.querySelector("pluto-helpbox.helpbox-docs:not(.hidden)");
+  docs.addEventListener("click", (e) => {
+    if (!e.isTrusted) return;
+    window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: docsOpen() ? null : "docs" }));
+    if (!docsOpen()) setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
+  });
+  pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
+  let last: unknown = null;
+  const tick = () => {
+    const nb = (window as any).editor_state?.notebook as (NotebookLike & { path?: string }) | undefined;
+    if (nb && nb !== last) {
+      last = nb;
+      file.textContent = fileName(nb.path);
+      file.title = file.textContent;
+      words.textContent = doing(nb);
+    }
+    docs.classList.toggle("on", docsOpen());
+    pointButton?.classList.toggle("on", document.body.classList.contains("annotating"));
+  };
+  // Pluto redraws the page whenever its state changes (a cell runs, a panel opens): follow its
+  // redraws, at most every 250 ms, rather than polling a page that is sitting still.
+  let soon = 0;
+  new MutationObserver(() => {
+    if (!soon) soon = window.setTimeout(() => ((soon = 0), tick()), 250);
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+  tick();
+}
 
 /** Start the look and Point on this page, which shows notebook `notebook`. */
 let started = false;
@@ -152,7 +253,8 @@ export function start(notebook: string, host: Host): void {
   closeStrayCompletions();
   followNewCells();
   receive({ type: "theme", name: "view" });
-  // A chat that doesn't take messages from the view gets the look only.
+  initBar(host.canSend, point);
+  // A chat that doesn't take messages from the view gets the look and the toolbar, without Point.
   if (!host.canSend) return;
   initAskBox();
   initAnnotate(true);
@@ -160,13 +262,7 @@ export function start(notebook: string, host: Host): void {
   const style = document.createElement("style");
   style.textContent = css;
   document.head.append(style);
-  const button = document.createElement("button");
-  button.id = "endeavor-point";
-  button.type = "button";
-  button.title = "Point at a cell, its code or its output, and comment on it for Claude";
-  button.innerHTML = `<span>Point</span><span class="key">${mac ? "⌘⇧E" : "Ctrl+Shift+E"}</span>`;
-  button.addEventListener("click", (e) => e.isTrusted && point(true));
-  document.body.append(button, sent);
+  document.body.append(sent);
   // ⌘⇧E (Ctrl+Shift+E) toggles Point, as in the app's menu.
   window.addEventListener(
     "keydown",
