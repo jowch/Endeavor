@@ -94,10 +94,6 @@ export function start(notebook: string, host: Host): void {
     clearTimeout(hide);
     hide = window.setTimeout(() => sent.classList.remove("shown"), 4000);
   };
-  // Point clears its picks and comment as it sends: when the chat doesn't take them, they're kept here,
-  // with what ⌘↩ added, and the next ↩ passes them all.
-  const kept = (why: string) =>
-    say(`${why} Your ${added.length === 1 ? "pick is" : "picks are"} kept: ${mac ? "↩" : "Enter"} with your next pick passes ${added.length === 1 ? "it" : "them"} to the chat.`);
   setHost((msg: ToApp) => {
     if (msg.type === "shoot") return setTimeout(() => toPage?.({ type: "shot", id: msg.id }));
     if (msg.type !== "quote" || !msg.picks.length) return;
@@ -109,10 +105,15 @@ export function start(notebook: string, host: Host): void {
     }
     const earlier = added.splice(0);
     host.send(`${QUOTE_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
-      () => say("Passed to the chat"),
+      () => {
+        toPage?.({ type: "quote_sent", ok: true });
+        say("Passed to the chat");
+      },
       (e) => {
-        added.unshift(...earlier, text);
-        kept(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}.`);
+        // What ⌘↩ added stays here; Point gets its picks and comment back, for ↩ to send again.
+        added.unshift(...earlier);
+        toPage?.({ type: "quote_sent", ok: false });
+        say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "↩" : "Enter"} sends again.`);
       },
     );
   });
@@ -123,7 +124,7 @@ export function start(notebook: string, host: Host): void {
   // A chat that doesn't take messages from the view gets the look only.
   if (!host.canSend) return;
   initAskBox();
-  initAnnotate();
+  initAnnotate(true);
 
   const style = document.createElement("style");
   style.textContent = css;

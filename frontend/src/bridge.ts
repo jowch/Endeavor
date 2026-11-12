@@ -89,6 +89,9 @@ export type ErrorAsk = { cell: string; kind: "fix" | "explain"; queued: boolean 
 /** Messages the app sends the page. */
 export type ToPage =
   | { type: "annotate"; on: boolean }
+  // Whether the chat took Point's oldest ↩ still under way (Claude's notebook view only, view.ts):
+  // when it didn't, its picks and comment go back to Point.
+  | { type: "quote_sent"; ok: boolean }
   // The shown notebook's cells, whenever they change and after `ready`.
   | { type: "cells"; cells: CellState[] }
   // The notebook theme (Settings), after `ready` and on change.

@@ -974,7 +974,7 @@
       comment: state?.comment() ?? ""
     };
   }
-  function initAnnotate() {
+  function initAnnotate(answered = false) {
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
@@ -1096,10 +1096,12 @@
       send({ type: "mode", on: enable });
       requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
     }
+    const underWay = [];
     async function sendComment(add) {
       if (!picks.length) return;
       const sending = picks.splice(0, picks.length);
       const comment = text.value.trim();
+      if (!add && answered) underWay.push({ picks: sending, comment });
       text.value = "";
       text.dispatchEvent(new Event("input"));
       refresh2();
@@ -1200,6 +1202,17 @@
     );
     hint.querySelector(".done").onclick = () => set(false);
     on("annotate", (msg) => set(msg.on));
+    on("quote_sent", (msg) => {
+      const sent = underWay.shift();
+      if (msg.ok || !sent || !active()) return;
+      picks.unshift(...sent.picks.filter((p) => !picks.some((q) => samePick(p, q))));
+      if (sent.comment) {
+        text.value = text.value.trim() ? `${sent.comment}
+${text.value}` : sent.comment;
+        text.dispatchEvent(new Event("input"));
+      }
+      refresh2();
+    });
   }
 
   // src/redraw.ts
