@@ -331,7 +331,7 @@ export function start(notebook: string, host: Host): void {
       },
     );
   });
-  initTheme();
+  initTheme("web");
   initNarrow();
   initSpace();
   closeStrayCompletions();

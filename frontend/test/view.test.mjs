@@ -69,6 +69,10 @@ test("the view's look leaves Pluto's header and docs panel to the toolbar's rule
   const narrow = $("#endeavor-narrow").textContent;
   assert.match(narrow, /max-width: 600px[\s\S]*h1 \{ font-size: 1\.6rem/);
   assert.match(narrow, /overflow-wrap: break-word/);
+  // Claude's desktop app can't reach endeavor:, so JuliaMono comes from the host the view allows.
+  const fonts = $("#endeavor-fonts").textContent;
+  assert.ok(!fonts.includes("endeavor://"), "not the app's bundled copy");
+  assert.equal(fonts.match(/url\("https:\/\/cdn\.jsdelivr\.net\/gh\/cormullion\/juliamono@v0\.63\.2\/webfonts\/JuliaMono-(Regular|Bold|RegularItalic)\.woff2"\)/g)?.length, 3);
 });
 
 test("Point sends nothing for keys a page script makes up", async () => {
