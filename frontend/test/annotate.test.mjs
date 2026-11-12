@@ -10,9 +10,9 @@ const NB = "0f381e2e-b8ca-11f1-b549-49cf0ce82801";
 const [A, B] = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"];
 const CODE = "rates = map(1:1000) do _\n  fit(rows)\nend";
 
-async function page() {
+async function page(body) {
   const dom = new JSDOM(
-    `<body><pluto-cell id="${A}"><pluto-output><div class="markdown"><p>Each resample draws rows.</p></div><pre>0.42</pre></pluto-output>` +
+    body ?? `<body><pluto-cell id="${A}"><pluto-output><div class="markdown"><p>Each resample draws rows.</p></div><pre>0.42</pre></pluto-output>` +
       `<pluto-input><div class="cm-content">${CODE.split("\n").map((l) => `<div class="cm-line">${l}</div>`).join("")}</div></pluto-input></pluto-cell>` +
       `<pluto-cell id="${B}"><pluto-output><div><svg><g><path/></g></svg></div></pluto-output></pluto-cell></body>`,
     { url: `http://localhost/edit?id=${NB}`, runScripts: "outside-only", pretendToBeVisual: true },
@@ -143,6 +143,19 @@ test("⌘⇧E is the app's: the page neither turns Point off nor keeps the key f
   assert.deepEqual(sent.slice(before), []);
   window.__endeavor.receive({ type: "annotate", on: false });
   assert.ok(!window.document.body.classList.contains("annotating"));
+});
+
+test("Pluto's list and table views pick as one output, and a widget's quote holds its value", async () => {
+  const { $, sent, click, comment } = await page(
+    `<body><pluto-cell id="${A}"><pluto-output><pluto-tree class="Array"><pluto-tree-items class="Array">` +
+      `<p-r><p-k>1</p-k><p-v><pre>1</pre></p-v></p-r><p-r><p-k>11</p-k><p-v><pre>11</pre></p-v></p-r></pluto-tree-items></pluto-tree></pluto-output></pluto-cell>` +
+      `<pluto-cell id="${B}"><pluto-output><bond def="n"><input type="range" value="13"></bond><bond def="secret"><input type="password" value="hunter2"></bond></pluto-output></pluto-cell></body>`,
+  );
+  click($("p-r:nth-child(2) pre"));
+  assert.ok($("pluto-tree").classList.contains("annotate-picked"), "the whole list, not the value under the pointer");
+  click($("input"));
+  comment("x");
+  assert.equal(sent.at(-1).picks[0].text, "range: 13", "never a password's value");
 });
 
 const { outputFiles } = buildSync({ entryPoints: [new URL("../src/place.ts", import.meta.url).pathname], bundle: true, format: "esm", write: false });
