@@ -71,6 +71,7 @@ export type Target = { part: "cell" | "code" | "output" | "figure"; cell: HTMLEl
 
 const FIGURE = "img, svg, canvas, video";
 const PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
+const TREE = "pluto-tree, table.pluto-table";
 
 /** The smallest thing Point can pick under `el`: a figure, a Markdown
  * paragraph or an output; the code block; else (the cell's edge) the cell. */
@@ -85,9 +86,28 @@ export function targetAt(el: Element | null): Target | null {
   let figure = el.closest<HTMLElement>(FIGURE);
   while (figure?.parentElement?.closest(FIGURE) && output.contains(figure.parentElement.closest(FIGURE))) figure = figure.parentElement.closest<HTMLElement>(FIGURE);
   if (figure && output.contains(figure)) return { part: "figure", cell, el: figure };
+  // Pluto's list and table views (`collect(1:100000)`, a DataFrame) are one
+  // output, not their items: a click on one value would quote just "11".
+  let tree = el.closest<HTMLElement>(TREE);
+  while (tree?.parentElement?.closest(TREE) && output.contains(tree.parentElement.closest(TREE))) tree = tree.parentElement.closest<HTMLElement>(TREE);
+  if (tree && output.contains(tree)) return { part: "output", cell, el: tree };
   const paragraph = el.closest<HTMLElement>(PARAGRAPH);
   if (paragraph && output.contains(paragraph)) return { part: "output", cell, el: paragraph };
   return { part: output.querySelector(FIGURE) ? "figure" : "output", cell, el: output };
+}
+
+/** The values a widget output shows (a slider's position, a box's text), for
+ * the quote when the output has no text of its own. */
+export function widgetValues(el: Element): string {
+  return [...el.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea")]
+    // Never a password's, which the quote would put in Claude's message box.
+    .filter((i) => !(i instanceof HTMLInputElement) || !["hidden", "password", "file", "button", "submit", "reset", "image"].includes(i.type))
+    .map((i) => {
+      const kind = i instanceof HTMLInputElement ? i.type : i.tagName.toLowerCase();
+      const value = i instanceof HTMLInputElement && (i.type === "checkbox" || i.type === "radio") ? String(i.checked) : i.value;
+      return `${kind}: ${value}`;
+    })
+    .join("\n");
 }
 
 /** A picked thing: the quote it becomes, and what shows it (to outline it
@@ -257,7 +277,7 @@ export function initAnnotate(answered = false): void {
         return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el };
       }
       case "output":
-        return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() }, el };
+        return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() || widgetValues(el) }, el };
       case "figure":
         return { pick: { part: "figure", cell: cell.id, code }, el };
     }
