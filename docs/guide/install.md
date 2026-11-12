@@ -30,6 +30,11 @@ claude plugin marketplace add jowch/EndeavorMCP
 claude plugin install endeavor@endeavor
 ```
 
+Claude Code doesn't update this plugin unless the user turns that on, and
+Endeavor changes often. Suggest that they turn it on, and leave the choice to
+them: in a session, `/plugin`, then Marketplaces, select `endeavor`, and
+"Enable auto-update".
+
 **Codex:**
 
 ```sh
