@@ -119,7 +119,10 @@ test("the toolbar says what Pluto is doing, and leaves what needs the user to Pl
   const { outputFiles } = buildSync({ entryPoints: [new URL("../src/view.ts", import.meta.url).pathname], bundle: true, format: "iife", globalName: "view", write: false });
   const { window } = new JSDOM("", { runScripts: "outside-only" });
   window.eval(`${outputFiles[0].text};window.view = view;`);
-  const { doing, fileName } = window.view;
+  const { doing, fileName, outsideLink } = window.view;
+  assert.equal(outsideLink(" https://example.com/a "), "https://example.com/a");
+  assert.equal(outsideLink("mailto:a@b.c"), "mailto:a@b.c");
+  for (const inside of ["#cell", "javascript:;", "./a.jl", "", null]) assert.equal(outsideLink(inside), null, String(inside));
   const at = (started, finished) => ({ started_at: started, finished_at: finished, subtasks: {} });
   const nb = (tree, extra = {}) => ({ process_status: "ready", status_tree: tree, nbpkg: null, cell_order: ["a"], cell_inputs: { a: { code: "x = 1" } }, cell_results: {}, ...extra });
   const running = { ...at(1, null), subtasks: { run: { ...at(1, null), subtasks: { evaluate: { ...at(1, null), subtasks: { a: at(1, 2), b: at(2, null) } } } } } };

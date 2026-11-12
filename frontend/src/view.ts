@@ -29,6 +29,8 @@ export type Host = {
   canSend: boolean;
   /** Pass `text` to the chat as the user's message (the host may wait for the user to send it). */
   send(text: string): Promise<void>;
+  /** Open `url` in the user's browser (MCP Apps' ui/open-link; Claude's desktop app asks the user first). Without it, links stay as they are. */
+  openLink?(url: string): Promise<void>;
 };
 
 /** How the quotes read. Keep in step with the app's attach::quote_note and quote_block (src/attach.rs). */
@@ -251,6 +253,7 @@ export function start(notebook: string, host: Host): void {
   });
   initTheme();
   closeStrayCompletions();
+  if (host.openLink) openLinksThrough(host.openLink);
   followNewCells();
   receive({ type: "theme", name: "view" });
   initBar(host.canSend, point);
@@ -271,6 +274,42 @@ export function start(notebook: string, host: Host): void {
       e.preventDefault();
       e.stopPropagation();
       point(!document.body.classList.contains("annotating"));
+    },
+    true,
+  );
+}
+
+/** A link the view hands to the host: a web or mail address, not a jump within the page. */
+export function outsideLink(href: string | null): string | null {
+  if (!href) return null;
+  return /^(https?:|mailto:)/i.test(href.trim()) ? href.trim() : null;
+}
+
+/**
+ * Links in cells and Live docs open in the user's browser through the host. The view's frame may not
+ * open windows (Claude's desktop app gives it no allow-popups), so a click on one did nothing
+ * (2026-11-12); a jump within the page scrolls there. Only the user's own clicks: a script's made-up click opens nothing. Not while Point is
+ * on, where a click picks what it's on.
+ */
+function openLinksThrough(open: (url: string) => Promise<void>): void {
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (!e.isTrusted || e.defaultPrevented || e.button !== 0 || document.body.classList.contains("annotating")) return;
+      const link = (e.target as Element | null)?.closest?.("a[href]");
+      const href = link?.getAttribute("href") ?? "";
+      // A jump within the page ("#cell"): in a frame drawn from markup, the browser takes it for a
+      // new page and the view goes blank (headless, 2026-11-12), so the view scrolls there itself.
+      if (/^#./.test(href) && !e.defaultPrevented) {
+        e.preventDefault();
+        document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      const url = outsideLink(href);
+      if (!url) return;
+      e.preventDefault();
+      e.stopPropagation();
+      open(url).catch(() => {});
     },
     true,
   );
