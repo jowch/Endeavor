@@ -20,7 +20,8 @@ function page() {
   Object.defineProperty(window.navigator, "platform", { value: "MacIntel" });
   window.eval(readFileSync(new URL("../dist/view.js", import.meta.url), "utf8"));
   const told = { sent: [] };
-  window.EndeavorView.start(NB, { canSend: true, send: async (t) => void told.sent.push(t) });
+  told.opened = [];
+  window.EndeavorView.start(NB, { canSend: true, send: async (t) => void told.sent.push(t), openLink: async (u) => void told.opened.push(u) });
   return { window, told, $: (s) => window.document.querySelector(s) };
 }
 
@@ -206,4 +207,16 @@ test("the view brings Claude's new cell into view, until the user scrolls somewh
   add("new3");
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(scrolled, ["new1", "new3"]);
+});
+
+test("no link replaces the view with a blank page, and only the user's own clicks open one", () => {
+  const { window, told } = page();
+  const doc = window.document;
+  doc.body.insertAdjacentHTML("beforeend", `<a id="hash" href="#">r</a><a id="rel" href="./other.jl">o</a><a id="file" href="file:///etc/x">f</a><a id="js" href="javascript:;">j</a><a id="web" href="https://example.com">w</a><a id="handled" href="./x">h</a><p id="target">t</p><a id="jump" href="#target">j</a>`);
+  doc.getElementById("handled").addEventListener("click", (e) => e.preventDefault());
+  const click = (id) => { const e = new window.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }); doc.getElementById(id).dispatchEvent(e); return e.defaultPrevented; };
+  for (const id of ["hash", "rel", "file", "web", "jump"]) assert.ok(click(id), `${id} doesn't navigate`);
+  assert.equal(click("js"), false, "javascript: links run as they are");
+  assert.ok(click("handled"), "a click the page handled stays handled");
+  assert.deepEqual(told.opened, [], "a script's made-up click opens nothing");
 });

@@ -95,10 +95,14 @@ const chrome = `
   pluto-editor > header#pluto-nav nav#at_the_top > :not(#process_status) { display: none !important; }
   pluto-editor > header#pluto-nav nav#at_the_top { justify-content: center; }
   pluto-editor > main { padding-top: 16px; }
+  /* What Pluto keeps at the top as the page scrolls (its "Save all changes" button) and where a jump
+     to a cell lands go under the toolbar, not behind it. */
+  pluto-editor main > preamble { top: calc(var(--endeavor-bar) + 5px) !important; }
+  html { scroll-padding-top: calc(var(--endeavor-bar) + 8px); }
   #endeavor-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 9997; box-sizing: border-box; height: var(--endeavor-bar);
     display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px;
     background: var(--e-bg-page); border-bottom: 1px solid var(--e-divider); color: var(--e-text-secondary);
-    font: 12.5px var(--font-sans, system-ui), -apple-system, "Segoe UI", sans-serif; }
+    font: 12.5px system-ui, -apple-system, "Segoe UI", sans-serif; }
   #endeavor-bar .file { font-weight: 600; color: var(--e-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   #endeavor-bar .doing { color: var(--e-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
   #endeavor-bar .grow { flex: 1; }
@@ -159,7 +163,7 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
   const bar = document.createElement("div");
   bar.id = "endeavor-bar";
   bar.innerHTML =
-    `<span class="file">Notebook</span><span class="doing"></span><span class="grow"></span>` +
+    `<span class="file">Notebook</span><span class="doing">Loading…</span><span class="grow"></span>` +
     `<button type="button" class="docs" title="Live docs: what the code under the cursor does">${book}<span>Docs</span></button>` +
     (withPoint
       ? `<button type="button" id="endeavor-point" title="Point at a cell, its code or its output, and comment on it for Claude"><span>Point</span><span class="key">${mac ? "⌘⇧E" : "Ctrl+Shift+E"}</span></button>`
@@ -173,6 +177,7 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
   docs.addEventListener("click", (e) => {
     if (!e.isTrusted) return;
     window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: docsOpen() ? null : "docs" }));
+    // The search box takes the cursor once Pluto has drawn the panel (it does so on its next render).
     if (!docsOpen()) setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
   });
   pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
@@ -195,6 +200,29 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
     if (!soon) soon = window.setTimeout(() => ((soon = 0), tick()), 250);
   }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
   tick();
+  keepCursorBelowBar();
+}
+
+/**
+ * Where the cursor moves in a cell, it stays in sight below the toolbar. CodeMirror scrolls the cursor
+ * into view by the window's top edge and ignores scroll-padding, so a jump up (⌘↑, Page Up, a long
+ * cell's first line) left it under the toolbar (headless, 2026-11-12).
+ */
+function keepCursorBelowBar(): void {
+  let queued = false;
+  document.addEventListener("selectionchange", () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      const selection = window.getSelection();
+      if (!selection?.rangeCount || !selection.isCollapsed || !(selection.anchorNode as Element | null)?.parentElement?.closest?.(".cm-content")) return;
+      const range = selection.getRangeAt(0);
+      const rect = range.getClientRects()[0] ?? (selection.anchorNode as Element).parentElement!.getBoundingClientRect();
+      const bar = document.getElementById("endeavor-bar")?.getBoundingClientRect().bottom ?? 0;
+      if (rect.bottom > 0 && rect.top < bar + 4) window.scrollBy(0, rect.top - bar - 8);
+    });
+  });
 }
 
 /** Start the look and Point on this page, which shows notebook `notebook`. */
@@ -253,7 +281,7 @@ export function start(notebook: string, host: Host): void {
   });
   initTheme();
   closeStrayCompletions();
-  if (host.openLink) openLinksThrough(host.openLink);
+  initLinks(host.openLink);
   followNewCells();
   receive({ type: "theme", name: "view" });
   initBar(host.canSend, point);
@@ -288,31 +316,27 @@ export function outsideLink(href: string | null): string | null {
 /**
  * Links in cells and Live docs open in the user's browser through the host. The view's frame may not
  * open windows (Claude's desktop app gives it no allow-popups), so a click on one did nothing
- * (2026-11-12); a jump within the page scrolls there. Only the user's own clicks: a script's made-up click opens nothing. Not while Point is
- * on, where a click picks what it's on.
+ * (2026-11-12). Any other link that would load a page (href="#", a relative path, file:) instead
+ * replaced the view with a blank one, as the frame's page is markup with no address of its own; a jump
+ * within the page ("#cell") scrolls there. In the bubble phase, after the page's own handlers: a click
+ * one of them handled (Pluto's Restart link, a widget's own) is left alone, and so is javascript:.
+ * Only the user's own clicks open anything: a script's made-up click opens nothing.
  */
-function openLinksThrough(open: (url: string) => Promise<void>): void {
-  document.addEventListener(
-    "click",
-    (e) => {
-      if (!e.isTrusted || e.defaultPrevented || e.button !== 0 || document.body.classList.contains("annotating")) return;
-      const link = (e.target as Element | null)?.closest?.("a[href]");
-      const href = link?.getAttribute("href") ?? "";
-      // A jump within the page ("#cell"): in a frame drawn from markup, the browser takes it for a
-      // new page and the view goes blank (headless, 2026-11-12), so the view scrolls there itself.
-      if (/^#./.test(href) && !e.defaultPrevented) {
-        e.preventDefault();
-        document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: "smooth", block: "start" });
-        return;
-      }
-      const url = outsideLink(href);
-      if (!url) return;
-      e.preventDefault();
-      e.stopPropagation();
-      open(url).catch(() => {});
-    },
-    true,
-  );
+export function initLinks(open: ((url: string) => Promise<void>) | undefined): void {
+  document.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0) return;
+    const link = (e.target as Element | null)?.closest?.("a[href]");
+    if (!link) return;
+    const href = (link.getAttribute("href") ?? "").trim();
+    if (/^javascript:/i.test(href)) return;
+    e.preventDefault();
+    if (/^#./.test(href)) {
+      document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const url = outsideLink(href);
+    if (url && open && e.isTrusted) open(url).catch(() => {});
+  });
 }
 
 /** How long a code completion list may stay open with no key or click from the user. */
