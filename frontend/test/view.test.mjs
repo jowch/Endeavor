@@ -40,6 +40,20 @@ test("picks become the same <quote> text the app sends", () => {
   assert.equal(quoteText(NB, [{ part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], "", "ember"), `<quote cell="rates" part="output" uri="notebook://ember/${NB}/cell/${A}">\n[1] 1 4 9\n</quote>`);
 });
 
+test("a huge output's text is cut to its start and end, saying how much is left out", () => {
+  const { outputFiles } = buildSync({ entryPoints: [new URL("../src/view.ts", import.meta.url).pathname], bundle: true, format: "iife", globalName: "view", write: false });
+  const { window } = new JSDOM("", { runScripts: "outside-only" });
+  window.eval(`${outputFiles[0].text};window.view = view;`);
+  const { quoteText, OUTPUT_MAX } = window.view;
+  const short = "x".repeat(OUTPUT_MAX);
+  assert.ok(quoteText(NB, [{ part: "output", cell: A, code: CODE, text: short }], "").includes(`\n${short}\n`), "up to the limit, all of it");
+  const big = Array.from({ length: 200000 }, (_, i) => String(i + 1)).join("\n");
+  const said = quoteText(NB, [{ part: "output", cell: A, code: CODE, text: big }], "Why?");
+  assert.ok(said.length < OUTPUT_MAX + 400, `cut (${said.length} characters)`);
+  assert.ok(said.includes("\n1\n2\n3\n") && said.includes("\n199999\n200000\n</quote>\nWhy?"), "its start and its end");
+  assert.match(said, /\n\[1,284,894 characters of this output left out here; read_cell has all of it\.\]\n/);
+});
+
 test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {
   const { window, $ } = page();
   const css = $("#endeavor-theme").textContent;

@@ -59,6 +59,21 @@ const LEAD_NOTE = " A \u2193 just before this note only marks where the quotes s
 
 const uri = (notebook: string, cell: string, engine: Engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
 
+/**
+ * How much of a picked output's text goes in a quote. Text goes to Claude's message box, and an output can be
+ * megabytes (a 200,000-line `Text` sent 1.3 MB, headless 2026-11-12): past this, its start and end with a note.
+ */
+export const OUTPUT_MAX = 4000;
+const OUTPUT_END = 500;
+
+/** `text` cut to OUTPUT_MAX characters, its start and end kept, saying how much was left out. */
+export function outputText(text: string): string {
+  if (text.length <= OUTPUT_MAX) return text;
+  const head = text.slice(0, OUTPUT_MAX - OUTPUT_END);
+  const tail = text.slice(-OUTPUT_END);
+  return `${head}\n[${(text.length - head.length - tail.length).toLocaleString("en-US")} characters of this output left out here; read_cell has all of it.]\n${tail}`;
+}
+
 /** One pick as a `<quote>` (the app's attach::quote_block). */
 export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto"): string {
   if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
@@ -70,7 +85,7 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
     case "lines":
       return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
     case "output":
-      return `<quote ${at} part="output" uri="${where}">\n${pick.text}\n</quote>`;
+      return `<quote ${at} part="output" uri="${where}">\n${outputText(pick.text)}\n</quote>`;
     case "figure":
       return `<quote ${at} part="figure" uri="${where}"/>`;
   }

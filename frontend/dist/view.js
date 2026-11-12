@@ -1143,6 +1143,16 @@ footer form#feedback { display: none !important; }
   var LEAD = "\u2193";
   var LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
   var uri = (notebook, cell, engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
+  var OUTPUT_MAX = 4e3;
+  var OUTPUT_END = 500;
+  function outputText(text) {
+    if (text.length <= OUTPUT_MAX) return text;
+    const head = text.slice(0, OUTPUT_MAX - OUTPUT_END);
+    const tail = text.slice(-OUTPUT_END);
+    return `${head}
+[${(text.length - head.length - tail.length).toLocaleString("en-US")} characters of this output left out here; read_cell has all of it.]
+${tail}`;
+  }
   function quoteBlock(notebook, pick, engine = "pluto") {
     if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
     const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
@@ -1158,7 +1168,7 @@ ${pick.text}
 </quote>`;
       case "output":
         return `<quote ${at} part="output" uri="${where}">
-${pick.text}
+${outputText(pick.text)}
 </quote>`;
       case "figure":
         return `<quote ${at} part="figure" uri="${where}"/>`;
