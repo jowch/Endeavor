@@ -99,7 +99,7 @@ test("Pluto's bottom overlays sit round Point's button", () => {
   const { $ } = page();
   const css = [...$("head").querySelectorAll("style")].map((s) => s.textContent).join("\n");
   assert.match(css, /pluto-helpbox \{ bottom: 52px/, "Live docs and Status above the button");
-  assert.match(css, /\.outline-frame-actions-container\.safe-preview \{ left: 16px/, "the safe-preview badge at the left");
+  assert.match(css, /\.outline-frame-actions-container\.safe-preview \{ display: none/, "no floating safe-preview badge for Settings and FAQ to pass under");
   assert.match(css, /pluto-editor footer \{ padding-bottom: 104px/, "Settings and FAQ above them all at the page's end");
 });
 

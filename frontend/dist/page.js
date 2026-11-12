@@ -1109,7 +1109,7 @@
       refresh2();
       const out = [];
       for (const p of sending) {
-        if (p.pick.part === "box" || p.pick.part === "figure") {
+        if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
           const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
         } else out.push(p.pick);

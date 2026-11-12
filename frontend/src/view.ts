@@ -80,13 +80,17 @@ const css = `
   #endeavor-point:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
   #endeavor-point .key { color: var(--e-text-faint); }
   body.annotating #endeavor-point { display: none; }
-  #endeavor-sent { position: fixed; right: 16px; bottom: 16px; z-index: 10001; display: none;
-    padding: 4px 12px; border-radius: 999px; background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
+  /* At the top, under Point's hint, where nothing of Pluto's sits over it. */
+  #endeavor-sent { position: fixed; left: 50%; top: 44px; transform: translateX(-50%); z-index: 10001; display: none;
+    max-width: calc(100vw - 32px); box-sizing: border-box; text-align: center;
+    padding: 4px 12px; border-radius: 12px; background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
   #endeavor-sent.shown { display: block; }
   /* Pluto's own overlays at the bottom, laid out round Point's button: the Live docs and Status tabs just above it,
-     the safe-preview badge at the bottom left, and Settings and FAQ, at the end of the page, above all three. */
+     and Settings and FAQ, at the end of the page, above both. Pluto's floating safe-preview badge is hidden, as
+     in the app: wherever it floats, Settings and FAQ pass under it as the page scrolls, and the header's
+     Run notebook code and each cell's "Code not executed in Safe preview" already say it. */
   pluto-helpbox { bottom: 52px !important; }
-  .outline-frame-actions-container.safe-preview { left: 16px; bottom: 12px; }
+  .outline-frame-actions-container.safe-preview { display: none !important; }
   pluto-editor footer { padding-bottom: 104px; }
 `;
 
@@ -112,7 +116,6 @@ export function start(notebook: string, host: Host): void {
   };
   const point = (on: boolean) => receive({ type: "annotate", on });
   setHost((msg: ToApp) => {
-    if (msg.type === "shoot") return setTimeout(() => receive({ type: "shot", id: msg.id }));
     if (msg.type !== "quote" || !msg.picks.length) return;
     const text = quoteText(notebook, msg.picks, msg.comment);
     // ⌘↩ adds to the message the next ↩ passes, kept here.
