@@ -81,8 +81,9 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 - **Windows.** It builds and its tests pass in CI, which also keeps a
   build to try and a per-user installer ([windows.md](windows.md#install)).
   A local notebook with a real Claude session has run from the installer on
-  Windows 10; signing is left, and servers haven't been tried (the build
-  downloads a server's helper when it first connects). See [windows.md](windows.md), and [linux.md](linux.md)
+  Windows 10, and so has a notebook on a Linux server over an ssh key (the
+  build downloads a server's helper when it first connects). Signing is left,
+  and so is a server that asks for a password (#204). See [windows.md](windows.md), and [linux.md](linux.md)
   for the Linux port's remaining work.
 - **Upstream to mthelm85/PlutoMCP.jl.** The runtime started from a fork of
   PlutoMCP that carried several general improvements (`new_notebook`, run
