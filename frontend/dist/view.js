@@ -1147,11 +1147,14 @@ footer form#feedback { display: none !important; }
   var OUTPUT_END = 500;
   function outputText(text) {
     if (text.length <= OUTPUT_MAX) return text;
-    const head = text.slice(0, OUTPUT_MAX - OUTPUT_END);
-    const tail = text.slice(-OUTPUT_END);
-    return `${head}
-[${(text.length - head.length - tail.length).toLocaleString("en-US")} characters of this output left out here; read_cell has all of it.]
-${tail}`;
+    const low = (i) => (text.charCodeAt(i) & 64512) === 56320;
+    let end = OUTPUT_MAX - OUTPUT_END;
+    if (low(end)) end--;
+    let start2 = text.length - OUTPUT_END;
+    if (low(start2)) start2++;
+    return `${text.slice(0, end)}
+[${(start2 - end).toLocaleString("en-US")} characters of this output left out here.]
+${text.slice(start2)}`;
   }
   function quoteBlock(notebook, pick, engine = "pluto") {
     if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;

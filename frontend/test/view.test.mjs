@@ -25,7 +25,7 @@ function page() {
   return { window, told, $: (s) => window.document.querySelector(s) };
 }
 
-test("picks become the same <quote> text the app sends", () => {
+test("picks become the same <quote> text the app sends (but for a long output, cut below)", () => {
   const { outputFiles } = buildSync({ entryPoints: [new URL("../src/view.ts", import.meta.url).pathname], bundle: true, format: "iife", globalName: "view", write: false });
   const { window } = new JSDOM("", { runScripts: "outside-only" });
   window.eval(`${outputFiles[0].text};window.view = view;`);
@@ -51,7 +51,10 @@ test("a huge output's text is cut to its start and end, saying how much is left 
   const said = quoteText(NB, [{ part: "output", cell: A, code: CODE, text: big }], "Why?");
   assert.ok(said.length < OUTPUT_MAX + 400, `cut (${said.length} characters)`);
   assert.ok(said.includes("\n1\n2\n3\n") && said.includes("\n199999\n200000\n</quote>\nWhy?"), "its start and its end");
-  assert.match(said, /\n\[1,284,894 characters of this output left out here; read_cell has all of it\.\]\n/);
+  assert.match(said, /\n\[1,284,894 characters of this output left out here\.\]\n/);
+  // Never between the halves of a surrogate pair.
+  const emoji = quoteText(NB, [{ part: "output", cell: A, code: CODE, text: "a".repeat(OUTPUT_MAX - 501) + "\u{1F600}".repeat(1000) }], "");
+  assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(emoji), "no half pairs");
 });
 
 test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {

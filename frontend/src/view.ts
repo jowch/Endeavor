@@ -69,12 +69,16 @@ const OUTPUT_END = 500;
 /** `text` cut to OUTPUT_MAX characters, its start and end kept, saying how much was left out. */
 export function outputText(text: string): string {
   if (text.length <= OUTPUT_MAX) return text;
-  const head = text.slice(0, OUTPUT_MAX - OUTPUT_END);
-  const tail = text.slice(-OUTPUT_END);
-  return `${head}\n[${(text.length - head.length - tail.length).toLocaleString("en-US")} characters of this output left out here; read_cell has all of it.]\n${tail}`;
+  // Not between the two halves of a surrogate pair (an emoji, say).
+  const low = (i: number) => (text.charCodeAt(i) & 0xfc00) === 0xdc00;
+  let end = OUTPUT_MAX - OUTPUT_END;
+  if (low(end)) end--;
+  let start = text.length - OUTPUT_END;
+  if (low(start)) start++;
+  return `${text.slice(0, end)}\n[${(start - end).toLocaleString("en-US")} characters of this output left out here.]\n${text.slice(start)}`;
 }
 
-/** One pick as a `<quote>` (the app's attach::quote_block). */
+/** One pick as a `<quote>` (the app's attach::quote_block), except that the view cuts a long output (OUTPUT_MAX) and the app doesn't. */
 export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto"): string {
   if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
   const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
