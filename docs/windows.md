@@ -6,8 +6,11 @@ real Claude session, and reinstall and uninstall worked (October 2026, one
 machine that already had Julia, Node, a Claude sign-in and Git for Windows;
 the build predates the switch to Julia through juliaup).
 Not run yet: a first Claude sign-in on Windows, a browser download through
-SmartScreen, Windows 11, and servers, which the Windows build can't reach
-because it carries no server helpers. Parts of this page below still
+SmartScreen, Windows 11, and a server that asks for a password (#204).
+The Windows build carries no server helpers; it downloads the one a server
+needs the first time it connects. That ran on Windows 10 in November 2026
+against a Linux server with an ssh key: the download, a notebook, an upload,
+the folder browser, and a second connect that reused the helper. Parts of this page below still
 describe the port before those runs. User steps are in the guide's
 [Install Endeavor](guide/install.md#on-windows)._
 
@@ -61,7 +64,11 @@ On Windows the app should open, install Node and the agent, get Julia
 through juliaup on first run, start the local runtime and run a notebook. None of that has been tried
 yet. Servers go through EndeavorMCP's ssh client (`client::Session`), whose
 password and two-factor prompts reach the app over loopback TCP, as on the
-Mac; the app hasn't tried a server from Windows yet. These refuse with a plain
+Mac. The app ships no server helpers on Windows: it downloads the one for
+the server's platform from EndeavorMCP's Helpers release, by the key of the
+build it pins, and keeps it in `%LOCALAPPDATA%\Endeavor\helpers`
+(`remote::helper_for`). A key login to a Linux server works from Windows; a
+password prompt hasn't been tried (#204). These refuse with a plain
 error rather than half-work:
 
 | Where | What it says | What it needs |
@@ -314,7 +321,7 @@ Windows](#how-process-control-works-on-windows)). Left:
   under a hidden console (ConPTY) or an ssh library in Rust such as `russh`.
   Either adds about two weeks.
 
-### Paths (written; server half untried on Windows)
+### Paths (written; tried on Windows with a Linux server)
 
 Done for a local notebook: home and app data, the depot list's separator,
 canonical paths without `\\?\`, and notebook paths as Julia's Windows rules
@@ -324,8 +331,8 @@ only with servers.
 - **Server paths.** A server's folders and notebooks are plain strings with
   `/` rules, in the app (`Place::path`, the folder browser, uploads) and in
   EndeavorMCP's wire messages; `wire::server_path` and `HostId`'s path
-  methods take them apart. Only This Mac's paths use `PathBuf`. Untried:
-  the folder browser and an upload from Windows to a Linux server.
+  methods take them apart. Only This Mac's paths use `PathBuf`. The folder
+  browser and an upload from Windows to a Linux server work (November 2026).
 - **Upload names.** A Windows machine refuses names it can't hold (`\`,
   `:`, device names such as `CON`, a trailing dot or space) in
   `wire::files::place` and `write`. Linux and macOS servers still take them.

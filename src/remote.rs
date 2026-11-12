@@ -243,7 +243,12 @@ fn bundled_helpers() -> Vec<PathBuf> {
     found
 }
 
-/// The helper binary for a server that says `uname -s` = `os`, `uname -m` = `arch`.
+/// The helper binary for a server that says `uname -s` = `os`, `uname -m` = `arch`:
+/// one the app ships, else (on this Mac's platform) the one cargo built, else
+/// one downloaded from EndeavorMCP's Helpers release for the build of the
+/// library this app pins, when the app was built knowing that build's key (the
+/// Windows app ships no helpers and always does this). A downloaded helper is
+/// kept in `helpers/` in the app's folder and used again without the network.
 fn helper_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     let arch = if arch == "arm64" { "aarch64" } else { arch };
     let platform = format!("{}-{arch}", os.to_lowercase());
@@ -255,7 +260,44 @@ fn helper_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     {
         return Ok(helper);
     }
-    Err(missing_helper(os, arch, crate::install::bundled()))
+    match endeavor_mcp::embedded::RELEASE_KEY {
+        Some(key) if supported(os, arch) => {
+            let cache = crate::install::app_dir()?.join("helpers");
+            let removed = removed_build(os, arch);
+            endeavor_mcp::release_helper(&os.to_lowercase(), arch, key, &cache, &|_, _, _| removed.clone()).map_err(|e| if e == removed { e } else { download_failed(os, arch, &e) })
+        }
+        _ => Err(missing_helper(os, arch, crate::install::bundled())),
+    }
+}
+
+/// Whether Endeavor runs on servers of this platform, as the Helpers release
+/// builds for: Linux and macOS, on x86_64 or arm64.
+fn supported(os: &str, arch: &str) -> bool {
+    (os.eq_ignore_ascii_case("linux") || os.eq_ignore_ascii_case("darwin")) && matches!(arch, "x86_64" | "aarch64")
+}
+
+fn is_this_mac(os: &str, arch: &str) -> bool {
+    (os.to_lowercase().as_str(), arch) == HERE && os.eq_ignore_ascii_case("darwin")
+}
+
+/// A server's platform as the user knows it: "Linux x86_64", "macOS arm64".
+fn platform_words(os: &str, arch: &str) -> String {
+    if os.eq_ignore_ascii_case("darwin") { format!("macOS {}", if arch == "aarch64" { "arm64" } else { arch }) } else { format!("{os} {arch}") }
+}
+
+/// Why the first connect to a server of this platform failed when the
+/// download did (offline, a proxy, GitHub down), in the user's words, then
+/// the library's.
+fn download_failed(os: &str, arch: &str, why: &str) -> String {
+    format!("Couldn't download the runtime helper for {} servers, which Endeavor needs the first time it connects to one. Check that this computer is online, then connect again. ({why})", platform_words(os, arch))
+}
+
+/// What to say when the Helpers release no longer has this app's build, so a
+/// server's helper can't be downloaded: it keeps the builds of recent pins,
+/// and a copy that hasn't updated in a while falls behind. One that updates
+/// itself has most likely fetched a newer build already.
+fn removed_build(os: &str, arch: &str) -> String {
+    format!("This copy of Endeavor{TOO_OLD}{} servers. Restart Endeavor to finish updating, or {DOWNLOAD_AGAIN} to get a newer one.", platform_words(os, arch))
 }
 
 /// This Mac's platform as `helper_for` names a server's.
@@ -264,23 +306,32 @@ const HERE: (&str, &str) = (if cfg!(target_os = "macos") { "darwin" } else { std
 const HELPERS_SCRIPT: &str = "scripts/helpers.sh";
 const NO_HELPER: &str = " has no runtime helper for ";
 const DOWNLOAD_AGAIN: &str = "Download Endeavor again";
+const TOO_OLD: &str = " is too old to download the runtime helper for ";
 
 /// Why a server can't be set up, and what to do: servers of a platform
 /// Endeavor supports need its helper built (in a source checkout) or come
-/// with a fresh download (in the app).
+/// with a fresh download (in the app). A Windows app ships no helpers, so one
+/// built without the release's key can't get them at all.
 fn missing_helper(os: &str, arch: &str, bundled: bool) -> String {
-    let linux = os.eq_ignore_ascii_case("linux") && matches!(arch, "x86_64" | "aarch64");
-    let mac = (os.to_lowercase().as_str(), arch) == HERE && os.eq_ignore_ascii_case("darwin");
-    if !linux && !mac {
+    if !supported(os, arch) {
         return format!("Endeavor can't run on {os} {arch} servers.");
     }
-    let platform = if mac { format!("macOS {}", if arch == "aarch64" { "arm64" } else { arch }) } else { format!("{os} {arch}") };
-    let fix = if linux { format!("Get it with {HELPERS_SCRIPT}") } else { "Build it with cargo build".into() };
-    if bundled {
-        format!("This copy of Endeavor{NO_HELPER}{platform} servers. {DOWNLOAD_AGAIN} to get one.")
-    } else {
-        format!("This build of Endeavor{NO_HELPER}{platform} servers. {fix} in Endeavor's source folder, then connect again.")
+    let platform = platform_words(os, arch);
+    if bundled && cfg!(windows) {
+        return format!("This copy of Endeavor can't get the runtime helper for {platform} servers: it was built without the key for downloading one.");
     }
+    if bundled {
+        return format!("This copy of Endeavor{NO_HELPER}{platform} servers. {DOWNLOAD_AGAIN} to get one.");
+    }
+    let fix = if is_this_mac(os, arch) {
+        "Build it with cargo build"
+    } else if os.eq_ignore_ascii_case("linux") {
+        &format!("Get it with {HELPERS_SCRIPT}")
+    } else {
+        // Another Mac's: only a build that knows its release key downloads one.
+        return format!("This build of Endeavor{NO_HELPER}{platform} servers, and can't download one: only Endeavor's own builds can.");
+    };
+    format!("This build of Endeavor{NO_HELPER}{platform} servers. {fix} in Endeavor's source folder, then connect again.")
 }
 
 /// What the app can offer for a connection that failed for want of a helper.
@@ -294,14 +345,18 @@ pub enum HelperFix {
 
 impl HelperFix {
     pub fn of(reason: &str) -> Option<HelperFix> {
-        if !reason.contains(NO_HELPER) {
+        if reason.contains(TOO_OLD) {
+            Some(HelperFix::Download)
+        } else if !reason.contains(NO_HELPER) {
             None
         } else if reason.contains(DOWNLOAD_AGAIN) {
             Some(HelperFix::Download)
         } else if reason.contains(HELPERS_SCRIPT) {
             Some(HelperFix::Build(HELPERS_SCRIPT))
-        } else {
+        } else if reason.contains("cargo build") {
             Some(HelperFix::Build("cargo build"))
+        } else {
+            None
         }
     }
 
@@ -464,15 +519,38 @@ mod tests {
         assert_eq!(linux, "This build of Endeavor has no runtime helper for Linux x86_64 servers. Get it with scripts/helpers.sh in Endeavor's source folder, then connect again.");
         assert_eq!(HelperFix::of(&linux), Some(HelperFix::Build("scripts/helpers.sh")));
         let app = missing_helper("Linux", "aarch64", true);
-        assert_eq!(app, "This copy of Endeavor has no runtime helper for Linux aarch64 servers. Download Endeavor again to get one.");
-        assert_eq!(HelperFix::of(&app), Some(HelperFix::Download));
+        if cfg!(windows) {
+            // The Windows app ships no helpers: downloading again wouldn't help.
+            assert_eq!(app, "This copy of Endeavor can't get the runtime helper for Linux aarch64 servers: it was built without the key for downloading one.");
+            assert_eq!(HelperFix::of(&app), None);
+        } else {
+            assert_eq!(app, "This copy of Endeavor has no runtime helper for Linux aarch64 servers. Download Endeavor again to get one.");
+            assert_eq!(HelperFix::of(&app), Some(HelperFix::Download));
+        }
         assert_eq!(HelperFix::Download.command(), None);
         assert_eq!(missing_helper("Linux", "riscv64", false), "Endeavor can't run on Linux riscv64 servers.");
+        assert_eq!(missing_helper("FreeBSD", "x86_64", true), "Endeavor can't run on FreeBSD x86_64 servers.");
+        // Another Mac than this one: the release has its helper, but a source build can't download it.
+        let other = if HERE == ("darwin", "aarch64") { "x86_64" } else { "aarch64" };
+        let mac = missing_helper("Darwin", other, false);
+        assert_eq!(mac, format!("This build of Endeavor has no runtime helper for {} servers, and can't download one: only Endeavor's own builds can.", platform_words("Darwin", other)));
+        assert_eq!(HelperFix::of(&mac), None);
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             let mac = missing_helper("Darwin", "aarch64", false);
             assert_eq!(mac, "This build of Endeavor has no runtime helper for macOS arm64 servers. Build it with cargo build in Endeavor's source folder, then connect again.");
             assert_eq!(HelperFix::of(&mac).and_then(HelperFix::command), Some(format!("cd '{}' && cargo build", env!("CARGO_MANIFEST_DIR"))));
-            assert_eq!(missing_helper("Darwin", "x86_64", true), "Endeavor can't run on Darwin x86_64 servers.");
         }
     }
+
+    #[test]
+    fn an_old_build_says_to_update() {
+        let old = removed_build("Linux", "x86_64");
+        assert_eq!(old, "This copy of Endeavor is too old to download the runtime helper for Linux x86_64 servers. Restart Endeavor to finish updating, or Download Endeavor again to get a newer one.");
+        assert_eq!(HelperFix::of(&old), Some(HelperFix::Download));
+        let offline = download_failed("Darwin", "x86_64", "Couldn't download https://example (curl: (6) Could not resolve host).");
+        assert_eq!(offline, "Couldn't download the runtime helper for macOS x86_64 servers, which Endeavor needs the first time it connects to one. Check that this computer is online, then connect again. (Couldn't download https://example (curl: (6) Could not resolve host).)");
+        assert_eq!(HelperFix::of(&offline), None);
+        assert_eq!(removed_build("Darwin", "x86_64"), "This copy of Endeavor is too old to download the runtime helper for macOS x86_64 servers. Restart Endeavor to finish updating, or Download Endeavor again to get a newer one.");
+    }
 }
+

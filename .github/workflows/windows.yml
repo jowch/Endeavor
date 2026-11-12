@@ -43,10 +43,38 @@ jobs:
   # layout install::resources() looks for (the exe's folder's parent). Julia,
   # Node and the agents are installed on first run, as on macOS.
   # It also builds the installer (scripts/installer.iss) from that layout.
-  # ponytail: no signing and no server helpers (#12; Windows can't connect to
-  # servers yet).
+  # It ships no server helpers: it downloads the one a server needs from
+  # EndeavorMCP's Helpers release when it first connects (src/remote.rs), by
+  # the key of the EndeavorMCP commit Cargo.lock pins, which the build embeds.
+  # ponytail: no signing (#12).
+  helpers-key:
+    name: server helpers' key
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      # Fails if the Helpers release has no build for the pinned commit,
+      # rather than shipping an app that can't set up servers: Helpers never
+      # built it, or pruned it (scripts/prune-helpers.sh).
+      - id: key
+        run: |
+          set -eu
+          key=$(scripts/helpers.sh --key)
+          case "$key" in ''|*[!0-9a-f]*) echo "::error::scripts/helpers.sh --key printed '$key', not a key."; exit 1 ;; esac
+          curl -fsSL "https://github.com/jowch/EndeavorMCP/releases/download/helpers/endeavor-$key.sha256" > sums || {
+            echo "::error::EndeavorMCP's Helpers release has no build $key, for the commit Cargo.lock pins. Wait for its Helpers run, or pin a newer commit."
+            exit 1
+          }
+          for platform in linux-x86_64 linux-aarch64 darwin-x86_64 darwin-aarch64; do
+            grep -q " endeavor-$key-$platform\$" sums || { echo "::error::Build $key on the Helpers release has no $platform helper."; exit 1; }
+          done
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
   package:
     name: windows-x86_64 build
+    needs: helpers-key
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: windows-latest
     steps:
@@ -66,6 +94,7 @@ jobs:
         env:
           RUSTFLAGS: -C target-feature=+crt-static
           ENDEAVOR_CHANNEL: ${{ github.event_name == 'push' && 'nightly' || 'dev' }}
+          ENDEAVOR_RELEASE_KEY: ${{ needs.helpers-key.outputs.key }}
         run: cargo build --locked --release -p endeavor --bin endeavor
       # Fails if the exe needs a DLL that a fresh Windows doesn't have.
       - name: Check the DLLs it needs

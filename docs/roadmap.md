@@ -81,7 +81,9 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 - **Windows.** It builds and its tests pass in CI, which also keeps a
   build to try and a per-user installer ([windows.md](windows.md#install)).
   A local notebook with a real Claude session has run from the installer on
-  Windows 10; servers (the build has no server helpers) and signing are left. See [windows.md](windows.md), and [linux.md](linux.md)
+  Windows 10, and so has a notebook on a Linux server over an ssh key (the
+  build downloads a server's helper when it first connects). Signing is left,
+  and so is a server that asks for a password (#204). See [windows.md](windows.md), and [linux.md](linux.md)
   for the Linux port's remaining work.
 - **Upstream to mthelm85/PlutoMCP.jl.** The runtime started from a fork of
   PlutoMCP that carried several general improvements (`new_notebook`, run
@@ -121,4 +123,4 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `own_julia.rs` `install_own_julia` | Settings' Install and a Julia notebook opened meanwhile can both download Endeavor's Julia at once (Install waits while the runtime is starting Julia, not the other way round); the second fails its check or rename, and trying again works | it bites |
 | `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
 | `.github/workflows/nightly.yml` | without the Developer ID secrets the Mac nightly builds ad-hoc signed and isn't published; Apple Silicon only | sharing (above) |
-| `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns), and the build has no server helpers | the installer is shared (#12) |
+| `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns) | the installer is shared (#12) |

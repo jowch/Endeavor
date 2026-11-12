@@ -3,8 +3,11 @@
 Design for running notebooks on a remote machine (a lab server, a cloud VM, or
 an HPC cluster) from the Endeavor app on macOS, Linux, or Windows. Plain
 servers (the process launcher) and clusters (Slurm) are built. A Linux client
-reaches servers too ([linux.md](linux.md)); a Windows client can't connect
-yet ([windows.md](windows.md)).
+reaches servers too ([linux.md](linux.md)), and so does a Windows client
+with an ssh key; a password prompt from Windows hasn't been tried
+([windows.md](windows.md)). The Windows app downloads a
+server's helper the first time it connects; the Mac app carries the Linux
+ones and its own, and downloads any other, such as an Intel Mac's.
 
 _Drafted 2026-09-26_
 
