@@ -158,27 +158,6 @@ test("Pluto's list and table views pick as one output, and a widget's quote hold
   assert.equal(sent.at(-1).picks[0].text, "range: 13", "never a password's value");
 });
 
-test("a click that lands on a cell's edge while the pointer is over its output picks the output", async () => {
-  const { window, $, mouse, comment, sent } = await page();
-  const cell = window.document.getElementById(A);
-  const output = cell.querySelector("pluto-output");
-  const p = $("pluto-output p");
-  const rect = (r) => () => ({ left: r[0], top: r[1], right: r[2], bottom: r[3], width: r[2] - r[0], height: r[3] - r[1] });
-  cell.getBoundingClientRect = rect([0, 0, 500, 300]);
-  output.getBoundingClientRect = rect([10, 10, 490, 100]);
-  // As in Claude's desktop app with an R output: the event's target is the cell.
-  window.document.elementsFromPoint = () => [p, output, cell];
-  mouse(cell, "click", 50, 20);
-  assert.equal($("#annotate-bar .status").textContent, "Output of rates");
-  assert.ok(p.classList.contains("annotate-picked"));
-  window.document.elementsFromPoint = () => [cell];
-  mouse(cell, "click", 50, 20);
-  assert.ok(output.classList.contains("annotate-picked"), "nothing hit-testable under it: the output whose box holds the pointer");
-  mouse(cell, "click", 50, 200);
-  comment("y");
-  assert.deepEqual(sent.at(-1).picks, [{ part: "cell", cell: A, code: CODE }], "off the output, the edge still picks the cell");
-});
-
 const { outputFiles } = buildSync({ entryPoints: [new URL("../src/place.ts", import.meta.url).pathname], bundle: true, format: "esm", write: false });
 const place = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString("base64")}`);
 

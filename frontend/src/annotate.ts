@@ -96,27 +96,6 @@ export function targetAt(el: Element | null): Target | null {
   return { part: output.querySelector(FIGURE) ? "figure" : "output", cell, el: output };
 }
 
-const inside = (r: DOMRect, x: number, y: number) => r.width > 0 && r.height > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-
-/** What the pointer is over for a mouse event. Mostly `targetAt` its target; but
- * when the event lands on a cell's edge (or outside any cell) while the pointer
- * is over a cell's code or output, that code or output: what the page hit-tests
- * there, else (for a cell's edge) the code or output box holding the pointer. A click on an R output
- * in Claude's desktop app came to the page as one on the cell itself. */
-export function pointTarget(e: MouseEvent): Target | null {
-  const found = targetAt(e.target as Element | null);
-  if (found && found.part !== "cell") return found;
-  const [x, y] = [e.clientX, e.clientY];
-  for (const el of document.elementsFromPoint?.(x, y) ?? []) {
-    const under = el.closest("pluto-output, pluto-input") ? targetAt(el) : null;
-    if (under && (!found || under.cell === found.cell)) return under;
-  }
-  // Not hit-testable (`pointer-events: none`, or under something that is): the box that holds the pointer.
-  for (const part of found?.cell.querySelectorAll<HTMLElement>("pluto-output, pluto-input") ?? [])
-    if (inside(part.getBoundingClientRect(), x, y)) return targetAt(part);
-  return found;
-}
-
 /** The values a widget output shows (a slider's position, a box's text), for
  * the quote when the output has no text of its own. */
 export function widgetValues(el: Element): string {
@@ -386,7 +365,7 @@ export function initAnnotate(answered = false): void {
       justDragged = false;
       return;
     }
-    const found = pointTarget(m);
+    const found = targetAt(target);
     if (found) choose(targetPick(found), m.shiftKey);
   };
   for (const type of ["pointerdown", "mousedown", "click"]) document.addEventListener(type, swallow, true);
@@ -395,7 +374,7 @@ export function initAnnotate(answered = false): void {
     "mousemove",
     (e) => {
       if (!active()) return;
-      if (!drag) return showHover(ours(e.target as Element) ? null : pointTarget(e));
+      if (!drag) return showHover(ours(e.target as Element) ? null : targetAt(e.target as Element));
       if (!drag.moved && Math.hypot(e.clientX + window.scrollX - drag.x, e.clientY + window.scrollY - drag.y) < DRAG) return;
       drag.moved = true;
       e.preventDefault();

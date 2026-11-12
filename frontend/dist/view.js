@@ -495,19 +495,6 @@
     if (paragraph && output.contains(paragraph)) return { part: "output", cell, el: paragraph };
     return { part: output.querySelector(FIGURE) ? "figure" : "output", cell, el: output };
   }
-  var inside = (r, x, y) => r.width > 0 && r.height > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-  function pointTarget(e) {
-    const found = targetAt(e.target);
-    if (found && found.part !== "cell") return found;
-    const [x, y] = [e.clientX, e.clientY];
-    for (const el of document.elementsFromPoint?.(x, y) ?? []) {
-      const under = el.closest("pluto-output, pluto-input") ? targetAt(el) : null;
-      if (under && (!found || under.cell === found.cell)) return under;
-    }
-    for (const part of found?.cell.querySelectorAll("pluto-output, pluto-input") ?? [])
-      if (inside(part.getBoundingClientRect(), x, y)) return targetAt(part);
-    return found;
-  }
   function widgetValues(el) {
     return [...el.querySelectorAll("input, select, textarea")].filter((i) => !(i instanceof HTMLInputElement) || !["hidden", "password", "file", "button", "submit", "reset", "image"].includes(i.type)).map((i) => {
       const kind = i instanceof HTMLInputElement ? i.type : i.tagName.toLowerCase();
@@ -725,7 +712,7 @@
         justDragged = false;
         return;
       }
-      const found = pointTarget(m);
+      const found = targetAt(target);
       if (found) choose(targetPick(found), m.shiftKey);
     };
     for (const type of ["pointerdown", "mousedown", "click"]) document.addEventListener(type, swallow, true);
@@ -733,7 +720,7 @@
       "mousemove",
       (e) => {
         if (!active()) return;
-        if (!drag) return showHover(ours(e.target) ? null : pointTarget(e));
+        if (!drag) return showHover(ours(e.target) ? null : targetAt(e.target));
         if (!drag.moved && Math.hypot(e.clientX + window.scrollX - drag.x, e.clientY + window.scrollY - drag.y) < DRAG) return;
         drag.moved = true;
         e.preventDefault();
