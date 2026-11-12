@@ -48,7 +48,7 @@ test("the view's look leaves Pluto's header and docs panel to the toolbar's rule
   assert.match($("#endeavor-point").textContent, /Point⌘⇧E/);
   // Claude's side panel goes down to about 320 px: smaller headings there, and long words wrap.
   const narrow = $("#endeavor-narrow").textContent;
-  assert.match(narrow, /max-width: 480px[\s\S]*h1 \{ font-size: 1\.6rem/);
+  assert.match(narrow, /max-width: 600px[\s\S]*h1 \{ font-size: 1\.6rem/);
   assert.match(narrow, /overflow-wrap: break-word/);
 });
 
@@ -101,17 +101,24 @@ test("a code completion list closes once the user is in Claude's chat, but not w
   assert.equal($(".cm-tooltip-autocomplete"), null);
 });
 
-test("Pluto's website chrome gives way to one toolbar: the file, what Pluto is doing, Docs and Point", async () => {
+test("Pluto's website chrome gives way to one toolbar: the file, what Pluto is doing, Docs, Status and Point", async () => {
   const { window, $ } = page();
   const css = $("#endeavor-chrome").textContent;
   assert.match(css, /footer \{ display: none/, "no footer (Settings, FAQ)");
   assert.match(css, /header#pluto-nav \{ display: none/, "no Pluto header (file box, Move, share)");
   assert.match(css, /process_waiting_for_permission[^{]*> header#pluto-nav \{\s*display: block/, "but its band when the notebook needs the user");
-  assert.match(css, /pluto-helpbox\.hidden, pluto-helpbox\.helpbox-process \{ display: none/, "no floating Live docs and Status tabs");
+  assert.match(css, /pluto-helpbox\.hidden \{ display: none/, "no floating Live docs and Status tabs");
+  assert.match(css, /pluto-helpbox > header \{ display: none/, "nor the panel's own tabs: the toolbar opens it");
   assert.match(css, /\.outline-frame-actions-container\.safe-preview \{ display: none/, "no floating safe-preview badge");
   const bar = $("#endeavor-bar");
   assert.equal(bar, window.document.body.firstElementChild);
-  assert.ok(bar.querySelector(".docs"));
+  assert.ok(bar.querySelector(".panel.docs"));
+  assert.ok(bar.querySelector(".panel.process"), "Status, Pluto's other bottom tab");
+  const opened = [];
+  window.addEventListener("open_bottom_right_panel", (e) => opened.push(e.detail));
+  bar.querySelector(".panel.process").click();
+  assert.deepEqual(opened, [], "a script's click doesn't open the panel: only the user's");
+  assert.match($("#endeavor-space").textContent, /padding-left: var\(--e-left\)/, "the cells reach from the eye to the scrollbar");
   assert.equal(bar.querySelector("#endeavor-point"), $("#endeavor-point"), "Point is in the toolbar");
   window.editor_state = { notebook: { path: "/home/me/work/growth.jl", process_status: "ready", status_tree: null, nbpkg: null, cell_order: [], cell_inputs: {}, cell_results: {} } };
   window.document.body.append(window.document.createElement("i"));
