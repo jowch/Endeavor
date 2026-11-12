@@ -723,10 +723,11 @@
     background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); }
   .endeavor-prompt .head { display: flex; align-items: center; gap: 8px; padding: 0 2px 0 4px; font-size: 12px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; }
-  .endeavor-prompt .what { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
+  /* In a narrow bar (Claude's side panel goes down to about 320 px) the key hints give way first, so what was picked still reads. */
+  .endeavor-prompt .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .what svg { flex: none; }
   .endeavor-prompt .what .name { font-family: JuliaMono, ui-monospace, monospace; font-size: 11.5px; color: var(--e-text-secondary); }
-  .endeavor-prompt .keys { flex: none; font-size: 11px; }
+  .endeavor-prompt .keys { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
   .endeavor-prompt .quote { margin: 0 4px; border-left: 2px solid var(--e-control-edge); padding-left: 8px; font-size: 11.5px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .quote.code { font-family: JuliaMono, ui-monospace, monospace; }
@@ -893,10 +894,12 @@
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
     border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
+  /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
-    display: none; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; border: 1px solid transparent;
-    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; white-space: nowrap; }
-  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; }
+    display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
+    box-sizing: border-box; max-width: calc(100vw - 16px); width: max-content; text-align: center;
+    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
+  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; white-space: nowrap; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
     z-index: 10000; display: none; flex-direction: column; gap: 6px; box-sizing: border-box;

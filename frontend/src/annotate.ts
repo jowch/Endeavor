@@ -37,10 +37,12 @@ const css = `
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
     border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
+  /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
-    display: none; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; border: 1px solid transparent;
-    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; white-space: nowrap; }
-  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; }
+    display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
+    box-sizing: border-box; max-width: calc(100vw - 16px); width: max-content; text-align: center;
+    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
+  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; white-space: nowrap; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
     z-index: 10000; display: none; flex-direction: column; gap: 6px; box-sizing: border-box;

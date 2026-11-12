@@ -45,6 +45,10 @@ test("the view's look keeps Pluto's header and docs panel, and shows a Point but
   assert.ok(!css.includes("#helpbox-wrapper"), "Pluto's Live docs stay: the view has no drawer");
   assert.equal(window.document.documentElement.dataset.endeavorLook, "endeavor");
   assert.match($("#endeavor-point").textContent, /Point⌘⇧E/);
+  // Claude's side panel goes down to about 320 px: smaller headings there, and long words wrap.
+  const narrow = $("#endeavor-narrow").textContent;
+  assert.match(narrow, /max-width: 480px[\s\S]*h1 \{ font-size: 1\.6rem/);
+  assert.match(narrow, /overflow-wrap: break-word/);
 });
 
 test("Point sends nothing for keys a page script makes up", async () => {
