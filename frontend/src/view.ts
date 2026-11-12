@@ -19,6 +19,7 @@ import { setHost, type ToApp } from "./bridge";
 import { cellName } from "./cellname";
 import { mac, modHeld } from "./keys";
 import type { Pick } from "./quote";
+import { initNarrow } from "./narrow";
 import { initTheme } from "./theme";
 
 /** What the view gives the page: Claude's chat. */
@@ -149,6 +150,7 @@ export function start(notebook: string, host: Host): void {
     );
   });
   initTheme();
+  initNarrow();
   closeStrayCompletions();
   followNewCells();
   receive({ type: "theme", name: "view" });
