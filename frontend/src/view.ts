@@ -28,22 +28,27 @@ import { initTheme } from "./theme";
 export type Host = {
   /** Whether the host takes messages from the view (`send`); without it there is no Point. */
   canSend: boolean;
+  /** The notebook's engine, which names it in a quote's uri as the app does: "ember" for an R notebook. Pluto without it. */
+  engine?: Engine;
   /** Pass `text` to the chat as the user's message (the host may wait for the user to send it). */
   send(text: string): Promise<void>;
   /** Open `url` in the user's browser (MCP Apps' ui/open-link; Claude's desktop app asks the user first). Without it, links stay as they are. */
   openLink?(url: string): Promise<void>;
 };
 
+/** A notebook engine, by the name the app's quote uris use (wire's `Backend::name`). */
+export type Engine = "pluto" | "ember";
+
 /** How the quotes read. Keep in step with the app's attach::quote_note and quote_block (src/attach.rs). */
-const FORMAT =
-  "A quote's uri, notebook://pluto/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are " +
+const format = (engine: Engine) =>
+  "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are " +
   "line numbers in the cell's code, counting from 1. `part` says what was quoted when it isn't code: `output` (text from " +
   "the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists " +
   "the cells under it). No picture comes with a figure or box here: read current code and outputs with the notebook MCP tools.";
 
 /** What Claude is told once in a message that quotes the notebook. */
-export const QUOTE_NOTE =
-  "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + FORMAT;
+export const quoteNote = (engine: Engine = "pluto") =>
+  "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
 
 // Claude's desktop app adds the message at the end of its box, straight after anything the user typed,
 // and trims its leading whitespace (probed 2026-11-12), so a visible mark starts it and its newlines
@@ -52,13 +57,13 @@ export const QUOTE_NOTE =
 const LEAD = "\u2193";
 const LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
 
-const uri = (notebook: string, cell: string) => `notebook://pluto/${notebook}/cell/${cell}`;
+const uri = (notebook: string, cell: string, engine: Engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
 
 /** One pick as a `<quote>` (the app's attach::quote_block). */
-export function quoteBlock(notebook: string, pick: Pick): string {
-  if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c)).join(" ")}"/>`;
+export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto"): string {
+  if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
   const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
-  const where = uri(notebook, pick.cell);
+  const where = uri(notebook, pick.cell, engine);
   switch (pick.part) {
     case "cell":
       return `<quote ${at} uri="${where}">\n${pick.code}\n</quote>`;
@@ -72,8 +77,8 @@ export function quoteBlock(notebook: string, pick: Pick): string {
 }
 
 /** The quotes of one ↩ or ⌘↩: each pick, then the comment after the last. */
-export function quoteText(notebook: string, picks: Pick[], comment: string): string {
-  const blocks = picks.map((p) => quoteBlock(notebook, p));
+export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto"): string {
+  const blocks = picks.map((p) => quoteBlock(notebook, p, engine));
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
@@ -233,6 +238,7 @@ export function start(notebook: string, host: Host): void {
   // Once: a later call (a notebook's own script, say) can't take Point's way into the chat.
   if (started) return;
   started = true;
+  const engine: Engine = host.engine === "ember" ? "ember" : "pluto";
   // What ⌘↩ added since the last ↩.
   const added: string[] = [];
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
@@ -249,7 +255,7 @@ export function start(notebook: string, host: Host): void {
   const point = (on: boolean) => receive({ type: "annotate", on });
   setHost((msg: ToApp) => {
     if (msg.type !== "quote" || !msg.picks.length) return;
-    const text = quoteText(notebook, msg.picks, msg.comment);
+    const text = quoteText(notebook, msg.picks, msg.comment, engine);
     // ⌘↩ adds to the message the next ↩ passes, kept here.
     if (msg.add) {
       added.push(text);
@@ -258,7 +264,7 @@ export function start(notebook: string, host: Host): void {
     const earlier = added.splice(0);
     // Claude's desktop app takes a few seconds to show it in its box (2–7 s, 2026-11-12): say it's on its way.
     say("Sending to Claude's chat…", 0);
-    host.send(`${LEAD}\n\n${QUOTE_NOTE}${LEAD_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
+    host.send(`${LEAD}\n\n${quoteNote(engine)}${LEAD_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
       () => {
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
         say("On its way to Claude's message box. Send it from there.", 8000);
