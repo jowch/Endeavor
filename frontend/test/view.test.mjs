@@ -20,7 +20,8 @@ function page() {
   Object.defineProperty(window.navigator, "platform", { value: "MacIntel" });
   window.eval(readFileSync(new URL("../dist/view.js", import.meta.url), "utf8"));
   const told = { sent: [] };
-  window.EndeavorView.start(NB, { canSend: true, send: async (t) => void told.sent.push(t) });
+  told.opened = [];
+  window.EndeavorView.start(NB, { canSend: true, send: async (t) => void told.sent.push(t), openLink: async (u) => void told.opened.push(u) });
   return { window, told, $: (s) => window.document.querySelector(s) };
 }
 
@@ -37,12 +38,12 @@ test("picks become the same <quote> text the app sends", () => {
   assert.equal(quoteText(NB, [{ part: "box", cells: [A, A] }], ""), `<quote part="box" uri="${uri} ${uri}"/>`);
 });
 
-test("the view's look keeps Pluto's header and docs panel, and shows a Point button", () => {
+test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {
   const { window, $ } = page();
   const css = $("#endeavor-theme").textContent;
   assert.ok(css.includes("--main-bg-color"), "Endeavor's colours");
-  assert.ok(!css.includes("header#pluto-nav"), "Pluto's header stays: the view has no app header");
-  assert.ok(!css.includes("#helpbox-wrapper"), "Pluto's Live docs stay: the view has no drawer");
+  assert.ok(!css.includes("header#pluto-nav"), "not the app's rules: the view has no app header");
+  assert.ok(!css.includes("#helpbox-wrapper"), "not the app's drawer");
   assert.equal(window.document.documentElement.dataset.endeavorLook, "endeavor");
   assert.match($("#endeavor-point").textContent, /Point⌘⇧E/);
   // Claude's side panel goes down to about 320 px: smaller headings there, and long words wrap.
@@ -72,6 +73,7 @@ test("a chat that takes no messages from the view gets the look and no Point; st
   window.EndeavorView.start(NB, host);
   assert.ok(window.document.getElementById("endeavor-theme"));
   assert.equal(window.document.getElementById("endeavor-point"), null);
+  assert.ok(window.document.getElementById("endeavor-bar"), "the toolbar, without Point");
   assert.equal(window.document.getElementById("annotate-bar"), null);
   window.EndeavorView.start(NB, { ...host, canSend: true });
   assert.equal(window.document.getElementById("endeavor-point"), null, "a second start does nothing");
@@ -99,12 +101,42 @@ test("a code completion list closes once the user is in Claude's chat, but not w
   assert.equal($(".cm-tooltip-autocomplete"), null);
 });
 
-test("Pluto's bottom overlays sit round Point's button", () => {
-  const { $ } = page();
-  const css = [...$("head").querySelectorAll("style")].map((s) => s.textContent).join("\n");
-  assert.match(css, /pluto-helpbox \{ bottom: 52px/, "Live docs and Status above the button");
-  assert.match(css, /\.outline-frame-actions-container\.safe-preview \{ display: none/, "no floating safe-preview badge for Settings and FAQ to pass under");
-  assert.match(css, /pluto-editor footer \{ padding-bottom: 104px/, "Settings and FAQ above them all at the page's end");
+test("Pluto's website chrome gives way to one toolbar: the file, what Pluto is doing, Docs and Point", async () => {
+  const { window, $ } = page();
+  const css = $("#endeavor-chrome").textContent;
+  assert.match(css, /footer \{ display: none/, "no footer (Settings, FAQ)");
+  assert.match(css, /header#pluto-nav \{ display: none/, "no Pluto header (file box, Move, share)");
+  assert.match(css, /process_waiting_for_permission[^{]*> header#pluto-nav \{\s*display: block/, "but its band when the notebook needs the user");
+  assert.match(css, /pluto-helpbox\.hidden, pluto-helpbox\.helpbox-process \{ display: none/, "no floating Live docs and Status tabs");
+  assert.match(css, /\.outline-frame-actions-container\.safe-preview \{ display: none/, "no floating safe-preview badge");
+  const bar = $("#endeavor-bar");
+  assert.equal(bar, window.document.body.firstElementChild);
+  assert.ok(bar.querySelector(".docs"));
+  assert.equal(bar.querySelector("#endeavor-point"), $("#endeavor-point"), "Point is in the toolbar");
+  window.editor_state = { notebook: { path: "/home/me/work/growth.jl", process_status: "ready", status_tree: null, nbpkg: null, cell_order: [], cell_inputs: {}, cell_results: {} } };
+  window.document.body.append(window.document.createElement("i"));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(bar.querySelector(".file").textContent, "growth.jl", "the name, not the folder");
+  assert.equal(bar.querySelector(".doing").textContent, "", "nothing while idle");
+});
+
+test("the toolbar says what Pluto is doing, and leaves what needs the user to Pluto's band", () => {
+  const { outputFiles } = buildSync({ entryPoints: [new URL("../src/view.ts", import.meta.url).pathname], bundle: true, format: "iife", globalName: "view", write: false });
+  const { window } = new JSDOM("", { runScripts: "outside-only" });
+  window.eval(`${outputFiles[0].text};window.view = view;`);
+  const { doing, fileName, outsideLink } = window.view;
+  assert.equal(outsideLink(" https://example.com/a "), "https://example.com/a");
+  assert.equal(outsideLink("mailto:a@b.c"), "mailto:a@b.c");
+  for (const inside of ["#cell", "javascript:;", "./a.jl", "", null]) assert.equal(outsideLink(inside), null, String(inside));
+  const at = (started, finished) => ({ started_at: started, finished_at: finished, subtasks: {} });
+  const nb = (tree, extra = {}) => ({ process_status: "ready", status_tree: tree, nbpkg: null, cell_order: ["a"], cell_inputs: { a: { code: "x = 1" } }, cell_results: {}, ...extra });
+  const running = { ...at(1, null), subtasks: { run: { ...at(1, null), subtasks: { evaluate: { ...at(1, null), subtasks: { a: at(1, 2), b: at(2, null) } } } } } };
+  assert.equal(doing(nb(running)), "Running 1 of 2");
+  assert.equal(doing(nb({ ...at(1, 2), subtasks: { saving: { ...at(1, 2), success: false, subtasks: {} } } })), "Couldn't save");
+  assert.equal(doing(nb(null, { process_status: "waiting_for_permission" })), "", "Safe preview is Pluto's band");
+  assert.equal(doing(undefined), "");
+  assert.equal(fileName("C:\\work\\a.jl"), "a.jl");
+  assert.equal(fileName(undefined), "Notebook");
 });
 
 // The view with a way to post the page's messages as the user's ↩ would (jsdom makes no trusted keys).
@@ -179,4 +211,31 @@ test("the view brings Claude's new cell into view, until the user scrolls somewh
   add("new3");
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(scrolled, ["new1", "new3"]);
+});
+
+test("no link replaces the view with a blank page, and only the user's own clicks open one", () => {
+  const { window, told } = page();
+  const doc = window.document;
+  doc.body.insertAdjacentHTML("beforeend", `<a id="hash" href="#">r</a><a id="rel" href="./other.jl">o</a><a id="file" href="file:///etc/x">f</a><a id="js" href="javascript:;">j</a><a id="web" href="https://example.com">w</a><a id="handled" href="./x">h</a><p id="target">t</p><a id="jump" href="#target">j</a>`);
+  doc.getElementById("handled").addEventListener("click", (e) => e.preventDefault());
+  const click = (id) => { const e = new window.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }); doc.getElementById(id).dispatchEvent(e); return e.defaultPrevented; };
+  for (const id of ["hash", "rel", "file", "web", "jump"]) assert.ok(click(id), `${id} doesn't navigate`);
+  assert.equal(click("js"), false, "javascript: links run as they are");
+  assert.ok(click("handled"), "a click the page handled stays handled");
+  assert.deepEqual(told.opened, [], "a script's made-up click opens nothing");
+});
+test("in Claude's panel the page takes Claude's palette, with our accent, once the host's variables are there", async () => {
+  const { window, $ } = page();
+  const root = window.document.documentElement;
+  assert.ok(!root.classList.contains("claude-palette"), "no variables: the Endeavor look as it is");
+  const css = $("#endeavor-claude-palette").textContent;
+  assert.match(css, /--e-bg-page: var\(--color-background-primary\)/);
+  assert.match(css, /--main-bg-color: var\(--color-background-primary\)/);
+  assert.ok(!/--e-accent|--cm-color|--e-diff/.test(css), "our accent, code and diff colours stay");
+  for (const v of ["background", "text", "border"]) for (const k of ["primary", "secondary", "tertiary"]) root.style.setProperty(`--color-${v}-${k}`, "light-dark(#fff, #000)");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(root.classList.contains("claude-palette"));
+  root.style.removeProperty("--color-text-tertiary");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(!root.classList.contains("claude-palette"), "not with some missing");
 });

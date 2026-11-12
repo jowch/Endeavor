@@ -324,7 +324,8 @@ export function initAnnotate(answered = false): void {
     const line = el?.closest<HTMLElement>(".cm-line");
     return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
   };
-  const ours = (target: Element) => bar.contains(target) || hint.contains(target);
+  // The view's toolbar (view.ts) too: its Point button ends Point, and Docs opens the docs.
+  const ours = (target: Element) => bar.contains(target) || hint.contains(target) || !!target.closest?.("#endeavor-bar");
 
   // Capture phase so Pluto/CodeMirror never see presses meant for picking.
   const swallow = (e: Event) => {

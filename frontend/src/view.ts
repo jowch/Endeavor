@@ -10,8 +10,9 @@
 // figures and boxes aren't taken here (the app takes them natively), so
 // those picks name their cells and Claude reads the output with its tools.
 // Unlike the app, Point ends once ↩'s message is on its way: the user sends it from Claude's
-// box, where the view's keys don't reach. The view also tidies what Pluto shows there (its
-// overlays at the bottom, a completion list nobody uses) and follows the cells Claude adds.
+// box, where the view's keys don't reach. The view fills Claude's panel: Pluto's header, footer and
+// floating tabs give way to one slim toolbar (the file, what Pluto is doing, Docs, Point). It also
+// closes a completion list nobody uses and follows the cells Claude adds.
 
 import { initAnnotate, pointState } from "./annotate";
 import { initAskBox } from "./askbox";
@@ -20,6 +21,7 @@ import { cellName } from "./cellname";
 import { mac, modHeld } from "./keys";
 import type { Pick } from "./quote";
 import { initNarrow } from "./narrow";
+import { statusModel, type NotebookLike } from "./status";
 import { initTheme } from "./theme";
 
 /** What the view gives the page: Claude's chat. */
@@ -28,6 +30,8 @@ export type Host = {
   canSend: boolean;
   /** Pass `text` to the chat as the user's message (the host may wait for the user to send it). */
   send(text: string): Promise<void>;
+  /** Open `url` in the user's browser (MCP Apps' ui/open-link; Claude's desktop app asks the user first). Without it, links stay as they are. */
+  openLink?(url: string): Promise<void>;
 };
 
 /** How the quotes read. Keep in step with the app's attach::quote_note and quote_block (src/attach.rs). */
@@ -73,27 +77,154 @@ export function quoteText(notebook: string, picks: Pick[], comment: string): str
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
+/** The toolbar's height, without Claude's inset above it. */
+const BAR = 36;
+
+// The view fills Claude's panel edge to edge, as an app does, not a website in a box: Pluto's own
+// website chrome (its header with the file box and Move, the share menu, the footer with Settings and
+// FAQ, the floating Live docs and Status tabs) gives way to one slim toolbar: the file's name, what
+// Pluto is doing, Docs and Point. Pluto's header stays only as the band it turns into when the
+// notebook needs the user (Safe preview's Run notebook code, Restart, Julia stopped, Reconnecting),
+// under the toolbar. (Claude's desktop app reports no safe-area insets in its panel, 2026-11-12.)
+const chrome = `
+  :root { --endeavor-bar: ${BAR}px; }
+  body { padding-top: var(--endeavor-bar); box-sizing: border-box; }
+  footer { display: none !important; }
+  pluto-editor > header#pluto-nav { display: none !important; }
+  pluto-editor:is(.process_waiting_for_permission, .process_dead, .nbpkg_restart_required, .nbpkg_restart_recommended, .disconnected) > header#pluto-nav {
+    display: block !important; position: sticky; top: var(--endeavor-bar); z-index: 60; }
+  pluto-editor > header#pluto-nav nav#at_the_top > :not(#process_status) { display: none !important; }
+  pluto-editor > header#pluto-nav nav#at_the_top { justify-content: center; }
+  pluto-editor > main { padding-top: 16px; }
+  /* What Pluto keeps at the top as the page scrolls (its "Save all changes" button) and where a jump
+     to a cell lands go under the toolbar, not behind it. */
+  pluto-editor main > preamble { top: calc(var(--endeavor-bar) + 5px) !important; }
+  html { scroll-padding-top: calc(var(--endeavor-bar) + 8px); }
+  #endeavor-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 9997; box-sizing: border-box; height: var(--endeavor-bar);
+    display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px;
+    background: var(--e-bg-page); border-bottom: 1px solid var(--e-divider); color: var(--e-text-secondary);
+    font: 12.5px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #endeavor-bar .file { font-weight: 600; color: var(--e-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #endeavor-bar .doing { color: var(--e-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+  #endeavor-bar .grow { flex: 1; }
+  #endeavor-bar button { flex: none; display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: none; border-radius: 6px;
+    background: none; color: var(--e-text-secondary); font: inherit; cursor: pointer; }
+  #endeavor-bar button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
+  #endeavor-bar button.on { color: var(--e-text-primary); background: var(--e-bg-raised); }
+  #endeavor-bar .key { color: var(--e-text-faint); }
+  /* Live docs: Pluto's own panel, as a sheet down the right side under the toolbar, opened from Docs.
+     Not display: none when shut: Pluto alerts "window too small to show docs" whenever it opens a panel
+     it finds undisplayed, and it hides the panel below 500px wide. Its Status tab isn't offered here. */
+  #helpbox-wrapper { display: block !important; }
+  pluto-helpbox.hidden, pluto-helpbox.helpbox-process { display: none !important; }
+  pluto-helpbox { position: fixed !important; top: var(--endeavor-bar) !important; bottom: 0 !important;
+    right: 0 !important; height: auto !important; width: min(380px, 100vw) !important;
+    border-radius: 0 !important; border-left: 1px solid var(--e-divider); box-shadow: -8px 0 24px var(--e-shadow-popover) !important; }
+  /* Its own tabs and close button: Docs in the toolbar opens and closes it. */
+  pluto-helpbox > header { display: none !important; }
+  /* A narrow panel: the name before the shortcut, and the sheet over the whole width. */
+  @media (max-width: 420px) {
+    #endeavor-bar .key { display: none; }
+    pluto-helpbox { border-left: none; }
+  }
+  /* Pluto's floating safe-preview badge is hidden, as in the app: its band and each cell's
+     "Code not executed in Safe preview" already say it. */
+  .outline-frame-actions-container.safe-preview { display: none !important; }
+`;
+
+// Point, from the toolbar, and what it says once ↩ has passed the picks on.
 const css = `
-  #endeavor-point { position: fixed; right: 16px; bottom: 16px; z-index: 9998; display: flex; align-items: center; gap: 6px;
-    height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--e-popover-edge);
-    background: var(--e-popover-bg); color: var(--e-text-secondary); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
-    box-shadow: 0 4px 16px var(--e-shadow-popover); cursor: pointer; }
-  #endeavor-point:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
-  #endeavor-point .key { color: var(--e-text-faint); }
-  body.annotating #endeavor-point { display: none; }
-  /* At the top, under Point's hint, where nothing of Pluto's sits over it. */
-  #endeavor-sent { position: fixed; left: 50%; top: 44px; transform: translateX(-50%); z-index: 10001; display: none;
+  #annotate-hint { top: calc(var(--endeavor-bar) + 8px) !important; }
+  #endeavor-sent { position: fixed; left: 50%; top: calc(var(--endeavor-bar) + 8px); transform: translateX(-50%); z-index: 10001; display: none;
     max-width: calc(100vw - 32px); box-sizing: border-box; text-align: center;
     padding: 4px 12px; border-radius: 12px; background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
   #endeavor-sent.shown { display: block; }
-  /* Pluto's own overlays at the bottom, laid out round Point's button: the Live docs and Status tabs just above it,
-     and Settings and FAQ, at the end of the page, above both. Pluto's floating safe-preview badge is hidden, as
-     in the app: wherever it floats, Settings and FAQ pass under it as the page scrolls, and the header's
-     Run notebook code and each cell's "Code not executed in Safe preview" already say it. */
-  pluto-helpbox { bottom: 52px !important; }
-  .outline-frame-actions-container.safe-preview { display: none !important; }
-  pluto-editor footer { padding-bottom: 104px; }
 `;
+
+/** What Pluto is doing, in words, for the toolbar: nothing when it's idle. What needs the user (Safe preview, Restart, Julia stopped, Reconnecting) is Pluto's own band. */
+export function doing(nb: NotebookLike | undefined): string {
+  if (!nb?.cell_order) return "";
+  const model = statusModel(nb);
+  if (model.busy) return model.busy;
+  if (model.saveFailed) return "Couldn't save";
+  return "";
+}
+
+/** The file's name, without its folder. */
+export const fileName = (path: string | undefined): string => (path ? path.split(/[\\/]/).pop() || "Notebook" : "Notebook");
+
+const book = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 3.2c1.8-.6 3.7-.4 5.5.8 1.8-1.2 3.7-1.4 5.5-.8v9.6c-1.8-.6-3.7-.4-5.5.8-1.8-1.2-3.7-1.4-5.5-.8z"/><path d="M8 4v9.6"/></svg>`;
+
+/** The toolbar: the file's name, what Pluto is doing, Docs, and Point when the chat takes messages. */
+function initBar(withPoint: boolean, point: (on: boolean) => void): void {
+  const style = document.createElement("style");
+  style.id = "endeavor-chrome";
+  style.textContent = chrome;
+  document.head.append(style);
+  const bar = document.createElement("div");
+  bar.id = "endeavor-bar";
+  bar.innerHTML =
+    `<span class="file">Notebook</span><span class="doing">Loading…</span><span class="grow"></span>` +
+    `<button type="button" class="docs" title="Live docs: what the code under the cursor does">${book}<span>Docs</span></button>` +
+    (withPoint
+      ? `<button type="button" id="endeavor-point" title="Point at a cell, its code or its output, and comment on it for Claude"><span>Point</span><span class="key">${mac ? "⌘⇧E" : "Ctrl+Shift+E"}</span></button>`
+      : "");
+  document.body.prepend(bar);
+  const file = bar.querySelector<HTMLElement>(".file")!;
+  const words = bar.querySelector<HTMLElement>(".doing")!;
+  const docs = bar.querySelector<HTMLButtonElement>(".docs")!;
+  const pointButton = bar.querySelector<HTMLButtonElement>("#endeavor-point");
+  const docsOpen = () => !!document.querySelector("pluto-helpbox.helpbox-docs:not(.hidden)");
+  docs.addEventListener("click", (e) => {
+    if (!e.isTrusted) return;
+    window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: docsOpen() ? null : "docs" }));
+    // The search box takes the cursor once Pluto has drawn the panel (it does so on its next render).
+    if (!docsOpen()) setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
+  });
+  pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
+  let last: unknown = null;
+  const tick = () => {
+    const nb = (window as any).editor_state?.notebook as (NotebookLike & { path?: string }) | undefined;
+    if (nb && nb !== last) {
+      last = nb;
+      file.textContent = fileName(nb.path);
+      file.title = file.textContent;
+      words.textContent = doing(nb);
+    }
+    docs.classList.toggle("on", docsOpen());
+    pointButton?.classList.toggle("on", document.body.classList.contains("annotating"));
+  };
+  // Pluto redraws the page whenever its state changes (a cell runs, a panel opens): follow its
+  // redraws, at most every 250 ms, rather than polling a page that is sitting still.
+  let soon = 0;
+  new MutationObserver(() => {
+    if (!soon) soon = window.setTimeout(() => ((soon = 0), tick()), 250);
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+  tick();
+  keepCursorBelowBar();
+}
+
+/**
+ * Where the cursor moves in a cell, it stays in sight below the toolbar. CodeMirror scrolls the cursor
+ * into view by the window's top edge and ignores scroll-padding, so a jump up (⌘↑, Page Up, a long
+ * cell's first line) left it under the toolbar (headless, 2026-11-12).
+ */
+function keepCursorBelowBar(): void {
+  let queued = false;
+  document.addEventListener("selectionchange", () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      const selection = window.getSelection();
+      if (!selection?.rangeCount || !selection.isCollapsed || !(selection.anchorNode as Element | null)?.parentElement?.closest?.(".cm-content")) return;
+      const range = selection.getRangeAt(0);
+      const rect = range.getClientRects()[0] ?? (selection.anchorNode as Element).parentElement!.getBoundingClientRect();
+      const bar = document.getElementById("endeavor-bar")?.getBoundingClientRect().bottom ?? 0;
+      if (rect.bottom > 0 && rect.top < bar + 4) window.scrollBy(0, rect.top - bar - 8);
+    });
+  });
+}
 
 /** Start the look and Point on this page, which shows notebook `notebook`. */
 let started = false;
@@ -152,9 +283,12 @@ export function start(notebook: string, host: Host): void {
   initTheme();
   initNarrow();
   closeStrayCompletions();
+  initLinks(host.openLink);
   followNewCells();
   receive({ type: "theme", name: "view" });
-  // A chat that doesn't take messages from the view gets the look only.
+  initBar(host.canSend, point);
+  followClaudesPalette();
+  // A chat that doesn't take messages from the view gets the look and the toolbar, without Point.
   if (!host.canSend) return;
   initAskBox();
   initAnnotate(true);
@@ -162,13 +296,7 @@ export function start(notebook: string, host: Host): void {
   const style = document.createElement("style");
   style.textContent = css;
   document.head.append(style);
-  const button = document.createElement("button");
-  button.id = "endeavor-point";
-  button.type = "button";
-  button.title = "Point at a cell, its code or its output, and comment on it for Claude";
-  button.innerHTML = `<span>Point</span><span class="key">${mac ? "⌘⇧E" : "Ctrl+Shift+E"}</span>`;
-  button.addEventListener("click", (e) => e.isTrusted && point(true));
-  document.body.append(button, sent);
+  document.body.append(sent);
   // ⌘⇧E (Ctrl+Shift+E) toggles Point, as in the app's menu.
   window.addEventListener(
     "keydown",
@@ -180,6 +308,119 @@ export function start(notebook: string, host: Host): void {
     },
     true,
   );
+}
+
+/** A link the view hands to the host: a web or mail address, not a jump within the page. */
+export function outsideLink(href: string | null): string | null {
+  if (!href) return null;
+  return /^(https?:|mailto:)/i.test(href.trim()) ? href.trim() : null;
+}
+
+/**
+ * Links in cells and Live docs open in the user's browser through the host. The view's frame may not
+ * open windows (Claude's desktop app gives it no allow-popups), so a click on one did nothing
+ * (2026-11-12). Any other link that would load a page (href="#", a relative path, file:) instead
+ * replaced the view with a blank one, as the frame's page is markup with no address of its own; a jump
+ * within the page ("#cell") scrolls there. In the bubble phase, after the page's own handlers: a click
+ * one of them handled (Pluto's Restart link, a widget's own) is left alone, and so is javascript:.
+ * Only the user's own clicks open anything: a script's made-up click opens nothing.
+ */
+export function initLinks(open: ((url: string) => Promise<void>) | undefined): void {
+  document.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0) return;
+    const link = (e.target as Element | null)?.closest?.("a[href]");
+    if (!link) return;
+    const href = (link.getAttribute("href") ?? "").trim();
+    if (/^javascript:/i.test(href)) return;
+    e.preventDefault();
+    if (/^#./.test(href)) {
+      document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const url = outsideLink(href);
+    if (url && open && e.isTrusted) open(url).catch(() => {});
+  });
+}
+
+// Claude's palette with our accent (Jonathan's pick, 2026-11-12): in Claude's panel, the page's
+// backgrounds, text greys and borders are Claude's own, from the style variables the host sends
+// (MCP Apps' hostContext.styles.variables, which the view puts on <html>; Claude's desktop app sends
+// 76, each a light-dark() pair, so they follow the appearance as Pluto's colours do). Our accent,
+// the code's colours and the diff colours stay Endeavor's. Only while the host sent them: without,
+// the Endeavor look stays as it is.
+export const claudePalette = `
+html.claude-palette {
+  /* Pages, cards, raised controls */
+  --e-bg-page: var(--color-background-primary);
+  --e-bg-sidebar: var(--color-background-secondary);
+  --e-bg-card: var(--color-background-secondary);
+  --e-bg-sunken: var(--color-background-secondary);
+  --e-bg-raised: var(--color-background-tertiary);
+  --e-bg-tag: var(--color-background-tertiary);
+  --e-button-hover: var(--color-background-tertiary);
+  --e-menu-hover: var(--color-background-tertiary);
+  --e-popover-bg: var(--color-background-primary);
+  --e-dialog-bg: var(--color-background-primary);
+  /* Text */
+  --e-text-primary: var(--color-text-primary);
+  --e-text-secondary: var(--color-text-secondary);
+  --e-text-muted: var(--color-text-secondary);
+  --e-text-section: var(--color-text-secondary);
+  --e-text-tag: var(--color-text-secondary);
+  --e-text-faint: var(--color-text-tertiary);
+  --e-text-dim: var(--color-text-tertiary);
+  --e-hint-text: var(--color-text-secondary);
+  /* Edges */
+  --e-border: var(--color-border-tertiary);
+  --e-divider: var(--color-border-tertiary);
+  --e-popover-edge: var(--color-border-secondary);
+  --e-dialog-edge: var(--color-border-secondary);
+  --e-control-edge: var(--color-border-primary);
+  /* Pluto's own colours that the Endeavor look sets */
+  --main-bg-color: var(--color-background-primary);
+  --header-bg-color: var(--color-background-primary);
+  --footer-bg-color: var(--color-background-primary);
+  --pluto-output-bg-color: var(--color-background-primary);
+  --pluto-output-color: var(--color-text-secondary);
+  --pluto-output-h-color: var(--color-text-primary);
+  --rule-color: var(--color-border-tertiary);
+  --code-background: var(--color-background-secondary);
+  --pluto-logs-bg-color: var(--color-background-secondary);
+  --overlay-button-bg: var(--color-background-secondary);
+  --input-context-menu-bg-color: var(--color-background-secondary);
+  --input-context-menu-border-color: var(--color-border-tertiary);
+  --helpbox-bg-color: var(--color-background-secondary);
+  --helpbox-header-bg-color: var(--color-background-tertiary);
+  --helpbox-header-tab-bg-color: var(--color-background-tertiary);
+  --helpbox-header-color: var(--color-text-primary);
+  --helpbox-text-color: var(--color-text-primary);
+  --helpbox-search-bg-color: var(--color-background-primary);
+  --helpbox-search-border-color: var(--color-border-primary);
+  --docs-binding-bg: var(--color-background-tertiary);
+  --export-bg-color: var(--color-background-secondary);
+  --export-color: var(--color-text-primary);
+  --frontmatter-button-bg-color: var(--color-background-tertiary);
+  --frontmatter-input-bg-color: var(--color-background-primary);
+  --frontmatter-input-border-color: var(--color-border-primary);
+  --pluto-runarea-span-color: var(--color-text-tertiary);
+}
+html.claude-palette .pluto-modal { border-color: var(--color-border-secondary); }
+`;
+
+/** Which of Claude's variables the palette needs; without all of them it stays off. */
+const PALETTE_NEEDS = ["--color-background-primary", "--color-background-secondary", "--color-background-tertiary", "--color-text-primary",
+  "--color-text-secondary", "--color-text-tertiary", "--color-border-primary", "--color-border-secondary", "--color-border-tertiary"];
+
+/** Claude's palette is on while the host's variables are on <html> (the view sets them, and sets them again when Claude's change). */
+function followClaudesPalette(): void {
+  const style = document.createElement("style");
+  style.id = "endeavor-claude-palette";
+  style.textContent = claudePalette;
+  document.head.append(style);
+  const root = document.documentElement;
+  const sync = () => root.classList.toggle("claude-palette", PALETTE_NEEDS.every((v) => root.style.getPropertyValue(v).trim() !== ""));
+  new MutationObserver(sync).observe(root, { attributes: true, attributeFilter: ["style"] });
+  sync();
 }
 
 /** How long a code completion list may stay open with no key or click from the user. */
