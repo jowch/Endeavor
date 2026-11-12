@@ -285,6 +285,7 @@ export function start(notebook: string, host: Host): void {
   followNewCells();
   receive({ type: "theme", name: "view" });
   initBar(host.canSend, point);
+  followClaudesPalette();
   // A chat that doesn't take messages from the view gets the look and the toolbar, without Point.
   if (!host.canSend) return;
   initAskBox();
@@ -337,6 +338,87 @@ export function initLinks(open: ((url: string) => Promise<void>) | undefined): v
     const url = outsideLink(href);
     if (url && open && e.isTrusted) open(url).catch(() => {});
   });
+}
+
+// Claude's palette with our accent (Jonathan's pick, 2026-11-12): in Claude's panel, the page's
+// backgrounds, text greys and borders are Claude's own, from the style variables the host sends
+// (MCP Apps' hostContext.styles.variables, which the view puts on <html>; Claude's desktop app sends
+// 76, each a light-dark() pair, so they follow the appearance as Pluto's colours do). Our accent,
+// the code's colours and the diff colours stay Endeavor's. Only while the host sent them: without,
+// the Endeavor look stays as it is.
+export const claudePalette = `
+html.claude-palette {
+  /* Pages, cards, raised controls */
+  --e-bg-page: var(--color-background-primary);
+  --e-bg-sidebar: var(--color-background-secondary);
+  --e-bg-card: var(--color-background-secondary);
+  --e-bg-sunken: var(--color-background-secondary);
+  --e-bg-raised: var(--color-background-tertiary);
+  --e-bg-tag: var(--color-background-tertiary);
+  --e-button-hover: var(--color-background-tertiary);
+  --e-menu-hover: var(--color-background-tertiary);
+  --e-popover-bg: var(--color-background-primary);
+  --e-dialog-bg: var(--color-background-primary);
+  /* Text */
+  --e-text-primary: var(--color-text-primary);
+  --e-text-secondary: var(--color-text-secondary);
+  --e-text-muted: var(--color-text-secondary);
+  --e-text-section: var(--color-text-secondary);
+  --e-text-tag: var(--color-text-secondary);
+  --e-text-faint: var(--color-text-tertiary);
+  --e-text-dim: var(--color-text-tertiary);
+  --e-hint-text: var(--color-text-secondary);
+  /* Edges */
+  --e-border: var(--color-border-tertiary);
+  --e-divider: var(--color-border-tertiary);
+  --e-popover-edge: var(--color-border-secondary);
+  --e-dialog-edge: var(--color-border-secondary);
+  --e-control-edge: var(--color-border-primary);
+  /* Pluto's own colours that the Endeavor look sets */
+  --main-bg-color: var(--color-background-primary);
+  --header-bg-color: var(--color-background-primary);
+  --footer-bg-color: var(--color-background-primary);
+  --pluto-output-bg-color: var(--color-background-primary);
+  --pluto-output-color: var(--color-text-secondary);
+  --pluto-output-h-color: var(--color-text-primary);
+  --rule-color: var(--color-border-tertiary);
+  --code-background: var(--color-background-secondary);
+  --pluto-logs-bg-color: var(--color-background-secondary);
+  --overlay-button-bg: var(--color-background-secondary);
+  --input-context-menu-bg-color: var(--color-background-secondary);
+  --input-context-menu-border-color: var(--color-border-tertiary);
+  --helpbox-bg-color: var(--color-background-secondary);
+  --helpbox-header-bg-color: var(--color-background-tertiary);
+  --helpbox-header-tab-bg-color: var(--color-background-tertiary);
+  --helpbox-header-color: var(--color-text-primary);
+  --helpbox-text-color: var(--color-text-primary);
+  --helpbox-search-bg-color: var(--color-background-primary);
+  --helpbox-search-border-color: var(--color-border-primary);
+  --docs-binding-bg: var(--color-background-tertiary);
+  --export-bg-color: var(--color-background-secondary);
+  --export-color: var(--color-text-primary);
+  --frontmatter-button-bg-color: var(--color-background-tertiary);
+  --frontmatter-input-bg-color: var(--color-background-primary);
+  --frontmatter-input-border-color: var(--color-border-primary);
+  --pluto-runarea-span-color: var(--color-text-tertiary);
+}
+html.claude-palette .pluto-modal { border-color: var(--color-border-secondary); }
+`;
+
+/** Which of Claude's variables the palette needs; without all of them it stays off. */
+const PALETTE_NEEDS = ["--color-background-primary", "--color-background-secondary", "--color-background-tertiary", "--color-text-primary",
+  "--color-text-secondary", "--color-text-tertiary", "--color-border-primary", "--color-border-secondary", "--color-border-tertiary"];
+
+/** Claude's palette is on while the host's variables are on <html> (the view sets them, and sets them again when Claude's change). */
+function followClaudesPalette(): void {
+  const style = document.createElement("style");
+  style.id = "endeavor-claude-palette";
+  style.textContent = claudePalette;
+  document.head.append(style);
+  const root = document.documentElement;
+  const sync = () => root.classList.toggle("claude-palette", PALETTE_NEEDS.every((v) => root.style.getPropertyValue(v).trim() !== ""));
+  new MutationObserver(sync).observe(root, { attributes: true, attributeFilter: ["style"] });
+  sync();
 }
 
 /** How long a code completion list may stay open with no key or click from the user. */

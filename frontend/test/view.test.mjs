@@ -220,3 +220,18 @@ test("no link replaces the view with a blank page, and only the user's own click
   assert.ok(click("handled"), "a click the page handled stays handled");
   assert.deepEqual(told.opened, [], "a script's made-up click opens nothing");
 });
+test("in Claude's panel the page takes Claude's palette, with our accent, once the host's variables are there", async () => {
+  const { window, $ } = page();
+  const root = window.document.documentElement;
+  assert.ok(!root.classList.contains("claude-palette"), "no variables: the Endeavor look as it is");
+  const css = $("#endeavor-claude-palette").textContent;
+  assert.match(css, /--e-bg-page: var\(--color-background-primary\)/);
+  assert.match(css, /--main-bg-color: var\(--color-background-primary\)/);
+  assert.ok(!/--e-accent|--cm-color|--e-diff/.test(css), "our accent, code and diff colours stay");
+  for (const v of ["background", "text", "border"]) for (const k of ["primary", "secondary", "tertiary"]) root.style.setProperty(`--color-${v}-${k}`, "light-dark(#fff, #000)");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(root.classList.contains("claude-palette"));
+  root.style.removeProperty("--color-text-tertiary");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(!root.classList.contains("claude-palette"), "not with some missing");
+});
