@@ -149,13 +149,13 @@ test("Pluto's list and table views pick as one output, and a widget's quote hold
   const { $, sent, click, comment } = await page(
     `<body><pluto-cell id="${A}"><pluto-output><pluto-tree class="Array"><pluto-tree-items class="Array">` +
       `<p-r><p-k>1</p-k><p-v><pre>1</pre></p-v></p-r><p-r><p-k>11</p-k><p-v><pre>11</pre></p-v></p-r></pluto-tree-items></pluto-tree></pluto-output></pluto-cell>` +
-      `<pluto-cell id="${B}"><pluto-output><bond def="n"><input type="range" value="13"></bond></pluto-output></pluto-cell></body>`,
+      `<pluto-cell id="${B}"><pluto-output><bond def="n"><input type="range" value="13"></bond><bond def="secret"><input type="password" value="hunter2"></bond></pluto-output></pluto-cell></body>`,
   );
   click($("p-r:nth-child(2) pre"));
   assert.ok($("pluto-tree").classList.contains("annotate-picked"), "the whole list, not the value under the pointer");
   click($("input"));
   comment("x");
-  assert.equal(sent.at(-1).picks[0].text, "range: 13");
+  assert.equal(sent.at(-1).picks[0].text, "range: 13", "never a password's value");
 });
 
 test("a click that lands on a cell's edge while the pointer is over its output picks the output", async () => {

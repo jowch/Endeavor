@@ -100,7 +100,8 @@ const inside = (r: DOMRect, x: number, y: number) => r.width > 0 && r.height > 0
 
 /** What the pointer is over for a mouse event. Mostly `targetAt` its target; but
  * when the event lands on a cell's edge (or outside any cell) while the pointer
- * is over a cell's code or output, that code or output. A click on an R output
+ * is over a cell's code or output, that code or output: what the page hit-tests
+ * there, else (for a cell's edge) the code or output box holding the pointer. A click on an R output
  * in Claude's desktop app came to the page as one on the cell itself. */
 export function pointTarget(e: MouseEvent): Target | null {
   const found = targetAt(e.target as Element | null);
@@ -110,10 +111,9 @@ export function pointTarget(e: MouseEvent): Target | null {
     const under = el.closest("pluto-output, pluto-input") ? targetAt(el) : null;
     if (under && (!found || under.cell === found.cell)) return under;
   }
-  const cells = found ? [found.cell] : [...document.querySelectorAll<HTMLElement>("pluto-cell")].filter((c) => inside(c.getBoundingClientRect(), x, y));
-  for (const cell of cells)
-    for (const part of cell.querySelectorAll<HTMLElement>("pluto-output, pluto-input"))
-      if (inside(part.getBoundingClientRect(), x, y)) return targetAt(part);
+  // Not hit-testable (`pointer-events: none`, or under something that is): the box that holds the pointer.
+  for (const part of found?.cell.querySelectorAll<HTMLElement>("pluto-output, pluto-input") ?? [])
+    if (inside(part.getBoundingClientRect(), x, y)) return targetAt(part);
   return found;
 }
 
@@ -121,7 +121,8 @@ export function pointTarget(e: MouseEvent): Target | null {
  * the quote when the output has no text of its own. */
 export function widgetValues(el: Element): string {
   return [...el.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea")]
-    .filter((i) => !(i instanceof HTMLInputElement) || !["hidden", "button", "submit"].includes(i.type))
+    // Never a password's, which the quote would put in Claude's message box.
+    .filter((i) => !(i instanceof HTMLInputElement) || !["hidden", "password", "file", "button", "submit", "reset", "image"].includes(i.type))
     .map((i) => {
       const kind = i instanceof HTMLInputElement ? i.type : i.tagName.toLowerCase();
       const value = i instanceof HTMLInputElement && (i.type === "checkbox" || i.type === "radio") ? String(i.checked) : i.value;

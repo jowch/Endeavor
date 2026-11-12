@@ -949,14 +949,12 @@
       const under = el2.closest("pluto-output, pluto-input") ? targetAt(el2) : null;
       if (under && (!found || under.cell === found.cell)) return under;
     }
-    const cells = found ? [found.cell] : [...document.querySelectorAll("pluto-cell")].filter((c) => inside(c.getBoundingClientRect(), x, y));
-    for (const cell of cells)
-      for (const part of cell.querySelectorAll("pluto-output, pluto-input"))
-        if (inside(part.getBoundingClientRect(), x, y)) return targetAt(part);
+    for (const part of found?.cell.querySelectorAll("pluto-output, pluto-input") ?? [])
+      if (inside(part.getBoundingClientRect(), x, y)) return targetAt(part);
     return found;
   }
   function widgetValues(el2) {
-    return [...el2.querySelectorAll("input, select, textarea")].filter((i) => !(i instanceof HTMLInputElement) || !["hidden", "button", "submit"].includes(i.type)).map((i) => {
+    return [...el2.querySelectorAll("input, select, textarea")].filter((i) => !(i instanceof HTMLInputElement) || !["hidden", "password", "file", "button", "submit", "reset", "image"].includes(i.type)).map((i) => {
       const kind = i instanceof HTMLInputElement ? i.type : i.tagName.toLowerCase();
       const value = i instanceof HTMLInputElement && (i.type === "checkbox" || i.type === "radio") ? String(i.checked) : i.value;
       return `${kind}: ${value}`;
