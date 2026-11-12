@@ -36,6 +36,8 @@ test("picks become the same <quote> text the app sends", () => {
     `<quote cell="rates" lines="2-2" uri="${uri}">\n  fit(rows)\n</quote>\n\n<quote cell="rates" part="figure" uri="${uri}"/>\nWhy fit here?`,
   );
   assert.equal(quoteText(NB, [{ part: "box", cells: [A, A] }], ""), `<quote part="box" uri="${uri} ${uri}"/>`);
+  // An R notebook is Ember's, as the app names it.
+  assert.equal(quoteText(NB, [{ part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], "", "ember"), `<quote cell="rates" part="output" uri="notebook://ember/${NB}/cell/${A}">\n[1] 1 4 9\n</quote>`);
 });
 
 test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {
