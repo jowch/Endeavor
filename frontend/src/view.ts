@@ -37,6 +37,13 @@ const FORMAT =
 export const QUOTE_NOTE =
   "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + FORMAT;
 
+// Claude's desktop app adds the message at the end of its box, straight after anything the user typed,
+// and trims its leading whitespace (probed 2026-11-12), so a visible mark starts it and its newlines
+// survive. A dash read to Claude as the user's own text cut off; an arrow pointing down, with a word
+// in the note, doesn't.
+const LEAD = "\u2193";
+const LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
+
 const uri = (notebook: string, cell: string) => `notebook://pluto/${notebook}/cell/${cell}`;
 
 /** One pick as a `<quote>` (the app's attach::quote_block). */
@@ -104,7 +111,7 @@ export function start(notebook: string, host: Host): void {
       return say(`${added.length} added. ${mac ? "↩" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
     }
     const earlier = added.splice(0);
-    host.send(`${QUOTE_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
+    host.send(`${LEAD}\n\n${QUOTE_NOTE}${LEAD_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
       () => {
         if (msg.ref !== undefined) toPage?.({ type: "quote_sent", ref: msg.ref, ok: true });
         say("Passed to the chat");
