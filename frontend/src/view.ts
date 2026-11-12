@@ -128,9 +128,14 @@ export function start(notebook: string, host: Host): void {
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
         say("On its way to Claude's message box. Send it from there.", 8000);
         // The user sends it from Claude's box, where the view's keys (Escape, ⌘⇧E) don't reach, so Point
-        // ends here, unless something was picked or typed since.
-        const now = pointState();
-        if (!now.picks.length && !now.comment.trim()) point(false);
+        // ends once the view has lost the keyboard, unless something was picked or typed since.
+        // While the keyboard stays here, Point stays on for the next pick, and Escape ends it.
+        const end = () => {
+          const now = pointState();
+          if (!now.picks.length && !now.comment.trim()) point(false);
+        };
+        if (!document.hasFocus()) end();
+        else window.addEventListener("blur", end, { once: true });
       },
       (e) => {
         // What ⌘↩ added stays here; Point gets its picks and comment back, for ↩ to send again.
@@ -177,7 +182,7 @@ const STRAY_MS = 5000;
 
 /**
  * Close Pluto's code completion list when the user isn't using it: open while the view doesn't have
- * the keyboard (the user is in Claude's chat), or for STRAY_MS with no key or click since it opened.
+ * the keyboard (the user is in Claude's chat), or for STRAY_MS with no key, click or pointer movement since it opened.
  * Claude's edits land in cells while a cursor sits in one, and a list could stay up over the notebook
  * for as long as Claude worked (2026-11-12). Escape to its editor closes it as the user's Escape would;
  * not while Point is on, whose own Escape ends Point (a list then closes once Point ends).
@@ -185,7 +190,8 @@ const STRAY_MS = 5000;
 function closeStrayCompletions(): void {
   let lastInput = 0;
   let timer = 0;
-  for (const type of ["keydown", "pointerdown"]) window.addEventListener(type, (e) => e.isTrusted && (lastInput = Date.now()), true);
+  // A pointer over the list, or a wheel turn, counts as using it.
+  for (const type of ["keydown", "pointerdown", "pointermove", "wheel"]) window.addEventListener(type, (e) => e.isTrusted && (lastInput = Date.now()), { capture: true, passive: true });
   const list = () => document.querySelector(".cm-tooltip-autocomplete");
   const close = () => {
     const open = list();
@@ -206,19 +212,32 @@ function closeStrayCompletions(): void {
   window.addEventListener("blur", close);
 }
 
-/** How long since the user's last key, click or scroll before the view follows Claude's new cells. */
+/** How long since the user's last key or click before the view follows Claude's new cells. */
 const IDLE_MS = 2000;
+/** How long the view's own scroll to a cell takes, so its scroll events aren't taken for the user's. */
+const OWN_SCROLL_MS = 1000;
 
 /**
- * Bring a cell Claude adds into view, as long as the user isn't busy in the notebook (no key, click
- * or scroll for IDLE_MS): they watch the notebook beside the chat, and otherwise the new cell landed
- * out of sight, or the page moved somewhere else (2026-11-12). A cell the user adds themselves comes
- * right after their click or key, so Pluto shows it as usual. While the page first draws its cells,
- * nothing is followed: Pluto adds them in bursts until it has drawn the whole notebook.
+ * Bring a cell Claude adds into view: the user watches the notebook beside the chat, and otherwise the
+ * new cell landed out of sight (2026-11-12). Only while the user follows along: once they scroll the
+ * page somewhere else, it stays where they put it, until they scroll back to the end of the notebook
+ * (as a chat follows its end). Not within IDLE_MS of a key or click either: a cell the user adds
+ * themselves comes right after one, and Pluto shows it as usual. While the page first draws its
+ * cells, nothing is followed: Pluto adds them in bursts until it has drawn the whole notebook.
  */
 function followNewCells(): void {
   let lastInput = 0;
-  for (const type of ["keydown", "pointerdown", "wheel", "touchmove"]) window.addEventListener(type, (e) => e.isTrusted && (lastInput = Date.now()), { capture: true, passive: true });
+  for (const type of ["keydown", "pointerdown"]) window.addEventListener(type, (e) => e.isTrusted && (lastInput = Date.now()), true);
+  let following = true;
+  let ownScroll = 0;
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (Date.now() - ownScroll < OWN_SCROLL_MS) return;
+      following = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 80;
+    },
+    { passive: true },
+  );
   const known = new Set<string>();
   let settled = false;
   let settle = 0;
@@ -226,6 +245,7 @@ function followNewCells(): void {
   const show = (cell: HTMLElement) => {
     const r = cell.getBoundingClientRect();
     if (r.top >= 0 && r.bottom <= window.innerHeight) return;
+    ownScroll = Date.now();
     cell.scrollIntoView({ block: r.height > window.innerHeight ? "start" : "center", behavior: "smooth" });
   };
   new MutationObserver(() => {
@@ -237,13 +257,13 @@ function followNewCells(): void {
       settle = window.setTimeout(() => (settled = true), 1500);
       return;
     }
-    if (added.length > 3 || Date.now() - lastInput < IDLE_MS) return;
+    if (added.length > 3 || !following || Date.now() - lastInput < IDLE_MS) return;
     const cell = added[added.length - 1];
     const since = Date.now();
     show(cell);
-    // Its output comes once it runs (a plot, say): keep it in view while it grows, for a while, if the user hasn't moved.
+    // Its output comes once it runs (a plot, say): keep it in view while it grows, for a while, while the user follows.
     const grow = new ResizeObserver(() => {
-      if (lastInput > since || Date.now() - since > 15000 || !cell.isConnected) return grow.disconnect();
+      if (!following || lastInput > since || Date.now() - since > 15000 || !cell.isConnected) return grow.disconnect();
       show(cell);
     });
     grow.observe(cell);

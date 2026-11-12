@@ -102,3 +102,77 @@ test("Pluto's bottom overlays sit round Point's button", () => {
   assert.match(css, /\.outline-frame-actions-container\.safe-preview \{ left: 16px/, "the safe-preview badge at the left");
   assert.match(css, /pluto-editor footer \{ padding-bottom: 104px/, "Settings and FAQ above them all at the page's end");
 });
+
+// The view with a way to post the page's messages as the user's ↩ would (jsdom makes no trusted keys).
+function pageWithSend({ focused }) {
+  const { outputFiles } = buildSync({
+    stdin: { contents: `import "./src/view"; import { send } from "./src/bridge"; window.testSend = send;`, resolveDir: new URL("..", import.meta.url).pathname, loader: "ts" },
+    bundle: true, format: "iife", write: false,
+  });
+  const dom = new JSDOM(
+    `<head></head><body><pluto-cell id="${A}"><pluto-output><p>0.42</p></pluto-output><pluto-input><div class="cm-content"><div class="cm-line">x</div></div></pluto-input></pluto-cell></body>`,
+    { url: "http://localhost/", runScripts: "outside-only", pretendToBeVisual: true },
+  );
+  const { window } = dom;
+  window.document.hasFocus = () => focused.now;
+  window.eval(outputFiles[0].text);
+  const sent = [];
+  window.EndeavorView.start(NB, { canSend: true, send: async (t) => void sent.push(t) });
+  const quote = () => window.testSend({ type: "quote", notebook: NB, picks: [{ part: "output", cell: A, code: "x", text: "0.42" }], comment: "Why?", add: false, ref: 1 });
+  return { window, sent, quote, on: () => window.document.body.classList.contains("annotating") };
+}
+
+test("after ↩, Point ends once the view has lost the keyboard to Claude's box, not before", async () => {
+  const focused = { now: true };
+  const { window, sent, quote, on } = pageWithSend({ focused });
+  window.__endeavor.receive({ type: "annotate", on: true });
+  quote();
+  assert.match(window.document.getElementById("endeavor-sent").textContent, /^Sending to Claude's chat/);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 1);
+  assert.match(window.document.getElementById("endeavor-sent").textContent, /message box/);
+  assert.ok(on(), "the keyboard is still here: Point stays on for the next pick");
+  focused.now = false;
+  window.dispatchEvent(new window.Event("blur"));
+  assert.ok(!on(), "the user went to Claude's box: Point ends");
+});
+
+test("after ↩, Point ends at once when the keyboard is already in Claude's box", async () => {
+  const { window, quote, on } = pageWithSend({ focused: { now: false } });
+  window.__endeavor.receive({ type: "annotate", on: true });
+  quote();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(!on());
+});
+
+test("the view brings Claude's new cell into view, until the user scrolls somewhere else", async () => {
+  const { window, $ } = page();
+  const scrolled = [];
+  const add = (id) => {
+    const cell = window.document.createElement("pluto-cell");
+    cell.id = id;
+    cell.getBoundingClientRect = () => ({ top: 2000, bottom: 2100, height: 100 });
+    cell.scrollIntoView = () => scrolled.push(id);
+    $("body").append(cell);
+  };
+  // Cells drawn as the page loads aren't followed.
+  add("loading");
+  await new Promise((r) => setTimeout(r, 1700));
+  assert.deepEqual(scrolled, []);
+  add("new1");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(scrolled, ["new1"]);
+  // The user scrolls away from the end (well after the view's own scroll): new cells stay out of view.
+  await new Promise((r) => setTimeout(r, 1100));
+  Object.defineProperty(window.document.documentElement, "scrollHeight", { value: 5000, configurable: true });
+  window.dispatchEvent(new window.Event("scroll"));
+  add("new2");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(scrolled, ["new1"]);
+  // Back at the end: followed again.
+  Object.defineProperty(window.document.documentElement, "scrollHeight", { value: window.innerHeight, configurable: true });
+  window.dispatchEvent(new window.Event("scroll"));
+  add("new3");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(scrolled, ["new1", "new3"]);
+});
