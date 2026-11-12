@@ -94,16 +94,6 @@ export function start(notebook: string, host: Host): void {
     clearTimeout(hide);
     hide = window.setTimeout(() => sent.classList.remove("shown"), 4000);
   };
-  // Point clears its comment as it sends: when the chat doesn't take it, it goes back in the box.
-  const giveBack = (comment: string, why: string) => {
-    const box = document.querySelector<HTMLTextAreaElement>("#annotate-bar textarea");
-    if (box && !box.value.trim() && comment) {
-      box.value = comment;
-      box.dispatchEvent(new Event("input"));
-    }
-    say(comment ? `${why} Your comment is back in the box.` : why);
-  };
-  const failed = (comment: string) => (e: unknown) => giveBack(comment, `Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}.`);
   setHost((msg: ToApp) => {
     if (msg.type === "shoot") return setTimeout(() => toPage?.({ type: "shot", id: msg.id }));
     if (msg.type !== "quote" || !msg.picks.length) return;
@@ -115,10 +105,15 @@ export function start(notebook: string, host: Host): void {
     }
     const earlier = added.splice(0);
     host.send(`${QUOTE_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
-      () => say("Passed to the chat"),
+      () => {
+        if (msg.ref !== undefined) toPage?.({ type: "quote_sent", ref: msg.ref, ok: true });
+        say("Passed to the chat");
+      },
       (e) => {
+        // What ⌘↩ added stays here; Point gets its picks and comment back, for ↩ to send again.
         added.unshift(...earlier);
-        failed(msg.comment)(e);
+        if (msg.ref !== undefined) toPage?.({ type: "quote_sent", ref: msg.ref, ok: false });
+        say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "↩" : "Enter"} sends again.`);
       },
     );
   });
@@ -129,7 +124,7 @@ export function start(notebook: string, host: Host): void {
   // A chat that doesn't take messages from the view gets the look only.
   if (!host.canSend) return;
   initAskBox();
-  initAnnotate();
+  initAnnotate(true);
 
   const style = document.createElement("style");
   style.textContent = css;

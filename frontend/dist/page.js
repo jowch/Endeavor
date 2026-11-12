@@ -863,9 +863,9 @@
     const part = pick2.part === "lines" ? pick2.lines[0] === pick2.lines[1] ? `line ${pick2.lines[0]}` : `lines ${pick2.lines[0]}\u2013${pick2.lines[1]}` : pick2.part;
     return `${cellName(pick2.code)} \xB7 ${part}`;
   }
-  function sendQuote(picks, comment, add) {
+  function sendQuote(picks, comment, add, ref) {
     const notebook2 = new URLSearchParams(location.search).get("id");
-    send({ type: "quote", notebook: notebook2, picks, comment, add });
+    send({ type: "quote", notebook: notebook2, picks, comment, add, ...ref === void 0 ? {} : { ref } });
   }
   function initQuote() {
     on("shot", (msg) => waiting2.get(msg.id)?.());
@@ -974,7 +974,7 @@
       comment: state?.comment() ?? ""
     };
   }
-  function initAnnotate() {
+  function initAnnotate(answered = false) {
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
@@ -1096,10 +1096,14 @@
       send({ type: "mode", on: enable });
       requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
     }
+    const underWay = /* @__PURE__ */ new Map();
+    let nextRef = 1;
     async function sendComment(add) {
       if (!picks.length) return;
       const sending = picks.splice(0, picks.length);
       const comment = text.value.trim();
+      const ref = !add && answered ? nextRef++ : void 0;
+      if (ref !== void 0) underWay.set(ref, { picks: sending, comment });
       text.value = "";
       text.dispatchEvent(new Event("input"));
       refresh2();
@@ -1110,7 +1114,7 @@
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
         } else out.push(p.pick);
       }
-      sendQuote(out, comment, add);
+      sendQuote(out, comment, add, ref);
     }
     let drag = null;
     let justDragged = false;
@@ -1200,6 +1204,19 @@
     );
     hint.querySelector(".done").onclick = () => set(false);
     on("annotate", (msg) => set(msg.on));
+    on("quote_sent", (msg) => {
+      const sent = underWay.get(msg.ref);
+      underWay.delete(msg.ref);
+      if (msg.ok || !sent) return;
+      set(true);
+      picks.unshift(...sent.picks.filter((p) => !picks.some((q) => samePick(p, q))));
+      if (sent.comment) {
+        text.value = text.value.trim() ? `${sent.comment}
+${text.value}` : sent.comment;
+        text.dispatchEvent(new Event("input"));
+      }
+      refresh2();
+    });
   }
 
   // src/redraw.ts

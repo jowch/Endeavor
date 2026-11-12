@@ -143,7 +143,8 @@ export function pointState(): { picked: string[]; picks: string[]; box: boolean;
   };
 }
 
-export function initAnnotate(): void {
+/** `answered`: the host answers each ↩ with `quote_sent` (Claude's notebook view). */
+export function initAnnotate(answered = false): void {
   const picks: Picked[] = [];
   let hover: Target | null = null;
   const active = () => document.body.classList.contains("annotating");
@@ -282,12 +283,18 @@ export function initAnnotate(): void {
     requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
   }
 
+  // The picks and comment of each ↩ under way, by its ref, until the chat answers (`quote_sent`):
+  // answers can come in any order (a refusal is tried again, a picture takes time).
+  const underWay = new Map<number, { picks: Picked[]; comment: string }>();
+  let nextRef = 1;
   // Stays in Point afterwards, ready for the next pick. Pictures are taken
   // one at a time, each brought into view.
   async function sendComment(add: boolean) {
     if (!picks.length) return;
     const sending = picks.splice(0, picks.length);
     const comment = text.value.trim();
+    const ref = !add && answered ? nextRef++ : undefined;
+    if (ref !== undefined) underWay.set(ref, { picks: sending, comment });
     text.value = "";
     text.dispatchEvent(new Event("input"));
     refresh();
@@ -298,7 +305,7 @@ export function initAnnotate(): void {
         out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
       } else out.push(p.pick);
     }
-    sendQuote(out, comment, add);
+    sendQuote(out, comment, add, ref);
   }
 
   // A press starts a drag: over lines when it starts on code (and ⌥ isn't
@@ -398,4 +405,18 @@ export function initAnnotate(): void {
   hint.querySelector<HTMLElement>(".done")!.onclick = () => set(false);
 
   on("annotate", (msg) => set(msg.on));
+  // Refused: back as they were, ahead of anything picked or typed since, so the next ↩ sends them again.
+  // Point turned off since: it comes back on, with them.
+  on("quote_sent", (msg) => {
+    const sent = underWay.get(msg.ref);
+    underWay.delete(msg.ref);
+    if (msg.ok || !sent) return;
+    set(true);
+    picks.unshift(...sent.picks.filter((p) => !picks.some((q) => samePick(p, q))));
+    if (sent.comment) {
+      text.value = text.value.trim() ? `${sent.comment}\n${text.value}` : sent.comment;
+      text.dispatchEvent(new Event("input"));
+    }
+    refresh();
+  });
 }
