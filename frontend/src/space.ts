@@ -29,21 +29,24 @@ const css = `
   pluto-editor:not(.disable_ui) > main { padding-bottom: 96px !important; }
   /* The page is the panel's height under the toolbar, so a short notebook doesn't scroll by the toolbar's height. */
   body > div:has(> pluto-editor) { min-height: calc(100vh - var(--endeavor-bar)) !important; }
-  @media (max-width: 799px) {
+  /* 760 px is where the panel ends and full screen begins, here and for Docs and Status (view.ts):
+     below it they open as a drawer along the bottom, from it as a sheet down the right. */
+  @media (max-width: 759px) {
     /* The panel: cells from the eye to the scrollbar, whatever the width. */
     pluto-editor main { margin-left: 0 !important; margin-right: 0 !important; width: 100% !important; max-width: none !important;
       box-sizing: border-box; padding-left: var(--e-left) !important; padding-right: var(--e-right) !important; }
   }
-  @media (min-width: 800px) {
-    /* Full screen: a wider column, centred, for long code lines and wide tables; prose keeps a
-       readable measure. Not beside PlutoUI's table of contents, which floats at the right. */
+  @media (min-width: 760px) {
+    /* Full screen: a wider column, centred, for long code lines and wide tables. Prose keeps a
+       readable measure (the cap holds a Markdown cell's own images and tables to it too). Not beside
+       PlutoUI's table of contents, which floats at the right. */
     ${PLUTO}:not(:has(.plutoui-toc.aside)) main, ${EMBER} main { max-width: 1031px !important; margin-left: auto !important; margin-right: auto !important; }
     pluto-output .markdown { max-width: 720px; }
-  }
-  @media (min-width: 760px) {
-    /* With Docs or Status open as a sheet down the right (view.ts), the column moves out from under it. */
-    body:has(pluto-helpbox:not(.hidden)) :is(${PLUTO}, ${EMBER}) main { margin-left: auto !important; margin-right: 392px !important;
-      max-width: min(1031px, calc(100% - 412px)) !important; }
+    /* With Docs or Status open as a sheet down the right (view.ts), the column moves out from under it,
+       to the left edge. The selector must outweigh the column rule above (1,2,2: its :has(.plutoui-toc.aside)
+       counts two classes); this one is (1,2,4). */
+    body:has(pluto-helpbox:not(.hidden)) :is(${PLUTO}, ${EMBER}):not(.disable_ui) main { margin-left: 0 !important; margin-right: 392px !important;
+      padding-left: var(--e-left) !important; max-width: min(1031px, calc(100% - 392px)) !important; }
   }
   /* A Markdown cell's first heading starts at the top of its output, not a line below it. */
   pluto-editor pluto-output .markdown > :first-child { margin-top: 0 !important; }
