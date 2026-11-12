@@ -143,7 +143,9 @@ export function pointState(): { picked: string[]; picks: string[]; box: boolean;
   };
 }
 
-/** `answered`: the host answers each ↩ with `quote_sent` (Claude's notebook view). */
+/** `answered`: the host answers each ↩ with `quote_sent`, and takes no pictures (Claude's notebook view):
+ * a figure or box goes at once, without the wait for a picture, which held the message back for
+ * seconds there (no "shot" ever came), past the moment the host takes it. */
 export function initAnnotate(answered = false): void {
   const picks: Picked[] = [];
   let hover: Target | null = null;
@@ -300,7 +302,7 @@ export function initAnnotate(answered = false): void {
     refresh();
     const out: Pick[] = [];
     for (const p of sending) {
-      if (p.pick.part === "box" || p.pick.part === "figure") {
+      if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
         const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
         out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
       } else out.push(p.pick);
