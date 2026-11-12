@@ -72,3 +72,33 @@ test("a chat that takes no messages from the view gets the look and no Point; st
   window.EndeavorView.start(NB, { ...host, canSend: true });
   assert.equal(window.document.getElementById("endeavor-point"), null, "a second start does nothing");
 });
+
+test("a code completion list closes once the user is in Claude's chat, but not while Point is on", async () => {
+  const { window, $ } = page();
+  const escapes = [];
+  const editor = window.document.createElement("div");
+  editor.className = "cm-editor";
+  editor.innerHTML = `<div class="cm-content"></div>`;
+  $("pluto-input").append(editor);
+  editor.querySelector(".cm-content").addEventListener("keydown", (e) => {
+    escapes.push(e.key);
+    window.document.querySelector(".cm-tooltip-autocomplete")?.remove();
+  });
+  const open = () => editor.insertAdjacentHTML("beforeend", `<div class="cm-tooltip-autocomplete"><ul><li>__precompile__</li></ul></div>`);
+  window.__endeavor.receive({ type: "annotate", on: true });
+  open();
+  window.dispatchEvent(new window.Event("blur"));
+  assert.deepEqual(escapes, [], "Point keeps Escape for itself");
+  window.__endeavor.receive({ type: "annotate", on: false });
+  window.dispatchEvent(new window.Event("blur"));
+  assert.deepEqual(escapes, ["Escape"], "the list gets the Escape the user would give it");
+  assert.equal($(".cm-tooltip-autocomplete"), null);
+});
+
+test("Pluto's bottom overlays sit round Point's button", () => {
+  const { $ } = page();
+  const css = [...$("head").querySelectorAll("style")].map((s) => s.textContent).join("\n");
+  assert.match(css, /pluto-helpbox \{ bottom: 52px/, "Live docs and Status above the button");
+  assert.match(css, /\.outline-frame-actions-container\.safe-preview \{ left: 16px/, "the safe-preview badge at the left");
+  assert.match(css, /pluto-editor footer \{ padding-bottom: 104px/, "Settings and FAQ above them all at the page's end");
+});
