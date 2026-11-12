@@ -314,7 +314,7 @@
   /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
     display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
-    box-sizing: border-box; max-width: calc(100vw - 16px); width: max-content; text-align: center;
+    box-sizing: border-box; max-width: calc(100% - 16px); width: max-content; text-align: center;
     background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
   #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; white-space: nowrap; }
   #annotate-hint .done:hover { text-decoration: underline; }
@@ -644,11 +644,12 @@ ${text.value}` : sent.comment;
   /* Long words and links in Markdown wrap at the cell's edge, rather than run past it. */
   pluto-editor pluto-output :is(p, li, blockquote, h1, h2, h3, h4, h5, h6, dt, dd) { overflow-wrap: break-word; }
   @media (max-width: 480px) {
-    /* Pluto's are 2.2, 1.8, 1.6 and 1.4rem. The pluto-editor in front outweighs Pluto's own rules, whichever loads last. */
+    /* Pluto's are 2.2, 1.8, 1.6 1.4 and 1.2rem. The pluto-editor in front outweighs Pluto's own rules, whichever loads last. */
     pluto-editor pluto-output h1 { font-size: 1.6rem; }
     pluto-editor pluto-output h2 { font-size: 1.4rem; }
     pluto-editor pluto-output h3 { font-size: 1.25rem; }
     pluto-editor pluto-output h4 { font-size: 1.15rem; }
+    pluto-editor pluto-output h5 { font-size: 1.05rem; }
   }
 `;
   function initNarrow() {
