@@ -106,13 +106,13 @@ export function start(notebook: string, host: Host): void {
     const earlier = added.splice(0);
     host.send(`${QUOTE_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
       () => {
-        toPage?.({ type: "quote_sent", ok: true });
+        if (msg.ref !== undefined) toPage?.({ type: "quote_sent", ref: msg.ref, ok: true });
         say("Passed to the chat");
       },
       (e) => {
         // What ⌘↩ added stays here; Point gets its picks and comment back, for ↩ to send again.
         added.unshift(...earlier);
-        toPage?.({ type: "quote_sent", ok: false });
+        if (msg.ref !== undefined) toPage?.({ type: "quote_sent", ref: msg.ref, ok: false });
         say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "↩" : "Enter"} sends again.`);
       },
     );
