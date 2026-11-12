@@ -60,7 +60,26 @@ const LEAD_NOTE = " A \u2193 just before this note only marks where the quotes s
 
 const uri = (notebook: string, cell: string, engine: Engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
 
-/** One pick as a `<quote>` (the app's attach::quote_block). */
+/**
+ * How much of a picked output's text goes in a quote. Text goes to Claude's message box, and an output can be
+ * megabytes (a 200,000-line `Text` sent 1.3 MB, headless 2026-11-12): past this, its start and end with a note.
+ */
+export const OUTPUT_MAX = 4000;
+const OUTPUT_END = 500;
+
+/** `text` cut to OUTPUT_MAX characters, its start and end kept, saying how much was left out. */
+export function outputText(text: string): string {
+  if (text.length <= OUTPUT_MAX) return text;
+  // Not between the two halves of a surrogate pair (an emoji, say).
+  const low = (i: number) => (text.charCodeAt(i) & 0xfc00) === 0xdc00;
+  let end = OUTPUT_MAX - OUTPUT_END;
+  if (low(end)) end--;
+  let start = text.length - OUTPUT_END;
+  if (low(start)) start++;
+  return `${text.slice(0, end)}\n[${(start - end).toLocaleString("en-US")} characters of this output left out here.]\n${text.slice(start)}`;
+}
+
+/** One pick as a `<quote>` (the app's attach::quote_block), except that the view cuts a long output (OUTPUT_MAX) and the app doesn't. */
 export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto"): string {
   if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
   const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
@@ -71,7 +90,7 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
     case "lines":
       return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
     case "output":
-      return `<quote ${at} part="output" uri="${where}">\n${pick.text}\n</quote>`;
+      return `<quote ${at} part="output" uri="${where}">\n${outputText(pick.text)}\n</quote>`;
     case "figure":
       return `<quote ${at} part="figure" uri="${where}"/>`;
   }
