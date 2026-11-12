@@ -20,6 +20,7 @@ import { setHost, type ToApp } from "./bridge";
 import { cellName } from "./cellname";
 import { mac, modHeld } from "./keys";
 import type { Pick } from "./quote";
+import { initNarrow } from "./narrow";
 import { statusModel, type NotebookLike } from "./status";
 import { initTheme } from "./theme";
 
@@ -280,6 +281,7 @@ export function start(notebook: string, host: Host): void {
     );
   });
   initTheme();
+  initNarrow();
   closeStrayCompletions();
   initLinks(host.openLink);
   followNewCells();

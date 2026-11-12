@@ -46,6 +46,10 @@ test("the view's look leaves Pluto's header and docs panel to the toolbar's rule
   assert.ok(!css.includes("#helpbox-wrapper"), "not the app's drawer");
   assert.equal(window.document.documentElement.dataset.endeavorLook, "endeavor");
   assert.match($("#endeavor-point").textContent, /Point⌘⇧E/);
+  // Claude's side panel goes down to about 320 px: smaller headings there, and long words wrap.
+  const narrow = $("#endeavor-narrow").textContent;
+  assert.match(narrow, /max-width: 480px[\s\S]*h1 \{ font-size: 1\.6rem/);
+  assert.match(narrow, /overflow-wrap: break-word/);
 });
 
 test("Point sends nothing for keys a page script makes up", async () => {
