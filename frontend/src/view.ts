@@ -94,16 +94,10 @@ export function start(notebook: string, host: Host): void {
     clearTimeout(hide);
     hide = window.setTimeout(() => sent.classList.remove("shown"), 4000);
   };
-  // Point clears its comment as it sends: when the chat doesn't take it, it goes back in the box.
-  const giveBack = (comment: string, why: string) => {
-    const box = document.querySelector<HTMLTextAreaElement>("#annotate-bar textarea");
-    if (box && !box.value.trim() && comment) {
-      box.value = comment;
-      box.dispatchEvent(new Event("input"));
-    }
-    say(comment ? `${why} Your comment is back in the box.` : why);
-  };
-  const failed = (comment: string) => (e: unknown) => giveBack(comment, `Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}.`);
+  // Point clears its picks and comment as it sends: when the chat doesn't take them, they're kept here,
+  // with what ⌘↩ added, and the next ↩ passes them all.
+  const kept = (why: string) =>
+    say(`${why} Your ${added.length === 1 ? "pick is" : "picks are"} kept: ${mac ? "↩" : "Enter"} with your next pick passes ${added.length === 1 ? "it" : "them"} to the chat.`);
   setHost((msg: ToApp) => {
     if (msg.type === "shoot") return setTimeout(() => toPage?.({ type: "shot", id: msg.id }));
     if (msg.type !== "quote" || !msg.picks.length) return;
@@ -117,8 +111,8 @@ export function start(notebook: string, host: Host): void {
     host.send(`${QUOTE_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
       () => say("Passed to the chat"),
       (e) => {
-        added.unshift(...earlier);
-        failed(msg.comment)(e);
+        added.unshift(...earlier, text);
+        kept(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}.`);
       },
     );
   });
