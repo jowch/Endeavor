@@ -349,6 +349,7 @@ footer form#feedback { display: none !important; }
 // offline. Claude's desktop app can't reach endeavor:, and its frame loads fonts
 // only from the hosts EndeavorMCP's view names (cdn.jsdelivr.net), so the view
 // takes the same release from there.
+// The tag is fonts/build.py's JULIAMONO_TAG, the release the app bundles: move them together.
 const JULIA_MONO_WEB = "https://cdn.jsdelivr.net/gh/cormullion/juliamono@v0.63.2/webfonts";
 export function juliaMonoFaces(from: "app" | "web"): string {
   return [
