@@ -117,6 +117,144 @@
     return m ? rest.slice(m[0].length).trimEnd().replace(/"+$/, "") : null;
   }
 
+  // src/status.ts
+  function phaseOf(entry) {
+    if (!entry) return "waiting";
+    if (entry.success === false) return "failed";
+    if (entry.finished_at != null) return "done";
+    if (entry.started_at != null) return "busy";
+    return "waiting";
+  }
+  var ansi = /\x1b\[[0-9;]*m/g;
+  function parsePkgLog(log) {
+    const precompiled = [];
+    const failed = [];
+    const added = [];
+    let inManifest = false;
+    for (const raw of log.replace(ansi, "").split("\n")) {
+      const line = raw.trimEnd();
+      const mark = line.match(/^\s*(?:[\d.]+\s*ms)?\s*([✓✗])\s+([\w.]+)/);
+      if (mark) (mark[1] === "\u2713" ? precompiled : failed).push(mark[2]);
+      if (/^\s*Updating\s+`.*Manifest\.toml`/.test(line)) {
+        inManifest = true;
+        continue;
+      }
+      const entry = line.match(/\[[0-9a-f]{8}\]\s+(\+)?\s*([\w.]+)/);
+      if (!entry) inManifest = false;
+      else if (inManifest && entry[1]) added.push(entry[2]);
+    }
+    return { precompiled, failed, added };
+  }
+  function importedPackages(codes) {
+    const names = [];
+    for (const code of codes) {
+      for (const line of code.split("\n")) {
+        const m = line.match(/^\s*(?:using|import)\s+([^#]+)/);
+        if (!m) continue;
+        const list = m[1].split(":")[0];
+        for (const part of list.split(",")) {
+          const name = part.trim().split(/[.\s]/)[0];
+          if (/^[A-Za-z_]\w*$/.test(name) && !["Base", "Core", "Main"].includes(name) && !names.includes(name)) names.push(name);
+        }
+      }
+    }
+    return names;
+  }
+  function prettyTime(ns) {
+    if (ns < 1e3) return `${Math.round(ns)} ns`;
+    if (ns < 1e6) return `${Math.round(ns / 1e3)} \xB5s`;
+    if (ns < 1e9) return `${Math.round(ns / 1e6)} ms`;
+    const s = ns / 1e9;
+    if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
+    return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+  }
+  function definedNames(map) {
+    return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
+  }
+  function cellName2(nb, id) {
+    const named = commentName(nb.cell_inputs[id]?.code ?? "");
+    if (named) return cellName(nb.cell_inputs[id].code);
+    const defined = definedNames(nb.cell_dependencies?.[id]?.downstream_cells_map);
+    if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
+    return cellName(nb.cell_inputs[id]?.code ?? "");
+  }
+  function statusModel(nb) {
+    const tree = nb.status_tree?.subtasks ?? {};
+    const pkgTask = tree.pkg;
+    const pkgPhase = phaseOf(pkgTask);
+    const runTask = tree.run;
+    const workspace = phaseOf(tree.workspace);
+    const running = nb.process_status === "ready" || nb.process_status === "starting";
+    const steps = [
+      { name: "Start Julia", phase: tree.workspace ? workspace : running ? "done" : "waiting" },
+      { name: "Packages", phase: pkgTask ? pkgPhase : running ? "done" : "waiting" },
+      { name: "Run cells", phase: phaseOf(runTask) }
+    ];
+    const nbpkg = nb.nbpkg ?? {};
+    const installed = nbpkg.installed_versions ?? {};
+    const busy = new Set(nbpkg.busy_packages ?? []);
+    const log = parsePkgLog(nbpkg.terminal_outputs?.nbpkg_sync ?? "");
+    const precompiled = new Set(log.precompiled);
+    const failedSet = new Set(log.failed);
+    const precompiling = phaseOf(pkgTask?.subtasks?.precompile) === "busy";
+    const codes = nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? "");
+    const direct = importedPackages(codes);
+    for (const name of [...Object.keys(installed), ...busy].sort()) {
+      if (!name.startsWith("__internal") && name !== "nbpkg_sync" && !direct.includes(name)) direct.push(name);
+    }
+    const packages = direct.map((name) => {
+      const version = installed[name];
+      const detail = version === "stdlib" ? "standard library" : version ?? "";
+      let state2;
+      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state2 = "failed";
+      else if (busy.has(name) && pkgPhase === "busy") state2 = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
+      else if (version != null) state2 = "ready";
+      else if (pkgPhase === "done") state2 = Object.keys(installed).length ? "failed" : "ready";
+      else state2 = "waiting";
+      const notFound = state2 === "failed" && version == null && pkgPhase === "done";
+      return { name, state: state2, detail: state2 === "ready" ? detail : notFound ? "not found" : "" };
+    });
+    const deps = log.added.filter((n) => !direct.includes(n));
+    const depsRow = deps.length ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length } : null;
+    const cells = nb.cell_order.map((id) => {
+      const r = nb.cell_results[id] ?? {};
+      const state2 = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
+      const time = (state2 === "done" || state2 === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
+      return { id, name: cellName2(nb, id), state: state2, time };
+    });
+    const failedPkg = packages.find((p) => p.state === "failed");
+    const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
+    if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
+    const readyPkgs = packages.filter((p) => p.state === "ready").length;
+    const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
+    const runTotal = Object.keys(evaluate).length;
+    const runDone = Object.values(evaluate).filter((e) => e.finished_at != null).length;
+    let busyText = null;
+    if (steps[0].phase === "busy") busyText = "Starting Julia";
+    else if (pkgPhase === "busy") busyText = packages.length ? `Installing packages \xB7 ${readyPkgs} of ${packages.length}` : "Installing packages";
+    else if (steps[2].phase === "busy") busyText = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
+    const restart = nbpkg.restart_required_msg ? "required" : nbpkg.restart_recommended_msg ? "recommended" : null;
+    let headline;
+    if (nb.process_status === "waiting_for_permission") headline = "Safe preview \xB7 nothing has run";
+    else if (failure) headline = `Package failed \xB7 ${failure.name}`;
+    else if (busyText?.startsWith("Running")) headline = `Running cells \xB7 ${runDone} of ${runTotal}`;
+    else if (busyText) headline = busyText;
+    else if (restart === "required") headline = "Restart needed";
+    else if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") headline = "Julia stopped";
+    else headline = "Ready";
+    return {
+      headline,
+      steps,
+      packages,
+      deps: depsRow,
+      cells,
+      failure,
+      busy: busyText,
+      saveFailed: tree.saving?.success === false,
+      restart
+    };
+  }
+
   // src/state.ts
   var context = { host: "This Mac", agent: "Claude", asking: false, crash: null };
 
@@ -143,10 +281,11 @@
     background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); }
   .endeavor-prompt .head { display: flex; align-items: center; gap: 8px; padding: 0 2px 0 4px; font-size: 12px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; }
-  .endeavor-prompt .what { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
+  /* In a narrow bar (Claude's side panel goes down to about 320 px) the key hints give way first, so what was picked still reads. */
+  .endeavor-prompt .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .what svg { flex: none; }
   .endeavor-prompt .what .name { font-family: JuliaMono, ui-monospace, monospace; font-size: 11.5px; color: var(--e-text-secondary); }
-  .endeavor-prompt .keys { flex: none; font-size: 11px; }
+  .endeavor-prompt .keys { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
   .endeavor-prompt .quote { margin: 0 4px; border-left: 2px solid var(--e-control-edge); padding-left: 8px; font-size: 11.5px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .quote.code { font-family: JuliaMono, ui-monospace, monospace; }
@@ -278,9 +417,14 @@
     document.body.classList.remove(SHOOTING);
     return id;
   }
-  function sendQuote(picks, comment, add) {
+  function pickSource(pick) {
+    if (pick.part === "box") return `Box \xB7 ${pick.cells.length} cell${pick.cells.length === 1 ? "" : "s"}`;
+    const part = pick.part === "lines" ? pick.lines[0] === pick.lines[1] ? `line ${pick.lines[0]}` : `lines ${pick.lines[0]}\u2013${pick.lines[1]}` : pick.part;
+    return `${cellName(pick.code)} \xB7 ${part}`;
+  }
+  function sendQuote(picks, comment, add, ref) {
     const notebook = new URLSearchParams(location.search).get("id");
-    send({ type: "quote", notebook, picks, comment, add });
+    send({ type: "quote", notebook, picks, comment, add, ...ref === void 0 ? {} : { ref } });
   }
 
   // src/annotate.ts
@@ -305,10 +449,12 @@
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
     border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
+  /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
-    display: none; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; border: 1px solid transparent;
-    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; white-space: nowrap; }
-  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; }
+    display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
+    box-sizing: border-box; max-width: calc(100% - 16px); width: max-content; text-align: center;
+    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
+  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; white-space: nowrap; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
     z-index: 10000; display: none; flex-direction: column; gap: 6px; box-sizing: border-box;
@@ -375,7 +521,18 @@
     return !!a.el && a.el === b.el;
   }
   var state = null;
-  function initAnnotate() {
+  function pointState() {
+    const picks = state?.picks ?? [];
+    const cells = picks.flatMap((p) => p.pick.part === "box" ? p.pick.cells : [p.pick.cell]);
+    return {
+      picked: [...new Set(cells)],
+      picks: picks.map((p) => pickSource(p.pick)),
+      box: picks.some((p) => p.box),
+      status: state?.status() ?? "",
+      comment: state?.comment() ?? ""
+    };
+  }
+  function initAnnotate(answered = false) {
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
@@ -497,21 +654,25 @@
       send({ type: "mode", on: enable });
       requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
     }
+    const underWay = /* @__PURE__ */ new Map();
+    let nextRef = 1;
     async function sendComment(add) {
       if (!picks.length) return;
       const sending = picks.splice(0, picks.length);
       const comment = text.value.trim();
+      const ref = !add && answered ? nextRef++ : void 0;
+      if (ref !== void 0) underWay.set(ref, { picks: sending, comment });
       text.value = "";
       text.dispatchEvent(new Event("input"));
       refresh();
       const out = [];
       for (const p of sending) {
-        if (p.pick.part === "box" || p.pick.part === "figure") {
+        if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
           const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
         } else out.push(p.pick);
       }
-      sendQuote(out, comment, add);
+      sendQuote(out, comment, add, ref);
     }
     let drag = null;
     let justDragged = false;
@@ -523,7 +684,7 @@
       const line = el?.closest(".cm-line");
       return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
     };
-    const ours = (target) => bar.contains(target) || hint.contains(target);
+    const ours = (target) => bar.contains(target) || hint.contains(target) || !!target.closest?.("#endeavor-bar");
     const swallow = (e) => {
       const target = e.target;
       if (!active() || ours(target)) return;
@@ -601,6 +762,94 @@
     );
     hint.querySelector(".done").onclick = () => set(false);
     on("annotate", (msg) => set(msg.on));
+    on("quote_sent", (msg) => {
+      const sent = underWay.get(msg.ref);
+      underWay.delete(msg.ref);
+      if (msg.ok || !sent) return;
+      set(true);
+      picks.unshift(...sent.picks.filter((p) => !picks.some((q) => samePick(p, q))));
+      if (sent.comment) {
+        text.value = text.value.trim() ? `${sent.comment}
+${text.value}` : sent.comment;
+        text.dispatchEvent(new Event("input"));
+      }
+      refresh();
+    });
+  }
+
+  // src/narrow.ts
+  var css3 = `
+  /* Long words and links in Markdown wrap at the cell's edge, rather than run past it. */
+  pluto-editor pluto-output :is(p, li, blockquote, h1, h2, h3, h4, h5, h6, dt, dd) { overflow-wrap: break-word; }
+  @media (max-width: 600px) {
+    /* Pluto's are 2.2, 1.8, 1.6, 1.4 and 1.2rem. The pluto-editor in front outweighs Pluto's own rules, whichever loads last. */
+    pluto-editor pluto-output h1 { font-size: 1.6rem; }
+    pluto-editor pluto-output h2 { font-size: 1.4rem; }
+    pluto-editor pluto-output h3 { font-size: 1.25rem; }
+    pluto-editor pluto-output h4 { font-size: 1.15rem; }
+    pluto-editor pluto-output h5 { font-size: 1.05rem; }
+  }
+`;
+  function initNarrow() {
+    const style = document.createElement("style");
+    style.id = "endeavor-narrow";
+    style.textContent = css3;
+    document.head.append(style);
+  }
+
+  // src/space.ts
+  var EMBER = "pluto-editor:has(> #ember-run-status)";
+  var PLUTO = "pluto-editor:not(:has(> #ember-run-status))";
+  var css4 = `
+  /* Left of a cell: Pluto's eye (16 px icon), or Ember's eye and run button (46 px, Ember's own
+     measure). Right: 10 px, for an overlay scrollbar's thumb. */
+  pluto-editor { --e-left: 26px; --e-right: 10px; }
+  ${EMBER} { --e-left: 46px; }
+  /* Ember keeps 52 px at the top for its own header, which the view hides. */
+  pluto-editor { padding-top: 0 !important; }
+  /* Under the toolbar, only the room the first cell's add-cell button needs (the cell's own margin). */
+  pluto-editor > main { padding-top: 4px !important; }
+  /* Under the last cell: enough to bring it up off the bottom edge and clear Point's bar, not Pluto's
+     16rem, which in a 721 px panel was a third of it empty. */
+  pluto-editor:not(.disable_ui) > main { padding-bottom: 96px !important; }
+  /* The page is the panel's height under the toolbar, so a short notebook doesn't scroll by the toolbar's height. */
+  body > div:has(> pluto-editor) { min-height: calc(100vh - var(--endeavor-bar)) !important; }
+  /* 760 px is where the panel ends and full screen begins, here and for Docs and Status (view.ts):
+     below it they open as a drawer along the bottom, from it as a sheet down the right. */
+  @media (max-width: 759px) {
+    /* The panel: cells from the eye to the scrollbar, whatever the width. */
+    pluto-editor main { margin-left: 0 !important; margin-right: 0 !important; width: 100% !important; max-width: none !important;
+      box-sizing: border-box; padding-left: var(--e-left) !important; padding-right: var(--e-right) !important; }
+  }
+  @media (min-width: 760px) {
+    /* Full screen: a wider column, centred, for long code lines and wide tables. Prose keeps a
+       readable measure (the cap holds a Markdown cell's own images and tables to it too). Not beside
+       PlutoUI's table of contents, which floats at the right. */
+    ${PLUTO}:not(:has(.plutoui-toc.aside)) main, ${EMBER} main { max-width: 1031px !important; margin-left: auto !important; margin-right: auto !important; }
+    pluto-output .markdown { max-width: 720px; }
+    /* With Docs or Status open as a sheet down the right (view.ts), the column moves out from under it,
+       to the left edge. The selector must outweigh the column rule above (1,2,2: its :has(.plutoui-toc.aside)
+       counts two classes); this one is (1,2,4). */
+    body:has(pluto-helpbox:not(.hidden)) :is(${PLUTO}, ${EMBER}):not(.disable_ui) main { margin-left: 0 !important; margin-right: 392px !important;
+      padding-left: var(--e-left) !important; max-width: min(1031px, calc(100% - 392px)) !important; }
+  }
+  /* A Markdown cell's first heading starts at the top of its output, not a line below it. */
+  pluto-editor pluto-output .markdown > :first-child { margin-top: 0 !important; }
+  /* The eye sits right against the cell, without Pluto's 10 px of padding to its left. */
+  ${PLUTO} pluto-shoulder > button { padding-left: 4px !important; }
+  /* Inside a cell, the line numbers (dots until hovered) take two digits' room, not 31 px (Pluto) or 34 px (Ember). */
+  ${PLUTO} pluto-input .cm-editor .cm-gutter { min-width: 0 !important; }
+  ${PLUTO} pluto-input .cm-editor .cm-lineNumbers .cm-gutterElement { min-width: 16px; padding: 0 2px 0 3px !important; }
+  ${PLUTO} pluto-input .cm-editor .cm-line { padding-left: 4px !important; }
+  ${EMBER} pluto-input .cm-editor :is(.cm-gutters, .cm-gutter.cm-lineNumbers) { min-width: 24px !important; }
+  ${EMBER} pluto-input .cm-editor .cm-lineNumbers .cm-gutterElement { padding: 0 6px 0 4px !important; }
+  ${EMBER} pluto-input .cm-editor .cm-content { padding: 7px 8px 7px 6px !important; }
+`;
+  function initSpace() {
+    const style = document.createElement("style");
+    style.id = "endeavor-space";
+    style.textContent = css4;
+    document.head.append(style);
   }
 
   // src/engine.ts
@@ -944,13 +1193,28 @@ footer form#feedback { display: none !important; }
   }
 
   // src/view.ts
-  var FORMAT = "A quote's uri, notebook://pluto/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was quoted when it isn't code: `output` (text from the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). No picture comes with a figure or box here: read current code and outputs with the notebook MCP tools.";
-  var QUOTE_NOTE = "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + FORMAT;
-  var uri = (notebook, cell) => `notebook://pluto/${notebook}/cell/${cell}`;
-  function quoteBlock(notebook, pick) {
-    if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c)).join(" ")}"/>`;
+  var format = (engine) => "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was quoted when it isn't code: `output` (text from the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). No picture comes with a figure or box here: read current code and outputs with the notebook MCP tools.";
+  var quoteNote = (engine = "pluto") => "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
+  var LEAD = "\u2193";
+  var LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
+  var uri = (notebook, cell, engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
+  var OUTPUT_MAX = 4e3;
+  var OUTPUT_END = 500;
+  function outputText(text) {
+    if (text.length <= OUTPUT_MAX) return text;
+    const low = (i) => (text.charCodeAt(i) & 64512) === 56320;
+    let end = OUTPUT_MAX - OUTPUT_END;
+    if (low(end)) end--;
+    let start2 = text.length - OUTPUT_END;
+    if (low(start2)) start2++;
+    return `${text.slice(0, end)}
+[${(start2 - end).toLocaleString("en-US")} characters of this output left out here.]
+${text.slice(start2)}`;
+  }
+  function quoteBlock(notebook, pick, engine = "pluto") {
+    if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
     const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
-    const where = uri(notebook, pick.cell);
+    const where = uri(notebook, pick.cell, engine);
     switch (pick.part) {
       case "cell":
         return `<quote ${at} uri="${where}">
@@ -962,90 +1226,218 @@ ${pick.text}
 </quote>`;
       case "output":
         return `<quote ${at} part="output" uri="${where}">
-${pick.text}
+${outputText(pick.text)}
 </quote>`;
       case "figure":
         return `<quote ${at} part="figure" uri="${where}"/>`;
     }
   }
-  function quoteText(notebook, picks, comment) {
-    const blocks = picks.map((p) => quoteBlock(notebook, p));
+  function quoteText(notebook, picks, comment, engine = "pluto") {
+    const blocks = picks.map((p) => quoteBlock(notebook, p, engine));
     return comment ? `${blocks.join("\n\n")}
 ${comment}` : blocks.join("\n\n");
   }
-  var css3 = `
-  #endeavor-point { position: fixed; right: 16px; bottom: 16px; z-index: 9998; display: flex; align-items: center; gap: 6px;
-    height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--e-popover-edge);
-    background: var(--e-popover-bg); color: var(--e-text-secondary); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
-    box-shadow: 0 4px 16px var(--e-shadow-popover); cursor: pointer; }
-  #endeavor-point:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
-  #endeavor-point .key { color: var(--e-text-faint); }
-  body.annotating #endeavor-point { display: none; }
-  #endeavor-sent { position: fixed; right: 16px; bottom: 16px; z-index: 10001; display: none;
-    padding: 4px 12px; border-radius: 999px; background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
+  var DRAWER = 40;
+  var BAR = 32;
+  var chrome = `
+  :root { --endeavor-bar: ${BAR}px; }
+  body { padding-top: var(--endeavor-bar); box-sizing: border-box; }
+  footer { display: none !important; }
+  pluto-editor > header#pluto-nav { display: none !important; }
+  pluto-editor:is(.process_waiting_for_permission, .process_dead, .nbpkg_restart_required, .nbpkg_restart_recommended, .disconnected) > header#pluto-nav {
+    display: block !important; position: sticky; top: var(--endeavor-bar); z-index: 60; }
+  pluto-editor > header#pluto-nav nav#at_the_top > :not(#process_status) { display: none !important; }
+  pluto-editor > header#pluto-nav nav#at_the_top { justify-content: center; }
+  /* What Pluto keeps at the top as the page scrolls (its "Save all changes" button) and where a jump
+     to a cell lands go under the toolbar, not behind it. */
+  pluto-editor main > preamble { top: calc(var(--endeavor-bar) + 5px) !important; }
+  html { scroll-padding-top: calc(var(--endeavor-bar) + 8px); }
+  #endeavor-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 9997; box-sizing: border-box; height: var(--endeavor-bar);
+    display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px;
+    background: var(--e-bg-page); border-bottom: 1px solid var(--e-divider); color: var(--e-text-secondary);
+    font: 12.5px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #endeavor-bar .file { font-weight: 600; color: var(--e-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #endeavor-bar .doing { color: var(--e-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+  #endeavor-bar .grow { flex: 1; }
+  #endeavor-bar button { flex: none; display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: none; border-radius: 6px;
+    background: none; color: var(--e-text-secondary); font: inherit; cursor: pointer; }
+  #endeavor-bar button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
+  #endeavor-bar button.on { color: var(--e-text-primary); background: var(--e-bg-raised); }
+  #endeavor-bar .key { color: var(--e-text-faint); }
+  /* Live docs and Status: Pluto's own panel, opened from Docs or Status, as a sheet down the right side under the toolbar,
+     or in a panel too narrow to keep the code beside it, a drawer along the bottom (#211), with room
+     under the last cell to scroll it above the drawer. Not display: none when shut: Pluto alerts
+     "window too small to show docs" whenever it opens a panel it finds undisplayed, and it hides the
+     panel below 500px wide. Ember's (R) panel is its own wrapper
+     round the help, with a scrim below 640 px: the wrapper takes the sheet's place, and no scrim
+     covers the code. */
+  #helpbox-wrapper { display: block !important; }
+  pluto-helpbox.hidden { display: none !important; }
+  ${PLUTO} pluto-helpbox, ${EMBER} #helpbox-wrapper.open { position: fixed !important; top: var(--endeavor-bar) !important; bottom: 0 !important;
+    left: auto !important; right: 0 !important; height: auto !important; width: min(380px, 100vw) !important;
+    border-radius: 0 !important; border: none !important; border-left: 1px solid var(--e-divider) !important;
+    box-shadow: -8px 0 24px var(--e-shadow-popover) !important; }
+  ${EMBER} pluto-helpbox { position: static !important; width: auto !important; height: 100% !important; border: none !important; box-shadow: none !important; }
+  ${EMBER} .ember-scrim { display: none !important; }
+  /* Its own tabs and close button: Docs and Status in the toolbar open and close it. */
+  pluto-helpbox > header { display: none !important; }
+  @media (max-width: 759px) {
+    ${PLUTO} pluto-helpbox, ${EMBER} #helpbox-wrapper.open { top: auto !important; left: 0 !important; width: auto !important; height: ${DRAWER}vh !important;
+      border-left: none !important; border-top: 1px solid var(--e-divider) !important; box-shadow: 0 -8px 24px var(--e-shadow-popover) !important; }
+    /* Ember's sheet slides in from the right below 1240 px; as a drawer it comes up from the bottom. */
+    ${EMBER} #helpbox-wrapper.open { animation-name: ember-slide-up !important; }
+    body:has(pluto-helpbox:not(.hidden)) pluto-editor:not(.disable_ui) > main { padding-bottom: calc(${DRAWER}vh + 24px) !important; }
+  }
+  /* A narrow panel: the file's name before the shortcut and the panel buttons' words (their icons stay). */
+  @media (max-width: 420px) {
+    #endeavor-bar .key, #endeavor-bar .panel .word { display: none; }
+  }
+  /* Pluto's floating safe-preview badge is hidden, as in the app: its band and each cell's
+     "Code not executed in Safe preview" already say it. */
+  .outline-frame-actions-container.safe-preview { display: none !important; }
+`;
+  var css5 = `
+  #annotate-hint { top: calc(var(--endeavor-bar) + 8px) !important; }
+  #endeavor-sent { position: fixed; left: 50%; top: calc(var(--endeavor-bar) + 8px); transform: translateX(-50%); z-index: 10001; display: none;
+    max-width: calc(100vw - 32px); box-sizing: border-box; text-align: center;
+    padding: 4px 12px; border-radius: 12px; background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
   #endeavor-sent.shown { display: block; }
 `;
+  function doing(nb) {
+    if (!nb?.cell_order) return "";
+    const model = statusModel(nb);
+    if (model.busy) return model.busy;
+    if (model.saveFailed) return "Couldn't save";
+    return "";
+  }
+  var fileName = (path) => path ? path.split(/[\\/]/).pop() || "Notebook" : "Notebook";
+  var book = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 3.2c1.8-.6 3.7-.4 5.5.8 1.8-1.2 3.7-1.4 5.5-.8v9.6c-1.8-.6-3.7-.4-5.5.8-1.8-1.2-3.7-1.4-5.5-.8z"/><path d="M8 4v9.6"/></svg>`;
+  var pulse = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8.5h3l1.8-4.5 3.4 8 1.8-3.5h3"/></svg>`;
+  var PANELS = [
+    ["docs", "Docs", book, "Live docs: what the code under the cursor does"],
+    ["process", "Status", pulse, "Status: what the notebook is doing, its packages and how long each step took"]
+  ];
+  function initBar(withPoint, point) {
+    const style = document.createElement("style");
+    style.id = "endeavor-chrome";
+    style.textContent = chrome;
+    document.head.append(style);
+    const bar = document.createElement("div");
+    bar.id = "endeavor-bar";
+    bar.innerHTML = `<span class="file">Notebook</span><span class="doing">Loading\u2026</span><span class="grow"></span>` + PANELS.map(([tab, word, icon, title]) => `<button type="button" class="panel ${tab}" title="${title}" aria-label="${word}">${icon}<span class="word">${word}</span></button>`).join("") + (withPoint ? `<button type="button" id="endeavor-point" title="Point at a cell, its code or its output, and comment on it for Claude"><span>Point</span><span class="key">${mac ? "\u2318\u21E7E" : "Ctrl+Shift+E"}</span></button>` : "");
+    document.body.prepend(bar);
+    const file = bar.querySelector(".file");
+    const words = bar.querySelector(".doing");
+    const pointButton = bar.querySelector("#endeavor-point");
+    const panelOpen = (tab) => !!document.querySelector(`pluto-helpbox.helpbox-${tab}:not(.hidden)`);
+    const panels = PANELS.map(([tab]) => [tab, bar.querySelector(`.panel.${tab}`)]);
+    for (const [tab, button] of panels)
+      button.addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
+        const open = panelOpen(tab);
+        window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: open ? null : tab }));
+        if (!open && tab === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), 50);
+      });
+    pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
+    let last = null;
+    const tick = () => {
+      const nb = window.editor_state?.notebook;
+      if (nb && nb !== last) {
+        last = nb;
+        file.textContent = fileName(nb.path);
+        file.title = file.textContent;
+        words.textContent = doing(nb);
+      }
+      for (const [tab, button] of panels) button.classList.toggle("on", panelOpen(tab));
+      pointButton?.classList.toggle("on", document.body.classList.contains("annotating"));
+    };
+    let soon = 0;
+    new MutationObserver(() => {
+      if (!soon) soon = window.setTimeout(() => (soon = 0, tick()), 250);
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+    tick();
+    keepCursorBelowBar();
+  }
+  function keepCursorBelowBar() {
+    let queued = false;
+    document.addEventListener("selectionchange", () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        const selection = window.getSelection();
+        if (!selection?.rangeCount || !selection.isCollapsed || !selection.anchorNode?.parentElement?.closest?.(".cm-content")) return;
+        const range = selection.getRangeAt(0);
+        const rect = range.getClientRects()[0] ?? selection.anchorNode.parentElement.getBoundingClientRect();
+        const bar = document.getElementById("endeavor-bar")?.getBoundingClientRect().bottom ?? 0;
+        if (rect.bottom > 0 && rect.top < bar + 4) window.scrollBy(0, rect.top - bar - 8);
+      });
+    });
+  }
   var started = false;
   function start(notebook, host2) {
     if (started) return;
     started = true;
+    const engine = host2.engine === "ember" ? "ember" : "pluto";
     const added = [];
-    let toPage = null;
+    const receive = (msg) => window.__endeavor?.receive(msg);
     const sent = document.createElement("div");
     sent.id = "endeavor-sent";
     let hide = 0;
-    const say = (text) => {
+    const say = (text, ms = 4e3) => {
       sent.textContent = text;
       sent.classList.add("shown");
       clearTimeout(hide);
-      hide = window.setTimeout(() => sent.classList.remove("shown"), 4e3);
+      if (ms) hide = window.setTimeout(() => sent.classList.remove("shown"), ms);
     };
-    const giveBack = (comment, why) => {
-      const box = document.querySelector("#annotate-bar textarea");
-      if (box && !box.value.trim() && comment) {
-        box.value = comment;
-        box.dispatchEvent(new Event("input"));
-      }
-      say(comment ? `${why} Your comment is back in the box.` : why);
-    };
-    const failed = (comment) => (e) => giveBack(comment, `Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}.`);
+    const point = (on2) => receive({ type: "annotate", on: on2 });
     setHost((msg) => {
-      if (msg.type === "shoot") return setTimeout(() => toPage?.({ type: "shot", id: msg.id }));
       if (msg.type !== "quote" || !msg.picks.length) return;
-      const text = quoteText(notebook, msg.picks, msg.comment);
+      const text = quoteText(notebook, msg.picks, msg.comment, engine);
       if (msg.add) {
         added.push(text);
         return say(`${added.length} added. ${mac ? "\u21A9" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
       }
       const earlier = added.splice(0);
-      host2.send(`${QUOTE_NOTE}
+      say("Sending to Claude's chat\u2026", 0);
+      host2.send(`${LEAD}
+
+${quoteNote(engine)}${LEAD_NOTE}
 
 ${[...earlier, text].join("\n\n")}`).then(
-        () => say("Passed to the chat"),
+        () => {
+          if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: true });
+          say("On its way to Claude's message box. Send it from there.", 8e3);
+          const end = () => {
+            const now = pointState();
+            if (!now.picks.length && !now.comment.trim()) point(false);
+          };
+          if (!document.hasFocus()) end();
+          else window.addEventListener("blur", end, { once: true });
+        },
         (e) => {
           added.unshift(...earlier);
-          failed(msg.comment)(e);
+          if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: false });
+          say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "\u21A9" : "Enter"} sends again.`);
         }
       );
     });
     initTheme();
-    const receive = (msg) => window.__endeavor?.receive(msg);
-    toPage = receive;
+    initNarrow();
+    initSpace();
+    closeStrayCompletions();
+    initLinks(host2.openLink);
+    followNewCells();
     receive({ type: "theme", name: "view" });
+    initBar(host2.canSend, point);
+    followClaudesPalette();
     if (!host2.canSend) return;
     initAskBox();
-    initAnnotate();
+    initAnnotate(true);
     const style = document.createElement("style");
-    style.textContent = css3;
+    style.textContent = css5;
     document.head.append(style);
-    const button = document.createElement("button");
-    button.id = "endeavor-point";
-    button.type = "button";
-    button.title = "Point at a cell, its code or its output, and comment on it for Claude";
-    button.innerHTML = `<span>Point</span><span class="key">${mac ? "\u2318\u21E7E" : "Ctrl+Shift+E"}</span>`;
-    const point = (on2) => receive({ type: "annotate", on: on2 });
-    button.addEventListener("click", (e) => e.isTrusted && point(true));
-    document.body.append(button, sent);
+    document.body.append(sent);
     window.addEventListener(
       "keydown",
       (e) => {
@@ -1056,6 +1448,174 @@ ${[...earlier, text].join("\n\n")}`).then(
       },
       true
     );
+  }
+  function outsideLink(href) {
+    if (!href) return null;
+    return /^(https?:|mailto:)/i.test(href.trim()) ? href.trim() : null;
+  }
+  function initLinks(open) {
+    document.addEventListener("click", (e) => {
+      if (e.defaultPrevented || e.button !== 0) return;
+      const link = e.target?.closest?.("a[href]");
+      if (!link) return;
+      const href = (link.getAttribute("href") ?? "").trim();
+      if (/^javascript:/i.test(href)) return;
+      e.preventDefault();
+      if (/^#./.test(href)) {
+        document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      const url = outsideLink(href);
+      if (url && open && e.isTrusted) open(url).catch(() => {
+      });
+    });
+  }
+  var claudePalette = `
+html.claude-palette {
+  /* Pages, cards, raised controls */
+  --e-bg-page: var(--color-background-primary);
+  --e-bg-sidebar: var(--color-background-secondary);
+  --e-bg-card: var(--color-background-secondary);
+  --e-bg-sunken: var(--color-background-secondary);
+  --e-bg-raised: var(--color-background-tertiary);
+  --e-bg-tag: var(--color-background-tertiary);
+  --e-button-hover: var(--color-background-tertiary);
+  --e-menu-hover: var(--color-background-tertiary);
+  --e-popover-bg: var(--color-background-primary);
+  --e-dialog-bg: var(--color-background-primary);
+  /* Text */
+  --e-text-primary: var(--color-text-primary);
+  --e-text-secondary: var(--color-text-secondary);
+  --e-text-muted: var(--color-text-secondary);
+  --e-text-section: var(--color-text-secondary);
+  --e-text-tag: var(--color-text-secondary);
+  --e-text-faint: var(--color-text-tertiary);
+  --e-text-dim: var(--color-text-tertiary);
+  --e-hint-text: var(--color-text-secondary);
+  /* Edges */
+  --e-border: var(--color-border-tertiary);
+  --e-divider: var(--color-border-tertiary);
+  --e-popover-edge: var(--color-border-secondary);
+  --e-dialog-edge: var(--color-border-secondary);
+  --e-control-edge: var(--color-border-primary);
+  /* Pluto's own colours that the Endeavor look sets */
+  --main-bg-color: var(--color-background-primary);
+  --header-bg-color: var(--color-background-primary);
+  --footer-bg-color: var(--color-background-primary);
+  --pluto-output-bg-color: var(--color-background-primary);
+  --pluto-output-color: var(--color-text-secondary);
+  --pluto-output-h-color: var(--color-text-primary);
+  --rule-color: var(--color-border-tertiary);
+  --code-background: var(--color-background-secondary);
+  --pluto-logs-bg-color: var(--color-background-secondary);
+  --overlay-button-bg: var(--color-background-secondary);
+  --input-context-menu-bg-color: var(--color-background-secondary);
+  --input-context-menu-border-color: var(--color-border-tertiary);
+  --helpbox-bg-color: var(--color-background-secondary);
+  --helpbox-header-bg-color: var(--color-background-tertiary);
+  --helpbox-header-tab-bg-color: var(--color-background-tertiary);
+  --helpbox-header-color: var(--color-text-primary);
+  --helpbox-text-color: var(--color-text-primary);
+  --helpbox-search-bg-color: var(--color-background-primary);
+  --helpbox-search-border-color: var(--color-border-primary);
+  --docs-binding-bg: var(--color-background-tertiary);
+  --export-bg-color: var(--color-background-secondary);
+  --export-color: var(--color-text-primary);
+  --frontmatter-button-bg-color: var(--color-background-tertiary);
+  --frontmatter-input-bg-color: var(--color-background-primary);
+  --frontmatter-input-border-color: var(--color-border-primary);
+  --pluto-runarea-span-color: var(--color-text-tertiary);
+}
+html.claude-palette .pluto-modal { border-color: var(--color-border-secondary); }
+`;
+  var PALETTE_NEEDS = [
+    "--color-background-primary",
+    "--color-background-secondary",
+    "--color-background-tertiary",
+    "--color-text-primary",
+    "--color-text-secondary",
+    "--color-text-tertiary",
+    "--color-border-primary",
+    "--color-border-secondary",
+    "--color-border-tertiary"
+  ];
+  function followClaudesPalette() {
+    const style = document.createElement("style");
+    style.id = "endeavor-claude-palette";
+    style.textContent = claudePalette;
+    document.head.append(style);
+    const root = document.documentElement;
+    const sync = () => root.classList.toggle("claude-palette", PALETTE_NEEDS.every((v) => root.style.getPropertyValue(v).trim() !== ""));
+    new MutationObserver(sync).observe(root, { attributes: true, attributeFilter: ["style"] });
+    sync();
+  }
+  var STRAY_MS = 5e3;
+  function closeStrayCompletions() {
+    let lastInput = 0;
+    let timer = 0;
+    for (const type of ["keydown", "pointerdown", "pointermove", "wheel"]) window.addEventListener(type, (e) => e.isTrusted && (lastInput = Date.now()), { capture: true, passive: true });
+    const list = () => document.querySelector(".cm-tooltip-autocomplete");
+    const close = () => {
+      const open = list();
+      if (!open || document.body.classList.contains("annotating")) return;
+      open.closest(".cm-editor")?.querySelector(".cm-content")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 27, bubbles: true, cancelable: true }));
+    };
+    const check = (openedAt) => {
+      timer = 0;
+      if (!list()) return;
+      const idle = Date.now() - Math.max(openedAt, lastInput);
+      if (!document.hasFocus() || idle >= STRAY_MS) close();
+      if (list()) timer = window.setTimeout(() => check(openedAt), Math.max(STRAY_MS - idle, 500));
+    };
+    new MutationObserver(() => {
+      if (!timer && list()) check(Date.now());
+    }).observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("blur", close);
+  }
+  var IDLE_MS = 2e3;
+  var OWN_SCROLL_MS = 1e3;
+  function followNewCells() {
+    let lastInput = 0;
+    for (const type of ["keydown", "pointerdown"]) window.addEventListener(type, (e) => e.isTrusted && (lastInput = Date.now()), true);
+    let following = true;
+    let ownScroll = 0;
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (Date.now() - ownScroll < OWN_SCROLL_MS) return;
+        following = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 80;
+      },
+      { passive: true }
+    );
+    const known = /* @__PURE__ */ new Set();
+    let settled = false;
+    let settle = 0;
+    const cells = () => [...document.querySelectorAll("pluto-cell")];
+    const show = (cell) => {
+      const r = cell.getBoundingClientRect();
+      if (r.top >= 0 && r.bottom <= window.innerHeight) return;
+      ownScroll = Date.now();
+      cell.scrollIntoView({ block: r.height > window.innerHeight ? "start" : "center", behavior: "smooth" });
+    };
+    new MutationObserver(() => {
+      const added = cells().filter((c) => c.id && !known.has(c.id));
+      if (!added.length) return;
+      added.forEach((c) => known.add(c.id));
+      if (!settled) {
+        clearTimeout(settle);
+        settle = window.setTimeout(() => settled = true, 1500);
+        return;
+      }
+      if (added.length > 3 || !following || Date.now() - lastInput < IDLE_MS) return;
+      const cell = added[added.length - 1];
+      const since = Date.now();
+      show(cell);
+      const grow = new ResizeObserver(() => {
+        if (!following || lastInput > since || Date.now() - since > 15e3 || !cell.isConnected) return grow.disconnect();
+        show(cell);
+      });
+      grow.observe(cell);
+    }).observe(document.body, { childList: true, subtree: true });
   }
   window.EndeavorView = { start };
 })();

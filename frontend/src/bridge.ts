@@ -11,7 +11,8 @@ export type ToApp =
   | { type: "mode"; on: boolean }
   // What Point picked, or a selection Reply quotes, with the user's comment:
   // sent now, or (`add`) added to the composer's message.
-  | { type: "quote"; notebook: string | null; picks: Pick[]; comment: string; add: boolean }
+  // `ref`: echoed in `quote_sent` by a host that answers each ↩ (Claude's notebook view).
+  | { type: "quote"; notebook: string | null; picks: Pick[]; comment: string; add: boolean; ref?: number }
   // Take a picture of this part of the viewport (CSS pixels) for a quote; the app answers "shot".
   | { type: "shoot"; id: number; rect: { x: number; y: number; width: number; height: number } }
   // Fix with Claude / Explain on a cell's error.
@@ -89,6 +90,9 @@ export type ErrorAsk = { cell: string; kind: "fix" | "explain"; queued: boolean 
 /** Messages the app sends the page. */
 export type ToPage =
   | { type: "annotate"; on: boolean }
+  // Whether the chat took Point's ↩ `ref` (Claude's notebook view only, view.ts): when it didn't,
+  // its picks and comment go back to Point.
+  | { type: "quote_sent"; ref: number; ok: boolean }
   // The shown notebook's cells, whenever they change and after `ready`.
   | { type: "cells"; cells: CellState[] }
   // The notebook theme (Settings), after `ready` and on change.

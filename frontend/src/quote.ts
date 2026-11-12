@@ -62,10 +62,11 @@ export function pickSource(pick: Pick): string {
   return `${cellName(pick.code)} · ${part}`;
 }
 
-/** Send picks and the comment: now as a message, or (`add`) into the composer's. */
-export function sendQuote(picks: Pick[], comment: string, add: boolean): void {
+/** Send picks and the comment: now as a message, or (`add`) into the composer's. `ref`: names this
+ * ↩ in the host's answer (`quote_sent`), for a host that answers. */
+export function sendQuote(picks: Pick[], comment: string, add: boolean, ref?: number): void {
   const notebook = new URLSearchParams(location.search).get("id");
-  send({ type: "quote", notebook, picks, comment, add });
+  send({ type: "quote", notebook, picks, comment, add, ...(ref === undefined ? {} : { ref }) });
 }
 
 export function initQuote(): void {

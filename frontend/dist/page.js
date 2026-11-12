@@ -723,10 +723,11 @@
     background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); }
   .endeavor-prompt .head { display: flex; align-items: center; gap: 8px; padding: 0 2px 0 4px; font-size: 12px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; }
-  .endeavor-prompt .what { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
+  /* In a narrow bar (Claude's side panel goes down to about 320 px) the key hints give way first, so what was picked still reads. */
+  .endeavor-prompt .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .what svg { flex: none; }
   .endeavor-prompt .what .name { font-family: JuliaMono, ui-monospace, monospace; font-size: 11.5px; color: var(--e-text-secondary); }
-  .endeavor-prompt .keys { flex: none; font-size: 11px; }
+  .endeavor-prompt .keys { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
   .endeavor-prompt .quote { margin: 0 4px; border-left: 2px solid var(--e-control-edge); padding-left: 8px; font-size: 11.5px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .quote.code { font-family: JuliaMono, ui-monospace, monospace; }
@@ -863,9 +864,9 @@
     const part = pick2.part === "lines" ? pick2.lines[0] === pick2.lines[1] ? `line ${pick2.lines[0]}` : `lines ${pick2.lines[0]}\u2013${pick2.lines[1]}` : pick2.part;
     return `${cellName(pick2.code)} \xB7 ${part}`;
   }
-  function sendQuote(picks, comment, add) {
+  function sendQuote(picks, comment, add, ref) {
     const notebook2 = new URLSearchParams(location.search).get("id");
-    send({ type: "quote", notebook: notebook2, picks, comment, add });
+    send({ type: "quote", notebook: notebook2, picks, comment, add, ...ref === void 0 ? {} : { ref } });
   }
   function initQuote() {
     on("shot", (msg) => waiting2.get(msg.id)?.());
@@ -893,10 +894,12 @@
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
     border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
+  /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
-    display: none; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; border: 1px solid transparent;
-    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; white-space: nowrap; }
-  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; }
+    display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
+    box-sizing: border-box; max-width: calc(100% - 16px); width: max-content; text-align: center;
+    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
+  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; white-space: nowrap; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
     z-index: 10000; display: none; flex-direction: column; gap: 6px; box-sizing: border-box;
@@ -974,7 +977,7 @@
       comment: state?.comment() ?? ""
     };
   }
-  function initAnnotate() {
+  function initAnnotate(answered = false) {
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
@@ -1096,21 +1099,25 @@
       send({ type: "mode", on: enable });
       requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
     }
+    const underWay = /* @__PURE__ */ new Map();
+    let nextRef = 1;
     async function sendComment(add) {
       if (!picks.length) return;
       const sending = picks.splice(0, picks.length);
       const comment = text.value.trim();
+      const ref = !add && answered ? nextRef++ : void 0;
+      if (ref !== void 0) underWay.set(ref, { picks: sending, comment });
       text.value = "";
       text.dispatchEvent(new Event("input"));
       refresh2();
       const out = [];
       for (const p of sending) {
-        if (p.pick.part === "box" || p.pick.part === "figure") {
+        if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
           const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
         } else out.push(p.pick);
       }
-      sendQuote(out, comment, add);
+      sendQuote(out, comment, add, ref);
     }
     let drag = null;
     let justDragged = false;
@@ -1122,7 +1129,7 @@
       const line = el2?.closest(".cm-line");
       return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
     };
-    const ours = (target) => bar2.contains(target) || hint.contains(target);
+    const ours = (target) => bar2.contains(target) || hint.contains(target) || !!target.closest?.("#endeavor-bar");
     const swallow = (e) => {
       const target = e.target;
       if (!active() || ours(target)) return;
@@ -1200,6 +1207,19 @@
     );
     hint.querySelector(".done").onclick = () => set(false);
     on("annotate", (msg) => set(msg.on));
+    on("quote_sent", (msg) => {
+      const sent = underWay.get(msg.ref);
+      underWay.delete(msg.ref);
+      if (msg.ok || !sent) return;
+      set(true);
+      picks.unshift(...sent.picks.filter((p) => !picks.some((q) => samePick(p, q))));
+      if (sent.comment) {
+        text.value = text.value.trim() ? `${sent.comment}
+${text.value}` : sent.comment;
+        text.dispatchEvent(new Event("input"));
+      }
+      refresh2();
+    });
   }
 
   // src/redraw.ts

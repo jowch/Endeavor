@@ -37,10 +37,12 @@ const css = `
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
     border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
+  /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
-    display: none; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; border: 1px solid transparent;
-    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; white-space: nowrap; }
-  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; }
+    display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
+    box-sizing: border-box; max-width: calc(100% - 16px); width: max-content; text-align: center;
+    background: var(--e-hint-bg); color: var(--e-hint-text); font: 12px system-ui; }
+  #annotate-hint .done { color: var(--e-text-primary); cursor: pointer; white-space: nowrap; }
   #annotate-hint .done:hover { text-decoration: underline; }
   #annotate-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
     z-index: 10000; display: none; flex-direction: column; gap: 6px; box-sizing: border-box;
@@ -143,7 +145,10 @@ export function pointState(): { picked: string[]; picks: string[]; box: boolean;
   };
 }
 
-export function initAnnotate(): void {
+/** `answered`: the host answers each ↩ with `quote_sent`, and takes no pictures (Claude's notebook view):
+ * a figure or box goes at once, without the wait for a picture, which held the message back for
+ * seconds there (no "shot" ever came), past the moment the host takes it. */
+export function initAnnotate(answered = false): void {
   const picks: Picked[] = [];
   let hover: Target | null = null;
   const active = () => document.body.classList.contains("annotating");
@@ -282,23 +287,29 @@ export function initAnnotate(): void {
     requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
   }
 
+  // The picks and comment of each ↩ under way, by its ref, until the chat answers (`quote_sent`):
+  // answers can come in any order (a refusal is tried again, a picture takes time).
+  const underWay = new Map<number, { picks: Picked[]; comment: string }>();
+  let nextRef = 1;
   // Stays in Point afterwards, ready for the next pick. Pictures are taken
   // one at a time, each brought into view.
   async function sendComment(add: boolean) {
     if (!picks.length) return;
     const sending = picks.splice(0, picks.length);
     const comment = text.value.trim();
+    const ref = !add && answered ? nextRef++ : undefined;
+    if (ref !== undefined) underWay.set(ref, { picks: sending, comment });
     text.value = "";
     text.dispatchEvent(new Event("input"));
     refresh();
     const out: Pick[] = [];
     for (const p of sending) {
-      if (p.pick.part === "box" || p.pick.part === "figure") {
+      if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
         const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
         out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
       } else out.push(p.pick);
     }
-    sendQuote(out, comment, add);
+    sendQuote(out, comment, add, ref);
   }
 
   // A press starts a drag: over lines when it starts on code (and ⌥ isn't
@@ -313,7 +324,8 @@ export function initAnnotate(): void {
     const line = el?.closest<HTMLElement>(".cm-line");
     return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
   };
-  const ours = (target: Element) => bar.contains(target) || hint.contains(target);
+  // The view's toolbar (view.ts) too: its Point button ends Point, and Docs opens the docs.
+  const ours = (target: Element) => bar.contains(target) || hint.contains(target) || !!target.closest?.("#endeavor-bar");
 
   // Capture phase so Pluto/CodeMirror never see presses meant for picking.
   const swallow = (e: Event) => {
@@ -398,4 +410,18 @@ export function initAnnotate(): void {
   hint.querySelector<HTMLElement>(".done")!.onclick = () => set(false);
 
   on("annotate", (msg) => set(msg.on));
+  // Refused: back as they were, ahead of anything picked or typed since, so the next ↩ sends them again.
+  // Point turned off since: it comes back on, with them.
+  on("quote_sent", (msg) => {
+    const sent = underWay.get(msg.ref);
+    underWay.delete(msg.ref);
+    if (msg.ok || !sent) return;
+    set(true);
+    picks.unshift(...sent.picks.filter((p) => !picks.some((q) => samePick(p, q))));
+    if (sent.comment) {
+      text.value = text.value.trim() ? `${sent.comment}\n${text.value}` : sent.comment;
+      text.dispatchEvent(new Event("input"));
+    }
+    refresh();
+  });
 }
