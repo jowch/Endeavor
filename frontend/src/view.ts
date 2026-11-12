@@ -11,7 +11,7 @@
 // those picks name their cells and Claude reads the output with its tools.
 // Unlike the app, Point ends once ↩'s message is on its way: the user sends it from Claude's
 // box, where the view's keys don't reach. The view fills Claude's panel: Pluto's header, footer and
-// floating tabs give way to one slim toolbar (the file, what Pluto is doing, Docs, Point). It also
+// floating tabs give way to one slim toolbar (the file, what Pluto is doing, Docs, Status, Point). It also
 // closes a completion list nobody uses and follows the cells Claude adds.
 
 import { initAnnotate, pointState } from "./annotate";
@@ -21,6 +21,7 @@ import { cellName } from "./cellname";
 import { mac, modHeld } from "./keys";
 import type { Pick } from "./quote";
 import { initNarrow } from "./narrow";
+import { EMBER, PLUTO, initSpace } from "./space";
 import { statusModel, type NotebookLike } from "./status";
 import { initTheme } from "./theme";
 
@@ -82,13 +83,16 @@ export function quoteText(notebook: string, picks: Pick[], comment: string, engi
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
+/** The Docs and Status drawer's height in a narrow panel, in % of the panel's height. */
+const DRAWER = 40;
+
 /** The toolbar's height, without Claude's inset above it. */
-const BAR = 36;
+const BAR = 32;
 
 // The view fills Claude's panel edge to edge, as an app does, not a website in a box: Pluto's own
 // website chrome (its header with the file box and Move, the share menu, the footer with Settings and
 // FAQ, the floating Live docs and Status tabs) gives way to one slim toolbar: the file's name, what
-// Pluto is doing, Docs and Point. Pluto's header stays only as the band it turns into when the
+// Pluto is doing, Docs, Status and Point. Pluto's header stays only as the band it turns into when the
 // notebook needs the user (Safe preview's Run notebook code, Restart, Julia stopped, Reconnecting),
 // under the toolbar. (Claude's desktop app reports no safe-area insets in its panel, 2026-11-12.)
 const chrome = `
@@ -100,7 +104,6 @@ const chrome = `
     display: block !important; position: sticky; top: var(--endeavor-bar); z-index: 60; }
   pluto-editor > header#pluto-nav nav#at_the_top > :not(#process_status) { display: none !important; }
   pluto-editor > header#pluto-nav nav#at_the_top { justify-content: center; }
-  pluto-editor > main { padding-top: 16px; }
   /* What Pluto keeps at the top as the page scrolls (its "Save all changes" button) and where a jump
      to a cell lands go under the toolbar, not behind it. */
   pluto-editor main > preamble { top: calc(var(--endeavor-bar) + 5px) !important; }
@@ -117,20 +120,33 @@ const chrome = `
   #endeavor-bar button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
   #endeavor-bar button.on { color: var(--e-text-primary); background: var(--e-bg-raised); }
   #endeavor-bar .key { color: var(--e-text-faint); }
-  /* Live docs: Pluto's own panel, as a sheet down the right side under the toolbar, opened from Docs.
-     Not display: none when shut: Pluto alerts "window too small to show docs" whenever it opens a panel
-     it finds undisplayed, and it hides the panel below 500px wide. Its Status tab isn't offered here. */
+  /* Live docs and Status: Pluto's own panel, opened from Docs or Status, as a sheet down the right side under the toolbar,
+     or in a panel too narrow to keep the code beside it, a drawer along the bottom (#211), with room
+     under the last cell to scroll it above the drawer. Not display: none when shut: Pluto alerts
+     "window too small to show docs" whenever it opens a panel it finds undisplayed, and it hides the
+     panel below 500px wide. Ember's (R) panel is its own wrapper
+     round the help, with a scrim below 640 px: the wrapper takes the sheet's place, and no scrim
+     covers the code. */
   #helpbox-wrapper { display: block !important; }
-  pluto-helpbox.hidden, pluto-helpbox.helpbox-process { display: none !important; }
-  pluto-helpbox { position: fixed !important; top: var(--endeavor-bar) !important; bottom: 0 !important;
-    right: 0 !important; height: auto !important; width: min(380px, 100vw) !important;
-    border-radius: 0 !important; border-left: 1px solid var(--e-divider); box-shadow: -8px 0 24px var(--e-shadow-popover) !important; }
-  /* Its own tabs and close button: Docs in the toolbar opens and closes it. */
+  pluto-helpbox.hidden { display: none !important; }
+  ${PLUTO} pluto-helpbox, ${EMBER} #helpbox-wrapper.open { position: fixed !important; top: var(--endeavor-bar) !important; bottom: 0 !important;
+    left: auto !important; right: 0 !important; height: auto !important; width: min(380px, 100vw) !important;
+    border-radius: 0 !important; border: none !important; border-left: 1px solid var(--e-divider) !important;
+    box-shadow: -8px 0 24px var(--e-shadow-popover) !important; }
+  ${EMBER} pluto-helpbox { position: static !important; width: auto !important; height: 100% !important; border: none !important; box-shadow: none !important; }
+  ${EMBER} .ember-scrim { display: none !important; }
+  /* Its own tabs and close button: Docs and Status in the toolbar open and close it. */
   pluto-helpbox > header { display: none !important; }
-  /* A narrow panel: the name before the shortcut, and the sheet over the whole width. */
+  @media (max-width: 759px) {
+    ${PLUTO} pluto-helpbox, ${EMBER} #helpbox-wrapper.open { top: auto !important; left: 0 !important; width: auto !important; height: ${DRAWER}vh !important;
+      border-left: none !important; border-top: 1px solid var(--e-divider) !important; box-shadow: 0 -8px 24px var(--e-shadow-popover) !important; }
+    /* Ember's sheet slides in from the right below 1240 px; as a drawer it comes up from the bottom. */
+    ${EMBER} #helpbox-wrapper.open { animation-name: ember-slide-up !important; }
+    body:has(pluto-helpbox:not(.hidden)) pluto-editor:not(.disable_ui) > main { padding-bottom: calc(${DRAWER}vh + 24px) !important; }
+  }
+  /* A narrow panel: the file's name before the shortcut and the panel buttons' words (their icons stay). */
   @media (max-width: 420px) {
-    #endeavor-bar .key { display: none; }
-    pluto-helpbox { border-left: none; }
+    #endeavor-bar .key, #endeavor-bar .panel .word { display: none; }
   }
   /* Pluto's floating safe-preview badge is hidden, as in the app: its band and each cell's
      "Code not executed in Safe preview" already say it. */
@@ -160,7 +176,15 @@ export const fileName = (path: string | undefined): string => (path ? path.split
 
 const book = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 3.2c1.8-.6 3.7-.4 5.5.8 1.8-1.2 3.7-1.4 5.5-.8v9.6c-1.8-.6-3.7-.4-5.5.8-1.8-1.2-3.7-1.4-5.5-.8z"/><path d="M8 4v9.6"/></svg>`;
 
-/** The toolbar: the file's name, what Pluto is doing, Docs, and Point when the chat takes messages. */
+const pulse = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8.5h3l1.8-4.5 3.4 8 1.8-3.5h3"/></svg>`;
+
+/** The toolbar's buttons for Pluto's panel: its tab, the word, the icon and the tooltip. */
+const PANELS: [tab: string, word: string, icon: string, title: string][] = [
+  ["docs", "Docs", book, "Live docs: what the code under the cursor does"],
+  ["process", "Status", pulse, "Status: what the notebook is doing, its packages and how long each step took"],
+];
+
+/** The toolbar: the file's name, what Pluto is doing, Docs, Status, and Point when the chat takes messages. */
 function initBar(withPoint: boolean, point: (on: boolean) => void): void {
   const style = document.createElement("style");
   style.id = "endeavor-chrome";
@@ -170,22 +194,24 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
   bar.id = "endeavor-bar";
   bar.innerHTML =
     `<span class="file">Notebook</span><span class="doing">Loading…</span><span class="grow"></span>` +
-    `<button type="button" class="docs" title="Live docs: what the code under the cursor does">${book}<span>Docs</span></button>` +
+    PANELS.map(([tab, word, icon, title]) => `<button type="button" class="panel ${tab}" title="${title}" aria-label="${word}">${icon}<span class="word">${word}</span></button>`).join("") +
     (withPoint
       ? `<button type="button" id="endeavor-point" title="Point at a cell, its code or its output, and comment on it for Claude"><span>Point</span><span class="key">${mac ? "⌘⇧E" : "Ctrl+Shift+E"}</span></button>`
       : "");
   document.body.prepend(bar);
   const file = bar.querySelector<HTMLElement>(".file")!;
   const words = bar.querySelector<HTMLElement>(".doing")!;
-  const docs = bar.querySelector<HTMLButtonElement>(".docs")!;
   const pointButton = bar.querySelector<HTMLButtonElement>("#endeavor-point");
-  const docsOpen = () => !!document.querySelector("pluto-helpbox.helpbox-docs:not(.hidden)");
-  docs.addEventListener("click", (e) => {
-    if (!e.isTrusted) return;
-    window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: docsOpen() ? null : "docs" }));
-    // The search box takes the cursor once Pluto has drawn the panel (it does so on its next render).
-    if (!docsOpen()) setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
-  });
+  const panelOpen = (tab: string) => !!document.querySelector(`pluto-helpbox.helpbox-${tab}:not(.hidden)`);
+  const panels = PANELS.map(([tab]) => [tab, bar.querySelector<HTMLButtonElement>(`.panel.${tab}`)!] as const);
+  for (const [tab, button] of panels)
+    button.addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
+      const open = panelOpen(tab);
+      window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: open ? null : tab }));
+      // The search box takes the cursor once Pluto has drawn the panel (it does so on its next render).
+      if (!open && tab === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
+    });
   pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
   let last: unknown = null;
   const tick = () => {
@@ -196,7 +222,7 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
       file.title = file.textContent;
       words.textContent = doing(nb);
     }
-    docs.classList.toggle("on", docsOpen());
+    for (const [tab, button] of panels) button.classList.toggle("on", panelOpen(tab));
     pointButton?.classList.toggle("on", document.body.classList.contains("annotating"));
   };
   // Pluto redraws the page whenever its state changes (a cell runs, a panel opens): follow its
@@ -288,6 +314,7 @@ export function start(notebook: string, host: Host): void {
   });
   initTheme();
   initNarrow();
+  initSpace();
   closeStrayCompletions();
   initLinks(host.openLink);
   followNewCells();
