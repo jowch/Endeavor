@@ -92,7 +92,8 @@ export type ToPage =
   // The shown notebook's cells, whenever they change and after `ready`.
   | { type: "cells"; cells: CellState[] }
   // The notebook theme (Settings), after `ready` and on change.
-  | { type: "theme"; name: "endeavor" | "pluto" }
+  // "view": the Endeavor look in Claude's notebook view (view.ts), with Pluto's own header and panels.
+  | { type: "theme"; name: "endeavor" | "pluto" | "view" }
   // Scroll to these cells and outline them briefly (a chip in the chat was clicked).
   | { type: "reveal"; cells: string[] }
   // Ask for a cell's code now.
@@ -151,13 +152,23 @@ const nonce = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
 const handler = (window as any).webkit?.messageHandlers?.ipc;
 const post: (body: string) => void = handler ? handler.postMessage.bind(handler) : (body) => window.ipc?.postMessage(body);
 
+// Outside the app (the notebook view in Claude's desktop app, view.ts), messages
+// go to a handler in this closure instead of over IPC.
+let host: ((msg: ToApp) => void) | null = null;
+
+/** Send the page's messages to `handler` instead of the app (view.ts). */
+export function setHost(handler: (msg: ToApp) => void): void {
+  host = handler;
+}
+
 export function send(msg: ToApp): void {
+  if (host) return host(msg);
   post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
 }
 
 /** Only the user's own clicks and keys may send prompts, not events a page
- * script synthesizes. (Tests run without a secret and can't make trusted events.) */
-export const byUser = (e: Event): boolean => e.isTrusted || !nonce;
+ * script synthesizes. (Tests run without a secret or a host and can't make trusted events.) */
+export const byUser = (e: Event): boolean => e.isTrusted || (!nonce && !host);
 
 /** Several features may listen to the same message (e.g. "cells"). */
 export function on<T extends ToPage["type"]>(type: T, handler: (msg: Extract<ToPage, { type: T }>) => void): void {

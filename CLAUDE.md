@@ -17,7 +17,10 @@ The notebook runtime, MCP server and skills live in
   `notebook_pane.rs`, `webcontent.rs` the notebook web view; `debug_state.rs`
   the state dump; `linux/` the X11/GTK glue.
 - `frontend/`: the TypeScript injected into Pluto's page. `dist/page.js` is
-  built and **committed** (so `cargo build` needs no Node).
+  built and **committed** (so `cargo build` needs no Node). `dist/view.js`
+  (`src/view.ts`: the look and Point only) is EndeavorMCP's notebook view in
+  Claude's desktop app; EndeavorMCP vendors it, and its CI fails until its copy
+  matches this repo's `main`.
 - `adapter/`, `adapter-codex/`: the pinned ACP adapters the app installs.
 - `site/`: the documentation website, built from `docs/guide/`.
 - `docs/`: start with `pluto-agent-design-doc.md` (why), `ui-spec.md` (how it
@@ -33,7 +36,9 @@ cargo clippy --locked --workspace --all-targets   # about 25 warnings today; don
 cd frontend && npm install && npm test && npm run -s check   # rebuilds dist/page.js, then tests
 ```
 
-- After changing `frontend/src/`, commit the rebuilt `dist/page.js` with it.
+- After changing `frontend/src/`, commit the rebuilt `dist/page.js` and
+  `dist/view.js` with it. If `dist/view.js` changed, copy it to EndeavorMCP
+  (`sh scripts/view-frontend.sh sync` there) once this lands.
 - The code is **not** rustfmt-formatted. Don't run `cargo fmt` on the tree;
   match the surrounding style.
 - Check a feature change through the state dump, not screenshots:
