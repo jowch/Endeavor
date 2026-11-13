@@ -115,6 +115,7 @@ A notebook stops when:
 
 - you stop it: **Stop notebook** in its **⋮** menu, or **Stop** next to the
   server in Settings, under **Where notebooks run**;
+- you ask Claude to close it. Claude asks first, with a "Close the notebook?" card;
 - nobody has used it for the time set in **Stop idle notebooks after**, 48
   hours unless you changed it.
 

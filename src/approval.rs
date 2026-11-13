@@ -264,8 +264,8 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
         // The same question as the notebook's safe-preview callout: once, not "always".
         buttons.extend(deny.map(|d| ("Not now".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
-    } else if matches!(tool, "approve_install" | "answer_prompt") && *runs_code {
-        // One download, one answer: "always" would turn on Auto for every later run.
+    } else if matches!(tool, "approve_install" | "answer_prompt" | "restart_notebook" | "close_notebook") && *runs_code {
+        // One download, one answer, one restart or close: "always" would turn on Auto for every later run.
         buttons.extend(deny.map(|d| ("Deny".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
     } else if let Some(allow) = allow {
@@ -310,6 +310,7 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
     let question = run_question(tool, preview, input);
     let what = match tool {
         "restart_notebook" => Some("Every value is cleared. A Julia notebook then runs every cell again; an R notebook's cells wait to be run."),
+        "close_notebook" => Some("The notebook stops and every value is cleared. Its code stays saved, and Start opens it again."),
         "apply_package_update" => Some("The notebook's package date and versions change and the new packages install. If R had one of them loaded, it restarts."),
         "approve_install" => Some("The packages download and install, then the cells waiting on them run."),
         "answer_prompt" => Some("The cell goes on with this answer."),
@@ -892,7 +893,7 @@ pub(crate) fn cut_line(text: &str, max: usize) -> String {
 /// Whether a run card asks the runtime which cells a call would run: not for
 /// a shell command, or a call on the whole notebook that names no cells.
 pub(crate) fn previews_cells(tool: &str) -> bool {
-    !matches!(tool, "run_shell" | "restart_notebook" | "apply_package_update" | "approve_install" | "answer_prompt" | "set_input")
+    !matches!(tool, "run_shell" | "restart_notebook" | "close_notebook" | "apply_package_update" | "approve_install" | "answer_prompt" | "set_input")
 }
 
 /// A run card's question ("Run `fit`?", "Delete a cell?", "Add `x` and run
@@ -912,6 +913,7 @@ fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_j
     // Whole-notebook runs that name no cells: their own question, never "Run 0 cells?".
     match tool {
         "restart_notebook" => return RunQuestion { heading: "Restart the notebook?".into(), button: "Restart", names: vec![] },
+        "close_notebook" => return RunQuestion { heading: "Close the notebook?".into(), button: "Close", names: vec![] },
         "approve_install" => return RunQuestion { heading: "Download and install the packages?".into(), button: "Download", names: vec![] },
         "answer_prompt" => return RunQuestion { heading: "Answer the cell's question?".into(), button: "Answer", names: vec![] },
         "set_input" => {
@@ -1172,12 +1174,14 @@ mod tests {
         };
         let safe = waiting("mcp__notebook__allow_execution", json!({ "notebook_id": "n" }));
         assert_eq!(super::command_enter_scope(&safe), Scope::Once, "Let this notebook run? has no Always");
-        for tool in ["mcp__notebook__approve_install", "mcp__notebook__answer_prompt"] {
+        for tool in ["mcp__notebook__approve_install", "mcp__notebook__answer_prompt", "mcp__notebook__restart_notebook", "mcp__notebook__close_notebook"] {
             let once = waiting(tool, json!({ "notebook_id": "n", "text": "y" }));
             assert_eq!(super::command_enter_scope(&once), Scope::Once, "{tool} has no Always");
             let view = super::approval_view(&once).unwrap();
             assert!(view.buttons.iter().all(|b| b.scope == Scope::Once), "{tool}: {:?}", view.buttons.iter().map(|b| &b.label).collect::<Vec<_>>());
         }
+        let close = super::approval_view(&waiting("mcp__notebook__close_notebook", json!({ "notebook_id": "n" }))).unwrap();
+        assert_eq!(close.buttons.iter().map(|b| (b.label.as_str(), b.scope)).collect::<Vec<_>>(), vec![("Deny", Scope::Once), ("Close", Scope::Once)]);
         let run = waiting("mcp__notebook__execute_cell", json!({ "notebook_id": "n", "cell_id": "c1" }));
         assert_eq!(super::command_enter_scope(&run), Scope::Session);
     }
@@ -1341,13 +1345,14 @@ mod tests {
         assert_eq!(ask("edit_cells", None, json!({ "cells": [{}, {}] })), ("Edit 2 cells and run them?".into(), "Edit and run"));
         assert_eq!(ask("delete_cell", None, json!({ "cell_id": "a" })), ("Delete a cell?".into(), "Delete"));
         assert_eq!(ask("restart_notebook", cells(0, false), json!({ "notebook_id": "n" })), ("Restart the notebook?".into(), "Restart"), "never \"Run 0 cells?\"");
+        assert_eq!(ask("close_notebook", None, json!({ "notebook_id": "n" })), ("Close the notebook?".into(), "Close"));
         assert_eq!(ask("apply_package_update", cells(0, false), json!({ "notebook_id": "n", "date": "2026-10-01" })), ("Update the packages to 2026-10-01?".into(), "Update"));
         assert_eq!(ask("apply_package_update", None, json!({})), ("Update the notebook's packages?".into(), "Update"));
         assert_eq!(ask("approve_install", cells(0, false), json!({ "notebook_id": "n" })), ("Download and install the packages?".into(), "Download"));
         assert_eq!(ask("answer_prompt", cells(1, false), json!({ "notebook_id": "n", "cell_id": "a", "text": "y" })), ("Answer the cell's question?".into(), "Answer"));
         assert_eq!(ask("set_input", cells(0, false), json!({ "notebook_id": "n", "name": "bins", "value": 30 })), ("Set `bins` to 30?".into(), "Set"));
         assert_eq!(ask("set_input", None, json!({ "notebook_id": "n", "name": "species", "value": "setosa" })), ("Set `species` to “setosa”?".into(), "Set"));
-        for tool in ["restart_notebook", "apply_package_update", "approve_install", "answer_prompt", "set_input"] {
+        for tool in ["restart_notebook", "close_notebook", "apply_package_update", "approve_install", "answer_prompt", "set_input"] {
             assert!(!super::previews_cells(tool), "{tool}");
         }
         assert!(super::previews_cells("execute_cell"));

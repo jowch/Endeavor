@@ -2786,7 +2786,7 @@ fn r_failure(before: Option<&pluto::RStatus>, now: &pluto::RStatus) -> Option<St
 
 /// Whether `a` and `b` name the same file on `host`: spelled the same, or, on this computer, the same once
 /// canonical (a file system that ignores case, a link). A server's paths are compared as spelled.
-fn same_file(host: &HostId, a: &str, b: &str) -> bool {
+pub(crate) fn same_file(host: &HostId, a: &str, b: &str) -> bool {
     a == b || (*host == HostId::ThisMac && matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b))
 }
 

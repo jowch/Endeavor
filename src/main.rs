@@ -1479,6 +1479,30 @@ impl Workspace {
         .detach();
     }
 
+    /// Session `key`'s agent closed notebook `id` at `path` (`close_notebook`): every
+    /// session on it, or on its file, shows it stopped, with Start, as after Stop notebook.
+    /// Start opens it in safe preview, since the app doesn't know whether it was let run.
+    fn notebook_closed(&mut self, key: u64, id: &str, path: Option<&str>, cx: &mut Context<Self>) {
+        let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
+        let stopped = Stopped { safe_preview: true, idle_hours: None, modified: None };
+        let mut paths = Vec::new();
+        // The runtime names the file canonically; a session may have it spelled otherwise (case, links).
+        let on_it = |s: &crate::session::Session| {
+            s.notebook.as_deref() == Some(id) || path.zip(s.notebook_path.as_deref()).is_some_and(|(closed, own)| crate::connection::same_file(&host, own, closed))
+        };
+        for session in self.sessions.iter_mut().filter(|s| s.place.host == host && on_it(s)) {
+            session.notebook = None;
+            session.stopped = Some(stopped);
+            if let Some(path) = session.notebook_path.clone().filter(|p| !paths.contains(p)) {
+                paths.push(path);
+            }
+        }
+        for path in paths {
+            self.note_stopped_file(&host, path, cx);
+        }
+        cx.notify();
+    }
+
     /// Show a session; the notebook pane follows it to the notebook it last viewed
     /// (without one, the pane draws a stand-in over the hidden web view).
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
@@ -1545,6 +1569,7 @@ impl Workspace {
                         self.load_notebook(&host, &id, cx);
                     }
                 }
+                Effect::NotebookClosed { id, path } => self.notebook_closed(key, &id, path.as_deref(), cx),
                 Effect::CheckRunState => {
                     self.keep_transcript(key);
                     self.check_run_state(key, cx)
