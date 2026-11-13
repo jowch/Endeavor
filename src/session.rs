@@ -229,8 +229,8 @@ pub enum Effect {
     Send(Turn),
     /// The agent opened or created this notebook (its id, and its file).
     ShowNotebook { id: String, path: Option<String> },
-    /// The agent closed this notebook (its id): the sessions on it show it stopped, with Start.
-    NotebookClosed(String),
+    /// The agent closed this notebook (its id, and its file): the sessions on it show it stopped, with Start.
+    NotebookClosed { id: String, path: Option<String> },
     /// A reopened session last worked in this notebook file: open it in the
     /// current Pluto (its old id died with the previous Julia) and show it.
     ReopenNotebook(String),
@@ -263,8 +263,8 @@ pub enum Effect {
 enum Arrived {
     /// It opened or created this notebook (its id, and its file).
     Opened(String, Option<String>),
-    /// It closed this notebook (its id).
-    Closed(String),
+    /// It closed this notebook (its id, and its file).
+    Closed(String, Option<String>),
 }
 
 /// A select config option's current value and its choices.
@@ -2064,8 +2064,8 @@ impl Session {
             SessionUpdate::ToolCallUpdate(update) => {
                 match self.on_tool_update(update, effects) {
                     // History, not a live close: the notebook it closed died with an earlier Julia.
-                    Some(Arrived::Closed(id)) if !self.replaying => effects.push(Effect::NotebookClosed(id)),
-                    Some(Arrived::Closed(_)) | None => {}
+                    Some(Arrived::Closed(id, path)) if !self.replaying => effects.push(Effect::NotebookClosed { id, path }),
+                    Some(Arrived::Closed(..)) | None => {}
                     Some(Arrived::Opened(id, path)) => if self.replaying {
                         // History, not a live open: that id belongs to an earlier Julia.
                         // The notebook Endeavor recorded wins over the history's: the
@@ -2190,7 +2190,7 @@ impl Session {
         let id = result["notebook_id"].as_str()?.to_owned();
         match tool {
             "open_notebook" | "new_notebook" => Some(Arrived::Opened(id, result["path"].as_str().map(str::to_owned))),
-            "close_notebook" if result["closed"] == true => Some(Arrived::Closed(id)),
+            "close_notebook" if result["closed"] == true => Some(Arrived::Closed(id, result["path"].as_str().map(str::to_owned))),
             _ => None,
         }
     }
@@ -2208,7 +2208,7 @@ impl Session {
         self.mark(ix);
         match self.result_arrived(ix) {
             Some(Arrived::Opened(id, path)) => vec![Effect::ShowNotebook { id, path }],
-            Some(Arrived::Closed(id)) => vec![Effect::NotebookClosed(id)],
+            Some(Arrived::Closed(id, path)) => vec![Effect::NotebookClosed { id, path }],
             None => Vec::new(),
         }
     }
@@ -4178,9 +4178,9 @@ more" }"#);
         let opened = call("t0", "open_notebook", json!({ "path": "/tmp/a.jl" }), json!({ "notebook_id": "n1", "path": "/tmp/a.jl" }));
         assert!(matches!(opened.as_slice(), [Effect::ShowNotebook { id, .. }] if id == "n1"), "the pane follows");
         let refused = call("t3", "close_notebook", json!({ "notebook_id": "n1" }), json!({ "error": "notebook_not_found::gone" }));
-        assert!(refused.iter().all(|e| !matches!(e, Effect::NotebookClosed(_))), "only a close that happened");
+        assert!(refused.iter().all(|e| !matches!(e, Effect::NotebookClosed { .. })), "only a close that happened");
         let closed = call("t4", "close_notebook", json!({ "notebook_id": "n1" }), json!({ "notebook_id": "n1", "path": "/tmp/a.jl", "closed": true }));
-        assert!(matches!(closed.as_slice(), [Effect::NotebookClosed(id)] if id == "n1"), "the pane shows it stopped");
+        assert!(matches!(closed.as_slice(), [Effect::NotebookClosed { id, path: Some(p) }] if id == "n1" && p == "/tmp/a.jl"), "the pane shows it stopped");
         call("t1", "read_cell", json!({ "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" }));
         call("t2", "edit_cell", json!({ "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true }));
         let Some(Entry::Tool { title, input, diffs, .. }) = s.entries.last() else { panic!("no call") };
@@ -4213,7 +4213,7 @@ more" }"#);
         assert!(matches!(shown.as_slice(), [Effect::ShowNotebook { id, .. }] if id == "n1"), "the pane follows");
         call(&mut s, "t9", "close_notebook", json!({ "notebook_id": "n1" }));
         let closed = s.result_fetched(&ToolCallId::new("t9"), text(json!({ "notebook_id": "n1", "path": "/tmp/a.jl", "closed": true })));
-        assert!(matches!(closed.as_slice(), [Effect::NotebookClosed(id)] if id == "n1"), "the pane shows it stopped");
+        assert!(matches!(closed.as_slice(), [Effect::NotebookClosed { id, path: Some(p) }] if id == "n1" && p == "/tmp/a.jl"), "the pane shows it stopped");
 
         call(&mut s, "t1", "read_cell", json!({ "cell_id": A }));
         s.result_fetched(&ToolCallId::new("t1"), text(json!({ "cell_id": A, "code": "rate = 0.1" })));
