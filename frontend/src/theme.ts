@@ -343,27 +343,38 @@ const both = `
 footer form#feedback { display: none !important; }
 `;
 
-// The app's bundled JuliaMono (served by the app's endeavor: protocol), so code
-// renders offline. Declared after Pluto's CDN faces of the same family, so these
-// win for every character. Pluto declares only a regular-weight italic.
-const juliaMono = [
-  { file: "Regular", weight: 400, style: "normal" },
-  { file: "Bold", weight: 700, style: "normal" },
-  { file: "RegularItalic", weight: 400, style: "italic" },
-]
-  .map(
-    ({ file, weight, style }) => `
+// JuliaMono, declared after Pluto's CDN faces of the same family, so these win
+// for every character. Pluto declares only a regular-weight italic. In the app
+// it's the bundled copy (served by the app's endeavor: protocol), so code renders
+// offline. Claude's desktop app can't reach endeavor:, and its frame loads fonts
+// only from the hosts EndeavorMCP's view names (cdn.jsdelivr.net), so the view
+// takes the same release from there.
+// The tag is fonts/build.py's JULIAMONO_TAG, the release the app bundles: move them together.
+const JULIA_MONO_WEB = "https://cdn.jsdelivr.net/gh/cormullion/juliamono@v0.63.2/webfonts";
+export function juliaMonoFaces(from: "app" | "web"): string {
+  return [
+    { file: "Regular", weight: 400, style: "normal" },
+    { file: "Bold", weight: 700, style: "normal" },
+    { file: "RegularItalic", weight: 400, style: "italic" },
+  ]
+    .map(({ file, weight, style }) => {
+      const src =
+        from === "app"
+          ? `url("endeavor://localhost/fonts/JuliaMono-${file}.ttf") format("truetype")`
+          : `url("${JULIA_MONO_WEB}/JuliaMono-${file}.woff2") format("woff2")`;
+      return `
 @font-face {
   font-family: JuliaMono;
-  src: url("endeavor://localhost/fonts/JuliaMono-${file}.ttf") format("truetype");
+  src: ${src};
   font-display: swap;
   font-weight: ${weight};
   font-style: ${style};
-}`,
-  )
-  .join("");
+}`;
+    })
+    .join("");
+}
 
-export function initTheme(): void {
+export function initTheme(fontsFrom: "app" | "web" = "app"): void {
   // Before anything else: other modules' <style> elements reference --e-*
   // variables, and CSS variables resolve at use time, so this only needs to
   // exist somewhere in the document by the time they're used, not first in
@@ -375,7 +386,7 @@ export function initTheme(): void {
 
   const fonts = document.createElement("style");
   fonts.id = "endeavor-fonts";
-  fonts.textContent = juliaMono;
+  fonts.textContent = juliaMonoFaces(fontsFrom);
   document.head.append(fonts);
 
   const style = document.createElement("style");
