@@ -17,25 +17,38 @@ export function findMatches(root: Element, query: string): Range[] {
   const needle = query.toLowerCase();
   if (!needle) return [];
   const doc = root.ownerDocument;
-  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+  // What isn't drawn (a folded cell's code, a closed details, display: none) isn't found. Asked once per element.
+  const shown = new Map<Element, boolean>();
+  const isShown = (el: Element) => {
+    let yes = shown.get(el);
+    if (yes === undefined) shown.set(el, (yes = (el as any).checkVisibility?.() ?? true));
+    return yes;
+  };
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
     acceptNode: (node) => {
+      if (node.nodeType === 1) return (node as Element).tagName === "BR" ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
       const parent = node.parentElement;
       if (!parent || !node.nodeValue) return NodeFilter.FILTER_REJECT;
-      if (parent.closest("script, style, template, [hidden], [aria-hidden='true']")) return NodeFilter.FILTER_REJECT;
+      if (parent.closest("script, style, template, [hidden], [aria-hidden='true']") || !isShown(parent)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },
   });
-  // The text, with a line break wherever the block changes, and which node each stretch came from.
+  // The text, with a line break wherever the block changes or a <br> breaks the line, and which node each stretch came from.
   const pieces: { node: Text; at: number }[] = [];
   let text = "";
   let block: Element | null = null;
-  for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.nodeType === 1) {
+      text += "\n";
+      block = null;
+      continue;
+    }
     const here = node.parentElement!.closest(BLOCK);
     if (here !== block) {
       text += "\n";
       block = here;
     }
-    pieces.push({ node, at: text.length });
+    pieces.push({ node: node as Text, at: text.length });
     text += node.nodeValue!;
   }
   const haystack = text.toLowerCase();
@@ -118,7 +131,17 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
     count.textContent = !input.value ? "" : matches.length ? `${current + 1} of ${matches.length}` : "No matches";
     paint();
     if (!range) return;
-    // Into sight below the toolbar and the box.
+    // Into sight: first inside any scrolling box around it (a long output, a wide table), then in the
+    // page, below the toolbar and this box.
+    for (let el = range.startContainer.parentElement; el && el !== document.body; el = el.parentElement) {
+      const style = getComputedStyle(el);
+      const r = range.getBoundingClientRect();
+      const area = el.getBoundingClientRect();
+      if (/auto|scroll/.test(style.overflowY) && el.scrollHeight > el.clientHeight && (r.top < area.top || r.bottom > area.bottom))
+        el.scrollTop += r.top - area.top - el.clientHeight / 2;
+      if (/auto|scroll/.test(style.overflowX) && el.scrollWidth > el.clientWidth && (r.left < area.left || r.right > area.right))
+        el.scrollLeft += r.left - area.left - el.clientWidth / 2;
+    }
     const rect = range.getBoundingClientRect();
     const top = (document.getElementById("endeavor-bar")?.getBoundingClientRect().bottom ?? 0) + box.offsetHeight + 16;
     if (rect.top < top || rect.bottom > window.innerHeight - 16) window.scrollBy(0, rect.top - (top + window.innerHeight) / 2);
@@ -160,12 +183,17 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
   let typing = 0;
   input.addEventListener("input", () => {
     clearTimeout(typing);
-    typing = window.setTimeout(() => search(false), 80);
+    typing = window.setTimeout(() => ((typing = 0), search(false)), 80);
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      step(e.shiftKey ? -1 : 1);
+      // ↩ straight after typing goes to the first match of what was typed, not the next of the old search.
+      if (typing) {
+        clearTimeout(typing);
+        typing = 0;
+        search(false);
+      } else step(e.shiftKey ? -1 : 1);
     } else if (e.key === "Escape") {
       e.preventDefault();
       close();

@@ -35,6 +35,10 @@ test("a match doesn't run from one line, paragraph or cell into the next", () =>
   assert.deepEqual(search("endstart"), []);
   assert.deepEqual(search("startz"), []);
   assert.deepEqual(search("y = 2"), ["y = 2"]);
+  // A <br> breaks the line too.
+  const br = find(`<pluto-notebook>${cell(["a"], "<span>one<br>two</span>")}</pluto-notebook>`);
+  assert.deepEqual(br("onetwo"), []);
+  assert.deepEqual(br("two"), ["two"]);
 });
 
 test("only the notebook: not scripts, styles or what's hidden from the page", () => {
