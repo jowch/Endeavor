@@ -18,6 +18,12 @@ Handoff for implementing the redesigned chat + notebook interface.
    | Ambient | Sidebar, composer, controls | Smaller, grey, no emphasis |
 3. **Native by default, CSS where needed, a thin adapter for the rest.** Every line injected into the notebook is maintained twice (Pluto, later Ember).
 4. **Agent-agnostic.** Every "Claude" label comes from the ACP agent's name.
+5. **Say it once.** Each fact gets one signal in one place. A cell Claude edited has its orange bar, not a bar, a badge and a header line too. A second signal is only for something the first doesn't say.
+6. **Words where they carry meaning.** A surface has a small word budget: what it is, what changed, what you can do. Everything else is a shape, an icon or nothing. If a line only repeats what the layout already shows, cut it.
+7. **Space follows meaning.** Things that belong together sit closer than things that don't: a title sits nearer its own details than the next row. The thing the user came for gets the room. Never spread rows to fill a pane, and never leave a dead band between a result and its controls.
+8. **Every change has a visible cause.** Content that changes moves or crossfades in place; it doesn't vanish and reappear. Nothing jumps, reorders or rewinds unless the user, the agent or the notebook did something, and the screen says which.
+9. **Judge the whole before the details.** Shrink a screenshot to thumbnail size. You should still see where to look first, and it should be what principle 2 says it is. Fix that before any pixel.
+10. **Review like the strictest designer you know.** Picture them sending back one cropped screenshot that asks "what is this?": a dot off its row, a label one pixel low, text touching a card edge. If you can picture that screenshot, fix it. The checklist under Space lists the usual ones.
 
 ## Tokens
 
@@ -58,6 +64,18 @@ Every light text colour passes WCAG AA on the surfaces it sits on.
 **Type** — Geist (UI), Geist Mono (cell names, paths, counts). Sizes: chat 14px/1.6; tool lines 13px; sidebar 12.5px; section heads 11.5px; toolbar 12px. The notebook keeps Pluto's own fonts (Vollkorn, Alegreya Sans, JuliaMono).
 
 **Space** — 16px inset from every column edge (headers, transcript, composer, sidebar rows); 10px inside cards; 8px between related items, 16px between blocks. Column headers 44px.
+
+**Polish checklist.** Run through it on a screenshot of the change, in both looks.
+
+- Text never touches a box. Words keep the card's 10px inset on every side, the bottom too; under 8px reads as cramped.
+- No near-misses. Edges 1 to 3px apart look like an accident: line them up exactly or part them by 8px or more.
+- A control hugs its content. No button stretched wide with its label at one end; fix overflow by fitting the text, not by widening the box.
+- Labels centre on their letters, not their line box. Capitals sit low in a plain line box, so check a label beside an icon, in a chip or in a pill by eye.
+- Nested shapes pad evenly, and the outer radius is the inner radius plus that padding.
+- Dots, rings and badges sit fully inside their row's inset, never on its edge or clipped.
+- Columns line up. Rows in a list share one set of tracks, and an empty slot keeps its width.
+- Small text keeps a line height of 1.3 or more.
+- An open menu's button keeps its pressed look until the menu closes.
 
 **Radius** — cards, composer, bubbles 8px, and menus and popovers drawn with `theme::popover` too; 10px for the prompt, the context ring's popover, failure cards and notices, and the offline card; buttons and menu rows 4–5px; chips, inline code 3px; gutter bars 2px; circles stay round. The chat panel keeps this scale rather than Pluto's 4px everywhere.
 
