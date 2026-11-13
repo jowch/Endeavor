@@ -11,11 +11,12 @@
 // those picks name their cells and Claude reads the output with its tools.
 // Unlike the app, Point ends once ↩'s message is on its way: the user sends it from Claude's
 // box, where the view's keys don't reach. The view fills Claude's panel: Pluto's header, footer and
-// floating tabs give way to one slim toolbar (the file, what Pluto is doing, Docs, Status, Point). It also
+// floating tabs give way to one slim toolbar (the file, what Pluto is doing, Find, Docs, Status, Point). It also
 // closes a completion list nobody uses and follows the cells Claude adds.
 
 import { initAnnotate, pointState } from "./annotate";
 import { initAskBox } from "./askbox";
+import { findButton, initFind } from "./find";
 import { setHost, type ToApp } from "./bridge";
 import { cellName } from "./cellname";
 import { mac, modHeld } from "./keys";
@@ -165,7 +166,7 @@ const chrome = `
   }
   /* A narrow panel: the file's name before the shortcut and the panel buttons' words (their icons stay). */
   @media (max-width: 420px) {
-    #endeavor-bar .key, #endeavor-bar .panel .word { display: none; }
+    #endeavor-bar .key, #endeavor-bar .panel .word, #endeavor-find-button .word { display: none; }
   }
   /* Pluto's floating safe-preview badge is hidden, as in the app: its band and each cell's
      "Code not executed in Safe preview" already say it. */
@@ -203,7 +204,7 @@ const PANELS: [tab: string, word: string, icon: string, title: string][] = [
   ["process", "Status", pulse, "Status: what the notebook is doing, its packages and how long each step took"],
 ];
 
-/** The toolbar: the file's name, what Pluto is doing, Docs, Status, and Point when the chat takes messages. */
+/** The toolbar: the file's name, what Pluto is doing, Find, Docs, Status, and Point when the chat takes messages. */
 function initBar(withPoint: boolean, point: (on: boolean) => void): void {
   const style = document.createElement("style");
   style.id = "endeavor-chrome";
@@ -213,6 +214,7 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
   bar.id = "endeavor-bar";
   bar.innerHTML =
     `<span class="file">Notebook</span><span class="doing">Loading…</span><span class="grow"></span>` +
+    findButton() +
     PANELS.map(([tab, word, icon, title]) => `<button type="button" class="panel ${tab}" title="${title}" aria-label="${word}">${icon}<span class="word">${word}</span></button>`).join("") +
     (withPoint
       ? `<button type="button" id="endeavor-point" title="Point at a cell, its code or its output, and comment on it for Claude"><span>Point</span><span class="key">${mac ? "⌘⇧E" : "Ctrl+Shift+E"}</span></button>`
@@ -232,6 +234,7 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
       if (!open && tab === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
     });
   pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
+  initFind(bar.querySelector<HTMLButtonElement>("#endeavor-find-button")!);
   let last: unknown = null;
   const tick = () => {
     const nb = (window as any).editor_state?.notebook as (NotebookLike & { path?: string }) | undefined;
