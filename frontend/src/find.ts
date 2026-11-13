@@ -1,9 +1,9 @@
 // Find in the notebook, for the view in Claude's desktop app. Desktop's own ⌘F searches Desktop's page
-// and not the view's frame (Mac audit, 2026-11-12: 0/0 for text on screen), so the view has its own:
-// a Find button in the toolbar. ⌘F (Ctrl+F) opens it too, should Desktop ever pass the key to the frame:
-// today it doesn't, and opens its own bar (Mac, 2026-11-13). It
-// searches the text on the page: the cells' code and their outputs, as shown. A folded cell's code and
-// the lines of a long cell that CodeMirror hasn't drawn are left out, as a browser's find leaves them.
+// and not the view's frame (Mac audit, 2026-11-12: 0/0 for text on screen), so the view has its own: a
+// Find button in the toolbar, and ⌘F (Ctrl+F) with the cursor in the view, which the view takes before
+// Desktop's bar opens (Mac, 2026-11-13). It searches the text on the page: the cells' code and their
+// outputs, as shown. A folded cell's code and the lines of a long cell that CodeMirror hasn't drawn are
+// left out, as a browser's find leaves them.
 
 import { mac, modHeld } from "./keys";
 
@@ -205,7 +205,7 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
   box.querySelector(".next")!.addEventListener("click", () => step(1));
   box.querySelector(".close")!.addEventListener("click", close);
   button.addEventListener("click", (e) => e.isTrusted && (isOpen() ? close() : open()));
-  // ⌘F (Ctrl+F) and ⌘G, if Desktop passes them to the frame (it doesn't today). Before CodeMirror's own keys.
+  // ⌘F (Ctrl+F) and ⌘G, with the cursor in the view. Before CodeMirror's own keys, and before Desktop's find.
   window.addEventListener(
     "keydown",
     (e) => {
