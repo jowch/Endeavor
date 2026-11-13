@@ -1473,6 +1473,7 @@ fn tool_verb(title: &str) -> String {
         "run_shell" => "Ran",
         "keep_notebook_alive" => "Kept notebook running",
         "interrupt_notebook" => "Stopped the notebook's run",
+        "close_notebook" => "Closed the notebook",
         other => other,
     }
     .to_string()

@@ -229,6 +229,8 @@ pub enum Effect {
     Send(Turn),
     /// The agent opened or created this notebook (its id, and its file).
     ShowNotebook { id: String, path: Option<String> },
+    /// The agent closed this notebook (its id): the sessions on it show it stopped, with Start.
+    NotebookClosed(String),
     /// A reopened session last worked in this notebook file: open it in the
     /// current Pluto (its old id died with the previous Julia) and show it.
     ReopenNotebook(String),
@@ -255,6 +257,14 @@ pub enum Effect {
     SignedOut,
     /// A turn hit the account's usage limit: messages wait until it resets.
     UsageLimit(Option<crate::trouble::Reset>),
+}
+
+/// What a finished notebook call did to the notebook the pane shows.
+enum Arrived {
+    /// It opened or created this notebook (its id, and its file).
+    Opened(String, Option<String>),
+    /// It closed this notebook (its id).
+    Closed(String),
 }
 
 /// A select config option's current value and its choices.
@@ -2052,8 +2062,11 @@ impl Session {
                 })
             }
             SessionUpdate::ToolCallUpdate(update) => {
-                if let Some((id, path)) = self.on_tool_update(update, effects) {
-                    if self.replaying {
+                match self.on_tool_update(update, effects) {
+                    // History, not a live close: the notebook it closed died with an earlier Julia.
+                    Some(Arrived::Closed(id)) if !self.replaying => effects.push(Effect::NotebookClosed(id)),
+                    Some(Arrived::Closed(_)) | None => {}
+                    Some(Arrived::Opened(id, path)) => if self.replaying {
                         // History, not a live open: that id belongs to an earlier Julia.
                         // The notebook Endeavor recorded wins over the history's: the
                         // user may have located the file since Claude last opened it.
@@ -2062,7 +2075,7 @@ impl Session {
                         }
                     } else {
                         effects.push(Effect::ShowNotebook { id, path });
-                    }
+                    },
                 }
             }
             SessionUpdate::CurrentModeUpdate(update) => {
@@ -2122,11 +2135,10 @@ impl Session {
     }
 
     /// Apply a tool-call update; on a completed notebook call, learn cell code
-    /// and diff edits. Returns the id (and file path) of a notebook the agent
-    /// just opened or created. A finished notebook call whose output isn't the
+    /// and diff edits. Returns the notebook the agent just opened, created or closed. A finished notebook call whose output isn't the
     /// tool's result (Cursor sends only `{"success": true}`) asks the runtime
     /// for it instead. The guide's result is text, not JSON.
-    fn on_tool_update(&mut self, update: ToolCallUpdate, effects: &mut Vec<Effect>) -> Option<(String, Option<String>)> {
+    fn on_tool_update(&mut self, update: ToolCallUpdate, effects: &mut Vec<Effect>) -> Option<Arrived> {
         let ix = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
         self.mark(ix);
         let Entry::Tool { id, title, kind, path, status, input, output, .. } = &mut self.entries[ix] else { return None };
@@ -2163,8 +2175,8 @@ impl Session {
     }
 
     /// The result of the notebook call at `ix` is in its output: learn cell
-    /// code, diff its edits, and say which notebook it opened or created.
-    fn result_arrived(&mut self, ix: usize) -> Option<(String, Option<String>)> {
+    /// code, diff its edits, and say which notebook it opened, created or closed.
+    fn result_arrived(&mut self, ix: usize) -> Option<Arrived> {
         let Some(Entry::Tool { title, status, input, output, diffs, .. }) = self.entries.get_mut(ix) else { return None };
         let tool = celldiff::notebook_tool(title).filter(|_| *status == ToolCallStatus::Completed)?;
         let result = output.as_ref().and_then(celldiff::tool_json)?;
@@ -2175,11 +2187,12 @@ impl Session {
         if let Some(input) = input {
             *diffs = self.cell_codes.diff(tool, input, &result);
         }
-        if !matches!(tool, "open_notebook" | "new_notebook") {
-            return None;
-        }
         let id = result["notebook_id"].as_str()?.to_owned();
-        Some((id, result["path"].as_str().map(str::to_owned)))
+        match tool {
+            "open_notebook" | "new_notebook" => Some(Arrived::Opened(id, result["path"].as_str().map(str::to_owned))),
+            "close_notebook" if result["closed"] == true => Some(Arrived::Closed(id)),
+            _ => None,
+        }
     }
 
     /// The runtime's copy of call `call`'s result (`{content, isError}`), which
@@ -2194,7 +2207,8 @@ impl Session {
         }
         self.mark(ix);
         match self.result_arrived(ix) {
-            Some((id, path)) => vec![Effect::ShowNotebook { id, path }],
+            Some(Arrived::Opened(id, path)) => vec![Effect::ShowNotebook { id, path }],
+            Some(Arrived::Closed(id)) => vec![Effect::NotebookClosed(id)],
             None => Vec::new(),
         }
     }
@@ -4163,6 +4177,10 @@ more" }"#);
         };
         let opened = call("t0", "open_notebook", json!({ "path": "/tmp/a.jl" }), json!({ "notebook_id": "n1", "path": "/tmp/a.jl" }));
         assert!(matches!(opened.as_slice(), [Effect::ShowNotebook { id, .. }] if id == "n1"), "the pane follows");
+        let refused = call("t3", "close_notebook", json!({ "notebook_id": "n1" }), json!({ "error": "notebook_not_found::gone" }));
+        assert!(refused.iter().all(|e| !matches!(e, Effect::NotebookClosed(_))), "only a close that happened");
+        let closed = call("t4", "close_notebook", json!({ "notebook_id": "n1" }), json!({ "notebook_id": "n1", "path": "/tmp/a.jl", "closed": true }));
+        assert!(matches!(closed.as_slice(), [Effect::NotebookClosed(id)] if id == "n1"), "the pane shows it stopped");
         call("t1", "read_cell", json!({ "cell_id": A }), json!({ "cell_id": A, "code": "rate = 0.1" }));
         call("t2", "edit_cell", json!({ "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true }));
         let Some(Entry::Tool { title, input, diffs, .. }) = s.entries.last() else { panic!("no call") };
@@ -4193,6 +4211,9 @@ more" }"#);
         assert_eq!((id.to_string(), tool.as_str(), input), ("t0".into(), "open_notebook", &json!({ "path": "/tmp/a.jl" })));
         let shown = s.result_fetched(&ToolCallId::new("t0"), text(json!({ "notebook_id": "n1", "path": "/tmp/a.jl" })));
         assert!(matches!(shown.as_slice(), [Effect::ShowNotebook { id, .. }] if id == "n1"), "the pane follows");
+        call(&mut s, "t9", "close_notebook", json!({ "notebook_id": "n1" }));
+        let closed = s.result_fetched(&ToolCallId::new("t9"), text(json!({ "notebook_id": "n1", "path": "/tmp/a.jl", "closed": true })));
+        assert!(matches!(closed.as_slice(), [Effect::NotebookClosed(id)] if id == "n1"), "the pane shows it stopped");
 
         call(&mut s, "t1", "read_cell", json!({ "cell_id": A }));
         s.result_fetched(&ToolCallId::new("t1"), text(json!({ "cell_id": A, "code": "rate = 0.1" })));

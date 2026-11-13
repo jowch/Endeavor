@@ -142,6 +142,7 @@ const ALLOW_RUN: Act = act("Letting", "let", "let", "the notebook run", "the not
 const GUIDE: Act = act("Reading", "read", "read", "the notebook guide", "the notebook guide {n} times");
 const KEEP_ALIVE: Act = act("Keeping", "keep", "kept", "the notebook running", "the notebook running");
 const STOP_RUN: Act = act("Stopping", "stop", "stopped", "the notebook's run", "the notebook's run {n} times");
+const CLOSE_NOTEBOOK: Act = act("Closing", "close", "closed", "the notebook", "the notebook {n} times");
 const SKILL: Act = act("Using", "use", "used", "a skill", "{n} skills");
 const OTHER: Act = act("Using", "use", "used", "a tool", "{n} tools");
 
@@ -192,6 +193,7 @@ fn act_of(title: &str, kind: ToolKind, input: &Value) -> (Act, usize) {
             "allow_execution" => (ALLOW_RUN, 1),
             "keep_notebook_alive" => (KEEP_ALIVE, 1),
             "interrupt_notebook" => (STOP_RUN, 1),
+            "close_notebook" => (CLOSE_NOTEBOOK, 1),
             "notebook_guide" => (GUIDE, 1),
             "list_folder" => (LIST_FOLDER, 1),
             "read_file" => (READ_FILE, 1),
@@ -363,6 +365,7 @@ mod tests {
         assert_eq!(super::asked("mcp__notebook__run_all_cells", &null).as_deref(), Some("run all cells"));
         assert_eq!(super::asked("mcp__notebook__allow_execution", &null).as_deref(), Some("let the notebook run"));
         assert_eq!(super::asked("mcp__notebook__interrupt_notebook", &null).as_deref(), Some("stop the notebook's run"));
+        assert_eq!(super::asked("mcp__notebook__close_notebook", &null).as_deref(), Some("close the notebook"));
         assert_eq!(super::asked("Bash", &null), None);
     }
 
