@@ -450,20 +450,6 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
                 .collect();
             if rows.is_empty() { vec![Part::Line("No notebooks open".into())] } else { vec![Part::Text(rows.join("\n"))] }
         }
-        // An outline is one line a cell, "<id> | first line | defines … | -> output": the cell's
-        // name in place of its id, as elsewhere in the details.
-        "read_notebook_code" if json["outline"].is_string() => {
-            let lines: Vec<String> = json["outline"]
-                .as_str()
-                .unwrap_or_default()
-                .lines()
-                .map(|line| match line.split_once(" | ") {
-                    Some((id, rest)) => format!("{} · {}", named(id), rest.replace(" | ", " · ")),
-                    None => line.to_owned(),
-                })
-                .collect();
-            vec![Part::Line(format!("Outline, {} cells", lines.len())), Part::Text(cut(&lines.join("\n")))]
-        }
         "read_notebook_code" => {
             let cells = celldiff::split_notebook_code(json["code"].as_str().unwrap_or_default());
             let n = json["cell_ids"].as_array().map_or(cells.len(), Vec::len);
@@ -759,10 +745,5 @@ mod tests {
         let ids = ["11111111-2222-4333-8444-555555555555", "66666666-7777-4888-9999-aaaaaaaaaaaa", "77777777-7777-4888-9999-aaaaaaaaaaaa"];
         let d = open("mcp__notebook__read_notebook_code", ToolKind::Other, json!({"notebook_id": "n"}), out(json!({"cell_ids": ids, "code": code})), false, false);
         assert_eq!(d.output, vec![Part::Line("3 cells".into()), Part::Code("using Plots".into()), Part::Code("x = 1\ny = 2".into())]);
-        let outline = format!("{} | md: # Growth\n{} | x = 1 | defines x | -> 1", ids[0], ids[2]);
-        let d = open("mcp__notebook__read_notebook_code", ToolKind::Other, json!({"notebook_id": "n", "outline": true}), out(json!({"notebook_id": "n", "order": "visual", "outline": outline})), false, false);
-        assert_eq!(d.output[0], Part::Line("Outline, 2 cells".into()), "not \"0 cells\" with nothing under it");
-        let Part::Text(text) = &d.output[1] else { panic!("{:?}", d.output) };
-        assert!(text.contains("md: # Growth") && text.contains("x = 1 · defines x · -> 1") && !text.contains(" | "), "{text}");
     }
 }
