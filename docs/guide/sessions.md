@@ -1,6 +1,6 @@
 ---
 title: Sessions, the chat and the notebook
-description: How the chat and the notebook work together, and how to ask Claude about one part of your work.
+description: How the chat and the notebook work together, how to ask Claude about one part of your work, and what uses up your Claude plan.
 sidebar:
   order: 30
 ---
@@ -159,3 +159,23 @@ the conversation Claude can still keep in mind. Hover over it for details.
 When it nears full, Claude summarizes the conversation by itself. To choose
 when that happens, type `/compact` and send it. The whole conversation stays
 in the chat either way.
+
+## What uses up your Claude plan
+
+Each message you send makes Claude read the whole conversation again,
+including the notebook code and results it has read so far. So every message
+in a long session costs more than the one before it, even a short question.
+The fuller the ring under the message box, the more each message costs.
+
+Two habits keep your usage down:
+
+- **Start a new session for a new question.** Press ⌘N, or choose **Open in
+  a new session…** in the notebook's **⋮** menu to keep working on the same
+  notebook. The notebook stays as it is; only the conversation starts over.
+- **Use a smaller model for questions.** For questions about a notebook, try
+  Sonnet first: pick it in the model menu under the message box, or send
+  `/model sonnet`. Opus costs about twice as much for the same conversation.
+
+To see how much of your plan you've used, open Settings (⌘,), click
+**Settings** next to Claude, and click **Open claude.ai** under **Plan and
+usage**.
