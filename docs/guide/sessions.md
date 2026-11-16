@@ -169,12 +169,13 @@ The fuller the ring under the message box, the more each message costs.
 
 Two habits keep your usage down:
 
-- **Start a new session for a new question.** Press ⌘N, or choose **Open in
-  a new session…** in the notebook's **⋮** menu to keep working on the same
-  notebook. The notebook stays as it is; only the conversation starts over.
-- **Use a smaller model for questions.** For questions about a notebook, try
-  Sonnet first: pick it in the model menu under the message box, or send
-  `/model sonnet`. Opus costs about twice as much for the same conversation.
+- **Start a new session when you move on to something new**, or when the
+  ring is well filled. Press ⌘N, or choose **Open in a new session…** in the
+  notebook's **⋮** menu to keep working on the same notebook. The notebook
+  stays as it is; only the conversation starts over. A new session reads the
+  notebook again, so starting over after every question saves little.
+- **Try Sonnet for questions about a notebook.** Pick it in the model menu
+  under the message box, or send `/model sonnet`. Opus uses up a plan faster.
 
 To see how much of your plan you've used, open Settings (⌘,), click
 **Settings** next to Claude, and click **Open claude.ai** under **Plan and
