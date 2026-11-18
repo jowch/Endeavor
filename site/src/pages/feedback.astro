@@ -21,7 +21,7 @@ const withSite = (url: string) => url + (url.includes('?') ? '&' : '?') + 'sourc
 		<main>
 			<p class="home"><a href={`${base}/`}>Endeavor</a></p>
 			<h1>Tell us what got in your way</h1>
-			<p>Something stopped you, confused you or took too long? A few lines is plenty.</p>
+			<p>Something stopped you, confused you or took too long? A few lines is plenty. Use whichever suits you: we read both.</p>
 			{
 				tallyForm && (
 					<p>
@@ -32,7 +32,7 @@ const withSite = (url: string) => url + (url.includes('?') ? '&' : '?') + 'sourc
 				)
 			}
 			<p>
-				<a class={tallyForm ? 'more' : 'button'} data-form href={withSite(githubForm)}>{tallyForm ? 'Or open an issue on GitHub' : 'Open an issue on GitHub'}</a>
+				<a class="button" data-form href={withSite(githubForm)}>Open an issue on GitHub</a>
 				<br />
 				<span class="note">Public, and needs a GitHub account. Leave out passwords, tokens, server names and folder paths.</span>
 			</p>
@@ -106,9 +106,6 @@ const withSite = (url: string) => url + (url.includes('?') ? '&' : '?') + 'sourc
 		color: #ffffff;
 		font-weight: 600;
 		text-decoration: none;
-	}
-	.more {
-		font-weight: 600;
 	}
 	.note {
 		color: var(--muted);
