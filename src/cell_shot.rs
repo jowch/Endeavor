@@ -475,6 +475,8 @@ fn view(bridge: &crate::pluto::Bridge, key: u64, call: &str) -> Result<serde_jso
 ///   notebook (it opens in safe preview), as the new-session screen does.
 /// - `run`: the callout's Run notebook, for the notebook on screen.
 /// - `settings` and `close settings`: open or close Settings (⌘, and Esc).
+/// - `notice [error]`: the "Couldn't restart the notebook" notice, with `error` (`\n` for a
+///   line break) or a long made-up stack trace under Details; `details` opens or closes them.
 /// - `js <script>`: run the script in the user's notebook page; `.done` has the JSON of what it
 ///   gives once it has run (`null` for nothing).
 #[cfg(debug_assertions)]
@@ -521,6 +523,22 @@ impl crate::Workspace {
                 self.close_settings(window, cx);
                 "closed".to_owned()
             }
+            ("notice", error) => {
+                // A failure notice over the notebook's buttons, as a failed restart shows one.
+                let error = if error.is_empty() { (1..=60).map(|i| format!("    [{i}] a stack frame that is long enough to wrap @ Base ./process.jl:{i}\n")).collect::<String>() } else { error.replace("\\n", "\n") };
+                let key = self.active_session().map_or(0, |s| s.key);
+                let notice = crate::notice::Notice::new(crate::notice::Spot::NotebookRight, "Couldn't restart the notebook", &format!("TaskFailedException\n\n{error}"), Some(crate::notice::Retry::RestartNotebook(key)));
+                self.show_notice(notice, cx);
+                "shown".to_owned()
+            }
+            ("details", _) => match &mut self.notice {
+                Some(n) => {
+                    n.details_open = !n.details_open;
+                    cx.notify();
+                    format!("{}", n.details_open)
+                }
+                None => "no notice".to_owned(),
+            },
             ("js", script) => {
                 let answer = done.clone();
                 let asked = self.webview.read(cx).raw().evaluate_script_with_callback(script, move |value| {

@@ -1602,6 +1602,8 @@ impl Workspace {
             let (handle, under) = (webview.handle(), webview.bounds());
             canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Settings, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ())
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full()
         });
         let close = self
@@ -1647,7 +1649,6 @@ impl Workspace {
                     }
                 }),
             )
-            .children(hole)
             .child(self.render_settings_nav(panel, searching, &counts, window, cx))
             .child(
                 div()
@@ -1674,7 +1675,8 @@ impl Workspace {
                 .line_height(theme::line_body())
                 .font_family(theme::SANS)
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_settings(window, cx)))
-                .child(card)
+                // The hole is pinned to a plain box around the card: inside the card it would start inside its border.
+                .child(div().relative().child(card).children(hole))
                 .into_any_element(),
         )
     }
