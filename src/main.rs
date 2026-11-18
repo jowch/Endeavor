@@ -40,6 +40,7 @@ mod find_bar;
 mod host_list;
 mod hosts;
 mod install;
+mod layer;
 mod logs;
 mod new_session;
 mod network;
@@ -103,6 +104,7 @@ use platform::{dialogs, snapshot};
 use platform::{overlay, webcontent};
 
 use agent::{AgentEvent, Command};
+use layer::Layer;
 use agent_client_protocol::schema::v1::{ContentBlock, PermissionOptionKind, SessionId, SessionInfo, TextContent};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -2809,8 +2811,8 @@ impl Render for Workspace {
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
             // The assistant's own install or connection failed: another may do.
             let change = (setup.agent.is_some() && setup.step() >= splash::Step::Agent).then(|| cx.listener(|this, _, _, cx| this.change_assistant(cx)));
-            let settings = self.render_settings_panel(window, cx).map(|d| deferred(d).with_priority(2));
-            let confirm = self.render_confirm(cx).map(|d| deferred(d).with_priority(10));
+            let settings = self.render_settings_panel(window, cx).map(|d| layer::place(Layer::Settings, d));
+            let confirm = self.render_confirm(cx).map(|d| layer::place(Layer::Confirm, d));
             return div()
                 .size_full()
                 .bg(theme::bg_page())
@@ -2957,13 +2959,12 @@ impl Render for Workspace {
                     .children(self.render_notice(false, cx)),
             )
             .children(self.render_notice(true, cx))
-            // Deferred so they paint, and take clicks, above everything else.
-            .children(self.render_settings_panel(window, cx).map(|d| deferred(d).with_priority(2)))
-            .children(self.render_server_dialog(window, cx).map(|d| deferred(d).with_priority(3)))
-            .children(self.render_askpass(cx).map(|d| deferred(d).with_priority(5)))
-            .children(self.render_login_node_warning(cx).map(|d| deferred(d).with_priority(4)))
-            // Topmost: it can open from within Settings (Stop, Repair, Sign out).
-            .children(self.render_confirm(cx).map(|d| deferred(d).with_priority(10)))
+            // Deferred so they paint, and take clicks, above everything else, in layer.rs's order.
+            .children(self.render_settings_panel(window, cx).map(|d| layer::place(Layer::Settings, d)))
+            .children(self.render_server_dialog(window, cx).map(|d| layer::place(Layer::ServerDialog, d)))
+            .children(self.render_askpass(cx).map(|d| layer::place(Layer::Askpass, d)))
+            .children(self.render_login_node_warning(cx).map(|d| layer::place(Layer::LoginNodeWarning, d)))
+            .children(self.render_confirm(cx).map(|d| layer::place(Layer::Confirm, d)))
             // A click outside a menu or popover closes it, like a native menu;
             // set_dismiss_on_click makes the web view forward its own clicks
             // here too, while one is open (overlay.rs).

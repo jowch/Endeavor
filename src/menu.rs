@@ -10,7 +10,7 @@ use gpui::*;
 use crate::hosts::HostId;
 use crate::new_session::{self, glyph};
 use crate::notebook_pane::NotebookAction;
-use crate::overlay;
+use crate::layer::{self, Hole, Layer};
 use crate::settings::NotebookTheme;
 use wire::backend::Backend;
 use crate::sidebar::{Row, RowAction};
@@ -438,12 +438,6 @@ impl Workspace {
                 .text_color(theme::text_faint())
                 .child("Exports and recordings use the notebook's standard look.")
         });
-        // Over the notebook, the web view (a native view on top) lets the menu show through.
-        let hole = over_notebook.then(|| {
-            let webview = self.webview.read(cx);
-            let (handle, under) = (webview.handle(), webview.bounds());
-            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Menu, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ()).absolute().size_full()
-        });
         let body = div()
             .id("popup-menu")
             .role(Role::Menu)
@@ -459,7 +453,6 @@ impl Workspace {
             .text_color(theme::text_primary())
             .on_action(cx.listener(|this, _: &Interrupt, window, cx| this.close_menu(window, cx)))
             .on_key_down(cx.listener(Self::menu_key))
-            .children(hole)
             .children(head)
             .children(items)
             .children(rules_body.into_iter().flatten())
@@ -474,9 +467,11 @@ impl Workspace {
         };
         let wrapper = div().absolute().top(px(28.));
         let wrapper = if from_left { wrapper.left_0() } else { wrapper.right_0() };
+        // Over the notebook, the web view (a native view on top) lets the menu show through.
+        let body = layer::cut(body, Hole::Menu, over_notebook.then(|| self.webview.read(cx)));
         // Over the notebook it shows at once: its hole in the web view can't fade with it.
         let body = if over_notebook { body.into_any_element() } else { crate::motion::arriving(body, "popup-menu-in", true).into_any_element() };
-        wrapper.child(deferred(placed.child(body)).with_priority(1))
+        wrapper.child(layer::place(Layer::Popover, placed.child(body)))
     }
 
     fn menu_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {

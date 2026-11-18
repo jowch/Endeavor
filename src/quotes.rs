@@ -192,7 +192,7 @@ impl Workspace {
             if let Some(c) = column {
                 x = x.min(c.right() - width).max(c.left());
             }
-            deferred(anchored().position(point(x, at.y + px(BELOW_POINTER))).snap_to_window_with_margin(px(8.)).child(element)).with_priority(2).into_any_element()
+            crate::layer::place(crate::layer::Layer::Popover, anchored().position(point(x, at.y + px(BELOW_POINTER))).snap_to_window_with_margin(px(8.)).child(element)).into_any_element()
         };
         let frame = || div().occlude().map(theme::popover).rounded(px(8.)).font_family(theme::SANS).text_size(theme::chat_meta());
         Some(match reply {

@@ -1280,7 +1280,7 @@ impl Workspace {
             .text_color(theme::text_primary())
             .text_left()
             .child(self.browser_menu(browser, cx));
-        Some(div().absolute().top(px(34.)).left_0().child(deferred(anchored().child(body)).with_priority(1)).into_any_element())
+        Some(div().absolute().top(px(34.)).left_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().child(body))).into_any_element())
     }
 
     /// Open a notebook in a new session…: This Mac's file panel, else the
@@ -1612,7 +1612,7 @@ impl Workspace {
             .text_color(theme::text_primary())
             .children(rows)
             .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child("Notebooks stop when the job's time runs out."));
-        div().absolute().top(px(32.)).left_0().child(deferred(anchored().anchor(Anchor::TopLeft).child(body)).with_priority(1))
+        div().absolute().top(px(32.)).left_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::TopLeft).child(body)))
     }
 }
 

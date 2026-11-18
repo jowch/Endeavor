@@ -9,7 +9,8 @@ use gpui::*;
 use gpui_component::FocusTrapElement as _;
 
 use crate::server_dialog::button;
-use crate::{Workspace, overlay, theme};
+use crate::layer::{self, Hole};
+use crate::{Workspace, theme};
 
 pub struct Confirm {
     title: SharedString,
@@ -75,15 +76,6 @@ impl Workspace {
 
     pub fn render_confirm(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let confirm = self.confirm.as_ref()?;
-        // Above the web view like Settings: a hole cut where the card is, so
-        // its own hit-testing wins there instead of the native view's.
-        let hole = self.webview.read(cx).visible().then(|| {
-            let webview = self.webview.read(cx);
-            let (handle, under) = (webview.handle(), webview.bounds());
-            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Confirm, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ())
-                .absolute()
-                .size_full()
-        });
         let card = div()
             .id("confirm-dialog")
             .role(Role::Dialog)
@@ -104,7 +96,6 @@ impl Workspace {
             .border_1()
             .border_color(theme::popover_edge())
             .shadow(theme::dialog_shadow(20., 50.))
-            .children(hole)
             .child(div().font_weight(FontWeight::SEMIBOLD).text_size(theme::size_body()).text_color(theme::text_primary()).child(confirm.title.clone()))
             .child(div().text_size(theme::size_meta()).text_color(theme::text_secondary()).child(confirm.body.clone()))
             .child(
@@ -142,7 +133,9 @@ impl Workspace {
                 .justify_center()
                 .occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx)))
-                .child(card)
+                // Above the web view like Settings: a hole cut where the card is, so
+                // its own hit-testing wins there instead of the native view's.
+                .child(layer::cut(card, Hole::Confirm, Some(self.webview.read(cx)).filter(|w| w.visible())))
                 .into_any_element(),
         )
     }

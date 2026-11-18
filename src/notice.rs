@@ -9,7 +9,7 @@ use gpui::*;
 
 use crate::Workspace;
 use crate::failure;
-use crate::overlay;
+use crate::layer::{self, Hole, Layer};
 use crate::signin::Look;
 
 /// Where a notice hangs: under the notebook header's file name (rename),
@@ -169,20 +169,14 @@ impl Workspace {
                 });
             })
         });
-        let hole = (!over_settings && self.webview.read(cx).visible()).then(|| {
-            let webview = self.webview.read(cx);
-            let (handle, under) = (webview.handle(), webview.bounds());
-            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Notice, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ())
-                .absolute()
-                .size_full()
-        });
-        let body = failure::notice(notice.title.clone(), notice.reason.clone(), buttons, details, close).relative().children(hole);
+        let webview = Some(self.webview.read(cx)).filter(|w| !over_settings && w.visible());
+        let body = layer::cut(failure::notice(notice.title.clone(), notice.reason.clone(), buttons, details, close), Hole::Notice, webview);
         let (placed, wrapper) = match notice.spot {
             Spot::NotebookLeft => (anchored().anchor(Anchor::TopLeft), div().absolute().top(px(46.)).left(px(16.))),
             Spot::NotebookRight | Spot::Pane => (anchored().anchor(Anchor::TopRight), div().absolute().top(px(46.)).right(px(16.))),
             Spot::Settings => (anchored().anchor(Anchor::TopCenter), div().absolute().top(px(12.)).left_1_2()),
         };
-        Some(wrapper.child(deferred(placed.child(body)).with_priority(if over_settings { 11 } else { 1 })).into_any_element())
+        Some(wrapper.child(layer::place(if over_settings { Layer::NoticeOverSettings } else { Layer::Notice }, placed.child(body))).into_any_element())
     }
 }
 
