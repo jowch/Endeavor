@@ -94,6 +94,19 @@ pub enum Part {
     Figure(Arc<Vec<u8>>),
 }
 
+impl Part {
+    /// What part of the cell it is: "whole cell", "lines 3–5", "figure".
+    pub fn name(&self) -> String {
+        match self {
+            Part::Whole(_) => "whole cell".into(),
+            Part::Lines { first, last, .. } if first == last => format!("line {first}"),
+            Part::Lines { first, last, .. } => format!("lines {first}–{last}"),
+            Part::Output(_) => "output".into(),
+            Part::Figure(_) => "figure".into(),
+        }
+    }
+}
+
 impl Quote {
     /// Where it's from: "Claude's reply · 14:02", "rates · lines 3–5",
     /// "plot_fit · figure", "Box · 2 cells".
@@ -101,18 +114,18 @@ impl Quote {
         match &self.from {
             Quoted::Reply { at: Some(at), .. } => format!("Claude's reply · {at}"),
             Quoted::Reply { at: None, .. } => "Claude's reply".into(),
-            Quoted::Cell { name, part, .. } => {
-                let part = match part {
-                    Part::Whole(_) => "whole cell".to_string(),
-                    Part::Lines { first, last, .. } if first == last => format!("line {first}"),
-                    Part::Lines { first, last, .. } => format!("lines {first}–{last}"),
-                    Part::Output(_) => "output".into(),
-                    Part::Figure(_) => "figure".into(),
-                };
-                format!("{name} · {part}")
-            }
+            Quoted::Cell { name, part, .. } => format!("{name} · {}", part.name()),
             Quoted::Box { cells, .. } if cells.len() == 1 => "Box · 1 cell".into(),
             Quoted::Box { cells, .. } => format!("Box · {} cells", cells.len()),
+        }
+    }
+
+    /// Its chip's label: a cell's name in mono, cut to `max` characters, and
+    /// the part after it ("· figure"), so a long name never hides what it is.
+    pub fn label(&self, max: usize) -> Label {
+        match &self.from {
+            Quoted::Cell { name, part, .. } => Label { plain: String::new(), mono: cut(name, max), after: format!("· {}", part.name()) },
+            _ => Label { plain: self.source(), mono: String::new(), after: String::new() },
         }
     }
 
@@ -152,11 +165,20 @@ impl Quote {
     }
 }
 
-/// A chip's label: plain words, then a name in mono (either may be empty).
+/// A chip's label: plain words, then a name in mono, then plain words after
+/// it (any may be empty). The chip cuts only the name to fit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Label {
     pub plain: String,
     pub mono: String,
+    pub after: String,
+}
+
+impl Label {
+    /// The whole label as one line of text.
+    pub fn text(&self) -> String {
+        [&self.plain, &self.mono, &self.after].into_iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -172,7 +194,7 @@ pub enum Icon {
 }
 
 /// Longest name a chip shows before cutting it with "…".
-const CHIP_NAME: usize = 24;
+pub const CHIP_NAME: usize = 24;
 
 fn cut(name: &str, max: usize) -> String {
     if name.chars().count() <= max {
@@ -193,12 +215,12 @@ impl Attachment {
     }
 
     fn label_cut_at(&self, max: usize) -> Label {
-        let label = |plain: &str, mono: &str| Label { plain: plain.into(), mono: cut(mono, max) };
+        let label = |plain: &str, mono: &str| Label { plain: plain.into(), mono: cut(mono, max), after: String::new() };
         match self {
             Attachment::Cells { cells, .. } if cells.len() == 1 => label("", &cells[0].name()),
             Attachment::Cells { cells, .. } => label(&format!("{} cells", cells.len()), ""),
             Attachment::Error { cell, .. } => label("error in ", &cell.name()),
-            Attachment::Quote(quote) => label(&quote.source(), ""),
+            Attachment::Quote(quote) => quote.label(max),
             Attachment::Image { name, .. } | Attachment::Text { name, .. } => label("", name),
             Attachment::Upload { source, .. } => label("", &data_path(&file_name(source))),
             Attachment::Saved { path } => label("", path),
@@ -1025,15 +1047,26 @@ mod tests {
         let rates = cell("c1", "rates = map(1:1000) do _\n  fit()\nend");
         let plot = cell("c2", "scatter(data.t, data.counts)");
         let one = Attachment::Cells { notebook: NB.into(), cells: vec![rates.clone()], ask: CellAsk::About };
-        assert_eq!(one.label(), Label { plain: "".into(), mono: "rates".into() });
+        assert_eq!(one.label(), Label { plain: "".into(), mono: "rates".into(), after: "".into() });
         let three = Attachment::Cells { notebook: NB.into(), cells: vec![rates.clone(), plot.clone(), rates.clone()], ask: CellAsk::About };
-        assert_eq!(three.label(), Label { plain: "3 cells".into(), mono: "".into() });
+        assert_eq!(three.label(), Label { plain: "3 cells".into(), mono: "".into(), after: "".into() });
         assert_eq!(Attachment::Cells { notebook: NB.into(), cells: vec![plot.clone()], ask: CellAsk::About }.label().mono, "scatter(data.t, data.co…");
         let error = Attachment::Error { notebook: NB.into(), cell: rates, text: "BoundsError".into() };
-        assert_eq!(error.label(), Label { plain: "error in ".into(), mono: "rates".into() });
+        assert_eq!(error.label(), Label { plain: "error in ".into(), mono: "rates".into(), after: "".into() });
         assert_eq!(error.icon(), Icon::Error);
         let long = Attachment::Text { name: "a_really_long_file_name_for_a_chip.csv".into(), text: String::new() };
         assert_eq!(long.label().mono, "a_really_long_file_name…");
+    }
+
+    #[test]
+    fn a_quote_chip_cuts_the_name_and_keeps_the_part() {
+        let figure = |name: &str| Attachment::Quote(Quote { from: Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: name.into(), part: Part::Figure(Arc::new(Vec::new())) }, comment: String::new() });
+        let long = figure("@bind apoe_delta_pick apoe_picker()");
+        assert_eq!(long.label(), Label { plain: "".into(), mono: "@bind apoe_delta_pick a…".into(), after: "· figure".into() });
+        assert_eq!(long.full_label().text(), "@bind apoe_delta_pick apoe_picker() · figure");
+        assert_eq!(figure("plot_fit").label().text(), "plot_fit · figure");
+        let reply = Attachment::Quote(Quote { from: Quoted::Reply { text: "x".into(), at: None }, comment: String::new() });
+        assert_eq!(reply.label(), Label { plain: "Claude's reply".into(), mono: "".into(), after: "".into() });
     }
 
     #[test]
@@ -1305,7 +1338,7 @@ mod tests {
         let added = add_file(&csv, &Folder::Here(session.clone())).unwrap();
         assert_eq!(added, Added::Chip(Attachment::Upload { source: csv.clone(), size: 10 }));
         let Added::Chip(chip) = added else { unreachable!() };
-        assert_eq!(chip.label(), Label { plain: "".into(), mono: "data/decay.csv".into() });
+        assert_eq!(chip.label(), Label { plain: "".into(), mono: "data/decay.csv".into(), after: "".into() });
         assert!(!session.join("data").exists(), "nothing is copied when the file is picked");
 
         let (placed, refused) = place_uploads(vec![chip], &Dest::Here(session.clone()));

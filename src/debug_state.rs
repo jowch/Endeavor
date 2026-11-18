@@ -800,8 +800,7 @@ fn quotes(attachments: &[crate::attach::Attachment]) -> Vec<Value> {
 }
 
 fn chip_label(a: &crate::attach::Attachment) -> String {
-    let label = a.label();
-    [label.plain, label.mono].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
+    a.label().text()
 }
 
 /// The pane of a host that isn't ready: "cant_reach", "starting",
