@@ -456,7 +456,7 @@ fn view(bridge: &crate::pluto::Bridge, key: u64, call: &str) -> Result<serde_jso
     stream.set_read_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
     write!(
         stream,
-        "POST /mcp HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {}\r\nX-Endeavor-Session: {key}\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{call}",
+        "POST /mcp HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {}\r\nX-Endeavor-Session: {key}\r\nX-Endeavor-Client: app\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{call}",
         bridge.token,
         call.len()
     )

@@ -292,7 +292,8 @@ pub fn connect(keep_running: bool) -> Result<(Channel, Hello), String> {
         .args(client::Server { r: crate::settings::Settings::load().r, ..Default::default() }.r_args())
         // This computer, and only it, may be offered Endeavor's own R when none is found (a Mac).
         .arg("--own-r")
-        // This Mac's state folder is its own, so another node name means a renamed Mac.
+        // The state folder is named after this computer, so a record in it with
+        // another node name is this computer's from before it was renamed.
         .arg("--any-node");
     if let Some(build) = crate::remote::build() {
         command.args(["--build", build]);
@@ -333,14 +334,33 @@ fn old_state_dir(app_dir: &Path) -> PathBuf {
 /// A runtime an older version kept running in the app's own folder is stopped
 /// and its record removed, once, so it doesn't run on beside the shared one.
 /// Its notebooks were saved as they changed, and the app opens them again in
-/// the new runtime. The helper's `stop` checks the recorded process is still
-/// the runtime before it ends it. Its token and log stay.
+/// the new runtime. The app stops it itself rather than through the helper's
+/// `stop`, which refuses a record made under another host name (a renamed Mac),
+/// and only a process that is still that runtime. Its token and log stay.
 fn retire_old_state(app_dir: &Path) {
     retire_old_state_in(&old_state_dir(app_dir), &|old| {
-        let mut stop = helper_command()?;
-        stop.args(["stop", "--state-dir"]).arg(old).stdin(Stdio::null()).stdout(Stdio::null());
-        stop.status().map(|status| status.success()).map_err(|e| e.to_string())
+        if record(old).and_then(|r| r["pid"].as_u64()).is_some_and(|pid| runs_from(pid, old)) {
+            stop_recorded_in(old);
+        }
+        Ok(true)
     });
+}
+
+/// Whether process `pid` is a runtime started with `state_dir`, so a pid the
+/// system gave another process since isn't ended. On Windows `stop_group`
+/// checks the recorded start time instead.
+#[cfg(unix)]
+fn runs_from(pid: u64, state_dir: &Path) -> bool {
+    let args = Command::new("ps").args(["-p", &pid.to_string(), "-o", "args="]).stderr(Stdio::null()).output();
+    let Ok(out) = args else { return false };
+    let (args, flag) = (String::from_utf8_lossy(&out.stdout), format!("--state-dir {}", state_dir.display()));
+    // The folder ends there: not a longer path that starts with it.
+    args.match_indices(&flag).any(|(at, _)| args[at + flag.len()..].chars().next().is_none_or(char::is_whitespace))
+}
+
+#[cfg(windows)]
+fn runs_from(_pid: u64, _state_dir: &Path) -> bool {
+    true
 }
 
 /// `retire_old_state` for the folder `old`, where `stop` stops the runtime recorded there and says whether that worked.
@@ -695,6 +715,26 @@ fn an_old_runtime_is_stopped_once_and_its_record_removed() {
     retire_old_state_in(&old, &counted(true));
     assert_eq!(stops.get(), 2, "once");
     let _ = std::fs::remove_dir_all(&old);
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn only_a_runtime_started_with_the_old_folder_is_taken_for_it() {
+    let old = std::env::temp_dir().join(format!("endeavor-runs-from-{}", std::process::id()));
+    let mut core = Command::new("sh").args(["-c", "sleep 60", "core", "--state-dir"]).arg(&old).spawn().unwrap();
+    let mut other = Command::new("sleep").arg("60").spawn().unwrap();
+    assert!(runs_from(u64::from(core.id()), &old));
+    assert!(!runs_from(u64::from(other.id()), &old), "a pid another process has now");
+    assert!(!runs_from(u64::from(core.id()), &old.join("x")), "started with another folder");
+    let longer = PathBuf::from(format!("{}-files", old.display()));
+    let mut near = Command::new("sh").args(["-c", "sleep 60", "core", "--state-dir"]).arg(&longer).spawn().unwrap();
+    assert!(!runs_from(u64::from(near.id()), &old), "a folder whose name starts with it");
+    let _ = near.kill();
+    let _ = near.wait();
+    for child in [&mut core, &mut other] {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 #[cfg(all(test, unix))]
