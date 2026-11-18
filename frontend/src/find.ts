@@ -90,12 +90,12 @@ const css = `
     background: none; color: var(--e-text-secondary); font: inherit; cursor: pointer; }
   #endeavor-find button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
   /* Matches in Endeavor's orange (Jonathan, 2026-11-18: the old pale yellow looked grey on dark code):
-     the current one solid, with white text; the others a tint, stronger on a dark page, where a light
-     tint of orange turns brown. */
-  ::highlight(endeavor-find) { background-color: rgba(204, 63, 0, 0.3); }
+     the current one solid, with white text, so it stands out; the others a light tint, so the code
+     under them stays readable. Keep the dark tint at 40% or less, or it looks like the current one. */
+  ::highlight(endeavor-find) { background-color: rgba(204, 63, 0, 0.2); }
   ::highlight(endeavor-find-current) { background-color: #CC3F00; color: white; }
   @media (prefers-color-scheme: dark) {
-    ::highlight(endeavor-find) { background-color: rgba(224, 96, 31, 0.6); }
+    ::highlight(endeavor-find) { background-color: rgba(224, 96, 31, 0.3); }
   }
 `;
 
