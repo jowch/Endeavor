@@ -27,6 +27,11 @@ thread_local! {
     static FINDING: RefCell<Finding> = RefCell::new(Finding::default());
 }
 
+/// How long the match count must stay put before a search with no new count
+/// is answered from the count it has.
+// ponytail: a fixed settle time, and a late count from the search before can still answer a new one; untried on Windows.
+const SETTLE_MS: u32 = 400;
+
 #[derive(Default)]
 struct Finding {
     /// The text last searched, so the same text goes to the next match.
@@ -35,12 +40,52 @@ struct Finding {
     answer: Option<oneshot::Sender<bool>>,
     /// The page's find session, with our count handler on it.
     find: Option<ICoreWebView2Find>,
+    /// The thread timer that answers once the count has settled (`settle`).
+    timer: usize,
+}
+
+impl Finding {
+    fn stop_timer(&mut self) {
+        if self.timer != 0 {
+            // SAFETY: our own thread timer, on the thread that set it.
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(std::ptr::null_mut(), self.timer) };
+            self.timer = 0;
+        }
+    }
 }
 
 fn answer(found: bool) {
     if let Some(tx) = FINDING.with(|f| f.borrow_mut().answer.take()) {
         let _ = tx.send(found);
     }
+}
+
+/// Answer the waiting search from the match count once it has stayed put for
+/// `SETTLE_MS`. The count WebView2 has when a search starts can still be the
+/// last search's, and it raises MatchCountChanged only for a change, so "no
+/// new count for a while" is what says the count is this search's: the same
+/// as before (two terms with the same count), or none (0 again).
+fn settle() {
+    unsafe extern "system" fn settled(_: windows_sys::Win32::Foundation::HWND, _: u32, id: usize, _: u32) {
+        // SAFETY: our own thread timer.
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(std::ptr::null_mut(), id) };
+        let find = FINDING.with(|f| {
+            let mut f = f.borrow_mut();
+            if f.timer == id {
+                f.timer = 0;
+            }
+            f.find.clone()
+        });
+        if let Some(find) = find {
+            answer(match_count(&find) > 0);
+        }
+    }
+    FINDING.with(|f| {
+        let mut f = f.borrow_mut();
+        f.stop_timer();
+        // SAFETY: a thread timer on GPUI's thread, whose message loop runs `settled`.
+        f.timer = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(std::ptr::null_mut(), 0, SETTLE_MS, Some(settled)) };
+    });
 }
 
 /// Keyboard handling for the notebook's web view in `window`: track its focus,
@@ -189,7 +234,13 @@ fn find_session(webview: &wry::WebView) -> Option<ICoreWebView2Find> {
                 if let Some(find) = find {
                     find.MatchCount(&mut count)?;
                 }
-                answer(count > 0);
+                // A count of matches is this search's. A count of 0 may be a
+                // reset on the way to one, so it waits to settle.
+                if count > 0 {
+                    answer(true);
+                } else {
+                    settle();
+                }
                 Ok(())
             })),
             &mut token,
@@ -217,17 +268,24 @@ pub fn find(webview: &wry::WebView, text: &str, backwards: bool) -> oneshot::Rec
     let same = FINDING.with(|f| {
         let mut f = f.borrow_mut();
         let same = f.text.as_deref() == Some(text);
+        if !same {
+            // The last search's settling would answer this one too soon.
+            f.stop_timer();
+        }
         f.text = Some(text.to_owned());
         same
     });
+    // A newer search replaces the one still counting; that one's answer goes.
+    let counting = FINDING.with(|f| f.borrow_mut().answer.replace(tx).is_some());
     if same {
         // SAFETY: as in `attach`.
         let _ = unsafe { if backwards { find.FindPrevious() } else { find.FindNext() } };
-        let _ = tx.send(match_count(&find) > 0);
+        // The same text has the same count, unless its search is still counting.
+        if !counting {
+            answer(match_count(&find) > 0);
+        }
         return rx;
     }
-    // A newer search replaces the one still counting; its answer goes.
-    FINDING.with(|f| f.borrow_mut().answer = Some(tx));
     let start = || -> windows_core::Result<()> {
         // SAFETY: as in `attach`.
         unsafe {
@@ -244,11 +302,8 @@ pub fn find(webview: &wry::WebView, text: &str, backwards: bool) -> oneshot::Rec
                     if backwards {
                         session.FindPrevious()?;
                     }
-                    // Counted already; otherwise MatchCountChanged answers.
-                    // ponytail: a search with no matches may only be answered by MatchCountChanged; untried on Windows.
-                    if match_count(&session) > 0 {
-                        answer(true);
-                    }
+                    // Not answered from the count here: it can still be the last search's.
+                    settle();
                     Ok(())
                 })),
             )
@@ -266,6 +321,7 @@ pub fn clear_find(_: &wry::WebView) {
         let mut f = f.borrow_mut();
         f.text = None;
         f.answer = None;
+        f.stop_timer();
         f.find.clone()
     });
     if let Some(find) = find {

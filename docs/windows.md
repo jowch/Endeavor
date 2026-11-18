@@ -159,7 +159,8 @@ under the user's own `%LOCALAPPDATA%`.
   Ctrl+B, Ctrl+Shift+E, the zoom keys, Ctrl+F, Ctrl+G, Ctrl+Shift+G) to GPUI
   before the page sees them; the app's other Ctrl shortcuts stay with the page,
   since WebView2 doesn't say which keys the page used. Browser keys (F5,
-  Ctrl+P, F12) are off. Find uses WebView2's own find (`ICoreWebView2Find`,
+  Ctrl+P, F12) are off. For DevTools, right-click the page where Pluto doesn't
+  take the right-click (outside the cells) and choose Inspect. Find uses WebView2's own find (`ICoreWebView2Find`,
   on a runtime new enough to have it) without its bar. A renderer that ends
   (`ProcessFailed`) loads the notebook again. The Edit menu's clipboard items
   still act only on the app's own text boxes. Untried on a Windows machine.

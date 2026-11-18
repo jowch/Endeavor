@@ -295,16 +295,17 @@ pub fn init(_: &mut gpui::App) {
     unsafe { windows_sys::Win32::System::Threading::CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
 }
 
-/// The notebook's web view couldn't be made, almost always because the
-/// WebView2 runtime is missing (the installer adds it): say so and quit,
-/// rather than end with a panic the user never sees.
+/// The notebook's web view couldn't be made: most often the WebView2 runtime
+/// is missing (the installer adds it), or its data folder next to the exe
+/// can't be written. Say so and quit, rather than end with a panic the user
+/// never sees.
 #[cfg(windows)]
 pub fn no_web_view(error: &wry::Error) -> ! {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     eprintln!("The notebook's web view couldn't start: {error}");
     let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
     let text = wide(&format!(
-        "Endeavor's notebook view couldn't start, so Endeavor can't open.\n\nIt needs the Microsoft Edge WebView2 Runtime. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and open Endeavor again.\n\n({error})"
+        "Endeavor's notebook view couldn't start, so Endeavor can't open.\n\nUsually the Microsoft Edge WebView2 Runtime is missing. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and open Endeavor again. If it's installed, install Endeavor again, so its folder can be written to.\n\n({error})"
     ));
     let title = wide("Endeavor");
     // SAFETY: null-terminated wide strings that outlive the call; no owner window.
