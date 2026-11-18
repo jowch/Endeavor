@@ -159,7 +159,8 @@ Endeavor writes a log of what it does. In Settings, under
 **Troubleshooting**, click **Show in Finder** next to **Log files**. The log
 is `~/Library/Logs/Endeavor/endeavor.log`, and the one from the time before
 is `endeavor.old.log` next to it. Julia's own log on your Mac is
-`~/Library/Application Support/endeavor/runtime/runtime.log`.
+`runtime.log` in `~/.local/state/endeavor/serve/`, in the folder named after
+your Mac.
 
 ## Report a problem
 
