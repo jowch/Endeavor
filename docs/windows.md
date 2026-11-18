@@ -153,13 +153,20 @@ under the user's own `%LOCALAPPDATA%`.
   the window is disabled while a menu or popover is open, so a click on the
   notebook reaches GPUI and closes it. Not yet tried on a Windows machine.
   As on Linux, the web view isn't dimmed behind Settings.
-- `src/platform.rs`, `webcontent`: a crashed WebView2 process isn't noticed
-  (`ProcessFailed`), find in the notebook always says "Not found", and
-  `has_keyboard` is always false. `url` and `give_keyboard` (wry's `focus`)
-  are real.
+- `src/webview_windows.rs` (`webcontent`): WebView2's `GotFocus` and
+  `LostFocus` say whether the notebook has the keyboard. Its
+  `AcceleratorKeyPressed` sends the app's menu shortcuts (Ctrl+Q, Ctrl+,,
+  Ctrl+B, Ctrl+Shift+E, the zoom keys, Ctrl+F, Ctrl+G, Ctrl+Shift+G) to GPUI
+  before the page sees them; the app's other Ctrl shortcuts stay with the page,
+  since WebView2 doesn't say which keys the page used. Browser keys (F5,
+  Ctrl+P, F12) are off. Find uses WebView2's own find (`ICoreWebView2Find`,
+  on a runtime new enough to have it) without its bar. A renderer that ends
+  (`ProcessFailed`) loads the notebook again. The Edit menu's clipboard items
+  still act only on the app's own text boxes. Untried on a Windows machine.
 - `src/platform.rs`, `web_view_hooks` and `init`: a click in GPUI gives
-  GPUI's window the keyboard, but app shortcuts still don't reach GPUI while
-  the notebook has the keyboard. Needs WebView2's `AcceleratorKeyPressed`.
+  GPUI's window the keyboard.
+- `src/platform.rs`, `no_web_view`: without the WebView2 runtime the app says
+  what's missing and quits, instead of panicking.
 - `src/platform.rs`, `reduces_motion`: always false. Needs
   `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`.
 - `src/platform.rs`, `set_open_panel_message`, `snapshot`, `dialogs`: the
@@ -387,10 +394,8 @@ only with servers.
   cuts a hole in the web view's window with `SetWindowRgn`; with
   DirectComposition off, GPUI's own drawing should show through it. If it
   doesn't, the fallback is to hide the web view while a menu is open.
-- **App shortcuts while the notebook has focus (M).** Use WebView2's
-  `AcceleratorKeyPressed` to send Ctrl+B, Ctrl+Q, Ctrl+, Ctrl+Shift+E (Point) and the zoom keys to
-  GPUI actions (the macOS version is `webkeys.rs`). Turn off browser
-  accelerator keys so F5, Ctrl+P and Ctrl+F don't act on Pluto.
+- **App shortcuts while the notebook has focus: written, untried.** See
+  `src/webview_windows.rs` above.
 - **Snapshot (S–M).** Use `CapturePreview` and crop, or the DevTools
   `Page.captureScreenshot` with a clip.
 - **Small items (S).**
@@ -398,9 +403,9 @@ only with servers.
   - Open a URL: `ShellExecute`.
   - Set a WebView2 data folder: the default, next to the exe, isn't writable
     under Program Files.
-- **Custom scheme (S).** wry serves `endeavor://` as
-  `http://endeavor.localhost/` on Windows. The page's font URLs hard-code
-  `endeavor://localhost/` (`frontend/src/theme.ts:104`).
+- **Custom scheme: written, untried.** wry serves `endeavor://` as
+  `http://endeavor.localhost/` on Windows, so the page's font URLs use that
+  there (`frontend/src/theme.ts`, `APP_FONTS`).
 
 ### Smaller app fixes (about 1 week in total)
 
