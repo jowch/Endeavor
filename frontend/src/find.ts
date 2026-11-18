@@ -89,8 +89,14 @@ const css = `
   #endeavor-find button { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: none; border-radius: 6px;
     background: none; color: var(--e-text-secondary); font: inherit; cursor: pointer; }
   #endeavor-find button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
-  ::highlight(endeavor-find) { background-color: rgba(255, 196, 0, 0.35); }
-  ::highlight(endeavor-find-current) { background-color: rgba(255, 150, 0, 0.75); color: black; }
+  /* Matches in Endeavor's orange (Jonathan, 2026-11-18: the old pale yellow looked grey on dark code):
+     the current one solid, with white text; the others a tint, stronger on a dark page, where a light
+     tint of orange turns brown. */
+  ::highlight(endeavor-find) { background-color: rgba(204, 63, 0, 0.3); }
+  ::highlight(endeavor-find-current) { background-color: #CC3F00; color: white; }
+  @media (prefers-color-scheme: dark) {
+    ::highlight(endeavor-find) { background-color: rgba(224, 96, 31, 0.6); }
+  }
 `;
 
 type Highlights = { set(name: string, value: unknown): void; delete(name: string): void };
