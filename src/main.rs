@@ -663,7 +663,13 @@ impl Workspace {
                 });
             #[cfg(target_os = "linux")]
             let builder = builder.with_download_started_handler(save_image::started(image_asks.clone()));
+            // F5, Ctrl+P and the like would act on Pluto's page, not the app.
+            #[cfg(windows)]
+            let builder = wry::WebViewBuilderExtWindows::with_browser_accelerator_keys(builder, false);
+            #[cfg(not(windows))]
             let webview = builder.build_as_child(&handle).expect("child webview");
+            #[cfg(windows)]
+            let webview = builder.build_as_child(&handle).unwrap_or_else(|e| platform::no_web_view(&e));
             #[cfg(target_os = "macos")]
             save_image::attach(&webview, image_asks.clone());
             #[cfg(target_os = "macos")]
@@ -673,6 +679,8 @@ impl Workspace {
             }
             #[cfg(target_os = "linux")]
             linux::attach(&webview, window, cx);
+            #[cfg(windows)]
+            webcontent::attach(&webview, window, cx);
             dialogs::show_page_dialogs(&webview);
             webcontent::on_process_ended(&webview, move || drop(ended_tx.unbounded_send(())));
             WebView::new(webview, window, cx)
