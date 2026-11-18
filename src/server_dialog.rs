@@ -456,8 +456,10 @@ impl Workspace {
                     }))
                 });
             let rows: Vec<_> = rows.collect();
+            // Above the dialog: at the dialog's own layer or below, the dialog would cover it.
             div().absolute().top(px(32.)).right_0().child(
-                deferred(
+                crate::layer::place(
+                    crate::layer::Layer::ServerDialogMenu,
                     div()
                         .id("idle-menu")
                         .role(Role::Menu)
@@ -469,8 +471,7 @@ impl Workspace {
                         .flex_col()
                         .map(theme::popover)
                         .children(rows),
-                )
-                .with_priority(2),
+                ),
             )
         });
         let footer = if dialog.confirm_remove {

@@ -950,7 +950,7 @@ impl Workspace {
             .text_color(theme::text_primary())
             .when(chip == Chip::Folder, |d| d.capture_key_down(cx.listener(Self::folder_popover_key)))
             .child(body);
-        div().absolute().top(px(-6.)).left_0().child(deferred(anchored().anchor(Anchor::BottomLeft).child(crate::motion::arriving(body, "chip-menu-in", false))).with_priority(1))
+        div().absolute().top(px(-6.)).left_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::BottomLeft).child(crate::motion::arriving(body, "chip-menu-in", false))))
     }
 
     /// Pick where the session runs. A server connects now, so its folders can be
