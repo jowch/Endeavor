@@ -66,7 +66,9 @@ cd frontend && npm install && npm test && npm run -s check   # rebuilds dist/pag
   script's Julia and Rust pins.
 - **Anything that floats** (a menu, popover, notice, dialog) is placed with
   `layer::place` at a `Layer` from `src/layer.rs`, never a hand-picked
-  `with_priority`, and over the notebook cuts its hole with `layer::cut`.
+  `with_priority`. One that shows over the notebook cuts its hole with
+  `layer::cut`. The tooltips and the Point tip are the exception: they compute
+  their own rect and call `overlay::set_hole` themselves.
 - Deliberate shortcuts are marked `ponytail:` in the code and listed in
   `docs/roadmap.md`.
 
