@@ -21,7 +21,7 @@ const withSite = (url: string) => url + (url.includes('?') ? '&' : '?') + 'sourc
 		<main>
 			<p class="home"><a href={`${base}/`}>Endeavor</a></p>
 			<h1>Tell us what got in your way</h1>
-			<p>Something stopped you, confused you or took too long? A few lines is plenty. Use whichever suits you: we read both.</p>
+			<p>Something stopped you, confused you or took too long? A few lines is plenty.{tallyForm && ' Use whichever suits you: we read both.'}</p>
 			{
 				tallyForm && (
 					<p>
