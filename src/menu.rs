@@ -442,7 +442,7 @@ impl Workspace {
         let hole = over_notebook.then(|| {
             let webview = self.webview.read(cx);
             let (handle, under) = (webview.handle(), webview.bounds());
-            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Menu, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ()).absolute().size_full()
+            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Menu, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ()).absolute().top_0().left_0().size_full()
         });
         let body = div()
             .id("popup-menu")
@@ -459,7 +459,6 @@ impl Workspace {
             .text_color(theme::text_primary())
             .on_action(cx.listener(|this, _: &Interrupt, window, cx| this.close_menu(window, cx)))
             .on_key_down(cx.listener(Self::menu_key))
-            .children(hole)
             .children(head)
             .children(items)
             .children(rules_body.into_iter().flatten())
@@ -474,6 +473,8 @@ impl Workspace {
         };
         let wrapper = div().absolute().top(px(28.));
         let wrapper = if from_left { wrapper.left_0() } else { wrapper.right_0() };
+        // The hole is pinned to a plain box around the menu: inside the menu it would start inside its border and padding.
+        let body = div().relative().child(body).children(hole);
         // Over the notebook it shows at once: its hole in the web view can't fade with it.
         let body = if over_notebook { body.into_any_element() } else { crate::motion::arriving(body, "popup-menu-in", true).into_any_element() };
         wrapper.child(deferred(placed.child(body)).with_priority(1))

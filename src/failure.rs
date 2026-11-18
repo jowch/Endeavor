@@ -5,6 +5,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use std::sync::Arc;
 
 use crate::new_session::{Glyph, glyph_at};
 use crate::signin::{Look, button_frame};
@@ -35,45 +36,129 @@ pub fn code_text(text: &str) -> StyledText {
     StyledText::new(plain).with_highlights(ranges.into_iter().map(move |r| (r, style)))
 }
 
-/// "Details ›": the raw error, closed until clicked.
+/// The tallest Details gets before it scrolls: about fourteen lines, so a
+/// long stack trace stays inside its notice or card instead of running off
+/// the window.
+pub const DETAILS_MAX_H: f32 = 232.;
+
+/// "Details ›": the raw error, closed until clicked. Open, it scrolls past
+/// `DETAILS_MAX_H`, and Copy puts the whole error on the clipboard.
 pub fn details(id: impl Into<ElementId>, text: impl Into<SharedString>, open: bool, toggle: impl Fn(&mut Window, &mut App) + 'static) -> AnyElement {
-    let text = text.into();
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .child(
+    Details { id: id.into(), text: text.into(), open, toggle: Box::new(toggle) }.into_any_element()
+}
+
+#[derive(IntoElement)]
+struct Details {
+    id: ElementId,
+    text: SharedString,
+    open: bool,
+    toggle: Box<Toggle>,
+}
+
+type Toggle = dyn Fn(&mut Window, &mut App);
+
+impl RenderOnce for Details {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Details { id, text, open, toggle } = self;
+        let shown = open && !text.is_empty();
+        // The box's scroll position, and whether Copy just copied, live as
+        // long as the Details do.
+        let (scroll, copied) = window.with_element_namespace(id.clone(), |window| {
+            let scroll = window.use_keyed_state("scroll", cx, |_, _| ScrollHandle::new()).read(cx).clone();
+            (scroll, window.use_keyed_state("copied", cx, |_, _| false))
+        });
+        let copy = shown.then(|| {
+            let done = *copied.read(cx);
+            let label = if done { "Copied" } else { "Copy" };
+            let text = text.clone();
             div()
-                .id(id)
+                .id(ElementId::NamedChild(Arc::new(id.clone()), "copy".into()))
                 .role(Role::Button)
-                .aria_label(if open { "Hide details" } else { "Details" })
-                .self_start()
+                .aria_label(if done { "Copied" } else { "Copy error" })
                 .flex()
                 .items_center()
                 .gap(px(4.))
+                .px(px(4.))
+                .mr(px(-4.))
+                .rounded(px(4.))
                 .cursor_pointer()
                 .text_size(theme::size_meta())
                 .text_color(theme::text_faint())
                 .hover(|s| s.text_color(theme::text_secondary()))
-                .child("Details")
-                .child(glyph_at(if open { Glyph::Chevron } else { Glyph::Forward }, theme::text_faint(), 11. / 12.))
-                .on_click(move |_, window, cx| toggle(window, cx)),
-        )
-        .when(open && !text.is_empty(), |d| {
-            d.child(
+                .child(glyph_at(if done { Glyph::Check } else { Glyph::Copy }, theme::text_faint(), 11. / 12.))
+                .child(label)
+                .on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+                    copied.update(cx, |c, cx| {
+                        *c = true;
+                        cx.notify();
+                    });
+                    let copied = copied.downgrade();
+                    cx.spawn(async move |cx| {
+                        cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                        let _ = copied.update(cx, |c, cx| {
+                            *c = false;
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                })
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
                 div()
-                    .px(px(10.))
-                    .py(px(8.))
-                    .rounded(px(6.))
-                    .bg(theme::bg_sunken())
-                    .font_family(theme::MONO)
-                    .text_size(px(11.5))
-                    .line_height(px(16.))
-                    .text_color(theme::text_muted())
-                    .child(text),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .id(id.clone())
+                            .role(Role::Button)
+                            .aria_label(if open { "Hide details" } else { "Details" })
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .cursor_pointer()
+                            .text_size(theme::size_meta())
+                            .text_color(theme::text_faint())
+                            .hover(|s| s.text_color(theme::text_secondary()))
+                            .child("Details")
+                            .child(glyph_at(if open { Glyph::Chevron } else { Glyph::Forward }, theme::text_faint(), 11. / 12.))
+                            .on_click(move |_, window, cx| toggle(window, cx)),
+                    )
+                    .children(copy),
             )
-        })
-        .into_any_element()
+            .when(shown, |d| {
+                d.child(
+                    div()
+                        .id(ElementId::NamedChild(Arc::new(id.clone()), "text".into()))
+                        .max_h(px(DETAILS_MAX_H))
+                        .overflow_y_scroll()
+                        .track_scroll(&scroll)
+                        .px(px(10.))
+                        .py(px(8.))
+                        .rounded(px(6.))
+                        .bg(theme::bg_sunken())
+                        .font_family(theme::MONO)
+                        .text_size(px(11.5))
+                        .line_height(px(16.))
+                        .text_color(theme::text_muted())
+                        // A wheel turn here scrolls the error, not what's behind it, until the error is at its end.
+                        .on_scroll_wheel(move |event, window, cx| {
+                            let delta = event.delta.pixel_delta(window.line_height());
+                            let (at, max) = (scroll.offset(), scroll.max_offset());
+                            if delta.y != px(0.) && max.y > px(0.) && if delta.y < px(0.) { at.y > -max.y } else { at.y < px(0.) } {
+                                cx.stop_propagation();
+                            }
+                        })
+                        .child(text),
+                )
+            })
+    }
 }
 
 /// Something that needs the user, where the thing would have been: a title

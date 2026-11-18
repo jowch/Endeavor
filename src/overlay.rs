@@ -135,29 +135,34 @@ const LEFT_UP: usize = 2;
 const RIGHT_DOWN: usize = 3;
 const RIGHT_UP: usize = 4;
 const LEFT_DRAGGED: usize = 6;
+const SCROLL_WHEEL: usize = 22;
 
 /// Clicks in the hole go straight to GPUI's view. The web view claims them
 /// otherwise, even when it declines to hit-test there (WebKit's gesture
 /// recognizers take mouse-downs over the whole view). While `dismiss` holds,
 /// a mouse-down anywhere on the web view goes to GPUI the same way, so a menu
 /// or popover open elsewhere in the window hears it and closes, the way a
-/// native menu closes for a click anywhere outside it.
+/// native menu closes for a click anywhere outside it. A wheel turn in a hole
+/// goes to GPUI too (never for `dismiss`), so what the hole shows can scroll,
+/// such as a notice's long Details.
 unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
     unsafe {
         let (rects, view, dismiss) = {
             let holes = HOLES.lock().unwrap();
-            (holes.rects.iter().map(|(_, rect)| *rect).collect::<Vec<_>>(), holes.view, holes.dismiss)
+            (holes.rects.clone(), holes.view, holes.dismiss)
         };
         let kind: usize = msg_send![event, type];
         let is_click = [LEFT_DOWN, LEFT_UP, RIGHT_DOWN, RIGHT_UP, LEFT_DRAGGED].contains(&kind);
-        if view != 0 && is_click && (!rects.is_empty() || dismiss) {
+        let is_wheel = kind == SCROLL_WHEEL;
+        if view != 0 && (is_click || is_wheel) && (!rects.is_empty() || dismiss) {
             let view = view as *mut AnyObject;
             let in_window: CGPoint = msg_send![event, locationInWindow];
             let local: CGPoint = msg_send![view, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
             let flipped: Bool = msg_send![view, isFlipped];
             let bounds: CGRect = msg_send![view, bounds];
             let y = if flipped.as_bool() { local.y } else { bounds.size.height - local.y };
-            let in_hole = rects.iter().any(|rect| rect.contains(local.x, y));
+            // A tip or tooltip only shows over the page: a wheel turn there still scrolls the page.
+            let in_hole = rects.iter().any(|(hole, rect)| rect.contains(local.x, y) && !(is_wheel && matches!(hole, Hole::Tip | Hole::Tooltip)));
             let in_view = local.x >= 0. && local.x < bounds.size.width && y >= 0. && y < bounds.size.height;
             let dismiss_click = dismiss && matches!(kind, LEFT_DOWN | RIGHT_DOWN) && in_view;
             if in_hole || dismiss_click {
@@ -167,6 +172,7 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
                     LEFT_UP => msg_send![gpui, mouseUp: event],
                     RIGHT_DOWN => msg_send![gpui, rightMouseDown: event],
                     RIGHT_UP => msg_send![gpui, rightMouseUp: event],
+                    SCROLL_WHEEL => msg_send![gpui, scrollWheel: event],
                     _ => msg_send![gpui, mouseDragged: event],
                 }
                 return;
