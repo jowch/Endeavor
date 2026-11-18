@@ -193,7 +193,9 @@ pub struct ChipPopover {
     pub now: Option<Option<String>>,
 }
 
-fn icon_glyph(icon: Icon) -> Glyph {
+/// The glyph for a chip's icon. Quote cards use it too, so a quote shows
+/// the same icon everywhere.
+pub fn icon_glyph(icon: Icon) -> Glyph {
     match icon {
         Icon::Cell => Glyph::Code,
         Icon::Cells => Glyph::Cells,
