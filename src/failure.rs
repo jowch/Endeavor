@@ -39,7 +39,7 @@ pub fn code_text(text: &str) -> StyledText {
 /// The tallest Details gets before it scrolls: about fourteen lines, so a
 /// long stack trace stays inside its notice or card instead of running off
 /// the window.
-pub const DETAILS_MAX_H: f32 = 232.;
+const DETAILS_MAX_H: f32 = 232.;
 
 /// "Details ›": the raw error, closed until clicked. Open, it scrolls past
 /// `DETAILS_MAX_H`, and Copy puts the whole error on the clipboard.
@@ -65,10 +65,11 @@ impl RenderOnce for Details {
         // long as the Details do.
         let (scroll, copied) = window.with_element_namespace(id.clone(), |window| {
             let scroll = window.use_keyed_state("scroll", cx, |_, _| ScrollHandle::new()).read(cx).clone();
-            (scroll, window.use_keyed_state("copied", cx, |_, _| false))
+            // (clicks so far, showing Copied): a later click's timer clears it, not an earlier one's.
+            (scroll, window.use_keyed_state("copied", cx, |_, _| (0u64, false)))
         });
         let copy = shown.then(|| {
-            let done = *copied.read(cx);
+            let done = copied.read(cx).1;
             let label = if done { "Copied" } else { "Copy" };
             let text = text.clone();
             div()
@@ -89,16 +90,19 @@ impl RenderOnce for Details {
                 .child(label)
                 .on_click(move |_, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
-                    copied.update(cx, |c, cx| {
-                        *c = true;
+                    let click = copied.update(cx, |c, cx| {
+                        *c = (c.0 + 1, true);
                         cx.notify();
+                        c.0
                     });
                     let copied = copied.downgrade();
                     cx.spawn(async move |cx| {
                         cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
                         let _ = copied.update(cx, |c, cx| {
-                            *c = false;
-                            cx.notify();
+                            if c.0 == click {
+                                c.1 = false;
+                                cx.notify();
+                            }
                         });
                     })
                     .detach();
@@ -133,7 +137,7 @@ impl RenderOnce for Details {
                     .children(copy),
             )
             .when(shown, |d| {
-                d.child(
+                d.child(hand_on(
                     div()
                         .id(ElementId::NamedChild(Arc::new(id.clone()), "text".into()))
                         .max_h(px(DETAILS_MAX_H))
@@ -147,16 +151,9 @@ impl RenderOnce for Details {
                         .text_size(px(11.5))
                         .line_height(px(16.))
                         .text_color(theme::text_muted())
-                        // A wheel turn here scrolls the error, not what's behind it, until the error is at its end.
-                        .on_scroll_wheel(move |event, window, cx| {
-                            let delta = event.delta.pixel_delta(window.line_height());
-                            let (at, max) = (scroll.offset(), scroll.max_offset());
-                            if delta.y != px(0.) && max.y > px(0.) && if delta.y < px(0.) { at.y > -max.y } else { at.y < px(0.) } {
-                                cx.stop_propagation();
-                            }
-                        })
                         .child(text),
-                )
+                    scroll,
+                ))
             })
     }
 }
@@ -189,6 +186,22 @@ pub fn card(title: impl Into<SharedString>, body: impl Into<SharedString>, butto
                 .when(!buttons.is_empty(), |d| d.child(div().mt(px(4.)).flex().flex_wrap().items_center().gap(px(8.)).children(buttons)))
                 .children(details),
         )
+}
+
+/// Keeps a wheel turn from what's behind (the transcript) while the panel
+/// can still scroll that way. A sideways turn always stays: the transcript
+/// would take it as up and down. The panel's own scrolling runs before this
+/// and moves the offset by the turn already, so this looks at where it was.
+pub fn hand_on(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
+    panel.on_scroll_wheel(move |event, window, cx| {
+        let delta = event.delta.pixel_delta(window.line_height());
+        let (max, at) = (handle.max_offset(), handle.offset().y - delta.y);
+        let keeps_y = delta.y != px(0.) && max.y > px(0.) && if delta.y < px(0.) { at > -max.y } else { at < px(0.) };
+        let sideways = delta.x != px(0.) && delta.x.abs() > delta.y.abs();
+        if keeps_y || sideways {
+            cx.stop_propagation();
+        }
+    })
 }
 
 /// What leads a wait line: a clock, the offline mark, or a spinner.
