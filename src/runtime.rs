@@ -339,19 +339,22 @@ fn old_state_dir(app_dir: &Path) -> PathBuf {
 /// and only a process that is still that runtime. Its token and log stay.
 fn retire_old_state(app_dir: &Path) {
     retire_old_state_in(&old_state_dir(app_dir), &|old| {
-        if record(old).and_then(|r| r["pid"].as_u64()).is_some_and(|pid| runs_from(pid, old)) {
-            stop_recorded_in(old);
+        match record(old).and_then(|r| r["pid"].as_u64()) {
+            Some(pid) if runs_from(pid, old) => stop_recorded_in(old),
+            // A pid the system has given another process since, or a runtime this check can't see.
+            Some(pid) => eprintln!("The runtime recorded in {} (pid {pid}) isn't running from there; not stopping that process.", old.display()),
+            None => {}
         }
         Ok(true)
     });
 }
 
 /// Whether process `pid` is a runtime started with `state_dir`, so a pid the
-/// system gave another process since isn't ended. On Windows `stop_group`
+/// system gave another process since isn't ended. `-ww`: the whole command line. On Windows `stop_group`
 /// checks the recorded start time instead.
 #[cfg(unix)]
 fn runs_from(pid: u64, state_dir: &Path) -> bool {
-    let args = Command::new("ps").args(["-p", &pid.to_string(), "-o", "args="]).stderr(Stdio::null()).output();
+    let args = Command::new("ps").args(["-ww", "-p", &pid.to_string(), "-o", "args="]).stderr(Stdio::null()).output();
     let Ok(out) = args else { return false };
     let (args, flag) = (String::from_utf8_lossy(&out.stdout), format!("--state-dir {}", state_dir.display()));
     // The folder ends there: not a longer path that starts with it.
@@ -721,13 +724,13 @@ fn an_old_runtime_is_stopped_once_and_its_record_removed() {
 #[test]
 fn only_a_runtime_started_with_the_old_folder_is_taken_for_it() {
     let old = std::env::temp_dir().join(format!("endeavor-runs-from-{}", std::process::id()));
-    let mut core = Command::new("sh").args(["-c", "sleep 60", "core", "--state-dir"]).arg(&old).spawn().unwrap();
+    let mut core = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).spawn().unwrap();
     let mut other = Command::new("sleep").arg("60").spawn().unwrap();
     assert!(runs_from(u64::from(core.id()), &old));
     assert!(!runs_from(u64::from(other.id()), &old), "a pid another process has now");
     assert!(!runs_from(u64::from(core.id()), &old.join("x")), "started with another folder");
     let longer = PathBuf::from(format!("{}-files", old.display()));
-    let mut near = Command::new("sh").args(["-c", "sleep 60", "core", "--state-dir"]).arg(&longer).spawn().unwrap();
+    let mut near = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&longer).spawn().unwrap();
     assert!(!runs_from(u64::from(near.id()), &old), "a folder whose name starts with it");
     let _ = near.kill();
     let _ = near.wait();
