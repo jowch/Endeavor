@@ -75,6 +75,7 @@ pub fn new_notebook_label(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "New Julia notebook",
         Backend::Ember => "New R notebook",
+        Backend::Marimo => "New Python notebook",
     }
 }
 
@@ -83,6 +84,7 @@ pub fn language_name(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "Julia",
         Backend::Ember => "R",
+        Backend::Marimo => "Python",
     }
 }
 
@@ -91,6 +93,7 @@ pub fn kind_name(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "julia",
         Backend::Ember => "r",
+        Backend::Marimo => "python",
     }
 }
 

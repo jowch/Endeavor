@@ -181,6 +181,7 @@ impl NotebookAction {
         items.extend(match kind {
             Backend::Pluto => [LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback].as_slice(),
             Backend::Ember => [LookEndeavor, LookEmber, Shortcuts, NewSession].as_slice(),
+            Backend::Marimo => [Shortcuts, NewSession].as_slice(),
         });
         if stopped {
             items.push(Start);
@@ -200,6 +201,7 @@ impl NotebookAction {
         match kind {
             Backend::Pluto => vec![ExportFile, ExportHtml, ExportPdf, Present, Record, Frontmatter],
             Backend::Ember => vec![ExportFile, ExportHtml, ExportPdf],
+            Backend::Marimo => vec![ExportFile],
         }
     }
 }
@@ -307,6 +309,7 @@ pub fn engine_name(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "Julia",
         Backend::Ember => "R",
+        Backend::Marimo => "Python",
     }
 }
 
@@ -380,6 +383,8 @@ fn engine_logo(kind: Backend) -> AnyElement {
     match kind {
         Backend::Pluto => pluto_logo().into_any_element(),
         Backend::Ember => ember_logo().into_any_element(),
+        // ponytail: no marimo logo yet; Python notebooks don't open in the app.
+        Backend::Marimo => div().into_any_element(),
     }
 }
 

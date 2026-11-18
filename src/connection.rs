@@ -360,7 +360,8 @@ impl Connection {
     fn waits(&mut self, kind: Backend) -> &mut u32 {
         match kind {
             Backend::Pluto => &mut self.julia_waits,
-            Backend::Ember => &mut self.r_waits,
+            // ponytail: Python notebooks (marimo) don't open in the app yet (the runtime refuses them), so R's count stands in.
+            Backend::Ember | Backend::Marimo => &mut self.r_waits,
         }
     }
 
@@ -1974,7 +1975,7 @@ impl Workspace {
                                 connection.julia_failed = None;
                                 connection.julia.get_or_insert_with(|| Steps::first(&step, || Steps::new("Starting Julia"))).julia(&step);
                             }
-                            Backend::Ember => {
+                            Backend::Ember | Backend::Marimo => {
                                 connection.r_failed = None;
                                 connection.r.get_or_insert_with(|| Steps::first(&step, Steps::r)).r_step(&step);
                             }
@@ -1993,7 +1994,7 @@ impl Workspace {
                     if *waits == 0 {
                         match kind {
                             Backend::Pluto => connection.julia = None,
-                            Backend::Ember => connection.r = None,
+                            Backend::Ember | Backend::Marimo => connection.r = None,
                         }
                     }
                 }
@@ -2018,7 +2019,7 @@ impl Workspace {
     pub fn app_waits(&self, host: &HostId, kind: Backend) -> u32 {
         self.connections.get(host).map_or(0, |c| match kind {
             Backend::Pluto => c.julia_waits,
-            Backend::Ember => c.r_waits,
+            Backend::Ember | Backend::Marimo => c.r_waits,
         })
     }
 
@@ -2030,7 +2031,7 @@ impl Workspace {
         if failed.is_some() || error.is_none() {
             match kind {
                 Backend::Pluto => connection.julia_failed = failed,
-                Backend::Ember => connection.r_failed = failed,
+                Backend::Ember | Backend::Marimo => connection.r_failed = failed,
             }
             cx.notify();
         }
@@ -2364,6 +2365,7 @@ pub fn pane_failure(kind: Backend, error: &str) -> Option<String> {
     match kind {
         Backend::Pluto => pluto::julia_failed(error).or_else(|| pluto::open_stuck(error)).map(str::to_owned),
         Backend::Ember => pluto::r_failed(error).map(|_| error.to_owned()).or_else(|| pluto::open_stuck(error).map(|why| format!("r_failed::{why}"))),
+        Backend::Marimo => None,
     }
 }
 
