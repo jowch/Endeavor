@@ -162,8 +162,11 @@ under the user's own `%LOCALAPPDATA%`.
   Ctrl+P, F12) are off. For DevTools, right-click the page where Pluto doesn't
   take the right-click (outside the cells) and choose Inspect. Find uses WebView2's own find (`ICoreWebView2Find`,
   on a runtime new enough to have it) without its bar. A renderer that ends
-  (`ProcessFailed`) loads the notebook again. The Edit menu's clipboard items
-  still act only on the app's own text boxes. Untried on a Windows machine.
+  (`ProcessFailed`) loads the notebook again. When the notebook gets the
+  keyboard back from the app (Esc in the find bar), the page puts its focus
+  and caret back in the cell it was in, which WebView2 doesn't do after a find.
+  The Edit menu's clipboard items still act only on the app's own text boxes.
+  Shortcuts, Find, the reload and the font were checked on Windows 10 for #228.
 - `src/platform.rs`, `web_view_hooks` and `init`: a click in GPUI gives
   GPUI's window the keyboard.
 - `src/platform.rs`, `no_web_view`: without the WebView2 runtime the app says

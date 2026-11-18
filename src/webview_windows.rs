@@ -100,8 +100,10 @@ pub fn attach(webview: &wry::WebView, window: &gpui::Window, cx: &mut App) {
             FOCUSED.with(|f| f.set(true));
             Ok(())
         })), &mut token);
-        let _ = controller.add_LostFocus(&FocusChangedEventHandler::create(Box::new(|_, _| {
+        let page = webview.webview();
+        let _ = controller.add_LostFocus(&FocusChangedEventHandler::create(Box::new(move |_, _| {
             FOCUSED.with(|f| f.set(false));
+            let _ = page.ExecuteScript(&HSTRING::from(SAVE_FOCUS), None);
             Ok(())
         })), &mut token);
     }
@@ -331,23 +333,39 @@ pub fn clear_find(_: &wry::WebView) {
 }
 
 thread_local! {
-    /// The controller `give_keyboard` moves the focus into once the key that asked has been handled.
-    static FOCUS_NEXT: RefCell<Option<ICoreWebView2Controller>> = const { RefCell::new(None) };
+    /// The web view `give_keyboard` moves the focus into once the key that asked has been handled.
+    static FOCUS_NEXT: RefCell<Option<(ICoreWebView2Controller, ICoreWebView2)>> = const { RefCell::new(None) };
 }
 
-/// Give the web view the keyboard. Esc in the find bar asks for it while GPUI
-/// is still handling that key, and a MoveFocus then left the keyboard nowhere
-/// (seen on Windows 10), so it's done once the key's messages are through.
+/// When the web view loses the keyboard, the page notes where its own focus
+/// and caret were, so `give_keyboard` can put them back.
+const SAVE_FOCUS: &str = "(() => { const e = document.activeElement, s = getSelection(); \
+window.__endeavorFocus = e && e !== document.body ? [e, s.rangeCount ? s.getRangeAt(0).cloneRange() : null] : null })()";
+
+/// Put the page's focus and caret back where they were. Nothing in the page
+/// can have taken the focus meanwhile but find, since the keyboard was elsewhere.
+const RESTORE_FOCUS: &str = "(() => { const f = window.__endeavorFocus; if (!f || !f[0].isConnected) return; \
+if (document.activeElement !== f[0]) f[0].focus(); if (f[1]) { const s = getSelection(); s.removeAllRanges(); s.addRange(f[1]) } })()";
+
+/// Give the web view the keyboard, with the page's focus where it was. Esc in
+/// the find bar asks for it while GPUI is still handling that key, and a
+/// MoveFocus then left the keyboard nowhere (seen on Windows 10), so it's
+/// done once the key's messages are through. After a find, WebView2 gives the
+/// keyboard back to the page but not to the cell it was in (also seen on
+/// Windows 10), so the page puts its own focus back.
 pub fn give_keyboard(webview: &wry::WebView) {
     unsafe extern "system" fn focus_now(_: windows_sys::Win32::Foundation::HWND, _: u32, id: usize, _: u32) {
         // SAFETY: our own thread timer.
         unsafe { windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(std::ptr::null_mut(), id) };
-        if let Some(controller) = FOCUS_NEXT.with(|f| f.borrow_mut().take()) {
+        if let Some((controller, page)) = FOCUS_NEXT.with(|f| f.borrow_mut().take()) {
             // SAFETY: as in `attach`.
-            let _ = unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) };
+            unsafe {
+                let _ = controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+                let _ = page.ExecuteScript(&HSTRING::from(RESTORE_FOCUS), None);
+            }
         }
     }
-    FOCUS_NEXT.with(|f| f.replace(Some(webview.controller())));
+    FOCUS_NEXT.with(|f| f.replace(Some((webview.controller(), webview.webview()))));
     // SAFETY: a thread timer on GPUI's thread, whose message loop runs `focus_now`.
     unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(std::ptr::null_mut(), 0, 10, Some(focus_now)) };
 }
