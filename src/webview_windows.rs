@@ -330,8 +330,26 @@ pub fn clear_find(_: &wry::WebView) {
     }
 }
 
+thread_local! {
+    /// The controller `give_keyboard` moves the focus into once the key that asked has been handled.
+    static FOCUS_NEXT: RefCell<Option<ICoreWebView2Controller>> = const { RefCell::new(None) };
+}
+
+/// Give the web view the keyboard. Esc in the find bar asks for it while GPUI
+/// is still handling that key, and a MoveFocus then left the keyboard nowhere
+/// (seen on Windows 10), so it's done once the key's messages are through.
 pub fn give_keyboard(webview: &wry::WebView) {
-    let _ = webview.focus();
+    unsafe extern "system" fn focus_now(_: windows_sys::Win32::Foundation::HWND, _: u32, id: usize, _: u32) {
+        // SAFETY: our own thread timer.
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(std::ptr::null_mut(), id) };
+        if let Some(controller) = FOCUS_NEXT.with(|f| f.borrow_mut().take()) {
+            // SAFETY: as in `attach`.
+            let _ = unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) };
+        }
+    }
+    FOCUS_NEXT.with(|f| f.replace(Some(webview.controller())));
+    // SAFETY: a thread timer on GPUI's thread, whose message loop runs `focus_now`.
+    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(std::ptr::null_mut(), 0, 10, Some(focus_now)) };
 }
 
 pub fn has_keyboard(_: &wry::WebView) -> bool {
