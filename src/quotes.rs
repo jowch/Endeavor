@@ -9,7 +9,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
 
-use crate::attach::{Attachment, Quote, Quoted};
+use crate::attach::{self, Attachment, Quote, Quoted};
+use crate::composer::label_chip;
 use crate::new_session::{Glyph, glyph};
 use crate::session::Entry;
 use crate::{ReplyToSelection, Workspace, theme};
@@ -550,26 +551,16 @@ impl Workspace {
                     div()
                         .flex()
                         .child(
-                            div()
-                                .id(ElementId::NamedInteger("sent-quote".into(), (key << 32) | ((entry as u64) << 8) | i as u64))
-                                .role(Role::Button)
-                                .aria_label(format!("{label}, show in notebook"))
-                                .h(theme::chat_px(22.))
-                                .flex()
-                                .items_center()
-                                .gap(px(5.))
-                                .px(px(6.))
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(theme::composer_edge())
-                                .bg(theme::bg_raised())
-                                .cursor_pointer()
-                                .hover(|s| s.bg(theme::composer_edge()))
-                                .text_size(theme::chat_meta_small())
-                                .text_color(theme::text_secondary())
-                                .child(glyph(quote_glyph(quote), theme::text_muted()))
-                                .child(div().font_family(theme::MONO).text_size(theme::chat_px(11.5)).child(label))
-                                .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(cells.clone(), cx))),
+                            label_chip(
+                                ElementId::NamedInteger("sent-quote".into(), (key << 32) | ((entry as u64) << 8) | i as u64),
+                                glyph(quote_glyph(quote), theme::text_muted()),
+                                quote.label(attach::CHIP_NAME),
+                            )
+                            .role(Role::Button)
+                            .aria_label(format!("{label}, show in notebook"))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::bg_raised()))
+                            .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(cells.clone(), cx))),
                         )
                         .into_any_element(),
                 );
