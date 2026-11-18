@@ -82,6 +82,8 @@ impl Workspace {
             let (handle, under) = (webview.handle(), webview.bounds());
             canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Confirm, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ())
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full()
         });
         let card = div()
@@ -104,7 +106,6 @@ impl Workspace {
             .border_1()
             .border_color(theme::popover_edge())
             .shadow(theme::dialog_shadow(20., 50.))
-            .children(hole)
             .child(div().font_weight(FontWeight::SEMIBOLD).text_size(theme::size_body()).text_color(theme::text_primary()).child(confirm.title.clone()))
             .child(div().text_size(theme::size_meta()).text_color(theme::text_secondary()).child(confirm.body.clone()))
             .child(
@@ -142,7 +143,8 @@ impl Workspace {
                 .justify_center()
                 .occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx)))
-                .child(card)
+                // The hole is pinned to a plain box around the card: inside the card it would start inside its border and padding.
+                .child(div().relative().child(card).children(hole))
                 .into_any_element(),
         )
     }

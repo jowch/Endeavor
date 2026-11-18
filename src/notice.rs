@@ -174,9 +174,14 @@ impl Workspace {
             let (handle, under) = (webview.handle(), webview.bounds());
             canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Notice, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ())
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full()
         });
-        let body = failure::notice(notice.title.clone(), notice.reason.clone(), buttons, details, close).relative().children(hole);
+        // The hole is pinned to the corner of a plain box around the notice.
+        // Inside the notice, unpinned, it started inside the notice's border
+        // and padding, so the web view covered the notice's left edge.
+        let body = div().relative().child(failure::notice(notice.title.clone(), notice.reason.clone(), buttons, details, close)).children(hole);
         let (placed, wrapper) = match notice.spot {
             Spot::NotebookLeft => (anchored().anchor(Anchor::TopLeft), div().absolute().top(px(46.)).left(px(16.))),
             Spot::NotebookRight | Spot::Pane => (anchored().anchor(Anchor::TopRight), div().absolute().top(px(46.)).right(px(16.))),
