@@ -660,7 +660,8 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
             this_session = this_session.on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &allow, Scope::Session))));
         }
         let in_folder = item("perm-always-folder", "In this folder", "").on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &folder, Scope::Folder))));
-        deferred(
+        crate::layer::place(
+            crate::layer::Layer::Popover,
             anchored().anchor(Anchor::TopLeft).child(
                 div()
                     .id(ElementId::NamedInteger("perm-always-menu".into(), key))
@@ -678,7 +679,6 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
                     .child(in_folder),
             ),
         )
-        .with_priority(1)
     });
     div()
         .relative()

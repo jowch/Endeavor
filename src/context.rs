@@ -224,7 +224,7 @@ impl Workspace {
             .bottom(relative(1.))
             .right(px(-2.))
             .mb(px(8.))
-            .child(deferred(anchored().anchor(Anchor::BottomRight).child(body)).with_priority(2))
+            .child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::BottomRight).child(body)))
             .into_any_element()
     }
 }

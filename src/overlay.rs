@@ -85,19 +85,7 @@ impl CGRect {
     }
 }
 
-/// What a hole in the web view is for; each has at most one.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Hole {
-    Menu,
-    Tip,
-    Tooltip,
-    /// The Settings panel.
-    Settings,
-    /// The confirm dialog.
-    Confirm,
-    /// A one-off failure's notice.
-    Notice,
-}
+pub use crate::layer::Hole;
 
 impl Hole {
     /// The corner radius of what the hole is cut for, so the notebook shows

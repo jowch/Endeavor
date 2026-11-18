@@ -9,7 +9,8 @@ use gpui::*;
 use gpui_component::FocusTrapElement as _;
 
 use crate::server_dialog::button;
-use crate::{Workspace, overlay, theme};
+use crate::layer::{self, Hole};
+use crate::{Workspace, theme};
 
 pub struct Confirm {
     title: SharedString,
@@ -75,17 +76,6 @@ impl Workspace {
 
     pub fn render_confirm(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let confirm = self.confirm.as_ref()?;
-        // Above the web view like Settings: a hole cut where the card is, so
-        // its own hit-testing wins there instead of the native view's.
-        let hole = self.webview.read(cx).visible().then(|| {
-            let webview = self.webview.read(cx);
-            let (handle, under) = (webview.handle(), webview.bounds());
-            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Confirm, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ())
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-        });
         let card = div()
             .id("confirm-dialog")
             .role(Role::Dialog)
@@ -143,8 +133,9 @@ impl Workspace {
                 .justify_center()
                 .occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx)))
-                // The hole is pinned to a plain box around the card: inside the card it would start inside its border and padding.
-                .child(div().relative().child(card).children(hole))
+                // Above the web view like Settings: a hole cut where the card is, so
+                // its own hit-testing wins there instead of the native view's.
+                .child(layer::cut(card, Hole::Confirm, Some(self.webview.read(cx)).filter(|w| w.visible())))
                 .into_any_element(),
         )
     }
