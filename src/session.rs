@@ -1463,10 +1463,6 @@ impl Session {
 
     /// Open this notebook file in the notebook pane once the agent session is up
     /// (Julia is running by then).
-    pub fn open_on_start(&mut self, path: String) {
-        self.replayed_path = Some(path);
-    }
-
     /// The agent created this session: send whatever was queued meanwhile.
     pub fn started(&mut self, started: Started) -> Vec<Effect> {
         self.id = Some(started.id);

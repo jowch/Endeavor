@@ -48,6 +48,8 @@ pub enum Retry {
     RestartNotebook(u64),
     StopNotebook(u64, String),
     NewNotebook(u64),
+    /// Session `key`'s notebook at the path, whose open failed.
+    OpenNotebook(u64, String),
     SignOut,
 }
 
@@ -137,6 +139,7 @@ impl Workspace {
             Retry::RestartNotebook(key) => self.restart_notebook(key, cx),
             Retry::StopNotebook(key, path) => self.stop_notebook(key, path, cx),
             Retry::NewNotebook(key) => self.new_notebook_here(key, cx),
+            Retry::OpenNotebook(key, path) => self.open_for_session(key, path, false, cx),
             Retry::SignOut => self.sign_out_now(cx),
         }
         cx.notify();

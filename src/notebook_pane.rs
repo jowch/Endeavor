@@ -1168,14 +1168,22 @@ impl Workspace {
     }
 
     /// Opening a session's notebook failed: if its file is gone, say so.
-    pub fn check_missing(&mut self, key: u64, cx: &mut Context<Self>) {
+    /// `failed`: the open of this file failed for a reason the pane doesn't
+    /// show; if the file is there, a notice says it, with Try again.
+    pub fn check_missing(&mut self, key: u64, failed: Option<(String, String)>, cx: &mut Context<Self>) {
         let Some(path) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook_path.clone()) else { return };
         let Some(bridge) = self.session_bridge(key) else { return };
         let task = cx.background_executor().spawn(async move { pluto::file_info(&bridge, &path) });
         cx.spawn(async move |this, cx| {
-            if let Ok(None) = task.await {
-                let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.missing = true));
-            }
+            let info = task.await;
+            let _ = this.update(cx, |this, cx| match (info, failed) {
+                (Ok(None), _) => this.with_session(key, cx, |s| s.missing = true),
+                (_, Some((path, e))) => {
+                    let title = format!("Couldn't open {}", folder_name(Path::new(&path)));
+                    this.show_notice(Notice::new(Spot::Pane, title, &e, Some(Retry::OpenNotebook(key, path))), cx);
+                }
+                _ => {}
+            });
         })
         .detach();
     }

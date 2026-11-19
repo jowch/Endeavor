@@ -1641,7 +1641,7 @@ impl Workspace {
                 }
                 // A file that's gone shows File not found.
                 for key in lost {
-                    this.check_missing(key, cx);
+                    this.check_missing(key, None, cx);
                 }
                 if let Some((host, id)) = this.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
                     this.load_notebook(&host, &id, cx);
