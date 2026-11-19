@@ -120,6 +120,16 @@ impl Quote {
         }
     }
 
+    /// Its chip's icon, the same wherever the quote shows.
+    pub fn icon(&self) -> Icon {
+        match &self.from {
+            Quoted::Reply { .. } => Icon::Quote,
+            Quoted::Cell { part: Part::Figure(_), .. } => Icon::Image,
+            Quoted::Cell { .. } => Icon::Cell,
+            Quoted::Box { .. } => Icon::Region,
+        }
+    }
+
     /// Its chip's label: a cell's name in mono, cut to `max` characters, and
     /// the part after it ("· figure"), so a long name never hides what it is.
     pub fn label(&self, max: usize) -> Label {
@@ -232,10 +242,7 @@ impl Attachment {
             Attachment::Cells { cells, .. } if cells.len() == 1 => Icon::Cell,
             Attachment::Cells { .. } => Icon::Cells,
             Attachment::Error { .. } => Icon::Error,
-            Attachment::Quote(Quote { from: Quoted::Reply { .. }, .. }) => Icon::Quote,
-            Attachment::Quote(Quote { from: Quoted::Cell { part: Part::Figure(_), .. }, .. }) => Icon::Image,
-            Attachment::Quote(Quote { from: Quoted::Cell { .. }, .. }) => Icon::Cell,
-            Attachment::Quote(Quote { from: Quoted::Box { .. }, .. }) => Icon::Region,
+            Attachment::Quote(quote) => quote.icon(),
             Attachment::Image { .. } => Icon::Image,
             Attachment::Text { .. } | Attachment::Upload { .. } | Attachment::Saved { .. } => Icon::File,
         }
