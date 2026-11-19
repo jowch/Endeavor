@@ -13,9 +13,13 @@ const FILE: &str = "settings.json";
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Load the user's own Claude Code setup (user settings, their MCP servers)
-    /// into new sessions, besides Endeavor's plugin and the project's settings.
-    pub personal_claude: bool,
+    /// Load the user's own Claude Code setup (user settings and CLAUDE.md,
+    /// skills, plugins, hooks, MCP servers) into new sessions, besides
+    /// Endeavor's plugin and the project's settings (`own_claude_setup`).
+    /// None, the default, is on: only a user who turned it off has `Some(false)`.
+    /// It replaces `personal_claude`, which was off by default, so a saved
+    /// `false` there meant nothing and isn't carried over.
+    pub claude_setup: Option<bool>,
     /// A julia binary to use instead of Endeavor's own.
     pub julia: Option<PathBuf>,
     /// The R for R notebooks on this computer: an Rscript path, or a shell line
@@ -179,6 +183,11 @@ impl Settings {
         }
     }
 
+    /// New sessions load the user's own Claude Code setup.
+    pub fn own_claude_setup(&self) -> bool {
+        self.claude_setup.unwrap_or(true)
+    }
+
     pub fn load() -> Self {
         let file = crate::install::app_dir().ok().map(|d| d.join(FILE));
         // Bytes, as in `load_json_at`: a file cut mid-character doesn't parse.
@@ -263,5 +272,16 @@ mod tests {
         let back: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(back.mode, Some(mode("Ask to run")));
         assert_eq!(serde_json::from_str::<Settings>("{}").unwrap().mode, None);
+    }
+
+    #[test]
+    fn the_users_claude_setup_is_on_unless_they_turned_it_off() {
+        assert!(Settings::default().own_claude_setup());
+        // The old switch was off by default, so its `false` says nothing.
+        assert!(serde_json::from_str::<Settings>(r#"{"personal_claude": false}"#).unwrap().own_claude_setup());
+        assert!(serde_json::from_str::<Settings>(r#"{"personal_claude": true}"#).unwrap().own_claude_setup());
+        let off = Settings { claude_setup: Some(false), ..Settings::default() };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
+        assert!(!back.own_claude_setup());
     }
 }

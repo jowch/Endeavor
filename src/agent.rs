@@ -188,7 +188,11 @@ pub const CODEX: AgentFacts = AgentFacts {
     name: "Codex",
     maker: "by OpenAI",
     install: Install::Npm { package: "@agentclientprotocol/codex-acp", pins: "adapter-codex", installed: "codex-adapter" },
-    env: &[("INITIAL_AGENT_MODE", "workspace-write")],
+    // Codex always loads the user's own setup (`CODEX_HOME`, else `~/.codex`).
+    // `CODEX_CONFIG` overrides it for every session of the adapter: the user's
+    // own install of Endeavor's plugin is off, as in Claude's sessions
+    // (`session_options`); its notebook tools would bypass the app's cards.
+    env: &[("INITIAL_AGENT_MODE", "workspace-write"), ("CODEX_CONFIG", r#"{"plugins":{"endeavor@endeavor":{"enabled":false}}}"#)],
     private_temp: false,
     plugin: false,
     folder_rules: None,
@@ -449,7 +453,7 @@ fn fake_turn_error() -> Option<Vec<SessionEvent>> {
 /// isn't yet, with the variables it is started with in front.
 fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     let facts = agent.facts();
-    let mut env: Vec<String> = facts.env.iter().map(|(name, value)| format!("{name}={value}")).collect();
+    let mut env: Vec<String> = facts.env.iter().map(|(name, value)| format!("{name}={}", with_inherited(name, value, std::env::var(name).ok()))).collect();
     let program = match facts.install {
         Install::Npm { pins, installed, .. } => npm_adapter(agent, pins, installed, progress)?,
         Install::Program { what, zip, folder, program } => {
@@ -478,6 +482,30 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
     let [program, args @ ..] = program.as_slice() else { return Err("no adapter program".into()) };
     let program = crate::agent_job::command(program.clone(), args.to_vec())?;
     Ok(env.into_iter().chain(program).collect())
+}
+
+/// An adapter variable's value. The user's own `CODEX_CONFIG` (a gateway's
+/// `model_provider`, say) stays, with Endeavor's keys merged over it; any
+/// other variable is Endeavor's alone.
+fn with_inherited(name: &str, ours: &str, theirs: Option<String>) -> String {
+    fn merge(base: &mut serde_json::Value, over: serde_json::Value) {
+        match (base, over) {
+            (serde_json::Value::Object(base), serde_json::Value::Object(over)) => {
+                for (key, value) in over {
+                    merge(base.entry(key).or_insert(serde_json::Value::Null), value);
+                }
+            }
+            (base, over) => *base = over,
+        }
+    }
+    let theirs = theirs.filter(|_| name == "CODEX_CONFIG").and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).filter(serde_json::Value::is_object);
+    match (theirs, serde_json::from_str(ours)) {
+        (Some(mut theirs), Ok(ours)) => {
+            merge(&mut theirs, ours);
+            theirs.to_string()
+        }
+        _ => ours.to_owned(),
+    }
 }
 
 /// The agent's name as a file name ("antigravity").
@@ -571,25 +599,47 @@ const ASKS_ITSELF: [&str; 1] = ["mcp__notebook__request_restart"];
 
 /// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
 /// skills and guards) always; the project's settings and CLAUDE.md (from the
-/// working directory) always; the user's personal setup (user settings, their MCP
-/// servers) only when they opt in (Settings). On a server, no local file tools.
+/// working directory) always; the user's own setup (user settings and
+/// CLAUDE.md, skills, plugins, hooks, their MCP servers) unless they turned it
+/// off (Settings). Off, strict MCP config also leaves out the project's
+/// `.mcp.json`. On a server, no local file tools; the agent itself, and so
+/// the user's MCP servers, run on this computer, as with the plugin in
+/// Claude's desktop app.
 /// The skills point the agent at reference files beside them, outside the
 /// working folder, which Claude Code would ask about (it doesn't allow reading
 /// a plugin's own files by itself), so they get a Read rule.
+/// The user's own install of Endeavor's plugin (`endeavor@endeavor`, from the
+/// EndeavorMCP marketplace) is off: it would add a second set of notebook
+/// tools, outside the app's cards. The app's own plugin is `endeavor@inline`.
+/// `settings` is Claude Code's flag settings, which outrank user and project
+/// settings. Sending it replaces what the adapter would have put there from a
+/// `CLAUDE_MODEL_CONFIG` variable (a gateway's model list), which the app's
+/// sessions don't use.
+/// Endeavor added by hand as an MCP server named `endeavor` (`claude mcp add
+/// endeavor`, as EndeavorMCP's docs show, or a folder's `.mcp.json`) is off
+/// for the same reason, by the permission rule for the whole server.
 fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
-    let disallowed: &[&str] = if on_server { &LOCAL_TOOLS } else { &[] };
+    let disallowed: Vec<&str> = std::iter::once(USERS_ENDEAVOR_SERVER).chain(if on_server { LOCAL_TOOLS.as_slice() } else { &[] }.iter().copied()).collect();
     let allowed: Vec<String> = READ_ONLY_TOOLS.iter().chain(&ASKS_ITSELF).map(|t| t.to_string()).chain(plugin_rules(plugin_dir)).collect();
     serde_json::json!({
         "claudeCode": { "options": {
             "settingSources": sources,
             "strictMcpConfig": !personal,
             "plugins": [{ "type": "local", "path": plugin_dir }],
+            "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false } },
             "disallowedTools": disallowed,
             "allowedTools": allowed,
         } }
     })
 }
+
+/// Endeavor's plugin as a user installs it from EndeavorMCP's marketplace,
+/// for Claude Code and Codex alike.
+const USERS_ENDEAVOR_PLUGIN: &str = "endeavor@endeavor";
+
+/// Every tool of an MCP server the user named `endeavor`, as a Claude Code rule.
+const USERS_ENDEAVOR_SERVER: &str = "mcp__endeavor";
 
 /// The Read rules for the plugin folder. When its path goes through a symlink
 /// (a symlinked home, XDG folder or AppData), Claude Code only reads without
@@ -940,7 +990,7 @@ async fn run(
             };
             let options = |tools: &Tools| {
                 let plugin = plugin.as_deref()?;
-                session_options(crate::settings::Settings::load().personal_claude, plugin, tools.server.is_some()).as_object().cloned()
+                session_options(crate::settings::Settings::load().own_claude_setup(), plugin, tools.server.is_some()).as_object().cloned()
             };
             let _ = events.unbounded_send(AgentEvent::Ready);
 
@@ -1452,17 +1502,49 @@ mod tests {
     }
 
     #[test]
-    fn personal_setup_is_opt_in_and_the_app_plugin_always_loads() {
-        let default = &session_options(false, "/p", false)["claudeCode"]["options"];
-        assert_eq!(default["settingSources"], serde_json::json!(["project", "local"]));
-        assert_eq!(default["strictMcpConfig"], true);
-        assert_eq!(default["plugins"][0]["path"], "/p");
-        assert_eq!(default["disallowedTools"], serde_json::json!([]));
+    fn the_users_own_setup_can_be_left_out_and_the_app_plugin_always_loads() {
+        let off = &session_options(false, "/p", false)["claudeCode"]["options"];
+        assert_eq!(off["settingSources"], serde_json::json!(["project", "local"]));
+        assert_eq!(off["strictMcpConfig"], true);
+        assert_eq!(off["plugins"][0]["path"], "/p");
+        assert_eq!(off["disallowedTools"], serde_json::json!(["mcp__endeavor"]));
 
-        let personal = &session_options(true, "/p", false)["claudeCode"]["options"];
-        assert_eq!(personal["settingSources"], serde_json::json!(["user", "project", "local"]));
-        assert_eq!(personal["strictMcpConfig"], false);
-        assert_eq!(personal["plugins"][0]["path"], "/p");
+        let own = &session_options(true, "/p", false)["claudeCode"]["options"];
+        assert_eq!(own["settingSources"], serde_json::json!(["user", "project", "local"]));
+        assert_eq!(own["strictMcpConfig"], false);
+        assert_eq!(own["plugins"][0]["path"], "/p");
+    }
+
+    /// A user who installed Endeavor's plugin themselves would otherwise get its
+    /// notebook tools beside the app's, in Claude's sessions and in Codex's.
+    #[test]
+    fn the_users_own_endeavor_plugin_is_off_in_every_session() {
+        for own in [false, true] {
+            for on_server in [false, true] {
+                let settings = &session_options(own, "/p", on_server)["claudeCode"]["options"]["settings"];
+                assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false } }));
+            }
+        }
+        let codex = super::CODEX.env.iter().find(|(name, _)| *name == "CODEX_CONFIG").expect("Codex's adapter gets CODEX_CONFIG").1;
+        let codex: serde_json::Value = serde_json::from_str(codex).unwrap();
+        assert_eq!(codex, serde_json::json!({ "plugins": { super::USERS_ENDEAVOR_PLUGIN: { "enabled": false } } }));
+        // Added by hand as a server named `endeavor`: every one of its tools is off in Claude's.
+        for on_server in [false, true] {
+            let off = &session_options(true, "/p", on_server)["claudeCode"]["options"]["disallowedTools"];
+            assert_eq!(off[0], "mcp__endeavor");
+        }
+    }
+
+    /// The user's own CODEX_CONFIG keeps its keys; Endeavor's win where they meet.
+    #[test]
+    fn a_users_codex_config_is_merged_not_replaced() {
+        let ours = r#"{"plugins":{"endeavor@endeavor":{"enabled":false}}}"#;
+        let theirs = r#"{"model_provider":"gateway","plugins":{"other@x":{"enabled":true},"endeavor@endeavor":{"enabled":true}}}"#;
+        let merged: serde_json::Value = serde_json::from_str(&super::with_inherited("CODEX_CONFIG", ours, Some(theirs.into()))).unwrap();
+        assert_eq!(merged, serde_json::json!({ "model_provider": "gateway", "plugins": { "other@x": { "enabled": true }, "endeavor@endeavor": { "enabled": false } } }));
+        assert_eq!(super::with_inherited("CODEX_CONFIG", ours, None), ours);
+        assert_eq!(super::with_inherited("CODEX_CONFIG", ours, Some("not json".into())), ours, "one that doesn't parse is Codex's to report, not ours to keep");
+        assert_eq!(super::with_inherited("INITIAL_AGENT_MODE", "workspace-write", Some("agent".into())), "workspace-write");
     }
 
     /// The plugin's reference files are read without asking, wherever the app's
