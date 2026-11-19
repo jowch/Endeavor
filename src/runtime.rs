@@ -336,17 +336,43 @@ fn old_state_dir(app_dir: &Path) -> PathBuf {
 /// Its notebooks were saved as they changed, and the app opens them again in
 /// the new runtime. The app stops it itself rather than through the helper's
 /// `stop`, which refuses a record made under another host name (a renamed Mac),
-/// and only a process that is still that runtime. Its token and log stay.
+/// and only a process that is still that runtime.
 fn retire_old_state(app_dir: &Path) {
-    retire_old_state_in(&old_state_dir(app_dir), &|old| {
-        match record(old).and_then(|r| r["pid"].as_u64()) {
-            Some(pid) if runs_from(pid, old) => stop_recorded_in(old),
-            // A pid the system has given another process since, or a runtime this check can't see.
-            Some(pid) => eprintln!("The runtime recorded in {} (pid {pid}) isn't running from there; not stopping that process.", old.display()),
-            None => {}
-        }
-        Ok(true)
-    });
+    retire_old_state_in(&old_state_dir(app_dir), &stop_old);
+}
+
+/// Stop the runtime recorded in the old folder `old`, if it still runs from
+/// there; whether its process group is gone now.
+fn stop_old(old: &Path) -> bool {
+    let Some(pid) = record(old).and_then(|r| r["pid"].as_u64()) else { return true };
+    if runs_from(pid, old) {
+        stop_recorded_in(old);
+    } else {
+        // A pid the system has given another process since, or a runtime this check can't see.
+        eprintln!("The runtime recorded in {} (pid {pid}) isn't running from there; not stopping that process.", old.display());
+    }
+    i32::try_from(pid).is_ok_and(group_gone)
+}
+
+/// Whether no process of the group `pgid` runs any more: none is left (ESRCH),
+/// or only zombies are.
+#[cfg(unix)]
+fn group_gone(pgid: i32) -> bool {
+    // SAFETY: signal 0 only checks.
+    if pgid <= 1 || unsafe { libc::kill(-pgid, 0) } != 0 {
+        return pgid > 1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+    }
+    let Ok(out) = Command::new("ps").args(["-A", "-o", "pgid=,stat="]).stderr(Stdio::null()).output() else { return false };
+    !String::from_utf8_lossy(&out.stdout).lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        fields.next().and_then(|g| g.parse::<i32>().ok()) == Some(pgid) && fields.next().is_some_and(|stat| !stat.starts_with('Z'))
+    })
+}
+
+/// Windows can't tell here, so the old folder stays (only its record goes).
+#[cfg(windows)]
+fn group_gone(_pgid: i32) -> bool {
+    false
 }
 
 /// Whether process `pid` is a runtime started with `state_dir`, so a pid the
@@ -366,22 +392,28 @@ fn runs_from(_pid: u64, _state_dir: &Path) -> bool {
     true
 }
 
-/// `retire_old_state` for the folder `old`, where `stop` stops the runtime recorded there and says whether that worked.
-fn retire_old_state_in(old: &Path, stop: &dyn Fn(&Path) -> Result<bool, String>) {
+/// `retire_old_state` for the folder `old`, where `stop` stops the runtime
+/// recorded there and says whether it's gone. The record goes either way, so
+/// this happens once; the folder (token, locks, log) goes only with the runtime.
+fn retire_old_state_in(old: &Path, stop: &dyn Fn(&Path) -> bool) {
     if !old.join("runtime.json").exists() {
         return;
     }
-    match stop(old) {
-        Ok(true) => {}
-        // Tried again at the next start.
-        Ok(false) => return eprintln!("Couldn't stop the runtime kept in {}.", old.display()),
-        Err(e) => return eprintln!("Couldn't stop the runtime kept in {}: {e}", old.display()),
+    if stop(old) {
+        // Nothing uses the old folder now: its record, token, locks and log go.
+        if let Err(e) = std::fs::remove_dir_all(old) {
+            eprintln!("Couldn't remove {}: {e}", old.display());
+        }
+    } else {
+        eprintln!("The runtime kept in {} may still be running; removing only its record.", old.display());
+        for file in ["runtime.json", "runtime.json.tmp"] {
+            match std::fs::remove_file(old.join(file)) {
+                Err(e) if e.kind() != ErrorKind::NotFound => eprintln!("Couldn't remove {}: {e}", old.join(file).display()),
+                _ => {}
+            }
+        }
     }
-    // Nothing uses the old folder now: its record, token, locks and log go.
-    if let Err(e) = std::fs::remove_dir_all(old) {
-        eprintln!("Couldn't remove {}: {e}", old.display());
-    }
-    eprintln!("Stopped the runtime kept in {}: This Mac's runtime is now in {}, shared with the plugin.", old.display(), state_dir().display());
+    eprintln!("This Mac's runtime is now in {}, shared with the plugin.", state_dir().display());
 }
 
 /// Whether quitting with Keep running off stops the runtime with this pid: not
@@ -693,28 +725,33 @@ fn quitting_leaves_a_runtime_the_plugin_started() {
 #[test]
 fn an_old_runtime_is_stopped_once_and_its_folder_removed() {
     let old = std::env::temp_dir().join(format!("endeavor-retire-{}", std::process::id()));
-    std::fs::create_dir_all(&old).unwrap();
     let stops = std::cell::Cell::new(0);
-    let counted = |worked: bool| {
+    let counted = |gone: bool| {
         let stops = &stops;
-        move |_: &Path| -> Result<bool, String> {
+        move |_: &Path| -> bool {
             stops.set(stops.get() + 1);
-            Ok(worked)
+            gone
         }
     };
+    let fill = || {
+        std::fs::create_dir_all(&old).unwrap();
+        for file in ["runtime.json", "start.lock", "starting.lock", "token", "page_token", "runtime.log"] {
+            std::fs::write(old.join(file), "{}").unwrap();
+        }
+    };
+    std::fs::create_dir_all(&old).unwrap();
     retire_old_state_in(&old, &counted(true));
     assert_eq!(stops.get(), 0, "nothing recorded, nothing to stop");
-    for file in ["runtime.json", "start.lock", "starting.lock", "token", "page_token", "runtime.log"] {
-        std::fs::write(old.join(file), "{}").unwrap();
-    }
+    fill();
     retire_old_state_in(&old, &counted(false));
-    assert!(old.join("runtime.json").exists(), "kept for the next start when the stop failed");
+    assert!(!old.join("runtime.json").exists(), "the record goes, so this happens once");
+    assert!(old.join("start.lock").exists() && old.join("runtime.log").exists(), "the folder stays while the runtime may run");
+    retire_old_state_in(&old, &counted(true));
+    assert_eq!(stops.get(), 1, "once");
+    fill();
     retire_old_state_in(&old, &counted(true));
     assert_eq!(stops.get(), 2);
     assert!(!old.exists(), "the old folder goes, locks and all");
-    retire_old_state_in(&old, &counted(true));
-    assert_eq!(stops.get(), 2, "once");
-    let _ = std::fs::remove_dir_all(&old);
 }
 
 #[cfg(all(test, unix))]
@@ -735,6 +772,33 @@ fn only_a_runtime_started_with_the_old_folder_is_taken_for_it() {
         let _ = child.kill();
         let _ = child.wait();
     }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn the_old_folder_goes_only_once_its_runtime_is_gone() {
+    use std::os::unix::process::CommandExt as _;
+    let old = std::env::temp_dir().join(format!("endeavor-stop-old-{}", std::process::id()));
+    let record = |pid: u32| {
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("runtime.json"), format!(r#"{{"pid": {pid}}}"#)).unwrap();
+        std::fs::write(old.join("start.lock"), "").unwrap();
+    };
+    // A live pid that isn't a runtime started from there: not stopped, and the folder stays.
+    let mut other = Command::new("sleep").arg("60").process_group(0).spawn().unwrap();
+    record(other.id());
+    retire_old_state_in(&old, &stop_old);
+    assert!(other.try_wait().unwrap().is_none(), "another process isn't stopped");
+    assert!(!old.join("runtime.json").exists() && old.join("start.lock").exists(), "only the record goes");
+    let _ = other.kill();
+    let _ = other.wait();
+    // The old runtime: stopped, and once its group is gone (a zombie until it's reaped) the folder goes.
+    let core = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).process_group(0).spawn().unwrap();
+    record(core.id());
+    retire_old_state_in(&old, &stop_old);
+    assert!(!old.exists(), "the folder goes with the runtime");
+    let mut core = core;
+    let _ = core.wait();
 }
 
 #[cfg(all(test, unix))]
