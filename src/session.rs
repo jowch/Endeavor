@@ -1461,8 +1461,6 @@ impl Session {
         self.replaying && self.failed.is_none()
     }
 
-    /// Open this notebook file in the notebook pane once the agent session is up
-    /// (Julia is running by then).
     /// The agent created this session: send whatever was queued meanwhile.
     pub fn started(&mut self, started: Started) -> Vec<Effect> {
         self.id = Some(started.id);

@@ -1178,7 +1178,8 @@ impl Workspace {
             let info = task.await;
             let _ = this.update(cx, |this, cx| match (info, failed) {
                 (Ok(None), _) => this.with_session(key, cx, |s| s.missing = true),
-                (_, Some((path, e))) => {
+                // Over the pane, so only for the session it shows.
+                (_, Some((path, e))) if this.active == Some(key) => {
                     let title = format!("Couldn't open {}", folder_name(Path::new(&path)));
                     this.show_notice(Notice::new(Spot::Pane, title, &e, Some(Retry::OpenNotebook(key, path))), cx);
                 }

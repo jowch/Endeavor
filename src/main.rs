@@ -1576,6 +1576,10 @@ impl Workspace {
                     }
                 }
                 Effect::ShowNotebook { id, path } => {
+                    // It opened after all: a notice that its open failed goes.
+                    if self.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(notice::Retry::OpenNotebook(k, _)) if *k == key)) {
+                        self.notice = None;
+                    }
                     let Some(session) = self.session_mut(key) else { continue };
                     session.notebook = Some(id.clone());
                     session.stopped = None;
@@ -2081,6 +2085,9 @@ impl Workspace {
                         }
                         let picked = self.settings.config_picks(agent).clone();
                         let Some(session) = self.session_mut(key) else { return };
+                        // A notebook bound before the session had an id, the one it was started on,
+                        // is recorded under that id now (notebooks.json, its kind).
+                        let bound = session.notebook_path.clone();
                         let queued = session.started(started);
                         // The user's last picks, ahead of a queued first message; the model
                         // first, since effort's choices depend on it.
@@ -2095,6 +2102,9 @@ impl Workspace {
                             }
                         }
                         effects.extend(queued);
+                        if let Some(path) = bound {
+                            self.bind_notebook(key, path, cx);
+                        }
                         self.apply_effects(key, effects, cx);
                     }
                     Err(e) => session.fail(&e),
