@@ -350,6 +350,8 @@ footer form#feedback { display: none !important; }
 // only from the hosts EndeavorMCP's view names (cdn.jsdelivr.net), so the view
 // takes the same release from there.
 // The tag is fonts/build.py's JULIAMONO_TAG, the release the app bundles: move them together.
+// wry serves the app's endeavor: protocol as http://endeavor.localhost/ on Windows.
+const APP_FONTS = /Win/.test(navigator.platform) ? "http://endeavor.localhost/fonts" : "endeavor://localhost/fonts";
 const JULIA_MONO_WEB = "https://cdn.jsdelivr.net/gh/cormullion/juliamono@v0.63.2/webfonts";
 export function juliaMonoFaces(from: "app" | "web"): string {
   return [
@@ -360,7 +362,7 @@ export function juliaMonoFaces(from: "app" | "web"): string {
     .map(({ file, weight, style }) => {
       const src =
         from === "app"
-          ? `url("endeavor://localhost/fonts/JuliaMono-${file}.ttf") format("truetype")`
+          ? `url("${APP_FONTS}/JuliaMono-${file}.ttf") format("truetype")`
           : `url("${JULIA_MONO_WEB}/JuliaMono-${file}.woff2") format("woff2")`;
       return `
 @font-face {
