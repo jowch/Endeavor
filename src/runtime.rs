@@ -754,17 +754,28 @@ fn an_old_runtime_is_stopped_once_and_its_folder_removed() {
     assert!(!old.exists(), "the old folder goes, locks and all");
 }
 
+/// Wait until `ps` shows `pid` started with `--state-dir dir`: on macOS it can
+/// show a child just spawned with the parent's command line until it execs.
+#[cfg(all(test, unix))]
+fn wait_runs_from(pid: u32, dir: &Path) {
+    if !(0..50).any(|_| runs_from(u64::from(pid), dir) || { std::thread::sleep(Duration::from_millis(100)); false }) {
+        let ps = Command::new("ps").args(["-ww", "-p", &pid.to_string(), "-o", "args="]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        panic!("pid {pid} isn't shown started with {}: ps says {ps:?}", dir.display());
+    }
+}
+
 #[cfg(all(test, unix))]
 #[test]
 fn only_a_runtime_started_with_the_old_folder_is_taken_for_it() {
     let old = std::env::temp_dir().join(format!("endeavor-runs-from-{}", std::process::id()));
     let mut core = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).spawn().unwrap();
     let mut other = Command::new("sleep").arg("60").spawn().unwrap();
-    assert!(runs_from(u64::from(core.id()), &old));
+    wait_runs_from(core.id(), &old);
     assert!(!runs_from(u64::from(other.id()), &old), "a pid another process has now");
     assert!(!runs_from(u64::from(core.id()), &old.join("x")), "started with another folder");
     let longer = PathBuf::from(format!("{}-files", old.display()));
     let mut near = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&longer).spawn().unwrap();
+    wait_runs_from(near.id(), &longer);
     assert!(!runs_from(u64::from(near.id()), &old), "a folder whose name starts with it");
     let _ = near.kill();
     let _ = near.wait();
@@ -794,6 +805,7 @@ fn the_old_folder_goes_only_once_its_runtime_is_gone() {
     let _ = other.wait();
     // The old runtime: stopped, and once its group is gone (a zombie until it's reaped) the folder goes.
     let core = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).process_group(0).spawn().unwrap();
+    wait_runs_from(core.id(), &old);
     record(core.id());
     retire_old_state_in(&old, &stop_old);
     assert!(!old.exists(), "the folder goes with the runtime");
