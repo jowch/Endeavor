@@ -276,7 +276,12 @@ notebook tools would sit beside the app's and skip its cards. Checked
 2026-11-19 with the bundled `codex app-server` 0.159.1 and the plugin
 installed: without it a new thread starts the plugin's `endeavor` MCP
 server; with it, no MCP server starts. The `-c` flag on `codex mcp list`
-doesn't show the change; that command reads the plugin list itself.
+doesn't show the change; that command reads the plugin list itself. A
+user's own `CODEX_CONFIG` stays, with Endeavor's key merged in. Endeavor
+added by hand as `[mcp_servers.endeavor]` is not turned off: a partial
+`mcp_servers.endeavor` table makes Codex refuse to start a thread for a user
+without that server ("invalid transport"), checked the same way. Claude's
+sessions turn that server off with a `mcp__endeavor` rule.
 
 ### 7. Modes, models and effort
 

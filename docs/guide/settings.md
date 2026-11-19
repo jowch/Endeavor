@@ -20,8 +20,9 @@ starts with. Click **Settings** next to Claude for these:
   `claude` command does. Turn it off to use only Endeavor's skills and the
   session folder's own settings and `CLAUDE.md`; the folder's MCP servers
   (`.mcp.json`) are left out then too. If you installed Endeavor's plugin in
-  Claude Code yourself, Endeavor turns it off in its own sessions, since the
-  app already has the notebook tools.
+  Claude Code yourself, or added it as an MCP server named `endeavor`,
+  Endeavor turns it off in its own sessions, since the app already has the
+  notebook tools.
 - **Signed in as**, with your plan and organisation.
 - **Plan and usage**, with **Open claude.ai**, which shows your usage.
 - **Sign out**. Claude stops answering in every session until you sign in

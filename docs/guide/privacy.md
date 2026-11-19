@@ -64,10 +64,11 @@ doesn't store your sign-in itself.
 **Use my Claude Code setup** in Settings is on by default: Endeavor's
 sessions load your own Claude Code settings, `CLAUDE.md`, skills, plugins and
 the MCP servers you connected, as the `claude` command does. The MCP servers
-run on your Mac, also in a session on a server. When you turn it off, sessions
+run on this computer, also in a session on a server. When you turn it off, sessions
 load only Endeavor's own skills and the session folder's settings and
 `CLAUDE.md`. A few of your settings still apply then, such as which models
-you allow. Codex always uses your own Codex setup.
+you allow. Codex always uses your own Codex setup, except Endeavor's own
+plugin.
 
 ## Other connections Endeavor makes
 
