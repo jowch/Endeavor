@@ -1939,11 +1939,13 @@ impl Workspace {
     }
 
     /// The app is quitting: servers' runtimes keep running (their idle stop
-    /// covers them); This Mac's as Settings says. The helpers do the rest.
+    /// covers them); This Mac's as Settings says, unless the plugin started it
+    /// and so is using it (`runtime::quit_stops`). The helpers do the rest.
     pub fn quit_runtimes(&mut self) {
         for (host, connection) in &self.connections {
             if let Some(channel) = &connection.channel {
-                channel.quit(*host != HostId::ThisMac || self.settings.keep_running);
+                let stops = *host == HostId::ThisMac && !self.settings.keep_running && connection.runtime.as_ref().is_none_or(|r| runtime::quit_stops(r.pid));
+                channel.quit(!stops);
             }
         }
         // Each server's helper is let go, and Julia keeps running there; a

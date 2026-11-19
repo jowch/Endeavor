@@ -277,7 +277,8 @@ pub fn connect(keep_running: bool) -> Result<(Channel, Hello), String> {
     let julia = julia_arg();
     *STARTED_WITH.lock().unwrap() = Some(julia.clone());
     let app_dir = crate::install::app_dir()?;
-    let state_dir = app_dir.join("runtime");
+    retire_old_state(&app_dir);
+    let state_dir = state_dir();
     let depot = depot_list(&app_dir);
 
     let mut command = helper_command()?;
@@ -291,13 +292,16 @@ pub fn connect(keep_running: bool) -> Result<(Channel, Hello), String> {
         .args(client::Server { r: crate::settings::Settings::load().r, ..Default::default() }.r_args())
         // This computer, and only it, may be offered Endeavor's own R when none is found (a Mac).
         .arg("--own-r")
-        // This Mac's state folder is its own, so another node name means a renamed Mac.
+        // The state folder is named after this computer, so a record in it with
+        // another node name is this computer's from before it was renamed.
         .arg("--any-node");
     if let Some(build) = crate::remote::build() {
         command.args(["--build", build]);
     }
+    // If the app goes without saying, only a runtime this connect started goes
+    // with it: one the plugin started is the plugin's (`quit_stops`).
     if !keep_running {
-        command.arg("--quit-with-client");
+        command.arg("--own-with-client");
     }
     // Its own process group: a Ctrl-C meant for the app in a terminal must not
     // kill the helper before it can stop Julia. On Windows the helper is the
@@ -315,6 +319,125 @@ pub fn connect(keep_running: bool) -> Result<(Channel, Hello), String> {
     Ok((channel, hello))
 }
 
+/// This Mac's state folder: the one the plugin and `endeavor serve` use here
+/// (EndeavorMCP's `paths`), so the app and the plugin find one runtime and share
+/// it rather than each starting its own on the same notebook (EndeavorMCP #110).
+pub fn state_dir() -> PathBuf {
+    endeavor_mcp::paths::Env::here().state_dir()
+}
+
+/// Where versions before the shared folder kept This Mac's runtime.
+fn old_state_dir(app_dir: &Path) -> PathBuf {
+    app_dir.join("runtime")
+}
+
+/// A runtime an older version kept running in the app's own folder is stopped
+/// and the old folder removed, once, so it doesn't run on beside the shared one.
+/// Its notebooks were saved as they changed, and the app opens them again in
+/// the new runtime. The app stops it itself rather than through the helper's
+/// `stop`, which refuses a record made under another host name (a renamed Mac),
+/// and only a process that is still that runtime.
+fn retire_old_state(app_dir: &Path) {
+    retire_old_state_in(&old_state_dir(app_dir), &stop_old);
+}
+
+/// Stop the runtime recorded in the old folder `old`, if it still runs from
+/// there; whether its process group is gone now.
+fn stop_old(old: &Path) -> bool {
+    let Some(pid) = record(old).and_then(|r| r["pid"].as_u64()) else { return true };
+    if runs_from(pid, old) {
+        stop_recorded_in(old);
+    } else {
+        // A pid the system has given another process since, or a runtime this check can't see.
+        eprintln!("The runtime recorded in {} (pid {pid}) isn't running from there; not stopping that process.", old.display());
+    }
+    i32::try_from(pid).is_ok_and(group_gone)
+}
+
+/// Whether no process of the group `pgid` runs any more: none is left (ESRCH),
+/// or only zombies are.
+#[cfg(unix)]
+fn group_gone(pgid: i32) -> bool {
+    // SAFETY: signal 0 only checks.
+    if pgid <= 1 || unsafe { libc::kill(-pgid, 0) } != 0 {
+        return pgid > 1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+    }
+    let Ok(out) = Command::new("ps").args(["-A", "-o", "pgid=,stat="]).stderr(Stdio::null()).output() else { return false };
+    !String::from_utf8_lossy(&out.stdout).lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        fields.next().and_then(|g| g.parse::<i32>().ok()) == Some(pgid) && fields.next().is_some_and(|stat| !stat.starts_with('Z'))
+    })
+}
+
+/// Windows can't tell here, so the old folder stays (only its record goes).
+#[cfg(windows)]
+fn group_gone(_pgid: i32) -> bool {
+    false
+}
+
+/// Whether process `pid` is a runtime started with `state_dir`, so a pid the
+/// system gave another process since isn't ended. `-ww`: the whole command line. On Windows `stop_group`
+/// checks the recorded start time instead.
+#[cfg(unix)]
+fn runs_from(pid: u64, state_dir: &Path) -> bool {
+    let args = Command::new("ps").args(["-ww", "-p", &pid.to_string(), "-o", "args="]).stderr(Stdio::null()).output();
+    let Ok(out) = args else { return false };
+    let (args, flag) = (String::from_utf8_lossy(&out.stdout), format!("--state-dir {}", state_dir.display()));
+    // The folder ends there: not a longer path that starts with it.
+    args.match_indices(&flag).any(|(at, _)| args[at + flag.len()..].chars().next().is_none_or(char::is_whitespace))
+}
+
+#[cfg(windows)]
+fn runs_from(_pid: u64, _state_dir: &Path) -> bool {
+    true
+}
+
+/// `retire_old_state` for the folder `old`, where `stop` stops the runtime
+/// recorded there and says whether it's gone. The record goes either way, so
+/// this happens once; the folder (token, locks, log) goes only with the runtime.
+fn retire_old_state_in(old: &Path, stop: &dyn Fn(&Path) -> bool) {
+    if !old.join("runtime.json").exists() {
+        return;
+    }
+    if stop(old) {
+        // Nothing uses the old folder now: its record, token, locks and log go.
+        if let Err(e) = std::fs::remove_dir_all(old) {
+            eprintln!("Couldn't remove {}: {e}", old.display());
+        }
+    } else {
+        eprintln!("The runtime kept in {} may still be running; removing only its record.", old.display());
+        for file in ["runtime.json", "runtime.json.tmp"] {
+            match std::fs::remove_file(old.join(file)) {
+                Err(e) if e.kind() != ErrorKind::NotFound => eprintln!("Couldn't remove {}: {e}", old.join(file).display()),
+                _ => {}
+            }
+        }
+    }
+    eprintln!("This Mac's runtime is now in {}, shared with the plugin.", state_dir().display());
+}
+
+/// Whether quitting with Keep running off stops the runtime with this pid: not
+/// when `endeavor mcp` or `serve` started it, since the plugin (in Claude's
+/// desktop app, say) is using it, and it ends itself when idle. One the app
+/// started stops, even if the plugin joined it.
+pub fn quit_stops(pid: u32) -> bool {
+    quit_stops_in(&state_dir(), pid)
+}
+
+fn quit_stops_in(state_dir: &Path, pid: u32) -> bool {
+    record(state_dir).filter(|r| r["pid"].as_u64() == Some(u64::from(pid))).is_none_or(|r| !started_by_plugin(&r))
+}
+
+/// `runtime.json` in `state_dir`, if there is one.
+fn record(state_dir: &Path) -> Option<serde_json::Value> {
+    std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str(&t).ok())
+}
+
+/// A runtime `endeavor mcp` or `serve` started records its notebooks folder; one the app started has none.
+fn started_by_plugin(record: &serde_json::Value) -> bool {
+    record.get("folder").is_some_and(|folder| !folder.is_null())
+}
+
 /// JULIA_DEPOT_PATH for This Mac's runtime: the app's depot, then an empty
 /// entry, which stacks the default depots (~/.julia) read-only behind ours.
 fn depot_list(app_dir: &Path) -> String {
@@ -327,12 +450,11 @@ fn depot_list(app_dir: &Path) -> String {
 /// (the agent's MCP config carries it), the log, the depot's packages and
 /// Julia stay. Returns what it removed.
 pub fn clear_state() -> Result<Vec<PathBuf>, String> {
-    clear_state_in(&crate::install::app_dir()?)
+    clear_state_in(&state_dir(), &crate::install::app_dir()?)
 }
 
-fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
-    let state_dir = app_dir.join("runtime");
-    stop_recorded_in(&state_dir);
+fn clear_state_in(state_dir: &Path, app_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    stop_recorded_in(state_dir);
     let mut stale: Vec<PathBuf> = ["runtime.json", "runtime.json.tmp", "lock"].iter().map(|f| state_dir.join(f)).collect();
     if let Ok(versions) = std::fs::read_dir(app_dir.join("depot/compiled")) {
         stale.extend(versions.flatten().map(|v| v.path().join("EndeavorRuntime")));
@@ -354,16 +476,21 @@ fn clear_state_in(app_dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
 /// runs from. Its open notebooks are already saved (Pluto saves on each change).
 pub const STOP_FLAG: &str = "--stop-runtime";
 
-/// Stop the runtime recorded in This Mac's state folder, if one still runs.
+/// Stop the runtimes the app's exe runs, if they still run: the one recorded in
+/// This Mac's state folder, unless the plugin started it from its own binary,
+/// and one an older version kept in the app's folder.
 pub fn stop_recorded() {
     if let Ok(app_dir) = crate::install::app_dir() {
-        stop_recorded_in(&app_dir.join("runtime"));
+        stop_recorded_in(&old_state_dir(&app_dir));
+    }
+    let state_dir = state_dir();
+    if record(&state_dir).is_some_and(|r| !started_by_plugin(&r)) {
+        stop_recorded_in(&state_dir);
     }
 }
 
 fn stop_recorded_in(state_dir: &Path) {
-    let recorded = std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    if let Some(recorded) = recorded
+    if let Some(recorded) = record(state_dir)
         && let Some(pid) = recorded["pid"].as_i64().and_then(|p| i32::try_from(p).ok()).filter(|&p| p > 1)
     {
         stop_group(pid, recorded["started"].as_u64());
@@ -419,7 +546,7 @@ pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn F
         });
     }
     let how = if runtime.reattached { "Reattached to" } else { "Started" };
-    let log = crate::install::app_dir().map(|d| d.join("runtime/runtime.log").display().to_string()).unwrap_or_default();
+    let log = state_dir().join("runtime.log").display().to_string();
     eprintln!("{how} the runtime on {}; its log is {log}", runtime.node);
     Ok(runtime)
 }
@@ -555,7 +682,7 @@ fn live_die_and_restart() {
     let list = crate::pluto::call_tool(&first.bridge, "list_notebooks", serde_json::json!({})).unwrap();
     println!("connected (reattached: {}); list_notebooks = {list}", first.reattached);
     // SIGKILL, like a crash or OOM kill.
-    let state = std::fs::read_to_string(crate::install::app_dir().unwrap().join("runtime/runtime.json")).unwrap();
+    let state = std::fs::read_to_string(state_dir().join("runtime.json")).unwrap();
     let pid = serde_json::from_str::<serde_json::Value>(&state).unwrap()["pid"].to_string();
     Command::new("kill").args(["-9", &pid]).status().unwrap();
     match heard.recv_timeout(Duration::from_secs(30)).expect("death reported") {
@@ -575,6 +702,127 @@ fn live_die_and_restart() {
     let list = crate::pluto::call_tool(&second.bridge, "list_notebooks", serde_json::json!({})).unwrap();
     println!("restarted; list_notebooks = {list}");
     channel.stop().unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn quitting_leaves_a_runtime_the_plugin_started() {
+    let dir = std::env::temp_dir().join(format!("endeavor-quit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let record = |state: serde_json::Value| std::fs::write(dir.join("runtime.json"), state.to_string()).unwrap();
+    assert!(quit_stops_in(&dir, 7), "no record: the app's own");
+    record(serde_json::json!({ "pid": 7, "token": "t" }));
+    assert!(quit_stops_in(&dir, 7), "the app started it");
+    record(serde_json::json!({ "pid": 7, "folder": "/home/me/project" }));
+    assert!(!quit_stops_in(&dir, 7), "endeavor mcp started it");
+    record(serde_json::json!({ "pid": 7, "folder": "/home/me", "no_folder": true }));
+    assert!(!quit_stops_in(&dir, 7), "endeavor mcp --no-folder started it");
+    assert!(quit_stops_in(&dir, 8), "the record is of another runtime");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(test)]
+#[test]
+fn an_old_runtime_is_stopped_once_and_its_folder_removed() {
+    let old = std::env::temp_dir().join(format!("endeavor-retire-{}", std::process::id()));
+    let stops = std::cell::Cell::new(0);
+    let counted = |gone: bool| {
+        let stops = &stops;
+        move |_: &Path| -> bool {
+            stops.set(stops.get() + 1);
+            gone
+        }
+    };
+    let fill = || {
+        std::fs::create_dir_all(&old).unwrap();
+        for file in ["runtime.json", "start.lock", "starting.lock", "token", "page_token", "runtime.log"] {
+            std::fs::write(old.join(file), "{}").unwrap();
+        }
+    };
+    std::fs::create_dir_all(&old).unwrap();
+    retire_old_state_in(&old, &counted(true));
+    assert_eq!(stops.get(), 0, "nothing recorded, nothing to stop");
+    fill();
+    retire_old_state_in(&old, &counted(false));
+    assert!(!old.join("runtime.json").exists(), "the record goes, so this happens once");
+    assert!(old.join("start.lock").exists() && old.join("runtime.log").exists(), "the folder stays while the runtime may run");
+    retire_old_state_in(&old, &counted(true));
+    assert_eq!(stops.get(), 1, "once");
+    fill();
+    retire_old_state_in(&old, &counted(true));
+    assert_eq!(stops.get(), 2);
+    assert!(!old.exists(), "the old folder goes, locks and all");
+}
+
+/// Wait until `ps` shows `pid` started with `--state-dir dir`: on macOS it can
+/// show a child just spawned with the parent's command line until it execs.
+#[cfg(all(test, unix))]
+fn wait_runs_from(pid: u32, dir: &Path) {
+    if !(0..50).any(|_| runs_from(u64::from(pid), dir) || { std::thread::sleep(Duration::from_millis(100)); false }) {
+        let ps = Command::new("ps").args(["-ww", "-p", &pid.to_string(), "-o", "args="]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        panic!("pid {pid} isn't shown started with {}: ps says {ps:?}", dir.display());
+    }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn only_a_runtime_started_with_the_old_folder_is_taken_for_it() {
+    let old = std::env::temp_dir().join(format!("endeavor-runs-from-{}", std::process::id()));
+    let mut core = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).spawn().unwrap();
+    let mut other = Command::new("sleep").arg("60").spawn().unwrap();
+    wait_runs_from(core.id(), &old);
+    assert!(!runs_from(u64::from(other.id()), &old), "a pid another process has now");
+    assert!(!runs_from(u64::from(core.id()), &old.join("x")), "started with another folder");
+    let longer = PathBuf::from(format!("{}-files", old.display()));
+    let mut near = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&longer).spawn().unwrap();
+    wait_runs_from(near.id(), &longer);
+    assert!(!runs_from(u64::from(near.id()), &old), "a folder whose name starts with it");
+    let _ = near.kill();
+    let _ = near.wait();
+    for child in [&mut core, &mut other] {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn the_old_folder_goes_only_once_its_runtime_is_gone() {
+    use std::os::unix::process::CommandExt as _;
+    let old = std::env::temp_dir().join(format!("endeavor-stop-old-{}", std::process::id()));
+    let record = |pid: u32| {
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("runtime.json"), format!(r#"{{"pid": {pid}}}"#)).unwrap();
+        std::fs::write(old.join("start.lock"), "").unwrap();
+    };
+    // A live pid that isn't a runtime started from there: not stopped, and the folder stays.
+    let mut other = Command::new("sleep").arg("60").process_group(0).spawn().unwrap();
+    record(other.id());
+    retire_old_state_in(&old, &stop_old);
+    assert!(other.try_wait().unwrap().is_none(), "another process isn't stopped");
+    assert!(!old.join("runtime.json").exists() && old.join("start.lock").exists(), "only the record goes");
+    let _ = other.kill();
+    let _ = other.wait();
+    // The old runtime, which isn't the app's child (launchd or init adopted it), leading its own
+    // group: stopped, and the folder goes with it.
+    let spawn = Command::new("sh")
+        .args(["-c", r#"perl -e 'setpgrp(0,0); exec @ARGV' sh -c "sleep 60; :" core --state-dir "$1" </dev/null >/dev/null 2>&1 & echo $!"#, "sh"])
+        .arg(&old).output().unwrap();
+    let core: u32 = String::from_utf8_lossy(&spawn.stdout).trim().parse().unwrap();
+    wait_runs_from(core, &old);
+    record(core);
+    retire_old_state_in(&old, &stop_old);
+    assert!(!old.exists(), "the folder goes with the runtime");
+    // Linux: a group left with only a zombie counts as gone (a container's PID 1 may never reap).
+    #[cfg(target_os = "linux")]
+    {
+        let mut child = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).process_group(0).spawn().unwrap();
+        wait_runs_from(child.id(), &old);
+        record(child.id());
+        retire_old_state_in(&old, &stop_old);
+        assert!(!old.exists(), "the folder goes while the stopped runtime is an unreaped zombie");
+        let _ = child.wait();
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -597,7 +845,7 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
     write("runtime/lock");
     write("depot/compiled/v1.12/EndeavorRuntime/b.ji");
 
-    let removed = clear_state_in(&app).unwrap();
+    let removed = clear_state_in(&app.join("runtime"), &app).unwrap();
     let removed: Vec<String> = removed.iter().map(|p| p.strip_prefix(&app).unwrap().display().to_string()).collect();
     assert_eq!(removed, ["runtime/runtime.json", "runtime/lock", "depot/compiled/v1.12/EndeavorRuntime"]);
     // Its group can be empty a moment before the child is ours to reap (seen on macOS), so poll.
@@ -612,7 +860,7 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
     for kept in ["runtime/token", "runtime/runtime.log", "depot/compiled/v1.12/Pluto/a.ji", "depot/packages/Pluto/x/src/Pluto.jl", "sessions.json"] {
         assert!(app.join(kept).exists(), "{kept} stays");
     }
-    assert_eq!(clear_state_in(&app).unwrap(), Vec::<PathBuf>::new(), "nothing left to clear");
+    assert_eq!(clear_state_in(&app.join("runtime"), &app).unwrap(), Vec::<PathBuf>::new(), "nothing left to clear");
     let _ = std::fs::remove_dir_all(&app);
 }
 

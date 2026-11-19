@@ -367,9 +367,7 @@ pub fn why_text(language: &str, why: &str) -> String {
 
 /// This Mac's runtime log (Julia's and R's), in Finder.
 fn reveal_julia_log() {
-    if let Ok(dir) = crate::install::app_dir() {
-        crate::platform::reveal(&dir.join("runtime/runtime.log"));
-    }
+    crate::platform::reveal(&crate::runtime::state_dir().join("runtime.log"));
 }
 
 /// The crash page's words: what's kept, and the cell that was running.

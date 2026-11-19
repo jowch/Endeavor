@@ -96,8 +96,8 @@ Endeavor's window and Claude Code talk to Julia over a network port that only
 programs on the same computer can reach. A random secret, a token, guards that
 port, so other people signed in to the same computer or server can't use it.
 The token is stored in a file only your user account can read: on your Mac
-in `~/Library/Application Support/endeavor/runtime/`, on a server in
-`~/.cache/endeavor/`. On a server, Julia's port stays on the server and your
+in `~/.local/state/endeavor/serve/` (in a folder named after your Mac), on a
+server in `~/.cache/endeavor/`. On a server, Julia's port stays on the server and your
 Mac reaches it through the SSH connection. Endeavor opens no port on a
 server to the network.
 

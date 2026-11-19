@@ -631,11 +631,13 @@ pub struct Tools {
 impl Tools {
     /// Each session's tool calls carry its key, so the runtime applies its policy.
     /// An agent that loads the skills from Endeavor's plugin (`session_options`)
-    /// says so, and the runtime leaves out its own guide to them.
+    /// says so, and the runtime leaves out its own guide to them. Each says it is
+    /// the app's, so a runtime the plugin started and shares answers it as the app's.
     fn mcp_server(&self, key: u64, agent: Agent) -> McpServer {
         let mut headers = vec![
             HttpHeader::new("Authorization", format!("Bearer {}", self.bridge.token)),
             HttpHeader::new("X-Endeavor-Session", key.to_string()),
+            HttpHeader::new("X-Endeavor-Client", "app"),
         ];
         if agent.facts().plugin {
             headers.push(HttpHeader::new("X-Endeavor-Skills", "plugin"));
@@ -1534,5 +1536,6 @@ mod tests {
         assert_eq!(header(super::Tools { bridge: bridge.clone(), server: None }), None);
         let super::McpServer::Http(http) = (super::Tools { bridge, server: None }).mcp_server(7, super::Agent::Claude) else { panic!() };
         assert!(http.headers.iter().any(|h| h.name == "X-Endeavor-Skills" && h.value == "plugin"), "Claude Code has the skills");
+        assert!(http.headers.iter().any(|h| h.name == "X-Endeavor-Client" && h.value == "app"), "the runtime answers it as the app's");
     }
 }
