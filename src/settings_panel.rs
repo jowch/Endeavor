@@ -915,16 +915,11 @@ impl Workspace {
         use endeavor_mcp::julia::Preference;
         let now = self.effective(&self.settings.julia_preference());
         if let Some(started) = self.julia_started_here() {
-            let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).map_or(a == b, |(a, b)| a == b);
-            return match &now {
-                Preference::Endeavors => !started.endeavors,
-                Preference::Path(path) => started.endeavors || !same(path, Path::new(&started.path)),
-                Preference::Auto => match &self.settings_checks.users_julia {
-                    Some(Some(Ok((yours, _)))) => started.endeavors || !same(Path::new(yours), Path::new(&started.path)),
-                    Some(_) => !started.endeavors,
-                    None => false,
-                },
+            let chosen = match (&now, &self.settings_checks.julia) {
+                (Preference::Path(path), Some((checked, ChosenJulia::Usable(version)))) if checked == path => Some(version.as_str()),
+                _ => None,
             };
+            return runs_another_julia(&now, started, self.settings_checks.users_julia.as_ref(), chosen);
         }
         self.settings_checks.local_julia.as_ref().is_some_and(|started| self.effective(started) != now)
     }
@@ -2511,8 +2506,44 @@ impl Workspace {
     }
 }
 
+/// Whether the Julia the runtime says it started isn't the one `now` picks. `users` is the user's own
+/// Julia as Settings found it; `chosen` the version of the chosen file, when it was checked. The
+/// runtime starts the Julia that juliaup's launcher would (its Sys.BINDIR), so a chosen launcher
+/// (~/.juliaup/bin/julia) matches the Julia of the same version, not only the same file.
+fn runs_another_julia(now: &endeavor_mcp::julia::Preference, started: &crate::pluto::Started, users: Option<&Option<Result<(String, String), String>>>, chosen: Option<&str>) -> bool {
+    use endeavor_mcp::julia::Preference;
+    let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).map_or(a == b, |(a, b)| a == b);
+    match now {
+        Preference::Endeavors => !started.endeavors,
+        Preference::Path(path) => started.endeavors || !(same(path, Path::new(&started.path)) || chosen.is_some_and(|v| started.version.as_deref() == Some(v))),
+        Preference::Auto => match users {
+            Some(Some(Ok((yours, _)))) => started.endeavors || !same(Path::new(yours), Path::new(&started.path)),
+            Some(_) => !started.endeavors,
+            None => false,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_chosen_juliaup_launcher_matches_the_julia_it_starts() {
+        use endeavor_mcp::julia::Preference;
+        let real = crate::pluto::Started { path: "/home/ada/.julia/juliaup/julia-1.13.4+0.x64.linux.gnu/bin/julia".into(), version: Some("1.13.4".into()), endeavors: false };
+        let launcher = Preference::Path("/home/ada/.juliaup/bin/julia".into());
+        assert!(!super::runs_another_julia(&launcher, &real, None, Some("1.13.4")), "the launcher's Julia runs: no restart");
+        assert!(super::runs_another_julia(&launcher, &real, None, Some("1.12.6")), "the launcher now gives another version");
+        assert!(super::runs_another_julia(&launcher, &real, None, None), "not checked yet, another file");
+        let own = crate::pluto::Started { endeavors: true, ..real.clone() };
+        assert!(super::runs_another_julia(&launcher, &own, None, Some("1.13.4")), "Endeavor's runs instead");
+        assert!(!super::runs_another_julia(&Preference::Endeavors, &own, None, None));
+        let yours = Some(Some(Ok((real.path.clone(), "1.13.4".to_owned()))));
+        assert!(!super::runs_another_julia(&Preference::Auto, &real, yours.as_ref(), None));
+        assert!(super::runs_another_julia(&Preference::Auto, &own, yours.as_ref(), None), "yours found, Endeavor's runs");
+        assert!(!super::runs_another_julia(&Preference::Auto, &own, Some(&None), None));
+    }
+
+
     use super::{Found, Page, Section, closes, marks, matches, unrun_edit};
 
     fn found(page: Page, crumb: &str, title: &str, summary: &str) -> Found {
