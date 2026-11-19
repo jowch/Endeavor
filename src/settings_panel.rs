@@ -361,7 +361,7 @@ pub enum Act {
     ReopenSignIn,
     SignOut,
     OpenClaudeAi,
-    PersonalClaude,
+    OwnClaudeSetup,
     KeepRunning,
     RunWithoutAsking,
     IdleMenu,
@@ -603,10 +603,10 @@ impl Workspace {
 
     fn claude_groups(&self) -> Vec<Group> {
         let setup = {
-            let mut r = row("personal-claude", "Use my Claude Code setup");
-            r.desc = Some("New sessions also load your own Claude Code settings and the tools you connected to it. Leave this off if you only use Claude here.".into());
-            r.controls.push(Control::Toggle { on: self.settings.personal_claude, act: Act::PersonalClaude, aria: "Use my Claude Code setup".into() });
-            group(Some("If you also use Claude Code"), vec![Item::Row(r)])
+            let mut r = row("own-claude-setup", "Use my Claude Code setup");
+            r.desc = Some("New sessions load your own Claude Code settings, CLAUDE.md, skills, plugins and MCP servers, as the claude command does. Turn it off to use only Endeavor's and the folder's.".into());
+            r.controls.push(Control::Toggle { on: self.settings.own_claude_setup(), act: Act::OwnClaudeSetup, aria: "Use my Claude Code setup".into() });
+            group(Some("Your setup"), vec![Item::Row(r)])
         };
         let account = match &self.account {
             Account::SignedOut(stage) => {
@@ -1587,7 +1587,7 @@ impl Workspace {
             Act::SignInCodex => self.sign_in_to_codex(cx),
             Act::CheckCodex => self.recheck_codex(cx),
             Act::SignInAntigravity => self.sign_in_to_antigravity(cx),
-            Act::PersonalClaude => self.update_settings(cx, |s| s.personal_claude = !s.personal_claude),
+            Act::OwnClaudeSetup => self.update_settings(cx, |s| s.claude_setup = Some(!s.own_claude_setup())),
             Act::KeepRunning => self.update_settings(cx, |s| s.keep_running = !s.keep_running),
             Act::RunWithoutAsking => self.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking),
             Act::IdleMenu => {}

@@ -33,8 +33,16 @@ Each of these works only because of how Claude Code or its adapter behaves.
   read-only notebook tools, and reads of the skills' own files, through
   without a prompt. Cursor asks for every
   call.
-- **Personal setup.** "Load your personal Claude Code setup" works through the
-  `settingSources` and `strictMcpConfig` options.
+- **The user's own setup.** "Use my Claude Code setup" (on by default) works
+  through the `settingSources` and `strictMcpConfig` options. Off is not a
+  wall: the adapter's own settings reader (`claude-agent-acp`'s
+  `SettingsManager`) resolves every source whatever `settingSources` says,
+  for the starting mode, `availableModels`, `modelOverrides` and effort. And
+  strict MCP config also leaves out the project's `.mcp.json`. Either way the
+  user's own install of Endeavor's plugin (`endeavor@endeavor`) is off,
+  through `enabledPlugins` in the flag settings; the app's own plugin loads
+  as `endeavor@inline`. A server the user added by hand as `endeavor` is off
+  through the `mcp__endeavor` rule in `disallowedTools`.
 - **Modes.** Manual, Ask to run, Auto and Plan are Claude's `default`, `auto`
   and `plan` modes, plus Endeavor's run gate (`app_modes`, `src/session.rs`).
   Agents without `plan` and `auto` fall back to showing their own modes.
