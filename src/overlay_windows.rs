@@ -16,19 +16,7 @@ use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::GetParent;
 
-/// What a hole in the web view is for; each has at most one.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Hole {
-    Menu,
-    Tip,
-    Tooltip,
-    /// The Settings panel.
-    Settings,
-    /// The confirm dialog.
-    Confirm,
-    /// A one-off failure's notice.
-    Notice,
-}
+pub use crate::layer::Hole;
 
 #[derive(Default)]
 struct Holes {

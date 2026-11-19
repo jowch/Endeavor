@@ -16,7 +16,7 @@ use gpui::*;
 use gpui_component::input::{InputEvent, Textarea};
 use wire::files::{Reply, Request};
 
-use crate::attach::{self, Attachment, Icon};
+use crate::attach::{self, Attachment, Icon, Label};
 use crate::hosts::{HostId, Place};
 use crate::new_session::{Glyph, glyph};
 use crate::session::{self, Entry, ModeChoice, Session};
@@ -193,7 +193,9 @@ pub struct ChipPopover {
     pub now: Option<Option<String>>,
 }
 
-fn icon_glyph(icon: Icon) -> Glyph {
+/// The glyph for a chip's icon. Quote cards use it too, so a quote shows
+/// the same icon everywhere.
+pub fn icon_glyph(icon: Icon) -> Glyph {
     match icon {
         Icon::Cell => Glyph::Code,
         Icon::Cells => Glyph::Cells,
@@ -207,8 +209,16 @@ fn icon_glyph(icon: Icon) -> Glyph {
 
 /// A 22px chip: icon, then the label (names in mono).
 pub fn chip(id: ElementId, attachment: &Attachment) -> Stateful<Div> {
-    let label = attachment.label();
     let error = attachment.icon() == Icon::Error;
+    label_chip(id, glyph(icon_glyph(attachment.icon()), if error { theme::danger() } else { theme::text_muted() }), attachment.label())
+}
+
+/// The chip every attachment and quote is drawn with: an icon, then the
+/// label, at most 240px wide. Only the name gives way, cut with "…", so the
+/// words around it ("error in", "· figure") always show and nothing spills
+/// past the edge.
+pub fn label_chip(id: ElementId, icon: impl IntoElement, label: Label) -> Stateful<Div> {
+    let words = |text: String| div().flex_shrink_0().whitespace_nowrap().child(text);
     div()
         .id(id)
         .flex_shrink_0()
@@ -218,17 +228,19 @@ pub fn chip(id: ElementId, attachment: &Attachment) -> Stateful<Div> {
         .items_center()
         .gap(px(5.))
         .px(px(6.))
+        .overflow_hidden()
         .rounded(px(4.))
         .border_1()
         .border_color(theme::composer_edge())
         .bg(theme::bg_tag())
         .text_size(theme::chat_meta())
         .text_color(theme::text_secondary())
-        .child(glyph(icon_glyph(attachment.icon()), if error { theme::danger() } else { theme::text_muted() }))
-        .when(!label.plain.is_empty(), |d| d.child(div().flex_shrink_0().whitespace_nowrap().child(label.plain)))
+        .child(div().flex_shrink_0().child(icon))
+        .when(!label.plain.is_empty(), |d| d.child(words(label.plain)))
         .when(!label.mono.is_empty(), |d| {
             d.child(div().min_w_0().truncate().font_family(theme::MONO).text_size(theme::chat_meta_small()).child(label.mono))
         })
+        .when(!label.after.is_empty(), |d| d.child(words(label.after)))
 }
 
 fn image_format(mime: &str) -> ImageFormat {
@@ -1379,7 +1391,7 @@ impl Workspace {
             Menu::Config(_) => (div().right_0(), Anchor::BottomRight),
             _ => (div().left(px(-11.)), Anchor::BottomLeft),
         };
-        Some(place.absolute().top(px(-6.)).child(deferred(anchored().anchor(anchor).child(crate::motion::arriving(div().occlude().child(body), "composer-menu-in", false))).with_priority(1)).into_any_element())
+        Some(place.absolute().top(px(-6.)).child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(anchor).child(crate::motion::arriving(div().occlude().child(body), "composer-menu-in", false)))).into_any_element())
     }
 
     /// The hovered chip's preview, above the box.
@@ -1508,7 +1520,7 @@ impl Workspace {
                 let name = a.full_label();
                 chip(ElementId::NamedInteger("sent-chip".into(), (key << 32) | ((entry as u64) << 8) | i as u64), a)
                     .role(Role::Button)
-                    .aria_label(format!("{}{}", name.plain, name.mono))
+                    .aria_label(name.text())
                     .cursor_pointer()
                     .when(open, |d| d.bg(theme::bg_raised()))
                     .hover(|s| s.bg(theme::bg_raised()))
@@ -1590,7 +1602,7 @@ impl Workspace {
             });
         // Closed by the shared click-outside backdrop (main.rs); occlude()
         // keeps a click on the popover itself from reaching it.
-        div().absolute().top(relative(1.)).right_0().mt(px(4.)).child(deferred(anchored().anchor(Anchor::TopRight).child(body)).with_priority(2)).into_any_element()
+        div().absolute().top(relative(1.)).right_0().mt(px(4.)).child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::TopRight).child(body))).into_any_element()
     }
 }
 

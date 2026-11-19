@@ -1854,6 +1854,8 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "webkit2gtk",
+ "webview2-com",
+ "windows-core 0.61.2",
  "windows-sys 0.61.2",
  "wire",
  "x11",
@@ -1862,7 +1864,7 @@ dependencies = [
 [[package]]
 name = "endeavor-mcp"
 version = "0.1.0"
-source = "git+https://github.com/jowch/EndeavorMCP#97aa6fba7c4c066dbe5937076c0c1ec34006c62c"
+source = "git+https://github.com/jowch/EndeavorMCP#ed0991b8fa0dca426c7bd443a9fc148125bd3723"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
@@ -9773,7 +9775,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
-source = "git+https://github.com/jowch/EndeavorMCP#97aa6fba7c4c066dbe5937076c0c1ec34006c62c"
+source = "git+https://github.com/jowch/EndeavorMCP#ed0991b8fa0dca426c7bd443a9fc148125bd3723"
 dependencies = [
  "base64 0.22.1",
  "dunce",

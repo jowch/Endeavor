@@ -26,7 +26,8 @@ use crate::new_session::{Glyph, glyph_at};
 use crate::runtime::{self, ChosenJulia};
 use crate::settings::{Appearance, IdleStop, NotebookTheme};
 use crate::signin::{self, Account, Look, Method, Stage};
-use crate::{Workspace, overlay, theme};
+use crate::layer::{self, Hole, Layer};
+use crate::{Workspace, theme};
 
 /// A section in the list on the left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1597,13 +1598,6 @@ impl Workspace {
         let (view, counts) = if searching { self.results_view(&query) } else { (self.settings_view(panel.page), Vec::new()) };
         let viewport = window.viewport_size();
         let (w, h) = ((f32::from(viewport.width) - 48.).clamp(560., 960.), (f32::from(viewport.height) - 48.).clamp(400., 690.));
-        let hole = self.webview.read(cx).visible().then(|| {
-            let webview = self.webview.read(cx);
-            let (handle, under) = (webview.handle(), webview.bounds());
-            canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), overlay::Hole::Settings, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ())
-                .absolute()
-                .size_full()
-        });
         let close = self
             .focusable("settings-close".into(), Role::Button, "Close settings".into(), cx)
             .absolute()
@@ -1647,7 +1641,6 @@ impl Workspace {
                     }
                 }),
             )
-            .children(hole)
             .child(self.render_settings_nav(panel, searching, &counts, window, cx))
             .child(
                 div()
@@ -1674,7 +1667,7 @@ impl Workspace {
                 .line_height(theme::line_body())
                 .font_family(theme::SANS)
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_settings(window, cx)))
-                .child(card)
+                .child(layer::cut(card, Hole::Settings, Some(self.webview.read(cx)).filter(|w| w.visible())))
                 .into_any_element(),
         )
     }
@@ -2065,11 +2058,10 @@ impl Workspace {
                 .into_any_element(),
             Control::Select { value, act, aria } => {
                 let open = self.settings_panel.as_ref().is_some_and(|p| p.idle_menu);
-                // Deferred draws paint in priority order across the window: the
-                // panel's own priority, and later in the list, puts it on top of the panel.
                 let menu = open.then(|| {
                     let current = self.settings.idle_stop;
-                    div().absolute().top(px(32.)).right_0().child(deferred(
+                    div().absolute().top(px(32.)).right_0().child(layer::place(
+                        Layer::SettingsMenu,
                             div()
                                 .id("idle-stop-menu")
                                 .role(Role::ListBox)
@@ -2097,9 +2089,7 @@ impl Workspace {
                                         .when(value == current, |d| d.child(glyph_at(Glyph::Check, theme::text_secondary(), 1.)))
                                         .on_click(cx.listener(move |this, _, window, cx| this.settings_act(Act::Idle(value), window, cx)))
                                 })),
-                        )
-                        .with_priority(2),
-                    )
+                    ))
                 });
                 div()
                     .relative()

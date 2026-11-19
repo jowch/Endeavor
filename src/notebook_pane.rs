@@ -181,6 +181,7 @@ impl NotebookAction {
         items.extend(match kind {
             Backend::Pluto => [LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback].as_slice(),
             Backend::Ember => [LookEndeavor, LookEmber, Shortcuts, NewSession].as_slice(),
+            Backend::Marimo => [Shortcuts, NewSession].as_slice(),
         });
         if stopped {
             items.push(Start);
@@ -200,6 +201,7 @@ impl NotebookAction {
         match kind {
             Backend::Pluto => vec![ExportFile, ExportHtml, ExportPdf, Present, Record, Frontmatter],
             Backend::Ember => vec![ExportFile, ExportHtml, ExportPdf],
+            Backend::Marimo => vec![ExportFile],
         }
     }
 }
@@ -307,6 +309,7 @@ pub fn engine_name(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "Julia",
         Backend::Ember => "R",
+        Backend::Marimo => "Python",
     }
 }
 
@@ -380,6 +383,8 @@ fn engine_logo(kind: Backend) -> AnyElement {
     match kind {
         Backend::Pluto => pluto_logo().into_any_element(),
         Backend::Ember => ember_logo().into_any_element(),
+        // ponytail: no marimo logo yet; Python notebooks don't open in the app.
+        Backend::Marimo => div().into_any_element(),
     }
 }
 
@@ -1280,7 +1285,7 @@ impl Workspace {
             .text_color(theme::text_primary())
             .text_left()
             .child(self.browser_menu(browser, cx));
-        Some(div().absolute().top(px(34.)).left_0().child(deferred(anchored().child(body)).with_priority(1)).into_any_element())
+        Some(div().absolute().top(px(34.)).left_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().child(body))).into_any_element())
     }
 
     /// Open a notebook in a new session…: This Mac's file panel, else the
@@ -1612,7 +1617,7 @@ impl Workspace {
             .text_color(theme::text_primary())
             .children(rows)
             .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child("Notebooks stop when the job's time runs out."));
-        div().absolute().top(px(32.)).left_0().child(deferred(anchored().anchor(Anchor::TopLeft).child(body)).with_priority(1))
+        div().absolute().top(px(32.)).left_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::TopLeft).child(body)))
     }
 }
 

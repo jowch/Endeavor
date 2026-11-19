@@ -9,7 +9,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
 
-use crate::attach::{Attachment, Quote, Quoted};
+use crate::attach::{self, Attachment, Quote, Quoted};
+use crate::composer::{icon_glyph, label_chip};
 use crate::new_session::{Glyph, glyph};
 use crate::session::Entry;
 use crate::{ReplyToSelection, Workspace, theme};
@@ -192,7 +193,7 @@ impl Workspace {
             if let Some(c) = column {
                 x = x.min(c.right() - width).max(c.left());
             }
-            deferred(anchored().position(point(x, at.y + px(BELOW_POINTER))).snap_to_window_with_margin(px(8.)).child(element)).with_priority(2).into_any_element()
+            crate::layer::place(crate::layer::Layer::Popover, anchored().position(point(x, at.y + px(BELOW_POINTER))).snap_to_window_with_margin(px(8.)).child(element)).into_any_element()
         };
         let frame = || div().occlude().map(theme::popover).rounded(px(8.)).font_family(theme::SANS).text_size(theme::chat_meta());
         Some(match reply {
@@ -365,15 +366,6 @@ impl Workspace {
 /// From this many quotes on, the cards above the composer take one line each.
 const COMPACT_FROM: usize = 4;
 
-fn quote_glyph(quote: &Quote) -> Glyph {
-    match &quote.from {
-        Quoted::Reply { .. } => Glyph::Lines,
-        Quoted::Cell { .. } if quote.picture().is_some() => Glyph::Picture,
-        Quoted::Cell { .. } => Glyph::Code,
-        Quoted::Box { .. } => Glyph::Region,
-    }
-}
-
 /// A quote's text with a rule on its left: code as numbered lines (at most
 /// `max_lines`, each cut to fit), other text as `max_lines` wrapped lines.
 fn excerpt(quote: &Quote, max_lines: usize) -> Option<Div> {
@@ -498,13 +490,13 @@ impl Workspace {
                     .gap(px(8.))
                     .pl(px(10.))
                     .pr(px(6.))
-                    .child(glyph(quote_glyph(quote), theme::text_faint()))
+                    .child(glyph(icon_glyph(quote.icon()), theme::text_faint()))
                     .child(source)
                     .child(comment.flex_1().min_w_0().whitespace_nowrap().overflow_hidden().text_ellipsis().text_size(theme::chat_meta()))
                     .child(remove)
                     .into_any_element();
             }
-            let header = div().flex().items_center().gap(px(6.)).child(glyph(quote_glyph(quote), theme::text_faint())).child(source).child(div().flex_1()).children(show).child(remove);
+            let header = div().flex().items_center().gap(px(6.)).child(glyph(icon_glyph(quote.icon()), theme::text_faint())).child(source).child(div().flex_1()).children(show).child(remove);
             card.flex()
                 .gap(px(10.))
                 .pl(px(10.))
@@ -550,26 +542,16 @@ impl Workspace {
                     div()
                         .flex()
                         .child(
-                            div()
-                                .id(ElementId::NamedInteger("sent-quote".into(), (key << 32) | ((entry as u64) << 8) | i as u64))
-                                .role(Role::Button)
-                                .aria_label(format!("{label}, show in notebook"))
-                                .h(theme::chat_px(22.))
-                                .flex()
-                                .items_center()
-                                .gap(px(5.))
-                                .px(px(6.))
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(theme::composer_edge())
-                                .bg(theme::bg_raised())
-                                .cursor_pointer()
-                                .hover(|s| s.bg(theme::composer_edge()))
-                                .text_size(theme::chat_meta_small())
-                                .text_color(theme::text_secondary())
-                                .child(glyph(quote_glyph(quote), theme::text_muted()))
-                                .child(div().font_family(theme::MONO).text_size(theme::chat_px(11.5)).child(label))
-                                .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(cells.clone(), cx))),
+                            label_chip(
+                                ElementId::NamedInteger("sent-quote".into(), (key << 32) | ((entry as u64) << 8) | i as u64),
+                                glyph(icon_glyph(quote.icon()), theme::text_muted()),
+                                quote.label(attach::CHIP_NAME),
+                            )
+                            .role(Role::Button)
+                            .aria_label(format!("{label}, show in notebook"))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::bg_raised()))
+                            .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(cells.clone(), cx))),
                         )
                         .into_any_element(),
                 );

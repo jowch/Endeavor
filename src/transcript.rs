@@ -14,6 +14,7 @@ use crate::celldiff;
 use crate::details;
 use crate::diagram;
 use crate::failure;
+use crate::failure::hand_on;
 use crate::motion;
 use crate::new_session::Glyph;
 use crate::outbox::Delivery;
@@ -1370,21 +1371,6 @@ fn scroll_xy(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
 /// A line that scrolls sideways; the wheel's up and down go to the transcript.
 fn scroll_x(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
     hand_on(panel.overflow_x_scroll().restrict_scroll_to_axis().track_scroll(&handle), handle)
-}
-
-/// Keeps a wheel turn from the transcript while the panel can still scroll
-/// that way. A sideways turn always stays: the transcript would take it as
-/// up and down.
-fn hand_on(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
-    panel.on_scroll_wheel(move |event, window, cx| {
-        let delta = event.delta.pixel_delta(window.line_height());
-        let (at, max) = (handle.offset(), handle.max_offset());
-        let keeps_y = delta.y != px(0.) && max.y > px(0.) && if delta.y < px(0.) { at.y > -max.y } else { at.y < px(0.) };
-        let sideways = delta.x != px(0.) && delta.x.abs() > delta.y.abs();
-        if keeps_y || sideways {
-            cx.stop_propagation();
-        }
-    })
 }
 
 /// A cell edit as coloured lines: its +/− signs stay put while the code

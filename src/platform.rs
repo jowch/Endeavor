@@ -2,8 +2,8 @@
 //! wry: showing a file, reading system settings, and hosting the notebook's web
 //! view. On Linux the web view is WebKitGTK in an X11 child window, so GTK has
 //! to be started and its events run. `src/linux/` has the Linux versions of the
-//! macOS-only fixes. Windows has some of them; the rest are stubs
-//! (docs/windows.md).
+//! macOS-only fixes. Windows has most of them (`src/overlay_windows.rs`,
+//! `src/webview_windows.rs`); the rest are stubs (docs/windows.md).
 
 use std::path::Path;
 
@@ -236,7 +236,7 @@ static WAS_HOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// view (or in a hole cut in it), so the keyboard goes to GPUI's window, as on
 /// Linux. gpui-wry does this only outside the web view's bounds, so without it
 /// a click in Settings over the notebook left the keyboard in the notebook.
-/// WebView2's own keys aren't ported (docs/windows.md).
+/// The app's shortcuts reach GPUI from the web view in `webcontent::attach`.
 #[cfg(windows)]
 pub fn web_view_hooks() -> impl gpui::IntoElement {
     use gpui::Styled;
@@ -249,6 +249,7 @@ pub fn web_view_hooks() -> impl gpui::IntoElement {
             let hwnd = handle.hwnd.get() as usize;
             window.on_mouse_event(move |_: &gpui::MouseDownEvent, phase, _, _| {
                 if phase.capture() {
+                    webcontent::note_click();
                     unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(hwnd as _) };
                 }
             });
@@ -292,6 +293,24 @@ pub fn init(_: &mut gpui::App) {
     let name: Vec<u16> = "EndeavorApp\0".encode_utf16().collect();
     // SAFETY: a null-terminated wide name; the handle stays open for the app's life.
     unsafe { windows_sys::Win32::System::Threading::CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+}
+
+/// The notebook's web view couldn't be made: most often the WebView2 runtime
+/// is missing (the installer adds it), or its data folder next to the exe
+/// can't be written. Say so and quit, rather than end with a panic the user
+/// never sees.
+#[cfg(windows)]
+pub fn no_web_view(error: &wry::Error) -> ! {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    eprintln!("The notebook's web view couldn't start: {error}");
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let text = wide(&format!(
+        "Endeavor's notebook view couldn't start, so Endeavor can't open.\n\nUsually the Microsoft Edge WebView2 Runtime is missing. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and open Endeavor again. If it's installed, install Endeavor again, so its folder can be written to.\n\n({error})"
+    ));
+    let title = wide("Endeavor");
+    // SAFETY: null-terminated wide strings that outlive the call; no owner window.
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
+    std::process::exit(1)
 }
 
 /// GPUI's application. On Windows it draws without DirectComposition: GPUI
@@ -409,39 +428,7 @@ pub mod dialogs {
 #[path = "overlay_windows.rs"]
 pub mod overlay;
 
-/// WebView2's side of the notebook. Not ported: its process ending
-/// (`ProcessFailed`), find in the page, and whether it has the keyboard.
+/// WebView2's side of the notebook: its process ending, find, the keyboard.
 #[cfg(windows)]
-pub mod webcontent {
-    use futures::channel::oneshot;
-
-    pub fn on_process_ended(_: &wry::WebView, _: impl Fn() + 'static) {}
-
-    pub fn url(webview: &wry::WebView) -> String {
-        webview.url().unwrap_or_default()
-    }
-
-    /// Nothing is found until find is ported.
-    pub fn find(_: &wry::WebView, _: &str, _: bool) -> oneshot::Receiver<bool> {
-        let (tx, rx) = oneshot::channel();
-        let _ = tx.send(false);
-        rx
-    }
-
-    pub fn clear_find(_: &wry::WebView) {}
-
-    pub fn give_keyboard(webview: &wry::WebView) {
-        let _ = webview.focus();
-    }
-
-    pub fn has_keyboard(_: &wry::WebView) -> bool {
-        false
-    }
-
-    pub fn had_keyboard(webview: &wry::WebView) -> bool {
-        has_keyboard(webview)
-    }
-
-    // ponytail: the app menu's Edit items act on GPUI's text boxes only; WebView2's clipboard commands come with #10.
-    pub fn edit(_: &wry::WebView, _: gpui::OsAction) {}
-}
+#[path = "webview_windows.rs"]
+pub mod webcontent;
