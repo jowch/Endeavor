@@ -165,7 +165,10 @@ under the user's own `%LOCALAPPDATA%`.
   (`ProcessFailed`) loads the notebook again. When the notebook gets the
   keyboard back from the app (Esc in the find bar), the page puts its focus
   and caret back in the cell it was in, which WebView2 doesn't do after a find.
-  The Edit menu's clipboard items still act only on the app's own text boxes.
+  The Edit menu's Cut, Copy, Paste and Select All reach the notebook when it
+  had the keyboard: the app sends the page the key with its editing command
+  through the DevTools protocol (`Input.dispatchKeyEvent` with `commands`),
+  since WebView2 has no editing commands and a script can't paste.
   Shortcuts, Find, the reload and the font were checked on Windows 10 for #228.
 - `src/platform.rs`, `web_view_hooks` and `init`: a click in GPUI gives
   GPUI's window the keyboard.
