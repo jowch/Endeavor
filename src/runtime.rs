@@ -332,7 +332,7 @@ fn old_state_dir(app_dir: &Path) -> PathBuf {
 }
 
 /// A runtime an older version kept running in the app's own folder is stopped
-/// and its record removed, once, so it doesn't run on beside the shared one.
+/// and the old folder removed, once, so it doesn't run on beside the shared one.
 /// Its notebooks were saved as they changed, and the app opens them again in
 /// the new runtime. The app stops it itself rather than through the helper's
 /// `stop`, which refuses a record made under another host name (a renamed Mac),
@@ -377,11 +377,9 @@ fn retire_old_state_in(old: &Path, stop: &dyn Fn(&Path) -> Result<bool, String>)
         Ok(false) => return eprintln!("Couldn't stop the runtime kept in {}.", old.display()),
         Err(e) => return eprintln!("Couldn't stop the runtime kept in {}: {e}", old.display()),
     }
-    for file in ["runtime.json", "runtime.json.tmp", "lock"] {
-        match std::fs::remove_file(old.join(file)) {
-            Err(e) if e.kind() != ErrorKind::NotFound => eprintln!("Couldn't remove {}: {e}", old.join(file).display()),
-            _ => {}
-        }
+    // Nothing uses the old folder now: its record, token, locks and log go.
+    if let Err(e) = std::fs::remove_dir_all(old) {
+        eprintln!("Couldn't remove {}: {e}", old.display());
     }
     eprintln!("Stopped the runtime kept in {}: This Mac's runtime is now in {}, shared with the plugin.", old.display(), state_dir().display());
 }
@@ -693,7 +691,7 @@ fn quitting_leaves_a_runtime_the_plugin_started() {
 
 #[cfg(test)]
 #[test]
-fn an_old_runtime_is_stopped_once_and_its_record_removed() {
+fn an_old_runtime_is_stopped_once_and_its_folder_removed() {
     let old = std::env::temp_dir().join(format!("endeavor-retire-{}", std::process::id()));
     std::fs::create_dir_all(&old).unwrap();
     let stops = std::cell::Cell::new(0);
@@ -706,15 +704,14 @@ fn an_old_runtime_is_stopped_once_and_its_record_removed() {
     };
     retire_old_state_in(&old, &counted(true));
     assert_eq!(stops.get(), 0, "nothing recorded, nothing to stop");
-    for file in ["runtime.json", "lock", "token", "runtime.log"] {
+    for file in ["runtime.json", "start.lock", "starting.lock", "token", "page_token", "runtime.log"] {
         std::fs::write(old.join(file), "{}").unwrap();
     }
     retire_old_state_in(&old, &counted(false));
     assert!(old.join("runtime.json").exists(), "kept for the next start when the stop failed");
     retire_old_state_in(&old, &counted(true));
     assert_eq!(stops.get(), 2);
-    assert!(!old.join("runtime.json").exists() && !old.join("lock").exists());
-    assert!(old.join("token").exists() && old.join("runtime.log").exists(), "the token and the log stay");
+    assert!(!old.exists(), "the old folder goes, locks and all");
     retire_old_state_in(&old, &counted(true));
     assert_eq!(stops.get(), 2, "once");
     let _ = std::fs::remove_dir_all(&old);
