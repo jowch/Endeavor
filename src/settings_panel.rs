@@ -675,6 +675,15 @@ impl Workspace {
     /// What the Notebooks page's Julia row says: which Julia runs (yours, Endeavor's or the chosen
     /// one) and its version, or what's wrong with the chosen one.
     fn julia_line(&self) -> Status2 {
+        // What this computer's runtime says it started, while the choice that started it stands.
+        if let Some(started) = self.julia_started_here().filter(|_| !self.julia_changed()) {
+            let version = started.version.clone().unwrap_or_default();
+            return if started.endeavors {
+                Status2::new(format!("Endeavor's Julia {version}"), Tone::Plain)
+            } else {
+                Status2::new(format!("{} · {version}", crate::new_session::tilde(Path::new(&started.path))), Tone::Plain)
+            };
+        }
         match (&self.settings.julia, &self.settings_checks.julia) {
             (None, _) => match self.yours_runs() {
                 Some((path, version)) => Status2::new(format!("{} · {version}", crate::new_session::tilde(Path::new(path))), Tone::Plain),
@@ -689,6 +698,16 @@ impl Workspace {
             (Some(path), Some((checked, problem))) if checked == path => Status2 { mono: Some(crate::new_session::tilde(path)), text: problem_text(problem), tone: Tone::Danger },
             (Some(path), _) => Status2::new(crate::new_session::tilde(path), Tone::Plain),
         }
+    }
+
+    /// The Notebooks page's Julia line, for the state dump.
+    pub(crate) fn julia_line_text(&self) -> String {
+        self.julia_line().text
+    }
+
+    /// The Julia this computer's runtime says it started (`endeavor/julia_status`), while it runs one.
+    pub fn julia_started_here(&self) -> Option<&crate::pluto::Started> {
+        self.connections.get(&HostId::ThisMac).filter(|c| c.status == Status::Ready).and_then(|c| c.julia_started.as_ref())
     }
 
     /// The user's own Julia, when Settings ask for it (no chosen one, not Endeavor's) and it can be used.
@@ -746,11 +765,16 @@ impl Workspace {
     }
 
     /// What the Notebooks page's R row says: which R runs R notebooks.
+    /// While R runs, the R the runtime says it started; before, what `--r auto` would pick.
     fn r_line(&self) -> String {
-        match (&self.settings.r, &self.own_r.found) {
-            (Some(r), _) => crate::new_session::tilde(Path::new(r)),
-            (None, Some(Some(own))) => format!("Endeavor's R {}", own.version),
-            (None, _) => "The R your login shell finds".into(),
+        let started = self.connections.get(&HostId::ThisMac).filter(|c| c.status == Status::Ready && !self.r_changed()).and_then(|c| c.r_started.as_ref());
+        match (&self.settings.r, started, &self.own_r.found) {
+            (_, Some(started), Some(Some(own))) if started.endeavors => format!("Endeavor's R {}", own.version),
+            (_, Some(started), _) if started.endeavors => "Endeavor's R".into(),
+            (_, Some(started), _) if started.path.starts_with('/') => crate::new_session::tilde(Path::new(&started.path)),
+            (Some(r), _, _) => crate::new_session::tilde(Path::new(r)),
+            (None, _, Some(Some(own))) => format!("The R your login shell finds, else Endeavor's R {}", own.version),
+            (None, _, _) => "The R your login shell finds".into(),
         }
     }
 
@@ -786,7 +810,7 @@ impl Workspace {
         let mut found = row("r-auto", "Find R by itself");
         found.lead = Lead::Radio { checked: auto, act: Some(Act::AutoR) };
         found.desc = Some(if crate::connection::own_r_item().is_some() {
-            format!("Endeavor's own R {} if it's installed, else the R your login shell finds. With neither, Endeavor offers to install its own the first time you open an R notebook.", r::OWN_VERSION)
+            format!("The R your login shell finds, else Endeavor's own R {} if it's installed. With neither, Endeavor offers to install its own the first time you open an R notebook.", r::OWN_VERSION)
         } else {
             "The R your login shell finds. Endeavor doesn't install R here: rig (github.com/r-lib/rig) installs one without admin rights.".to_owned()
         }
@@ -883,9 +907,26 @@ impl Workspace {
 
     /// The Julia This Mac's helper runs isn't the one chosen now. A chosen
     /// file known to be broken counts as Auto, which runs in its place.
+    ///
+    /// When the runtime says which Julia it started, that is compared with what the choice now picks;
+    /// it may not be the app's choice at all (a runtime the plugin started with its own `--julia`).
+    /// The app's own look for the user's Julia only decides between theirs and Endeavor's.
     pub fn julia_changed(&self) -> bool {
-        let now = self.settings.julia_preference();
-        self.settings_checks.local_julia.as_ref().is_some_and(|started| self.effective(started) != self.effective(&now))
+        use endeavor_mcp::julia::Preference;
+        let now = self.effective(&self.settings.julia_preference());
+        if let Some(started) = self.julia_started_here() {
+            let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).map_or(a == b, |(a, b)| a == b);
+            return match &now {
+                Preference::Endeavors => !started.endeavors,
+                Preference::Path(path) => started.endeavors || !same(path, Path::new(&started.path)),
+                Preference::Auto => match &self.settings_checks.users_julia {
+                    Some(Some(Ok((yours, _)))) => started.endeavors || !same(Path::new(yours), Path::new(&started.path)),
+                    Some(_) => !started.endeavors,
+                    None => false,
+                },
+            };
+        }
+        self.settings_checks.local_julia.as_ref().is_some_and(|started| self.effective(started) != now)
     }
 
     /// What a preference runs as far as Settings know: a chosen julia known to be broken runs as Auto.

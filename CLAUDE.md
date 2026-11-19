@@ -60,8 +60,8 @@ cd frontend && npm install && npm test && npm run -s check   # rebuilds dist/pag
   agent's MCP tools and Pluto's session API.
 - **Pluto stays on loopback** behind its secret. Never widen it, and never let
   the app's proxying go beyond loopback.
-- **Pins move together:** Julia (`src/runtime.rs`, EndeavorMCP's
-  `src/julia.rs`, `scripts/cloud-setup.sh`), Node and the adapters
+- **Pins move together:** Julia (EndeavorMCP's `src/julia.rs`, which the
+  app reads, and `scripts/cloud-setup.sh` here and there), Node and the adapters
   (`src/install.rs`, `adapter*/package-lock.json`). A test checks the cloud
   script's Julia and Rust pins.
 - **Anything that floats** (a menu, popover, notice, dialog) is placed with

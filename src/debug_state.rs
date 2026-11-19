@@ -98,7 +98,7 @@ impl Workspace {
     }
 
     /// Julia on this computer: which Julia Settings ask for (`preference`), what the runtime was
-    /// started with, the user's own Julia as found (`yours`), what its runtime last said (`julia_status`; null
+    /// started with (`started_with`, the app's choice then) and the Julia it says it started (`running`), the line Settings show (`line`) and whether a change needs a restart (`changed`), the user's own Julia as found (`yours`), what its runtime last said (`julia_status`; null
     /// from a runtime too old to say, or none running), and Endeavor's own
     /// Julia as Settings last found it, with an Install or Remove under way.
     /// `failed` is the failure the pane shows, with Try again.
@@ -125,7 +125,9 @@ impl Workspace {
             Some(Some(Err(why))) => json!({ "unusable": why }),
         };
         let started = self.settings_checks.local_julia.as_ref().map(|p| format!("{p:?}"));
-        json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")), "preference": preference, "started_with": started, "yours": yours })
+        // The Julia the runtime says it started (null before it has, or from a runtime too old to say).
+        let running = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_started.as_ref()).map(|s| json!({ "julia": s.path, "version": s.version, "endeavors": s.endeavors }));
+        json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")), "preference": preference, "started_with": started, "yours": yours, "running": running, "line": self.julia_line_text(), "changed": self.julia_changed() })
     }
 
     /// R on this computer: the R setting, Endeavor's own R as Settings last

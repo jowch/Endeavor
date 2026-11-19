@@ -130,6 +130,8 @@ pub struct Connection {
     /// Where Julia is, as the runtime last said (`endeavor/julia_status`); none
     /// from a runtime too old to say.
     pub julia_status: Option<pluto::JuliaStatus>,
+    /// The Julia the runtime says it started last; none before it has, or from a runtime too old to say.
+    pub julia_started: Option<pluto::Started>,
     /// R notebooks' setup (R, then Ember) for an R notebook the app is opening
     /// (the runtime says `r_installing` meanwhile): the pane's step log.
     pub r: Option<Steps>,
@@ -142,6 +144,8 @@ pub struct Connection {
     /// Where R notebooks' setup is, as the runtime last said (`endeavor/r_status`);
     /// none from a runtime too old to say.
     pub r_status: Option<pluto::RStatus>,
+    /// The R the runtime says runs; none while none does, or from a runtime too old to say.
+    pub r_started: Option<pluto::Started>,
 }
 
 /// A dropped server connection.
@@ -398,10 +402,12 @@ impl Connection {
             julia_waits: 0,
             julia_failed: None,
             julia_status: None,
+            julia_started: None,
             r: None,
             r_waits: 0,
             r_failed: None,
             r_status: None,
+            r_started: None,
             lost: None,
             dropped: None,
             crashed: false,
@@ -465,9 +471,11 @@ impl Connection {
         self.julia = None;
         self.julia_failed = None;
         self.julia_status = None;
+        self.julia_started = None;
         self.r = None;
         self.r_failed = None;
         self.r_status = None;
+        self.r_started = None;
         self.notebooks = serde_json::Value::Null;
         self.cells = serde_json::Value::Null;
         self.runtime.take()
@@ -1377,12 +1385,12 @@ impl Workspace {
     /// it's the one `watching` follows: every second while Julia starts, else
     /// every few. It never starts Julia.
     fn watch_julia(&mut self, host: &HostId, bridge: Bridge, watching: Arc<AtomicU64>, mine: u64, cx: &mut Context<Self>) {
-        let (tx, mut rx) = futures::channel::mpsc::unbounded::<pluto::JuliaStatus>();
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<(pluto::JuliaStatus, Option<pluto::Started>)>();
         let current = watching.clone();
         std::thread::spawn(move || {
             while current.load(Ordering::SeqCst) == mine {
                 let status = pluto::julia_status(&bridge);
-                let starting = matches!(status, Ok(pluto::JuliaStatus::Starting { .. }));
+                let starting = matches!(status, Ok((pluto::JuliaStatus::Starting { .. }, _)));
                 if let Ok(status) = status
                     && tx.unbounded_send(status).is_err()
                 {
@@ -1397,7 +1405,7 @@ impl Workspace {
                 if watching.load(Ordering::SeqCst) != mine {
                     break;
                 }
-                if this.update(cx, |this, cx| this.on_julia_status(&host, status, cx)).is_err() {
+                if this.update(cx, |this, cx| this.on_julia_status(&host, status.0, status.1, cx)).is_err() {
                     break;
                 }
             }
@@ -1409,8 +1417,12 @@ impl Workspace {
     /// starts, whoever started it (the agent, a warm-up), except over a
     /// session with no notebook yet (`starting_ahead`), and why a start it
     /// watched failed (a stall the runtime ended, say), with Try again.
-    fn on_julia_status(&mut self, host: &HostId, status: pluto::JuliaStatus, cx: &mut Context<Self>) {
+    fn on_julia_status(&mut self, host: &HostId, status: pluto::JuliaStatus, started: Option<pluto::Started>, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get_mut(host) else { return };
+        if connection.julia_started != started {
+            connection.julia_started = started;
+            cx.notify();
+        }
         if connection.julia_status.as_ref() == Some(&status) {
             return;
         }
@@ -1446,12 +1458,12 @@ impl Workspace {
     /// as `watch_julia` does Julia's: every second while it's under way, else
     /// every few. It never starts R.
     fn watch_r(&mut self, host: &HostId, bridge: Bridge, watching: Arc<AtomicU64>, mine: u64, cx: &mut Context<Self>) {
-        let (tx, mut rx) = futures::channel::mpsc::unbounded::<pluto::RStatus>();
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<(pluto::RStatus, Option<pluto::Started>)>();
         let current = watching.clone();
         std::thread::spawn(move || {
             while current.load(Ordering::SeqCst) == mine {
                 let status = pluto::r_status(&bridge);
-                let starting = matches!(status, Ok(pluto::RStatus::Starting { .. }));
+                let starting = matches!(status, Ok((pluto::RStatus::Starting { .. }, _)));
                 if let Ok(status) = status
                     && tx.unbounded_send(status).is_err()
                 {
@@ -1466,7 +1478,7 @@ impl Workspace {
                 if watching.load(Ordering::SeqCst) != mine {
                     break;
                 }
-                if this.update(cx, |this, cx| this.on_r_status(&host, status, cx)).is_err() {
+                if this.update(cx, |this, cx| this.on_r_status(&host, status.0, status.1, cx)).is_err() {
                     break;
                 }
             }
@@ -1475,8 +1487,11 @@ impl Workspace {
     }
 
     /// The runtime said where R notebooks' setup is (`Connection::r_status_now`).
-    fn on_r_status(&mut self, host: &HostId, status: pluto::RStatus, cx: &mut Context<Self>) {
-        if self.connections.get_mut(host).is_some_and(|c| c.r_status_now(status)) {
+    fn on_r_status(&mut self, host: &HostId, status: pluto::RStatus, started: Option<pluto::Started>, cx: &mut Context<Self>) {
+        let Some(connection) = self.connections.get_mut(host) else { return };
+        let moved = connection.r_started != started;
+        connection.r_started = started;
+        if connection.r_status_now(status) || moved {
             cx.notify();
         }
     }
@@ -2064,7 +2079,11 @@ impl Workspace {
                     let started = started.await;
                     let _ = this.update(cx, |this, cx| {
                         match started {
-                            Ok(status) => this.on_julia_status(&host, status, cx),
+                            // A start just asked for keeps the Julia last said until the watch says the new one.
+                            Ok(status) => {
+                                let started = this.connections.get(&host).and_then(|c| c.julia_started.clone());
+                                this.on_julia_status(&host, status, started, cx)
+                            }
                             Err(e) => this.julia_answer(&host, Backend::Pluto, Some(&format!("julia_failed::{e}")), cx),
                         }
                         if let Some((key, path)) = open {

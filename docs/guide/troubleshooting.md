@@ -21,6 +21,13 @@ and what to try when the button doesn't help. Settings has a
    Julia on your Mac fails to start and **Retry** fails twice.
 3. **Report it.** See [Report a problem](#report-a-problem).
 
+## The first Julia notebook takes minutes
+
+Endeavor runs your own Julia when you have one (Settings, **Your Julia**).
+The first notebook after a new Julia, or after Endeavor switches from its own
+Julia to yours, compiles Pluto and your packages for that Julia. It can take
+several minutes, longest on Windows. Later notebooks start as before.
+
 ## Julia stopped unexpectedly
 
 If Julia stops while a notebook runs, the notebook pane says "Julia stopped
