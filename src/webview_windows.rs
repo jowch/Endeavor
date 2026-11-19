@@ -384,5 +384,28 @@ pub fn had_keyboard(_: &wry::WebView) -> bool {
     FOCUSED.with(Cell::get) || HAD_KEYBOARD.with(Cell::get)
 }
 
-// ponytail: the app menu's Edit items act on GPUI's text boxes only; WebView2's clipboard commands aren't ported.
-pub fn edit(_: &wry::WebView, _: gpui::OsAction) {}
+/// Cut, Copy, Paste or Select All in the page, as its own keys would. WebView2
+/// has no editing commands, and a script's `execCommand` can't paste, so the
+/// keys go in through the DevTools protocol with the command each one runs
+/// (Linux's WebKit takes the command by name).
+pub fn edit(webview: &wry::WebView, action: gpui::OsAction) {
+    let (key, command) = match action {
+        gpui::OsAction::Cut => ('X', "cut"),
+        gpui::OsAction::Copy => ('C', "copy"),
+        gpui::OsAction::Paste => ('V', "paste"),
+        gpui::OsAction::SelectAll => ('A', "selectAll"),
+        _ => return,
+    };
+    let page = webview.webview();
+    // Ctrl (modifiers 2), as the page would get it from the keyboard.
+    let lower = key.to_ascii_lowercase();
+    let down = format!(r#"{{"type":"keyDown","modifiers":2,"key":"{lower}","code":"Key{key}","windowsVirtualKeyCode":{},"commands":["{command}"]}}"#, key as u32);
+    let up = format!(r#"{{"type":"keyUp","modifiers":2,"key":"{lower}","code":"Key{key}","windowsVirtualKeyCode":{}}}"#, key as u32);
+    for params in [down, up] {
+        // SAFETY: a COM call on the UI thread that made the web view.
+        if let Err(e) = unsafe { page.CallDevToolsProtocolMethod(&HSTRING::from("Input.dispatchKeyEvent"), &HSTRING::from(params), None) } {
+            eprintln!("Edit menu {command} in the notebook: {e}");
+            return;
+        }
+    }
+}
