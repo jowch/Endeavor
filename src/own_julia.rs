@@ -71,7 +71,18 @@ impl Workspace {
             // A runtime too old to say started Julia with itself.
             None => true,
         };
-        let own = matches!(self.settings_checks.local_julia, Some(None)) || self.julia_broken();
+        // The runtime says which Julia it started.
+        if let Some(started) = &c.julia_started {
+            return julia && started.endeavors;
+        }
+        use endeavor_mcp::julia::Preference;
+        // Auto runs Endeavor's when the user's own Julia can't be used, or there is none.
+        let yours = matches!(&self.settings_checks.users_julia, Some(Some(Ok(_))));
+        let own = match self.settings_checks.local_julia.as_ref().map(|started| self.effective(started)) {
+            Some(Preference::Endeavors) => true,
+            Some(Preference::Auto) => !yours,
+            _ => false,
+        };
         julia && own
     }
 

@@ -53,19 +53,23 @@ Cursor is listed as **Not available yet**.
 **Julia** sets which Julia runs your notebooks on your Mac. Click
 **Settings** next to it to choose:
 
-- **Endeavor's Julia** (the default): Julia 1.12.6, the version Endeavor is
-  tested with. Endeavor installs it the first time you open a Julia notebook,
-  or when you click **Install**. If you use juliaup, Julia's installer,
-  Endeavor adds 1.12.6 to it rather than downloading a second Julia, and
-  leaves your other juliaup versions alone. On Windows it always comes through
-  juliaup, which Endeavor installs if you don't have it. A Julia on your PATH
-  isn't used unless you choose it below. **Remove…** deletes Endeavor's Julia
-  (Julia on your Mac stops first if it's running); it's installed again the
-  next time you open a Julia notebook. If you added 1.12.6 to juliaup
+- **Your Julia** (the default): the Julia you installed, such as with
+  juliaup, when it's 1.12 or newer. Settings shows which one and its
+  version. Notebooks use your packages and registries (a LocalRegistry,
+  say) as well as Endeavor's. When you have none, or yours is too old,
+  Endeavor's Julia runs instead.
+- **Endeavor's Julia**: Julia 1.12.6, the version Endeavor is tested with,
+  even when you have another. Endeavor installs it when it needs it, or when
+  you click **Install**. If you use juliaup, Julia's installer, Endeavor
+  adds 1.12.6 to it rather than downloading a second Julia, and leaves your
+  other juliaup versions alone. On Windows it always comes through juliaup,
+  which Endeavor installs if you don't have it. **Remove…** deletes
+  Endeavor's Julia (Julia on your Mac stops first if it's running); it's
+  installed again the next time it's needed. If you added 1.12.6 to juliaup
   yourself, Endeavor leaves it there.
-- **Another Julia on this Mac**: a Julia you installed yourself. Click
+- **Another Julia on this Mac**: a Julia you pick yourself. Click
   **Choose…** (or **Change…**) and pick the file named `julia`, in a `bin`
-  folder. It must be Julia 1.11 or newer.
+  folder. It must be Julia 1.12 or newer.
 
 The change takes effect when Julia restarts. Servers and clusters set their
 own Julia. See [Servers](./servers.md).
@@ -73,9 +77,10 @@ own Julia. See [Servers](./servers.md).
 **R** sets which R runs your R notebooks on your Mac or Linux computer.
 Click **Settings** next to it to choose:
 
-- **Find R by itself** (the default): the R your login shell finds. On a
-  Mac, Endeavor's own R 4.6.1 comes first once it's installed, and when a
-  Mac has no R at all, the first R notebook offers **Install R** (about
+- **Find R by itself** (the default): the R your login shell finds, with
+  your `~/.Renviron` and `~/.Rprofile` (your library and repositories). On
+  a Mac with no R of yours, Endeavor's own R 4.6.1 runs once it's
+  installed, and when a Mac has no R at all, the first R notebook offers **Install R** (about
   165 MB, from CRAN). **Install** and **Remove…** under **Endeavor's R** do
   the same ahead of time, or undo it; notebooks on your Mac stop first if
   they're running. On Linux, Endeavor doesn't install R:

@@ -268,19 +268,45 @@ impl JuliaStatus {
     }
 }
 
+/// The Julia or R a runtime started, as its status says (`julia` in `endeavor/julia_status`, `r` in
+/// `endeavor/r_status`; a runtime from before EndeavorMCP #371 says neither): what Settings show,
+/// rather than the app working out for itself which one the runtime picked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Started {
+    pub path: String,
+    /// Julia's version; none for R.
+    pub version: Option<String>,
+    /// Endeavor's own, not the user's.
+    pub endeavors: bool,
+}
+
+impl Started {
+    fn julia(result: &Value) -> Option<Started> {
+        let j = &result["julia"];
+        Some(Started { path: j["path"].as_str()?.to_owned(), version: j["version"].as_str().map(str::to_owned), endeavors: j["endeavors"].as_bool()? })
+    }
+
+    fn r(result: &Value) -> Option<Started> {
+        let r = &result["r"];
+        Some(Started { path: r["rscript"].as_str()?.to_owned(), version: None, endeavors: r["endeavors"].as_bool()? })
+    }
+}
+
 /// Where R notebooks' setup is, as `endeavor/r_status` says it (EndeavorMCP
 /// interface 9): the same states as Julia's, with no quiet seconds, and the
 /// failure's code `r_failed` or `r_not_found`.
 pub type RStatus = JuliaStatus;
 
 /// Where R notebooks' setup is (Endeavor's own R, Ember, R starting), without starting it.
-pub fn r_status(bridge: &Bridge) -> Result<RStatus, String> {
-    JuliaStatus::from(&app_call(bridge, "endeavor/r_status", json!({}))?)
+pub fn r_status(bridge: &Bridge) -> Result<(RStatus, Option<Started>), String> {
+    let result = app_call(bridge, "endeavor/r_status", json!({}))?;
+    Ok((JuliaStatus::from(&result)?, Started::r(&result)))
 }
 
 /// Where Julia is, without starting it.
-pub fn julia_status(bridge: &Bridge) -> Result<JuliaStatus, String> {
-    JuliaStatus::from(&app_call(bridge, "endeavor/julia_status", json!({}))?)
+pub fn julia_status(bridge: &Bridge) -> Result<(JuliaStatus, Option<Started>), String> {
+    let result = app_call(bridge, "endeavor/julia_status", json!({}))?;
+    Ok((JuliaStatus::from(&result)?, Started::julia(&result)))
 }
 
 /// Start Julia now (after a failure: the person's Try again), and where it is then.
@@ -600,7 +626,18 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunWarning, cells_that_ran, engine_ended, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
+    use super::{RunWarning, Started, cells_that_ran, engine_ended, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
+
+    #[test]
+    fn the_status_says_which_julia_and_r_the_runtime_started() {
+        // As the core sends them (EndeavorMCP core.rs `status`).
+        let julia = serde_json::json!({ "state": "ready", "julia": { "path": "/opt/julia/bin/julia", "version": "1.13.4", "endeavors": false } });
+        assert_eq!(Started::julia(&julia), Some(Started { path: "/opt/julia/bin/julia".into(), version: Some("1.13.4".into()), endeavors: false }));
+        let r = serde_json::json!({ "state": "ready", "r": { "rscript": "/usr/bin/Rscript", "endeavors": true } });
+        assert_eq!(Started::r(&r), Some(Started { path: "/usr/bin/Rscript".into(), version: None, endeavors: true }));
+        assert_eq!(Started::julia(&serde_json::json!({ "state": "ready" })), None, "an older runtime says neither");
+        assert_eq!(Started::r(&serde_json::json!({ "state": "not_started" })), None);
+    }
 
     #[test]
     fn the_events_list_the_notebooks_r_took_with_it() {
