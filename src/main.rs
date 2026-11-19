@@ -1096,7 +1096,6 @@ impl Workspace {
             );
         }
         if let Some(path) = &existing {
-            session.open_on_start(path.clone());
             context.push(format!(
                 "[Endeavor] The user started this session on the notebook {path}, which is open in the \
                  notebook pane in safe preview (nothing has run). Unless they say otherwise, \"the notebook\" \
@@ -1109,10 +1108,15 @@ impl Workspace {
         }
         self.sessions.push(session);
         // Now, not only once the agent opens the session (which can take a while just
-        // after launch): Julia starts ahead from it, and New notebook makes its notebook there.
+        // after launch, and never happens while it's signed out): Julia starts ahead
+        // from it, New notebook makes its notebook there, and the picked notebook opens,
+        // now if the runtime is up, else with its reopen (`reopen_notebooks`).
         self.send_session_folder(key, cx);
         if let Some(path) = existing {
-            self.bind_notebook(key, path, cx);
+            self.bind_notebook(key, path.clone(), cx);
+            if self.bridge(&host).is_some() {
+                self.open_for_session(key, path, false, cx);
+            }
         }
         self.request_agent(key, cx);
         self.draft.notebook = self.new_notebook_choice();
@@ -1398,10 +1402,15 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let opened = opened.await;
             let _ = this.update(cx, |this, cx| this.julia_answer(&host, kind, opened.as_ref().err().map(String::as_str), cx));
-            let Ok(id) = opened else {
-                // A notebook file that's gone shows File not found.
-                let _ = this.update(cx, |this, cx| this.check_missing(key, cx));
-                return;
+            let id = match opened {
+                Ok(id) => id,
+                Err(e) => {
+                    // A notebook file that's gone shows File not found. Julia's and R's failures
+                    // show in the pane; anything else would leave it on Opening, so it says why.
+                    let unexplained = connection::pane_failure(kind, &e).is_none().then(|| (path.clone(), e));
+                    let _ = this.update(cx, |this, cx| this.check_missing(key, unexplained, cx));
+                    return;
+                }
             };
             let _ = this.update(cx, |this, cx| {
                 let Some(host) = this.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
@@ -1567,6 +1576,10 @@ impl Workspace {
                     }
                 }
                 Effect::ShowNotebook { id, path } => {
+                    // It opened after all: a notice that its open failed goes.
+                    if self.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(notice::Retry::OpenNotebook(k, _)) if *k == key)) {
+                        self.notice = None;
+                    }
                     let Some(session) = self.session_mut(key) else { continue };
                     session.notebook = Some(id.clone());
                     session.stopped = None;
@@ -2072,6 +2085,9 @@ impl Workspace {
                         }
                         let picked = self.settings.config_picks(agent).clone();
                         let Some(session) = self.session_mut(key) else { return };
+                        // A notebook bound before the session had an id, the one it was started on,
+                        // is recorded under that id now (notebooks.json, its kind).
+                        let bound = session.notebook_path.clone();
                         let queued = session.started(started);
                         // The user's last picks, ahead of a queued first message; the model
                         // first, since effort's choices depend on it.
@@ -2086,6 +2102,9 @@ impl Workspace {
                             }
                         }
                         effects.extend(queued);
+                        if let Some(path) = bound {
+                            self.bind_notebook(key, path, cx);
+                        }
                         self.apply_effects(key, effects, cx);
                     }
                     Err(e) => session.fail(&e),
