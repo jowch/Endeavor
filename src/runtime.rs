@@ -803,14 +803,26 @@ fn the_old_folder_goes_only_once_its_runtime_is_gone() {
     assert!(!old.join("runtime.json").exists() && old.join("start.lock").exists(), "only the record goes");
     let _ = other.kill();
     let _ = other.wait();
-    // The old runtime: stopped, and once its group is gone (a zombie until it's reaped) the folder goes.
-    let core = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).process_group(0).spawn().unwrap();
-    wait_runs_from(core.id(), &old);
-    record(core.id());
+    // The old runtime, which isn't the app's child (launchd or init adopted it), leading its own
+    // group: stopped, and the folder goes with it.
+    let spawn = Command::new("sh")
+        .args(["-c", r#"perl -e 'setpgrp(0,0); exec @ARGV' sh -c "sleep 60; :" core --state-dir "$1" </dev/null >/dev/null 2>&1 & echo $!"#, "sh"])
+        .arg(&old).output().unwrap();
+    let core: u32 = String::from_utf8_lossy(&spawn.stdout).trim().parse().unwrap();
+    wait_runs_from(core, &old);
+    record(core);
     retire_old_state_in(&old, &stop_old);
     assert!(!old.exists(), "the folder goes with the runtime");
-    let mut core = core;
-    let _ = core.wait();
+    // Linux: a group left with only a zombie counts as gone (a container's PID 1 may never reap).
+    #[cfg(target_os = "linux")]
+    {
+        let mut child = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).process_group(0).spawn().unwrap();
+        wait_runs_from(child.id(), &old);
+        record(child.id());
+        retire_old_state_in(&old, &stop_old);
+        assert!(!old.exists(), "the folder goes while the stopped runtime is an unreaped zombie");
+        let _ = child.wait();
+    }
 }
 
 #[cfg(all(test, unix))]
