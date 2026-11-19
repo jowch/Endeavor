@@ -70,8 +70,9 @@ takes a minute or two and needs the internet once.
 The first time you open a Julia notebook, it installs:
 
 - **Julia 1.12.6**, from julialang.org (about 230 MB, or 270 MB on an
-  Intel Mac), unless a Julia 1.11 or newer is already on your PATH. It goes
-  in `~/.cache/endeavor/`.
+  Intel Mac), unless you already have Julia 1.12 or newer (on your PATH, or
+  with juliaup). Then Endeavor uses yours, with your packages and
+  registries. Its own goes in `~/.cache/endeavor/`.
 - **Pluto and the packages it needs**, which Julia downloads from Julia's
   package registry.
 

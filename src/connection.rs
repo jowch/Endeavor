@@ -591,7 +591,9 @@ impl Workspace {
                 let (tx, rx) = futures::channel::mpsc::unbounded::<Update>();
                 let keep_running = self.settings.keep_running;
                 // The helper runs this Julia for as long as it lives (runtime::connect).
-                self.settings_checks.local_julia = Some(self.settings.julia.clone());
+                self.settings_checks.local_julia = Some(self.settings.julia_preference());
+                // Which Julia that runs, for Settings and the state dump: the user's own when they have one.
+                self.check_users_julia(cx);
                 self.settings_checks.local_r = Some(self.settings.r.clone());
                 std::thread::spawn(move || {
                     let result = runtime::connect(keep_running).map(|(channel, hello)| (Arc::new(channel), hello));

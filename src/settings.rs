@@ -16,8 +16,11 @@ pub struct Settings {
     /// Load the user's own Claude Code setup (user settings, their MCP servers)
     /// into new sessions, besides Endeavor's plugin and the project's settings.
     pub personal_claude: bool,
-    /// A julia binary to use instead of Endeavor's own.
+    /// A julia binary chosen in Settings. None: the user's own Julia when they
+    /// have one, else Endeavor's (`endeavors_julia` asks for Endeavor's always).
     pub julia: Option<PathBuf>,
+    /// Run Endeavor's own Julia even when the user has one (Settings › Julia).
+    pub endeavors_julia: bool,
     /// The R for R notebooks on this computer: an Rscript path, or a shell line
     /// such as `module load R`. None is the login shell's Rscript.
     pub r: Option<String>,
@@ -162,6 +165,16 @@ impl NotebookTheme {
 }
 
 impl Settings {
+    /// Which Julia Settings ask for, as EndeavorMCP takes it (`julia::choose`).
+    pub fn julia_preference(&self) -> endeavor_mcp::julia::Preference {
+        use endeavor_mcp::julia::Preference;
+        match (&self.julia, self.endeavors_julia) {
+            (Some(path), _) => Preference::Path(path.clone()),
+            (None, true) => Preference::Endeavors,
+            (None, false) => Preference::Auto,
+        }
+    }
+
     /// An agent's config values last picked.
     pub fn config_picks(&self, agent: crate::agent::Agent) -> &std::collections::BTreeMap<String, String> {
         match agent {

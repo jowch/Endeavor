@@ -24,8 +24,9 @@ use crate::older_runtime::Version;
 use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
 
-/// Julia needed by runtime/Project.toml's `[sources]` section.
-const MIN_JULIA: (u32, u32) = (1, 11);
+/// Which Julia runs, and the checks of a chosen one, are EndeavorMCP's (`julia`): the app and a
+/// server pick Julia one way.
+pub use endeavor_mcp::julia::{Chosen as ChosenJulia, JULIA_VERSION, check_chosen, min_version as min_julia};
 
 /// A host's listener (`endeavor_mcp::client::Listener`): the app's loopback
 /// port for its runtime, for Pluto's page, the agent's MCP and the app's
@@ -145,58 +146,20 @@ pub fn start_runtime(channel: &Channel, listener: &Arc<Listener>, job: Option<Jo
     started
 }
 
-/// Endeavor's own Julia, which the core installs the first time a Julia
-/// notebook needs it (with juliaup where there is juliaup, always on Windows). Pinned with
-/// the official tarballs' SHA-256 and size, as EndeavorMCP's `src/julia.rs` pins
-/// them (bump all three per release, in both).
-pub const JULIA_VERSION: &str = "1.12.6";
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-#[cfg_attr(not(test), allow(dead_code))]
-const JULIA_TARBALL: (&str, &str, u64) = (
-    "https://julialang-s3.julialang.org/bin/mac/aarch64/1.12/julia-1.12.6-macaarch64.tar.gz",
-    "277d82fbd2eda99d0963b3e41f3dc979d7486f181399f8430fb637318ccd6a31",
-    231_027_185,
-);
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-#[cfg_attr(not(test), allow(dead_code))]
-const JULIA_TARBALL: (&str, &str, u64) = (
-    "https://julialang-s3.julialang.org/bin/mac/x64/1.12/julia-1.12.6-mac64.tar.gz",
-    "1a70b7c606d6bac38a246e722369e5b30914dccf9378499d2712fb3bd282642c",
-    271_518_180,
-);
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-#[cfg_attr(not(test), allow(dead_code))]
-const JULIA_TARBALL: (&str, &str, u64) = (
-    "https://julialang-s3.julialang.org/bin/linux/aarch64/1.12/julia-1.12.6-linux-aarch64.tar.gz",
-    "029b93b857bd0ffd627f9a8580d3bbaa63daf008d7b7aed02fbceb8fd57c4899",
-    306_918_080,
-);
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[cfg_attr(not(test), allow(dead_code))]
-const JULIA_TARBALL: (&str, &str, u64) = (
-    "https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.6-linux-x86_64.tar.gz",
-    "bbabf3bef19421a9dbd24a767d807606ab85e444323b5a1c73ffe293fa3d079a",
-    289_794_236,
-);
-// Windows gets the same Julia through juliaup, which the core installs.
 
 
-/// How the core finds Julia (its `--julia`): the one chosen in Settings while
-/// it's there and is Julia; else Endeavor's own (`own`): the pinned Julia,
-/// which the core installs the first time a Julia notebook needs it, as
-/// juliaup's channel for that version where there is juliaup (always on
-/// Windows, where the core installs juliaup first), else as its own download.
-/// Never a julia on the PATH that Settings doesn't name.
+/// The core's `--julia`, as EndeavorMCP chooses it from Settings (`julia::choose`): the chosen
+/// Julia while it's there and is Julia; else, unless Settings ask for Endeavor's, the user's own
+/// (the login shell's, juliaup's) when it's new enough; else Endeavor's own, the pinned Julia, which
+/// the core installs the first time a Julia notebook needs it (with juliaup where there is juliaup,
+/// always on Windows).
 fn julia_arg() -> String {
-    if let Some(julia) = crate::settings::Settings::load().julia {
-        match check_chosen(&julia) {
-            ChosenJulia::Usable(_) => return julia.display().to_string(),
-            problem => eprintln!("The chosen Julia {} can't be used ({problem:?}); using Endeavor's.", julia.display()),
-        }
-    }
+    let source = endeavor_mcp::julia::choose(&crate::settings::Settings::load().julia_preference(), None);
     #[cfg(not(windows))]
-    move_old_julia();
-    "own".into()
+    if source == endeavor_mcp::julia::Source::Auto || source == endeavor_mcp::julia::Source::Own {
+        move_old_julia();
+    }
+    source.value().unwrap_or_else(|| "auto".into())
 }
 
 /// Where the core keeps the Julia it downloads (EndeavorMCP's `julia::download_dir`).
@@ -439,7 +402,8 @@ fn started_by_plugin(record: &serde_json::Value) -> bool {
 }
 
 /// JULIA_DEPOT_PATH for This Mac's runtime: the app's depot, then an empty
-/// entry, which stacks the default depots (~/.julia) read-only behind ours.
+/// entry, behind which EndeavorMCP puts the user's own depot (~/.julia) when
+/// Julia starts (`paths::with_user_depot`), so their registries and packages are found.
 fn depot_list(app_dir: &Path) -> String {
     format!("{}{}", app_dir.join("depot").display(), if cfg!(windows) { ';' } else { ':' })
 }
@@ -551,79 +515,16 @@ pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn F
     Ok(runtime)
 }
 
-/// What a julia the user chose in Settings turned out to be.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ChosenJulia {
-    /// It runs and is new enough; its version, e.g. "1.11.5".
-    Usable(String),
-    /// Nothing is at the path any more.
-    Gone,
-    /// Something is there, but it didn't answer as Julia does.
-    NotJulia,
-    /// Julia, but older than Endeavor needs; its version.
-    TooOld(String),
-}
-
-/// Run the chosen file once to read its version (blocking; Julia answers in well under a second).
-pub fn check_chosen(path: &Path) -> ChosenJulia {
-    if !path.is_file() {
-        return ChosenJulia::Gone;
-    }
-    let mut command = Command::new(path);
-    endeavor_mcp::client::no_window(&mut command);
-    match command.arg("--version").output() {
-        Ok(out) if out.status.success() => chosen_from_version(&String::from_utf8_lossy(&out.stdout)),
-        _ => ChosenJulia::NotJulia,
-    }
-}
-
-/// `julia --version`'s answer, as a check of the chosen file.
-fn chosen_from_version(text: &str) -> ChosenJulia {
-    let Some(version) = text.trim().strip_prefix("julia version ") else { return ChosenJulia::NotJulia };
-    match parse_version(text) {
-        Some(v) if v < MIN_JULIA => ChosenJulia::TooOld(version.to_owned()),
-        Some(_) => ChosenJulia::Usable(version.to_owned()),
-        None => ChosenJulia::NotJulia,
-    }
-}
-
-/// The oldest Julia Endeavor runs, for saying so ("1.11").
-pub fn min_julia() -> String {
-    format!("{}.{}", MIN_JULIA.0, MIN_JULIA.1)
-}
-
-/// "julia version 1.12.6" -> (1, 12)
-fn parse_version(text: &str) -> Option<(u32, u32)> {
-    let mut parts = text.trim().rsplit(' ').next()?.split('.');
-    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ChosenJulia, chosen_from_version, depot_list, parse_version};
+    use super::depot_list;
 
     #[test]
-    fn the_depot_list_stacks_the_default_depots_behind_ours() {
+    fn the_depot_list_asks_for_the_users_depot_behind_ours() {
         #[cfg(windows)]
         assert_eq!(depot_list(std::path::Path::new(r"C:\Users\jc\AppData\Local\Endeavor")), r"C:\Users\jc\AppData\Local\Endeavor\depot;");
         #[cfg(not(windows))]
         assert_eq!(depot_list(std::path::Path::new("/Users/jc/Library/Application Support/endeavor")), "/Users/jc/Library/Application Support/endeavor/depot:");
-    }
-
-    #[test]
-    fn a_chosen_file_is_julia_when_it_says_so() {
-        assert_eq!(chosen_from_version("julia version 1.11.5\n"), ChosenJulia::Usable("1.11.5".into()));
-        assert_eq!(chosen_from_version("julia version 1.10.4\n"), ChosenJulia::TooOld("1.10.4".into()));
-        assert_eq!(chosen_from_version("Python 3.12.1\n"), ChosenJulia::NotJulia);
-        assert_eq!(chosen_from_version(""), ChosenJulia::NotJulia);
-    }
-
-    #[test]
-    fn parses_julia_version() {
-        assert_eq!(parse_version("julia version 1.12.6\n"), Some((1, 12)));
-        assert_eq!(parse_version("julia version 1.10.0-rc1"), Some((1, 10)));
-        assert!(parse_version("julia version 1.10.0").unwrap() < (1, 11));
-        assert_eq!(parse_version("garbage"), None);
     }
 
     fn ready(build: Option<&str>, interface: Option<u32>) -> super::Runtime {
@@ -891,43 +792,12 @@ fn stop_recorded_ends_the_recorded_process_only() {
     let _ = std::fs::remove_dir_all(&state);
 }
 
-/// EndeavorMCP downloads its own Julia on servers, pinned in its `src/julia.rs`;
-/// both pins move together (CLAUDE.md). Reads the pinned library's source.
-#[cfg(test)]
-#[test]
-fn the_library_pins_the_same_julia() {
-    let rustc = Command::new("rustc").arg("-vV").output().unwrap();
-    let host = String::from_utf8_lossy(&rustc.stdout).lines().find_map(|l| l.strip_prefix("host: ").map(str::to_owned)).unwrap();
-    // Only this platform's packages: the others aren't downloaded.
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let out = Command::new(cargo)
-        .args(["metadata", "--locked", "--offline", "--format-version", "1", "--filter-platform", &host])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "cargo metadata: {}", String::from_utf8_lossy(&out.stderr));
-    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let manifest = metadata["packages"].as_array().unwrap().iter().find(|p| p["name"] == "endeavor-mcp").unwrap()["manifest_path"].as_str().unwrap();
-    let library = std::fs::read_to_string(Path::new(manifest).with_file_name("src").join("julia.rs")).unwrap();
-    #[cfg_attr(windows, allow(unused_mut))]
-    let mut pins = vec![format!("const JULIA_VERSION: &str = \"{JULIA_VERSION}\";"), format!("const MIN_JULIA: (u32, u32) = ({}, {});", MIN_JULIA.0, MIN_JULIA.1)];
-    // Neither downloads Julia on Windows (juliaup there).
-    #[cfg(not(windows))]
-    {
-        let (url, sha, _) = JULIA_TARBALL;
-        pins.extend([format!("\"{url}\","), format!("\"{sha}\",")]);
-    }
-    for pin in pins {
-        assert!(library.lines().any(|l| l.trim().trim_start_matches("pub ") == pin), "EndeavorMCP's src/julia.rs should have `{pin}`, as src/runtime.rs does");
-    }
-}
-
 /// The cloud VMs' setup script installs this Julia and the pinned Rust too (docs/cloud.md).
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn the_cloud_setup_script_pins_the_same_julia() {
     let script = include_str!("../scripts/cloud-setup.sh");
-    let (url, sha, _) = JULIA_TARBALL;
+    let (url, sha, _) = endeavor_mcp::julia::tarball().unwrap();
     let rust = include_str!("../rust-toolchain.toml").lines().find_map(|l| l.strip_prefix("channel = ")).unwrap().trim_matches('"');
     for line in [format!("JULIA_VERSION={JULIA_VERSION}"), format!("JULIA_URL={url}"), format!("JULIA_SHA256={sha}"), format!("RUST_TOOLCHAIN={rust}")] {
         assert!(script.lines().any(|l| l == line), "scripts/cloud-setup.sh should have `{line}`");

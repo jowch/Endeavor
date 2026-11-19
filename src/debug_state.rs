@@ -97,7 +97,8 @@ impl Workspace {
         })))
     }
 
-    /// Julia on this computer: what its runtime last said (`julia_status`; null
+    /// Julia on this computer: which Julia Settings ask for (`preference`), what the runtime was
+    /// started with, the user's own Julia as found (`yours`), what its runtime last said (`julia_status`; null
     /// from a runtime too old to say, or none running), and Endeavor's own
     /// Julia as Settings last found it, with an Install or Remove under way.
     /// `failed` is the failure the pane shows, with Try again.
@@ -115,7 +116,16 @@ impl Workspace {
             Some(Some(own)) => json!({ "julia": own.julia, "from": format!("{:?}", own.from) }),
         };
         let failed = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_failed.clone());
-        json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")) })
+        // Which Julia Settings ask for, and the user's own as Settings last found it (null until looked).
+        let preference = format!("{:?}", self.settings.julia_preference());
+        let yours = match &self.settings_checks.users_julia {
+            None => json!(null),
+            Some(None) => json!("none"),
+            Some(Some(Ok((julia, version)))) => json!({ "julia": julia, "version": version }),
+            Some(Some(Err(why))) => json!({ "unusable": why }),
+        };
+        let started = self.settings_checks.local_julia.as_ref().map(|p| format!("{p:?}"));
+        json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")), "preference": preference, "started_with": started, "yours": yours })
     }
 
     /// R on this computer: the R setting, Endeavor's own R as Settings last

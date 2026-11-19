@@ -82,12 +82,13 @@ sign in once. Nothing needs administrator rights.
 **How to get Julia** takes one of three things:
 
 - nothing: Endeavor uses the `julia` it finds when you sign in. If there is
-  none, or it's older than 1.11, Endeavor downloads its own Julia 1.12.6 into
+  none, or it's older than 1.12, Endeavor downloads its own Julia 1.12.6 into
   `~/.cache/endeavor/`;
 - the path to a `julia` program, such as `/opt/julia-1.12/bin/julia`;
 - a shell line that makes `julia` available, such as `module load julia`.
 
-Endeavor needs Julia 1.11 or newer.
+Endeavor needs Julia 1.12 or newer. Notebooks find the packages and
+registries in your own Julia depot (`~/.julia`) too.
 
 ## R on the server
 

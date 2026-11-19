@@ -171,7 +171,10 @@ pub struct Checks {
     pub julia: Option<(PathBuf, ChosenJulia)>,
     /// The Julia This Mac's helper was started with, as Settings chose it then:
     /// a different choice since needs a restart.
-    pub local_julia: Option<Option<PathBuf>>,
+    pub local_julia: Option<endeavor_mcp::julia::Preference>,
+    /// The user's own Julia (`julia::users_julia`), as last looked for: its path
+    /// and version, or why it can't be used; none until looked.
+    pub users_julia: Option<Option<Result<(String, String), String>>>,
     /// Likewise its R setting (`Settings::r`).
     pub local_r: Option<Option<String>>,
     /// Repair Julia is under way.
@@ -363,6 +366,8 @@ pub enum Act {
     RunWithoutAsking,
     IdleMenu,
     Idle(IdleStop),
+    /// The user's own Julia, else Endeavor's (Settings' default).
+    YourJulia,
     OwnJulia,
     ChooseJulia,
     /// Install or remove Endeavor's own Julia (`own_julia`).
@@ -667,18 +672,33 @@ impl Workspace {
         vec![account, setup]
     }
 
-    /// What the Notebooks page's Julia row says: Endeavor's, or the chosen one and its version, or what's wrong with it.
+    /// What the Notebooks page's Julia row says: which Julia runs (yours, Endeavor's or the chosen
+    /// one) and its version, or what's wrong with the chosen one.
     fn julia_line(&self) -> Status2 {
         match (&self.settings.julia, &self.settings_checks.julia) {
-            (None, _) => match &self.own_julia.found {
-                Some(None) => Status2::new(format!("Endeavor's Julia {} · not installed yet", runtime::JULIA_VERSION), Tone::Plain),
-                _ => Status2::new(format!("Endeavor's Julia {}", runtime::JULIA_VERSION), Tone::Plain),
+            (None, _) => match self.yours_runs() {
+                Some((path, version)) => Status2::new(format!("{} · {version}", crate::new_session::tilde(Path::new(path))), Tone::Plain),
+                None => match &self.own_julia.found {
+                    Some(None) => Status2::new(format!("Endeavor's Julia {} · not installed yet", runtime::JULIA_VERSION), Tone::Plain),
+                    _ => Status2::new(format!("Endeavor's Julia {}", runtime::JULIA_VERSION), Tone::Plain),
+                },
             },
             (Some(path), Some((checked, ChosenJulia::Usable(version)))) if checked == path => {
                 Status2::new(format!("{} · {version}", crate::new_session::tilde(path)), Tone::Plain)
             }
             (Some(path), Some((checked, problem))) if checked == path => Status2 { mono: Some(crate::new_session::tilde(path)), text: problem_text(problem), tone: Tone::Danger },
             (Some(path), _) => Status2::new(crate::new_session::tilde(path), Tone::Plain),
+        }
+    }
+
+    /// The user's own Julia, when Settings ask for it (no chosen one, not Endeavor's) and it can be used.
+    fn yours_runs(&self) -> Option<&(String, String)> {
+        if self.settings.endeavors_julia {
+            return None;
+        }
+        match &self.settings_checks.users_julia {
+            Some(Some(Ok(found))) => Some(found),
+            _ => None,
         }
     }
 
@@ -862,24 +882,44 @@ impl Workspace {
     }
 
     /// The Julia This Mac's helper runs isn't the one chosen now. A chosen
-    /// file known to be broken counts as Endeavor's, which runs in its place.
+    /// file known to be broken counts as Auto, which runs in its place.
     pub fn julia_changed(&self) -> bool {
-        let runs = |choice: &Option<PathBuf>| {
-            choice.clone().filter(|p| !matches!(&self.settings_checks.julia, Some((checked, check)) if checked == p && !matches!(check, ChosenJulia::Usable(_))))
-        };
-        self.settings_checks.local_julia.as_ref().is_some_and(|started| runs(started) != runs(&self.settings.julia))
+        let now = self.settings.julia_preference();
+        self.settings_checks.local_julia.as_ref().is_some_and(|started| self.effective(started) != self.effective(&now))
+    }
+
+    /// What a preference runs as far as Settings know: a chosen julia known to be broken runs as Auto.
+    pub fn effective(&self, preference: &endeavor_mcp::julia::Preference) -> endeavor_mcp::julia::Preference {
+        use endeavor_mcp::julia::Preference;
+        match preference {
+            Preference::Path(p) if matches!(&self.settings_checks.julia, Some((checked, check)) if checked == p && !matches!(check, ChosenJulia::Usable(_))) => Preference::Auto,
+            other => other.clone(),
+        }
     }
 
     fn julia_groups(&self) -> Vec<Group> {
-        let own = self.settings.julia.is_none();
+        let (auto, own) = (self.settings.julia.is_none() && !self.settings.endeavors_julia, self.settings.julia.is_none() && self.settings.endeavors_julia);
+        let mut yours = row("julia-yours", "Your Julia");
+        yours.lead = Lead::Radio { checked: auto, act: Some(Act::YourJulia) };
+        yours.summary = Some("The Julia you installed, such as with juliaup, when it's new enough. Endeavor's otherwise.".into());
+        yours.controls.push(Control::Note("recommended".into()));
+        yours.desc = Some(match &self.settings_checks.users_julia {
+            None => "Looking for your Julia…".into(),
+            Some(None) => format!("None found, so Endeavor's Julia {} runs.", runtime::JULIA_VERSION).into(),
+            Some(Some(Ok((_, version)))) => format!("Julia {version} runs, with your packages and registries.").into(),
+            Some(Some(Err(why))) => format!("{why} Endeavor's Julia {} runs instead.", runtime::JULIA_VERSION).into(),
+        });
+        if let Some(Some(Ok((path, version)))) = &self.settings_checks.users_julia {
+            yours.extra = Some(Extra::Path { path: crate::new_session::tilde(Path::new(path)), version: format!("Julia {version}") });
+        }
         let mut ours = row("julia-own", "Endeavor's Julia");
         ours.lead = Lead::Radio { checked: own, act: Some(Act::OwnJulia) };
         ours.desc = Some(
             if cfg!(windows) {
-                format!("Julia {}, the version Endeavor is tested with. Endeavor installs it with juliaup, Julia's installer, the first time you open a Julia notebook.", runtime::JULIA_VERSION)
+                format!("Julia {}, the version Endeavor is tested with. Endeavor installs it with juliaup, Julia's installer, when it needs it.", runtime::JULIA_VERSION)
             } else {
                 format!(
-                    "Julia {}, the version Endeavor is tested with. Endeavor installs it the first time you open a Julia notebook. If you use juliaup, Endeavor adds this version to it instead of downloading a second Julia.",
+                    "Julia {}, the version Endeavor is tested with. Endeavor installs it when it needs it. If you use juliaup, Endeavor adds this version to it instead of downloading a second Julia.",
                     runtime::JULIA_VERSION
                 )
             }
@@ -887,13 +927,12 @@ impl Workspace {
         );
         // Search finds the choice by its other half, "Another Julia on this Mac".
         ours.search = None;
-        ours.controls.push(Control::Note("recommended".into()));
         self.own_julia_controls(&mut ours);
         let mut theirs = row("julia-another", concat!("Another Julia on ", crate::platform::this_computer!(lower)));
-        theirs.lead = Lead::Radio { checked: !own, act: Some(Act::ChooseJulia) };
+        theirs.lead = Lead::Radio { checked: self.settings.julia.is_some(), act: Some(Act::ChooseJulia) };
         theirs.summary = Some("Use a Julia you installed yourself.".into());
         let broken = self.julia_broken();
-        let label = if !own && !broken { "Change…" } else { "Choose…" };
+        let label = if self.settings.julia.is_some() && !broken { "Change…" } else { "Choose…" };
         theirs.controls.push(button(label, Look::Secondary, Act::ChooseJulia, "Choose another Julia"));
         match (&self.settings.julia, &self.settings_checks.julia) {
             (None, _) => theirs.desc = Some("If you already have Julia installed and want to use it.".into()),
@@ -906,7 +945,7 @@ impl Workspace {
             }
             (Some(path), _) => theirs.extra = Some(Extra::Path { path: crate::new_session::tilde(path), version: "Checking…".into() }),
         }
-        let mut items = vec![Item::Row(ours), Item::Row(theirs)];
+        let mut items = vec![Item::Row(yours), Item::Row(ours), Item::Row(theirs)];
         let restart = self.julia_needs_restart();
         if restart {
             let n = self.open_notebook_files(&HostId::ThisMac).len();
@@ -1223,9 +1262,9 @@ pub fn update_available(updates: &about::Updates) -> bool {
 
 fn problem_text(problem: &ChosenJulia) -> String {
     match problem {
-        ChosenJulia::Gone => " isn't there any more. Notebooks use Endeavor's Julia until you choose another.".into(),
-        ChosenJulia::NotJulia => " isn't Julia. Choose the file named julia, in a bin folder. Notebooks use Endeavor's Julia until then.".into(),
-        ChosenJulia::TooOld(v) => format!(" is Julia {v}; Endeavor needs {} or newer. Notebooks use Endeavor's Julia until you choose another.", runtime::min_julia()),
+        ChosenJulia::Gone => " isn't there any more. Notebooks use your other Julia, or Endeavor's, until you choose another.".into(),
+        ChosenJulia::NotJulia => " isn't Julia. Choose the file named julia, in a bin folder. Notebooks use your other Julia, or Endeavor's, until then.".into(),
+        ChosenJulia::TooOld(v) => format!(" is Julia {v}; Endeavor needs {} or newer. Notebooks use your other Julia, or Endeavor's, until you choose another.", runtime::min_julia()),
         ChosenJulia::Usable(v) => format!(" · {v}"),
     }
 }
@@ -1292,6 +1331,7 @@ impl Workspace {
         }
         self.refresh_profile(cx);
         self.check_chosen_julia(cx);
+        self.check_users_julia(cx);
         self.check_own_julia(cx);
         self.check_own_r(cx);
         cx.notify();
@@ -1439,6 +1479,25 @@ impl Workspace {
         self.check_chosen_julia(cx);
     }
 
+    fn set_julia_preference(&mut self, julia: Option<PathBuf>, endeavors: bool, cx: &mut Context<Self>) {
+        self.update_settings(cx, |s| s.endeavors_julia = endeavors);
+        self.set_julia(julia, cx);
+    }
+
+    /// Look for the user's own Julia, as the runtime does (`julia::users_julia`: a login shell and
+    /// `julia --version`), to say which Julia runs.
+    pub fn check_users_julia(&mut self, cx: &mut Context<Self>) {
+        let look = cx.background_executor().spawn(async move { endeavor_mcp::julia::users_julia() });
+        cx.spawn(async move |this, cx| {
+            let found = look.await;
+            let _ = this.update(cx, |this, cx| {
+                this.settings_checks.users_julia = Some(found);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Ask before stopping Julia on `host`, or cancelling its queued job.
     fn confirm_host_stop(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.hosts.name(&host);
@@ -1503,7 +1562,8 @@ impl Workspace {
                     self.send_idle_limit(&host, cx);
                 }
             }
-            Act::OwnJulia => self.set_julia(None, cx),
+            Act::YourJulia => self.set_julia_preference(None, false, cx),
+            Act::OwnJulia => self.set_julia_preference(None, true, cx),
             Act::ChooseJulia => self.choose_julia(cx),
             Act::InstallJulia => self.install_own_julia(cx),
             Act::RemoveJulia => self.confirm_remove_own_julia(window, cx),
