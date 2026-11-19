@@ -15,9 +15,13 @@ Settings.
 you're signed in to each. The one picked is the one the new-session screen
 starts with. Click **Settings** next to Claude for these:
 
-- **Use my Claude Code setup**. Off by default. When on, new sessions also
-  load your own Claude Code settings and the tools you connected to it. Leave
-  it off if you only use Claude in Endeavor.
+- **Use my Claude Code setup**. On by default. New sessions load your own
+  Claude Code settings, `CLAUDE.md`, skills, plugins and MCP servers, as the
+  `claude` command does. Turn it off to use only Endeavor's skills and the
+  session folder's own settings and `CLAUDE.md`; the folder's MCP servers
+  (`.mcp.json`) are left out then too. If you installed Endeavor's plugin in
+  Claude Code yourself, Endeavor turns it off in its own sessions, since the
+  app already has the notebook tools.
 - **Signed in as**, with your plan and organisation.
 - **Plan and usage**, with **Open claude.ai**, which shows your usage.
 - **Sign out**. Claude stops answering in every session until you sign in

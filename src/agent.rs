@@ -188,7 +188,11 @@ pub const CODEX: AgentFacts = AgentFacts {
     name: "Codex",
     maker: "by OpenAI",
     install: Install::Npm { package: "@agentclientprotocol/codex-acp", pins: "adapter-codex", installed: "codex-adapter" },
-    env: &[("INITIAL_AGENT_MODE", "workspace-write")],
+    // Codex always loads the user's own setup (`CODEX_HOME`, else `~/.codex`).
+    // `CODEX_CONFIG` overrides it for every session of the adapter: the user's
+    // own install of Endeavor's plugin is off, as in Claude's sessions
+    // (`session_options`); its notebook tools would bypass the app's cards.
+    env: &[("INITIAL_AGENT_MODE", "workspace-write"), ("CODEX_CONFIG", r#"{"plugins":{"endeavor@endeavor":{"enabled":false}}}"#)],
     private_temp: false,
     plugin: false,
     folder_rules: None,
@@ -571,11 +575,20 @@ const ASKS_ITSELF: [&str; 1] = ["mcp__notebook__request_restart"];
 
 /// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
 /// skills and guards) always; the project's settings and CLAUDE.md (from the
-/// working directory) always; the user's personal setup (user settings, their MCP
-/// servers) only when they opt in (Settings). On a server, no local file tools.
+/// working directory) always; the user's own setup (user settings and
+/// CLAUDE.md, skills, plugins, hooks, their MCP servers) unless they turned it
+/// off (Settings). Off, strict MCP config also leaves out the project's
+/// `.mcp.json`. On a server, no local file tools; the agent itself, and so
+/// the user's MCP servers, run on this computer, as with the plugin in
+/// Claude's desktop app.
 /// The skills point the agent at reference files beside them, outside the
 /// working folder, which Claude Code would ask about (it doesn't allow reading
 /// a plugin's own files by itself), so they get a Read rule.
+/// The user's own install of Endeavor's plugin (`endeavor@endeavor`, from the
+/// EndeavorMCP marketplace) is off: it would add a second set of notebook
+/// tools, outside the app's cards. The app's own plugin is `endeavor@inline`.
+/// `settings` is Claude Code's flag settings, which outrank user and project
+/// settings.
 fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
     let disallowed: &[&str] = if on_server { &LOCAL_TOOLS } else { &[] };
@@ -585,11 +598,16 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_j
             "settingSources": sources,
             "strictMcpConfig": !personal,
             "plugins": [{ "type": "local", "path": plugin_dir }],
+            "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false } },
             "disallowedTools": disallowed,
             "allowedTools": allowed,
         } }
     })
 }
+
+/// Endeavor's plugin as a user installs it from EndeavorMCP's marketplace,
+/// for Claude Code and Codex alike.
+const USERS_ENDEAVOR_PLUGIN: &str = "endeavor@endeavor";
 
 /// The Read rules for the plugin folder. When its path goes through a symlink
 /// (a symlinked home, XDG folder or AppData), Claude Code only reads without
@@ -940,7 +958,7 @@ async fn run(
             };
             let options = |tools: &Tools| {
                 let plugin = plugin.as_deref()?;
-                session_options(crate::settings::Settings::load().personal_claude, plugin, tools.server.is_some()).as_object().cloned()
+                session_options(crate::settings::Settings::load().own_claude_setup(), plugin, tools.server.is_some()).as_object().cloned()
             };
             let _ = events.unbounded_send(AgentEvent::Ready);
 
@@ -1452,17 +1470,32 @@ mod tests {
     }
 
     #[test]
-    fn personal_setup_is_opt_in_and_the_app_plugin_always_loads() {
-        let default = &session_options(false, "/p", false)["claudeCode"]["options"];
-        assert_eq!(default["settingSources"], serde_json::json!(["project", "local"]));
-        assert_eq!(default["strictMcpConfig"], true);
-        assert_eq!(default["plugins"][0]["path"], "/p");
-        assert_eq!(default["disallowedTools"], serde_json::json!([]));
+    fn the_users_own_setup_can_be_left_out_and_the_app_plugin_always_loads() {
+        let off = &session_options(false, "/p", false)["claudeCode"]["options"];
+        assert_eq!(off["settingSources"], serde_json::json!(["project", "local"]));
+        assert_eq!(off["strictMcpConfig"], true);
+        assert_eq!(off["plugins"][0]["path"], "/p");
+        assert_eq!(off["disallowedTools"], serde_json::json!([]));
 
-        let personal = &session_options(true, "/p", false)["claudeCode"]["options"];
-        assert_eq!(personal["settingSources"], serde_json::json!(["user", "project", "local"]));
-        assert_eq!(personal["strictMcpConfig"], false);
-        assert_eq!(personal["plugins"][0]["path"], "/p");
+        let own = &session_options(true, "/p", false)["claudeCode"]["options"];
+        assert_eq!(own["settingSources"], serde_json::json!(["user", "project", "local"]));
+        assert_eq!(own["strictMcpConfig"], false);
+        assert_eq!(own["plugins"][0]["path"], "/p");
+    }
+
+    /// A user who installed Endeavor's plugin themselves would otherwise get its
+    /// notebook tools beside the app's, in Claude's sessions and in Codex's.
+    #[test]
+    fn the_users_own_endeavor_plugin_is_off_in_every_session() {
+        for own in [false, true] {
+            for on_server in [false, true] {
+                let settings = &session_options(own, "/p", on_server)["claudeCode"]["options"]["settings"];
+                assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false } }));
+            }
+        }
+        let codex = super::CODEX.env.iter().find(|(name, _)| *name == "CODEX_CONFIG").expect("Codex's adapter gets CODEX_CONFIG").1;
+        let codex: serde_json::Value = serde_json::from_str(codex).unwrap();
+        assert_eq!(codex, serde_json::json!({ "plugins": { super::USERS_ENDEAVOR_PLUGIN: { "enabled": false } } }));
     }
 
     /// The plugin's reference files are read without asking, wherever the app's

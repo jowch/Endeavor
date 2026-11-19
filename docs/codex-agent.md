@@ -270,7 +270,13 @@ usual Codex way; the session folder had none. ACP 2.1.1 sends
 `developer_instructions: null` in every session, so there is no
 per-session instruction channel. `CODEX_CONFIG` applies to every session of
 the adapter process; whether its `developer_instructions` key reaches the
-model wasn't tested.
+model wasn't tested. Endeavor sets it to turn off the user's own install of
+Endeavor's plugin (`plugins."endeavor@endeavor".enabled = false`), whose
+notebook tools would sit beside the app's and skip its cards. Checked
+2026-11-19 with the bundled `codex app-server` 0.159.1 and the plugin
+installed: without it a new thread starts the plugin's `endeavor` MCP
+server; with it, no MCP server starts. The `-c` flag on `codex mcp list`
+doesn't show the change; that command reads the plugin list itself.
 
 ### 7. Modes, models and effort
 
@@ -448,8 +454,9 @@ In order. Items 1 to 6 are [other-agents.md](other-agents.md)'s work items
     - `session_info_update` with only `_meta.codex.threadStatus` changes
       nothing: the session only takes a title.
     - `agent` mode isn't used, so "Guardian Review" calls don't appear.
-    - The personal-setup switch doesn't apply: Codex always loads the
-      user's skills, plugins and AGENTS.md.
+    - The "Use my Claude Code setup" switch doesn't apply: Codex always
+      loads the user's skills, plugins and AGENTS.md, except Endeavor's own
+      plugin (`CODEX_CONFIG`, item 6).
 
 13. **Telling Codex the notebook is Pluto's.** Done. Without Endeavor's
     plugin, Codex answered "make a new notebook" in the app by writing a

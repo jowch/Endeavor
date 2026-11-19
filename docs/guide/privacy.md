@@ -28,7 +28,9 @@ to Anthropic. That includes:
   files in the session's folder, and the output of commands it runs.
 
 Claude Code also reads a `CLAUDE.md` file and Claude Code settings in the
-session's folder when there are any, so their contents go to Anthropic too.
+session's folder when there are any, and your own `CLAUDE.md`, skills and
+plugins while **Use my Claude Code setup** is on, so their contents go to
+Anthropic too.
 
 Endeavor doesn't send your notebook or your folder to Claude by itself. A
 file you attach from elsewhere is copied into the session's folder, and Claude
@@ -59,9 +61,13 @@ Claude Code handles your sign-in. You type your password only in your web
 browser, on claude.ai or console.anthropic.com. Endeavor never sees it and
 doesn't store your sign-in itself.
 
-**Use my Claude Code setup** in Settings is off by default. While it's off,
-Endeavor's sessions don't load your own Claude Code settings or the tools you
-connected to Claude Code.
+**Use my Claude Code setup** in Settings is on by default: Endeavor's
+sessions load your own Claude Code settings, `CLAUDE.md`, skills, plugins and
+the MCP servers you connected, as the `claude` command does. The MCP servers
+run on your Mac, also in a session on a server. When you turn it off, sessions
+load only Endeavor's own skills and the session folder's settings and
+`CLAUDE.md`. A few of your settings still apply then, such as which models
+you allow. Codex always uses your own Codex setup.
 
 ## Other connections Endeavor makes
 
