@@ -1,0 +1,134 @@
+# The Windows app on a Linux server over ssh (issue #257, item 3 of #198).
+# Nothing else in CI connects the Windows client to a server: the server path
+# on Windows (#195: the helper downloaded from EndeavorMCP's Helpers release,
+# then started over ssh with Windows' own OpenSSH) was checked only by hand.
+#
+# The server is Ubuntu in WSL on the same runner, with sshd on 127.0.0.1:2222
+# and a key the runner's ssh uses. scripts/julia-smoke.py starts the app's exe
+# as the plugin's MCP server (`endeavor.exe --helper mcp`), and as an agent
+# would: add_machine (it installs Endeavor's helper there, from the Helpers
+# release for the build Cargo.lock pins), use_machine (it may install Julia
+# there), then a notebook and one cell, and stop_machine. The script says yes
+# to each install, as the user would. It goes through EndeavorMCP's machine
+# tools, which use the same ssh, channel and helper download as the app's
+# "Add server", not the app's window.
+#
+# Same triggers as windows-julia.yml: the runtime's pins, this check, weekly,
+# and by hand.
+name: Windows server
+
+on:
+  pull_request:
+    paths:
+      - Cargo.lock
+      - src/runtime.rs
+      - rust-toolchain.toml
+      - scripts/julia-smoke.py
+      - .github/workflows/windows-server.yml
+  schedule:
+    - cron: '17 7 * * 2'
+  workflow_dispatch:
+
+concurrency:
+  group: windows-server-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  helpers-key:
+    name: server helpers' key
+    runs-on: ubuntu-24.04
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: key
+        run: |
+          set -eu
+          key=$(scripts/helpers.sh --key)
+          case "$key" in ''|*[!0-9a-f]*) echo "::error::scripts/helpers.sh --key printed '$key', not a key."; exit 1 ;; esac
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+  server:
+    name: Linux server over ssh (windows-latest)
+    needs: helpers-key
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - name: Git
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@v4
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: openssh-server curl ca-certificates
+      - name: Key for ssh
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
+          # PowerShell 7.3+ passes an empty string as "" to a program, so -N ''
+          # is an empty passphrase. ('""' would make the passphrase two quotes.)
+          ssh-keygen -q -t ed25519 -N '' -f "$env:USERPROFILE\.ssh\smoke_ed25519"
+          if (-not (Test-Path "$env:USERPROFILE\.ssh\smoke_ed25519.pub")) { Write-Error "ssh-keygen made no key"; exit 1 }
+          # Fails if the key has a passphrase, which BatchMode can't type.
+          ssh-keygen -y -P '' -f "$env:USERPROFILE\.ssh\smoke_ed25519" | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error "the key has a passphrase"; exit 1 }
+          Copy-Item "$env:USERPROFILE\.ssh\smoke_ed25519.pub" "$env:RUNNER_TEMP\smoke.pub"
+          @"
+          Host smoke-host
+            HostName 127.0.0.1
+            Port 2222
+            User root
+            IdentityFile ~/.ssh/smoke_ed25519
+            StrictHostKeyChecking accept-new
+          "@ | Set-Content -Encoding ascii "$env:USERPROFILE\.ssh\config"
+      - name: sshd in WSL
+        shell: wsl-bash {0}
+        env:
+          WSLENV: RUNNER_TEMP/p
+        run: |
+          set -eux
+          uname -a
+          mkdir -p /run/sshd /root/.ssh
+          chmod 700 /root/.ssh
+          tr -d '\r' < "$RUNNER_TEMP/smoke.pub" >> /root/.ssh/authorized_keys
+          chmod 600 /root/.ssh/authorized_keys
+          printf 'Port 2222\nListenAddress 127.0.0.1\nPermitRootLogin prohibit-password\nPasswordAuthentication no\nUsePAM no\n' > /etc/ssh/sshd_config.d/smoke.conf
+          ssh-keygen -A
+          /usr/sbin/sshd
+      - name: Reach it
+        shell: pwsh
+        run: |
+          ssh -o BatchMode=yes smoke-host 'uname -a'
+          if ($LASTEXITCODE -ne 0) { ssh -v -o BatchMode=yes smoke-host true; exit 1 }
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build
+        env:
+          ENDEAVOR_RELEASE_KEY: ${{ needs.helpers-key.outputs.key }}
+        run: cargo build --locked -p endeavor --bin endeavor
+      - name: Run a notebook on the server
+        shell: bash
+        env:
+          ENDEAVOR_TEST_BROWSER: ${{ runner.temp }}/browser.txt
+          PYTHONUNBUFFERED: '1'
+        run: python scripts/julia-smoke.py target/debug/endeavor.exe --helper --server smoke-host
+      - name: Logs
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Filter *.log "$env:LOCALAPPDATA\Endeavor" -ErrorAction SilentlyContinue | ForEach-Object {
+            "== $($_.FullName)"
+            Get-Content -Tail 80 $_.FullName
+          }
+      - name: Server logs
+        if: always()
+        shell: wsl-bash {0}
+        run: |
+          for f in $(find /root/.local/state/endeavor /root/.cache/endeavor -name '*.log' 2>/dev/null); do
+            echo "== $f"; tail -n 80 "$f"
+          done
