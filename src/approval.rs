@@ -912,20 +912,16 @@ pub(crate) fn shown_packages(tool: &str, preview: Option<&pluto::RunPreview>) ->
 fn install_question(preview: Option<&pluto::RunPreview>) -> RunQuestion {
     let asking = preview.and_then(|p| p.asking.as_ref());
     if let (Some(names), Some(asking)) = (new_packages(preview), asking) {
-        const SHOWN: usize = 4;
+        // Every name, however many: the yes sends them all (`shown_packages`), so what the card shows
+        // is what it approves, and none hides behind "and N more". A long list wraps.
         // A likely typo says what it is close to: "pandsa (close to pandas)".
         let named = |name: &String| match asking.close_to.iter().find(|(p, _)| p == name) {
             Some((_, near)) => format!("{name} (close to {near})"),
             None => name.clone(),
         };
-        let mut shown: Vec<String> = names.iter().take(SHOWN).map(named).collect();
-        let more = names.len().saturating_sub(SHOWN);
-        let list = if more > 0 {
-            format!("{} and {more} more", shown.join(", "))
-        } else {
-            let last = shown.pop().unwrap_or_default();
-            if shown.is_empty() { last } else { format!("{} and {last}", shown.join(", ")) }
-        };
+        let mut shown: Vec<String> = names.iter().map(named).collect();
+        let last = shown.pop().unwrap_or_default();
+        let list = if shown.is_empty() { last } else { format!("{} and {last}", shown.join(", ")) };
         return RunQuestion { heading: format!("Install {list}, new to this notebook?"), button: "Install", names: vec![] };
     }
     match asking {
@@ -1422,7 +1418,10 @@ mod tests {
         };
         assert_eq!(ask(asking(true, &["Example"])), ("Install Example, new to this notebook?".into(), "Install"));
         assert_eq!(ask(asking(true, &["Makie", "WGLMakie"])), ("Install Makie and WGLMakie, new to this notebook?".into(), "Install"));
-        assert_eq!(ask(asking(true, &["A", "B", "C", "D", "E", "F"])), ("Install A, B, C, D and 2 more, new to this notebook?".into(), "Install"));
+        // Every name the yes approves is on the card (EndeavorMCP #418): none hides behind "and 2 more".
+        let six = asking(true, &["A", "B", "C", "D", "E", "F"]);
+        assert_eq!(ask(six.clone()), ("Install A, B, C, D, E and F, new to this notebook?".into(), "Install"));
+        assert_eq!(super::shown_packages("approve_install", six.as_ref()), Some(["A", "B", "C", "D", "E", "F"].map(String::from).to_vec()), "and the yes sends those six");
         // An R notebook's large download keeps its question; before the preview, neither word is promised.
         assert_eq!(ask(asking(false, &["GO.db"])), ("Download and install the packages?".into(), "Download"));
         assert_eq!(ask(None), ("Install the packages?".into(), "Install"));
