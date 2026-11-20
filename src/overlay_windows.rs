@@ -140,3 +140,9 @@ pub fn set_second(other: Option<&wry::WebView>) {
         apply(holes);
     });
 }
+
+/// Whether the second view is registered (`set_second`). It isn't when its window wasn't
+/// there yet as it was made, and `cell_shot` registers it again then.
+pub fn has_second() -> bool {
+    HOLES.with_borrow(|holes| holes.second.is_some())
+}

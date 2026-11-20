@@ -304,6 +304,9 @@ mod linux {
                 return false;
             }
             let Some(ours) = overlay::window_of(&self.view) else { return false };
+            if !overlay::has_second() {
+                overlay::set_second(Some(&self.view));
+            }
             // As wry places the user's view: GDK's units, which wry takes to be logical pixels.
             // Placed and lowered before it's mapped, so it never shows over anything.
             use wry::WebViewExtUnix;
@@ -412,6 +415,9 @@ mod windows {
                 return false;
             }
             let (Some(ours), Some(want)) = (overlay::window_of(&self.view), placed(self.main)) else { return false };
+            if !overlay::has_second() {
+                overlay::set_second(Some(&self.view));
+            }
             let now = placed(ours);
             if now.is_none_or(|r| (r.left, r.top, r.right, r.bottom) != (want.left, want.top, want.right, want.bottom)) {
                 let _ = self.view.set_bounds(wry::Rect {
