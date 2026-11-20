@@ -69,10 +69,15 @@ pub fn set_policy(bridge: &Bridge, owner: u64, policy: &str, edits: bool) -> Res
 }
 
 /// Answer a run the runtime holds (its ask `id`), with the cells the user's
-/// own run reached while it waited (each with its `last_run` before that run).
-pub fn answer_run(bridge: &Bridge, id: u64, allow: bool, user_ran: &[(String, f64)]) -> Result<(), String> {
+/// own run reached while it waited (each with its `last_run` before that run), and for
+/// `approve_install` the packages its card named, which the yes covers and no others.
+pub fn answer_run(bridge: &Bridge, id: u64, allow: bool, user_ran: &[(String, f64)], packages: Option<&[String]>) -> Result<(), String> {
     let user_ran: Vec<Value> = user_ran.iter().map(|(id, last_run)| json!({ "cell_id": id, "last_run": last_run })).collect();
-    app_call(bridge, "endeavor/answer_run", json!({ "id": id, "allow": allow, "user_ran": user_ran })).map(|_| ())
+    let mut params = json!({ "id": id, "allow": allow, "user_ran": user_ran });
+    if let Some(packages) = packages {
+        params["packages"] = json!(packages);
+    }
+    app_call(bridge, "endeavor/answer_run", params).map(|_| ())
 }
 
 /// Bind an agent session (`owner`, its key) to its one notebook file; the runtime
@@ -451,18 +456,24 @@ fn http_body(response: &[u8]) -> Result<Vec<u8>, String> {
 pub struct Asking {
     pub new: bool,
     pub packages: Vec<String>,
+    /// A new package whose name is close to a widely used one's, and that one (`pandsa`, `pandas`):
+    /// a likely typo, which the card says (EndeavorMCP #417).
+    pub close_to: Vec<(String, String)>,
 }
 
 /// The notebook `id`'s `Asking` in a `list_notebooks` result, if its packages wait for an OK.
 pub fn install_asking(listed: &Value, id: &str) -> Option<Asking> {
     let notebooks = listed.as_array().or_else(|| listed["notebooks"].as_array())?;
+    // The whole id, as the call names it: a UUID, which only its case may write otherwise.
     let nb = notebooks.iter().find(|nb| nb["notebook_id"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(id)))?;
     let packages = &nb["packages"];
     if packages["step"] != "asking" {
         return None;
     }
-    let names = packages["download"]["packages"].as_array().into_iter().flatten().filter_map(|p| p["package"].as_str().map(str::to_owned)).collect();
-    Some(Asking { new: packages["new"] == true, packages: names })
+    let listed = || packages["download"]["packages"].as_array().into_iter().flatten();
+    let names = listed().filter_map(|p| p["package"].as_str().map(str::to_owned)).collect();
+    let close_to = listed().filter_map(|p| Some((p["package"].as_str()?.to_owned(), p["close_to"].as_str()?.to_owned()))).collect();
+    Some(Asking { new: packages["new"] == true, packages: names, close_to })
 }
 
 /// What a run would run, for the approval card (the runtime's `run_preview`).
@@ -659,13 +670,13 @@ mod tests {
     #[test]
     fn a_notebooks_asking_packages_are_read_from_list_notebooks() {
         let listed = serde_json::json!([
-            { "notebook_id": "AAAA-1", "packages": { "step": "asking", "new": true, "download": { "bytes": null, "packages": [{ "package": "Makie" }, { "package": "WGLMakie" }] } } },
+            { "notebook_id": "AAAA-1", "packages": { "step": "asking", "new": true, "download": { "bytes": null, "packages": [{ "package": "Makie" }, { "package": "WGLMakie", "close_to": "GLMakie" }] } } },
             { "notebook_id": "bbbb-2", "packages": { "step": "asking", "download": { "bytes": 5e8, "packages": [{ "package": "GO.db" }] } } },
             { "notebook_id": "cccc-3", "packages": { "step": "installing", "packages": ["DataFrames"] } },
             { "notebook_id": "dddd-4", "packages": null },
         ]);
-        assert_eq!(super::install_asking(&listed, "aaaa-1"), Some(super::Asking { new: true, packages: vec!["Makie".into(), "WGLMakie".into()] }), "ids match whatever their case");
-        assert_eq!(super::install_asking(&listed, "bbbb-2"), Some(super::Asking { new: false, packages: vec!["GO.db".into()] }));
+        assert_eq!(super::install_asking(&listed, "aaaa-1"), Some(super::Asking { new: true, packages: vec!["Makie".into(), "WGLMakie".into()], close_to: vec![("WGLMakie".into(), "GLMakie".into())] }), "ids match whatever their case");
+        assert_eq!(super::install_asking(&listed, "bbbb-2"), Some(super::Asking { new: false, packages: vec!["GO.db".into()], close_to: vec![] }));
         assert_eq!(super::install_asking(&listed, "cccc-3"), None, "installing isn't asking");
         assert_eq!(super::install_asking(&listed, "dddd-4"), None);
         assert_eq!(super::install_asking(&listed, "eeee-5"), None);

@@ -247,7 +247,9 @@ pub enum Effect {
     FetchResult { call: ToolCallId, tool: String, input: serde_json::Value },
     /// Answer a call the runtime holds (`ask`), with the cells the user's own
     /// run reached meanwhile (each with its `last_run` before that run).
-    AnswerRun { ask: u64, allow: bool, user_ran: Vec<(String, f64)> },
+    /// `packages`: for `approve_install`, the packages its card named, so the yes covers those only
+    /// (EndeavorMCP #418); none where the card named none.
+    AnswerRun { ask: u64, allow: bool, user_ran: Vec<(String, f64)>, packages: Option<Vec<String>> },
     /// The user answered the agent's request to restart the runtime (card `id`): Restart restarts it.
     AnswerRestart { id: u64, restart: bool },
     /// Tell the runtime this session's policy changed ("plan" | "ask" |
@@ -2305,7 +2307,7 @@ impl Session {
                         notes.extend(heading.map(|h| format!("{agent} stopped before you answered “{h}”")));
                     }
                     Some(Asker::Runtime(ask)) => {
-                        self.later.push(Effect::AnswerRun { ask, allow: false, user_ran: Vec::new() });
+                        self.later.push(Effect::AnswerRun { ask, allow: false, user_ran: Vec::new(), packages: None });
                         notes.extend(heading.map(|h| format!("{agent} stopped waiting for your answer to “{h}”")));
                     }
                     // Its Restart still restarts after the turn: the user's press is what restarts.
@@ -2479,9 +2481,10 @@ impl Session {
     /// `answer`, telling the runtime which cells the user's own run reached
     /// meanwhile (`user_ran`), for a run it holds.
     fn answer_with(&mut self, ix: usize, option: &PermissionOption, scope: Scope, user_ran: Vec<(String, f64)>) {
-        let Some(Entry::Permission { responder, tool, .. }) = self.entries.get_mut(ix) else { return };
+        let Some(Entry::Permission { responder, tool, preview, .. }) = self.entries.get_mut(ix) else { return };
         let Some(asker) = responder.take() else { return };
         let tool = tool.clone().unwrap_or_default();
+        let shown = crate::approval::shown_packages(&tool, preview.as_ref());
         match asker {
             Asker::Agent(responder) => {
                 let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()));
@@ -2489,7 +2492,7 @@ impl Session {
             }
             Asker::Runtime(ask) => {
                 let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
-                self.later.push(Effect::AnswerRun { ask, allow, user_ran });
+                self.later.push(Effect::AnswerRun { ask, allow, user_ran, packages: allow.then_some(shown).flatten() });
                 // A card kept past the turn: nothing runs until the agent makes the call again, so
                 // "Go ahead" asks it to (queued while Claude restarts). A message of the user's
                 // already waiting goes instead, and may wait on Send next, so a note says so.
@@ -2587,7 +2590,7 @@ impl Session {
         let arrival = self.answer_on_arrival(&Asked { title: &title, kind: None, input: &input, path: None }, runs_code, false);
         if let Some(approval) = arrival {
             self.approve(&call, approval, &title, &input);
-            return vec![Effect::AnswerRun { ask: id, allow: true, user_ran: Vec::new() }];
+            return vec![Effect::AnswerRun { ask: id, allow: true, user_ran: Vec::new(), packages: None }];
         }
         let options = vec![
             PermissionOption::new(RUN_ALLOW, "Allow", PermissionOptionKind::AllowOnce),
@@ -3032,7 +3035,7 @@ mod tests {
     type Answered<'a> = (u64, bool, &'a [(String, f64)]);
 
     fn answers(effects: &[Effect]) -> Vec<Answered<'_>> {
-        effects.iter().filter_map(|e| if let Effect::AnswerRun { ask, allow, user_ran } = e { Some((*ask, *allow, user_ran.as_slice())) } else { None }).collect()
+        effects.iter().filter_map(|e| if let Effect::AnswerRun { ask, allow, user_ran, .. } = e { Some((*ask, *allow, user_ran.as_slice())) } else { None }).collect()
     }
 
     #[test]
@@ -3045,7 +3048,12 @@ mod tests {
         let effects = s.runtime_asks_now(&[download]);
         // The card also asks the runtime what would install, to name the packages (#264).
         assert!(answers(&effects).is_empty() && matches!(effects.as_slice(), [Effect::PreviewRun { .. }, Effect::Asked(_)]), "the download waits for the user");
-        assert!(s.pending_permission().is_some());
+        let card = s.pending_permission().expect("the install card");
+        // The yes names the packages the card did, so it covers those only (EndeavorMCP #418).
+        s.set_preview(card, crate::pluto::RunPreview { asking: Some(crate::pluto::Asking { new: true, packages: vec!["Example".into()], close_to: vec![] }), ..Default::default() });
+        assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
+        let later = s.take_later();
+        assert!(matches!(later.as_slice(), [Effect::AnswerRun { ask: 41, allow: true, packages: Some(p), .. }] if p == &["Example".to_owned()]), "the card's names go with the yes");
     }
 
     #[test]

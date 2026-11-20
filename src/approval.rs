@@ -897,24 +897,40 @@ fn new_packages(preview: Option<&pluto::RunPreview>) -> Option<&[String]> {
     preview.and_then(|p| p.asking.as_ref()).filter(|a| a.new && !a.packages.is_empty()).map(|a| a.packages.as_slice())
 }
 
+/// The packages an `approve_install` card named, which its yes covers and no others (EndeavorMCP
+/// #418): a package the notebook came to need after the card asks again. Empty where the card named
+/// none (its preview never came, or it is R's download, which isn't about names: the runtime goes by
+/// the download there). The app's yes to this call is always this card: the agent's own prompt for
+/// it is answered by the runtime's hold, and the call is never let through on arrival.
+pub(crate) fn shown_packages(tool: &str, preview: Option<&pluto::RunPreview>) -> Option<Vec<String>> {
+    (tool == "approve_install").then(|| new_packages(preview).map(<[String]>::to_vec).unwrap_or_default())
+}
+
 /// `approve_install`'s question: "Install Makie and WGLMakie, new to this notebook?" for a Julia or
 /// Python notebook's new packages (no size: nothing is measured), R's download question otherwise,
 /// and a plain one until the preview says which.
 fn install_question(preview: Option<&pluto::RunPreview>) -> RunQuestion {
-    if let Some(names) = new_packages(preview) {
+    let asking = preview.and_then(|p| p.asking.as_ref());
+    if let (Some(names), Some(asking)) = (new_packages(preview), asking) {
         const SHOWN: usize = 4;
-        let mut shown: Vec<&str> = names.iter().take(SHOWN).map(String::as_str).collect();
+        // A likely typo says what it is close to: "pandsa (close to pandas)".
+        let named = |name: &String| match asking.close_to.iter().find(|(p, _)| p == name) {
+            Some((_, near)) => format!("{name} (close to {near})"),
+            None => name.clone(),
+        };
+        let mut shown: Vec<String> = names.iter().take(SHOWN).map(named).collect();
         let more = names.len().saturating_sub(SHOWN);
         let list = if more > 0 {
             format!("{} and {more} more", shown.join(", "))
         } else {
             let last = shown.pop().unwrap_or_default();
-            if shown.is_empty() { last.to_owned() } else { format!("{} and {last}", shown.join(", ")) }
+            if shown.is_empty() { last } else { format!("{} and {last}", shown.join(", ")) }
         };
         return RunQuestion { heading: format!("Install {list}, new to this notebook?"), button: "Install", names: vec![] };
     }
-    match preview {
+    match asking {
         Some(_) => RunQuestion { heading: "Download and install the packages?".into(), button: "Download", names: vec![] },
+        // Until the runtime says what waits, or if it couldn't.
         None => RunQuestion { heading: "Install the packages?".into(), button: "Install", names: vec![] },
     }
 }
@@ -1383,7 +1399,7 @@ mod tests {
         assert_eq!(ask("close_notebook", None, json!({ "notebook_id": "n" })), ("Close the notebook?".into(), "Close"));
         assert_eq!(ask("apply_package_update", cells(0, false), json!({ "notebook_id": "n", "date": "2026-10-01" })), ("Update the packages to 2026-10-01?".into(), "Update"));
         assert_eq!(ask("apply_package_update", None, json!({})), ("Update the notebook's packages?".into(), "Update"));
-        assert_eq!(ask("approve_install", cells(0, false), json!({ "notebook_id": "n" })), ("Download and install the packages?".into(), "Download"));
+        assert_eq!(ask("approve_install", cells(0, false), json!({ "notebook_id": "n" })), ("Install the packages?".into(), "Install"), "a preview that doesn't say what waits");
         assert_eq!(ask("answer_prompt", cells(1, false), json!({ "notebook_id": "n", "cell_id": "a", "text": "y" })), ("Answer the cell's question?".into(), "Answer"));
         assert_eq!(ask("set_input", cells(0, false), json!({ "notebook_id": "n", "name": "bins", "value": 30 })), ("Set `bins` to 30?".into(), "Set"));
         assert_eq!(ask("set_input", None, json!({ "notebook_id": "n", "name": "species", "value": "setosa" })), ("Set `species` to “setosa”?".into(), "Set"));
@@ -1399,7 +1415,7 @@ mod tests {
         use super::{new_packages, run_question};
         use crate::pluto::{self, RunPreview};
         // EndeavorMCP #397/#355: a Julia or Python notebook's new packages have no size, and "install" is the word.
-        let asking = |new, packages: &[&str]| Some(RunPreview { asking: Some(pluto::Asking { new, packages: packages.iter().map(|p| p.to_string()).collect() }), ..Default::default() });
+        let asking = |new, packages: &[&str]| Some(RunPreview { asking: Some(pluto::Asking { new, packages: packages.iter().map(|p| p.to_string()).collect(), close_to: vec![] }), ..Default::default() });
         let ask = |preview: Option<RunPreview>| {
             let q = run_question("approve_install", preview.as_ref(), &json!({ "notebook_id": "n" }));
             (q.heading, q.button)
@@ -1410,7 +1426,16 @@ mod tests {
         // An R notebook's large download keeps its question; before the preview, neither word is promised.
         assert_eq!(ask(asking(false, &["GO.db"])), ("Download and install the packages?".into(), "Download"));
         assert_eq!(ask(None), ("Install the packages?".into(), "Install"));
+        assert_eq!(ask(Some(RunPreview::default())), ("Install the packages?".into(), "Install"), "a preview that couldn't say what waits");
         assert_eq!(new_packages(asking(true, &[]).as_ref()), None);
+        // A likely typo says what it is close to (EndeavorMCP #417).
+        let typo = Some(RunPreview { asking: Some(pluto::Asking { new: true, packages: vec!["pandsa".into()], close_to: vec![("pandsa".into(), "pandas".into())] }), ..Default::default() });
+        assert_eq!(ask(typo.clone()), ("Install pandsa (close to pandas), new to this notebook?".into(), "Install"));
+        // Its yes names the packages the card did, which it covers and no others (EndeavorMCP #418).
+        assert_eq!(super::shown_packages("approve_install", typo.as_ref()), Some(vec!["pandsa".to_owned()]));
+        assert_eq!(super::shown_packages("approve_install", asking(false, &["GO.db"]).as_ref()), Some(vec![]), "R's download names none");
+        assert_eq!(super::shown_packages("approve_install", None), Some(vec![]), "nor a card whose preview never came");
+        assert_eq!(super::shown_packages("execute_cell", typo.as_ref()), None);
     }
 
     #[test]
