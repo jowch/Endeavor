@@ -1774,7 +1774,7 @@ impl Session {
                     input["code"].as_str().map(str::to_owned).or_else(|| input["cell_id"].as_str().and_then(|id| self.cell_codes.get(id)).map(str::to_owned))
                 });
                 let tool = celldiff::notebook_tool(&title).map(str::to_owned);
-                if let Some(tool) = tool.clone().filter(|t| runs_code && crate::approval::previews_cells(t)) {
+                if let Some(tool) = tool.clone().filter(|t| runs_code && crate::approval::fetches_preview(t)) {
                     effects.push(Effect::PreviewRun { ix: self.entries.len(), tool, input: input.clone() });
                 }
                 if plan.is_some() {
@@ -2595,7 +2595,7 @@ impl Session {
         ];
         let code = input["code"].as_str().map(str::to_owned).or_else(|| input["cell_id"].as_str().and_then(|c| self.cell_codes.get(c)).map(str::to_owned));
         let mut effects = Vec::new();
-        if runs_code && crate::approval::previews_cells(&tool) {
+        if runs_code && crate::approval::fetches_preview(&tool) {
             effects.push(Effect::PreviewRun { ix: self.entries.len(), tool: tool.clone(), input: input.clone() });
         }
         self.asks.asked(self.waiting_prompts().len());
@@ -3043,7 +3043,8 @@ mod tests {
         assert_eq!(answers(&run), [(40, true, &[][..])], "a run in Auto is let through");
         let download = serde_json::json!({ "id": 41, "owner": "7", "tool": "approve_install", "arguments": { "notebook_id": "n" }, "since": 1.0 });
         let effects = s.runtime_asks_now(&[download]);
-        assert!(answers(&effects).is_empty() && matches!(effects.as_slice(), [Effect::Asked(_)]), "the download waits for the user");
+        // The card also asks the runtime what would install, to name the packages (#264).
+        assert!(answers(&effects).is_empty() && matches!(effects.as_slice(), [Effect::PreviewRun { .. }, Effect::Asked(_)]), "the download waits for the user");
         assert!(s.pending_permission().is_some());
     }
 
