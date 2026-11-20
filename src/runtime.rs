@@ -75,7 +75,6 @@ impl Listener {
     }
 
     /// The agent's `view_cell_output` gets `snapshot`'s picture when the runtime has none (`cell_shot`).
-    #[cfg(not(windows))]
     pub fn set_snapshot(&self, snapshot: Box<endeavor_mcp::Snapshot>) {
         self.relay.set_snapshot(snapshot);
     }

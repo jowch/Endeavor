@@ -406,17 +406,10 @@ pub fn set_open_panel_message(message: &'static str, cx: &mut gpui::App) {
 #[cfg(not(target_os = "macos"))]
 pub fn set_open_panel_message(_: &'static str, _: &mut gpui::App) {}
 
+/// A PNG of part of the notebook, from WebView2.
 #[cfg(windows)]
-pub mod snapshot {
-    use futures::channel::oneshot;
-
-    /// No picture of the notebook here yet: a drawn box goes as its cells.
-    pub fn png(_: &wry::WebView, _: [f64; 4]) -> oneshot::Receiver<Option<Vec<u8>>> {
-        let (tx, rx) = oneshot::channel();
-        let _ = tx.send(None);
-        rx
-    }
-}
+#[path = "snapshot_windows.rs"]
+pub mod snapshot;
 
 #[cfg(not(target_os = "macos"))]
 pub mod dialogs {

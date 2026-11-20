@@ -54,6 +54,8 @@ getrandom = "0.3"
 # the same versions wry uses.
 webview2-com = "0.38"
 windows-core = "0.61"
+# The notebook's picture, cut from WebView2's (src/snapshot_windows.rs). Already in the tree through GPUI.
+image = { version = "0.25", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Console", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

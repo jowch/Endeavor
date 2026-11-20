@@ -176,10 +176,17 @@ under the user's own `%LOCALAPPDATA%`.
   what's missing and quits, instead of panicking.
 - `src/platform.rs`, `reduces_motion`: always false. Needs
   `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`.
-- `src/platform.rs`, `set_open_panel_message`, `snapshot`, `dialogs`: the
-  same no-ops as on Linux.
+- `src/platform.rs`, `set_open_panel_message`, `dialogs`: the same no-ops as
+  on Linux.
 - `src/network.rs`, `monitor`: says the network is up once and never again.
   Needs `NotifyIpInterfaceChange`.
+
+Pictures of the notebook (untried on Windows): `src/snapshot_windows.rs` cuts
+WebView2's own picture of the view (DevTools' `Page.captureScreenshot`) to a
+rect, for Point's drawn box and the agent's picture of an HTML output
+(`cell_shot.rs`). That picture comes from a second WebView2 placed just under
+the user's view, with the same window region, and disabled so it takes no
+clicks.
 
 Ported for real: the app data folder (`%LOCALAPPDATA%\Endeavor`,
 `src/install.rs`), the home folder for `~/.ssh` and Downloads, the depot list
