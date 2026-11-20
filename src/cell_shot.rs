@@ -345,7 +345,8 @@ mod linux {
 mod windows {
     use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetClientRect, GetParent, IsIconic, IsWindowVisible, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetClientRect, GetParent, IsIconic, IsWindowVisible, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow};
+    use wry::WebViewExtWindows;
 
     use crate::overlay;
 
@@ -430,7 +431,10 @@ mod windows {
             if !self.shown() {
                 // The theme may have changed since the last picture.
                 crate::settings::set_webview_appearance(&self.view, crate::theme::is_light());
-                let _ = self.view.set_visible(true);
+                // Not wry's set_visible, whose SW_SHOW may activate: shown without
+                // activating, so the keyboard stays in the user's cell.
+                unsafe { ShowWindow(ours as HWND, SW_SHOWNA) };
+                let _ = unsafe { self.view.controller().SetIsVisible(true) };
             }
             true
         }
