@@ -209,9 +209,11 @@ mod mac {
                     // Its holes' mask is drawn for its bounds.
                     crate::overlay::set_second(Some(&self.view));
                 }
+                // Directly under the user's view among its siblings. Both are built on the same
+                // parent, so sharing a superview isn't enough: the second view, added last, starts
+                // on top (#259). Moved only when it isn't there, before it's shown.
                 let superview: *mut AnyObject = msg_send![&*self.main, superview];
-                let behind: *mut AnyObject = msg_send![&*ours, superview];
-                if !superview.is_null() && behind != superview {
+                if !superview.is_null() && !just_below(superview, &*ours, &*self.main) {
                     // NSWindowBelow.
                     let _: () = msg_send![superview, addSubview: &*ours, positioned: -1isize, relativeTo: &*self.main];
                 }
@@ -233,6 +235,18 @@ mod mac {
 
         pub fn hide(&self) {
             let _ = self.view.set_visible(false);
+        }
+    }
+
+    /// Whether `ours` is a subview of `superview` directly below `main` (the next one in front of
+    /// it, in `subviews`' back-to-front order).
+    unsafe fn just_below<A: objc2::Message, B: objc2::Message>(superview: *mut AnyObject, ours: &A, main: &B) -> bool {
+        unsafe {
+            let subviews: *mut AnyObject = msg_send![superview, subviews];
+            let ours: usize = msg_send![subviews, indexOfObjectIdenticalTo: ours];
+            let main: usize = msg_send![subviews, indexOfObjectIdenticalTo: main];
+            // NSNotFound is NSIntegerMax.
+            ours != isize::MAX as usize && ours.checked_add(1) == Some(main)
         }
     }
 
