@@ -309,11 +309,14 @@ impl Server {
     }
 
     /// The helper's launcher and its state folder's name in ~/.cache/endeavor.
-    /// A cluster's folder is its own, so the same machine can also be a plain
-    /// server entry without the two sharing a runtime.
+    /// A plain server's is empty: the helper's own default, which the plugin's
+    /// `endeavor serve` and `mcp` use too, so both share one runtime there. The
+    /// helper keeps using the app's older `state` folder while a runtime there
+    /// is alive (EndeavorMCP#110). A cluster's folder is its own, so the same
+    /// machine can also be a plain server entry without the two sharing a runtime.
     pub fn launcher(&self) -> [String; 2] {
         match &self.cluster {
-            None => ["process".into(), "state".into()],
+            None => ["process".into(), String::new()],
             Some(_) => ["slurm".into(), format!("cluster-{}", self.id)],
         }
     }
@@ -559,7 +562,7 @@ mod tests {
     #[test]
     fn a_cluster_keeps_its_own_state_folder() {
         let server = Server { id: "server-1".into(), ..Default::default() };
-        assert_eq!(server.launcher(), ["process", "state"]);
+        assert_eq!(server.launcher(), ["process", ""], "the helper's default, which the plugin shares");
         let cluster = Server { cluster: Some(Cluster::default()), ..server };
         assert_eq!(cluster.launcher(), ["slurm", "cluster-server-1"]);
         let saved = serde_json::to_string(&cluster).unwrap();

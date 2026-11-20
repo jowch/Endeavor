@@ -149,10 +149,15 @@ notebooks stop after 48 hours idle (a setting), even while the app is open.
 
 The state file records how the runtime was launched. Connect, reconnect, and
 stop each switch on this one value instead of scattered checks. Each host
-entry has its own state folder: `~/.cache/endeavor/state/` for a server,
-`~/.cache/endeavor/cluster-<id>/` for a cluster, so one machine can be both a
-server entry and a cluster entry without the two sharing a runtime. The app
-sends the launcher and the folder's name in the bootstrap's preamble.
+entry has its own state folder: for a server, the helper's default,
+`~/.local/state/endeavor/serve/<host name>/`, which the plugin's `endeavor
+serve` and `mcp` use too, so the app and the plugin on a server share one
+runtime; `~/.cache/endeavor/cluster-<id>/` for a cluster, so one machine can be
+both a server entry and a cluster entry without the two sharing a runtime. The
+app sends the launcher and the folder's name (empty for a server) in the
+bootstrap's preamble. The app used `~/.cache/endeavor/state/` for a server
+before; while a runtime there is still alive, the helper keeps using it until
+it stops (EndeavorMCP#110).
 
 ```
 <state folder>/runtime.json   (mode 0600)
