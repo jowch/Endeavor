@@ -231,9 +231,9 @@ To wait for something, poll the dump. For example, loop until
   and it still shows. `dialogs` is the text of each dialog open in the page:
   an R notebook's page (Ember) shows its messages that way, not with `alert`. Null when the page isn't on screen. While an alert is
   open the page can't answer, and `page` is `{"error": …}`.
-- `cell_shot`. How the last picture of a cell's output for the agent went
-  (Mac and Linux): `picture`, or why there was none, such as "the output is empty" or
-  "the notebook pane isn't on screen". Null before the first one.
+- `cell_shot`. How the last picture of a cell's output for the agent went:
+  `picture`, or why there was none, such as "the output is empty" or "the
+  notebook pane isn't on screen". Null before the first one.
   `cell_shot_view` is the second web view that takes it: `none` (not made
   yet, or let go after 5 idle minutes), `hidden`, or `shown` (behind the
   user's view, only while a picture is taken).

@@ -1841,6 +1841,7 @@ dependencies = [
  "gpui-pre-platform",
  "gpui-wry",
  "gtk",
+ "image",
  "lb-wry",
  "libc",
  "log",

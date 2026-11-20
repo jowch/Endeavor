@@ -48,33 +48,41 @@ const ALL: i32 = 1 << 16;
 fn apply(holes: &Holes) {
     let Some(hwnd) = holes.window else { return };
     let hwnd = hwnd as HWND;
+    let open: Vec<_> = holes.open.iter().map(|(_, b)| *b).collect();
     unsafe {
-        if holes.open.is_empty() {
-            SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
-        } else {
-            // The region is in the window's physical pixels, from its top-left corner.
-            let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
-            let region = CreateRectRgn(0, 0, ALL, ALL);
-            for (_, b) in &holes.open {
-                let x = (f32::from(b.origin.x) * scale).floor() as i32;
-                let y = (f32::from(b.origin.y) * scale).floor() as i32;
-                let right = (f32::from(b.origin.x + b.size.width) * scale).ceil() as i32;
-                let bottom = (f32::from(b.origin.y + b.size.height) * scale).ceil() as i32;
-                let hole = CreateRectRgn(x, y, right, bottom);
-                CombineRgn(region, region, hole, RGN_DIFF);
-                DeleteObject(hole);
-            }
-            // The window owns the region once it's set.
-            if SetWindowRgn(hwnd, region, 1) == 0 {
-                DeleteObject(region);
-            }
-        }
+        set_region(hwnd, &open);
         // A disabled window keeps the keyboard if it has it, and then keys go
         // nowhere, so GPUI's window takes it first.
         if holes.dismiss {
             SetFocus(GetParent(hwnd));
         }
         EnableWindow(hwnd, (!holes.dismiss).into());
+    }
+}
+
+/// `hwnd`'s region: all of it but `holes`.
+unsafe fn set_region(hwnd: HWND, holes: &[Bounds<Pixels>]) {
+    unsafe {
+        if holes.is_empty() {
+            SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
+            return;
+        }
+        // The region is in the window's physical pixels, from its top-left corner.
+        let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
+        let region = CreateRectRgn(0, 0, ALL, ALL);
+        for b in holes {
+            let x = (f32::from(b.origin.x) * scale).floor() as i32;
+            let y = (f32::from(b.origin.y) * scale).floor() as i32;
+            let right = (f32::from(b.origin.x + b.size.width) * scale).ceil() as i32;
+            let bottom = (f32::from(b.origin.y + b.size.height) * scale).ceil() as i32;
+            let hole = CreateRectRgn(x, y, right, bottom);
+            CombineRgn(region, region, hole, RGN_DIFF);
+            DeleteObject(hole);
+        }
+        // The window owns the region once it's set.
+        if SetWindowRgn(hwnd, region, 1) == 0 {
+            DeleteObject(region);
+        }
     }
 }
 
@@ -107,4 +115,24 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
         holes.open.extend(hole.map(|b| (owner, b)));
         holes.open != before
     });
+}
+
+/// wry's container window around `webview`, for `cell_shot` to place the second view.
+pub fn window_of(webview: &wry::WebView) -> Option<usize> {
+    container(webview)
+}
+
+/// The holes cut in the user's web view now (`set_hole`), in GPUI's logical pixels.
+pub fn holes() -> Vec<Bounds<Pixels>> {
+    HOLES.with_borrow(|holes| holes.open.iter().map(|(_, b)| *b).collect())
+}
+
+/// Give `other` (the second web view behind the user's, `cell_shot`) the same
+/// holes, so GPUI's menu shows through both. It never takes a click.
+pub fn cut_holes(other: &wry::WebView, holes: &[Bounds<Pixels>]) {
+    let Some(window) = container(other) else { return };
+    unsafe {
+        set_region(window as HWND, holes);
+        EnableWindow(window as HWND, 0);
+    }
 }
