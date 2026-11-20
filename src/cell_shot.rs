@@ -12,8 +12,12 @@
 //! the user did inside a widget (a selection) isn't in the picture. It has none
 //! of the user's view's setup (page.js), so Pluto there loads JuliaMono from its
 //! CDN: offline, code in a picture is in another monospace font.
-// ponytail: Mac only. Windows (WebView2's captureScreenshot) and Linux (WebKitGTK's snapshot) come later.
-#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+//!
+//! On Linux the second view is an X child window stacked under the user's
+//! one: WebKitGTK draws a hidden view's snapshot too, but runs no animation
+//! frames there, so a plot drawn from one would be blank.
+// ponytail: Mac and Linux. Windows (WebView2's CapturePreview) comes later.
+#![cfg_attr(windows, allow(dead_code))]
 
 use std::time::Duration;
 
@@ -114,6 +118,8 @@ pub fn visible_rect(measured: &str) -> Option<[f64; 4]> {
 
 #[cfg(target_os = "macos")]
 pub use mac::Shooter;
+#[cfg(target_os = "linux")]
+pub use linux::Shooter;
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -237,6 +243,100 @@ mod mac {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod linux {
+    use gtk::gdk;
+    use gtk::prelude::*;
+
+    use crate::overlay;
+
+    /// The second web view, the page it has loaded, and the user's view's X window it hides behind.
+    pub struct Shooter {
+        pub view: wry::WebView,
+        /// Cleared when its web content process ends, so the next picture loads the page again.
+        pub url: std::rc::Rc<std::cell::RefCell<String>>,
+        main: gdk::Window,
+        /// The holes cut in the user's view (a tip, a menu, a notice), cut in this one too.
+        holes: std::cell::RefCell<Option<Vec<gpui::Bounds<gpui::Pixels>>>>,
+    }
+
+    impl Shooter {
+        pub fn new(window: &gpui::Window, main: &wry::WebView) -> Option<Shooter> {
+            let main = overlay::window_of(main)?;
+            let parent = crate::platform::webview_parent(window);
+            let view = wry::WebViewBuilder::new().with_url("about:blank").build_as_child(&parent).ok()?;
+            // Shown to GTK from the start, and hidden by unmapping its X window: shown again
+            // through GTK, a view keeps the size GTK picks for it, not the pane's.
+            overlay::window_of(&view)?.hide();
+            let url = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+            let page = url.clone();
+            crate::webcontent::on_process_ended(&view, move || {
+                eprintln!("The second web view's web content process ended; the next cell picture loads its page again");
+                page.borrow_mut().clear();
+            });
+            Some(Shooter { view, url, main, holes: Default::default() })
+        }
+
+        /// Show `url`, unless it is the page already loaded. Whether it loads now.
+        pub fn load(&self, url: &str) -> bool {
+            if *self.url.borrow() == url {
+                return false;
+            }
+            let _ = self.view.load_url(url);
+            *self.url.borrow_mut() = url.to_owned();
+            true
+        }
+
+        /// Whether the user's view is mapped in a mapped window. Behind anything else the second
+        /// view would show. X has no occlusion here, and a covered window still draws.
+        pub fn pane_shows(&self) -> bool {
+            overlay::viewable(&self.main)
+        }
+
+        /// Put the second view exactly behind the user's view, at the bottom of GPUI's child
+        /// windows, with the user's view's holes, and keep it there: called again as the picture
+        /// is taken, it follows the pane. False, with the second view hidden, once the pane isn't
+        /// on screen.
+        pub fn keep_behind(&self) -> bool {
+            if !self.pane_shows() {
+                self.hide();
+                return false;
+            }
+            let Some(ours) = overlay::window_of(&self.view) else { return false };
+            let holes = overlay::holes();
+            if self.holes.borrow().as_ref() != Some(&holes) {
+                overlay::cut_holes(&self.view, &holes);
+                *self.holes.borrow_mut() = Some(holes);
+            }
+            // As wry places the user's view: GDK's units, which wry takes to be logical pixels.
+            // Placed and lowered before it's mapped, so it never shows over anything.
+            use wry::WebViewExtUnix;
+            let (x, y, width, height) = self.main.geometry();
+            let laid_out = (self.view.webview().allocated_width(), self.view.webview().allocated_height());
+            if ours.geometry() != (x, y, width, height) || laid_out != (width, height) {
+                let _ = self.view.set_bounds(wry::Rect { position: wry::dpi::LogicalPosition::new(x, y).into(), size: wry::dpi::LogicalSize::new(width, height).into() });
+            }
+            ours.lower();
+            if !self.shown() {
+                // The theme may have changed since the last picture.
+                crate::settings::set_webview_appearance(&self.view, crate::theme::is_light());
+                ours.show_unraised();
+            }
+            true
+        }
+
+        pub fn shown(&self) -> bool {
+            overlay::window_of(&self.view).is_some_and(|w| overlay::viewable(&w))
+        }
+
+        pub fn hide(&self) {
+            if let Some(ours) = overlay::window_of(&self.view) {
+                ours.hide();
+            }
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -272,9 +372,9 @@ mod tests {
 /// The second web view while it is kept, and how the last picture went (the state dump's `cell_shot`).
 #[derive(Default)]
 pub struct Second {
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     shooter: Option<std::rc::Rc<Shooter>>,
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     used: Option<std::time::Instant>,
     pub last: Option<&'static str>,
 }
@@ -283,7 +383,7 @@ impl Second {
     /// The second view, for the state dump: "none" (not made, or let go), "hidden", or "shown"
     /// (behind the user's view, while a picture is taken).
     pub fn view(&self) -> &'static str {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         if let Some(shooter) = &self.shooter {
             return if shooter.shown() { "shown" } else { "hidden" };
         }
@@ -294,7 +394,7 @@ impl Second {
 impl crate::Workspace {
     /// Take the picture `ask` waits for, one at a time. What happened.
     pub(crate) fn shoot_cell(&mut self, ask: Ask, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> futures::future::LocalBoxFuture<'static, &'static str> {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         return match self.cell_shot_job(&ask, window, cx) {
             Ok(job) => Box::pin(async move {
                 let (png, outcome) = match job.await {
@@ -309,7 +409,7 @@ impl crate::Workspace {
                 Box::pin(async move { why })
             }
         };
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
         {
             let _ = (window, cx, ask.reply.send(None));
             Box::pin(async { "no snapshots here" })
@@ -319,7 +419,7 @@ impl crate::Workspace {
     /// After a picture: the outcome for the state dump, and the second view goes once it's idle.
     pub(crate) fn cell_shot_done(&mut self, outcome: &'static str, cx: &mut gpui::Context<Self>) {
         self.second.last = Some(outcome);
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(IDLE).await;
             let _ = this.update(cx, |this, _| {
@@ -329,11 +429,11 @@ impl crate::Workspace {
             });
         })
         .detach();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
         let _ = cx;
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     fn cell_shot_job(&mut self, ask: &Ask, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Result<futures::future::LocalBoxFuture<'static, Result<Vec<u8>, &'static str>>, &'static str> {
         use wire::backend::Backend;
         if self.notebook_kind(&ask.host, &ask.notebook) != Backend::Pluto {
@@ -368,7 +468,7 @@ impl crate::Workspace {
 /// Wait for the cell's output in the second view, scroll it into view, and take its picture. The
 /// pane is checked at each step: once it isn't on screen (Settings opened), the second view hides,
 /// within a step (at most about a second), and there is no picture.
-#[cfg(target_os = "macos")]
+#[cfg(not(windows))]
 async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::BackgroundExecutor) -> Result<Vec<u8>, &'static str> {
     let deadline = std::time::Instant::now() + DEADLINE;
     let behind = || if shooter.keep_behind() { Ok(()) } else { Err(NOT_ON_SCREEN) };

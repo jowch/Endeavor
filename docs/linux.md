@@ -112,9 +112,14 @@ The remaining work is ranked at the end of this page.
     passes the same X window ID as an Xlib handle.
 - `src/linux/` has the Linux versions of macOS's `webkeys` (key routing) and
   `overlay` (menus over the notebook).
-- Still stubs on Linux: `snapshot` (a picture of the notebook for Point's drawn
-  box, which goes as its cells instead) and `dialogs` (the page's alert(),
-  confirm() and prompt() fall back to WebKitGTK's own GTK dialogs, untested).
+- **Pictures of the notebook:** `src/linux/snapshot.rs` cuts WebKitGTK's
+  snapshot of the web view to a rect, for Point's drawn box and the agent's
+  picture of an HTML output (`cell_shot.rs`). That picture comes from a second
+  web view, an X child window stacked under the user's view with the same
+  holes. It has to be mapped: WebKitGTK snapshots a hidden view too, but runs
+  no animation frames there, so a plot drawn from one would come out blank.
+- Still a stub on Linux: `dialogs` (the page's alert(), confirm() and
+  prompt() fall back to WebKitGTK's own GTK dialogs, untested).
 - **Files:** app data goes to `$XDG_DATA_HOME/endeavor` (default
   `~/.local/share/endeavor`). The log goes to `$XDG_STATE_HOME/endeavor/endeavor.log`
   (default `~/.local/state/endeavor/endeavor.log`).
