@@ -1,0 +1,71 @@
+# A real Julia notebook on Windows, through the runtime the app runs
+# (issue #198). Nothing else in CI runs real Julia on Windows: EndeavorMCP's
+# real-Julia tests are Unix only, and its Windows tests use a stand-in julia.exe.
+#
+# scripts/julia-smoke.py starts the app's exe as the helper's stdio MCP
+# server (`endeavor.exe --helper mcp`, what the plugin runs), and as an agent
+# would: makes a notebook, runs a cell, checks its output, closes it, and
+# stops the runtime. The runner has no Julia, so the runtime gets its own,
+# as on a user's first run (juliaup, then Julia and Pluto: several minutes).
+# A debug build, so ENDEAVOR_TEST_BROWSER keeps it from opening a browser.
+#
+# It runs when the runtime's pins or this check change (Cargo.lock pins
+# EndeavorMCP), once a week, and by hand.
+name: Windows Julia
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - src/runtime.rs
+      - rust-toolchain.toml
+      - scripts/julia-smoke.py
+      - .github/workflows/windows-julia.yml
+  pull_request:
+    paths:
+      - Cargo.lock
+      - src/runtime.rs
+      - rust-toolchain.toml
+      - scripts/julia-smoke.py
+      - .github/workflows/windows-julia.yml
+  schedule:
+    - cron: '41 6 * * 2'
+  workflow_dispatch:
+
+concurrency:
+  group: windows-julia-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  notebook:
+    name: Julia notebook (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Git
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build
+        run: cargo build --locked -p endeavor --bin endeavor
+      - name: Run a notebook
+        shell: bash
+        env:
+          ENDEAVOR_TEST_BROWSER: ${{ runner.temp }}/browser.txt
+          PYTHONUNBUFFERED: '1'
+        run: python scripts/julia-smoke.py target/debug/endeavor.exe --helper
+      - name: Runtime log
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Filter *.log "$env:LOCALAPPDATA\Endeavor" -ErrorAction SilentlyContinue | ForEach-Object {
+            "== $($_.FullName)"
+            Get-Content -Tail 80 $_.FullName
+          }

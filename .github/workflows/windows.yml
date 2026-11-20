@@ -4,7 +4,8 @@
 # on parts not yet ported to Windows (paths, home and app data folders,
 # downloads) are ignored there with that reason. On main and on pull requests
 # it also keeps a release build a tester can unzip and run, and its
-# installer (docs/windows.md).
+# installer (docs/windows.md), after starting that build once to see that it
+# comes up. windows-julia.yml runs a real Julia notebook.
 name: Windows
 
 on:
@@ -107,6 +108,53 @@ jobs:
           if (-not ($dlls -match '^kernel32\.dll$')) { Write-Error "Couldn't read endeavor.exe's imports"; exit 1 }
           $extra = $dlls | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vccorlib|ucrtbased|webview2loader)' }
           if ($extra) { Write-Error "endeavor.exe needs DLLs Windows doesn't ship: $extra"; exit 1 }
+      # Starts the release build as a user would and fails if it exits or
+      # never shows its window (#198). It is the first run: the setup screen.
+      # The screenshot is kept with the build.
+      - name: Start it
+        shell: pwsh
+        run: |
+          # GitHub runs pwsh with $ErrorActionPreference = 'stop': errors are
+          # reported with ::error:: so the log and the cleanup still run.
+          $failed = $null
+          $env:LOCALAPPDATA = "$env:RUNNER_TEMP\appdata"
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+          $app = Start-Process target\release\endeavor.exe -PassThru
+          $deadline = (Get-Date).AddSeconds(90)
+          do {
+            Start-Sleep -Seconds 2
+            $app.Refresh()
+          } until ($app.HasExited -or $app.MainWindowHandle -ne 0 -or (Get-Date) -gt $deadline)
+          if ($app.HasExited) { $failed = "Endeavor exited with $($app.ExitCode) before showing its window" }
+          elseif ($app.MainWindowHandle -eq 0) { $failed = "Endeavor showed no window in 90 seconds" }
+          else {
+            # Still running a while later, past the setup screen's first steps.
+            Start-Sleep -Seconds 20
+            $app.Refresh()
+            if ($app.HasExited) { $failed = "Endeavor exited with $($app.ExitCode) after showing its window" }
+            "Window: '$($app.MainWindowTitle)'"
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $shot = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+            [System.Drawing.Graphics]::FromImage($shot).CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+            New-Item -ItemType Directory -Force target\smoke | Out-Null
+            $shot.Save("$PWD\target\smoke\first-run.png")
+          }
+          $log = "$env:LOCALAPPDATA\Endeavor\Logs\endeavor.log"
+          if (Test-Path $log) {
+            "== endeavor.log"
+            Get-Content -Tail 60 $log
+            if (-not $failed -and (Select-String -Quiet -Path $log -Pattern 'panicked')) { $failed = "Endeavor's log has a panic" }
+          }
+          Get-Process endeavor -ErrorAction SilentlyContinue | Stop-Process -Force
+          if ($failed) { "::error::$failed"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Endeavor-windows-first-run
+          path: target/smoke/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Lay out
         id: layout
         shell: bash
