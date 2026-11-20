@@ -1660,12 +1660,12 @@ impl Workspace {
                     .detach();
                 }
                 Effect::AnswerRestart { id, restart } => self.restart_answered(key, id, restart, cx),
-                Effect::AnswerRun { ask, allow, user_ran } => {
+                Effect::AnswerRun { ask, allow, user_ran, packages } => {
                     let Some(bridge) = self.session_bridge(key) else { continue };
                     cx.background_executor()
                         .spawn(async move {
                             // The ask may have gone meanwhile (the agent gave up on the call).
-                            if let Err(e) = pluto::answer_run(&bridge, ask, allow, &user_ran) {
+                            if let Err(e) = pluto::answer_run(&bridge, ask, allow, &user_ran, packages.as_deref()) {
                                 eprintln!("answer run {ask}: {e}");
                             }
                         })

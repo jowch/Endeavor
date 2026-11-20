@@ -69,10 +69,15 @@ pub fn set_policy(bridge: &Bridge, owner: u64, policy: &str, edits: bool) -> Res
 }
 
 /// Answer a run the runtime holds (its ask `id`), with the cells the user's
-/// own run reached while it waited (each with its `last_run` before that run).
-pub fn answer_run(bridge: &Bridge, id: u64, allow: bool, user_ran: &[(String, f64)]) -> Result<(), String> {
+/// own run reached while it waited (each with its `last_run` before that run), and for
+/// `approve_install` the packages its card named, which the yes covers and no others.
+pub fn answer_run(bridge: &Bridge, id: u64, allow: bool, user_ran: &[(String, f64)], packages: Option<&[String]>) -> Result<(), String> {
     let user_ran: Vec<Value> = user_ran.iter().map(|(id, last_run)| json!({ "cell_id": id, "last_run": last_run })).collect();
-    app_call(bridge, "endeavor/answer_run", json!({ "id": id, "allow": allow, "user_ran": user_ran })).map(|_| ())
+    let mut params = json!({ "id": id, "allow": allow, "user_ran": user_ran });
+    if let Some(packages) = packages {
+        params["packages"] = json!(packages);
+    }
+    app_call(bridge, "endeavor/answer_run", params).map(|_| ())
 }
 
 /// Bind an agent session (`owner`, its key) to its one notebook file; the runtime
@@ -445,6 +450,32 @@ fn http_body(response: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+/// What a notebook's packages wait for the user's OK on (`approve_install`): packages new to a
+/// Julia or Python notebook (`new`, EndeavorMCP #397 and #355), or an R notebook's large download.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Asking {
+    pub new: bool,
+    pub packages: Vec<String>,
+    /// A new package whose name is close to a widely used one's, and that one (`pandsa`, `pandas`):
+    /// a likely typo, which the card says (EndeavorMCP #417).
+    pub close_to: Vec<(String, String)>,
+}
+
+/// The notebook `id`'s `Asking` in a `list_notebooks` result, if its packages wait for an OK.
+pub fn install_asking(listed: &Value, id: &str) -> Option<Asking> {
+    let notebooks = listed.as_array().or_else(|| listed["notebooks"].as_array())?;
+    // The whole id, as the call names it: a UUID, which only its case may write otherwise.
+    let nb = notebooks.iter().find(|nb| nb["notebook_id"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(id)))?;
+    let packages = &nb["packages"];
+    if packages["step"] != "asking" {
+        return None;
+    }
+    let listed = || packages["download"]["packages"].as_array().into_iter().flatten();
+    let names = listed().filter_map(|p| p["package"].as_str().map(str::to_owned)).collect();
+    let close_to = listed().filter_map(|p| Some((p["package"].as_str()?.to_owned(), p["close_to"].as_str()?.to_owned()))).collect();
+    Some(Asking { new: packages["new"] == true, packages: names, close_to })
+}
+
 /// What a run would run, for the approval card (the runtime's `run_preview`).
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 pub struct RunPreview {
@@ -463,6 +494,10 @@ pub struct RunPreview {
     /// The packages a whole-notebook run loads, in notebook order.
     #[serde(default)]
     pub packages: Vec<String>,
+    /// For `approve_install`: what the notebook's packages wait for the user's OK on, from
+    /// `list_notebooks` (`install_asking`), not from the runtime's `run_preview`.
+    #[serde(skip)]
+    pub asking: Option<Asking>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -475,6 +510,10 @@ pub struct PreviewCell {
 }
 
 pub fn run_preview(bridge: &Bridge, tool: &str, arguments: &Value) -> Result<RunPreview, String> {
+    if tool == "approve_install" {
+        let listed = call_tool(bridge, "list_notebooks", json!({}))?;
+        return Ok(RunPreview { asking: install_asking(&listed, arguments["notebook_id"].as_str().unwrap_or("")), ..Default::default() });
+    }
     let reply = rpc(bridge, "endeavor/run_preview", json!({ "tool": tool, "arguments": arguments }))?;
     if let Some(error) = reply.get("error") {
         return Err(error["message"].as_str().unwrap_or("run_preview failed").to_string());
@@ -627,6 +666,21 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 #[cfg(test)]
 mod tests {
     use super::{RunWarning, Started, cells_that_ran, engine_ended, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
+
+    #[test]
+    fn a_notebooks_asking_packages_are_read_from_list_notebooks() {
+        let listed = serde_json::json!([
+            { "notebook_id": "AAAA-1", "packages": { "step": "asking", "new": true, "download": { "bytes": null, "packages": [{ "package": "Makie" }, { "package": "WGLMakie", "close_to": "GLMakie" }] } } },
+            { "notebook_id": "bbbb-2", "packages": { "step": "asking", "download": { "bytes": 5e8, "packages": [{ "package": "GO.db" }] } } },
+            { "notebook_id": "cccc-3", "packages": { "step": "installing", "packages": ["DataFrames"] } },
+            { "notebook_id": "dddd-4", "packages": null },
+        ]);
+        assert_eq!(super::install_asking(&listed, "aaaa-1"), Some(super::Asking { new: true, packages: vec!["Makie".into(), "WGLMakie".into()], close_to: vec![("WGLMakie".into(), "GLMakie".into())] }), "ids match whatever their case");
+        assert_eq!(super::install_asking(&listed, "bbbb-2"), Some(super::Asking { new: false, packages: vec!["GO.db".into()], close_to: vec![] }));
+        assert_eq!(super::install_asking(&listed, "cccc-3"), None, "installing isn't asking");
+        assert_eq!(super::install_asking(&listed, "dddd-4"), None);
+        assert_eq!(super::install_asking(&listed, "eeee-5"), None);
+    }
 
     #[test]
     fn the_status_says_which_julia_and_r_the_runtime_started() {
