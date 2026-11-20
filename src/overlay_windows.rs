@@ -26,6 +26,8 @@ struct Holes {
     dismiss: bool,
     /// wry's container window around WebView2's, which the region is set on.
     window: Option<usize>,
+    /// The cell picture's second web view's container window, while there is one (`set_second`).
+    second: Option<usize>,
 }
 
 thread_local! {
@@ -46,9 +48,13 @@ fn container(webview: &wry::WebView) -> Option<usize> {
 const ALL: i32 = 1 << 16;
 
 fn apply(holes: &Holes) {
+    let open: Vec<_> = holes.open.iter().map(|(_, b)| *b).collect();
+    // The second view has the same holes, so GPUI shows through both. It never takes a click.
+    if let Some(second) = holes.second {
+        unsafe { set_region(second as HWND, &open) };
+    }
     let Some(hwnd) = holes.window else { return };
     let hwnd = hwnd as HWND;
-    let open: Vec<_> = holes.open.iter().map(|(_, b)| *b).collect();
     unsafe {
         set_region(hwnd, &open);
         // A disabled window keeps the keyboard if it has it, and then keys go
@@ -122,17 +128,21 @@ pub fn window_of(webview: &wry::WebView) -> Option<usize> {
     container(webview)
 }
 
-/// The holes cut in the user's web view now (`set_hole`), in GPUI's logical pixels.
-pub fn holes() -> Vec<Bounds<Pixels>> {
-    HOLES.with_borrow(|holes| holes.open.iter().map(|(_, b)| *b).collect())
+/// The cell picture's second web view (`cell_shot`), kept just under the user's at the same
+/// place, or None once it goes. Every hole cut in the user's view is cut in it too, in the same
+/// call, so it never shows where GPUI draws a menu, a notice or a tip. It never takes a click.
+pub fn set_second(other: Option<&wry::WebView>) {
+    HOLES.with_borrow_mut(|holes| {
+        holes.second = other.and_then(container);
+        if let Some(second) = holes.second {
+            unsafe { EnableWindow(second as HWND, 0) };
+        }
+        apply(holes);
+    });
 }
 
-/// Give `other` (the second web view behind the user's, `cell_shot`) the same
-/// holes, so GPUI's menu shows through both. It never takes a click.
-pub fn cut_holes(other: &wry::WebView, holes: &[Bounds<Pixels>]) {
-    let Some(window) = container(other) else { return };
-    unsafe {
-        set_region(window as HWND, holes);
-        EnableWindow(window as HWND, 0);
-    }
+/// Whether the second view is registered (`set_second`). It isn't when its window wasn't
+/// there yet as it was made, and `cell_shot` registers it again then.
+pub fn has_second() -> bool {
+    HOLES.with_borrow(|holes| holes.second.is_some())
 }

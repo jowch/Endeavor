@@ -21,6 +21,8 @@ struct Holes {
     dismiss: bool,
     /// wry's container window around the web view, which the shape is set on.
     window: Option<gdk::Window>,
+    /// The cell picture's second web view's container window, while there is one (`set_second`).
+    second: Option<gdk::Window>,
 }
 
 thread_local! {
@@ -80,16 +82,19 @@ enum Shape<'a> {
 }
 
 fn apply(holes: &Holes) {
-    let (Some(window), Some(display)) = (&holes.window, super::xdisplay()) else { return };
-    let Some(xid) = super::xid_of(window) else { return };
-    let scale = window.scale_factor() as f32;
-    let rects: Vec<_> = holes.open.iter().map(|(_, b)| xrect(b, scale)).collect();
-    let shape = if rects.is_empty() { Shape::Whole } else { Shape::Holes(&rects) };
-    unsafe {
-        set_shape(display, xid, SHAPE_BOUNDING, shape);
-        set_shape(display, xid, SHAPE_INPUT, if holes.dismiss { Shape::Empty } else { shape });
-        x11::xlib::XFlush(display);
+    let Some(display) = super::xdisplay() else { return };
+    // The second view has the same holes, so GPUI shows through both. It never takes a click.
+    for (window, clicks) in [(&holes.window, !holes.dismiss), (&holes.second, false)] {
+        let Some((window, xid)) = window.as_ref().and_then(|w| Some((w, super::xid_of(w)?))) else { continue };
+        let scale = window.scale_factor() as f32;
+        let rects: Vec<_> = holes.open.iter().map(|(_, b)| xrect(b, scale)).collect();
+        let shape = if rects.is_empty() { Shape::Whole } else { Shape::Holes(&rects) };
+        unsafe {
+            set_shape(display, xid, SHAPE_BOUNDING, shape);
+            set_shape(display, xid, SHAPE_INPUT, if clicks { shape } else { Shape::Empty });
+        }
     }
+    unsafe { x11::xlib::XFlush(display) };
 }
 
 fn update(webview: Option<&wry::WebView>, change: impl FnOnce(&mut Holes) -> bool) {
@@ -124,23 +129,20 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
     });
 }
 
-/// The holes cut in the user's web view now (`set_hole`), in GPUI's logical pixels.
-pub fn holes() -> Vec<Bounds<Pixels>> {
-    HOLES.with_borrow(|holes| holes.open.iter().map(|(_, b)| *b).collect())
+/// The cell picture's second web view (`cell_shot`), kept just behind the user's at the same
+/// place, or None once it goes. Every hole cut in the user's view is cut in it too, in the same
+/// call, so it never shows where GPUI draws a menu, a notice or a tip.
+pub fn set_second(other: Option<&wry::WebView>) {
+    HOLES.with_borrow_mut(|holes| {
+        holes.second = other.and_then(container);
+        apply(holes);
+    });
 }
 
-/// Give `other` (the second web view behind the user's, `cell_shot`) the same
-/// holes, so GPUI's menu shows through both. It never takes a click.
-pub fn cut_holes(other: &wry::WebView, holes: &[Bounds<Pixels>]) {
-    let (Some(window), Some(display)) = (container(other), super::xdisplay()) else { return };
-    let Some(xid) = super::xid_of(&window) else { return };
-    let scale = window.scale_factor() as f32;
-    let rects: Vec<_> = holes.iter().map(|b| xrect(b, scale)).collect();
-    unsafe {
-        set_shape(display, xid, SHAPE_BOUNDING, if rects.is_empty() { Shape::Whole } else { Shape::Holes(&rects) });
-        set_shape(display, xid, SHAPE_INPUT, Shape::Empty);
-        x11::xlib::XFlush(display);
-    }
+/// Whether the second view is registered (`set_second`). It isn't when its window wasn't
+/// there yet as it was made, and `cell_shot` registers it again then.
+pub fn has_second() -> bool {
+    HOLES.with_borrow(|holes| holes.second.is_some())
 }
 
 /// wry's X window around `webview`, for `cell_shot` to place the second view.

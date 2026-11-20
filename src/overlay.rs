@@ -106,13 +106,15 @@ impl Hole {
 struct Holes {
     rects: Vec<(Hole, CGRect)>,
     view: usize,
+    /// The cell picture's second web view while there is one (`set_second`), 0 otherwise.
+    second: usize,
     /// A menu or popover is open somewhere (not necessarily over the web
     /// view): a mouse-down anywhere on the web view, not only in a hole,
     /// goes to GPUI too, so its own click-outside handling can close it.
     dismiss: bool,
 }
 
-static HOLES: Mutex<Holes> = Mutex::new(Holes { rects: Vec::new(), view: 0, dismiss: false });
+static HOLES: Mutex<Holes> = Mutex::new(Holes { rects: Vec::new(), view: 0, second: 0, dismiss: false });
 
 type SendEvent = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
 static GPUI_SEND_EVENT: OnceLock<SendEvent> = OnceLock::new();
@@ -327,7 +329,7 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
     use wry::WebViewExtMacOS;
     let view = webview.webview();
     let view = &*view as *const _ as *mut AnyObject as usize;
-    let rects = {
+    let (rects, second) = {
         let mut holes = HOLES.lock().unwrap();
         let before = holes.rects.clone();
         holes.rects.retain(|(o, _)| *o != owner);
@@ -336,23 +338,36 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
             return;
         }
         holes.view = view;
-        holes.rects.iter().map(|(owner, rect)| (*rect, owner.radius())).collect::<Vec<_>>()
+        (with_radii(&holes.rects), holes.second)
     };
     install_send_event();
-    unsafe { mask(view as *mut AnyObject, &rects) }
+    unsafe {
+        mask(view as *mut AnyObject, &rects);
+        if second != 0 {
+            mask(second as *mut AnyObject, &rects);
+        }
+    }
 }
 
-/// The web view's open holes, with their corner radii.
-pub fn holes() -> Vec<(CGRect, f64)> {
-    HOLES.lock().unwrap().rects.iter().map(|(owner, rect)| (*rect, owner.radius())).collect()
+fn with_radii(rects: &[(Hole, CGRect)]) -> Vec<(CGRect, f64)> {
+    rects.iter().map(|(owner, rect)| (*rect, owner.radius())).collect()
 }
 
-/// Cut `holes` in another web view at the same frame (the cell picture's second view, behind
-/// this one), so it doesn't cover what GPUI draws in them.
-pub fn cut_holes(other: &wry::WebView, holes: &[(CGRect, f64)]) {
+/// The cell picture's second web view (`cell_shot`), kept at the user's view's frame just
+/// behind it, or None once it goes. Every hole cut in the user's view is cut in it too, in
+/// the same call, so it never shows where GPUI draws a menu, a notice or a tip. Called
+/// again after its frame changes, since its mask is drawn for its bounds.
+pub fn set_second(other: Option<&wry::WebView>) {
     use wry::WebViewExtMacOS;
-    let view = other.webview();
-    unsafe { mask(&*view as *const _ as *mut AnyObject, holes) }
+    let second = other.map_or(0, |v| &*v.webview() as *const _ as *mut AnyObject as usize);
+    let rects = {
+        let mut holes = HOLES.lock().unwrap();
+        holes.second = second;
+        with_radii(&holes.rects)
+    };
+    if second != 0 {
+        unsafe { mask(second as *mut AnyObject, &rects) }
+    }
 }
 
 /// Mask the web view's layer around `holes`, or not at all when there are none.
