@@ -1,0 +1,57 @@
+# PROBE (issue #257): can a Windows runner reach a Linux sshd in WSL, and run
+# Julia there? Replaced by the real check if it can.
+name: Windows server
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-server.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Server over ssh (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: openssh-server curl ca-certificates
+      - name: sshd in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -eux
+          uname -a
+          cat /proc/version
+          mkdir -p /run/sshd
+          printf 'Port 2222\nListenAddress 127.0.0.1\nPermitRootLogin prohibit-password\nPasswordAuthentication no\nUsePAM no\n' > /etc/ssh/sshd_config.d/ci.conf
+          ssh-keygen -A
+          /usr/sbin/sshd
+          sleep 2
+          ps aux | grep [s]shd
+      - name: Key
+        shell: pwsh
+        run: |
+          ssh-keygen -t ed25519 -N '""' -f "$env:USERPROFILE\.ssh\id_ed25519" -q
+          Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub" | Set-Content -NoNewline "$env:RUNNER_TEMP\key.pub"
+      - name: Authorize
+        shell: wsl-bash {0}
+        run: |
+          set -eux
+          mkdir -p /root/.ssh && chmod 700 /root/.ssh
+          cat "$RUNNER_TEMP/key.pub" >> /root/.ssh/authorized_keys
+          chmod 600 /root/.ssh/authorized_keys
+        env:
+          WSLENV: RUNNER_TEMP/p
+      - name: ssh from Windows
+        shell: pwsh
+        run: |
+          ssh -p 2222 -o StrictHostKeyChecking=accept-new -o BatchMode=yes root@127.0.0.1 'uname -a; echo hello from wsl'
+      - name: Julia in WSL, over ssh
+        shell: pwsh
+        run: |
+          ssh -p 2222 -o BatchMode=yes root@127.0.0.1 'curl -fsSL https://install.julialang.org | sh -s -- -y --default-channel 1.12.6 && ~/.juliaup/bin/julia -e "println(sum(1:10) * 2); using Sockets; s = listen(ip\"127.0.0.1\", 0); println(getsockname(s)); close(s)"'
