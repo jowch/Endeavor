@@ -406,7 +406,7 @@ pub fn set_open_panel_message(message: &'static str, cx: &mut gpui::App) {
 #[cfg(not(target_os = "macos"))]
 pub fn set_open_panel_message(_: &'static str, _: &mut gpui::App) {}
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 pub mod snapshot {
     use futures::channel::oneshot;
 
