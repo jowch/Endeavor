@@ -213,7 +213,11 @@ runtime in (`+crt-static`), and WebView2's loader is linked in on MSVC too, so
 the exe needs no DLL that Windows doesn't ship. The job checks that with
 `dumpbin /dependents` and fails if it finds one. A release build is needed
 because a debug build compiles its shaders at launch from the crate's source
-folder, so it runs only on the machine that built it.
+folder, so it runs only on the machine that built it. Before keeping the
+build, the job starts it once with an empty app data folder, as a first run,
+and fails if it exits, shows no window within 90 s, is gone 20 s later, or
+logs a panic. It keeps a screenshot of the window as the
+`Endeavor-windows-first-run` artifact.
 
 `.github/workflows/juliaup.yml` runs the first juliaup install for
 real on runners that have no juliaup: the ignored test
@@ -278,8 +282,17 @@ On every OS, `src/runtime.rs`'s
 `the_depot_list_stacks_the_default_depots_behind_ours` checks the depot list.
 
 The tests marked `#[ignore]` on every OS (the live and real-Julia ones) stay
-ignored. Nothing in CI starts the real core on Windows: the helper and core
-tests still need the fake Julia rewritten in Rust (see Tests below).
+ignored. The helper and core tests still need the fake Julia rewritten in
+Rust (see Tests below), so they don't run on Windows. Instead,
+`.github/workflows/windows-julia.yml` runs one real Julia notebook through
+the runtime the app runs: `scripts/julia-smoke.py` starts a debug build as
+the helper's stdio MCP server (`endeavor.exe --helper mcp`) and, as an agent
+would, makes a notebook, runs a cell, checks its output, closes the notebook
+and stops the runtime. The runner has no Julia, so the runtime installs its
+own, as on a user's first run. It runs on pull requests that change
+`Cargo.lock`, `src/runtime.rs`, the toolchain, the script or the workflow,
+weekly, and by hand. The
+script runs on Linux and macOS too.
 
 ## What should carry over
 
