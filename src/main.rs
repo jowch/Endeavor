@@ -778,7 +778,14 @@ impl Workspace {
             let mut clicks = notify::clicks();
             cx.spawn_in(window, async move |this, cx| {
                 while clicks.next().await.is_some() {
-                    if this.update_in(cx, |_, window, _| window.activate_window()).is_err() {
+                    // Open its session now: if Endeavor is already in front, no
+                    // activation follows to do it, and it would happen on the
+                    // next return instead.
+                    let opened = this.update_in(cx, |this, window, cx| {
+                        window.activate_window();
+                        this.open_clicked(cx);
+                    });
+                    if opened.is_err() {
                         break;
                     }
                 }
@@ -849,9 +856,7 @@ impl Workspace {
             if window.is_window_active() {
                 this.recheck_sign_in(cx);
                 // Back from a "Claude is waiting for you" notification: its session.
-                if let Some(key) = notify::take_clicked().filter(|key| this.sessions.iter().any(|s| s.key == *key)) {
-                    this.activate(key, cx);
-                }
+                this.open_clicked(cx);
             }
         })
         .detach();
@@ -1537,6 +1542,14 @@ impl Workspace {
             self.note_stopped_file(&host, path, cx);
         }
         cx.notify();
+    }
+
+    /// The session whose "Claude is waiting for you" notification was clicked, if
+    /// it's still open.
+    fn open_clicked(&mut self, cx: &mut Context<Self>) {
+        if let Some(key) = notify::take_clicked().filter(|key| self.sessions.iter().any(|s| s.key == *key)) {
+            self.activate(key, cx);
+        }
     }
 
     /// Show a session; the notebook pane follows it to the notebook it last viewed
