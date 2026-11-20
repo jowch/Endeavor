@@ -123,3 +123,35 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
         holes.open != before
     });
 }
+
+/// The holes cut in the user's web view now (`set_hole`), in GPUI's logical pixels.
+pub fn holes() -> Vec<Bounds<Pixels>> {
+    HOLES.with_borrow(|holes| holes.open.iter().map(|(_, b)| *b).collect())
+}
+
+/// Give `other` (the second web view behind the user's, `cell_shot`) the same
+/// holes, so GPUI's menu shows through both. It never takes a click.
+pub fn cut_holes(other: &wry::WebView, holes: &[Bounds<Pixels>]) {
+    let (Some(window), Some(display)) = (container(other), super::xdisplay()) else { return };
+    let Some(xid) = super::xid_of(&window) else { return };
+    let scale = window.scale_factor() as f32;
+    let rects: Vec<_> = holes.iter().map(|b| xrect(b, scale)).collect();
+    unsafe {
+        set_shape(display, xid, SHAPE_BOUNDING, if rects.is_empty() { Shape::Whole } else { Shape::Holes(&rects) });
+        set_shape(display, xid, SHAPE_INPUT, Shape::Empty);
+        x11::xlib::XFlush(display);
+    }
+}
+
+/// wry's X window around `webview`, for `cell_shot` to place the second view.
+pub fn window_of(webview: &wry::WebView) -> Option<gdk::Window> {
+    container(webview)
+}
+
+/// Whether X shows `window` and every window around it. wry maps and unmaps
+/// its windows with Xlib, behind GDK's back, so GDK's own answer can be stale.
+pub fn viewable(window: &gdk::Window) -> bool {
+    let (Some(display), Some(xid)) = (super::xdisplay(), super::xid_of(window)) else { return false };
+    let mut attributes = std::mem::MaybeUninit::<x11::xlib::XWindowAttributes>::zeroed();
+    unsafe { x11::xlib::XGetWindowAttributes(display, xid, attributes.as_mut_ptr()) != 0 && attributes.assume_init().map_state == x11::xlib::IsViewable }
+}
