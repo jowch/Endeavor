@@ -173,8 +173,8 @@ fn messages() -> client::Messages {
 
 /// A `Session` for `server`, connecting in a thread of its own: the helper is
 /// installed without asking, the runtime keeps running when the app goes, and its
-/// state folder is the one this app has always used there, so a runtime that
-/// already runs is found. A runtime it starts starts Julia only when a Julia
+/// state folder is the helper's default (`Server::launcher`), so a runtime that
+/// already runs there, the app's or the plugin's, is found. A runtime it starts starts Julia only when a Julia
 /// notebook needs it, as on this computer, so an R session doesn't wait for Julia.
 /// `on_event` hears its steps and trouble.
 pub fn open(server: &Server, auth: Auth, on_event: client::OnEvent) -> Result<Session, String> {
