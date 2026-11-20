@@ -140,8 +140,6 @@ mod mac {
         /// Cleared when its web content process ends, so the next picture loads the page again.
         pub url: std::rc::Rc<std::cell::RefCell<String>>,
         main: Retained<AnyObject>,
-        /// The holes cut in the user's view (a tip, a menu, a notice), cut in this one too.
-        holes: std::cell::RefCell<Vec<(CGRect, f64)>>,
     }
 
     impl Shooter {
@@ -157,7 +155,8 @@ mod mac {
                 page.borrow_mut().clear();
             });
             let main = unsafe { Retained::cast_unchecked(main.webview()) };
-            Some(Shooter { view, url, main, holes: Default::default() })
+            crate::overlay::set_second(Some(&view));
+            Some(Shooter { view, url, main })
         }
 
         /// Show `url`, unless it is the page already loaded. Whether it loads now.
@@ -174,8 +173,8 @@ mod mac {
         /// behind anything else the second view would show, and a hidden window draws nothing.
         /// Settings or a dialog over the pane doesn't hide the user's view but dims it
         /// (`overlay::set_dimmed`), and the second view would show through. The holes a tip, a
-        /// menu or a notice cuts in it (`overlay::set_hole`) are cut in the second view too
-        /// (`keep_behind`).
+        /// menu or a notice cuts in it are cut in the second view too, at once
+        /// (`overlay::set_second`).
         pub fn pane_shows(&self) -> bool {
             unsafe {
                 let hidden: bool = msg_send![&*self.main, isHiddenOrHasHiddenAncestor];
@@ -205,8 +204,10 @@ mod mac {
                 let ours = self.view.webview();
                 let frame: CGRect = msg_send![&*self.main, frame];
                 let now: CGRect = msg_send![&*ours, frame];
-                if now != frame {
+                if now != frame || !self.shown() {
                     let _: () = msg_send![&*ours, setFrame: frame];
+                    // Its holes' mask is drawn for its bounds.
+                    crate::overlay::set_second(Some(&self.view));
                 }
                 let superview: *mut AnyObject = msg_send![&*self.main, superview];
                 let behind: *mut AnyObject = msg_send![&*ours, superview];
@@ -214,11 +215,6 @@ mod mac {
                     // NSWindowBelow.
                     let _: () = msg_send![superview, addSubview: &*ours, positioned: -1isize, relativeTo: &*self.main];
                 }
-            }
-            let holes = crate::overlay::holes();
-            if *self.holes.borrow() != holes {
-                crate::overlay::cut_holes(&self.view, &holes);
-                *self.holes.borrow_mut() = holes;
             }
             if !self.shown() {
                 // The theme may have changed since the last picture.
@@ -242,6 +238,7 @@ mod mac {
 
     impl Drop for Shooter {
         fn drop(&mut self) {
+            crate::overlay::set_second(None);
             crate::webcontent::forget(&self.view);
         }
     }
@@ -260,8 +257,6 @@ mod linux {
         /// Cleared when its web content process ends, so the next picture loads the page again.
         pub url: std::rc::Rc<std::cell::RefCell<String>>,
         main: gdk::Window,
-        /// The holes cut in the user's view (a tip, a menu, a notice), cut in this one too.
-        holes: std::cell::RefCell<Option<Vec<gpui::Bounds<gpui::Pixels>>>>,
     }
 
     impl Shooter {
@@ -278,7 +273,9 @@ mod linux {
                 eprintln!("The second web view's web content process ended; the next cell picture loads its page again");
                 page.borrow_mut().clear();
             });
-            Some(Shooter { view, url, main, holes: Default::default() })
+            // The user's view's holes are cut in it as they open and close.
+            overlay::set_second(Some(&view));
+            Some(Shooter { view, url, main })
         }
 
         /// Show `url`, unless it is the page already loaded. Whether it loads now.
@@ -298,7 +295,7 @@ mod linux {
         }
 
         /// Put the second view exactly behind the user's view, at the bottom of GPUI's child
-        /// windows, with the user's view's holes, and keep it there: called again as the picture
+        /// windows, and keep it there: called again as the picture
         /// is taken, it follows the pane. False, with the second view hidden, once the pane isn't
         /// on screen.
         pub fn keep_behind(&self) -> bool {
@@ -307,11 +304,6 @@ mod linux {
                 return false;
             }
             let Some(ours) = overlay::window_of(&self.view) else { return false };
-            let holes = overlay::holes();
-            if self.holes.borrow().as_ref() != Some(&holes) {
-                overlay::cut_holes(&self.view, &holes);
-                *self.holes.borrow_mut() = Some(holes);
-            }
             // As wry places the user's view: GDK's units, which wry takes to be logical pixels.
             // Placed and lowered before it's mapped, so it never shows over anything.
             use wry::WebViewExtUnix;
@@ -339,6 +331,12 @@ mod linux {
             }
         }
     }
+
+    impl Drop for Shooter {
+        fn drop(&mut self) {
+            overlay::set_second(None);
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -356,8 +354,6 @@ mod windows {
         /// Cleared when its web content process ends, so the next picture loads the page again.
         pub url: std::rc::Rc<std::cell::RefCell<String>>,
         main: usize,
-        /// The holes cut in the user's view (a tip, a menu, a notice), cut in this one too.
-        holes: std::cell::RefCell<Option<Vec<gpui::Bounds<gpui::Pixels>>>>,
     }
 
     /// `hwnd`'s client area in its parent's client coordinates, in physical pixels.
@@ -384,7 +380,9 @@ mod windows {
                 eprintln!("The second web view's web content process ended; the next cell picture loads its page again");
                 page.borrow_mut().clear();
             });
-            Some(Shooter { view, url, main, holes: Default::default() })
+            // The user's view's holes are cut in it as they open and close.
+            overlay::set_second(Some(&view));
+            Some(Shooter { view, url, main })
         }
 
         /// Show `url`, unless it is the page already loaded. Whether it loads now.
@@ -405,7 +403,7 @@ mod windows {
         }
 
         /// Put the second view exactly behind the user's view, just under it in the window's
-        /// children, with the user's view's holes, and keep it there: called again as the picture
+        /// children, and keep it there: called again as the picture
         /// is taken, it follows the pane. False, with the second view hidden, once the pane isn't
         /// on screen.
         pub fn keep_behind(&self) -> bool {
@@ -414,11 +412,6 @@ mod windows {
                 return false;
             }
             let (Some(ours), Some(want)) = (overlay::window_of(&self.view), placed(self.main)) else { return false };
-            let holes = overlay::holes();
-            if self.holes.borrow().as_ref() != Some(&holes) {
-                overlay::cut_holes(&self.view, &holes);
-                *self.holes.borrow_mut() = Some(holes);
-            }
             let now = placed(ours);
             if now.is_none_or(|r| (r.left, r.top, r.right, r.bottom) != (want.left, want.top, want.right, want.bottom)) {
                 let _ = self.view.set_bounds(wry::Rect {
@@ -445,6 +438,12 @@ mod windows {
 
         pub fn hide(&self) {
             let _ = self.view.set_visible(false);
+        }
+    }
+
+    impl Drop for Shooter {
+        fn drop(&mut self) {
+            overlay::set_second(None);
         }
     }
 }
@@ -497,6 +496,19 @@ impl Second {
             return if shooter.shown() { "shown" } else { "hidden" };
         }
         "none"
+    }
+
+    /// Hide the second view, if it's shown, as soon as the user's view isn't on screen (hidden,
+    /// dimmed behind Settings, its window minimized): it is never seen without the user's view in
+    /// front of it. Called as the window draws, where the user's view is shown and hidden. The
+    /// picture being taken then stops at its next step.
+    pub fn follow_pane(&self) {
+        if let Some(shooter) = &self.shooter
+            && shooter.shown()
+            && !shooter.pane_shows()
+        {
+            shooter.hide();
+        }
     }
 }
 
@@ -565,8 +577,9 @@ impl crate::Workspace {
 }
 
 /// Wait for the cell's output in the second view, scroll it into view, and take its picture. The
-/// pane is checked at each step: once it isn't on screen (Settings opened), the second view hides,
-/// within a step (at most about a second), and there is no picture.
+/// pane is checked between steps, and there is no picture once it isn't on screen. The second
+/// view itself hides at once, as the user's view does (`Second::follow_pane`), and has the user's
+/// view's holes as they open (`overlay::set_second`): the checks here only place it.
 async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::BackgroundExecutor) -> Result<Vec<u8>, &'static str> {
     let deadline = std::time::Instant::now() + DEADLINE;
     let behind = || if shooter.keep_behind() { Ok(()) } else { Err(NOT_ON_SCREEN) };

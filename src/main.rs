@@ -2821,6 +2821,8 @@ impl Render for Workspace {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
         overlay::set_dimmed(self.webview.read(cx).raw(), self.settings_panel.is_some() || self.confirm.is_some());
+        // The cell picture's second view, behind the user's, hides with it.
+        self.second.follow_pane();
         let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
         let point_tip = self.point_tip_shows(show_webview && active.is_some_and(|ix| self.sessions[ix].notebook_path.is_some()));
         let webview = self.webview.read(cx).raw();
