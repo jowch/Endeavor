@@ -70,8 +70,13 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
-          ssh-keygen -q -t ed25519 -N '""' -f "$env:USERPROFILE\.ssh\smoke_ed25519"
+          # PowerShell 7.3+ passes an empty string as "" to a program, so -N ''
+          # is an empty passphrase. ('""' would make the passphrase two quotes.)
+          ssh-keygen -q -t ed25519 -N '' -f "$env:USERPROFILE\.ssh\smoke_ed25519"
           if (-not (Test-Path "$env:USERPROFILE\.ssh\smoke_ed25519.pub")) { Write-Error "ssh-keygen made no key"; exit 1 }
+          # Fails if the key has a passphrase, which BatchMode can't type.
+          ssh-keygen -y -P '' -f "$env:USERPROFILE\.ssh\smoke_ed25519" | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error "the key has a passphrase"; exit 1 }
           Copy-Item "$env:USERPROFILE\.ssh\smoke_ed25519.pub" "$env:RUNNER_TEMP\smoke.pub"
           @"
           Host smoke-host
@@ -97,7 +102,9 @@ jobs:
           /usr/sbin/sshd
       - name: Reach it
         shell: pwsh
-        run: ssh -o BatchMode=yes smoke-host 'uname -a'
+        run: |
+          ssh -o BatchMode=yes smoke-host 'uname -a'
+          if ($LASTEXITCODE -ne 0) { ssh -v -o BatchMode=yes smoke-host true; exit 1 }
       - name: Toolchain
         run: rustup toolchain install
       - name: Build
