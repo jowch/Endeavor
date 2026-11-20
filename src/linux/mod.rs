@@ -5,6 +5,7 @@
 
 pub mod gtk_loop;
 pub mod overlay;
+pub mod snapshot;
 pub mod webcontent;
 pub mod webkeys;
 

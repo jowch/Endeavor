@@ -97,11 +97,11 @@ mod when;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-use linux::{overlay, webcontent};
+use linux::{overlay, snapshot, webcontent};
 #[cfg(not(target_os = "macos"))]
-use platform::{dialogs, snapshot};
+use platform::dialogs;
 #[cfg(windows)]
-use platform::{overlay, webcontent};
+use platform::{overlay, snapshot, webcontent};
 
 use agent::{AgentEvent, Command};
 use layer::Layer;

@@ -104,7 +104,7 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 |---|---|---|
 | `transcript.rs` | long diffs are cut, not scrollable | real notebooks hit it |
 | `diagram.rs` `cached` | GPUI keeps each picture it has drawn for the window's life, so each width a diagram is laid out at keeps its pixels (about 1 to 3 MB) | a session with many diagrams, resized often, grows noticeably |
-| `cell_shot.rs` | the agent's picture of an HTML output is taken only on a Mac, and only while the notebook pane is on screen | Windows and Linux snapshots; a picture asked for behind Settings |
+| `cell_shot.rs` | the agent's picture of an HTML output is taken only on a Mac or Linux, and only while the notebook pane is on screen | a Windows snapshot (#197); a picture asked for behind Settings |
 | `frontend/src/diff.ts` | the page's diff is an O(n·m) table; when the two versions' line counts multiply past 250,000, no diff is shown | big cells need a diff |
 | `connection.rs` `open_line` | Reconnect on a server that dropped waits for the library's next try (up to 30 s apart) instead of trying at once; a server whose connection settings change gets a new listener port, so its sessions' agents need a restart | `client::Session` can be asked to try now, and can keep its port |
 | `server_dialog.rs` `drop_asks` | when a sign-in ends while another server's question waits behind it, that question comes to the front without the focus | two servers asking at once happens in practice |
