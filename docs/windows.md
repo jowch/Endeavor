@@ -282,8 +282,9 @@ the runtime the app runs: `scripts/julia-smoke.py` starts a debug build as
 the helper's stdio MCP server (`endeavor.exe --helper mcp`) and, as an agent
 would, makes a notebook, runs a cell, checks its output, closes the notebook
 and stops the runtime. The runner has no Julia, so the runtime installs its
-own, as on a user's first run. It runs when `Cargo.lock`, `src/runtime.rs`,
-the toolchain, the script or the workflow changes, weekly, and by hand. The
+own, as on a user's first run. It runs on pull requests that change
+`Cargo.lock`, `src/runtime.rs`, the toolchain, the script or the workflow,
+weekly, and by hand. The
 script runs on Linux and macOS too.
 
 ## What should carry over

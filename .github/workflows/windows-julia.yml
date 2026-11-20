@@ -9,19 +9,13 @@
 # as on a user's first run (juliaup, then Julia and Pluto: several minutes).
 # A debug build, so ENDEAVOR_TEST_BROWSER keeps it from opening a browser.
 #
-# It runs when the runtime's pins or this check change (Cargo.lock pins
-# EndeavorMCP), once a week, and by hand.
+# It runs on pull requests that change the runtime's pins or this check
+# (Cargo.lock pins EndeavorMCP), once a week, and by hand. Not again on the
+# push to main: the PR already ran it on the same code, and the daily pin
+# would pay 11 minutes twice.
 name: Windows Julia
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - Cargo.lock
-      - src/runtime.rs
-      - rust-toolchain.toml
-      - scripts/julia-smoke.py
-      - .github/workflows/windows-julia.yml
   pull_request:
     paths:
       - Cargo.lock
