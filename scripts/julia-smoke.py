@@ -91,11 +91,15 @@ def main():
                 answer = json.loads(text)
             except ValueError:
                 answer = text
-            # Julia is starting: the runtime says to make the same call again.
-            starting = isinstance(answer, dict) and str(answer.get("error", "")).endswith("_starting")
-            if not starting or time.monotonic() - started > STEP_TIMEOUT:
+            # Julia is starting, R is installing or the notebook is still opening (a cold server):
+            # the runtime says to make the same call again.
+            error = str(answer.get("error", "")) if isinstance(answer, dict) else ""
+            again = error.endswith("_starting") or error in ("r_installing", "notebook_opening")
+            if not again or time.monotonic() - started > STEP_TIMEOUT:
                 break
-            print(f"{tool}: {answer['error']} ({time.monotonic() - started:.0f} s)", flush=True)
+            print(f"{tool}: {error} ({time.monotonic() - started:.0f} s)", flush=True)
+            # Most of these wait in the call itself; a pause keeps one that answers at once from spinning.
+            time.sleep(2)
         print(f"{tool} ({time.monotonic() - started:.0f} s): {text[:400]}", flush=True)
         if result.get("isError") or (isinstance(answer, dict) and "error" in answer):
             fail(f"{tool} failed: {text}")
