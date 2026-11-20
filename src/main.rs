@@ -771,6 +771,23 @@ impl Workspace {
         })
         .detach();
 
+        // A click on a "Claude is waiting for you" notification raises the
+        // window; its activation then opens the session (on a Mac, macOS raises it).
+        #[cfg(target_os = "linux")]
+        {
+            let mut clicks = notify::clicks();
+            cx.spawn_in(window, async move |this, cx| {
+                while clicks.next().await.is_some() {
+                    if this.update_in(cx, |_, window, _| window.activate_window()).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        #[cfg(windows)]
+        notify::set_window(window);
+
         let (questions_tx, mut questions) = futures::channel::mpsc::unbounded::<remote::Question>();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(question) = questions.next().await {

@@ -139,9 +139,11 @@ Hold the pointer over a bullet to read its state in words. When a folder is
 collapsed, the bullet that matters most in it shows next to the folder's
 name.
 
-When Claude asks you something while Endeavor isn't the app in front, macOS
-shows a notification, "Claude is waiting for you". Click it to go to that
-session.
+When Claude asks you something while Endeavor isn't the app in front, you
+get a notification, "Claude is waiting for you". Click it to go to that
+session. On Windows, Endeavor's taskbar button flashes instead, until you
+come back to it. After one notification, Endeavor waits 10 minutes before
+sending another.
 
 Click **⋮** on a row for **Rename**, **Reveal folder in Finder**,
 **Archive**, **Close** and **Delete…**. Delete removes the conversation,
