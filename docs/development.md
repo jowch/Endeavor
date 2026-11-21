@@ -29,6 +29,15 @@ from EndeavorMCP's Helpers release when that source was built there, else
 builds it (EndeavorMCP's `scripts/build-helpers.sh`); it does nothing when
 it's already up to date. Without it the app can't connect to Linux servers.
 
+A helper the app downloads for a server (a Windows build, or a Mac build for a
+platform it doesn't carry) is checked against the checksums EndeavorMCP's
+build embeds for its own key, from a pin that includes EndeavorMCP#444. It
+embeds them only when `Cargo.lock` pins a
+"Plugins: pin build KEY" commit, the one EndeavorMCP's Helpers pin job pushes
+(EndeavorMCP#422). `scripts/pinned-sums.sh KEY` checks that, and the nightly
+and the Windows builds fail without it, on pull requests too, so a pin that
+would break `main` can't merge.
+
 To change EndeavorMCP and the app together, see
 [testing.md](testing.md#changing-endeavormcp-and-the-app-together).
 

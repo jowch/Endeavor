@@ -146,7 +146,10 @@ jobs:
             echo "::error::EndeavorMCP's Helpers release has no build for the commit Cargo.lock pins: Helpers never built it, or pruned it because this app commit is older than the last 10 pins on main. No nightly this time."
             exit 1
           }
-          echo "ENDEAVOR_RELEASE_KEY=$(scripts/helpers.sh --key)" >> "$GITHUB_ENV"
+          key=$(scripts/helpers.sh --key)
+          # The build must carry its helpers' checksums (EndeavorMCP#422).
+          scripts/pinned-sums.sh "$key"
+          echo "ENDEAVOR_RELEASE_KEY=$key" >> "$GITHUB_ENV"
       # A nightly checks nightly.json for a newer build and updates itself
       # (src/updater.rs); a build from source doesn't.
       - name: Bundle

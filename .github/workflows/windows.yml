@@ -71,6 +71,8 @@ jobs:
           for platform in linux-x86_64 linux-aarch64 darwin-x86_64 darwin-aarch64; do
             grep -q " endeavor-$key-$platform\$" sums || { echo "::error::Build $key on the Helpers release has no $platform helper."; exit 1; }
           done
+          # The build must carry its helpers' checksums (EndeavorMCP#422).
+          scripts/pinned-sums.sh "$key"
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
   package:
