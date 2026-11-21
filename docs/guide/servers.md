@@ -122,9 +122,10 @@ A notebook stops when:
 
 The notebook's file stays on the server either way. **Start** runs it again.
 
-Only one computer can be connected to a server's Julia at a time. If you
-connect from another Mac, that one takes over, and the first says "Another
-connection took over Julia on lab-server." with a **Reconnect** button.
+More than one computer can connect to a server's Julia at the same time. If
+you connect from another Mac, both use the same Julia and see the same
+notebooks. Stopping Julia from one stops it for all of them, and the others
+say it was stopped from another connection.
 
 ## Servers that are clusters
 
