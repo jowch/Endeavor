@@ -1685,10 +1685,10 @@ impl Workspace {
             HostId::Server(id) => self.hosts.server(id).and_then(|s| s.idle_stop),
             HostId::ThisMac => None,
         };
-        let hours = limit.unwrap_or(self.settings.idle_stop).hours();
-        // A short limit for a check of the idle stop, in a debug build only.
+        let hours = f64::from(limit.unwrap_or(self.settings.idle_stop).hours());
+        // A limit of seconds for a check of the idle stop, in a debug build only.
         #[cfg(debug_assertions)]
-        let hours = std::env::var("ENDEAVOR_TEST_IDLE_HOURS").ok().and_then(|h| h.parse().ok()).unwrap_or(hours);
+        let hours = std::env::var("ENDEAVOR_TEST_IDLE_SECS").ok().and_then(|s| s.parse::<f64>().ok()).map_or(hours, |secs| secs / 3600.0);
         // ponytail: a failed send leaves the runtime on its default (48 hours) until the next start.
         cx.background_executor().spawn(async move { pluto::set_idle_limit(&bridge, hours) }).detach();
     }
