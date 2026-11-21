@@ -530,8 +530,8 @@ fn rpc_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration) -> 
     let host = bridge.host()?;
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
 
-    let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
-    stream.set_read_timeout(Some(wait)).map_err(|e| e.to_string())?;
+    let mut stream = TcpStream::connect(host).map_err(connection_error)?;
+    stream.set_read_timeout(Some(wait)).map_err(connection_error)?;
     // HTTP/1.0: the bridge sends no Content-Length, so read the body to EOF
     // instead of dealing with chunked encoding.
     write!(
@@ -540,12 +540,26 @@ fn rpc_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration) -> 
         bridge.token,
         body.len()
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(connection_error)?;
     let mut response = String::new();
-    stream.read_to_string(&mut response).map_err(|e| e.to_string())?;
+    stream.read_to_string(&mut response).map_err(connection_error)?;
 
     let (_, payload) = response.split_once("\r\n\r\n").ok_or("malformed HTTP response")?;
     serde_json::from_str(payload).map_err(|e| format!("bad JSON-RPC reply: {e}"))
+}
+
+/// A call's connection failing, in plain words on its first line (the notice's reason) and the
+/// system's own words after it, for Details (#111): on Windows those read "A connection attempt
+/// failed because the connected party did not properly respond… (os error 10060)".
+fn connection_error(e: std::io::Error) -> String {
+    use std::io::ErrorKind::*;
+    let plain = match e.kind() {
+        // A read timeout is WouldBlock on Unix and TimedOut on Windows.
+        TimedOut | WouldBlock => "The notebook didn't answer.",
+        ConnectionRefused | ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected | UnexpectedEof => "The notebook isn't running.",
+        _ => return e.to_string(),
+    };
+    format!("{plain}\n{e}")
 }
 
 /// A notebook left with cells edited but not run, or still running.
@@ -665,6 +679,22 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_call_whose_connection_fails_says_so_plainly_and_keeps_the_systems_words() {
+        use std::io::{Error, ErrorKind};
+        let timed_out = connection_error(Error::new(ErrorKind::TimedOut, "A connection attempt failed because the connected party did not properly respond (os error 10060)"));
+        let notice = crate::notice::Notice::new(crate::notice::Spot::Pane, "Couldn't run the notebook", &timed_out, None);
+        assert_eq!(notice.reason, "The notebook didn't answer.");
+        assert!(notice.details() && notice.raw.contains("os error 10060"), "{}", notice.raw);
+        let refused = connection_error(Error::new(ErrorKind::ConnectionRefused, "No connection could be made because the target machine actively refused it. (os error 10061)"));
+        assert_eq!(crate::notice::reason(&refused), "The notebook isn't running.");
+        assert_eq!(connection_error(Error::new(ErrorKind::InvalidData, "stream did not contain valid UTF-8")), "stream did not contain valid UTF-8", "anything else as it came");
+        // A read that times out on Unix.
+        assert_eq!(crate::notice::reason(&connection_error(Error::from(ErrorKind::WouldBlock))), "The notebook didn't answer.");
+    }
+
     use super::{RunWarning, Started, cells_that_ran, engine_ended, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
 
     #[test]
