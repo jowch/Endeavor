@@ -1956,7 +1956,9 @@ impl Workspace {
 
     /// The app is quitting: servers' runtimes keep running (their idle stop
     /// covers them); This Mac's as Settings says, unless the plugin started it
-    /// and so is using it (`runtime::quit_stops`). The helpers do the rest.
+    /// and so is using it (`runtime::quit_stops`). The helpers do the rest: a
+    /// quit's Stop is "unless shared", so a runtime the plugin also works in is
+    /// left to it and ends once the plugin is out of it (#232).
     pub fn quit_runtimes(&mut self) {
         for (host, connection) in &self.connections {
             if let Some(channel) = &connection.channel {
