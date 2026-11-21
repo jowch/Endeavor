@@ -115,9 +115,9 @@ binary.
   [runtime-core.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/runtime-core.md)). The app is a client of the same
   bridge, so it sees what the agent's tools do.
 - **Lifetime.** The runtime runs detached, started by the helper, which the
-  app reaches over its stdin/stdout. It stops when the app quits, unless the
-  "Keep notebooks running after Endeavor quits" setting is on; then the next
-  launch reattaches.
+  app reaches over its stdin/stdout. When the app quits or is killed, it
+  goes on until its notebooks have been idle for the idle limit and ends once
+  none is open; a launch before then reattaches (#274).
 
 Deferred: juliaup integration, PackageCompiler sysimage (TTFX paid once per
 app launch, not per chat), automatic Julia upgrades (bump the pin per

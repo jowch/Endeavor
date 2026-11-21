@@ -231,11 +231,10 @@ pub fn helper_program() -> Result<PathBuf, String> {
 /// The `--julia` the last `connect` gave the helper: what a runtime it starts runs (`auto`: the core's choice).
 static STARTED_WITH: Mutex<Option<String>> = Mutex::new(None);
 
-/// Run This Mac's helper and wait for its hello. `keep_running` leaves the
-/// runtime running if the app goes away without quitting. Julia itself is
-/// installed and started the first time a Julia notebook needs it, not with
-/// the runtime (`--julia-when-needed`).
-pub fn connect(keep_running: bool) -> Result<(Channel, Hello), String> {
+/// Run This Mac's helper and wait for its hello. Julia itself is installed and
+/// started the first time a Julia notebook needs it, not with the runtime
+/// (`--julia-when-needed`).
+pub fn connect() -> Result<(Channel, Hello), String> {
     let julia = julia_arg();
     *STARTED_WITH.lock().unwrap() = Some(julia.clone());
     let app_dir = crate::install::app_dir()?;
@@ -260,11 +259,9 @@ pub fn connect(keep_running: bool) -> Result<(Channel, Hello), String> {
     if let Some(build) = crate::remote::build() {
         command.args(["--build", build]);
     }
-    // If the app goes without saying, only a runtime this connect started goes
-    // with it: one the plugin started is the plugin's (`quit_stops`).
-    if !keep_running {
-        command.arg("--own-with-client");
-    }
+    // However the app goes (a quit, a crash, a kill), the runtime stays up until
+    // its notebooks are idle, then ends once none is open (#274).
+    command.arg("--exit-idle-after-client");
     // Its own process group: a Ctrl-C meant for the app in a terminal must not
     // kill the helper before it can stop Julia. On Windows the helper is the
     // app's own GUI program, so it opens no console window either way.
@@ -376,18 +373,6 @@ fn retire_old_state_in(old: &Path, stop: &dyn Fn(&Path) -> bool) {
         }
     }
     eprintln!("This Mac's runtime is now in {}, shared with the plugin.", state_dir().display());
-}
-
-/// Whether quitting with Keep running off stops the runtime with this pid: not
-/// when `endeavor mcp` or `serve` started it, since the plugin (in Claude's
-/// desktop app, say) is using it, and it ends itself when idle. One the app
-/// started stops, even if the plugin joined it.
-pub fn quit_stops(pid: u32) -> bool {
-    quit_stops_in(&state_dir(), pid)
-}
-
-fn quit_stops_in(state_dir: &Path, pid: u32) -> bool {
-    record(state_dir).filter(|r| r["pid"].as_u64() == Some(u64::from(pid))).is_none_or(|r| !started_by_plugin(&r))
 }
 
 /// `runtime.json` in `state_dir`, if there is one.
@@ -576,7 +561,7 @@ mod tests {
 #[ignore]
 fn live_die_and_restart() {
     let listener = Listener::start("test").unwrap();
-    let (channel, _) = connect(false).expect("connect");
+    let (channel, _) = connect().expect("connect");
     let (heard_tx, heard) = std::sync::mpsc::channel();
     let first = start_local(&channel, &listener, &|_| {}, move |notice| drop(heard_tx.send(notice))).expect("start");
     let list = crate::pluto::call_tool(&first.bridge, "list_notebooks", serde_json::json!({})).unwrap();
@@ -602,23 +587,6 @@ fn live_die_and_restart() {
     let list = crate::pluto::call_tool(&second.bridge, "list_notebooks", serde_json::json!({})).unwrap();
     println!("restarted; list_notebooks = {list}");
     channel.stop().unwrap();
-}
-
-#[cfg(test)]
-#[test]
-fn quitting_leaves_a_runtime_the_plugin_started() {
-    let dir = std::env::temp_dir().join(format!("endeavor-quit-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let record = |state: serde_json::Value| std::fs::write(dir.join("runtime.json"), state.to_string()).unwrap();
-    assert!(quit_stops_in(&dir, 7), "no record: the app's own");
-    record(serde_json::json!({ "pid": 7, "token": "t" }));
-    assert!(quit_stops_in(&dir, 7), "the app started it");
-    record(serde_json::json!({ "pid": 7, "folder": "/home/me/project" }));
-    assert!(!quit_stops_in(&dir, 7), "endeavor mcp started it");
-    record(serde_json::json!({ "pid": 7, "folder": "/home/me", "no_folder": true }));
-    assert!(!quit_stops_in(&dir, 7), "endeavor mcp --no-folder started it");
-    assert!(quit_stops_in(&dir, 8), "the record is of another runtime");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[cfg(test)]

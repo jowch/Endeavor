@@ -564,11 +564,12 @@ test binary as its own stand-in core.
 5. **The process tree.** In Process Explorer, the core (`endeavor.exe` run as
    the helper's `core`), `julia.exe` and each worker `julia.exe` should share
    one job (the Job tab). Then:
-   - Quit the app with the runtime set to stop: all of them go.
+   - Quit the app with no notebook open: all of them go about ten minutes
+     later.
    - End the core in Task Manager: Julia and its workers go within a second
      or two, and the app says Julia stopped.
-   - End the app's process while the runtime is set to keep running: the
-     runtime stays, and the next launch reattaches to it (pid and start time).
+   - End the app's process: the runtime stays, and the next launch
+     reattaches to it (pid and start time).
    - Repair runtime with a runtime running: all of it goes.
    - While Claude is connected, the `endeavor.exe --agent-job` process, the
      adapter's `node.exe` and the Claude Code `node.exe` it starts share one
