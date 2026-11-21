@@ -133,7 +133,10 @@ The remaining work is ranked at the end of this page.
 ## System packages (Ubuntu 26.04)
 
 This is the set installed on the OrbStack machine. It hasn't been reduced to the
-smallest set that works.
+smallest set that works. It is the list the README, the guide and
+[development.md](development.md) point to. CI's Linux job and
+`scripts/cloud-setup.sh` install the same build packages, so change them
+together.
 
 ```
 sudo apt-get install -y build-essential clang cmake pkg-config libssl-dev \

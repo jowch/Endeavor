@@ -14,6 +14,10 @@ cargo run
 
 `cargo run` alone builds only the app, so run `cargo build` after pulling.
 
+On Linux, install the system packages first: the list for Ubuntu and Debian
+is in [linux.md](linux.md#system-packages-ubuntu-2604). Rust comes from
+rustup, and `rust-toolchain.toml` picks the version.
+
 Run a debug build from source. A release build (`cargo run --release`) looks
 for its files only in `Resources` beside the folder it runs from, as in
 `Endeavor.app`, so from the source tree it shows "Endeavor's files are
