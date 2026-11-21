@@ -596,14 +596,13 @@ impl Workspace {
         match host {
             HostId::ThisMac => {
                 let (tx, rx) = futures::channel::mpsc::unbounded::<Update>();
-                let keep_running = self.settings.keep_running;
                 // The helper runs this Julia for as long as it lives (runtime::connect).
                 self.settings_checks.local_julia = Some(self.settings.julia_preference());
                 // Which Julia that runs, for Settings and the state dump: the user's own when they have one.
                 self.check_users_julia(cx);
                 self.settings_checks.local_r = Some(self.settings.r.clone());
                 std::thread::spawn(move || {
-                    let result = runtime::connect(keep_running).map(|(channel, hello)| (Arc::new(channel), hello));
+                    let result = runtime::connect().map(|(channel, hello)| (Arc::new(channel), hello));
                     report_until_closed(&tx, result);
                 });
                 self.follow(host.clone(), id, rx, cx);
@@ -1686,7 +1685,10 @@ impl Workspace {
             HostId::Server(id) => self.hosts.server(id).and_then(|s| s.idle_stop),
             HostId::ThisMac => None,
         };
-        let hours = limit.unwrap_or(self.settings.idle_stop).hours();
+        let hours = f64::from(limit.unwrap_or(self.settings.idle_stop).hours());
+        // A limit of seconds for a check of the idle stop, in a debug build only.
+        #[cfg(debug_assertions)]
+        let hours = std::env::var("ENDEAVOR_TEST_IDLE_SECS").ok().and_then(|s| s.parse::<f64>().ok()).map_or(hours, |secs| secs / 3600.0);
         // ponytail: a failed send leaves the runtime on its default (48 hours) until the next start.
         cx.background_executor().spawn(async move { pluto::set_idle_limit(&bridge, hours) }).detach();
     }
@@ -1954,16 +1956,13 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The app is quitting: servers' runtimes keep running (their idle stop
-    /// covers them); This Mac's as Settings says, unless the plugin started it
-    /// and so is using it (`runtime::quit_stops`). The helpers do the rest: a
-    /// quit's Stop is "unless shared", so a runtime the plugin also works in is
-    /// left to it and ends once the plugin is out of it (#232).
+    /// The app is quitting: every runtime keeps running. A server's idle stop
+    /// covers it; This Mac's goes on until its notebooks are idle, then ends once
+    /// none is open (its helper's `--exit-idle-after-client`, #274).
     pub fn quit_runtimes(&mut self) {
-        for (host, connection) in &self.connections {
+        for connection in self.connections.values() {
             if let Some(channel) = &connection.channel {
-                let stops = *host == HostId::ThisMac && !self.settings.keep_running && connection.runtime.as_ref().is_none_or(|r| runtime::quit_stops(r.pid));
-                channel.quit(!stops);
+                channel.quit(true);
             }
         }
         // Each server's helper is let go, and Julia keeps running there; a

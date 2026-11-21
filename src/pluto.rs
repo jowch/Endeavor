@@ -100,7 +100,7 @@ pub fn set_folder(bridge: &Bridge, dir: &str) -> Result<(), String> {
 }
 
 /// Stop open notebooks after `hours` with no activity; 0 never stops them.
-pub fn set_idle_limit(bridge: &Bridge, hours: u32) -> Result<(), String> {
+pub fn set_idle_limit(bridge: &Bridge, hours: f64) -> Result<(), String> {
     rpc(bridge, "endeavor/set_idle_limit", json!({ "hours": hours })).map(|_| ())
 }
 

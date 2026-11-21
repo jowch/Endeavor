@@ -1866,7 +1866,7 @@ dependencies = [
 [[package]]
 name = "endeavor-mcp"
 version = "0.1.0"
-source = "git+https://github.com/jowch/EndeavorMCP#f1d31f8db3026f2165ef7b4a13bb29f1e4436779"
+source = "git+https://github.com/jowch/EndeavorMCP#519d9dc251ceeef3760619d5dc3be6dceb7dcf80"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
@@ -9777,7 +9777,7 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
-source = "git+https://github.com/jowch/EndeavorMCP#f1d31f8db3026f2165ef7b4a13bb29f1e4436779"
+source = "git+https://github.com/jowch/EndeavorMCP#519d9dc251ceeef3760619d5dc3be6dceb7dcf80"
 dependencies = [
  "base64 0.22.1",
  "dunce",

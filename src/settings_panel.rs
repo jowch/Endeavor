@@ -362,7 +362,6 @@ pub enum Act {
     SignOut,
     OpenClaudeAi,
     OwnClaudeSetup,
-    KeepRunning,
     RunWithoutAsking,
     IdleMenu,
     Idle(IdleStop),
@@ -732,9 +731,6 @@ impl Workspace {
         let mut idle = row("idle-stop", "Stop idle notebooks after");
         idle.desc = Some("A notebook nobody has used for this long stops, even with Endeavor open, to free memory. Start brings it back.".into());
         idle.controls.push(Control::Select { value: idle_label, act: Act::IdleMenu, aria: format!("Stop idle notebooks after: {idle_label}").into() });
-        let mut keep = row("keep-running", "Keep notebooks running after Endeavor quits");
-        keep.desc = Some("They carry on while Endeavor is closed, and it reconnects when you open it. Idle ones still stop.".into());
-        keep.controls.push(Control::Toggle { on: s.keep_running, act: Act::KeepRunning, aria: "Keep notebooks running after Endeavor quits".into() });
         let mut ask = row("run-without-asking", "Run notebook code without asking");
         ask.desc = Some("When on, the assistant runs the cells it writes without stopping to ask you first. It applies to new sessions. To change one session, use Ask to run under the message box.".into());
         ask.controls.push(Control::Toggle { on: s.run_without_asking, act: Act::RunWithoutAsking, aria: "Run notebook code without asking".into() });
@@ -757,7 +753,7 @@ impl Workspace {
             Item::Row(r)
         };
         vec![
-            group(Some("When notebooks stop"), vec![Item::Row(idle), Item::Row(keep)]),
+            group(Some("When notebooks stop"), vec![Item::Row(idle)]),
             group(Some("Running code"), vec![Item::Row(ask)]),
             group(Some("Languages"), vec![Item::Row(julia), self.r_row().map_or_else(|| later("r", "R", ".R notebooks"), Item::Row), later("python", "Python", ".py notebooks")])
                 .foot("Each language has its own program. Servers and clusters set theirs in Where notebooks run."),
@@ -1588,7 +1584,6 @@ impl Workspace {
             Act::CheckCodex => self.recheck_codex(cx),
             Act::SignInAntigravity => self.sign_in_to_antigravity(cx),
             Act::OwnClaudeSetup => self.update_settings(cx, |s| s.claude_setup = Some(!s.own_claude_setup())),
-            Act::KeepRunning => self.update_settings(cx, |s| s.keep_running = !s.keep_running),
             Act::RunWithoutAsking => self.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking),
             Act::IdleMenu => {}
             Act::Idle(value) => {

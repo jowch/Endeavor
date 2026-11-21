@@ -42,8 +42,8 @@ before you run it again. **Show log** shows Julia's own log.
 
 ## "Julia was started by an older version of Endeavor"
 
-Julia can keep running after Endeavor quits: always on a server, and on your
-Mac when **Keep notebooks running after Endeavor quits** is on. After you
+Julia keeps running after Endeavor quits, on a server and on your Mac, until
+its notebooks are idle. After you
 install a newer Endeavor, that Julia is still the one the older version
 started. Most updates can keep using it. When one can't, each session that
 uses it says:
