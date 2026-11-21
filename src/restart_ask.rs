@@ -181,7 +181,7 @@ impl Workspace {
             Some(Status::Ready) => self.restart_host(&host, cx),
             Some(Status::Browsing | Status::Died(_)) => self.start_host(&host, cx),
             Some(Status::Starting | Status::Connecting) => {}
-            None | Some(Status::Failed(_) | Status::Replaced) => self.connect_host(&host, true, cx),
+            None | Some(Status::Failed(_)) => self.connect_host(&host, true, cx),
         }
     }
 

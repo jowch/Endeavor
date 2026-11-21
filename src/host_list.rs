@@ -24,7 +24,6 @@ pub enum HostState {
     /// is starting. `reason`: why Slurm says it waits ("Priority", "Resources").
     Queued { job: String, starting: bool, reason: Option<String> },
     NotRunning,
-    Replaced,
     /// The connection dropped; Endeavor reconnects by itself.
     Lost,
     Failed(String),
@@ -69,7 +68,6 @@ impl HostState {
             }
             HostState::Queued { job, starting: true, .. } => format!("Starting · job {job}"),
             HostState::NotRunning => "Not running".into(),
-            HostState::Replaced => "In use from another connection".into(),
             HostState::Lost => "Can't reach · reconnects by itself".into(),
             HostState::Failed(_) => "Couldn't connect".into(),
         }

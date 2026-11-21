@@ -830,7 +830,6 @@ fn host_pane(pane: &HostPane, host: &str, kind: wire::backend::Backend) -> Value
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => (if kind == wire::backend::Backend::Ember { "r_not_running" } else { "julia_not_running" }, Some(reason)),
         HostPane::Crashed(reason) => ("julia_crashed", Some(reason)),
-        HostPane::Replaced => ("replaced", None),
         HostPane::NotConnected(reason) => ("not_connected", Some(reason)),
     };
     json!({ "kind": kind, "host": host, "reason": reason.filter(|r| !r.is_empty()) })

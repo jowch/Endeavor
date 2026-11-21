@@ -23,10 +23,11 @@ plain server, or inside a Slurm job on a cluster.
 
 ## Decisions
 
-- **One client per runtime.** Two computers attached to the same remote
-  runtime at once is not supported. A new connection takes over and the old
-  one is told it was replaced (a laptop that died without disconnecting must
-  not lock the user out).
+- **Any number of connections share a runtime.** Two computers can attach to
+  the same remote runtime at once; neither pushes the other off (so a laptop
+  that died without disconnecting can't lock the user out). A stop from one
+  ends the runtime for all, and the others are told it was stopped from
+  another connection.
 - **Notebooks keep running after a disconnect.** Pluto is slow to start a
   notebook, and users run long computations. This replaces the common manual
   setup of a Pluto server in tmux.
@@ -123,7 +124,7 @@ on a runtime too old to ask before one, in the app's words
 (`client::Messages::no_run_gate`, `older_runtime`); This Mac's listener
 (`src/runtime.rs`) does the same. The app keeps one connection per host
 (`src/connection.rs`): its status (connecting, browsing, starting, ready,
-died, replaced, failed) and what it follows of the runtime. A server's comes
+died, failed) and what it follows of the runtime. A server's comes
 from its session's state, read as it changes (`changes`). A drop that gets
 back to the same Julia within 2 s isn't shown at all (`LOST_GRACE`): the
 session usually has it back in well under a second, and Pluto's page
