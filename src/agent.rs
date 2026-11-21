@@ -558,7 +558,7 @@ fn npm_adapter(agent: Agent, pins: &str, installed: &str, progress: &dyn Fn(Prog
             return Err(format!("Couldn't install the {} agent. Check the internet connection and restart.\n{}", facts.name, tail.join("\n")));
         }
         let _ = std::fs::remove_dir_all(&adapter);
-        std::fs::rename(&staging, &adapter).map_err(|e| e.to_string())?;
+        crate::rename_folder(&staging, &adapter).map_err(|e| e.to_string())?;
         crate::install::remove_other_versions(&format!("{installed}-"), &pinned_adapter_version(agent)?, &[]);
     }
 

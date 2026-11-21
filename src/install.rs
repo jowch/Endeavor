@@ -130,7 +130,7 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     if !untar.success() || !unpacked.is_dir() {
         return Err(format!("Couldn't unpack {what} ({untar})."));
     }
-    std::fs::rename(&unpacked, dir).map_err(|e| e.to_string())?;
+    crate::rename_folder(&unpacked, dir).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&staging);
     let _ = std::fs::remove_file(&tarball);
     Ok(())
