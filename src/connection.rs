@@ -1679,6 +1679,14 @@ impl Workspace {
         .detach();
     }
 
+    /// Keep running changed: This Mac's helper was started with the setting as it was then, and an app that
+    /// is killed or crashes, rather than quit, leaves its runtime or stops it as the helper last heard (#245).
+    pub fn send_keep_running(&self) {
+        if let Some(channel) = self.connections.get(&HostId::ThisMac).and_then(|c| c.channel.as_ref()) {
+            channel.keep_running(self.settings.keep_running);
+        }
+    }
+
     /// Stop open notebooks after the host's idle limit: a server's own, else Settings'.
     pub fn send_idle_limit(&self, host: &HostId, cx: &mut Context<Self>) {
         let Some(bridge) = self.bridge(host) else { return };

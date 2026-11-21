@@ -1588,7 +1588,10 @@ impl Workspace {
             Act::CheckCodex => self.recheck_codex(cx),
             Act::SignInAntigravity => self.sign_in_to_antigravity(cx),
             Act::OwnClaudeSetup => self.update_settings(cx, |s| s.claude_setup = Some(!s.own_claude_setup())),
-            Act::KeepRunning => self.update_settings(cx, |s| s.keep_running = !s.keep_running),
+            Act::KeepRunning => {
+                self.update_settings(cx, |s| s.keep_running = !s.keep_running);
+                self.send_keep_running();
+            }
             Act::RunWithoutAsking => self.update_settings(cx, |s| s.run_without_asking = !s.run_without_asking),
             Act::IdleMenu => {}
             Act::Idle(value) => {
