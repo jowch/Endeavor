@@ -631,10 +631,12 @@ impl Workspace {
                 line.sign_in.forget();
                 let session = line.session.clone();
                 let status = session.status();
-                // ponytail: a line in its pause between tries isn't hurried (Session has no "try now"), so Reconnect waits for its next try.
                 if matches!(status.state, LineState::Failed(_)) && !signed_in(&status) {
                     // An attach starts nothing; a start the connection wants follows once connected.
                     session.request(&client::Want::Attach { install: true });
+                } else if !signed_in(&status) {
+                    // A line in its pause between tries tries now, not at its next try.
+                    session.retry_now();
                 }
                 let status = session.status();
                 // What it already reported is told again, to the connection just made.
@@ -2551,11 +2553,12 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
         }
         (Phase::Idle | Phase::Gone(_) | Phase::Failed(_), Phase::Starting) => out.push(Change::Starting),
         (Phase::Ready(_), Phase::Starting) => {}
-        (Phase::Ready(_), Phase::Failed(why)) if why == format!("Another connection took Julia on {} over.", now.name) => out.push(Change::Replaced),
-        (Phase::Ready(_), Phase::Failed(why) | Phase::Gone(why)) => {
-            let prefix = format!("Julia on {} stopped.", now.name);
-            out.push(Change::Died(why.strip_prefix(&prefix).unwrap_or(why).trim().to_owned()));
-        }
+        (Phase::Ready(_), Phase::Failed(why) | Phase::Gone(why)) => out.push(match &now.gone {
+            Some(client::Gone::Replaced) => Change::Replaced,
+            Some(client::Gone::Died(reason)) => Change::Died(reason.clone()),
+            // It went some other way, unseen between two looks: its words say how.
+            None => Change::Died(why.to_owned()),
+        }),
         (Phase::Starting | Phase::Ready(_), Phase::Idle) => out.push(Change::Stopped),
         (Phase::Starting, Phase::Failed(why) | Phase::Gone(why)) => out.push(Change::StartFailed(why.to_owned())),
         // A start that ended before it was seen to begin.
@@ -2908,7 +2911,7 @@ mod tests {
 
     fn line(state: LineState, node: &str) -> LineStatus {
         let hello = Some(client::HelloInfo { node: node.into(), home: "/home/me".into(), ..Default::default() });
-        LineStatus { machine: "lab".into(), name: "lab".into(), state, step: None, hello, job: None }
+        LineStatus { machine: "lab".into(), name: "lab".into(), state, step: None, hello, job: None, gone: None }
     }
 
     #[test]
@@ -3041,9 +3044,16 @@ mod tests {
         let ready = line(LineState::Ready(runtime(7)), "lab");
         let mut died = line(LineState::NothingRunning, "lab");
         died.step = Some("Julia on lab stopped. It ran out of memory.".into());
+        died.gone = Some(client::Gone::Died("It ran out of memory.".into()));
         assert_eq!(changes(&ready, &died), [Change::Died("It ran out of memory.".into())]);
-        let taken = line(LineState::Failed("Another connection took Julia on lab over.".into()), "lab");
+        // The session's typed reason decides, not its words.
+        let mut taken = line(LineState::Failed("Another connection took Julia on lab over.".into()), "lab");
+        assert_eq!(changes(&ready, &taken), [Change::Died("Another connection took Julia on lab over.".into())], "words alone are no takeover");
+        taken.gone = Some(client::Gone::Replaced);
         assert_eq!(changes(&ready, &taken), [Change::Replaced]);
+        let mut reworded = line(LineState::Failed("Julia on lab was taken over elsewhere.".into()), "lab");
+        reworded.gone = Some(client::Gone::Replaced);
+        assert_eq!(changes(&ready, &reworded), [Change::Replaced], "however the words go");
         // A drop keeps the hello until the next connect begins.
         let mut dropped = line(LineState::Connecting, "lab");
         dropped.step = Some("Lost the connection to lab; connecting again".into());
