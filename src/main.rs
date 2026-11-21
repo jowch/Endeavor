@@ -3355,6 +3355,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// On Windows a folder with a file open under it can't be renamed until the
+    /// file is let go, as a virus scanner lets go of what it checked (#246).
+    #[cfg(windows)]
+    #[test]
+    fn a_held_folder_is_renamed_once_it_is_let_go() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("endeavor-test-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (from, to) = (dir.join("adapter.installing"), dir.join("adapter"));
+        std::fs::create_dir_all(from.join("node_modules")).unwrap();
+        std::fs::write(from.join("node_modules/index.js"), "1").unwrap();
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(from.join("node_modules/index.js")).unwrap();
+        assert!(std::fs::rename(&from, &to).is_err(), "the open file should stop a plain rename");
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(held);
+        });
+        let started = std::time::Instant::now();
+        super::rename_folder(&from, &to).unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(250), "renamed before the file was let go");
+        letting_go.join().unwrap();
+        assert_eq!(std::fs::read_to_string(to.join("node_modules/index.js")).unwrap(), "1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn notebook_id_from_pluto_url() {
         let id = "6a1b2c3d-0000-4000-8000-1234567890ab";
