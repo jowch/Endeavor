@@ -49,6 +49,8 @@ jobs:
           set -eu
           key=$(scripts/helpers.sh --key)
           case "$key" in ''|*[!0-9a-f]*) echo "::error::scripts/helpers.sh --key printed '$key', not a key."; exit 1 ;; esac
+          # The build must carry its helpers' checksums (EndeavorMCP#422).
+          scripts/pinned-sums.sh "$key"
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
   server:

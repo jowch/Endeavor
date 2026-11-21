@@ -147,8 +147,8 @@ jobs:
             exit 1
           }
           key=$(scripts/helpers.sh --key)
-          # The build must carry its helpers' checksums (EndeavorMCP#422): a pull request's run only warns.
-          scripts/pinned-sums.sh "$key" ${{ github.event_name == 'pull_request' && 'warning' || '' }}
+          # The build must carry its helpers' checksums (EndeavorMCP#422).
+          scripts/pinned-sums.sh "$key"
           echo "ENDEAVOR_RELEASE_KEY=$key" >> "$GITHUB_ENV"
       # A nightly checks nightly.json for a newer build and updates itself
       # (src/updater.rs); a build from source doesn't.

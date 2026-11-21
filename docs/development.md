@@ -35,8 +35,8 @@ build embeds for its own key, from a pin that includes EndeavorMCP#444. It
 embeds them only when `Cargo.lock` pins a
 "Plugins: pin build KEY" commit, the one EndeavorMCP's Helpers pin job pushes
 (EndeavorMCP#422). `scripts/pinned-sums.sh KEY` checks that, and the nightly
-and the Windows build on `main` fail without it; a pull request's run only
-warns.
+and the Windows builds fail without it, on pull requests too, so a pin that
+would break `main` can't merge.
 
 To change EndeavorMCP and the app together, see
 [testing.md](testing.md#changing-endeavormcp-and-the-app-together).
