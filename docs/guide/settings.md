@@ -46,7 +46,7 @@ Cursor is listed as **Not available yet**.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Stop idle notebooks after** | 48 hours | A notebook nobody has used for this long stops, even with Endeavor open, to free memory. **Start** brings it back. The choices are 12 hours, 24 hours, 48 hours, 1 week and Never. Notebooks also keep running after you quit Endeavor, until they have been idle this long, and Endeavor picks them up again when you open it. Once none is open, Julia on your Mac stops about ten minutes later. |
+| **Stop idle notebooks after** | 48 hours | A notebook nobody has used for this long stops, even with Endeavor open, to free memory. **Start** brings it back. The choices are 12 hours, 24 hours, 48 hours, 1 week and Never. Notebooks also keep running after Endeavor closes, however it closes, until they have been idle this long, and Endeavor picks them up again when you open it. Once none is open, Julia on your Mac stops about ten minutes later. |
 | **Run notebook code without asking** | Off | Claude runs the cells it writes without asking first. It applies to new sessions. To change one session, use the mode under the message box. See [Modes and approvals](./modes-and-approvals.md). |
 
 **Julia** sets which Julia runs your notebooks on your Mac. Click
