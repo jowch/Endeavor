@@ -619,11 +619,12 @@ impl Workspace {
 
     /// `host`'s line, opened unless one for `server` as it is now is open: one
     /// made from the server's old connection settings is closed and a new one
-    /// opened. A line is kept otherwise, since its listener's port is in the
-    /// MCP URL of the agents on the host; one that gave up is asked to try
-    /// again. A line that is connected already reports it again, to the
-    /// connection just made.
+    /// opened on its socket, so its port, which is in the MCP URL of the
+    /// agents on the host, carries on. A line is kept otherwise; one that
+    /// gave up is asked to try again. A line that is connected already
+    /// reports it again, to the connection just made.
     fn open_line(&mut self, host: &HostId, server: &Server, cx: &mut Context<Self>) -> Result<(), String> {
+        let mut socket = None;
         if let Some(line) = self.lines.get(host) {
             if same_connection(&line.server, server) {
                 line.sign_in.forget();
@@ -644,13 +645,15 @@ impl Workspace {
                 }
                 return Ok(());
             }
+            // Taken now, not when the close in its thread gets there: the port is never free in between.
+            socket = line.session.hand_over_port();
             self.close_line(host, cx);
         }
         let (tx, rx) = futures::channel::mpsc::unbounded::<LineUpdate>();
         let sign_in = remote::SignIn::default();
         let (asker, auth) = remote::asker(server, self.questions_tx.clone(), sign_in.clone())?;
         let events = tx.clone();
-        let session = Arc::new(remote::open(server, auth, Box::new(move |event| drop(events.unbounded_send(LineUpdate::Event(event)))))?);
+        let session = Arc::new(remote::open(server, auth, socket, Box::new(move |event| drop(events.unbounded_send(LineUpdate::Event(event)))))?);
         let closed: Arc<AtomicBool> = Arc::default();
         // Every change of the session's state, in order; it says few of them with an event.
         std::thread::spawn({

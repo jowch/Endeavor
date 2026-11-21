@@ -134,8 +134,9 @@ however long it took, the page and its notebooks carry on: nothing is reopened
 or reloaded, since that would cut across the page's own reconnect. The
 app's Stop, Cancel and Restart force the stop, so a start the session resumed
 by itself after a drop is cancelled too. The session is kept for the whole launch unless the
-server's connection settings change, since its listener's port is in the MCP
-URL of the agents there; one that gave up is asked to try again. On quit, servers detach; their idle stop
+server's connection settings change. Then a new one opens on the old one's
+listener port, which is in the MCP URL of the agents there, so their tools
+keep working. One that gave up is asked to try again. On quit, servers detach; their idle stop
 (the server's own setting, else Settings') covers forgotten notebooks.
 
 **Local sessions use the same path.** The app can run the helper as a child

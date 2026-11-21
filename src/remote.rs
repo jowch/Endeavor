@@ -176,8 +176,9 @@ fn messages() -> client::Messages {
 /// state folder is the helper's default (`Server::launcher`), so a runtime that
 /// already runs there, the app's or the plugin's, is found. A runtime it starts starts Julia only when a Julia
 /// notebook needs it, as on this computer, so an R session doesn't wait for Julia.
-/// `on_event` hears its steps and trouble.
-pub fn open(server: &Server, auth: Auth, on_event: client::OnEvent) -> Result<Session, String> {
+/// `on_event` hears its steps and trouble. `socket`: a closed line's
+/// (`Session::hand_over_port`), so the agents on the server keep their MCP URL.
+pub fn open(server: &Server, auth: Auth, socket: Option<std::net::TcpListener>, on_event: client::OnEvent) -> Result<Session, String> {
     let mut config = client::Config::new(client_server(server)?, |os: &str, arch: &str| helper_for(os, arch));
     config.transport = transport(server);
     let [_, state] = server.launcher();
@@ -188,6 +189,7 @@ pub fn open(server: &Server, auth: Auth, on_event: client::OnEvent) -> Result<Se
     config.auth = auth;
     config.messages = messages();
     config.on_event = on_event;
+    config.socket = socket;
     Session::new(config)
 }
 
