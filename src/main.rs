@@ -237,15 +237,29 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// indexer) has either file open without sharing it, most often the scanner
 /// checking the `.partial` just closed, so try a few more times.
 fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
+    rename_held(from, to, &[20, 40, 60, 80, 100])
+}
+
+/// `std::fs::rename` for a folder just filled with many files (an adapter npm
+/// just installed, an unpacked Julia). On Windows the rename fails while any
+/// file under it is open, and a virus scanner checking thousands of new files
+/// can hold one for a few seconds, so keep trying for about 8 s (#246).
+pub fn rename_folder(from: &Path, to: &Path) -> std::io::Result<()> {
+    rename_held(from, to, &[100, 200, 400, 800, 1000, 1000, 1000, 1000, 1000, 1000, 1000])
+}
+
+/// `std::fs::rename`, tried again after each wait (in ms) while Windows says
+/// another program holds the file.
+fn rename_held(from: &Path, to: &Path, waits: &[u64]) -> std::io::Result<()> {
     // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
     const HELD: [i32; 3] = [5, 32, 33];
-    let mut tries = 0;
+    let mut waits = waits.iter();
     loop {
         match std::fs::rename(from, to) {
-            Err(e) if cfg!(windows) && e.raw_os_error().is_some_and(|code| HELD.contains(&code)) && tries < 5 => {
-                tries += 1;
-                std::thread::sleep(Duration::from_millis(20 * tries));
-            }
+            Err(e) if cfg!(windows) && e.raw_os_error().is_some_and(|code| HELD.contains(&code)) => match waits.next() {
+                Some(&ms) => std::thread::sleep(Duration::from_millis(ms)),
+                None => return Err(e),
+            },
             done => return done,
         }
     }
@@ -3323,6 +3337,48 @@ mod tests {
     use super::{load_json_at, save_json_at, viewed_notebook, viewed_notebook_id, write_atomic};
     use wire::backend::Backend;
     use std::collections::HashMap;
+
+    /// A folder moves with what's in it, and one that isn't there fails at once
+    /// rather than after the waits meant for a held file.
+    #[test]
+    fn a_folder_is_renamed_and_a_missing_one_fails_at_once() {
+        let dir = std::env::temp_dir().join(format!("endeavor-test-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (from, to) = (dir.join("adapter.installing"), dir.join("adapter"));
+        std::fs::create_dir_all(from.join("node_modules/x")).unwrap();
+        std::fs::write(from.join("node_modules/x/index.js"), "1").unwrap();
+        super::rename_folder(&from, &to).unwrap();
+        assert_eq!(std::fs::read_to_string(to.join("node_modules/x/index.js")).unwrap(), "1");
+        let started = std::time::Instant::now();
+        assert!(super::rename_folder(&from, &dir.join("other")).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On Windows a folder with a file open under it can't be renamed until the
+    /// file is let go, as a virus scanner lets go of what it checked (#246).
+    #[cfg(windows)]
+    #[test]
+    fn a_held_folder_is_renamed_once_it_is_let_go() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("endeavor-test-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (from, to) = (dir.join("adapter.installing"), dir.join("adapter"));
+        std::fs::create_dir_all(from.join("node_modules")).unwrap();
+        std::fs::write(from.join("node_modules/index.js"), "1").unwrap();
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(from.join("node_modules/index.js")).unwrap();
+        assert!(std::fs::rename(&from, &to).is_err(), "the open file should stop a plain rename");
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(held);
+        });
+        let started = std::time::Instant::now();
+        super::rename_folder(&from, &to).unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(250), "renamed before the file was let go");
+        letting_go.join().unwrap();
+        assert_eq!(std::fs::read_to_string(to.join("node_modules/index.js")).unwrap(), "1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn notebook_id_from_pluto_url() {
