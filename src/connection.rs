@@ -39,8 +39,6 @@ pub enum Status {
     Ready,
     /// Julia exited or couldn't start; still connected, so Start tries again.
     Died(String),
-    /// Another connection took the runtime over.
-    Replaced,
     /// Couldn't connect, or the connection closed.
     Failed(String),
 }
@@ -568,7 +566,7 @@ impl Workspace {
                 connection.start_when_connected |= start;
                 return;
             }
-            Some((Status::Failed(_) | Status::Replaced, _)) | None => {}
+            Some((Status::Failed(_), _)) | None => {}
             Some(_) => {
                 if start {
                     self.start_host(host, cx);
@@ -796,7 +794,6 @@ impl Workspace {
             Change::Started(runtime) => Update::Started(Ok(runtime_of(runtime))),
             Change::StartFailed(why) => Update::Started(Err(why)),
             Change::Died(why) => Update::Notice(Notice::Died(why)),
-            Change::Replaced => Update::Notice(Notice::Replaced),
             // The app's own stop, or Cancel: a start that it cut short ends as cancelled.
             Change::Stopped => match self.connections.get(host) {
                 Some(c) if c.status == Status::Starting => Update::Started(Err(String::new())),
@@ -1224,10 +1221,6 @@ impl Workspace {
                     Notice::Died(reason) => {
                         connection.crashed = true;
                         Status::Died(reason)
-                    }
-                    Notice::Replaced => {
-                        connection.unlink();
-                        Status::Replaced
                     }
                     Notice::Lost(reason) => {
                         connection.unlink();
@@ -1740,7 +1733,7 @@ impl Workspace {
     pub fn check_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let helper = self.helper(host);
         let Some(connection) = self.connections.get_mut(host).filter(|c| matches!(c.status, Status::Browsing | Status::Died(_))) else {
-            if matches!(self.status(host), None | Some(Status::Failed(_) | Status::Replaced)) {
+            if matches!(self.status(host), None | Some(Status::Failed(_))) {
                 self.connect_host(host, false, cx);
             }
             return;
@@ -1786,7 +1779,7 @@ impl Workspace {
                 }
                 return cx.notify();
             }
-            None | Some(Status::Failed(_) | Status::Replaced) => {
+            None | Some(Status::Failed(_)) => {
                 self.connect_host(host, false, cx);
                 if let Some(connection) = self.connections.get_mut(host) {
                     connection.stop_when_connected = true;
@@ -1906,7 +1899,6 @@ impl Workspace {
                 notebooks: c.notebooks.as_array().map(Vec::len),
                 job: c.runtime.as_ref().and_then(|r| r.job.as_ref()).map(|j| (j.id.clone(), j.ends_at)),
             },
-            Status::Replaced => HostState::Replaced,
             Status::Failed(e) => HostState::Failed(e.clone()),
         }
     }
@@ -2162,7 +2154,6 @@ impl Workspace {
             Status::Died(_) if connection.is_some_and(|c| c.stopping) => HostPane::Stopping,
             Status::Died(reason) if connection.is_some_and(|c| c.crashed) => HostPane::Crashed(reason),
             Status::Died(reason) => HostPane::NotRunning(reason),
-            Status::Replaced => HostPane::Replaced,
             Status::Failed(reason) => HostPane::NotConnected(reason),
         })
     }
@@ -2295,9 +2286,6 @@ impl Workspace {
             HostPane::Stopping => resting.child(div().text_color(theme::text_muted()).child(format!("Stopping {} on {name}…", crate::notebook_pane::engine_name(kind)))),
             HostPane::NotRunning(reason) => return Some(self.julia_stopped_page(host, kind, &reason, cx)),
             HostPane::Crashed(reason) => return Some(self.julia_crashed_page(host, kind, &reason, cx)),
-            HostPane::Replaced => resting
-                .child(div().text_color(theme::text_muted()).child(format!("Another connection took over {} on {name}.", crate::notebook_pane::engine_name(kind))))
-                .child(action("host-reconnect", "Reconnect", host.clone(), false)),
             HostPane::NotConnected(reason) => {
                 let fixes = self.fixes(host, &reason);
                 let repair = fixes.contains(&Fix::Repair);
@@ -2363,8 +2351,6 @@ pub enum HostPane {
     NotRunning(String),
     /// Julia stopped by itself: "Julia stopped unexpectedly", and why.
     Crashed(String),
-    /// Another connection took the runtime over.
-    Replaced,
     /// "Not connected", and why.
     NotConnected(String),
 }
@@ -2482,7 +2468,6 @@ enum Change {
     StartFailed(String),
     /// Julia stopped by itself; the reason, without the line's "Julia on X stopped."
     Died(String),
-    Replaced,
     /// The app's stop or cancel ended Julia, or the start under way.
     Stopped,
 }
@@ -2554,7 +2539,6 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
         (Phase::Idle | Phase::Gone(_) | Phase::Failed(_), Phase::Starting) => out.push(Change::Starting),
         (Phase::Ready(_), Phase::Starting) => {}
         (Phase::Ready(_), Phase::Failed(why) | Phase::Gone(why)) => out.push(match &now.gone {
-            Some(client::Gone::Replaced) => Change::Replaced,
             Some(client::Gone::Died(reason)) => Change::Died(reason.clone()),
             // It went some other way, unseen between two looks: its words say how.
             None => Change::Died(why.to_owned()),
@@ -3040,20 +3024,17 @@ mod tests {
     }
 
     #[test]
-    fn a_servers_julia_that_goes_by_itself_is_told_apart_from_a_takeover_and_a_drop() {
+    fn a_servers_julia_that_goes_by_itself_is_told_apart_from_a_drop() {
         let ready = line(LineState::Ready(runtime(7)), "lab");
         let mut died = line(LineState::NothingRunning, "lab");
         died.step = Some("Julia on lab stopped. It ran out of memory.".into());
         died.gone = Some(client::Gone::Died("It ran out of memory.".into()));
         assert_eq!(changes(&ready, &died), [Change::Died("It ran out of memory.".into())]);
-        // The session's typed reason decides, not its words.
-        let mut taken = line(LineState::Failed("Another connection took Julia on lab over.".into()), "lab");
-        assert_eq!(changes(&ready, &taken), [Change::Died("Another connection took Julia on lab over.".into())], "words alone are no takeover");
-        taken.gone = Some(client::Gone::Replaced);
-        assert_eq!(changes(&ready, &taken), [Change::Replaced]);
-        let mut reworded = line(LineState::Failed("Julia on lab was taken over elsewhere.".into()), "lab");
-        reworded.gone = Some(client::Gone::Replaced);
-        assert_eq!(changes(&ready, &reworded), [Change::Replaced], "however the words go");
+        // The session's typed reason gives the why, however its words go; with none, the words are the why.
+        died.step = Some("Julia on lab ended: out of memory.".into());
+        assert_eq!(changes(&ready, &died), [Change::Died("It ran out of memory.".into())]);
+        let failed = line(LineState::Failed("Julia on lab couldn't start.".into()), "lab");
+        assert_eq!(changes(&ready, &failed), [Change::Died("Julia on lab couldn't start.".into())]);
         // A drop keeps the hello until the next connect begins.
         let mut dropped = line(LineState::Connecting, "lab");
         dropped.step = Some("Lost the connection to lab; connecting again".into());

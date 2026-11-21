@@ -862,7 +862,7 @@ impl Workspace {
         let resources = self.draft.resources.as_ref().filter(|_| self.draft_cluster().is_some()).map(|r| (Chip::Resources, "resources", Glyph::Chip, r.summary(), false));
         let folder_label = match (&self.draft.folder, self.status(&self.draft.host)) {
             (Some(folder), _) => self.draft.host.folder_name(folder),
-            (None, Some(Status::Failed(_) | Status::Replaced)) => "Not connected".into(),
+            (None, Some(Status::Failed(_))) => "Not connected".into(),
             (None, _) => format!("Connecting to {where_label}…"),
         };
         std::iter::once((Chip::Agent, "agent", Glyph::Spark, self.draft_agent().name().to_owned(), false))
@@ -1004,7 +1004,7 @@ impl Workspace {
                         // The dot says it.
                         _ if running && !clusters => None,
                         Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) if !clusters => Some("Connected"),
-                        Some(Status::Failed(_) | Status::Replaced) => Some("Not connected"),
+                        Some(Status::Failed(_)) => Some("Not connected"),
                         _ if clusters => Some("Slurm"),
                         _ => None,
                     };
@@ -1354,7 +1354,7 @@ impl Workspace {
     /// the session will open. None: the pane shows the host's state instead.
     pub fn draft_pane_folder(&self) -> Option<&String> {
         let host = &self.draft.host;
-        let unreachable = matches!(self.status(host), Some(Status::Failed(_) | Status::Replaced)) || self.connection(host).is_some_and(|c| c.lost.is_some());
+        let unreachable = matches!(self.status(host), Some(Status::Failed(_))) || self.connection(host).is_some_and(|c| c.lost.is_some());
         self.draft.folder.as_ref().filter(|_| !unreachable)
     }
 

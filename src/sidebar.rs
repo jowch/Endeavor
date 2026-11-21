@@ -727,7 +727,6 @@ impl Workspace {
     /// notebook here, Julia's and R's, so it names neither.
     pub(crate) fn restart_row(&self) -> Option<&'static str> {
         match self.status(&HostId::ThisMac) {
-            Some(connection::Status::Replaced) => Some("↻ Reconnect notebooks"),
             Some(connection::Status::Died(_) | connection::Status::Failed(_)) => Some("↻ Restart notebooks"),
             _ => None,
         }
