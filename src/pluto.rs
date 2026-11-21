@@ -555,8 +555,8 @@ fn connection_error(e: std::io::Error) -> String {
     use std::io::ErrorKind::*;
     let plain = match e.kind() {
         // A read timeout is WouldBlock on Unix and TimedOut on Windows.
-        TimedOut | WouldBlock => "Julia didn't answer.",
-        ConnectionRefused | ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected | UnexpectedEof => "Julia isn't running.",
+        TimedOut | WouldBlock => "The notebook didn't answer.",
+        ConnectionRefused | ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected | UnexpectedEof => "The notebook isn't running.",
         _ => return e.to_string(),
     };
     format!("{plain}\n{e}")
@@ -686,13 +686,13 @@ mod tests {
         use std::io::{Error, ErrorKind};
         let timed_out = connection_error(Error::new(ErrorKind::TimedOut, "A connection attempt failed because the connected party did not properly respond (os error 10060)"));
         let notice = crate::notice::Notice::new(crate::notice::Spot::Pane, "Couldn't run the notebook", &timed_out, None);
-        assert_eq!(notice.reason, "Julia didn't answer.");
+        assert_eq!(notice.reason, "The notebook didn't answer.");
         assert!(notice.details() && notice.raw.contains("os error 10060"), "{}", notice.raw);
         let refused = connection_error(Error::new(ErrorKind::ConnectionRefused, "No connection could be made because the target machine actively refused it. (os error 10061)"));
-        assert_eq!(crate::notice::reason(&refused), "Julia isn't running.");
+        assert_eq!(crate::notice::reason(&refused), "The notebook isn't running.");
         assert_eq!(connection_error(Error::new(ErrorKind::InvalidData, "stream did not contain valid UTF-8")), "stream did not contain valid UTF-8", "anything else as it came");
         // A read that times out on Unix.
-        assert_eq!(crate::notice::reason(&connection_error(Error::from(ErrorKind::WouldBlock))), "Julia didn't answer.");
+        assert_eq!(crate::notice::reason(&connection_error(Error::from(ErrorKind::WouldBlock))), "The notebook didn't answer.");
     }
 
     use super::{RunWarning, Started, cells_that_ran, engine_ended, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};

@@ -99,7 +99,7 @@ pub fn reason(error: &str) -> String {
         return "The disk is full.".into();
     }
     if lower.contains("connection refused") || lower.contains("connection reset") || lower.contains("broken pipe") {
-        return "Julia isn't running.".into();
+        return "The notebook isn't running.".into();
     }
     let line = error.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("Something went wrong.");
     let line = line.split_once(": ").filter(|(head, _)| head.ends_with("Error")).map_or(line, |(_, rest)| rest);
@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(reason("ArgumentError: file_exists::'/Users/sam/lab/growth.jl' already exists"), "A file called growth.jl is already in this folder.");
         assert_eq!(reason("Permission denied (os error 13)"), "Endeavor isn't allowed to write there.");
         assert_eq!(reason("ArgumentError: execution_blocked::The notebook is in safe preview; Run notebook starts it"), "The notebook is in safe preview; Run notebook starts it.");
-        assert_eq!(reason("Couldn't reach the runtime: Connection refused (os error 61)"), "Julia isn't running.");
+        assert_eq!(reason("Couldn't reach the runtime: Connection refused (os error 61)"), "The notebook isn't running.");
         assert_eq!(reason("not logged in\nmore"), "not logged in.");
         assert_eq!(
             export_reason("Read-only file system (os error 30)", Path::new("/Volumes/Shared/lab")),
