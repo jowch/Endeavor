@@ -107,7 +107,6 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `notify.rs` `flash` | on Windows, "Claude is waiting for you" flashes the taskbar button instead of showing a notification, and coming back doesn't open the session that asked | a toast, with the app's AppUserModelID on the installer's Start menu shortcut |
 | `cell_shot.rs` | the agent's picture of an HTML output is taken only while the notebook pane is on screen | a picture asked for behind Settings |
 | `frontend/src/diff.ts` | the page's diff is an O(n·m) table; when the two versions' line counts multiply past 250,000, no diff is shown | big cells need a diff |
-| `connection.rs` `open_line` | A server whose connection settings change gets a new listener port, so its sessions' agents need a restart | `client::Session` can keep its port |
 | `server_dialog.rs` `drop_asks` | when a sign-in ends while another server's question waits behind it, that question comes to the front without the focus | two servers asking at once happens in practice |
 | `connection.rs` idle limit | a failed send leaves the runtime on its default idle stop (48 hours) until the next start | it fails in practice |
 | `main.rs` `send_binding`, `follow_folder`, `send_policy` | sends to the runtime are fire and forget: a failed one leaves the session unbound until it opens, Pluto suggesting the previous folder, or the run policy stale until the next change | a failed send is seen |
