@@ -409,3 +409,16 @@ pub fn edit(webview: &wry::WebView, action: gpui::OsAction) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Every app-first key parses. Since gpui-pre 0.3.11 a `secondary-` key
+    /// fails to parse, and the `.ok()` above would drop it without a word.
+    #[test]
+    fn every_app_first_key_parses() {
+        for key in super::APP_FIRST {
+            let keystroke = gpui::Keystroke::parse(key).unwrap_or_else(|_| panic!("{key} doesn't parse"));
+            assert!(keystroke.modifiers.control, "{key} has no Ctrl");
+        }
+    }
+}

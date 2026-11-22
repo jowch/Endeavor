@@ -8,5 +8,13 @@ gpui-webview and rewrote it (native-view clipping, GPUI Fast composition) after 
 This copy keeps the 0.6.6 behaviour the app's overlay holes, focus and Linux glue are
 built around, and lets the GPUI pin in `Cargo.toml` move with the app's.
 
-`src/lib.rs` is the upstream file, unchanged unless a GPUI upgrade needs a change.
+`src/lib.rs` is the upstream file, byte for byte, from the published crate
+`gpui-wry-0.6.6.crate` (sha256
+`529390779b0b86f97444b0512e4d5605e755f16210a53617eaa7c54bee21a4d0`, the checksum
+`Cargo.lock` recorded for it). Keep it unchanged unless a GPUI upgrade needs a change,
+and say here what changed.
+
+This folder is under the Apache License 2.0 (`LICENSE-APACHE`, copied from gpui-kit),
+not the app's license.
+
 To upgrade GPUI, change the `gpui-pre` version here and in the app's `Cargo.toml` together.

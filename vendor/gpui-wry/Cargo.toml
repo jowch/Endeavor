@@ -1,4 +1,4 @@
-# A copy of gpui-wry 0.6.6 (Apache-2.0, github.com/longbridge/gpui-kit, crates/webview),
+# ponytail: a copy of gpui-wry 0.6.6 (Apache-2.0, github.com/longbridge/gpui-kit, crates/webview),
 # kept here so its GPUI pin moves with the app's. See README.md.
 [package]
 name = "gpui-wry"
