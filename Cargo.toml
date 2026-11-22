@@ -11,6 +11,8 @@ gpui = { package = "gpui-pre", version = "=0.3.6" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["runtime_shaders", "font-kit"] }
 gpui-wry = "=0.6.6"
 wry = { package = "lb-wry", version = "0.53.3" }
+# Parses a link the page sends to the browser the way the browser will (#151).
+url = "2.5"
 raw-window-handle = "0.6"
 gpui-component = "=0.6.6"
 gpui-base = "=0.6.6"

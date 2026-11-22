@@ -53,6 +53,7 @@ pub fn attach(webview: &wry::WebView, window: &Window, cx: &mut App) {
     let Some(gpui) = gpui_xid(window) else { return };
     WEB_VIEW.with(|v| v.replace(Some(webview.webview())));
     focus_on_click(webview);
+    no_new_windows(webview);
     keys_follow_focus(webview, gpui);
     webkeys::forward_app_keys(webview, window.window_handle(), gpui, cx);
 }
@@ -84,6 +85,31 @@ pub fn web_view_hooks() -> impl IntoElement {
         },
     )
     .absolute()
+}
+
+/// The page's right-click menu without "Open Image (Video, Audio, Frame) in New
+/// Window": the app opens no second window, and what they open (a figure's
+/// data: or blob: URL) can't go to the browser, so they did nothing (#151).
+/// "Open Link in New Window" stays: the new-window handler sends a web link to
+/// the browser.
+fn no_new_windows(webview: &wry::WebView) {
+    use webkit2gtk::{ContextMenuAction, ContextMenuExt, ContextMenuItemExt, WebViewExt};
+    use wry::WebViewExtUnix;
+    webview.webview().connect_context_menu(|_, menu, _, _| {
+        for item in menu.items() {
+            if matches!(
+                item.stock_action(),
+                ContextMenuAction::OpenImageInNewWindow
+                    | ContextMenuAction::OpenFrameInNewWindow
+                    | ContextMenuAction::OpenVideoInNewWindow
+                    | ContextMenuAction::OpenAudioInNewWindow
+            ) {
+                menu.remove(&item);
+            }
+        }
+        // Not handled: WebKit shows the menu, without them.
+        false
+    });
 }
 
 /// A click in the web view gives it the keyboard: WebKit's own X window, as

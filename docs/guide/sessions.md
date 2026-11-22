@@ -85,7 +85,7 @@ typed for next time.
 
 Claude can also point at a cell in its reply. A cell shows as an orange
 pill with the cell icon: click it, and the notebook scrolls to that cell. A
-faded, struck-through pill is a cell that isn't in the notebook any more.
+faded, struck-through pill is a cell that isn't in this notebook.
 Cells are named by what they define. To give a cell a name of your own,
 start it with a comment in words, such as `# Growth curves by strain`.
 

@@ -23,6 +23,7 @@ use crate::runs;
 use crate::session::{Approval, Entry, Failed, FailedKind, Session, cell_label, file_name, file_path};
 use crate::signin::Look;
 use crate::theme;
+use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
 
 /// A run-state warning as the transcript shows it.
@@ -557,8 +558,8 @@ struct CellLink {
 
 /// Draws a reply's links to cells as pills: the agent's words after a cell
 /// glyph, in the accent colour. Clicking one shows the cell in the notebook.
-/// A cell the notebook no longer has is a faded, struck-through pill that
-/// doesn't click.
+/// A cell the shown notebook doesn't have is a faded, struck-through pill
+/// that doesn't click.
 struct CellLinks(WeakEntity<Workspace>);
 
 impl MarkdownPlugin for CellLinks {
@@ -573,7 +574,7 @@ impl MarkdownPlugin for CellLinks {
         Some(MarkdownNode::new(CELL_LINK, CellLink { cell, words: words.clone() }).text(words.clone()).accessibility_label(words))
     }
 
-    fn render(&self, node: &MarkdownNode, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(&self, node: &MarkdownNode, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Some(link) = node.data::<CellLink>() else { return div().into_any_element() };
         let gone = self.0.upgrade().is_some_and(|w| cell_here(w.read(cx), &link.cell) == Some(false));
         let color = if gone { theme::text_faint() } else { theme::accent_text() };
@@ -590,11 +591,17 @@ impl MarkdownPlugin for CellLinks {
             .child(crate::new_session::glyph(crate::new_session::Glyph::Code, color))
             .child(div().when(gone, |d| d.line_through()).child(link.words.clone()));
         if gone {
-            return pill.tooltip(|window, cx| Tooltip::new("This cell isn't in the notebook any more").build(window, cx)).into_any_element();
+            // Also a link to another notebook's cell, or a made-up id.
+            return pill.tooltip(|window, cx| Tooltip::new("This cell isn't in this notebook").build(window, cx)).into_any_element();
         }
+        // Tab reaches it and Enter or Space presses it, as with any button.
+        let focus = window.use_keyed_state(SharedString::from(format!("cell-link-focus-{}-{}", link.cell, node.source_range().map_or(0, |r| r.start))), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
         let workspace = self.0.clone();
         let cell = link.cell.clone();
         pill.role(Role::Link)
+            .track_focus(&focus)
+            .tab_stop(true)
+            .focus_ring()
             .cursor_pointer()
             .hover(|s| s.bg(theme::mark_bg()))
             .on_click(move |_, _, cx| {
@@ -785,10 +792,10 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
     let footer = div()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .min_h(px(34.))
-        .px(px(8.))
-        .py(px(4.))
+        .gap(theme::chat_px(8.))
+        .min_h(theme::chat_px(34.))
+        .px(theme::chat_px(8.))
+        .py(theme::chat_px(4.))
         .border_t_1()
         .border_color(theme::border())
         .text_size(theme::chat_meta())
@@ -797,6 +804,11 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
         .when(pressable, |d| {
             d.child(
                 crate::signin::button(ElementId::NamedInteger("restore-turn".into(), key << 32 | ix as u64), "Restore", crate::signin::Look::Secondary)
+                    // On the chat's scale, as the card around it is.
+                    .h(theme::chat_px(26.))
+                    .px(theme::chat_px(10.))
+                    .rounded(theme::chat_px(6.))
+                    .text_size(theme::chat_meta())
                     .track_focus(&session.changed_cell_focus(ix, cells.len(), cx))
                     .tab_stop(true)
                     .focus_visible(|s| s.border_color(theme::focus_ring()))
