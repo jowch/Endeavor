@@ -918,6 +918,8 @@ impl Session {
     /// loads: read-only, at its end. The replay replaces it once it's all in.
     pub fn show_copy(&mut self, copy: crate::transcript_copy::Copy) {
         self.entries = copy.entries;
+        // Restores the agent hadn't heard of when the app last saved: told with the next message.
+        self.restored = copy.untold;
         let keys: Vec<(usize, u64)> = self.card_keys().filter(|(ix, _)| copy.restored.contains(ix)).collect();
         for (_, key) in keys {
             self.restores.insert(key, Restore::Restored);
@@ -3050,7 +3052,7 @@ mod tests {
         assert!(answers(&effects).is_empty() && matches!(effects.as_slice(), [Effect::PreviewRun { .. }, Effect::Asked(_)]), "the download waits for the user");
         let card = s.pending_permission().expect("the install card");
         // The yes names the packages the card did, so it covers those only (EndeavorMCP #418).
-        s.set_preview(card, crate::pluto::RunPreview { asking: Some(crate::pluto::Asking { new: true, packages: vec!["Example".into()], close_to: vec![] }), ..Default::default() });
+        s.set_preview(card, crate::pluto::RunPreview { asking: Some(crate::pluto::Asking { new: true, packages: vec!["Example".into()], close_to: vec![], bytes: None }), ..Default::default() });
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
         let later = s.take_later();
         assert!(matches!(later.as_slice(), [Effect::AnswerRun { ask: 41, allow: true, packages: Some(p), .. }] if p == &["Example".to_owned()]), "the card's names go with the yes");
@@ -3994,8 +3996,10 @@ mod tests {
                 Entry::Agent { text: "Done.".into(), at: None },
             ],
             restored: Vec::new(),
+            untold: vec!["put back `fit`".into()],
         });
         assert!(s.showing_copy());
+        assert_eq!(s.restored, ["put back `fit`"], "a restore the agent hadn't heard of is told with the next message");
         s.apply(said("fit it"));
         s.apply(reply("Done."));
         s.apply(said("and plot it"));
@@ -4519,7 +4523,7 @@ more" }"#);
         assert_eq!(s.restored_cards(), [card]);
 
         // The app quits and opens the session again: its copy shows, then the agent's replay arrives.
-        let copy = crate::transcript_copy::from_json(&crate::transcript_copy::to_json(&s.entries, &s.restored_cards()).unwrap()).unwrap();
+        let copy = crate::transcript_copy::from_json(&crate::transcript_copy::to_json(&s.entries, &s.restored_cards(), &s.restored).unwrap()).unwrap();
         let mut again = Session::loading(2, SessionId::new("abc"), Place::local("/tmp"), None, "Rate".into());
         again.show_copy(copy);
         let card = again.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();
