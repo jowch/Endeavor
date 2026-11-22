@@ -2165,12 +2165,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The session shown, when it waits on `host` for a notebook that an R start failed to open:
-    /// what the R failure pane's buttons open again. With none (a stopped session, or another
-    /// session's agent failed to start R), they would only clear the failure until the runtime
-    /// says it again, so the pane shows none (#128).
+    /// The session shown, when it waits on `host` for a notebook: what the R failure pane's
+    /// buttons open again. The pane shows only over such a session (`pane_shows`, #128).
     fn r_retry_target(&self, host: &HostId) -> Option<(u64, Option<String>)> {
-        let waiting = self.active_session().filter(|s| s.place.host == *host && s.notebook.is_none() && s.stopped.is_none() && !s.missing);
+        let waiting = self.active_session().filter(|s| s.place.host == *host && waits_for_notebook(s));
         waiting.map(|s| (s.key, s.notebook_path.clone()))
     }
 
@@ -2283,9 +2281,7 @@ impl Workspace {
             }
             HostPane::RFailed(error) => {
                 let host_id = host.clone();
-                let can_retry = self.r_retry_target(host).is_some();
-                // The offer only where Install R has a notebook to open with it.
-                let offer = own_r_offered().filter(|_| can_retry && *host == HostId::ThisMac && error.starts_with("r_not_found::"));
+                let offer = own_r_offered().filter(|_| *host == HostId::ThisMac && error.starts_with("r_not_found::"));
                 let button = |id: &'static str, label: &'static str, install: bool| {
                     let host = host_id.clone();
                     div()
@@ -2300,7 +2296,6 @@ impl Workspace {
                         .button_text(label)
                         .on_click(cx.listener(move |this, _, _, cx| this.retry_r(&host, install, cx)))
                 };
-                let button = |id, label, install| can_retry.then(|| button(id, label, install));
                 if let Some(item) = offer {
                     let size = item.size_mb.map(|mb| format!(", about {mb} MB")).unwrap_or_default();
                     let words = format!(
@@ -2308,11 +2303,11 @@ impl Workspace {
                         item.name,
                         crate::platform::this_computer!(lower)
                     );
-                    resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).children(button("r-install", "Install R", true))
+                    resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("r-install", "Install R", true))
                 } else {
                     let why = pluto::r_failed(&error).unwrap_or(&error);
                     let heading = if why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("R notebooks couldn't start on {name}.") };
-                    resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).children(button("r-retry", "Try again", false))
+                    resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("r-retry", "Try again", false))
                 }
             }
             HostPane::Starting => {
@@ -2602,6 +2597,13 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
         (Phase::Idle | Phase::Gone(_) | Phase::Failed(_), Phase::Idle | Phase::Gone(_)) | (Phase::Failed(_), Phase::Failed(_)) | (Phase::Starting, Phase::Starting) => {}
     }
     out
+}
+
+/// Session `s` waits for its notebook: none open yet, and not stopped or gone. An R failure
+/// shows only over such a session, whose open (or new notebook) its Try again repeats; any
+/// other R session shows its own pane, since nothing clears the failure until R starts again.
+pub fn waits_for_notebook(s: &crate::session::Session) -> bool {
+    s.notebook.is_none() && s.stopped.is_none() && !s.missing
 }
 
 /// The helper's hello, as the app's connections keep it.
