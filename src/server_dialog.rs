@@ -202,6 +202,10 @@ impl Workspace {
         }
         self.close_server_dialog(cx);
         let host = HostId::Server(id);
+        if !adding {
+            // A connected server with new connection settings connects with them now.
+            self.settings_saved(&host, cx);
+        }
         if adding {
             self.set_draft_host(host, window, cx);
         } else if self.draft.host == host {

@@ -421,6 +421,18 @@ impl Connection {
         self.channel.is_some() || self.linked
     }
 
+    /// A server's connection is gone, by itself or for new settings: its page, if `shown`, stays up
+    /// read-only, and a line that gets back to the same Julia carries on with the page and notebooks.
+    fn lose(&mut self, reason: String, shown: bool) {
+        let was = self.status.clone();
+        let gone = self.forget_runtime();
+        let page = gone.as_ref().and_then(|r| r.page_url.split_once('?')).map(|(origin, _)| origin.to_owned()).filter(|_| shown);
+        self.dropped = gone.filter(|_| was == Status::Ready).map(|r| (r.pid, r.node));
+        self.unlink();
+        self.status = Status::Failed(reason);
+        self.lost = Some(Lost { page, was });
+    }
+
     /// The helper went: there is nothing to talk to until the next connect.
     fn unlink(&mut self) {
         self.channel = None;
@@ -1203,13 +1215,7 @@ impl Workspace {
             Update::Notice(Notice::Lost(_)) if !connection.connected() => {}
             // A server that drops reconnects by itself; its notebook, if showing, stays up read-only meanwhile.
             Update::Notice(Notice::Lost(reason)) if !local => {
-                let was = connection.status.clone();
-                let gone = connection.forget_runtime();
-                let page = gone.as_ref().and_then(|r| r.page_url.split_once('?')).map(|(origin, _)| origin.to_owned()).filter(|_| shown);
-                connection.dropped = gone.filter(|_| was == Status::Ready).map(|r| (r.pid, r.node));
-                connection.unlink();
-                connection.status = Status::Failed(reason);
-                connection.lost = Some(Lost { page, was });
+                connection.lose(reason, shown);
                 // A blip often passes: the first try comes soon.
                 if self.offline_since().is_none() {
                     self.retry_lost(host.clone(), std::time::Duration::from_secs(2), cx);
@@ -1240,6 +1246,32 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// `host`'s settings were saved. A line made from its old connection settings connects again
+    /// with the new ones at once, as after a drop: back on the same Julia, its page and notebooks
+    /// carry on, and its port stays (`open_line`), so the agents there do too (EndeavorMCP#47).
+    pub fn settings_saved(&mut self, host: &HostId, cx: &mut Context<Self>) {
+        let HostId::Server(id) = host else { return };
+        let (Some(line), Some(server)) = (self.lines.get(host), self.hosts.server(id)) else { return };
+        if same_connection(&line.server, server) {
+            return;
+        }
+        let name = self.hosts.name(host);
+        let shown = self.shows_page_of(host, cx);
+        let Some(connection) = self.connections.get_mut(host) else { return };
+        let start = connection.start_when_connected;
+        if connection.connected() {
+            connection.lose(format!("Connecting to {name} with its new settings"), shown);
+        } else if connection.status == Status::Connecting {
+            // A connect under way with the old settings gives way to one with the new.
+            connection.status = Status::Failed(String::new());
+        } else {
+            // Not connected: the next connect uses the new settings.
+            return;
+        }
+        let julia = start || connection.lost.as_ref().is_some_and(Lost::had_julia);
+        self.connect_host(host, julia, cx);
     }
 
     /// A dropped server's reconnect: it starts Julia again only if it ran.
@@ -2580,9 +2612,11 @@ fn runtime_of(runtime: client::RuntimeInfo) -> Runtime {
 }
 
 /// The same connection to a server: a change in anything else (its name, its
-/// idle stop) keeps the line open.
+/// idle stop, a cluster's account, depot or default resources, which each job
+/// request reads from the server as it is then) keeps the line open. Of the
+/// cluster, the line uses only that there is one (`Server::launcher`).
 fn same_connection(a: &Server, b: &Server) -> bool {
-    (&a.ssh_host, a.port, &a.julia, &a.r, &a.cluster) == (&b.ssh_host, b.port, &b.julia, &b.r, &b.cluster)
+    (&a.ssh_host, a.port, &a.julia, &a.r, a.cluster.is_some()) == (&b.ssh_host, b.port, &b.julia, &b.r, b.cluster.is_some())
 }
 
 /// What answers for a host's runtime: This Mac's helper, or a server's line.
@@ -2807,7 +2841,8 @@ pub(crate) fn same_file(host: &HostId, a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, ahead_line, load_again, new_failure, not_restarted, r_failure, not_stopped, pane_failure, percent, runtime_of, starting_ahead, try_ended};
+    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, ahead_line, load_again, new_failure, not_restarted, r_failure, not_stopped, pane_failure, percent, runtime_of, same_connection, starting_ahead, try_ended};
+    use crate::hosts::Server;
     use wire::backend::Backend;
     use crate::pluto;
 
@@ -3012,6 +3047,31 @@ mod tests {
         c.status = Status::Ready;
         c.runtime = Some(runtime_of(runtime(7)));
         assert!(c.same_julia(&runtime_of(client::RuntimeInfo { reattached: true, ..runtime(7) })), "seen again while ready");
+    }
+
+    #[test]
+    fn only_what_the_line_uses_counts_as_a_change_of_connection() {
+        let server = Server { ssh_host: "lab".into(), cluster: Some(crate::hosts::Cluster::default()), ..Default::default() };
+        let mut resources = server.clone();
+        resources.cluster.as_mut().unwrap().account = Some("other".into());
+        resources.name = "Lab".into();
+        assert!(same_connection(&server, &resources), "a cluster's job settings are read at each start");
+        for changed in [Server { port: Some(2222), ..server.clone() }, Server { cluster: None, ..server.clone() }, Server { julia: Some("/opt/julia".into()), ..server.clone() }] {
+            assert!(!same_connection(&server, &changed), "{changed:?}");
+        }
+    }
+
+    #[test]
+    fn a_connection_let_go_for_new_settings_carries_on_on_the_same_julia_as_after_a_drop() {
+        let mut c = Connection::new(1, Status::Ready, Steps::new("Connecting to lab"));
+        c.runtime = Some(runtime_of(runtime(7)));
+        c.linked = true;
+        c.lose("Connecting to lab with its new settings".into(), true);
+        assert_eq!(c.status, Status::Failed("Connecting to lab with its new settings".into()));
+        assert!(!c.connected() && c.runtime.is_none());
+        assert!(c.same_julia(&runtime_of(runtime(7))), "the line that gets back to it carries on");
+        let lost = c.lost.as_ref().unwrap();
+        assert!(lost.had_julia() && lost.page.as_deref() == Some("http://127.0.0.1:1/"), "Julia is started (attached) again, and the page stays up meanwhile");
     }
 
     #[test]
