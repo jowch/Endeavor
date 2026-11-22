@@ -1270,7 +1270,7 @@ impl Workspace {
     fn keep_transcript(&self, key: u64) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         if let Some(id) = session.id.as_ref().filter(|_| !session.opening() && session.failed.is_none()) {
-            transcript_copy::save(&id.to_string(), &session.entries, &session.restored_cards());
+            transcript_copy::save(&id.to_string(), &session.entries, &session.restored_cards(), &session.restored);
         }
     }
 
@@ -1729,6 +1729,10 @@ impl Workspace {
             session.notebook = Some(id.clone());
             edits = std::mem::take(&mut session.user_edits);
             restored = std::mem::take(&mut session.restored);
+        }
+        // The copy keeps restores the agent hasn't heard of; now it has, so a reopen doesn't tell it twice.
+        if let Some(key) = self.active.filter(|_| !restored.is_empty()) {
+            self.keep_transcript(key);
         }
         let mut text = format!(
             "[Endeavor] The user is viewing notebook {id} in the notebook pane. \
