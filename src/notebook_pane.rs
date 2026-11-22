@@ -1412,7 +1412,9 @@ impl Workspace {
     pub fn pane_shows(&self, session: &Session, cx: &App) -> PaneShows {
         if let Some(host) = self.host_pane_state(&session.place.host, session.kind, cx) {
             let empty = session.notebook_path.is_none() && session.notebook.is_none();
-            if !(empty && crate::connection::starting_ahead(&host, self.app_waits(&session.place.host, session.kind))) {
+            // R's failure is about a session waiting for its notebook; others show their own pane (#128).
+            let not_about_it = matches!(host, HostPane::RFailed(_)) && !crate::connection::waits_for_notebook(session);
+            if !not_about_it && !(empty && crate::connection::starting_ahead(&host, self.app_waits(&session.place.host, session.kind))) {
                 return PaneShows::Host(host);
             }
         }
