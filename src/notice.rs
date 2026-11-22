@@ -9,6 +9,7 @@ use gpui::*;
 
 use crate::Workspace;
 use crate::failure;
+use crate::hosts::HostId;
 use crate::layer::{self, Hole, Layer};
 use crate::signin::Look;
 
@@ -51,6 +52,9 @@ pub enum Retry {
     /// Session `key`'s notebook at the path, whose open failed.
     OpenNotebook(u64, String),
     SignOut,
+    /// The Julia the runtime on this host runs on was removed (`julia_removed`): only a
+    /// restart of Julia helps, so the notice offers that instead of Try again (#230).
+    RestartJulia(HostId),
 }
 
 impl Retry {
@@ -59,6 +63,7 @@ impl Retry {
             Retry::Export { .. } => "Export to…",
             Retry::Rename(_) => "Choose another name",
             Retry::MoveTo(_) => "Move to…",
+            Retry::RestartJulia(_) => "Restart Julia",
             _ => "Try again",
         }
     }
@@ -118,8 +123,14 @@ pub fn export_reason(error: &str, folder: &Path) -> String {
 }
 
 impl Workspace {
-    pub fn show_notice(&mut self, notice: Notice, cx: &mut Context<Self>) {
+    pub fn show_notice(&mut self, mut notice: Notice, cx: &mut Context<Self>) {
         eprintln!("{}: {}", notice.title, notice.raw);
+        // Trying again can't work while the runtime's Julia is gone: offer Restart Julia for its host.
+        if notice.raw.contains("julia_removed::")
+            && let Some(host) = notice.retry.as_ref().and_then(|retry| self.retry_host(retry))
+        {
+            notice.retry = Some(Retry::RestartJulia(host));
+        }
         self.notice = Some(notice);
         cx.notify();
     }
@@ -127,6 +138,18 @@ impl Workspace {
     pub fn close_notice(&mut self, cx: &mut Context<Self>) {
         self.notice = None;
         cx.notify();
+    }
+
+    /// The host whose runtime a notice's action went to: its session's, else the session shown.
+    fn retry_host(&self, retry: &Retry) -> Option<HostId> {
+        let key = match retry {
+            Retry::Export { key, .. } | Retry::Rename(key) | Retry::MoveTo(key) | Retry::RestartNotebook(key) | Retry::StopNotebook(key, _) | Retry::NewNotebook(key) | Retry::OpenNotebook(key, _) => Some(*key),
+            Retry::RunNotebook(notebook) => self.session_showing(notebook),
+            Retry::SignOut => return None,
+            Retry::RestartJulia(host) => return Some(host.clone()),
+        };
+        let key = key.or(self.active)?;
+        self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone())
     }
 
     fn retry_notice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -141,6 +164,7 @@ impl Workspace {
             Retry::NewNotebook(key) => self.new_notebook_here(key, cx),
             Retry::OpenNotebook(key, path) => self.open_for_session(key, path, false, cx),
             Retry::SignOut => self.sign_out_now(cx),
+            Retry::RestartJulia(host) => self.confirm_restart_julia(&host, window, cx),
         }
         cx.notify();
     }
@@ -202,5 +226,8 @@ mod tests {
         assert_eq!(Retry::Export { key: 1, kind: "notebookexport", extension: "html" }.label(), "Export to…");
         assert_eq!(Retry::Rename(1).label(), "Choose another name");
         assert_eq!(Retry::NewNotebook(1).label(), "Try again");
+        assert_eq!(Retry::RestartJulia(crate::hosts::HostId::ThisMac).label(), "Restart Julia");
+        // The runtime's own words, without its error's type and kind.
+        assert_eq!(reason("ArgumentError: julia_removed::Julia 1.12.6, which this Endeavor runs on, was removed from /x. Restart Julia to start notebooks again."), "Julia 1.12.6, which this Endeavor runs on, was removed from /x. Restart Julia to start notebooks again.");
     }
 }
