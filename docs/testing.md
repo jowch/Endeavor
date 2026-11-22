@@ -118,8 +118,9 @@ To wait for something, poll the dump. For example, loop until
   `julia` or `r`, the new notebook's or the picked file's), the new notebooks
   the notebook chip offers (`new_notebook_kinds`), the notebooks it lists
   (`notebooks`: each one's `file` and `language`), the mode, the notice and
-  connection notice, and either `resume` (Pick up where you left off) or
-  `examples`.
+  connection notice, `agent_fallback` (the line saying the picked agent runs
+  on this computer only, so a server session uses Claude; else null), and
+  either `resume` (Pick up where you left off) or `examples`.
 - `session`, for the active session. `failed` is null unless it couldn't
   open; then the page in place of its transcript: `kind` (`in_cli` for one
   open in the Claude Code CLI, else `other`), `title`, `text`, `buttons` and

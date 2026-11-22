@@ -517,6 +517,13 @@ impl Workspace {
         if self.draft.host == HostId::ThisMac || agent.facts().on_servers { agent } else { Agent::Claude }
     }
 
+    /// Why the agent chip says Claude when the user picked another agent: theirs doesn't run
+    /// sessions on servers (#218). Back on this computer, their pick comes back.
+    pub fn agent_fallback_text(&self) -> Option<String> {
+        let (picked, used) = (self.draft.agent, self.draft_agent());
+        (picked != used).then(|| format!("{} runs on {} only, so this session uses {}.", picked.facts().name, crate::platform::this_computer!(lower), used.facts().name))
+    }
+
     /// Pick the new session's agent. It starts now (installing on first use),
     /// so its sign-in and options are known before the first message.
     pub fn set_draft_agent(&mut self, agent: Agent, window: &mut Window, cx: &mut Context<Self>) {
@@ -914,6 +921,7 @@ impl Workspace {
             .gap(px(8.))
             .children(self.draft.notice.clone().map(|n| div().text_size(theme::size_meta()).text_color(theme::accent_text()).child(n)))
             .children(self.connection_notice(cx))
+            .children(self.agent_fallback_text().map(|text| div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(text)))
             .child(chips)
     }
 
