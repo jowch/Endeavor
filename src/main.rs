@@ -701,6 +701,7 @@ impl Workspace {
             {
                 webkeys::fix_key_handling();
                 webkeys::allow_pinch_zoom(&webview);
+                webkeys::no_new_windows();
             }
             #[cfg(target_os = "linux")]
             linux::attach(&webview, window, cx);

@@ -99,3 +99,46 @@ pub fn allow_pinch_zoom(webview: &wry::WebView) {
         let _: () = msg_send![&*view, setAllowsMagnification: true];
     }
 }
+
+/// The page's right-click menu on macOS loses the items that would open a new
+/// window for an image, video or frame. The app opens no second window, and
+/// those URLs (a figure's `data:` or `blob:`) have no browser to go to, so the
+/// items did nothing (#151). "Open Link in New Window" stays: the new-window
+/// handler sends a web link to the browser. Linux does the same in
+/// `linux::no_new_windows`.
+pub fn no_new_windows() {
+    type WillOpenMenu = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject);
+    const DEAD: [&str; 3] = [
+        "WKMenuItemIdentifierOpenImageInNewWindow",
+        "WKMenuItemIdentifierOpenMediaInNewWindow",
+        "WKMenuItemIdentifierOpenFrameInNewWindow",
+    ];
+    unsafe extern "C-unwind" fn will_open_menu(this: *mut AnyObject, cmd: Sel, menu: *mut AnyObject, event: *mut AnyObject) {
+        unsafe {
+            // WKWebView's own first: it finishes the menu there.
+            if let Some(method) = AnyClass::get(c"WKWebView").and_then(|c| c.instance_method(cmd)) {
+                let webkit: WillOpenMenu = std::mem::transmute(method.implementation());
+                webkit(this, cmd, menu, event);
+            }
+            if menu.is_null() {
+                return;
+            }
+            // A copy, so removing as we go is safe.
+            let items: *mut AnyObject = msg_send![menu, itemArray];
+            let count: usize = msg_send![items, count];
+            for i in 0..count {
+                let item: *mut AnyObject = msg_send![items, objectAtIndex: i];
+                let id = crate::dialogs::string_of(msg_send![item, identifier]);
+                if DEAD.contains(&id.as_str()) {
+                    let _: () = msg_send![menu, removeItem: item];
+                }
+            }
+        }
+    }
+    let Some(wry) = AnyClass::get(c"WryWebView") else { return };
+    unsafe {
+        let ours: Imp = std::mem::transmute(will_open_menu as WillOpenMenu);
+        // wry's class has none of its own, so this adds one; again, it does nothing.
+        objc2::ffi::class_addMethod(wry as *const AnyClass as *mut AnyClass, sel!(willOpenMenu:withEvent:), ours, c"v@:@@".as_ptr());
+    }
+}
