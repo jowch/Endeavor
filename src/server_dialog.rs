@@ -147,7 +147,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn close_server_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_server_dialog(&mut self, cx: &mut Context<Self>) {
         if let Some(test) = self.server_dialog.take().and_then(|d| d.test) {
             test.cancel.cancel();
             // Its end finds no dialog to report to, so its questions go now.

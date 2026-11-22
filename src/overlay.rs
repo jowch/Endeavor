@@ -4,6 +4,7 @@
 //! menu is: its layer is masked there, and clicks there go to GPUI. A menu, a
 //! tip and a tooltip can each have a hole at the same time.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use gpui::{Bounds, Pixels};
@@ -118,6 +119,8 @@ static HOLES: Mutex<Holes> = Mutex::new(Holes { rects: Vec::new(), view: 0, seco
 
 type SendEvent = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
 static GPUI_SEND_EVENT: OnceLock<SendEvent> = OnceLock::new();
+/// A mouse-down went to GPUI's view (`send_event`), and its mouse-up hasn't come yet.
+static ROUTED_PRESS: AtomicBool = AtomicBool::new(false);
 
 // NSEventType values.
 const LEFT_DOWN: usize = 1;
@@ -144,7 +147,7 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
         let kind: usize = msg_send![event, type];
         let is_click = [LEFT_DOWN, LEFT_UP, RIGHT_DOWN, RIGHT_UP, LEFT_DRAGGED].contains(&kind);
         let is_wheel = kind == SCROLL_WHEEL;
-        if view != 0 && matches!(kind, LEFT_DOWN | LEFT_UP) {
+        if cfg!(debug_assertions) && view != 0 && matches!(kind, LEFT_DOWN | LEFT_UP) {
             let view = view as *mut AnyObject;
             let in_window: CGPoint = msg_send![event, locationInWindow];
             let local: CGPoint = msg_send![view, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
@@ -164,9 +167,39 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
             let ours: *mut AnyObject = msg_send![gpui, inputContext];
             let current: *mut AnyObject = msg_send![class!(NSTextInputContext), currentInputContext];
             let context = if current.is_null() { "none" } else if current == ours { "gpui" } else { "other" };
-            crate::click_log::note(|| format!("window {} at page {:.0},{:.0} in holes {holes:?} dismiss {dismiss} keys in page {in_page} input context {context}", if kind == LEFT_DOWN { "down" } else { "up" }, local.x, y));
+            let hidden: Bool = msg_send![view, isHiddenOrHasHiddenAncestor];
+            let hidden = hidden.as_bool();
+            crate::click_log::note(|| format!("window {} at page {:.0},{:.0} in holes {holes:?} dismiss {dismiss} page hidden {hidden} keys in page {in_page} input context {context}", if kind == LEFT_DOWN { "down" } else { "up" }, local.x, y));
         }
-        if view != 0 && (is_click || is_wheel) && (!rects.is_empty() || dismiss) {
+        // A press that went to GPUI keeps going there until it ends, wherever the pointer is
+        // and whatever opened or closed meanwhile: AppKit sends a mouse-up only to the view that
+        // took its mouse-down, and the window never saw that one (#282).
+        // A new press starts afresh, so one whose mouse-up never came doesn't take the next one's.
+        let routed = !matches!(kind, LEFT_DOWN | RIGHT_DOWN) && ROUTED_PRESS.load(Ordering::Relaxed);
+        if matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
+            ROUTED_PRESS.store(false, Ordering::Relaxed);
+        }
+        if routed && view != 0 && [LEFT_UP, RIGHT_UP, LEFT_DRAGGED].contains(&kind) {
+            if kind != LEFT_DRAGGED {
+                ROUTED_PRESS.store(false, Ordering::Relaxed);
+            }
+            let gpui: *mut AnyObject = msg_send![view as *mut AnyObject, superview];
+            if cfg!(debug_assertions) && kind == LEFT_UP {
+                crate::click_log::note(|| "window routed it to gpui".into());
+            }
+            match kind {
+                LEFT_UP => msg_send![gpui, mouseUp: event],
+                RIGHT_UP => msg_send![gpui, rightMouseUp: event],
+                _ => msg_send![gpui, mouseDragged: event],
+            }
+            return;
+        }
+        // A hidden web view (under a modal dialog) takes no clicks: AppKit gives them to GPUI.
+        let hidden = view != 0 && {
+            let hidden: Bool = msg_send![view as *mut AnyObject, isHiddenOrHasHiddenAncestor];
+            hidden.as_bool()
+        };
+        if view != 0 && !hidden && (is_click || is_wheel) && (!rects.is_empty() || dismiss) {
             let view = view as *mut AnyObject;
             let in_window: CGPoint = msg_send![event, locationInWindow];
             let local: CGPoint = msg_send![view, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
@@ -183,7 +216,10 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
                 if in_hole && matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
                     take_keys(view, gpui, false);
                 }
-                if matches!(kind, LEFT_DOWN | LEFT_UP) {
+                if matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
+                    ROUTED_PRESS.store(true, Ordering::Relaxed);
+                }
+                if cfg!(debug_assertions) && matches!(kind, LEFT_DOWN | LEFT_UP) {
                     crate::click_log::note(|| "window routed it to gpui".into());
                 }
                 match kind {

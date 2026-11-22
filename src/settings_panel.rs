@@ -1385,6 +1385,10 @@ impl Workspace {
 
     pub fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(panel) = self.settings_panel.take() else { return };
+        // A server's dialog opened from Settings goes with it, rather than staying up alone.
+        if self.server_dialog.is_some() {
+            self.close_server_dialog(cx);
+        }
         self.settings_page = panel.page;
         if let Some(restore) = panel.restore {
             window.focus(&restore, cx);
@@ -1395,9 +1399,14 @@ impl Workspace {
     /// Esc: closes the idle list, then clears the search, then closes Settings.
     /// False when Settings isn't open.
     pub fn settings_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        // A server's dialog opened from here is on top: Esc isn't Settings' then.
-        if self.server_dialog.is_some() || !self.asks.is_empty() {
+        // A server's dialog opened from here is on top: Esc is its Cancel then, and a sign-in
+        // question's is its own.
+        if !self.asks.is_empty() {
             return self.settings_panel.is_some();
+        }
+        if self.server_dialog.is_some() {
+            self.close_server_dialog(cx);
+            return true;
         }
         let Some(panel) = &mut self.settings_panel else { return false };
         if panel.idle_menu {
