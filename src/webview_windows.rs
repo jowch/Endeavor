@@ -17,7 +17,7 @@ use wry::WebViewExtWindows;
 /// does (`src/webkeys.rs`), less ⌘M: Ctrl+M is Pluto's, and Windows has no
 /// such shortcut. WebView2 doesn't say which keys the page used, so the
 /// app's other Ctrl shortcuts stay with the page, unlike on Linux.
-const APP_FIRST: [&str; 10] = ["secondary-q", "secondary-,", "secondary-b", "secondary-=", "secondary--", "secondary-0", "secondary-shift-e", "secondary-f", "secondary-g", "secondary-shift-g"];
+const APP_FIRST: [&str; 10] = ["ctrl-q", "ctrl-,", "ctrl-b", "ctrl-=", "ctrl--", "ctrl-0", "ctrl-shift-e", "ctrl-f", "ctrl-g", "ctrl-shift-g"];
 
 thread_local! {
     /// WebView2 has the keyboard: its controller's GotFocus came after its LostFocus.

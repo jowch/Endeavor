@@ -1,0 +1,17 @@
+# A copy of gpui-wry 0.6.6 (Apache-2.0, github.com/longbridge/gpui-kit, crates/webview),
+# kept here so its GPUI pin moves with the app's. See README.md.
+[package]
+name = "gpui-wry"
+description = "WebView support for GPUI, based on Wry."
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+version = "0.6.6"
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow = "1"
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+wry = { version = "0.53.3", package = "lb-wry" }
