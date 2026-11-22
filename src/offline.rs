@@ -330,6 +330,8 @@ impl Workspace {
     pub fn pane_warning(&self, session: &Session) -> (String, Option<&'static str>) {
         if self.offline_since.is_some() {
             ("Looks like you're offline. Endeavor will reconnect when you're back online.".into(), None)
+        } else if self.signing_in(&session.place.host) {
+            (format!("Signing in to {}…", self.hosts.name(&session.place.host)), None)
         } else {
             (format!("Can't reach {}", self.hosts.name(&session.place.host)), Some("If it needs your university's VPN, check that it's on."))
         }
@@ -357,9 +359,12 @@ impl Workspace {
             .bg(theme::bg_card())
             .text_size(theme::size_meta())
             .line_height(px(17.))
-            .text_color(theme::text_secondary())
-            .child(glyph_at(Glyph::WifiOff, theme::text_muted(), 13. / 12.));
+            .text_color(theme::text_secondary());
         let host = session.place.host.clone();
+        // ssh asks for a password or code: the server answered, so no "offline" glyph,
+        // and no Try now, which would start the sign-in over under the question.
+        let signing_in = self.offline_since.is_none() && self.signing_in(&host);
+        let frame = frame.when(!signing_in, |f| f.child(glyph_at(Glyph::WifiOff, theme::text_muted(), 13. / 12.)));
         let body = match self.pane_warning(session) {
             (text, None) => div().flex_1().min_w_0().child(text),
             (title, Some(text)) => div()
@@ -390,7 +395,7 @@ impl Workspace {
                 )
                 .child(div().text_color(theme::text_new()).child(text)),
         };
-        Some(frame.child(body).child(self.try_now_button("try-now-pane", 24., cx)).into_any_element())
+        Some(frame.child(body).when(!signing_in, |f| f.child(self.try_now_button("try-now-pane", 24., cx))).into_any_element())
     }
 
     /// The queue's heading while its messages wait for Claude to be reachable.
