@@ -95,8 +95,10 @@ stops at the splash with "Couldn't set up Julia", which the dump shows as
 A fresh app stops at "Choose your assistant" and then Claude's sign-in. To
 reach a session and an open notebook instead, give it a scratch HOME where
 setup has finished, a stand-in for `claude auth status`, and the stand-in
-agent. Start it without the cloud session's credentials, so nothing it starts
-can reach Claude as this session:
+agent. The stand-in is what keeps a check from making a real turn: the cloud
+proxy signs requests in by itself, so an adapter started here can reach Claude
+whatever the environment holds. Leaving out the session's tokens only keeps
+them out of what the app starts:
 
 ```sh
 E=/tmp/e; mkdir -p $E/home/.local/share/endeavor $E/nb
@@ -111,11 +113,14 @@ env $UNSET HOME=$E/home DISPLAY=:99 \
   ENDEAVOR_TEST_AGENT=$PWD/scripts/test-agent.js ENDEAVOR_CLAUDE_CLI=$E/claude.sh \
   ENDEAVOR_TEST_ACTION=$E/action ENDEAVOR_STATE_REQUEST=$E/state.request ENDEAVOR_STATE_OUT=$E/state.json \
   target/debug/endeavor > $E/app.log 2>&1 &
+sleep 10; pgrep -f test-agent.js || echo "NO STAND-IN: don't send open"
 echo "open $E/nb/plot.jl" > $E/action     # a session on the notebook, in safe preview
 echo run > $E/action                      # Run notebook
 ```
 
-The proxy and certificate variables stay, so Julia can still install Pluto.
+Check that `test-agent.js` is running before the first `open`, since `open`
+sends a message. The proxy and certificate variables stay, so Julia can still
+install Pluto.
 The first start in a scratch HOME installs Pluto into its depot, which takes a
 few minutes. `open` sends the session's first message, which the stand-in
 answers with one line. `ENDEAVOR_TEST_ACTION`'s `js` action and `xdotool`
@@ -129,16 +134,19 @@ Real turns are allowed when the check needs one. Keep to these guardrails:
 
 - A scratch HOME and a scratch notebook only.
 - The agent sees only Endeavor's tools: no connectors, and no Artifact or
-  other publishing tools. A scratch HOME has no Claude config of its own, but
-  Claude Code syncs the account's skills and settings into it on its first
-  start, so check `~/.claude` there before the turn.
+  other publishing tools. This is the guardrail that matters, since the proxy
+  signs the turn in either way. A scratch HOME has no MCP servers of its own,
+  but Claude Code syncs the account's skills, settings and connectors into it
+  on its first start. Start the app with `ENABLE_CLAUDEAI_MCP_SERVERS=false`
+  to keep the account's connectors out, and check the first turn's tool list
+  in the scratch HOME's transcript (`~/.claude/projects`): only
+  `mcp__notebook__*` and Claude Code's own tools.
 - Approve only the cards the check needs, and deny the rest.
 - Delete the scratch HOME's `.claude` and `.claude.json` afterwards: they
   hold the session's keys.
 
-Leave out `ENDEAVOR_TEST_AGENT` and keep the session's environment, which is
-what signs the adapter in. Never start the app that way by accident: `open`
-sends a message, and a signed-in adapter answers it.
+For a real turn, leave out `ENDEAVOR_TEST_AGENT`. Never do that by accident:
+`open` sends a message, and the real adapter answers it.
 
 ## The accessibility tree
 
