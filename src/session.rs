@@ -918,6 +918,8 @@ impl Session {
     /// loads: read-only, at its end. The replay replaces it once it's all in.
     pub fn show_copy(&mut self, copy: crate::transcript_copy::Copy) {
         self.entries = copy.entries;
+        // Restores the agent hadn't heard of when the app last saved: told with the next message.
+        self.restored = copy.untold;
         let keys: Vec<(usize, u64)> = self.card_keys().filter(|(ix, _)| copy.restored.contains(ix)).collect();
         for (_, key) in keys {
             self.restores.insert(key, Restore::Restored);
@@ -3994,8 +3996,10 @@ mod tests {
                 Entry::Agent { text: "Done.".into(), at: None },
             ],
             restored: Vec::new(),
+            untold: vec!["put back `fit`".into()],
         });
         assert!(s.showing_copy());
+        assert_eq!(s.restored, ["put back `fit`"], "a restore the agent hadn't heard of is told with the next message");
         s.apply(said("fit it"));
         s.apply(reply("Done."));
         s.apply(said("and plot it"));
@@ -4519,7 +4523,7 @@ more" }"#);
         assert_eq!(s.restored_cards(), [card]);
 
         // The app quits and opens the session again: its copy shows, then the agent's replay arrives.
-        let copy = crate::transcript_copy::from_json(&crate::transcript_copy::to_json(&s.entries, &s.restored_cards()).unwrap()).unwrap();
+        let copy = crate::transcript_copy::from_json(&crate::transcript_copy::to_json(&s.entries, &s.restored_cards(), &s.restored).unwrap()).unwrap();
         let mut again = Session::loading(2, SessionId::new("abc"), Place::local("/tmp"), None, "Rate".into());
         again.show_copy(copy);
         let card = again.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).unwrap();

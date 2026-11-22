@@ -792,10 +792,10 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
     let footer = div()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .min_h(px(34.))
-        .px(px(8.))
-        .py(px(4.))
+        .gap(theme::chat_px(8.))
+        .min_h(theme::chat_px(34.))
+        .px(theme::chat_px(8.))
+        .py(theme::chat_px(4.))
         .border_t_1()
         .border_color(theme::border())
         .text_size(theme::chat_meta())
@@ -804,6 +804,11 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
         .when(pressable, |d| {
             d.child(
                 crate::signin::button(ElementId::NamedInteger("restore-turn".into(), key << 32 | ix as u64), "Restore", crate::signin::Look::Secondary)
+                    // On the chat's scale, as the card around it is.
+                    .h(theme::chat_px(26.))
+                    .px(theme::chat_px(10.))
+                    .rounded(theme::chat_px(6.))
+                    .text_size(theme::chat_meta())
                     .track_focus(&session.changed_cell_focus(ix, cells.len(), cx))
                     .tab_stop(true)
                     .focus_visible(|s| s.border_color(theme::focus_ring()))

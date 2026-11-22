@@ -99,6 +99,10 @@ fn is_turn(delivery: &Delivery) -> bool {
 struct File {
     version: u32,
     entries: Vec<serde_json::Value>,
+    /// What the user's restores put back that the agent hasn't heard yet
+    /// (`Session::restored`): told with the first message after a reopen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    untold: Vec<String>,
 }
 
 fn secs(at: SystemTime) -> u64 {
@@ -220,11 +224,14 @@ fn entry(saved: Saved) -> Entry {
 pub struct Copy {
     pub entries: Vec<Entry>,
     pub restored: Vec<usize>,
+    /// Restores the agent hadn't heard of yet.
+    pub untold: Vec<String>,
 }
 
 /// The copy's file contents, or None when there's nothing worth keeping.
-/// `restored`: the entries that are changed-cells cards the user restored.
-pub fn to_json(entries: &[Entry], restored: &[usize]) -> Option<String> {
+/// `restored`: the entries that are changed-cells cards the user restored;
+/// `untold`: what those restores put back that the agent hasn't heard yet.
+pub fn to_json(entries: &[Entry], restored: &[usize], untold: &[String]) -> Option<String> {
     if !entries.iter().any(keyed) {
         return None;
     }
@@ -234,13 +241,13 @@ pub fn to_json(entries: &[Entry], restored: &[usize]) -> Option<String> {
         .filter_map(|(ix, e)| saved(e, restored.contains(&ix)))
         .filter_map(|s| serde_json::to_value(s).ok())
         .collect();
-    serde_json::to_string(&File { version: 1, entries }).ok()
+    serde_json::to_string(&File { version: 1, entries, untold: untold.to_vec() }).ok()
 }
 
 /// A copy read back. Entries this version doesn't know are left out.
 pub fn from_json(json: &str) -> Option<Copy> {
     let file: File = serde_json::from_str(json).ok()?;
-    let mut copy = Copy::default();
+    let mut copy = Copy { untold: file.untold, ..Copy::default() };
     for saved in file.entries.into_iter().filter_map(|v| serde_json::from_value::<Saved>(v).ok()) {
         if matches!(saved, Saved::Changes { restored: true, .. }) {
             copy.restored.push(copy.entries.len());
@@ -260,8 +267,8 @@ pub fn load(id: &str) -> Option<Copy> {
     from_json(&std::fs::read_to_string(file(id)?).ok()?)
 }
 
-pub fn save(id: &str, entries: &[Entry], restored: &[usize]) {
-    let (Some(path), Some(json)) = (file(id), to_json(entries, restored)) else { return };
+pub fn save(id: &str, entries: &[Entry], restored: &[usize], untold: &[String]) {
+    let (Some(path), Some(json)) = (file(id), to_json(entries, restored, untold)) else { return };
     // ponytail: best effort; without a copy the session opens on its summary as before.
     let _ = crate::write_atomic(&path, json.as_bytes());
 }
@@ -478,7 +485,7 @@ mod tests {
             Entry::Reopened(at),
             Entry::RunState(Vec::new()),
         ];
-        let copy = from_json(&to_json(&saved, &[]).unwrap()).unwrap();
+        let copy = from_json(&to_json(&saved, &[], &[]).unwrap()).unwrap();
         assert_eq!(copy.restored, Vec::<usize>::new());
         let back = copy.entries;
         assert_eq!(words(&back), ["you: Fit the decay", "thought", "tool: mcp__pluto__edit_cell", "claude: The rate is 0.09.", "changes", "note: You stopped Claude", "reopened"]);
@@ -499,7 +506,7 @@ mod tests {
 
     #[test]
     fn a_copy_with_no_messages_isnt_kept_and_unknown_entries_are_skipped() {
-        assert_eq!(to_json(&[Entry::Note("Notebook moved".into())], &[]), None);
+        assert_eq!(to_json(&[Entry::Note("Notebook moved".into())], &[], &[]), None);
         assert!(from_json("not json").is_none());
         let back = from_json(r#"{"version": 2, "entries": [{"type": "hologram"}, {"type": "agent", "text": "Hi"}]}"#).unwrap();
         assert_eq!(words(&back.entries), ["claude: Hi"]);
@@ -510,10 +517,14 @@ mod tests {
         let card = |n: &str| Entry::Changes(vec![ChangedCell { cell: n.into(), name: n.into(), change: CellChange::Edited, added: 1, removed: 1, before: Some("a = 1".into()), after: Some("a = 2".into()), notebook: None, unseen: false }]);
         // The run-state entry isn't kept, so the restored card moves up one.
         let entries = vec![Entry::RunState(Vec::new()), agent("Done."), card("a"), card("b")];
-        let json = to_json(&entries, &[3]).unwrap();
+        let json = to_json(&entries, &[3], &[]).unwrap();
         assert!(!json.contains(r#""restored":false"#), "only a restored card says so: {json}");
+        assert!(!json.contains("untold"), "nothing untold, nothing saved: {json}");
         let back = from_json(&json).unwrap();
-        assert_eq!((words(&back.entries).len(), back.restored), (3, vec![2]));
+        assert_eq!((words(&back.entries).len(), back.restored, back.untold.len()), (3, vec![2], 0));
+        // A restore the agent hasn't heard of yet comes back with the copy (#141).
+        let untold = vec!["put back `b` as they were before one of your turns".to_string()];
+        assert_eq!(from_json(&to_json(&entries, &[3], &untold).unwrap()).unwrap().untold, untold);
         // A copy saved before this reads as nothing restored.
         let old = from_json(r#"{"version": 1, "entries": [{"type": "agent", "text": "Hi"}, {"type": "changes", "cells": []}]}"#).unwrap();
         assert_eq!(old.restored, Vec::<usize>::new());
