@@ -1050,6 +1050,20 @@ impl Workspace {
 
     /// Keep session `key`'s mode, just picked, for new sessions: the
     /// new-session screen shows it from now on, as remembered, not picked there.
+    /// Forget the folders used on `host`, as recent places and as the folder of the session
+    /// being set up there, which then starts in the home of whoever signs in next.
+    pub(crate) fn forget_folders(&mut self, host: &HostId) {
+        let before = self.recent.len();
+        self.recent.retain(|p| p.host != *host);
+        if self.recent.len() != before {
+            save_json("recent.json", &self.recent);
+        }
+        if self.draft.host == *host {
+            self.draft.folder = None;
+            self.draft.browser = None;
+        }
+    }
+
     fn remember_mode(&mut self, key: u64) {
         let Some(mode) = self.sessions.iter().find(|s| s.key == key).and_then(Session::mode) else { return };
         if self.settings.remember_mode(&mode) {

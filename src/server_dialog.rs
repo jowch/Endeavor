@@ -196,12 +196,18 @@ impl Workspace {
         };
         let adding = self.server_dialog.as_ref().is_some_and(|d| d.editing.is_none());
         let id = server.id.clone();
+        // Signing in as someone else (or to another machine) makes the folders used there before
+        // someone else's: New session starts in the new user's home, not the old one's (#48).
+        let moved = self.hosts.server(&id).is_some_and(|old| (&old.ssh_host, old.port) != (&server.ssh_host, server.port));
         self.hosts.put(server);
         if let Err(e) = self.hosts.save() {
             return self.dialog_error(e, cx);
         }
         self.close_server_dialog(cx);
         let host = HostId::Server(id);
+        if moved {
+            self.forget_folders(&host);
+        }
         if !adding {
             // A connected server with new connection settings connects with them now.
             self.settings_saved(&host, cx);
