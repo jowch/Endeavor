@@ -111,39 +111,76 @@ pub enum Reset {
     At { date: Option<(u32, u32, Option<i32>)>, hour: u32, minute: u32 },
     /// Unix seconds, as the older CLI wrote it ("Claude AI usage limit reached|1759258800").
     Unix(i64),
+    /// Seconds from when the message came ("try again in 4 days 3 hours", a form Codex may use).
+    After(u64),
 }
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /// The reset time in a usage-limit message: "… · resets 3pm (America/Los_Angeles)",
 /// "… · resets Oct 3, 3pm (…)", "Your limit will reset at 3pm (…).", or "…|1759258800".
+/// Codex's wording hasn't been seen yet (#50), so its likely forms are read too:
+/// "Try again at 3:45 PM.", "Try again at Sep 9th, 2026 3:45 PM.", "try again in 4 days 3 hours".
 pub fn parse_reset(text: &str) -> Option<Reset> {
     if let Some((_, secs)) = text.rsplit_once('|')
         && let Ok(secs) = secs.trim().parse::<i64>()
     {
         return Some(Reset::Unix(secs));
     }
-    let start = ["resets at ", "resets ", "reset at "].iter().find_map(|w| text.find(w).map(|i| i + w.len()))?;
+    let lower = text.to_ascii_lowercase();
+    if let Some(i) = lower.find("try again in ") {
+        return parse_span(&lower[i + "try again in ".len()..]).map(Reset::After);
+    }
+    // ASCII lowercasing keeps byte offsets, so an index into `lower` is one into `text`.
+    let start = ["resets at ", "resets ", "reset at ", "try again at "].iter().find_map(|w| lower.find(w).map(|i| i + w.len()))?;
     let rest = &text[start..];
     let end = [" (", " ·", ". "].iter().filter_map(|w| rest.find(w)).min().unwrap_or(rest.len());
     let when = rest[..end].trim().trim_end_matches('.');
-    let (date, clock) = match when.rsplit_once(", ") {
-        Some((date, clock)) => (Some(parse_date(date)?), clock),
-        None => (None, when),
-    };
-    let (hour, minute) = parse_clock(clock)?;
+    // The clock is the last word, or the last two ("3:45 PM"); a date may come before it.
+    let words: Vec<&str> = when.split_whitespace().collect();
+    let two = words.len() >= 2 && matches!(words[words.len() - 1].to_lowercase().as_str(), "am" | "pm");
+    let (date_words, clock) = if two { (&words[..words.len() - 2], words[words.len() - 2..].join("")) } else { (&words[..words.len().saturating_sub(1)], words.last()?.to_string()) };
+    let date = date_words.join(" ");
+    let date = date.trim_end_matches(',').trim();
+    let date = if date.is_empty() { None } else { Some(parse_date(date)?) };
+    let (hour, minute) = parse_clock(&clock)?;
     Some(Reset::At { date, hour, minute })
 }
 
-/// "Oct 3" or "Oct 3, 2027" (the year comes before the last comma's clock).
+/// "Oct 3", "Oct 3, 2027" or "Sep 9th, 2026" (the year comes before the clock).
 fn parse_date(text: &str) -> Option<(u32, u32, Option<i32>)> {
     let (month_day, year) = match text.split_once(", ") {
         Some((md, y)) => (md, Some(y.trim().parse().ok()?)),
         None => (text, None),
     };
     let (month, day) = month_day.trim().split_once(' ')?;
-    let month = MONTHS.iter().position(|m| *m == month)? as u32 + 1;
-    Some((month, day.trim().parse().ok()?, year))
+    let month = MONTHS.iter().position(|m| month.get(..3).is_some_and(|abbr| abbr.eq_ignore_ascii_case(m)))? as u32 + 1;
+    let day = day.trim().trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    Some((month, day.parse().ok()?, year))
+}
+
+/// "4 days 3 hours 1 minute", "2 hours, 5 minutes", "30 seconds": in seconds.
+fn parse_span(text: &str) -> Option<u64> {
+    let mut words = text.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).peekable();
+    let mut total = 0u64;
+    let mut any = false;
+    while let Some(n) = words.peek().and_then(|w| w.parse::<u64>().ok()) {
+        words.next();
+        let unit = words.next()?.trim_end_matches('.');
+        let secs = match unit.trim_end_matches('s') {
+            "day" | "d" => 86400,
+            "hour" | "hr" | "h" => 3600,
+            "minute" | "min" | "m" => 60,
+            "second" | "sec" | "" => 1,
+            _ => return None,
+        };
+        total += n * secs;
+        any = true;
+        if words.peek() == Some(&"and") {
+            words.next();
+        }
+    }
+    any.then_some(total)
 }
 
 /// "3pm", "3:30pm", "12am", "3 PM".
@@ -167,6 +204,7 @@ fn parse_clock(text: &str) -> Option<(u32, u32)> {
 pub fn resolve(reset: Reset, now: SystemTime, offset: i64) -> Option<SystemTime> {
     let secs = match reset {
         Reset::Unix(secs) => secs,
+        Reset::After(secs) => return now.checked_add(Duration::from_secs(secs)),
         Reset::At { date, hour, minute } => {
             let now_local = now.duration_since(UNIX_EPOCH).ok()?.as_secs() as i64 + offset;
             let day = now_local.div_euclid(86400);
@@ -324,6 +362,26 @@ mod tests {
         // No time to read: it still waits.
         assert_eq!(classify(None, "You're out of usage credits. Run /usage-credits to keep using Opus"), Trouble::UsageLimit(None));
         assert_eq!(classify(None, "You've hit your org's monthly spend limit · ask your admin"), Trouble::UsageLimit(None));
+    }
+
+    #[test]
+    fn codex_limit_wordings_are_read_too() {
+        // Codex's real message hasn't been seen (#50): these are the forms it is likely to use.
+        let at = |h, m| Some(Reset::At { date: None, hour: h, minute: m });
+        assert_eq!(classify(None, "You've hit your usage limit. Upgrade to Pro or try again at 3:45 PM."), Trouble::UsageLimit(at(15, 45)));
+        assert_eq!(
+            parse_reset("You've hit your usage limit. Try again at Sep 9th, 2026 3:45 PM."),
+            Some(Reset::At { date: Some((9, 9, Some(2026))), hour: 15, minute: 45 })
+        );
+        assert_eq!(parse_reset("You've hit your usage limit. Try again in 4 days 3 hours 1 minute."), Some(Reset::After(4 * 86400 + 3 * 3600 + 60)));
+        assert_eq!(parse_reset("Usage limit reached, try again in 2 hours, 5 minutes"), Some(Reset::After(2 * 3600 + 300)));
+        assert_eq!(parse_reset("You've hit your usage limit. Try again in 30 seconds"), Some(Reset::After(30)));
+        assert_eq!(parse_reset("You've hit your usage limit. Try again later."), None);
+        let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert_eq!(resolve(Reset::After(90), now, 0), Some(now + Duration::from_secs(90)));
+        // Claude Code's forms read as before.
+        assert_eq!(parse_reset("You've hit your session limit · resets 3pm (America/Los_Angeles)"), at(15, 0));
+        assert_eq!(parse_reset("Your limit will reset at 3pm (America/Los_Angeles)."), at(15, 0));
     }
 
     #[test]

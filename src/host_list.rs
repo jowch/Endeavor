@@ -26,6 +26,9 @@ pub enum HostState {
     NotRunning,
     /// The connection dropped; Endeavor reconnects by itself.
     Lost,
+    /// The connection dropped, and ssh is asking the user something while it
+    /// reconnects: the server answered, so it isn't "Can't reach".
+    SigningIn,
     Failed(String),
 }
 
@@ -69,6 +72,7 @@ impl HostState {
             HostState::Queued { job, starting: true, .. } => format!("Starting · job {job}"),
             HostState::NotRunning => "Not running".into(),
             HostState::Lost => "Can't reach · reconnects by itself".into(),
+            HostState::SigningIn => "Signing in…".into(),
             HostState::Failed(_) => "Couldn't connect".into(),
         }
     }
@@ -135,6 +139,8 @@ mod tests {
             words(HostState::Lost),
             (("Can't reach · reconnects by itself".into(), Some("If it needs your university's VPN, check that it's on.".into())), Some(HostAct::TryNow))
         );
+        // ssh asking for a password while it reconnects: no VPN advice, and no Try now under the question.
+        assert_eq!(words(HostState::SigningIn), (("Signing in…".into(), None), None));
         assert_eq!(words(HostState::Queued { job: "16".into(), starting: false, reason: None }), (("Queued · job 16 · waiting for a free node".into(), None), Some(HostAct::CancelJob)));
         assert_eq!(words(HostState::Queued { job: "16".into(), starting: true, reason: None }).1, Some(HostAct::Stop));
         assert_eq!(words(HostState::Failed("ssh: connection refused".into())), (("Couldn't connect".into(), Some("ssh: connection refused".into())), Some(HostAct::TryNow)));

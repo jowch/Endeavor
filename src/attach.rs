@@ -440,6 +440,25 @@ const FROM_REPLY: &str = "> — Claude's reply";
 /// </quote>
 /// Is sampling with replacement right here?
 /// ```
+/// How much of a picked output's text goes in a quote, in characters. An output can be
+/// megabytes (a 200,000-line `Text` is about 1.3 MB): past this, its start and end with a
+/// note, as the Desktop notebook view cuts it (`frontend/src/view.ts`, `outputText`).
+const OUTPUT_MAX: usize = 4000;
+const OUTPUT_END: usize = 500;
+
+/// `text` cut to `OUTPUT_MAX` characters, its start and end kept, saying how much was left out.
+fn output_text(text: &str) -> std::borrow::Cow<'_, str> {
+    let count = text.chars().count();
+    if count <= OUTPUT_MAX {
+        return text.into();
+    }
+    let at = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
+    let (end, start) = (OUTPUT_MAX - OUTPUT_END, count - OUTPUT_END);
+    let left = start - end;
+    let left = left.to_string().as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",");
+    format!("{}\n[{left} characters of this output left out here.]\n{}", &text[..at(end)], &text[at(start)..]).into()
+}
+
 pub fn quote_block(quote: &Quote, backend: Backend) -> String {
     let (quoted, gap) = match &quote.from {
         Quoted::Reply { text, at } => {
@@ -455,7 +474,7 @@ pub fn quote_block(quote: &Quote, backend: Backend) -> String {
             let out = match part {
                 Part::Whole(code) => format!("<quote cell=\"{name}\" uri=\"{uri}\">\n{code}\n</quote>"),
                 Part::Lines { first, last, text } => format!("<quote cell=\"{name}\" lines=\"{first}-{last}\" uri=\"{uri}\">\n{text}\n</quote>"),
-                Part::Output(text) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\">\n{text}\n</quote>"),
+                Part::Output(text) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\">\n{}\n</quote>", output_text(text)),
                 Part::Figure(_) => format!("<quote cell=\"{name}\" part=\"figure\" uri=\"{uri}\"/>"),
             };
             (out, "\n")
@@ -1028,6 +1047,29 @@ mod tests {
     use super::*;
 
     const NB: &str = "6a1b2c3d-0000-4000-8000-1234567890ab";
+
+    #[test]
+    fn a_huge_picked_output_keeps_its_start_and_end() {
+        assert_eq!(output_text("0.42"), "0.42");
+        let exact = "x".repeat(OUTPUT_MAX);
+        assert_eq!(output_text(&exact), exact);
+        // 200,000 lines, as the Desktop audit's Text output: its first 3,500 and last 500 characters.
+        let huge: String = (0..200_000).map(|i| format!("line {i}\n")).collect();
+        let cut = output_text(&huge);
+        let n = huge.chars().count();
+        assert!(cut.starts_with(&huge[..3500]) && cut.ends_with(&huge[huge.len() - 500..]));
+        assert!(cut.contains(&format!("\n[{} characters of this output left out here.]\n", fmt_thousands(n - 4000))), "{}", &cut[3490..3600]);
+        // Characters, not bytes: an emoji isn't split.
+        let wide = "é😀".repeat(3000);
+        let cut = output_text(&wide);
+        assert!(cut.contains("\n[2,000 characters of this output left out here.]\n"));
+        assert!(cut.starts_with(&"é😀".repeat(1750)) && cut.ends_with(&"é😀".repeat(250)));
+    }
+
+    fn fmt_thousands(n: usize) -> String {
+        let s = n.to_string();
+        s.as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",")
+    }
 
     fn cell(id: &str, code: &str) -> Cell {
         Cell { id: id.into(), code: code.into() }

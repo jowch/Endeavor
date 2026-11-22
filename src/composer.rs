@@ -1488,6 +1488,8 @@ impl Workspace {
                     .filter_map(|(&(id, name), focus)| {
                         let label = self.config_label(session, id)?;
                         let short = label.strip_suffix(" (recommended)").unwrap_or(&label).to_owned();
+                        // Narrow, two "Default"s both cut to "Defa…": say which setting each is.
+                        let short = if narrow && short.to_lowercase().starts_with("default") { name.to_owned() } else { short };
                         Some(
                             tool_button(id)
                                 .role(Role::Button)
