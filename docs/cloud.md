@@ -90,6 +90,56 @@ screenshots. `xdotool` drives clicks and keys. Without Julia's hosts the app
 stops at the splash with "Couldn't set up Julia", which the dump shows as
 `.window.setup.failed`.
 
+## Opening a notebook without signing in
+
+A fresh app stops at "Choose your assistant" and then Claude's sign-in. To
+reach a session and an open notebook instead, give it a scratch HOME where
+setup has finished, a stand-in for `claude auth status`, and the stand-in
+agent. Start it without the cloud session's credentials, so nothing it starts
+can reach Claude as this session:
+
+```sh
+E=/tmp/e; mkdir -p $E/home/.local/share/endeavor $E/nb
+touch $E/home/.local/share/endeavor/setup-complete        # skips the setup screen
+cat > $E/claude.sh <<'SH'
+#!/bin/sh
+echo '{"loggedIn": true, "authMethod": "claude.ai"}'
+SH
+chmod +x $E/claude.sh
+UNSET=$(env | grep -oE '^(CLAUDE[A-Z0-9_]*|ANTHROPIC[A-Z0-9_]*|CCR_[A-Z0-9_]*|GH_TOKEN|GITHUB_TOKEN|AWS_[A-Z0-9_]*|CLOUDSDK_AUTH[A-Z0-9_]*)=' | tr -d = | sed 's/^/-u /')
+env $UNSET HOME=$E/home DISPLAY=:99 \
+  ENDEAVOR_TEST_AGENT=$PWD/scripts/test-agent.js ENDEAVOR_CLAUDE_CLI=$E/claude.sh \
+  ENDEAVOR_TEST_ACTION=$E/action ENDEAVOR_STATE_REQUEST=$E/state.request ENDEAVOR_STATE_OUT=$E/state.json \
+  target/debug/endeavor > $E/app.log 2>&1 &
+echo "open $E/nb/plot.jl" > $E/action     # a session on the notebook, in safe preview
+echo run > $E/action                      # Run notebook
+```
+
+The proxy and certificate variables stay, so Julia can still install Pluto.
+The first start in a scratch HOME installs Pluto into its depot, which takes a
+few minutes. `open` sends the session's first message, which the stand-in
+answers with one line. `ENDEAVOR_TEST_ACTION`'s `js` action and `xdotool`
+then drive the page. The web view sits at the window's right edge, so a point
+in the page is at the window's right minus `innerWidth`, and bottom minus
+`innerHeight`.
+
+### When a check needs a real turn
+
+Real turns are allowed when the check needs one. Keep to these guardrails:
+
+- A scratch HOME and a scratch notebook only.
+- The agent sees only Endeavor's tools: no connectors, and no Artifact or
+  other publishing tools. A scratch HOME has no Claude config of its own, but
+  Claude Code syncs the account's skills and settings into it on its first
+  start, so check `~/.claude` there before the turn.
+- Approve only the cards the check needs, and deny the rest.
+- Delete the scratch HOME's `.claude` and `.claude.json` afterwards: they
+  hold the session's keys.
+
+Leave out `ENDEAVOR_TEST_AGENT` and keep the session's environment, which is
+what signs the adapter in. Never start the app that way by accident: `open`
+sends a message, and a signed-in adapter answers it.
+
 ## The accessibility tree
 
 GPUI builds its accessibility tree only while a screen reader is on. To read

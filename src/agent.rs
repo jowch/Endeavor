@@ -452,6 +452,13 @@ fn fake_turn_error() -> Option<Vec<SessionEvent>> {
 /// The command that runs the agent's ACP adapter, installed first if it
 /// isn't yet, with the variables it is started with in front.
 fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
+    // A debug build can run a scripted stand-in (`scripts/test-agent.js`) in place of every
+    // agent's adapter, so a check on a cloud VM or in CI never reaches a real assistant.
+    #[cfg(debug_assertions)]
+    if let Some(stand_in) = std::env::var_os("ENDEAVOR_TEST_AGENT").filter(|v| !v.is_empty()) {
+        let _ = progress;
+        return Ok(vec![stand_in.to_string_lossy().into_owned()]);
+    }
     let facts = agent.facts();
     let mut env: Vec<String> = facts.env.iter().map(|(name, value)| format!("{name}={}", with_inherited(name, value, std::env::var(name).ok()))).collect();
     let program = match facts.install {
