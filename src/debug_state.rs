@@ -276,6 +276,7 @@ impl Workspace {
             "settings_open": self.settings_panel.is_some(),
             "menu_open": self.menu.is_some(),
             "menu": self.menu_state(),
+            "clicks": crate::click_log::all(),
         })
     }
 

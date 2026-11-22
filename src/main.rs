@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod click_log;
 #[cfg(target_os = "macos")]
 mod dialogs;
 #[cfg(target_os = "macos")]
@@ -2977,7 +2978,11 @@ impl Render for Workspace {
             .on_mouse_move(cx.listener(Self::drag_divider))
             // Outside the chat column, ⌘= zooms the notebook again (the chat
             // column's own capture runs after this one and sets it back).
-            .capture_any_mouse_down(cx.listener(|this, _, _, _| this.zoom_chat = false))
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+                this.zoom_chat = false;
+                click_log::note(|| format!("gpui down {:?} at {:.0},{:.0}", event.button, f32::from(event.position.x), f32::from(event.position.y)));
+            }))
+            .capture_any_mouse_up(|event: &MouseUpEvent, _, _| click_log::note(|| format!("gpui up {:?} at {:.0},{:.0}", event.button, f32::from(event.position.x), f32::from(event.position.y))))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| {

@@ -4,6 +4,7 @@
 //! menu is: its layer is masked there, and clicks there go to GPUI. A menu, a
 //! tip and a tooltip can each have a hole at the same time.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use gpui::{Bounds, Pixels};
@@ -118,6 +119,8 @@ static HOLES: Mutex<Holes> = Mutex::new(Holes { rects: Vec::new(), view: 0, seco
 
 type SendEvent = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
 static GPUI_SEND_EVENT: OnceLock<SendEvent> = OnceLock::new();
+/// A mouse-down went to GPUI's view (`send_event`), and its mouse-up hasn't come yet.
+static ROUTED_PRESS: AtomicBool = AtomicBool::new(false);
 
 // NSEventType values.
 const LEFT_DOWN: usize = 1;
@@ -144,7 +147,59 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
         let kind: usize = msg_send![event, type];
         let is_click = [LEFT_DOWN, LEFT_UP, RIGHT_DOWN, RIGHT_UP, LEFT_DRAGGED].contains(&kind);
         let is_wheel = kind == SCROLL_WHEEL;
-        if view != 0 && (is_click || is_wheel) && (!rects.is_empty() || dismiss) {
+        if cfg!(debug_assertions) && view != 0 && matches!(kind, LEFT_DOWN | LEFT_UP) {
+            let view = view as *mut AnyObject;
+            let in_window: CGPoint = msg_send![event, locationInWindow];
+            let local: CGPoint = msg_send![view, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
+            let flipped: Bool = msg_send![view, isFlipped];
+            let bounds: CGRect = msg_send![view, bounds];
+            let y = if flipped.as_bool() { local.y } else { bounds.size.height - local.y };
+            let responder: *mut AnyObject = msg_send![window, firstResponder];
+            let in_page = !responder.is_null() && {
+                let is_view: Bool = msg_send![responder, isKindOfClass: class!(NSView)];
+                is_view.as_bool() && {
+                    let inside: Bool = msg_send![responder, isDescendantOf: view];
+                    inside.as_bool()
+                }
+            };
+            let holes: Vec<String> = rects.iter().filter(|(_, r)| r.contains(local.x, y)).map(|(h, _)| format!("{h:?}")).collect();
+            let gpui: *mut AnyObject = msg_send![view, superview];
+            let ours: *mut AnyObject = msg_send![gpui, inputContext];
+            let current: *mut AnyObject = msg_send![class!(NSTextInputContext), currentInputContext];
+            let context = if current.is_null() { "none" } else if current == ours { "gpui" } else { "other" };
+            let hidden: Bool = msg_send![view, isHiddenOrHasHiddenAncestor];
+            let hidden = hidden.as_bool();
+            crate::click_log::note(|| format!("window {} at page {:.0},{:.0} in holes {holes:?} dismiss {dismiss} page hidden {hidden} keys in page {in_page} input context {context}", if kind == LEFT_DOWN { "down" } else { "up" }, local.x, y));
+        }
+        // A press that went to GPUI keeps going there until it ends, wherever the pointer is
+        // and whatever opened or closed meanwhile: AppKit sends a mouse-up only to the view that
+        // took its mouse-down, and the window never saw that one (#282).
+        // A new press starts afresh, so one whose mouse-up never came doesn't take the next one's.
+        let routed = !matches!(kind, LEFT_DOWN | RIGHT_DOWN) && ROUTED_PRESS.load(Ordering::Relaxed);
+        if matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
+            ROUTED_PRESS.store(false, Ordering::Relaxed);
+        }
+        if routed && view != 0 && [LEFT_UP, RIGHT_UP, LEFT_DRAGGED].contains(&kind) {
+            if kind != LEFT_DRAGGED {
+                ROUTED_PRESS.store(false, Ordering::Relaxed);
+            }
+            let gpui: *mut AnyObject = msg_send![view as *mut AnyObject, superview];
+            if cfg!(debug_assertions) && kind == LEFT_UP {
+                crate::click_log::note(|| "window routed it to gpui".into());
+            }
+            match kind {
+                LEFT_UP => msg_send![gpui, mouseUp: event],
+                RIGHT_UP => msg_send![gpui, rightMouseUp: event],
+                _ => msg_send![gpui, mouseDragged: event],
+            }
+            return;
+        }
+        // A hidden web view (under a modal dialog) takes no clicks: AppKit gives them to GPUI.
+        let hidden = view != 0 && {
+            let hidden: Bool = msg_send![view as *mut AnyObject, isHiddenOrHasHiddenAncestor];
+            hidden.as_bool()
+        };
+        if view != 0 && !hidden && (is_click || is_wheel) && (!rects.is_empty() || dismiss) {
             let view = view as *mut AnyObject;
             let in_window: CGPoint = msg_send![event, locationInWindow];
             let local: CGPoint = msg_send![view, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
@@ -157,6 +212,16 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
             let dismiss_click = dismiss && matches!(kind, LEFT_DOWN | RIGHT_DOWN) && in_view;
             if in_hole || dismiss_click {
                 let gpui: *mut AnyObject = msg_send![view, superview];
+                // A click on what GPUI draws there is GPUI's, as a click outside the web view is (#282).
+                if in_hole && matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
+                    take_keys(view, gpui, false);
+                }
+                if matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
+                    ROUTED_PRESS.store(true, Ordering::Relaxed);
+                }
+                if cfg!(debug_assertions) && matches!(kind, LEFT_DOWN | LEFT_UP) {
+                    crate::click_log::note(|| "window routed it to gpui".into());
+                }
                 match kind {
                     LEFT_DOWN => msg_send![gpui, mouseDown: event],
                     LEFT_UP => msg_send![gpui, mouseUp: event],
@@ -170,6 +235,48 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
         }
         if let Some(gpui) = GPUI_SEND_EVENT.get() {
             gpui(window, cmd, event);
+        }
+    }
+}
+
+/// Make GPUI's view the window's first responder if the web view, or a view inside it, is. While
+/// the page holds it, clicks on GPUI's controls over the page were lost on the Mac until a click
+/// landed outside the web view (#282). AppKit does this for a click that reaches GPUI's view
+/// itself; one routed through a hole, or a dialog opened over the page, has to do it here.
+/// `later` makes it on the run loop's next turn, for a caller inside GPUI's paint.
+unsafe fn take_keys(view: *mut AnyObject, gpui: *mut AnyObject, later: bool) {
+    unsafe {
+        let window: *mut AnyObject = msg_send![view, window];
+        if window.is_null() || gpui.is_null() {
+            return;
+        }
+        let responder: *mut AnyObject = msg_send![window, firstResponder];
+        if responder.is_null() || responder == gpui {
+            return;
+        }
+        let is_view: Bool = msg_send![responder, isKindOfClass: class!(NSView)];
+        if !is_view.as_bool() {
+            return;
+        }
+        let inside: Bool = msg_send![responder, isDescendantOf: view];
+        if !inside.as_bool() {
+            return;
+        }
+        // GPUI's view hands each mouse-down to its text input context first (for input
+        // methods). AppKit switches the current context only as an event goes through the
+        // window's own sendEvent, which a click routed through a hole skips, so the page's
+        // stayed current: make GPUI's the current one too.
+        let context: *mut AnyObject = msg_send![gpui, inputContext];
+        if later {
+            let _: () = msg_send![window, performSelector: sel!(makeFirstResponder:), withObject: gpui, afterDelay: 0.0f64];
+            if !context.is_null() {
+                let _: () = msg_send![context, performSelector: sel!(activate), withObject: std::ptr::null_mut::<AnyObject>(), afterDelay: 0.0f64];
+            }
+        } else {
+            let _: Bool = msg_send![window, makeFirstResponder: gpui];
+            if !context.is_null() {
+                let _: () = msg_send![context, activate];
+            }
         }
     }
 }
@@ -329,6 +436,7 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
     use wry::WebViewExtMacOS;
     let view = webview.webview();
     let view = &*view as *const _ as *mut AnyObject as usize;
+    let mut take = false;
     let (rects, second) = {
         let mut holes = HOLES.lock().unwrap();
         let before = holes.rects.clone();
@@ -337,6 +445,10 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
         if holes.rects == before {
             return;
         }
+        // A dialog opened over the page takes the keys from it, so its fields and buttons work
+        // from the first click (#282). A menu, tip or notice leaves them: the user may be typing.
+        let opened = |o: Hole| !before.iter().any(|(b, _)| *b == o) && holes.rects.iter().any(|(r, _)| *r == o);
+        take = opened(Hole::Settings) || opened(Hole::Confirm);
         holes.view = view;
         (with_radii(&holes.rects), holes.second)
     };
@@ -345,6 +457,10 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
         mask(view as *mut AnyObject, &rects);
         if second != 0 {
             mask(second as *mut AnyObject, &rects);
+        }
+        if take {
+            let view = view as *mut AnyObject;
+            take_keys(view, msg_send![view, superview], true);
         }
     }
 }

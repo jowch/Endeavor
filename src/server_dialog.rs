@@ -147,7 +147,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn close_server_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_server_dialog(&mut self, cx: &mut Context<Self>) {
         if let Some(test) = self.server_dialog.take().and_then(|d| d.test) {
             test.cancel.cancel();
             // Its end finds no dialog to report to, so its questions go now.
@@ -517,8 +517,14 @@ impl Workspace {
                     )
                 })
                 .child(div().flex_1())
-                .child(button("cancel-server", "Cancel", false, &self.dialog_focus("cancel-server", cx), theme::dialog_bg()).on_click(cx.listener(|this, _, _, cx| this.close_server_dialog(cx))))
-                .child(button("save-server", if editing { "Save" } else { "Add" }, true, &self.dialog_focus("save-server", cx), theme::dialog_bg()).on_click(cx.listener(|this, _, window, cx| this.save_server(window, cx))))
+                .child(noted(button("cancel-server", "Cancel", false, &self.dialog_focus("cancel-server", cx), theme::dialog_bg()), "cancel").on_click(cx.listener(|this, _, _, cx| {
+                    crate::click_log::note(|| "cancel click".into());
+                    this.close_server_dialog(cx)
+                })))
+                .child(noted(button("save-server", if editing { "Save" } else { "Add" }, true, &self.dialog_focus("save-server", cx), theme::dialog_bg()), "save").on_click(cx.listener(|this, _, window, cx| {
+                    crate::click_log::note(|| "save click".into());
+                    this.save_server(window, cx)
+                })))
         };
         let card = div()
             .id("server-dialog")
@@ -802,6 +808,14 @@ fn field_frame(mono: bool) -> Div {
         .border_color(theme::control_edge())
         .bg(theme::bg_page())
         .when(mono, |d| d.font_family(theme::MONO))
+}
+
+/// A button whose presses go in the click log (`click_log`), as `name`: GPUI calls these only
+/// while the pointer is over it, so a press missing here was taken for somewhere else.
+fn noted(button: Stateful<Div>, name: &'static str) -> Stateful<Div> {
+    button
+        .on_mouse_down(MouseButton::Left, move |_, _, _| crate::click_log::note(|| format!("{name} down")))
+        .on_mouse_up(MouseButton::Left, move |_, _, _| crate::click_log::note(|| format!("{name} up")))
 }
 
 /// `on`: the dialog's colour, for the gap inside the focus ring.
