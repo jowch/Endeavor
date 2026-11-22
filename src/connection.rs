@@ -1685,10 +1685,19 @@ impl Workspace {
                 for session in this.sessions.iter_mut().filter(|s| s.place.host == host) {
                     let own = session.notebook_path.as_deref().filter(|_| session.stopped.is_none() && !session.missing);
                     session.notebook = own.and_then(by_path).or_else(|| session.notebook.as_deref().and_then(new_id));
+                    // Each pass says why afresh: an earlier pass's error mustn't show over this one's Julia or R pane.
+                    if own.is_some() {
+                        session.open_failed = None;
+                    }
                     if let Some(path) = own.filter(|_| session.notebook.is_none()) {
                         let failed = unexplained.iter().find(|(p, _)| p == path).cloned();
+                        session.open_failed = failed.clone();
                         lost.push((session.key, failed));
                     }
+                }
+                // A notice from an earlier pass goes once its session has no failed open to show.
+                if this.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(crate::notice::Retry::OpenNotebook(k, _)) if this.sessions.iter().any(|s| s.key == *k && s.place.host == host && s.open_failed.is_none()))) {
+                    this.notice = None;
                 }
                 // A file that's gone shows File not found; an open that failed for another reason
                 // says why over the pane, with Try again, as the session's own open does.
