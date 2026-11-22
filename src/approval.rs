@@ -294,6 +294,17 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
     Some(ApprovalView { heading: ask.heading, count: None, code: ask.code, lines: ask.lines, plan: None, buttons, folder, cells, rerun, needed, then: vec![], names: ask.names })
 }
 
+/// "About 1.3 GB to download." (or MB), for the download card's muted line.
+fn download_size(bytes: u64) -> String {
+    let mb = (bytes as f64 / 1e6).ceil().max(1.0);
+    if mb < 950.0 {
+        return format!("About {mb} MB to download.");
+    }
+    // 999 MB reads "About 1 GB", not "1000 MB" or "1.0 GB".
+    let gb = format!("{:.1}", mb / 1e3);
+    format!("About {} GB to download.", gb.strip_suffix(".0").unwrap_or(&gb))
+}
+
 /// A prompt's question, the word on its ⏎ button, and its body.
 #[derive(Default)]
 struct Prompt {
@@ -319,8 +330,26 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
         _ => None,
     };
     if let Some(what) = what {
-        let code = (tool == "answer_prompt").then(|| CardCode::Plain(input["text"].as_str().unwrap_or("").to_owned()));
-        return Prompt { heading: question.heading, verb: question.button, code, lines: vec![(what.into(), Tone::Muted)], ..Default::default() };
+        let mut lines = Vec::new();
+        let code = (tool == "answer_prompt").then(|| {
+            // What the cell asks, then the answer; an empty answer is a press of Enter (#171).
+            if let Some(asked) = preview.and_then(|p| p.question.as_deref()) {
+                lines.push((format!("The cell asks: {}", cut_line(asked, 80)), Tone::Secondary));
+            }
+            let text = input["text"].as_str().unwrap_or("");
+            // Only spaces would show as nothing: say how many.
+            CardCode::Plain(match text.chars().count() {
+                0 => "(Enter)".to_owned(),
+                n if text.chars().all(|c| c == ' ') => format!("({n} space{})", if n == 1 { "" } else { "s" }),
+                _ => text.to_owned(),
+            })
+        });
+        let what = match preview.and_then(|p| p.asking.as_ref()).and_then(|a| a.bytes).filter(|_| tool == "approve_install") {
+            Some(bytes) => format!("{} {what}", download_size(bytes)),
+            None => what.to_owned(),
+        };
+        lines.push((what, Tone::Muted));
+        return Prompt { heading: question.heading, verb: question.button, code, lines, ..Default::default() };
     }
     let mut lines = Vec::new();
     if question.names.len() > 1 && preview.is_none_or(|p| !p.all) {
@@ -932,9 +961,9 @@ fn install_question(preview: Option<&pluto::RunPreview>) -> RunQuestion {
 }
 
 /// Whether a card asks the runtime about its call before it is answered: the cells a run would run
-/// (`previews_cells`), or what `approve_install` would install.
+/// (`previews_cells`), what `approve_install` would install, or what `answer_prompt`'s cell asks.
 pub(crate) fn fetches_preview(tool: &str) -> bool {
-    previews_cells(tool) || tool == "approve_install"
+    previews_cells(tool) || matches!(tool, "approve_install" | "answer_prompt")
 }
 
 /// Whether a run card asks the runtime which cells a call would run: not for
@@ -966,9 +995,9 @@ fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_j
         "set_input" => {
             let name = input["name"].as_str().unwrap_or("the input");
             let heading = match &input["value"] {
-                serde_json::Value::String(value) => format!("Set `{name}` to “{value}”?"),
+                serde_json::Value::String(value) => format!("Set `{name}` to “{}”?", cut_line(value, 40)),
                 serde_json::Value::Null => format!("Set `{name}`?"),
-                value => format!("Set `{name}` to {value}?"),
+                value => format!("Set `{name}` to {}?", cut_line(&value.to_string(), 40)),
             };
             return RunQuestion { heading, button: "Set", names: vec![] };
         }
@@ -1238,6 +1267,34 @@ mod tests {
     }
 
     #[test]
+    fn the_answer_and_download_cards_say_what_they_answer_and_fetch() {
+        use crate::pluto::{Asking, RunPreview};
+        let s = Session::new(1, Place::local("/Users/jc/projects/decay-fits"), None);
+        let asked = RunPreview { question: Some("Overwrite results.csv? [y/n]".into()), ..Default::default() };
+        let answer = super::run_prompt(&s, "answer_prompt", &json!({ "notebook_id": "n", "cell_id": "a", "text": "y" }), Some(&asked));
+        assert_eq!(answer.code, Some(super::CardCode::Plain("y".into())));
+        assert_eq!(answer.lines[0].0, "The cell asks: Overwrite results.csv? [y/n]");
+        let enter = super::run_prompt(&s, "answer_prompt", &json!({ "notebook_id": "n", "cell_id": "a", "text": "" }), None);
+        assert_eq!(enter.code, Some(super::CardCode::Plain("(Enter)".into())), "an empty answer is a press of Enter");
+        assert_eq!(enter.lines.len(), 1, "no question line until the cell's question is known");
+        let spaces = super::run_prompt(&s, "answer_prompt", &json!({ "notebook_id": "n", "cell_id": "a", "text": "   " }), None);
+        assert_eq!(spaces.code, Some(super::CardCode::Plain("(3 spaces)".into())));
+
+        let big = |bytes| RunPreview { asking: Some(Asking { new: false, packages: vec!["GO.db".into()], close_to: vec![], bytes }), ..Default::default() };
+        let download = |bytes| super::run_prompt(&s, "approve_install", &json!({ "notebook_id": "n" }), Some(&big(bytes))).lines[0].0.clone();
+        assert_eq!(download(Some(1_270_000_000)), "About 1.3 GB to download. The packages download and install, then the cells waiting on them run.");
+        assert_eq!(download(Some(11_385_380)), "About 12 MB to download. The packages download and install, then the cells waiting on them run.");
+        assert_eq!(download(Some(999_000_000)), "About 1 GB to download. The packages download and install, then the cells waiting on them run.");
+        assert_eq!(download(Some(900_000_000)), "About 900 MB to download. The packages download and install, then the cells waiting on them run.");
+        assert_eq!(download(Some(2_000_000_000)), "About 2 GB to download. The packages download and install, then the cells waiting on them run.");
+        assert_eq!(download(None), "The packages download and install, then the cells waiting on them run.");
+
+        let long = "a".repeat(200);
+        let set = super::run_question("set_input", None, &json!({ "notebook_id": "n", "name": "note", "value": long }));
+        assert!(set.heading.chars().count() < 60 && set.heading.contains('…'), "{}", set.heading);
+    }
+
+    #[test]
     fn the_agents_prompts_read_in_endeavors_words_never_its_labels() {
         let mut s = Session::new(1, Place::local("/Users/jc/projects/decay-fits"), None);
         let shortcut = crate::platform::shortcut!("⏎");
@@ -1411,7 +1468,7 @@ mod tests {
         use super::{new_packages, run_question};
         use crate::pluto::{self, RunPreview};
         // EndeavorMCP #397/#355: a Julia or Python notebook's new packages have no size, and "install" is the word.
-        let asking = |new, packages: &[&str]| Some(RunPreview { asking: Some(pluto::Asking { new, packages: packages.iter().map(|p| p.to_string()).collect(), close_to: vec![] }), ..Default::default() });
+        let asking = |new, packages: &[&str]| Some(RunPreview { asking: Some(pluto::Asking { new, packages: packages.iter().map(|p| p.to_string()).collect(), close_to: vec![], bytes: None }), ..Default::default() });
         let ask = |preview: Option<RunPreview>| {
             let q = run_question("approve_install", preview.as_ref(), &json!({ "notebook_id": "n" }));
             (q.heading, q.button)
@@ -1428,7 +1485,7 @@ mod tests {
         assert_eq!(ask(Some(RunPreview::default())), ("Install the packages?".into(), "Install"), "a preview that couldn't say what waits");
         assert_eq!(new_packages(asking(true, &[]).as_ref()), None);
         // A likely typo says what it is close to (EndeavorMCP #417).
-        let typo = Some(RunPreview { asking: Some(pluto::Asking { new: true, packages: vec!["pandsa".into()], close_to: vec![("pandsa".into(), "pandas".into())] }), ..Default::default() });
+        let typo = Some(RunPreview { asking: Some(pluto::Asking { new: true, packages: vec!["pandsa".into()], close_to: vec![("pandsa".into(), "pandas".into())], bytes: None }), ..Default::default() });
         assert_eq!(ask(typo.clone()), ("Install pandsa (close to pandas), new to this notebook?".into(), "Install"));
         // Its yes names the packages the card did, which it covers and no others (EndeavorMCP #418).
         assert_eq!(super::shown_packages("approve_install", typo.as_ref()), Some(vec!["pandsa".to_owned()]));

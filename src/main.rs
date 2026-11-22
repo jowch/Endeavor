@@ -1094,6 +1094,15 @@ impl Workspace {
             return cx.notify();
         }
         let place = Place { host: host.clone(), path: folder.clone() };
+        // A folder picked under the new sign-in: the server's recent folders are its own again.
+        if let HostId::Server(id) = &host
+            && let Some(server) = self.hosts.servers.iter_mut().find(|s| s.id == *id && s.fresh)
+        {
+            server.fresh = false;
+            if let Err(e) = self.hosts.save() {
+                eprintln!("{e}");
+            }
+        }
         let server = match &host {
             HostId::ThisMac => None,
             HostId::Server(_) => Some(self.hosts.name(&host)),
