@@ -113,14 +113,16 @@ env $UNSET HOME=$E/home DISPLAY=:99 \
   ENDEAVOR_TEST_AGENT=$PWD/scripts/test-agent.js ENDEAVOR_CLAUDE_CLI=$E/claude.sh \
   ENDEAVOR_TEST_ACTION=$E/action ENDEAVOR_STATE_REQUEST=$E/state.request ENDEAVOR_STATE_OUT=$E/state.json \
   target/debug/endeavor > $E/app.log 2>&1 &
+APP=$!
 sleep 10      # the app starts the agent at launch
-pgrep -f test-agent.js >/dev/null || { echo "No stand-in agent: stopping before open"; exit 1; }
+pgrep -P $APP -f test-agent.js >/dev/null || { echo "No stand-in agent: stopping before open"; exit 1; }
 echo "open $E/nb/plot.jl" > $E/action     # a session on the notebook, in safe preview
 echo run > $E/action                      # Run notebook
 ```
 
-The `pgrep` line stops the script before the first `open` if `test-agent.js`
-isn't running, since `open` sends a message. The proxy and certificate variables stay, so Julia can still
+The `pgrep` line stops the script before the first `open` if this launch's
+agent isn't `test-agent.js`, since `open` sends a message. It looks only at the
+app's own children, so a stand-in left from an earlier run can't pass it. The proxy and certificate variables stay, so Julia can still
 install Pluto.
 The first start in a scratch HOME installs Pluto into its depot, which takes a
 few minutes. `open` sends the session's first message, which the stand-in
