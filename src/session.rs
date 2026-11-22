@@ -3056,7 +3056,7 @@ mod tests {
         assert!(answers(&effects).is_empty() && matches!(effects.as_slice(), [Effect::PreviewRun { .. }, Effect::Asked(_)]), "the download waits for the user");
         let card = s.pending_permission().expect("the install card");
         // The yes names the packages the card did, so it covers those only (EndeavorMCP #418).
-        s.set_preview(card, crate::pluto::RunPreview { asking: Some(crate::pluto::Asking { new: true, packages: vec!["Example".into()], close_to: vec![] }), ..Default::default() });
+        s.set_preview(card, crate::pluto::RunPreview { asking: Some(crate::pluto::Asking { new: true, packages: vec!["Example".into()], close_to: vec![], bytes: None }), ..Default::default() });
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
         let later = s.take_later();
         assert!(matches!(later.as_slice(), [Effect::AnswerRun { ask: 41, allow: true, packages: Some(p), .. }] if p == &["Example".to_owned()]), "the card's names go with the yes");
