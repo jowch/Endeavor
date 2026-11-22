@@ -1116,6 +1116,11 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .children(diffs.iter().enumerate().map(|(n, diff)| render_diff(diff, ElementId::NamedInteger(format!("call-diff-{n}").into(), key), window, cx)))
     });
 
+    // Output and errors share the cap: with both, each takes half, so the box stays within it.
+    let both = !body.is_empty() && !errors.is_empty();
+    let errors_cap = if both { cap * 0.5 } else { cap };
+    let output_cap = cap - if both { errors_cap } else { px(0.) };
+
     // The output: one area that scrolls both ways, faded where it's cut.
     let handle = window.use_keyed_state(id("call-out-scroll"), cx, |_, _| ScrollHandle::new()).read(cx).clone();
     let (offset, max) = (handle.offset(), handle.max_offset());
@@ -1126,7 +1131,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     let lines = shown_text.lines().count() - (cut && shown_text.ends_with("\n…")) as usize;
     let output_area = (!body.is_empty()).then(|| {
         let parts = div().flex().flex_col().items_start().gap(px(4.)).px(px(10.)).py(px(6.)).children(body.into_iter().map(output_part));
-        let area = scroll_xy(div().id(id("call-out")).flex().flex_col().items_start().when(!all, |d| d.max_h(cap)), handle.clone()).line_height(line).child(parts.flex_none().min_w_full());
+        let area = scroll_xy(div().id(id("call-out")).flex().flex_col().items_start().when(!all, |d| d.max_h(output_cap)), handle.clone()).line_height(line).child(parts.flex_none().min_w_full());
         div()
             .relative()
             .child(area)
@@ -1135,12 +1140,10 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .when(more_right, |d| d.child(fade(FadeEdge::Right, theme::bg_sunken())))
     });
 
-    // Errors wrap, under the output; with output above they take half the
-    // cap, so the box stays within it. Show all opens them too.
+    // Errors wrap, under the output, within their share of the cap. Show all opens them too.
     let errors_handle = window.use_keyed_state(id("call-errors-scroll"), cx, |_, _| ScrollHandle::new()).read(cx).clone();
     let (err_offset, err_max) = (errors_handle.offset(), errors_handle.max_offset());
     let errors_cut = !all && !errors.is_empty() && err_max.y > px(0.5);
-    let errors_cap = if output_area.is_some() { cap * 0.5 } else { cap };
     let errors = (!errors.is_empty()).then(|| {
         let panel = div()
             .id(id("call-errors"))
@@ -1202,7 +1205,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
                             // While following the turn's end, the list stays there.
                             let top = list.logical_scroll_top();
                             if *all && !list.is_following_tail() && top.item_ix == item {
-                                let lost = (out_handle.bounds().size.height - cap).max(px(0.)) + (err_handle.bounds().size.height - errors_cap).max(px(0.));
+                                let lost = (out_handle.bounds().size.height - output_cap).max(px(0.)) + (err_handle.bounds().size.height - errors_cap).max(px(0.));
                                 list.scroll_to(ListOffset { item_ix: item, offset_in_item: (top.offset_in_item - lost).max(px(0.)) });
                             }
                             *all = !*all;
