@@ -1648,7 +1648,7 @@ impl Workspace {
                                 // Opened meanwhile (the session's own open, or Claude's).
                                 Err(e) => find(&list(), &path).or_else(|| {
                                     eprintln!("Couldn't reopen {path}: {e}");
-                                    if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).or_else(|| pluto::open_stuck(&e)).is_some() {
+                                    if pane_failure(crate::new_session::kind_of_path(&path), &e).is_some() {
                                         failed.borrow_mut()[r as usize].get_or_insert(e);
                                     } else {
                                         unexplained.borrow_mut().push((path.clone(), e));
