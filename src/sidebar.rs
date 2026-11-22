@@ -557,7 +557,7 @@ impl Workspace {
             }
         }
         if let Some(host) = self.crashed_host() {
-            return (Some(StatusMark::NeedsYou), format!("Julia on {host} stopped").into());
+            return (Some(StatusMark::NeedsYou), format!("Notebooks on {host} stopped").into());
         }
         (None, self.status.clone())
     }

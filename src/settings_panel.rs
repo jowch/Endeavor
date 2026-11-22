@@ -1075,7 +1075,7 @@ impl Workspace {
         r.extra = hint.map(Extra::Hint);
         r.search = Some(format!("{name} {}", kind.unwrap_or(if host == HostId::ThisMac { "" } else { "server" })).into());
         match state.action() {
-            Some(crate::host_list::HostAct::Stop) => r.controls.push(button("Stop", Look::Secondary, Act::Stop(host.clone()), format!("Stop Julia on {name}"))),
+            Some(crate::host_list::HostAct::Stop) => r.controls.push(button("Stop", Look::Secondary, Act::Stop(host.clone()), format!("Stop notebooks on {name}"))),
             Some(crate::host_list::HostAct::CancelJob) => r.controls.push(button("Cancel job", Look::Secondary, Act::Stop(host.clone()), format!("Cancel the job on {name}"))),
             Some(crate::host_list::HostAct::TryNow) => r.controls.push(button("Try now", Look::Secondary, Act::TryNow(host.clone()), format!("Try {name} now"))),
             None => {}
@@ -1539,7 +1539,8 @@ impl Workspace {
         .detach();
     }
 
-    /// Ask before stopping Julia on `host`, or cancelling its queued job.
+    /// Ask before stopping the notebooks on `host` (Julia and R share one runtime), or
+    /// cancelling its queued job.
     fn confirm_host_stop(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.hosts.name(&host);
         let (title, detail, yes) = match self.host_state(&host) {
@@ -1549,7 +1550,7 @@ impl Workspace {
                 if let Some(lost) = self.unrun_edit_warning(&host) {
                     detail = format!("{detail}\n\n{lost}");
                 }
-                (format!("Stop Julia on {name}?"), detail, "Stop")
+                (format!("Stop notebooks on {name}?"), detail, "Stop")
             }
         };
         self.open_confirm(title, detail, yes, window, cx, move |this, _, cx| this.stop_host(&host, cx));

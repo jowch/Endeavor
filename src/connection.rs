@@ -1323,7 +1323,7 @@ impl Workspace {
                 eprintln!("Restart Julia: {e}");
                 self.status = not_restarted(&e).into();
             } else if self.this_mac_was_ready {
-                self.status = if reattached { "Reconnected to Julia." } else { "Julia restarted." }.into();
+                self.status = if reattached { "Reconnected to your notebooks." } else { "Notebooks restarted." }.into();
             } else {
                 self.status = "Ready.".into();
             }
@@ -1694,8 +1694,8 @@ impl Workspace {
                 }
                 if host == HostId::ThisMac && !reopened.is_empty() && !reattached {
                     this.status = match previewed {
-                        0 => format!("Julia restarted; reopened {} notebook(s).", reopened.len()),
-                        n => format!("Julia restarted; reopened {} notebook(s), {n} in safe preview.", reopened.len()),
+                        0 => format!("Notebooks restarted; {} reopened.", reopened.len()),
+                        n => format!("Notebooks restarted; {} reopened, {n} in safe preview.", reopened.len()),
                     }
                     .into();
                 }
@@ -1887,7 +1887,7 @@ impl Workspace {
                     return this.start_host(&host, cx);
                 }
                 if host == HostId::ThisMac {
-                    this.status = concat!("Julia on ", crate::platform::this_computer!(), " is stopped.").into();
+                    this.status = concat!("Notebooks on ", crate::platform::this_computer!(), " are stopped.").into();
                     this.own_julia_after_stop(true, cx);
                     this.own_r_after_stop(true, cx);
                 }
