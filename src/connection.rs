@@ -1906,13 +1906,19 @@ impl Workspace {
     }
 
     /// What runs on `host`, as far as the app knows, for the host list and the Where menu.
+    /// ssh on `host`'s line is asking the user something (a password, a code):
+    /// the server answered, so it isn't out of reach.
+    pub fn signing_in(&self, host: &HostId) -> bool {
+        self.lines.get(host).is_some_and(|line| self.asks.iter().any(|ask| ask.question().source == line.sign_in.id))
+    }
+
     pub fn host_state(&self, host: &HostId) -> HostState {
         let Some(c) = self.connections.get(host) else { return HostState::Unknown };
         if c.stopping {
             return HostState::Stopping;
         }
         if c.lost.is_some() {
-            return HostState::Lost;
+            return if self.signing_in(host) { HostState::SigningIn } else { HostState::Lost };
         }
         match &c.status {
             Status::Connecting => HostState::Connecting,
