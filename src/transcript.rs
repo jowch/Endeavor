@@ -1084,10 +1084,6 @@ fn kept_state<T: 'static>(id: ElementId, cx: &mut App, init: impl FnOnce(&mut Ap
     kept
 }
 
-/// An opened call as one box: what it was asked (the command, the file) on a
-/// strip at the top; its edits and output below, up to `DETAIL_LINES` lines
-/// unless shown in full, each line on one line, scrolling sideways; and a
-/// footer with how it ended, how long the output is, Show all and Copy.
 /// The ids of session `key`'s box for tool call `call`, by the call's id rather than its entry's
 /// index: a replay or a copy renumbers the entries, and another box would get this one's kept state.
 fn call_key(key: u64, call: &str) -> u64 {
@@ -1097,6 +1093,10 @@ fn call_key(key: u64, call: &str) -> u64 {
     hasher.finish()
 }
 
+/// An opened call as one box: what it was asked (the command, the file) on a
+/// strip at the top; its edits and output below, up to `DETAIL_LINES` lines
+/// unless shown in full, each line on one line, scrolling sideways; and a
+/// footer with how it ended, how long the output is, Show all and Copy.
 fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key: u64, (list, item): (ListState, usize), window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     use details::Part;
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key);
