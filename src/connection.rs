@@ -2612,9 +2612,11 @@ fn runtime_of(runtime: client::RuntimeInfo) -> Runtime {
 }
 
 /// The same connection to a server: a change in anything else (its name, its
-/// idle stop) keeps the line open.
+/// idle stop, a cluster's account, depot or default resources, which each job
+/// request reads from the server as it is then) keeps the line open. Of the
+/// cluster, the line uses only that there is one (`Server::launcher`).
 fn same_connection(a: &Server, b: &Server) -> bool {
-    (&a.ssh_host, a.port, &a.julia, &a.r, &a.cluster) == (&b.ssh_host, b.port, &b.julia, &b.r, &b.cluster)
+    (&a.ssh_host, a.port, &a.julia, &a.r, a.cluster.is_some()) == (&b.ssh_host, b.port, &b.julia, &b.r, b.cluster.is_some())
 }
 
 /// What answers for a host's runtime: This Mac's helper, or a server's line.
@@ -2839,7 +2841,8 @@ pub(crate) fn same_file(host: &HostId, a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, ahead_line, load_again, new_failure, not_restarted, r_failure, not_stopped, pane_failure, percent, runtime_of, starting_ahead, try_ended};
+    use super::{Change, Connection, HostPane, LineState, LineStatus, Status, Steps, changes, client, elapsed, ahead_line, load_again, new_failure, not_restarted, r_failure, not_stopped, pane_failure, percent, runtime_of, same_connection, starting_ahead, try_ended};
+    use crate::hosts::Server;
     use wire::backend::Backend;
     use crate::pluto;
 
@@ -3044,6 +3047,18 @@ mod tests {
         c.status = Status::Ready;
         c.runtime = Some(runtime_of(runtime(7)));
         assert!(c.same_julia(&runtime_of(client::RuntimeInfo { reattached: true, ..runtime(7) })), "seen again while ready");
+    }
+
+    #[test]
+    fn only_what_the_line_uses_counts_as_a_change_of_connection() {
+        let server = Server { ssh_host: "lab".into(), cluster: Some(crate::hosts::Cluster::default()), ..Default::default() };
+        let mut resources = server.clone();
+        resources.cluster.as_mut().unwrap().account = Some("other".into());
+        resources.name = "Lab".into();
+        assert!(same_connection(&server, &resources), "a cluster's job settings are read at each start");
+        for changed in [Server { port: Some(2222), ..server.clone() }, Server { cluster: None, ..server.clone() }, Server { julia: Some("/opt/julia".into()), ..server.clone() }] {
+            assert!(!same_connection(&server, &changed), "{changed:?}");
+        }
     }
 
     #[test]
