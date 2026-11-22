@@ -655,10 +655,11 @@ pub(crate) fn markdown_style() -> TextViewStyle {
         .inline_code(HighlightStyle { background_color: Some(theme::bg_tag().into()), ..Default::default() })
 }
 
-/// Inline code's background hugs its text, as before gpui-base 0.9 padded it by 4 px a side:
-/// the padding put a gap before the punctuation after a span ("`84` ." for "`84`.").
+/// Inline code's box reaches 2 px past its text, as it did before gpui-base 0.9: its default of
+/// 4 px a side put a gap before the punctuation after a span ("`84` ." for "`84`."), and none
+/// left the box hugging the glyphs, too tight to see.
 pub(crate) fn inline_code_style() -> StyleRefinement {
-    StyleRefinement::default().px(px(0.))
+    StyleRefinement::default().px(px(2.))
 }
 
 /// A thought's text scrolls past this height.
