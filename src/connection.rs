@@ -2530,7 +2530,7 @@ enum Change {
     StartFailed(String),
     /// Julia stopped by itself; the reason, without the line's "Julia on X stopped."
     Died(String),
-    /// The app's stop or cancel ended Julia, or the start under way.
+    /// The app's stop or cancel ended Julia, or the start under way; or an attach found nothing running.
     Stopped,
 }
 
@@ -2606,6 +2606,10 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
             None => Change::Died(why.to_owned()),
         }),
         (Phase::Starting | Phase::Ready(_), Phase::Idle) => out.push(Change::Stopped),
+        // An attach finding nothing running: the session shows it as starting until it has asked
+        // (EndeavorMCP's `begin_start`), so nothing failed and nothing stopped (#56). A runtime that
+        // went says how in `gone`; a new wish clears that, so an attach has none.
+        (Phase::Starting, Phase::Gone(_)) if now.gone.is_none() => out.push(Change::Stopped),
         (Phase::Starting, Phase::Failed(why) | Phase::Gone(why)) => out.push(Change::StartFailed(why.to_owned())),
         // A start that ended before it was seen to begin.
         (Phase::Idle | Phase::Gone(_), Phase::Failed(why)) => out.push(Change::StartFailed(why.to_owned())),
@@ -3060,6 +3064,12 @@ mod tests {
         assert_eq!(changes(&ready, &connected), [Change::Stopped], "the app's stop");
         // An attach (a line asked to try again after it gave up) that finds nothing running.
         assert!(changes(&connected, &line(LineState::NothingRunning, "lab")).is_empty());
+        // The same attach, looked at while it asked: it ends the start with nothing to say (#56).
+        let nothing = LineStatus { step: Some("No runtime is running on lab".into()), ..line(LineState::NothingRunning, "lab") };
+        assert_eq!(changes(&starting, &nothing), [Change::Stopped]);
+        // A runtime that went unseen between two looks still says why.
+        let went = LineStatus { gone: Some(client::Gone::Died("out of memory".into())), step: Some("out of memory".into()), ..line(LineState::NothingRunning, "lab") };
+        assert_eq!(changes(&starting, &went), [Change::StartFailed("out of memory".into())]);
         assert_eq!(changes(&line(LineState::NothingRunning, "lab"), &starting), [Change::Starting]);
         // A stop refused while a start goes on (a helper that can't force it) ends that start's wait.
         let refused = "Julia was not stopped: it is still starting. Try again once it is up, or force the stop to cancel the start.";
