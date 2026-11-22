@@ -1050,20 +1050,6 @@ impl Workspace {
 
     /// Keep session `key`'s mode, just picked, for new sessions: the
     /// new-session screen shows it from now on, as remembered, not picked there.
-    /// Forget the folders used on `host`, as recent places and as the folder of the session
-    /// being set up there, which then starts in the home of whoever signs in next.
-    pub(crate) fn forget_folders(&mut self, host: &HostId) {
-        let before = self.recent.len();
-        self.recent.retain(|p| p.host != *host);
-        if self.recent.len() != before {
-            save_json("recent.json", &self.recent);
-        }
-        if self.draft.host == *host {
-            self.draft.folder = None;
-            self.draft.browser = None;
-        }
-    }
-
     fn remember_mode(&mut self, key: u64) {
         let Some(mode) = self.sessions.iter().find(|s| s.key == key).and_then(Session::mode) else { return };
         if self.settings.remember_mode(&mode) {
@@ -1106,6 +1092,15 @@ impl Workspace {
             return cx.notify();
         }
         let place = Place { host: host.clone(), path: folder.clone() };
+        // A folder picked under the new sign-in: the server's recent folders are its own again.
+        if let HostId::Server(id) = &host
+            && let Some(server) = self.hosts.servers.iter_mut().find(|s| s.id == *id && s.fresh)
+        {
+            server.fresh = false;
+            if let Err(e) = self.hosts.save() {
+                eprintln!("{e}");
+            }
+        }
         let server = match &host {
             HostId::ThisMac => None,
             HostId::Server(_) => Some(self.hosts.name(&host)),
