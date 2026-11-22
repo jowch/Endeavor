@@ -171,6 +171,8 @@ pub(crate) struct PopupMenu {
     app: Vec<AppItem>,
     /// The notebook had the keyboard before the menu opened, so Edit's items act there.
     notebook_had_keyboard: bool,
+    /// Where the keyboard was before the menu opened, for its Zoom items.
+    pub(crate) before: Before,
 }
 
 impl Workspace {
@@ -234,7 +236,9 @@ impl Workspace {
             _ => Vec::new(),
         };
         let app = if target == MenuTarget::App { Self::app_items(cx) } else { Vec::new() };
-        self.menu = Some(PopupMenu { target, rules, at, selected: None, focus, restore, app, notebook_had_keyboard });
+        let chat = self.menu.as_ref().map_or(self.zoom_chat_before_click, |m| m.before.chat);
+        let before = Before { notebook: notebook_had_keyboard, chat };
+        self.menu = Some(PopupMenu { target, rules, at, selected: None, focus, restore, app, notebook_had_keyboard, before });
         cx.notify();
     }
 
@@ -247,13 +251,13 @@ impl Workspace {
 
     fn pick(&mut self, pick: MenuPick, window: &mut Window, cx: &mut Context<Self>) {
         let app_item = match pick {
-            MenuPick::App(i, _) => self.menu.as_ref().and_then(|m| Some((m.app.get(i)?.action.boxed_clone(), m.app[i].edit, m.notebook_had_keyboard))),
+            MenuPick::App(i, _) => self.menu.as_ref().and_then(|m| Some((m.app.get(i)?.action.boxed_clone(), m.app[i].edit, m.notebook_had_keyboard, m.before))),
             _ => None,
         };
         self.close_menu(window, cx);
         match pick {
             MenuPick::App(..) => {
-                let Some((action, edit, notebook_had_keyboard)) = app_item else { return };
+                let Some((action, edit, notebook_had_keyboard, before)) = app_item else { return };
                 // The web view takes the clipboard commands itself; GPUI's own text boxes take the actions.
                 let webview = self.webview.read(cx).raw();
                 match edit.filter(|_| notebook_had_keyboard) {
@@ -266,7 +270,11 @@ impl Workspace {
                         })
                         .detach();
                     }
-                    None => window.dispatch_action(action, cx),
+                    // Text size goes to the pane that had the keyboard before the menu took it (#237).
+                    None => match zoom_step(action.as_ref()) {
+                        Some((step, reset)) => self.zoom(step, reset, Some(before), cx),
+                        None => window.dispatch_action(action, cx),
+                    },
                 }
             }
             MenuPick::Row { row, action: RowAction::Rename, in_header: true } => self.start_rename(row, true, window, cx),
@@ -539,5 +547,26 @@ mod tests {
         assert!(MenuTarget::Session(3).session_row() == Some((Row::Open(3), true)));
         assert!(MenuTarget::Row(Row::Open(3)).session_row() == Some((Row::Open(3), false)));
         assert!(MenuTarget::Notebook(3).session_row().is_none());
+    }
+}
+
+/// Where the keyboard was before a menu opened: in the notebook, or the chat was used last.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Before {
+    pub(crate) notebook: bool,
+    pub(crate) chat: bool,
+}
+
+/// An app menu item's text-size step, if it is Zoom In, Zoom Out or Actual Size.
+fn zoom_step(action: &dyn gpui::Action) -> Option<(f64, bool)> {
+    let any = action.as_any();
+    if any.is::<crate::ZoomIn>() {
+        Some((1.1, false))
+    } else if any.is::<crate::ZoomOut>() {
+        Some((1. / 1.1, false))
+    } else if any.is::<crate::ZoomReset>() {
+        Some((1., true))
+    } else {
+        None
     }
 }
