@@ -1005,7 +1005,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 let details = details::details(title, *kind, path.as_deref(), args, output.as_ref(), failed, !all_diffs.is_empty(), &name);
                 // The list's item that holds this row: its run's first entry.
                 let item = runs::run_at(&session.entries, ix).map_or(ix, |run| run.start);
-                render_call_box(details, &all_diffs, key << 32 | ix as u64, (session.list.clone(), item), window, cx)
+                render_call_box(details, &all_diffs, call_key(key, &call.0), (session.list.clone(), item), window, cx)
             }).flatten();
             div()
                 .flex()
@@ -1088,6 +1088,15 @@ fn kept_state<T: 'static>(id: ElementId, cx: &mut App, init: impl FnOnce(&mut Ap
 /// strip at the top; its edits and output below, up to `DETAIL_LINES` lines
 /// unless shown in full, each line on one line, scrolling sideways; and a
 /// footer with how it ended, how long the output is, Show all and Copy.
+/// The ids of session `key`'s box for tool call `call`, by the call's id rather than its entry's
+/// index: a replay or a copy renumbers the entries, and another box would get this one's kept state.
+fn call_key(key: u64, call: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (key, call).hash(&mut hasher);
+    hasher.finish()
+}
+
 fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key: u64, (list, item): (ListState, usize), window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     use details::Part;
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key);
