@@ -2877,6 +2877,10 @@ impl Render for Workspace {
             // The assistant's own install or connection failed: another may do.
             let change = (setup.agent.is_some() && setup.step() >= splash::Step::Agent).then(|| cx.listener(|this, _, _, cx| this.change_assistant(cx)));
             let settings = self.render_settings_panel(window, cx).map(|d| layer::place(Layer::Settings, d));
+            // Settings opens here too, and with it the server dialog and its Test connection's sign-in.
+            let server_dialog = self.render_server_dialog(window, cx).map(|d| layer::place(Layer::ServerDialog, d));
+            let askpass = self.render_askpass(cx).map(|d| layer::place(Layer::Askpass, d));
+            let login_node = self.render_login_node_warning(cx).map(|d| layer::place(Layer::LoginNodeWarning, d));
             let confirm = self.render_confirm(cx).map(|d| layer::place(Layer::Confirm, d));
             return div()
                 .size_full()
@@ -2888,6 +2892,9 @@ impl Render for Workspace {
                 .child(div().track_focus(&self.keyboard_home))
                 .child(splash::render(setup, below, retry, change, &|id| self.dialog_focus(id, cx), cx))
                 .children(settings)
+                .children(server_dialog)
+                .children(askpass)
+                .children(login_node)
                 .children(confirm)
                 .into_any_element();
         }
