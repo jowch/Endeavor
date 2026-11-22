@@ -12,6 +12,8 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features =
 # Vendored so its GPUI pin moves with ours (vendor/gpui-wry/README.md).
 gpui-wry = { path = "vendor/gpui-wry" }
 wry = { package = "lb-wry", version = "0.53.3" }
+# Parses a link the page sends to the browser the way the browser will (#151).
+url = "2.5"
 raw-window-handle = "0.6"
 gpui-component = "=0.9.0"
 gpui-base = "=0.9.0"

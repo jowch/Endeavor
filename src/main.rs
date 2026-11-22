@@ -649,6 +649,7 @@ impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (page_tx, mut page_rx) = futures::channel::mpsc::unbounded::<String>();
         let (ended_tx, mut ended_rx) = futures::channel::mpsc::unbounded::<()>();
+        let (new_window_tx, mut new_window_rx) = futures::channel::mpsc::unbounded::<String>();
         #[cfg(not(windows))]
         let (image_asks, mut image_ask_rx) = futures::channel::mpsc::unbounded::<save_image::Ask>();
         let webview = cx.new(|cx| {
@@ -675,6 +676,15 @@ impl Workspace {
                 })
                 .with_ipc_handler(move |request| {
                     let _ = page_tx.unbounded_send(request.into_body());
+                })
+                // The app opens no second window. A web link the page would open in one ("Open
+                // Link in New Window", a link with target="_blank") opens in the browser instead;
+                // anything else (a figure's data: or blob: URL) has nowhere to go (#151).
+                .with_new_window_req_handler(move |url, _| {
+                    if let Some(url) = outside_link(&url) {
+                        let _ = new_window_tx.unbounded_send(url);
+                    }
+                    wry::NewWindowResponse::Deny
                 });
             #[cfg(target_os = "linux")]
             let builder = builder.with_download_started_handler(save_image::started(image_asks.clone()));
@@ -691,6 +701,7 @@ impl Workspace {
             {
                 webkeys::fix_key_handling();
                 webkeys::allow_pinch_zoom(&webview);
+                webkeys::no_new_windows();
             }
             #[cfg(target_os = "linux")]
             linux::attach(&webview, window, cx);
@@ -729,6 +740,13 @@ impl Workspace {
                 if this.update(cx, |this, cx| this.restart_asked(ask, cx)).is_err() {
                     break;
                 }
+            }
+        })
+        .detach();
+
+        cx.spawn(async move |_, cx| {
+            while let Some(url) = new_window_rx.next().await {
+                cx.update(|cx| platform::open_url(&url, cx));
             }
         })
         .detach();
@@ -3344,8 +3362,70 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
     light
 }
 
+/// A link the browser can open: http, https or mailto, parsed the way a
+/// browser parses it, and returned in that normal form. Never a loopback
+/// address in any spelling (`localhost.`, `x.localhost`, `0.0.0.0`, all of
+/// 127/8, `[::ffff:127.0.0.1]`): the notebook's own page carries Pluto's
+/// secret, which must not land in the browser's history. Nor a figure's
+/// `data:` or `blob:` URL.
+fn outside_link(url: &str) -> Option<String> {
+    use url::Host;
+    let url = url::Url::parse(url).ok()?;
+    match url.scheme() {
+        "mailto" => {}
+        "http" | "https" => {
+            let local = match url.host()? {
+                Host::Ipv4(ip) => ip.is_loopback() || ip.is_unspecified(),
+                Host::Ipv6(ip) => ip.is_loopback() || ip.is_unspecified() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_unspecified()),
+                Host::Domain(name) => {
+                    let name = name.trim_end_matches('.').to_ascii_lowercase();
+                    name == "localhost" || name.ends_with(".localhost")
+                }
+            };
+            if local {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    Some(url.into())
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_web_links_leave_for_the_browser() {
+        let out = |url: &str| super::outside_link(url).is_some();
+        assert!(out("https://julialang.org/learning/"));
+        assert!(out("http://example.com"));
+        assert!(out("mailto:someone@example.com"));
+        assert_eq!(super::outside_link("HTTPS://Example.COM/a b").as_deref(), Some("https://example.com/a%20b"), "the browser gets the parsed form");
+        for local in [
+            "http://127.0.0.1:1234/edit?id=x",
+            "http://localhost:1234/",
+            "http://LOCALHOST:1234/",
+            "http://localhost.:1234/",
+            "http://a.localhost:1234/",
+            "http://[::1]:1234/",
+            "http://0.0.0.0:1234/",
+            "http://[::]:1234/",
+            "http://[::ffff:127.0.0.1]:1234/",
+            "http://[::ffff:7f00:1]:1234/",
+            "http://127.0.0.2:1234/",
+            "http://127.1:1234/",
+            "http://2130706433:1234/",
+            "http://127.0.0.1\\@evil.com/",
+            "http://evil.com@127.0.0.1:1234/",
+        ] {
+            assert!(!out(local), "{local} is the notebook's own computer");
+        }
+        assert!(!out("data:image/png;base64,iVBOR"));
+        assert!(!out("blob:http://127.0.0.1:1234/3f2a"));
+        assert!(!out("file:///etc/passwd"));
+        assert!(!out("javascript:alert(1)"));
+        assert!(!out("not a url"));
+    }
     use super::{load_json_at, save_json_at, viewed_notebook, viewed_notebook_id, write_atomic};
     use wire::backend::Backend;
     use std::collections::HashMap;
