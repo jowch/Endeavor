@@ -144,6 +144,28 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
         let kind: usize = msg_send![event, type];
         let is_click = [LEFT_DOWN, LEFT_UP, RIGHT_DOWN, RIGHT_UP, LEFT_DRAGGED].contains(&kind);
         let is_wheel = kind == SCROLL_WHEEL;
+        if view != 0 && matches!(kind, LEFT_DOWN | LEFT_UP) {
+            let view = view as *mut AnyObject;
+            let in_window: CGPoint = msg_send![event, locationInWindow];
+            let local: CGPoint = msg_send![view, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
+            let flipped: Bool = msg_send![view, isFlipped];
+            let bounds: CGRect = msg_send![view, bounds];
+            let y = if flipped.as_bool() { local.y } else { bounds.size.height - local.y };
+            let responder: *mut AnyObject = msg_send![window, firstResponder];
+            let in_page = !responder.is_null() && {
+                let is_view: Bool = msg_send![responder, isKindOfClass: class!(NSView)];
+                is_view.as_bool() && {
+                    let inside: Bool = msg_send![responder, isDescendantOf: view];
+                    inside.as_bool()
+                }
+            };
+            let holes: Vec<String> = rects.iter().filter(|(_, r)| r.contains(local.x, y)).map(|(h, _)| format!("{h:?}")).collect();
+            let gpui: *mut AnyObject = msg_send![view, superview];
+            let ours: *mut AnyObject = msg_send![gpui, inputContext];
+            let current: *mut AnyObject = msg_send![class!(NSTextInputContext), currentInputContext];
+            let context = if current.is_null() { "none" } else if current == ours { "gpui" } else { "other" };
+            crate::click_log::note(|| format!("window {} at page {:.0},{:.0} in holes {holes:?} dismiss {dismiss} keys in page {in_page} input context {context}", if kind == LEFT_DOWN { "down" } else { "up" }, local.x, y));
+        }
         if view != 0 && (is_click || is_wheel) && (!rects.is_empty() || dismiss) {
             let view = view as *mut AnyObject;
             let in_window: CGPoint = msg_send![event, locationInWindow];
@@ -160,6 +182,9 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
                 // A click on what GPUI draws there is GPUI's, as a click outside the web view is (#282).
                 if in_hole && matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
                     take_keys(view, gpui, false);
+                }
+                if matches!(kind, LEFT_DOWN | LEFT_UP) {
+                    crate::click_log::note(|| "window routed it to gpui".into());
                 }
                 match kind {
                     LEFT_DOWN => msg_send![gpui, mouseDown: event],
@@ -201,10 +226,21 @@ unsafe fn take_keys(view: *mut AnyObject, gpui: *mut AnyObject, later: bool) {
         if !inside.as_bool() {
             return;
         }
+        // GPUI's view hands each mouse-down to its text input context first (for input
+        // methods). AppKit switches the current context only as an event goes through the
+        // window's own sendEvent, which a click routed through a hole skips, so the page's
+        // stayed current: make GPUI's the current one too.
+        let context: *mut AnyObject = msg_send![gpui, inputContext];
         if later {
             let _: () = msg_send![window, performSelector: sel!(makeFirstResponder:), withObject: gpui, afterDelay: 0.0f64];
+            if !context.is_null() {
+                let _: () = msg_send![context, performSelector: sel!(activate), withObject: std::ptr::null_mut::<AnyObject>(), afterDelay: 0.0f64];
+            }
         } else {
             let _: Bool = msg_send![window, makeFirstResponder: gpui];
+            if !context.is_null() {
+                let _: () = msg_send![context, activate];
+            }
         }
     }
 }
