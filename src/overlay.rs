@@ -157,6 +157,10 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
             let dismiss_click = dismiss && matches!(kind, LEFT_DOWN | RIGHT_DOWN) && in_view;
             if in_hole || dismiss_click {
                 let gpui: *mut AnyObject = msg_send![view, superview];
+                // A click on what GPUI draws there is GPUI's, as a click outside the web view is (#282).
+                if in_hole && matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
+                    take_keys(view, gpui, false);
+                }
                 match kind {
                     LEFT_DOWN => msg_send![gpui, mouseDown: event],
                     LEFT_UP => msg_send![gpui, mouseUp: event],
@@ -170,6 +174,37 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
         }
         if let Some(gpui) = GPUI_SEND_EVENT.get() {
             gpui(window, cmd, event);
+        }
+    }
+}
+
+/// Make GPUI's view the window's first responder if the web view, or a view inside it, is. While
+/// the page holds it, clicks on GPUI's controls over the page were lost on the Mac until a click
+/// landed outside the web view (#282). AppKit does this for a click that reaches GPUI's view
+/// itself; one routed through a hole, or a dialog opened over the page, has to do it here.
+/// `later` makes it on the run loop's next turn, for a caller inside GPUI's paint.
+unsafe fn take_keys(view: *mut AnyObject, gpui: *mut AnyObject, later: bool) {
+    unsafe {
+        let window: *mut AnyObject = msg_send![view, window];
+        if window.is_null() || gpui.is_null() {
+            return;
+        }
+        let responder: *mut AnyObject = msg_send![window, firstResponder];
+        if responder.is_null() || responder == gpui {
+            return;
+        }
+        let is_view: Bool = msg_send![responder, isKindOfClass: class!(NSView)];
+        if !is_view.as_bool() {
+            return;
+        }
+        let inside: Bool = msg_send![responder, isDescendantOf: view];
+        if !inside.as_bool() {
+            return;
+        }
+        if later {
+            let _: () = msg_send![window, performSelector: sel!(makeFirstResponder:), withObject: gpui, afterDelay: 0.0f64];
+        } else {
+            let _: Bool = msg_send![window, makeFirstResponder: gpui];
         }
     }
 }
@@ -329,6 +364,7 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
     use wry::WebViewExtMacOS;
     let view = webview.webview();
     let view = &*view as *const _ as *mut AnyObject as usize;
+    let mut take = false;
     let (rects, second) = {
         let mut holes = HOLES.lock().unwrap();
         let before = holes.rects.clone();
@@ -337,6 +373,10 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
         if holes.rects == before {
             return;
         }
+        // A dialog opened over the page takes the keys from it, so its fields and buttons work
+        // from the first click (#282). A menu, tip or notice leaves them: the user may be typing.
+        let opened = |o: Hole| !before.iter().any(|(b, _)| *b == o) && holes.rects.iter().any(|(r, _)| *r == o);
+        take = opened(Hole::Settings) || opened(Hole::Confirm);
         holes.view = view;
         (with_radii(&holes.rects), holes.second)
     };
@@ -345,6 +385,10 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
         mask(view as *mut AnyObject, &rects);
         if second != 0 {
             mask(second as *mut AnyObject, &rects);
+        }
+        if take {
+            let view = view as *mut AnyObject;
+            take_keys(view, msg_send![view, superview], true);
         }
     }
 }
