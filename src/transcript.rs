@@ -1085,7 +1085,14 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     let show_all = window.use_keyed_state(id("call-all"), cx, |_, _| false);
     let all = *show_all.read(cx);
     let line = theme::chat_px(DETAIL_LINE);
-    let cap = (line * DETAIL_LINES + px(12.)).min(window.viewport_size().height * DETAIL_MAX_SHARE);
+    // The whole box keeps within its share of the window (#191): the output's cap leaves room
+    // for the strip above and the footer below, as near as their rows can be counted before
+    // layout. Never below three lines.
+    let strip_rows: usize = strip.iter().map(|p| if let Part::Fields(rows) = p { rows.len() } else { 1 }).sum();
+    let strip_height = if strip_rows == 0 { px(0.) } else { (line + px(2.)) * strip_rows as f32 + px(13.) };
+    let footer_height = if !copy_text.is_empty() || status.is_some() { line + px(9.) } else { px(0.) };
+    let room = window.viewport_size().height * DETAIL_MAX_SHARE - strip_height - footer_height;
+    let cap = (line * DETAIL_LINES + px(12.)).min(room).max(line * 3. + px(12.));
 
     let strip = (!strip.is_empty()).then(|| {
         div()
