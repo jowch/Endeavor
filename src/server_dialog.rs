@@ -186,22 +186,33 @@ impl Workspace {
             r: (!r.is_empty()).then_some(r),
             idle_stop: dialog.idle_stop,
             cluster,
+            // `save_server` sets it.
+            fresh: false,
         })
     }
 
     fn save_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let server = match self.dialog_server(true, cx) {
+        let mut server = match self.dialog_server(true, cx) {
             Ok(server) => server,
             Err(e) => return self.dialog_error(e, cx),
         };
         let adding = self.server_dialog.as_ref().is_some_and(|d| d.editing.is_none());
         let id = server.id.clone();
+        // Signing in as someone else, or to another machine, makes the folders used there someone
+        // else's: New session starts in the home of whoever signs in next (#48). The folders stay
+        // recent, so the sidebar keeps that server's past sessions.
+        let moved = self.hosts.server(&id).is_some_and(|old| (&old.ssh_host, old.port) != (&server.ssh_host, server.port));
+        server.fresh = self.hosts.server(&id).is_some_and(|old| old.fresh) || moved;
         self.hosts.put(server);
         if let Err(e) = self.hosts.save() {
             return self.dialog_error(e, cx);
         }
         self.close_server_dialog(cx);
         let host = HostId::Server(id);
+        if moved && self.draft.host == host {
+            self.draft.folder = None;
+            self.draft.browser = None;
+        }
         if !adding {
             // A connected server with new connection settings connects with them now.
             self.settings_saved(&host, cx);
