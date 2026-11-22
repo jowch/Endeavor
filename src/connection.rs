@@ -1323,7 +1323,7 @@ impl Workspace {
                 eprintln!("Restart Julia: {e}");
                 self.status = not_restarted(&e).into();
             } else if self.this_mac_was_ready {
-                self.status = if reattached { "Reconnected to Julia." } else { "Julia restarted." }.into();
+                self.status = if reattached { "Reconnected to your notebooks." } else { "Notebooks restarted." }.into();
             } else {
                 self.status = "Ready.".into();
             }
@@ -1694,8 +1694,8 @@ impl Workspace {
                 }
                 if host == HostId::ThisMac && !reopened.is_empty() && !reattached {
                     this.status = match previewed {
-                        0 => format!("Julia restarted; reopened {} notebook(s).", reopened.len()),
-                        n => format!("Julia restarted; reopened {} notebook(s), {n} in safe preview.", reopened.len()),
+                        0 => format!("Notebooks restarted; {} reopened.", reopened.len()),
+                        n => format!("Notebooks restarted; {} reopened, {n} in safe preview.", reopened.len()),
                     }
                     .into();
                 }
@@ -1887,7 +1887,7 @@ impl Workspace {
                     return this.start_host(&host, cx);
                 }
                 if host == HostId::ThisMac {
-                    this.status = concat!("Julia on ", crate::platform::this_computer!(), " is stopped.").into();
+                    this.status = concat!("Notebooks on ", crate::platform::this_computer!(), " are stopped.").into();
                     this.own_julia_after_stop(true, cx);
                     this.own_r_after_stop(true, cx);
                 }
@@ -2793,8 +2793,8 @@ fn not_restarted(why: &str) -> String {
 /// The status line when Stop failed on `host` with `why`.
 fn not_stopped(host: &str, why: &str) -> String {
     match why.strip_prefix("Julia was not stopped: ") {
-        Some(rest) => format!("Julia on {host} was not stopped: {rest}"),
-        None => format!("Couldn't stop Julia on {host}: {why}"),
+        Some(rest) => format!("Notebooks on {host} were not stopped: {rest}"),
+        None => format!("Couldn't stop notebooks on {host}: {why}"),
     }
 }
 
@@ -3118,8 +3118,8 @@ mod tests {
             not_restarted("Endeavor's helper didn't answer in 60 s, so Julia may not have stopped."),
             "Julia didn't restart, so Endeavor is still using the Julia that was running. Endeavor's helper didn't answer in 60 s, so Julia may not have stopped."
         );
-        assert_eq!(not_stopped("lab", "Julia was not stopped: it is still running."), "Julia on lab was not stopped: it is still running.");
-        assert_eq!(not_stopped("lab", "The connection to Endeavor's helper closed."), "Couldn't stop Julia on lab: The connection to Endeavor's helper closed.");
+        assert_eq!(not_stopped("lab", "Julia was not stopped: it is still running."), "Notebooks on lab were not stopped: it is still running.");
+        assert_eq!(not_stopped("lab", "The connection to Endeavor's helper closed."), "Couldn't stop notebooks on lab: The connection to Endeavor's helper closed.");
     }
     use std::time::{Duration, Instant};
 

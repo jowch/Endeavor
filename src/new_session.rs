@@ -796,11 +796,11 @@ impl Workspace {
             .children(rows)
     }
 
-    /// The connection notice's text ("Julia on lab-cluster stopped. …"), and why it stopped.
+    /// The connection notice's text ("Notebooks on lab-cluster stopped. …"), and why it stopped.
     pub fn connection_notice_text(&self) -> Option<(String, String)> {
         let name = self.hosts.name(&self.draft.host);
         match self.status(&self.draft.host)? {
-            Status::Died(reason) if !reason.is_empty() => Some((format!("Julia on {name} stopped. {reason}"), reason.clone())),
+            Status::Died(reason) if !reason.is_empty() => Some((format!("Notebooks on {name} stopped. {reason}"), reason.clone())),
             _ => None,
         }
     }
