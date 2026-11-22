@@ -1096,6 +1096,15 @@ impl Workspace {
             return cx.notify();
         }
         let place = Place { host: host.clone(), path: folder.clone() };
+        // A folder picked under the new sign-in: the server's recent folders are its own again.
+        if let HostId::Server(id) = &host
+            && let Some(server) = self.hosts.servers.iter_mut().find(|s| s.id == *id && s.fresh)
+        {
+            server.fresh = false;
+            if let Err(e) = self.hosts.save() {
+                eprintln!("{e}");
+            }
+        }
         let server = match &host {
             HostId::ThisMac => None,
             HostId::Server(_) => Some(self.hosts.name(&host)),
@@ -1292,7 +1301,7 @@ impl Workspace {
     fn keep_transcript(&self, key: u64) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         if let Some(id) = session.id.as_ref().filter(|_| !session.opening() && session.failed.is_none()) {
-            transcript_copy::save(&id.to_string(), &session.entries, &session.restored_cards());
+            transcript_copy::save(&id.to_string(), &session.entries, &session.restored_cards(), &session.restored);
         }
     }
 
@@ -1751,6 +1760,10 @@ impl Workspace {
             session.notebook = Some(id.clone());
             edits = std::mem::take(&mut session.user_edits);
             restored = std::mem::take(&mut session.restored);
+        }
+        // The copy keeps restores the agent hasn't heard of; now it has, so a reopen doesn't tell it twice.
+        if let Some(key) = self.active.filter(|_| !restored.is_empty()) {
+            self.keep_transcript(key);
         }
         let mut text = format!(
             "[Endeavor] The user is viewing notebook {id} in the notebook pane. \
