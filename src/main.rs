@@ -3063,7 +3063,25 @@ impl Render for Workspace {
                         .inset_0()
                         .occlude()
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx)))
-                        .on_mouse_down(MouseButton::Right, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx))),
+                        .on_mouse_down(MouseButton::Right, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx)))
+                        // Spike, Linux: a press on the page reaches GPUI only in the capture
+                        // phase (gpui-webview forwards it; GPUI Fast doesn't bubble it).
+                        .children(cfg!(target_os = "linux").then(|| {
+                            let this = cx.entity().downgrade();
+                            canvas(|_, _, _| (), move |_, _, window, _| {
+                                let this = this.clone();
+                                window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
+                                    #[cfg(target_os = "linux")]
+                                    if phase.capture() && linux::take_page_pressed() {
+                                        let _ = this.update(cx, |this, cx| this.close_dismissible(window, cx));
+                                    }
+                                    #[cfg(not(target_os = "linux"))]
+                                    let _ = (phase, window, cx, &this);
+                                });
+                            })
+                            .absolute()
+                            .size_full()
+                        })),
                 )
             })
             .into_any_element()

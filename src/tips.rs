@@ -186,10 +186,10 @@ impl Workspace {
         .top_0()
         .left_0()
         .size_full();
-        div()
+        // Spike: deferred, so GPUI Fast's composition draws it above the page.
+        div().absolute().top(relative(1.)).right(px(-trailing)).child(crate::layer::place(crate::layer::Layer::Notice, div()
             .absolute()
-            .top(relative(1.))
-            .right(px(-trailing))
+            .top_0()
             .pt(px(6.))
             .w(px(WIDTH))
             .child(
@@ -219,6 +219,7 @@ impl Workspace {
                     .child(div().absolute().right(px(trailing + 26. - ARROW)).top(px(1. - ARROW)).child(arrow(false)))
                     .child(cut),
             )
+            .right_0()))
             .into_any_element()
     }
 }

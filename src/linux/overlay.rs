@@ -111,6 +111,9 @@ fn update(webview: Option<&wry::WebView>, change: impl FnOnce(&mut Holes) -> boo
 /// A menu or popover open anywhere in the window, so a click on the web view
 /// should reach GPUI even outside any hole (`Workspace::dismissible_open`).
 pub fn set_dismiss_on_click(webview: &wry::WebView, active: bool) {
+    // Spike: under GPUI Fast the web view sits in a composition surface window, which
+    // swallows clicks let through wry's window; gpui-webview forwards page clicks instead.
+    let active = active && !crate::layer::no_holes();
     update(Some(webview), |holes| std::mem::replace(&mut holes.dismiss, active) != active);
 }
 

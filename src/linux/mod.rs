@@ -88,9 +88,23 @@ pub fn web_view_hooks() -> impl IntoElement {
 
 /// A click in the web view gives it the keyboard: WebKit's own X window, as
 /// wry's container window around it doesn't take keys.
+thread_local! {
+    /// Spike: the page was just pressed. gpui-webview hands the press on to GPUI next,
+    /// and the dismiss backdrop's capture listener takes this to tell it from a press on
+    /// a menu (GPUI Fast doesn't bubble a press over the page to GPUI's handlers).
+    static PAGE_PRESSED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the press GPUI is handling came from the page (see PAGE_PRESSED).
+pub fn take_page_pressed() -> bool {
+    PAGE_PRESSED.with(|p| p.take()).is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(500))
+}
+
 fn focus_on_click(webview: &wry::WebView) {
     use wry::WebViewExtUnix;
-    webview.webview().connect_button_press_event(move |view, _| {
+    webview.webview().connect_button_press_event(move |view, e| {
+        let _ = e;
+        PAGE_PRESSED.with(|p| p.set(Some(std::time::Instant::now())));
         focus_web(view);
         Propagation::Proceed
     });
