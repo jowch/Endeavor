@@ -66,11 +66,17 @@ pub fn place(layer: Layer, element: impl IntoElement) -> Deferred {
     deferred(element).with_priority(layer.priority())
 }
 
+/// Spike: ENDEAVOR_TEST_NO_HOLES (debug builds) cuts no holes, to see whether GPUI
+/// Fast's window composition draws floating things above the web view by itself.
+pub fn no_holes() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("ENDEAVOR_TEST_NO_HOLES").is_some()
+}
+
 /// `body` with a hole cut for it in the notebook's web view, while `webview`
 /// is given (pass it only while the web view shows). The hole is pinned to
 /// the corner of a plain box around `body`: drawn inside `body`, it would
 /// start inside its border and padding, and the web view would cover its edge.
-pub fn cut(body: impl IntoElement, hole: Hole, webview: Option<&gpui_wry::WebView>) -> Div {
+pub fn cut(body: impl IntoElement, hole: Hole, webview: Option<&gpui_webview::WebView>) -> Div {
     let canvas = webview.map(|webview| {
         let (handle, under) = (webview.handle(), webview.bounds());
         canvas(move |bounds, _, _| overlay::set_hole(handle.raw(), hole, Some(Bounds { origin: bounds.origin - under.origin, size: bounds.size })), |_, _, _, _| ())

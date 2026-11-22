@@ -433,6 +433,7 @@ pub fn set_dimmed(webview: &wry::WebView, dimmed: bool) {
 /// Cut `owner`'s hole in the web view at `hole` (relative to the web view's
 /// top-left corner), or close it with None. Other holes stay.
 pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>>) {
+    let hole = if crate::layer::no_holes() { None } else { hole };
     use wry::WebViewExtMacOS;
     let view = webview.webview();
     let view = &*view as *const _ as *mut AnyObject as usize;

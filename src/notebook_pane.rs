@@ -412,7 +412,7 @@ static TOOLTIP_DRAWN: AtomicBool = AtomicBool::new(false);
 /// close when the tooltip's view goes: GPUI hides a tooltip while drawing a
 /// frame and keeps its view until it draws the next one, which may be much later.
 /// The root view draws this in every frame, after every tooltip is laid out.
-pub fn tooltip_hole_keeper(webview: &Entity<gpui_wry::WebView>) -> impl IntoElement {
+pub fn tooltip_hole_keeper(webview: &Entity<gpui_webview::WebView>) -> impl IntoElement {
     let webview = webview.clone();
     canvas(
         |_, _, _| (),
@@ -430,10 +430,10 @@ pub fn tooltip_hole_keeper(webview: &Entity<gpui_wry::WebView>) -> impl IntoElem
 /// native view on top of what GPUI draws) gets a hole there, as for menus.
 struct PaneTooltip {
     text: SharedString,
-    webview: Entity<gpui_wry::WebView>,
+    webview: Entity<gpui_webview::WebView>,
 }
 
-pub fn tooltip(text: impl Into<SharedString>, webview: &Entity<gpui_wry::WebView>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+pub fn tooltip(text: impl Into<SharedString>, webview: &Entity<gpui_webview::WebView>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text = text.into();
     let webview = webview.clone();
     move |_, cx| cx.new(|_| PaneTooltip { text: text.clone(), webview: webview.clone() }).into()

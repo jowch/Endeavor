@@ -5,16 +5,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.11" }
+# GPUI Fast (Longbridge's fork of Zed's GPUI): its window composition draws GPUI's
+# overlays above the notebook's native web view on macOS and Linux (spike).
+gpui = { package = "gpui-fast", version = "=0.1.13" }
 # runtime_shaders: compile Metal shaders at launch so builds don't need full Xcode.
 # font-kit: without it the macOS backend uses a no-op text system (no text renders).
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["runtime_shaders", "font-kit"] }
-# Vendored so its GPUI pin moves with ours (vendor/gpui-wry/README.md).
-gpui-wry = { path = "vendor/gpui-wry" }
+gpui_platform = { package = "gpui-fast-platform", version = "=0.1.13", features = ["runtime_shaders", "font-kit"] }
+# gpui-wry's successor. Its gpui-fast feature must agree with gpui-kit's, which picks the backend.
+gpui-webview = { version = "=0.9.0", features = ["gpui-fast"] }
+gpui-kit = { version = "=0.9.0", default-features = false, features = ["gpui-fast"] }
 wry = { package = "lb-wry", version = "0.53.3" }
 raw-window-handle = "0.6"
-gpui-component = "=0.9.0"
-gpui-base = "=0.9.0"
+gpui-component = { version = "=0.9.0", features = ["gpui-fast"] }
+gpui-base = { version = "=0.9.0", features = ["gpui-fast"] }
 agent-client-protocol = { version = "=2.2.0", features = ["unstable_session_fork", "unstable_session_notices"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -61,7 +64,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # wry embeds the notebook webview as an X11 child window, so the app runs on X11 (or XWayland).
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["x11"] }
+gpui_platform = { package = "gpui-fast-platform", version = "=0.1.13", features = ["x11"] }
 # The same GTK wry's web view uses: started by the app, its events run from GPUI's loop (src/linux/gtk_loop.rs).
 gtk = "0.18"
 # GDK's Xlib display, for X input focus and the web view's shape (src/linux/).

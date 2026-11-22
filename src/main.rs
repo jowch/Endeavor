@@ -114,7 +114,7 @@ use gpui::*;
 use gpui_component::input::{InputEvent, InputState, TextareaState};
 
 use gpui_component::{Root, Theme, ThemeConfig, ThemeMode};
-use gpui_wry::WebView;
+use gpui_webview::WebView;
 use hosts::{HostId, Place};
 use outbox::Queued;
 use new_session::{Draft, NotebookChoice};
@@ -681,7 +681,14 @@ impl Workspace {
             // F5, Ctrl+P and the like would act on Pluto's page, not the app.
             #[cfg(windows)]
             let builder = wry::WebViewBuilderExtWindows::with_browser_accelerator_keys(builder, false);
-            #[cfg(not(windows))]
+            // Linux: gpui-webview builds the page inside a GPUI Fast composition surface
+            // (an X11 child window GPUI stacks and cuts its overlays out of), so it has to
+            // build it. macOS registers the surface in WebView::new.
+            #[cfg(target_os = "linux")]
+            let built = { drop(handle); WebView::build(builder, window, cx).expect("child webview") };
+            #[cfg(target_os = "linux")]
+            let webview = built.raw();
+            #[cfg(target_os = "macos")]
             let webview = builder.build_as_child(&handle).expect("child webview");
             #[cfg(windows)]
             let webview = builder.build_as_child(&handle).unwrap_or_else(|e| platform::no_web_view(&e));
@@ -698,6 +705,9 @@ impl Workspace {
             webcontent::attach(&webview, window, cx);
             dialogs::show_page_dialogs(&webview);
             webcontent::on_process_ended(&webview, move || drop(ended_tx.unbounded_send(())));
+            #[cfg(target_os = "linux")]
+            return built;
+            #[cfg(not(target_os = "linux"))]
             WebView::new(webview, window, cx)
         });
 
