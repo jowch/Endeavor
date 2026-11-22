@@ -527,6 +527,14 @@ impl Workspace {
     }
 }
 
+/// An app menu item that opens something which takes the keyboard (Settings, About, the find
+/// bar, Point, a new session), or quits: after it, the keyboard doesn't go back to the notebook.
+fn takes_keyboard(action: &dyn gpui::Action) -> bool {
+    use crate::{FindSetting, NewSession, OpenSettings, Quit, ShowAbout, ToggleAnnotation};
+    let any = action.as_any();
+    any.is::<OpenSettings>() || any.is::<ShowAbout>() || any.is::<FindSetting>() || any.is::<ToggleAnnotation>() || any.is::<NewSession>() || any.is::<Quit>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MenuPick, MenuTarget, NotebookAction};
@@ -559,12 +567,4 @@ mod tests {
         assert!(MenuTarget::Row(Row::Open(3)).session_row() == Some((Row::Open(3), false)));
         assert!(MenuTarget::Notebook(3).session_row().is_none());
     }
-}
-
-/// An app menu item that opens something which takes the keyboard (Settings, About, the find
-/// bar, Point, a new session), or quits: after it, the keyboard doesn't go back to the notebook.
-fn takes_keyboard(action: &dyn gpui::Action) -> bool {
-    use crate::{FindSetting, NewSession, OpenSettings, Quit, ShowAbout, ToggleAnnotation};
-    let any = action.as_any();
-    any.is::<OpenSettings>() || any.is::<ShowAbout>() || any.is::<FindSetting>() || any.is::<ToggleAnnotation>() || any.is::<NewSession>() || any.is::<Quit>()
 }
