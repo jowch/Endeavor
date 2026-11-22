@@ -459,6 +459,8 @@ pub struct Asking {
     /// A new package whose name is close to a widely used one's, and that one (`pandsa`, `pandas`):
     /// a likely typo, which the card says (EndeavorMCP #417).
     pub close_to: Vec<(String, String)>,
+    /// What the download comes to, in bytes, if the runtime knows (R's large packages, #171).
+    pub bytes: Option<u64>,
 }
 
 /// The notebook `id`'s `Asking` in a `list_notebooks` result, if its packages wait for an OK.
@@ -473,7 +475,7 @@ pub fn install_asking(listed: &Value, id: &str) -> Option<Asking> {
     let listed = || packages["download"]["packages"].as_array().into_iter().flatten();
     let names = listed().filter_map(|p| p["package"].as_str().map(str::to_owned)).collect();
     let close_to = listed().filter_map(|p| Some((p["package"].as_str()?.to_owned(), p["close_to"].as_str()?.to_owned()))).collect();
-    Some(Asking { new: packages["new"] == true, packages: names, close_to })
+    Some(Asking { new: packages["new"] == true, packages: names, close_to, bytes: packages["download"]["bytes"].as_f64().filter(|b| *b > 0.0).map(|b| b as u64) })
 }
 
 /// What a run would run, for the approval card (the runtime's `run_preview`).
@@ -498,6 +500,9 @@ pub struct RunPreview {
     /// `list_notebooks` (`install_asking`), not from the runtime's `run_preview`.
     #[serde(skip)]
     pub asking: Option<Asking>,
+    /// For `answer_prompt`: what the cell asks, from `read_cell`'s `waiting_for_input` (#171).
+    #[serde(skip)]
+    pub question: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -509,10 +514,20 @@ pub struct PreviewCell {
     pub code: String,
 }
 
+/// The question a cell waits on, from its `read_cell`: what `readline()` printed, trimmed.
+pub fn prompt_question(read: &Value) -> Option<String> {
+    let text = read["waiting_for_input"]["prompt"].as_str()?.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 pub fn run_preview(bridge: &Bridge, tool: &str, arguments: &Value) -> Result<RunPreview, String> {
     if tool == "approve_install" {
         let listed = call_tool(bridge, "list_notebooks", json!({}))?;
         return Ok(RunPreview { asking: install_asking(&listed, arguments["notebook_id"].as_str().unwrap_or("")), ..Default::default() });
+    }
+    if tool == "answer_prompt" {
+        let read = call_tool(bridge, "read_cell", json!({ "notebook_id": arguments["notebook_id"], "cell_id": arguments["cell_id"] }))?;
+        return Ok(RunPreview { question: prompt_question(&read), ..Default::default() });
     }
     let reply = rpc(bridge, "endeavor/run_preview", json!({ "tool": tool, "arguments": arguments }))?;
     if let Some(error) = reply.get("error") {
@@ -705,8 +720,10 @@ mod tests {
             { "notebook_id": "cccc-3", "packages": { "step": "installing", "packages": ["DataFrames"] } },
             { "notebook_id": "dddd-4", "packages": null },
         ]);
-        assert_eq!(super::install_asking(&listed, "aaaa-1"), Some(super::Asking { new: true, packages: vec!["Makie".into(), "WGLMakie".into()], close_to: vec![("WGLMakie".into(), "GLMakie".into())] }), "ids match whatever their case");
-        assert_eq!(super::install_asking(&listed, "bbbb-2"), Some(super::Asking { new: false, packages: vec!["GO.db".into()], close_to: vec![] }));
+        assert_eq!(super::install_asking(&listed, "aaaa-1"), Some(super::Asking { new: true, packages: vec!["Makie".into(), "WGLMakie".into()], close_to: vec![("WGLMakie".into(), "GLMakie".into())], bytes: None }), "ids match whatever their case");
+        assert_eq!(super::install_asking(&listed, "bbbb-2"), Some(super::Asking { new: false, packages: vec!["GO.db".into()], close_to: vec![], bytes: Some(500_000_000) }));
+        assert_eq!(super::prompt_question(&serde_json::json!({ "waiting_for_input": { "prompt": "Name? " } })).as_deref(), Some("Name?"));
+        assert_eq!(super::prompt_question(&serde_json::json!({ "waiting_for_input": { "prompt": "" } })), None, "readline() with no prompt asks nothing");
         assert_eq!(super::install_asking(&listed, "cccc-3"), None, "installing isn't asking");
         assert_eq!(super::install_asking(&listed, "dddd-4"), None);
         assert_eq!(super::install_asking(&listed, "eeee-5"), None);

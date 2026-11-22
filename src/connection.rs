@@ -2145,9 +2145,8 @@ impl Workspace {
             connection.r_failed = None;
             connection.bridge()
         });
-        let waiting = self.active_session().filter(|s| s.place.host == *host && s.notebook.is_none() && s.stopped.is_none() && !s.missing);
         // Its notebook opens again, or with none yet (the pane's New notebook), it's made again.
-        let Some(again) = waiting.map(|s| (s.key, s.notebook_path.clone())) else { return cx.notify() };
+        let Some(again) = self.r_retry_target(host) else { return cx.notify() };
         match bridge.filter(|_| install) {
             Some(bridge) => {
                 let allowed = cx.background_executor().spawn(async move { pluto::allow_r_install(&bridge) });
@@ -2164,6 +2163,13 @@ impl Workspace {
             None => self.open_again(again, cx),
         }
         cx.notify();
+    }
+
+    /// The session shown, when it waits on `host` for a notebook: what the R failure pane's
+    /// buttons open again. The pane shows only over such a session (`pane_shows`, #128).
+    fn r_retry_target(&self, host: &HostId) -> Option<(u64, Option<String>)> {
+        let waiting = self.active_session().filter(|s| s.place.host == *host && waits_for_notebook(s));
+        waiting.map(|s| (s.key, s.notebook_path.clone()))
     }
 
     fn open_again(&mut self, (key, path): (u64, Option<String>), cx: &mut Context<Self>) {
@@ -2595,6 +2601,13 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
         (Phase::Idle | Phase::Gone(_) | Phase::Failed(_), Phase::Idle | Phase::Gone(_)) | (Phase::Failed(_), Phase::Failed(_)) | (Phase::Starting, Phase::Starting) => {}
     }
     out
+}
+
+/// Session `s` waits for its notebook: none open yet, and not stopped or gone. An R failure
+/// shows only over such a session, whose open (or new notebook) its Try again repeats; any
+/// other R session shows its own pane, since nothing clears the failure until R starts again.
+pub fn waits_for_notebook(s: &crate::session::Session) -> bool {
+    s.notebook.is_none() && s.stopped.is_none() && !s.missing
 }
 
 /// The helper's hello, as the app's connections keep it.

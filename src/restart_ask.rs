@@ -187,11 +187,24 @@ impl Workspace {
 
     /// The Restart beside the older-runtime note: the same dialog as the notebook pane's.
     pub fn confirm_restart(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
+        let body = self.restart_body(host);
+        self.restart_dialog(host, body, window, cx);
+    }
+
+    fn restart_dialog(&mut self, host: &HostId, body: String, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.hosts.name(host);
         let on = if *host == HostId::ThisMac { String::new() } else { format!(" on {name}") };
         let host = host.clone();
-        let body = self.restart_body(&host);
         self.open_confirm(format!("Restart Julia{on}?"), body, "Restart", window, cx, move |this, _, cx| this.restart_host(&host, cx));
+    }
+
+    /// A notice's Restart Julia, after the Julia `host`'s runtime runs on was removed (#230).
+    pub fn confirm_restart_julia(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
+        let mut body = stops_text(&self.connection(host).map(|c| c.notebooks.clone()).unwrap_or_default());
+        if let Some(lost) = self.unrun_edit_warning(host) {
+            body = format!("{body}\n\n{lost}");
+        }
+        self.restart_dialog(host, body, window, cx);
     }
 
     /// A restart dialog's text for `host`'s runtime that an older Endeavor started.
