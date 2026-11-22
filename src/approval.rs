@@ -296,8 +296,13 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
 
 /// "About 1.3 GB to download." (or MB), for the download card's muted line.
 fn download_size(bytes: u64) -> String {
-    let b = bytes as f64;
-    if b >= 1e9 { format!("About {:.1} GB to download.", b / 1e9) } else { format!("About {} MB to download.", (b / 1e6).ceil().max(1.0) as u64) }
+    let mb = (bytes as f64 / 1e6).ceil().max(1.0);
+    if mb < 950.0 {
+        return format!("About {mb} MB to download.");
+    }
+    // 999 MB reads "About 1 GB", not "1000 MB" or "1.0 GB".
+    let gb = format!("{:.1}", mb / 1e3);
+    format!("About {} GB to download.", gb.strip_suffix(".0").unwrap_or(&gb))
 }
 
 /// A prompt's question, the word on its ⏎ button, and its body.
@@ -332,7 +337,12 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
                 lines.push((format!("The cell asks: {}", cut_line(asked, 80)), Tone::Secondary));
             }
             let text = input["text"].as_str().unwrap_or("");
-            CardCode::Plain(if text.is_empty() { "(Enter)".to_owned() } else { text.to_owned() })
+            // Only spaces would show as nothing: say how many.
+            CardCode::Plain(match text.chars().count() {
+                0 => "(Enter)".to_owned(),
+                n if text.chars().all(|c| c == ' ') => format!("({n} space{})", if n == 1 { "" } else { "s" }),
+                _ => text.to_owned(),
+            })
         });
         let what = match preview.and_then(|p| p.asking.as_ref()).and_then(|a| a.bytes).filter(|_| tool == "approve_install") {
             Some(bytes) => format!("{} {what}", download_size(bytes)),
@@ -1267,11 +1277,16 @@ mod tests {
         let enter = super::run_prompt(&s, "answer_prompt", &json!({ "notebook_id": "n", "cell_id": "a", "text": "" }), None);
         assert_eq!(enter.code, Some(super::CardCode::Plain("(Enter)".into())), "an empty answer is a press of Enter");
         assert_eq!(enter.lines.len(), 1, "no question line until the cell's question is known");
+        let spaces = super::run_prompt(&s, "answer_prompt", &json!({ "notebook_id": "n", "cell_id": "a", "text": "   " }), None);
+        assert_eq!(spaces.code, Some(super::CardCode::Plain("(3 spaces)".into())));
 
         let big = |bytes| RunPreview { asking: Some(Asking { new: false, packages: vec!["GO.db".into()], close_to: vec![], bytes }), ..Default::default() };
         let download = |bytes| super::run_prompt(&s, "approve_install", &json!({ "notebook_id": "n" }), Some(&big(bytes))).lines[0].0.clone();
         assert_eq!(download(Some(1_270_000_000)), "About 1.3 GB to download. The packages download and install, then the cells waiting on them run.");
         assert_eq!(download(Some(11_385_380)), "About 12 MB to download. The packages download and install, then the cells waiting on them run.");
+        assert_eq!(download(Some(999_000_000)), "About 1 GB to download. The packages download and install, then the cells waiting on them run.");
+        assert_eq!(download(Some(900_000_000)), "About 900 MB to download. The packages download and install, then the cells waiting on them run.");
+        assert_eq!(download(Some(2_000_000_000)), "About 2 GB to download. The packages download and install, then the cells waiting on them run.");
         assert_eq!(download(None), "The packages download and install, then the cells waiting on them run.");
 
         let long = "a".repeat(200);
