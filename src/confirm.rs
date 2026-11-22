@@ -27,7 +27,7 @@ pub struct Confirm {
 
 impl Workspace {
     /// Ask before an action a macOS alert used to gate. `title` names what's
-    /// affected ("Stop Julia on lab-server?"), `body` is one or two lines
+    /// affected ("Stop notebooks on lab-server?"), `body` is one or two lines
     /// saying what closes and what stays, `action_label` is the primary
     /// button; Cancel is always the other. Confirming runs `on_confirm` and
     /// closes the dialog; Esc, Cancel or a click outside just closes it.
