@@ -87,8 +87,11 @@ pub fn web_view_hooks() -> impl IntoElement {
     .absolute()
 }
 
-/// The page's right-click menu without "Open … in New Window": the app opens
-/// no second window, so those items did nothing (#151).
+/// The page's right-click menu without "Open Image (Video, Audio, Frame) in New
+/// Window": the app opens no second window, and what they open (a figure's
+/// data: or blob: URL) can't go to the browser, so they did nothing (#151).
+/// "Open Link in New Window" stays: the new-window handler sends a web link to
+/// the browser.
 fn no_new_windows(webview: &wry::WebView) {
     use webkit2gtk::{ContextMenuAction, ContextMenuExt, ContextMenuItemExt, WebViewExt};
     use wry::WebViewExtUnix;
@@ -96,8 +99,7 @@ fn no_new_windows(webview: &wry::WebView) {
         for item in menu.items() {
             if matches!(
                 item.stock_action(),
-                ContextMenuAction::OpenLinkInNewWindow
-                    | ContextMenuAction::OpenImageInNewWindow
+                ContextMenuAction::OpenImageInNewWindow
                     | ContextMenuAction::OpenFrameInNewWindow
                     | ContextMenuAction::OpenVideoInNewWindow
                     | ContextMenuAction::OpenAudioInNewWindow

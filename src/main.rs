@@ -649,6 +649,7 @@ impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (page_tx, mut page_rx) = futures::channel::mpsc::unbounded::<String>();
         let (ended_tx, mut ended_rx) = futures::channel::mpsc::unbounded::<()>();
+        let (new_window_tx, mut new_window_rx) = futures::channel::mpsc::unbounded::<String>();
         #[cfg(not(windows))]
         let (image_asks, mut image_ask_rx) = futures::channel::mpsc::unbounded::<save_image::Ask>();
         let webview = cx.new(|cx| {
@@ -675,6 +676,15 @@ impl Workspace {
                 })
                 .with_ipc_handler(move |request| {
                     let _ = page_tx.unbounded_send(request.into_body());
+                })
+                // The app opens no second window. A web link the page would open in one ("Open
+                // Link in New Window", a link with target="_blank") opens in the browser instead;
+                // anything else (a figure's data: or blob: URL) has nowhere to go (#151).
+                .with_new_window_req_handler(move |url, _| {
+                    if outside_link(&url) {
+                        let _ = new_window_tx.unbounded_send(url);
+                    }
+                    wry::NewWindowResponse::Deny
                 });
             #[cfg(target_os = "linux")]
             let builder = builder.with_download_started_handler(save_image::started(image_asks.clone()));
@@ -729,6 +739,13 @@ impl Workspace {
                 if this.update(cx, |this, cx| this.restart_asked(ask, cx)).is_err() {
                     break;
                 }
+            }
+        })
+        .detach();
+
+        cx.spawn(async move |_, cx| {
+            while let Some(url) = new_window_rx.next().await {
+                cx.update(|cx| platform::open_url(&url, cx));
             }
         })
         .detach();
@@ -3344,8 +3361,38 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
     light
 }
 
+/// A link the browser can open: http, https or mailto. Not the notebook's own
+/// loopback page, nor a figure's data: or blob: URL.
+fn outside_link(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once(':') else { return false };
+    match scheme.to_ascii_lowercase().as_str() {
+        "mailto" => true,
+        "http" | "https" => {
+            let host = rest.trim_start_matches('/').split(['/', '?', '#']).next().unwrap_or("");
+            let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+            let host = if host.starts_with('[') { host.split(']').next().unwrap_or("").trim_start_matches('[') } else { host.split(':').next().unwrap_or("") };
+            !host.is_empty() && !matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_web_links_leave_for_the_browser() {
+        assert!(super::outside_link("https://julialang.org/learning/"));
+        assert!(super::outside_link("http://example.com"));
+        assert!(super::outside_link("mailto:someone@example.com"));
+        assert!(!super::outside_link("http://127.0.0.1:1234/edit?id=x"), "the notebook's own page stays");
+        assert!(!super::outside_link("http://localhost:1234/"));
+        assert!(!super::outside_link("http://[::1]:1234/"));
+        assert!(!super::outside_link("data:image/png;base64,iVBOR"));
+        assert!(!super::outside_link("blob:http://127.0.0.1:1234/3f2a"));
+        assert!(!super::outside_link("file:///etc/passwd"));
+        assert!(!super::outside_link("javascript:alert(1)"));
+    }
     use super::{load_json_at, save_json_at, viewed_notebook, viewed_notebook_id, write_atomic};
     use wire::backend::Backend;
     use std::collections::HashMap;
