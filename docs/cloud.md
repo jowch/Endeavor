@@ -113,13 +113,14 @@ env $UNSET HOME=$E/home DISPLAY=:99 \
   ENDEAVOR_TEST_AGENT=$PWD/scripts/test-agent.js ENDEAVOR_CLAUDE_CLI=$E/claude.sh \
   ENDEAVOR_TEST_ACTION=$E/action ENDEAVOR_STATE_REQUEST=$E/state.request ENDEAVOR_STATE_OUT=$E/state.json \
   target/debug/endeavor > $E/app.log 2>&1 &
-sleep 10; pgrep -f test-agent.js || echo "NO STAND-IN: don't send open"
+sleep 10      # the app starts the agent at launch
+pgrep -f test-agent.js >/dev/null || { echo "No stand-in agent: stopping before open"; exit 1; }
 echo "open $E/nb/plot.jl" > $E/action     # a session on the notebook, in safe preview
 echo run > $E/action                      # Run notebook
 ```
 
-Check that `test-agent.js` is running before the first `open`, since `open`
-sends a message. The proxy and certificate variables stay, so Julia can still
+The `pgrep` line stops the script before the first `open` if `test-agent.js`
+isn't running, since `open` sends a message. The proxy and certificate variables stay, so Julia can still
 install Pluto.
 The first start in a scratch HOME installs Pluto into its depot, which takes a
 few minutes. `open` sends the session's first message, which the stand-in
@@ -138,10 +139,19 @@ Real turns are allowed when the check needs one. Keep to these guardrails:
   signs the turn in either way. A scratch HOME has no MCP servers of its own,
   but Claude Code syncs the account's skills, settings and connectors into it
   on its first start. Start the app with `ENABLE_CLAUDEAI_MCP_SERVERS=false`
-  to keep the account's connectors out, and check the first turn's tool list
-  in the scratch HOME's transcript (`~/.claude/projects`): only
-  `mcp__notebook__*` and Claude Code's own tools.
-- Approve only the cards the check needs, and deny the rest.
+  to keep the account's connectors out. Check before any turn, with commands
+  that never call the model, in the environment the app gets:
+
+  ```sh
+  env $UNSET HOME=$E/home ENABLE_CLAUDEAI_MCP_SERVERS=false claude mcp list   # no servers: Endeavor's comes with the session
+  ls $E/home/.claude/skills $E/home/.claude/plugins 2>/dev/null              # nothing synced yet
+  ```
+
+  After the first turn, look again in the scratch HOME's transcript
+  (`~/.claude/projects`): only `mcp__notebook__*` and Claude Code's own
+  tools. If anything else shows up, stop there.
+- Keep the session in Manual mode, never Auto: Auto shows no card for the
+  agent's own runs. Approve only the cards the check needs, and deny the rest.
 - Delete the scratch HOME's `.claude` and `.claude.json` afterwards: they
   hold the session's keys.
 
