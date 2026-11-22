@@ -775,6 +775,8 @@ impl Workspace {
                 .placeholder("Type / for commands")
                 .submit_on_enter(true)
                 .auto_grow(1, 10)
+                // gpui-base 0.9 bounces a long draft at its ends on macOS; the chat stays still meanwhile.
+                .scroll_bounce(false)
         });
         composer::subscribe(&input, window, cx);
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {

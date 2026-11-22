@@ -87,11 +87,12 @@ pub fn render_transcript(session: &Session, margin: Pixels, window: &Window, cx:
 /// of the transcript: "3 new messages ↓" after a replay added some below,
 /// else "Jump to latest ↓". It scrolls to the end, which follows again.
 pub fn render_jump(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
-    if session.below.get().is_some() && session.reached_end.take() {
+    let at_end = session.list.is_scrolled_to_end();
+    if session.below.get().is_some() && crate::transcript_copy::clears_below(session.reached_end.take(), session.list.is_following_tail(), at_end) {
         session.below.set(None);
         session.list.set_follow_mode(FollowMode::Tail);
     }
-    let label = crate::transcript_copy::pill(session.following(), session.list.is_scrolled_to_end(), session.below.get())?;
+    let label = crate::transcript_copy::pill(session.following(), at_end, session.below.get())?;
     let key = session.key;
     Some(
         div()
@@ -488,6 +489,7 @@ fn markdown(state: &Entity<TextViewState>, chat_width: f32, cx: &mut Context<Wor
     let width = (chat_width - 2. * crate::chat_margin(chat_width)).min(crate::CHAT_CONTENT_MAX) - 20.;
     TextView::new(state)
         .style(markdown_style())
+        .inline_code_style(inline_code_style())
         .on_link_click(link)
         .plugin(cell_links)
         .code_block_actions(|block, _, _| copy_button("copy".into(), block.code().to_string(), "Copy code"))
@@ -651,6 +653,12 @@ pub(crate) fn markdown_style() -> TextViewStyle {
         .table_head(table_head)
         .table_cell(table_cell)
         .inline_code(HighlightStyle { background_color: Some(theme::bg_tag().into()), ..Default::default() })
+}
+
+/// Inline code's background hugs its text, as before gpui-base 0.9 padded it by 4 px a side:
+/// the padding put a gap before the punctuation after a span ("`84` ." for "`84`.").
+pub(crate) fn inline_code_style() -> StyleRefinement {
+    StyleRefinement::default().px(px(0.))
 }
 
 /// A thought's text scrolls past this height.
