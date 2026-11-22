@@ -510,8 +510,12 @@ applied over ACP). Three Codex turns and one Claude turn.
   session folder and runs sandboxed commands without asking; Manual asks
   only before notebook edits and runs. `read-only` would make it ask, at
   the cost of a prompt for every shell write.
-- **Codex's usage limit errors** haven't been seen, so whether they are
-  recognised is unknown. A usage limit is kept per agent: Claude's holds
+- **Codex's usage limit errors** haven't been seen. A message that starts
+  "You've hit your" or says "usage limit reached" counts as a limit, and its
+  reset is read from "try again at 3:45 PM", "try again at Sep 9th, 2026
+  3:45 PM" or "try again in 4 days 3 hours" as well as Claude Code's
+  "resets 3pm" (`src/trouble.rs`). If Codex words it another way, the line
+  says "It resets later". A usage limit is kept per agent: Claude's holds
   only Claude's sessions, and Codex's only Codex's.
 - **The sidebar** doesn't show which agent a session is on.
 - **Codex's model list** comes from its first session; the new-session
