@@ -959,6 +959,7 @@ impl Workspace {
         if host != self.draft.host {
             self.draft.folder = match &host {
                 HostId::ThisMac => Some(default_folder(&self.recent)),
+                HostId::Server(id) if self.hosts.server(id).is_some_and(|s| s.fresh) => None,
                 _ => self.recent.iter().find(|p| p.host == host).map(|p| p.path.clone()),
             };
             self.draft.host = host.clone();
