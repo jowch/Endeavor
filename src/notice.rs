@@ -140,15 +140,16 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The host whose runtime a notice's action went to: its session's, else the session shown.
+    /// The host whose runtime a notice's action went to: its session's.
     fn retry_host(&self, retry: &Retry) -> Option<HostId> {
         let key = match retry {
             Retry::Export { key, .. } | Retry::Rename(key) | Retry::MoveTo(key) | Retry::RestartNotebook(key) | Retry::StopNotebook(key, _) | Retry::NewNotebook(key) | Retry::OpenNotebook(key, _) => Some(*key),
+            // A notebook no session shows: its host isn't known, so the notice keeps Try again.
             Retry::RunNotebook(notebook) => self.session_showing(notebook),
             Retry::SignOut => return None,
             Retry::RestartJulia(host) => return Some(host.clone()),
         };
-        let key = key.or(self.active)?;
+        let key = key?;
         self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone())
     }
 
