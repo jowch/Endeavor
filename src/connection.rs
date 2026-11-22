@@ -2793,8 +2793,8 @@ fn not_restarted(why: &str) -> String {
 /// The status line when Stop failed on `host` with `why`.
 fn not_stopped(host: &str, why: &str) -> String {
     match why.strip_prefix("Julia was not stopped: ") {
-        Some(rest) => format!("Julia on {host} was not stopped: {rest}"),
-        None => format!("Couldn't stop Julia on {host}: {why}"),
+        Some(rest) => format!("Notebooks on {host} were not stopped: {rest}"),
+        None => format!("Couldn't stop notebooks on {host}: {why}"),
     }
 }
 
@@ -3118,8 +3118,8 @@ mod tests {
             not_restarted("Endeavor's helper didn't answer in 60 s, so Julia may not have stopped."),
             "Julia didn't restart, so Endeavor is still using the Julia that was running. Endeavor's helper didn't answer in 60 s, so Julia may not have stopped."
         );
-        assert_eq!(not_stopped("lab", "Julia was not stopped: it is still running."), "Julia on lab was not stopped: it is still running.");
-        assert_eq!(not_stopped("lab", "The connection to Endeavor's helper closed."), "Couldn't stop Julia on lab: The connection to Endeavor's helper closed.");
+        assert_eq!(not_stopped("lab", "Julia was not stopped: it is still running."), "Notebooks on lab were not stopped: it is still running.");
+        assert_eq!(not_stopped("lab", "The connection to Endeavor's helper closed."), "Couldn't stop notebooks on lab: The connection to Endeavor's helper closed.");
     }
     use std::time::{Duration, Instant};
 
