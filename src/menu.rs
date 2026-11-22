@@ -516,6 +516,27 @@ impl Workspace {
     }
 }
 
+/// Where the keyboard was before a menu opened: in the notebook, or the chat was used last.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Before {
+    pub(crate) notebook: bool,
+    pub(crate) chat: bool,
+}
+
+/// An app menu item's text-size step, if it is Zoom In, Zoom Out or Actual Size.
+fn zoom_step(action: &dyn gpui::Action) -> Option<(f64, bool)> {
+    let any = action.as_any();
+    if any.is::<crate::ZoomIn>() {
+        Some((1.1, false))
+    } else if any.is::<crate::ZoomOut>() {
+        Some((1. / 1.1, false))
+    } else if any.is::<crate::ZoomReset>() {
+        Some((1., true))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MenuPick, MenuTarget, NotebookAction};
@@ -547,26 +568,5 @@ mod tests {
         assert!(MenuTarget::Session(3).session_row() == Some((Row::Open(3), true)));
         assert!(MenuTarget::Row(Row::Open(3)).session_row() == Some((Row::Open(3), false)));
         assert!(MenuTarget::Notebook(3).session_row().is_none());
-    }
-}
-
-/// Where the keyboard was before a menu opened: in the notebook, or the chat was used last.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Before {
-    pub(crate) notebook: bool,
-    pub(crate) chat: bool,
-}
-
-/// An app menu item's text-size step, if it is Zoom In, Zoom Out or Actual Size.
-fn zoom_step(action: &dyn gpui::Action) -> Option<(f64, bool)> {
-    let any = action.as_any();
-    if any.is::<crate::ZoomIn>() {
-        Some((1.1, false))
-    } else if any.is::<crate::ZoomOut>() {
-        Some((1. / 1.1, false))
-    } else if any.is::<crate::ZoomReset>() {
-        Some((1., true))
-    } else {
-        None
     }
 }
