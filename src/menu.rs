@@ -238,11 +238,23 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Close the menu, and give the keyboard back to where it was: the notebook, if it had it
+    /// when the menu opened (#165).
     pub(crate) fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(restore) = self.menu.take().and_then(|menu| menu.restore) {
+        if self.dismiss_menu(window, cx) {
+            crate::webcontent::give_keyboard(self.webview.read(cx).raw());
+        }
+    }
+
+    /// Close the menu, focusing what GPUI had focused before. Returns whether the notebook had
+    /// the keyboard when it opened.
+    fn dismiss_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let menu = self.menu.take();
+        if let Some(restore) = menu.as_ref().and_then(|menu| menu.restore.clone()) {
             window.focus(&restore, cx);
         }
         cx.notify();
+        menu.is_some_and(|menu| menu.notebook_had_keyboard)
     }
 
     fn pick(&mut self, pick: MenuPick, window: &mut Window, cx: &mut Context<Self>) {
@@ -250,7 +262,7 @@ impl Workspace {
             MenuPick::App(i, _) => self.menu.as_ref().and_then(|m| Some((m.app.get(i)?.action.boxed_clone(), m.app[i].edit, m.notebook_had_keyboard))),
             _ => None,
         };
-        self.close_menu(window, cx);
+        self.dismiss_menu(window, cx);
         match pick {
             MenuPick::App(..) => {
                 let Some((action, edit, notebook_had_keyboard)) = app_item else { return };
@@ -266,7 +278,14 @@ impl Workspace {
                         })
                         .detach();
                     }
-                    None => window.dispatch_action(action, cx),
+                    None => {
+                        // The keyboard goes back to the notebook, unless the item opens
+                        // something of its own that takes it (#165).
+                        if notebook_had_keyboard && !takes_keyboard(action.as_ref()) {
+                            crate::webcontent::give_keyboard(webview);
+                        }
+                        window.dispatch_action(action, cx);
+                    }
                 }
             }
             MenuPick::Row { row, action: RowAction::Rename, in_header: true } => self.start_rename(row, true, window, cx),
@@ -540,4 +559,12 @@ mod tests {
         assert!(MenuTarget::Row(Row::Open(3)).session_row() == Some((Row::Open(3), false)));
         assert!(MenuTarget::Notebook(3).session_row().is_none());
     }
+}
+
+/// An app menu item that opens something which takes the keyboard (Settings, About, the find
+/// bar, Point, a new session), or quits: after it, the keyboard doesn't go back to the notebook.
+fn takes_keyboard(action: &dyn gpui::Action) -> bool {
+    use crate::{FindSetting, NewSession, OpenSettings, Quit, ShowAbout, ToggleAnnotation};
+    let any = action.as_any();
+    any.is::<OpenSettings>() || any.is::<ShowAbout>() || any.is::<FindSetting>() || any.is::<ToggleAnnotation>() || any.is::<NewSession>() || any.is::<Quit>()
 }
