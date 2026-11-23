@@ -11,7 +11,7 @@ use gtk::glib::Propagation;
 use gtk::prelude::*;
 
 /// On macOS these are menu items, which take their keys before the page does.
-const APP_FIRST: [&str; 7] = ["secondary-q", "secondary-,", "secondary-b", "secondary-=", "secondary--", "secondary-0", "secondary-shift-e"];
+const APP_FIRST: [&str; 7] = ["ctrl-q", "ctrl-,", "ctrl-b", "ctrl-=", "ctrl--", "ctrl-0", "ctrl-shift-e"];
 
 fn keystroke(event: &gdk::EventKey) -> Option<Keystroke> {
     let key = event.keyval().to_lower().to_unicode().filter(|c| !c.is_control())?;
@@ -69,5 +69,18 @@ pub fn forward_app_keys(webview: &wry::WebView, handle: AnyWindowHandle, gpui: u
             Some(k) if k.modifiers.control => send(&tx, k),
             _ => Propagation::Proceed,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every app-first key parses. Since gpui-pre 0.3.11 a `secondary-` key
+    /// fails to parse, and the `.ok()` above would drop it without a word.
+    #[test]
+    fn every_app_first_key_parses() {
+        for key in super::APP_FIRST {
+            let keystroke = gpui::Keystroke::parse(key).unwrap_or_else(|_| panic!("{key} doesn't parse"));
+            assert!(keystroke.modifiers.control, "{key} has no Ctrl");
+        }
     }
 }

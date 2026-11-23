@@ -115,14 +115,18 @@ fn count_skip(counts: &Mutex<BTreeMap<u32, usize>>, record: &log::Record) -> Opt
 }
 
 /// GPUI's `Window::new` wires each platform callback to `handle.update(..).log_err()`, which
-/// logs the `BorrowMutError` when the message arrives during an update. Only that exact error
-/// from GPUI's window.rs, so a different borrow error or any other GPUI error still shows.
+/// logs the borrow error when the message arrives during an update. Since gpui-pre 0.3.11 the
+/// error names the callback and both borrows ("drawing and presenting frame for window …:
+/// RefCell already borrowed: attempted mutable App borrow at …"). Only that error from GPUI's
+/// window.rs, so a different borrow error or any other GPUI error still shows.
 fn skipped_callback(record: &log::Record) -> bool {
     let from_window = record.file().is_some_and(|f| {
         let f = f.replace('\\', "/");
         f.contains("gpui") && f.ends_with("/src/window.rs")
     });
-    record.level() == log::Level::Error && from_window && record.args().to_string() == "RefCell already borrowed"
+    let message = record.args().to_string();
+    let busy = message == "RefCell already borrowed" || message.contains(": RefCell already borrowed: attempted mutable App borrow at ");
+    record.level() == log::Level::Error && from_window && busy
 }
 
 /// Show the log file in Finder (on Linux, its folder in the file manager).
@@ -150,6 +154,12 @@ mod tests {
         assert!(!record(unix, 1811, "app is quitting", skipped_callback));
         assert!(!record("/home/u/.cargo/registry/src/x/gpui-pre-0.3.6/src/app.rs", 1811, "RefCell already borrowed", skipped_callback));
         assert!(!record("src/window.rs", 1811, "RefCell already borrowed", skipped_callback));
+        // gpui-pre 0.3.11's form, as a Windows build logged it.
+        let windows = r"C:\Users\u\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui-pre-0.3.11\src\window.rs";
+        let busy = r"drawing and presenting frame for window WindowId(1v1): RefCell already borrowed: attempted mutable App borrow at C:\x\gpui-pre-0.3.11\src\window.rs:2029:30; existing mutable borrow group began at C:\x\gpui-pre-0.3.11\src\app.rs:319:33";
+        assert!(record(windows, 2049, busy, skipped_callback));
+        // A shared borrow that failed is a different problem, so it still shows.
+        assert!(!record(windows, 2049, &busy.replace("attempted mutable", "attempted shared"), skipped_callback));
     }
 
     #[test]
