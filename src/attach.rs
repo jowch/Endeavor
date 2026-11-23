@@ -1,10 +1,3 @@
-//! What goes along with a chat message besides its words: chips for notebook
-//! cells, selected text, error messages and uploaded files, and @ mentions of
-//! files in the session's folder. Here: the chips' labels, the prompt blocks a
-//! message becomes, what an added file becomes (an image in the message, an @
-//! mention of a file already in the folder, or a copy into the folder's
-//! `data/`), and the text editing that keeps an @ mention whole.
-
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,7 +13,6 @@ use wire::backend::Backend;
 
 use crate::session::cell_label;
 
-/// A notebook cell as it was when attached.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cell {
     pub id: String,
@@ -33,11 +25,9 @@ impl Cell {
     }
 }
 
-/// What ⌘E or the agent button between cells asked for, besides the user's words.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CellAsk {
     About,
-    /// Write the code for this empty cell.
     Fill,
     Before,
     After,
@@ -45,25 +35,15 @@ pub enum CellAsk {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Attachment {
-    /// The cell ⌘E asked about (and Point's cells, in sessions from before quotes).
     Cells { notebook: String, cells: Vec<Cell>, ask: CellAsk },
-    /// A cell's error, from Fix with Claude or Explain.
     Error { notebook: String, cell: Cell, text: String },
-    /// Part of a reply or of the notebook, and the user's comment on it.
     Quote(Quote),
     Image { name: String, mime: &'static str, bytes: Arc<Vec<u8>> },
-    /// A text file read into the message (a server session's upload).
     Text { name: String, text: String },
-    /// A file from outside the session's folder on this Mac, copied into its
-    /// `data/` folder when the message is sent.
     Upload { source: PathBuf, size: u64 },
-    /// A file copied into the session's folder, at `path` relative to it.
     Saved { path: String },
 }
 
-/// What the user replied to, in one of Claude's replies or in the notebook,
-/// and what they said about it: Reply on a selection, or a pick with Point.
-/// It goes at once as its own message, or waits as a card above the composer.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Quote {
     pub from: Quoted,
@@ -72,44 +52,33 @@ pub struct Quote {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Quoted {
-    /// Text selected in one of Claude's replies, and the reply's clock time
-    /// ("14:02"; replayed history has none).
     Reply { text: String, at: Option<String> },
-    /// Part of one cell. `name` is what the cell defines, else "cell".
     Cell { notebook: String, cell: String, name: String, part: Part },
-    /// A box drawn with Point: its picture, and the ids of the cells under it.
     Box { notebook: String, cells: Vec<String>, png: Arc<Vec<u8>> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Part {
-    /// The whole cell, with its code.
     Whole(String),
-    /// Lines `first..=last` of the cell's code, counted from 1, and the text
-    /// quoted from them.
     Lines { first: usize, last: usize, text: String },
-    /// Text from the cell's output (rendered Markdown included).
     Output(String),
-    /// The cell's output as a picture.
+    WholeOutput(String),
     Figure(Arc<Vec<u8>>),
 }
 
 impl Part {
-    /// What part of the cell it is: "whole cell", "lines 3–5", "figure".
     pub fn name(&self) -> String {
         match self {
             Part::Whole(_) => "whole cell".into(),
             Part::Lines { first, last, .. } if first == last => format!("line {first}"),
             Part::Lines { first, last, .. } => format!("lines {first}–{last}"),
-            Part::Output(_) => "output".into(),
+            Part::Output(_) | Part::WholeOutput(_) => "output".into(),
             Part::Figure(_) => "figure".into(),
         }
     }
 }
 
 impl Quote {
-    /// Where it's from: "Claude's reply · 14:02", "rates · lines 3–5",
-    /// "plot_fit · figure", "Box · 2 cells".
     pub fn source(&self) -> String {
         match &self.from {
             Quoted::Reply { at: Some(at), .. } => format!("Claude's reply · {at}"),
@@ -120,7 +89,6 @@ impl Quote {
         }
     }
 
-    /// Its chip's icon, the same wherever the quote shows.
     pub fn icon(&self) -> Icon {
         match &self.from {
             Quoted::Reply { .. } => Icon::Quote,
@@ -130,8 +98,6 @@ impl Quote {
         }
     }
 
-    /// Its chip's label: a cell's name in mono, cut to `max` characters, and
-    /// the part after it ("· figure"), so a long name never hides what it is.
     pub fn label(&self, max: usize) -> Label {
         match &self.from {
             Quoted::Cell { name, part, .. } => Label { plain: String::new(), mono: cut(name, max), after: format!("· {}", part.name()) },
@@ -139,16 +105,14 @@ impl Quote {
         }
     }
 
-    /// The quoted text; none for a picture.
     pub fn excerpt(&self) -> Option<&str> {
         match &self.from {
-            Quoted::Reply { text, .. } => Some(text),
-            Quoted::Cell { part: Part::Whole(text) | Part::Lines { text, .. } | Part::Output(text), .. } => Some(text),
+            Quoted::Reply { text, .. } => Some(text.as_str()),
+            Quoted::Cell { part: Part::Whole(text) | Part::Lines { text, .. } | Part::Output(text) | Part::WholeOutput(text), .. } => Some(text.as_str()).filter(|t| !t.is_empty()),
             Quoted::Cell { part: Part::Figure(_), .. } | Quoted::Box { .. } => None,
         }
     }
 
-    /// The number of the quoted code's first line, when it is code.
     pub fn first_line(&self) -> Option<usize> {
         match &self.from {
             Quoted::Cell { part: Part::Lines { first, .. }, .. } => Some(*first),
@@ -157,7 +121,6 @@ impl Quote {
         }
     }
 
-    /// Its picture: a figure's, or a box's (none if it couldn't be taken).
     pub fn picture(&self) -> Option<&Arc<Vec<u8>>> {
         match &self.from {
             Quoted::Cell { part: Part::Figure(png), .. } | Quoted::Box { png, .. } => Some(png).filter(|p| !p.is_empty()),
@@ -165,7 +128,6 @@ impl Quote {
         }
     }
 
-    /// The ids of the cells it points at, for "show in notebook".
     pub fn cells(&self) -> Vec<String> {
         match &self.from {
             Quoted::Reply { .. } => Vec::new(),
@@ -175,8 +137,6 @@ impl Quote {
     }
 }
 
-/// A chip's label: plain words, then a name in mono, then plain words after
-/// it (any may be empty). The chip cuts only the name to fit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Label {
     pub plain: String,
@@ -185,7 +145,6 @@ pub struct Label {
 }
 
 impl Label {
-    /// The whole label as one line of text.
     pub fn text(&self) -> String {
         [&self.plain, &self.mono, &self.after].into_iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
     }
@@ -195,7 +154,6 @@ impl Label {
 pub enum Icon {
     Cell,
     Cells,
-    /// Text quoted from a reply.
     Quote,
     Error,
     Region,
@@ -203,7 +161,6 @@ pub enum Icon {
     File,
 }
 
-/// Longest name a chip shows before cutting it with "…".
 pub const CHIP_NAME: usize = 24;
 
 fn cut(name: &str, max: usize) -> String {
@@ -219,7 +176,6 @@ impl Attachment {
         self.label_cut_at(CHIP_NAME)
     }
 
-    /// The label with its name whole, for a screen reader.
     pub fn full_label(&self) -> Label {
         self.label_cut_at(usize::MAX)
     }
@@ -248,7 +204,6 @@ impl Attachment {
         }
     }
 
-    /// The notebook cells it carries, as they were when attached.
     pub fn cells(&self) -> Vec<&Cell> {
         match self {
             Attachment::Cells { cells, .. } => cells.iter().collect(),
@@ -258,21 +213,9 @@ impl Attachment {
     }
 }
 
-/// The blocks a message sends: what the attachments are (notebook context the
-/// app explains, marked "[Endeavor]", then images and text files), then the
-/// user's own words. Mentioned files stay in the words as `@path`.
-///
-/// Each notebook attachment is one text block: a sentence for the agent, then
-/// an `<attached>` block with the cells as sent. The session's history keeps
-/// the blocks as sent, so a reopened session parses them back into chips
-/// (`replayed_notebook`).
-///
-/// Each quote is one text block too, the quote then the user's comment on it
-/// (`quote_block`), with a figure's or box's picture as the image block after.
 pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String], kind: Backend) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     let note = |s: String| ContentBlock::Text(TextContent::new(s));
-    // Claude Code reads a slash command only from the message's first block.
     let command = crate::slash::is_command(text);
     if command {
         blocks.push(note(text.to_string()));
@@ -295,7 +238,7 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
         match attachment {
             Attachment::Quote(quote) => {
                 blocks.push(note(quote_block(quote, kind)));
-                if let Some(png) = quote.picture() {
+                if let (Quoted::Box { .. }, Some(png)) = (&quote.from, quote.picture()) {
                     blocks.push(ContentBlock::Image(ImageContent::new(base64(png), "image/png")));
                 }
             }
@@ -304,7 +247,6 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
                 EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(text.clone(), format!("attachment:{name}"))),
             ))),
             Attachment::Saved { path } => blocks.push(note(format!("{SAVED_NOTE}{path}"))),
-            // Copied in and turned into `Saved` before sending (`place_uploads`).
             Attachment::Upload { .. } => {}
             Attachment::Cells { .. } | Attachment::Error { .. } => {}
         }
@@ -322,19 +264,6 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
     blocks
 }
 
-/// A notebook attachment's text block, e.g.
-///
-/// ```text
-/// [Endeavor] The cell below failed with this error.
-/// <attached kind="error">
-/// <cell uri="notebook://pluto/…/cell/…">
-/// fit = curve_fit(model, t, y, p0)
-/// </cell>
-/// <error>
-/// BoundsError
-/// </error>
-/// </attached>
-/// ```
 fn notebook_block(attachment: &Attachment, backend: Backend) -> Option<String> {
     let (kind, sentence, notebook, cells, extra) = match attachment {
         Attachment::Cells { notebook, cells, ask } => {
@@ -361,9 +290,6 @@ fn notebook_block(attachment: &Attachment, backend: Backend) -> Option<String> {
     Some(out)
 }
 
-/// A notebook attachment back from its text block (see `notebook_block`).
-/// Sessions from before quotes also have "selection" and "region" blocks,
-/// which come back as quotes (a region without its image, the next block).
 pub fn replayed_notebook(text: &str) -> Option<Attachment> {
     let rest = text.trim().strip_prefix("[Endeavor] ")?;
     let (_, rest) = rest.split_once("\n<attached kind=\"")?;
@@ -406,58 +332,21 @@ pub fn replayed_notebook(text: &str) -> Option<Attachment> {
     })
 }
 
-/// What the agent is told once in a message that quotes the notebook, a `kind` one.
 fn quote_note(kind: Backend) -> String {
     format!(
         "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> \
     followed by their comment on it. A quote's uri, notebook://{}/{{notebook_id}}/cell/{{cell_id}}, names its cell \
     (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was \
-    quoted when it isn't code: `output` (text from the cell's output), `figure` (the cell's output; the image after \
-    the quote shows it) or `box` (a box the user drew over the notebook; the image after the quote shows what was in \
-    it, and `uri` lists the cells under it). Read current code and outputs with the notebook MCP tools.",
+    quoted when it isn't code: `output` (the cell's output), `figure` (the cell's output, a picture) or `box` (a box \
+    the user drew over the notebook; the image after the quote shows what was in it, and `uri` lists the cells under \
+    it). A quote with a body holds what the user selected or the lines they picked, as it was then; the others \
+    hold no code or output, only the name of what was picked. Read \
+    what the cells hold now with the notebook MCP tools (read_cell, view_cell_output).",
         kind.name()
     )
 }
 
-/// How a chat quote names where it's from, on its last line.
 const FROM_REPLY: &str = "> — Claude's reply";
-
-/// A quote's text block: the quote, then the user's comment on it. A quote
-/// of a reply is a Markdown blockquote, e.g.
-///
-/// ```text
-/// > refits the model on 1,000 resampled copies of the rows
-/// > — Claude's reply, 14:02
-///
-/// Why 1,000 and not 10,000?
-/// ```
-///
-/// and one of the notebook a `<quote>` element:
-///
-/// ```text
-/// <quote cell="rates" lines="3-5" uri="notebook://pluto/…/cell/…">
-/// rows = rand(1:nrow(data), nrow(data))
-/// </quote>
-/// Is sampling with replacement right here?
-/// ```
-/// How much of a picked output's text goes in a quote, in characters. An output can be
-/// megabytes (a 200,000-line `Text` is about 1.3 MB): past this, its start and end with a
-/// note, as the Desktop notebook view cuts it (`frontend/src/view.ts`, `outputText`).
-const OUTPUT_MAX: usize = 4000;
-const OUTPUT_END: usize = 500;
-
-/// `text` cut to `OUTPUT_MAX` characters, its start and end kept, saying how much was left out.
-fn output_text(text: &str) -> std::borrow::Cow<'_, str> {
-    let count = text.chars().count();
-    if count <= OUTPUT_MAX {
-        return text.into();
-    }
-    let at = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
-    let (end, start) = (OUTPUT_MAX - OUTPUT_END, count - OUTPUT_END);
-    let left = start - end;
-    let left = left.to_string().as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",");
-    format!("{}\n[{left} characters of this output left out here.]\n{}", &text[..at(end)], &text[at(start)..]).into()
-}
 
 pub fn quote_block(quote: &Quote, backend: Backend) -> String {
     let (quoted, gap) = match &quote.from {
@@ -471,10 +360,12 @@ pub fn quote_block(quote: &Quote, backend: Backend) -> String {
         }
         Quoted::Cell { notebook, cell, name, part } => {
             let uri = cell_uri(backend, notebook, cell);
+            let name = escaped_attr(name);
             let out = match part {
-                Part::Whole(code) => format!("<quote cell=\"{name}\" uri=\"{uri}\">\n{code}\n</quote>"),
+                Part::Whole(_) => format!("<quote cell=\"{name}\" uri=\"{uri}\"/>"),
                 Part::Lines { first, last, text } => format!("<quote cell=\"{name}\" lines=\"{first}-{last}\" uri=\"{uri}\">\n{text}\n</quote>"),
-                Part::Output(text) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\">\n{}\n</quote>", output_text(text)),
+                Part::Output(text) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\">\n{text}\n</quote>"),
+                Part::WholeOutput(_) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\"/>"),
                 Part::Figure(_) => format!("<quote cell=\"{name}\" part=\"figure\" uri=\"{uri}\"/>"),
             };
             (out, "\n")
@@ -487,8 +378,6 @@ pub fn quote_block(quote: &Quote, backend: Backend) -> String {
     if quote.comment.is_empty() { quoted } else { format!("{quoted}{gap}{}", quote.comment) }
 }
 
-/// A quote back from its text block (see `quote_block`). A figure or box comes
-/// back without its picture, which is the next block.
 pub fn replayed_quote(block: &str) -> Option<Attachment> {
     let from_reply = |block: &str| {
         let (quoted, comment) = block.split_once("\n\n").unwrap_or((block, ""));
@@ -507,7 +396,7 @@ pub fn replayed_quote(block: &str) -> Option<Attachment> {
             (_, Some(end)) => (&rest[..end], false, &rest[end + 2..]),
             _ => return None,
         };
-        let attr = |key: &str| attrs.split_once(&format!("{key}=\"")).and_then(|(_, v)| v.split_once('"')).map(|(v, _)| v);
+        let attr = |key: &str| attrs.split_once(&format!(" {key}=\"")).or_else(|| attrs.strip_prefix(&format!("{key}=\"")).map(|v| ("", v))).and_then(|(_, v)| v.split_once('"')).map(|(v, _)| v);
         let (body, comment) = if closed {
             (None, rest)
         } else {
@@ -530,7 +419,9 @@ pub fn replayed_quote(block: &str) -> Option<Attachment> {
                 let (notebook, cell) = notebook_of(attr("uri")?)?;
                 let part = match (part, attr("lines"), body) {
                     (Some("figure"), _, None) => Part::Figure(Arc::new(Vec::new())),
+                    (Some("output"), _, None) => Part::WholeOutput(String::new()),
                     (Some("output"), _, Some(text)) => Part::Output(text.into()),
+                    (None, None, None) => Part::Whole(String::new()),
                     (None, Some(lines), Some(text)) => {
                         let (first, last) = lines.split_once('-')?;
                         Part::Lines { first: first.parse().ok()?, last: last.parse().ok()?, text: text.into() }
@@ -538,7 +429,7 @@ pub fn replayed_quote(block: &str) -> Option<Attachment> {
                     (None, None, Some(code)) => Part::Whole(code.into()),
                     _ => return None,
                 };
-                Quoted::Cell { notebook, cell, name: attr("cell")?.into(), part }
+                Quoted::Cell { notebook, cell, name: unescaped_attr(attr("cell")?), part }
             }
         };
         Some(Quote { from, comment: comment.into() })
@@ -546,31 +437,32 @@ pub fn replayed_quote(block: &str) -> Option<Attachment> {
     from_notebook(block).or_else(|| from_reply(block)).map(Attachment::Quote)
 }
 
-/// `body\n</tag>\n…` → (body, …).
+pub fn take_staged_quotes(attachments: &mut Vec<Attachment>) -> Vec<Attachment> {
+    attachments.extract_if(.., |a| matches!(a, Attachment::Quote(_))).collect()
+}
+
+fn escaped_attr(value: &str) -> String {
+    value.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn unescaped_attr(value: &str) -> String {
+    value.replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
 fn element_body<'a>(text: &'a str, tag: &str) -> Option<(&'a str, &'a str)> {
     let end = format!("\n</{tag}>\n");
     let at = text.find(&end)?;
     Some((&text[..at], &text[at + end.len()..]))
 }
 
-/// Text the app adds to a message, which a replayed session doesn't show as
-/// the user's words: its "[Endeavor]" notes, cell links, and how the agent
-/// echoes an attached text file.
 pub fn is_app_text(text: &str) -> bool {
     text.starts_with("[Endeavor]") || text.starts_with("notebook://") || text.starts_with("pluto://") || text.starts_with("attachment:") || text.trim_start().starts_with("<context ref=")
 }
 
-/// Claude Code's own markers for a turn it stopped mid-flight, written back as
-/// a synthetic user message so the next turn has a well-formed conversation.
-/// Not the user's words (`@anthropic-ai/claude-agent-sdk`'s own history-suppression
-/// list carries the same two strings).
 pub fn is_stopped_marker(text: &str) -> bool {
     text == "[Request interrupted by user]" || text == "[Request interrupted by user for tool use]"
 }
 
-/// A replayed user message without the blocks Claude Code adds to it itself:
-/// `<system-reminder>`s, and the `<task-notification>` it queues when a
-/// background task finishes, which rides along with the user's next message.
 pub fn without_agent_blocks(text: &str) -> String {
     ["system-reminder", "task-notification"].iter().fold(text.to_string(), |text, tag| {
         let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
@@ -587,8 +479,6 @@ pub fn without_agent_blocks(text: &str) -> String {
     .to_string()
 }
 
-/// An attached text file as a replayed session gives it back: the agent
-/// echoes it as `<context ref="attachment:name">…</context>`.
 pub fn replayed_text_file(text: &str) -> Option<Attachment> {
     let rest = text.trim_start().strip_prefix("<context ref=\"attachment:")?;
     let (name, body) = rest.split_once("\">\n")?;
@@ -596,34 +486,21 @@ pub fn replayed_text_file(text: &str) -> Option<Attachment> {
     Some(Attachment::Text { name: name.into(), text: body.into() })
 }
 
-/// A file saved into the session's folder, back from its note.
 pub fn replayed_saved_file(text: &str) -> Option<Attachment> {
     let path = text.strip_prefix(SAVED_NOTE)?;
     (!path.is_empty() && !path.contains('\n')).then(|| Attachment::Saved { path: path.into() })
 }
 
-/// An attached image as a replayed session gives it back (its name is lost).
 pub fn replayed_image(data: &str, mime: &str) -> Option<Attachment> {
     let mime = ["image/png", "image/jpeg", "image/gif", "image/webp"].into_iter().find(|m| *m == mime)?;
     let name = format!("image.{}", mime.trim_start_matches("image/").replace("jpeg", "jpg"));
     Some(Attachment::Image { name, mime, bytes: Arc::new(unbase64(data)?) })
 }
 
-// ---------------------------------------------------------------------------
-// Uploads
-// ---------------------------------------------------------------------------
-
-/// The Claude API takes images up to 5 MB once base64-encoded (4/3 larger).
 pub const IMAGE_MAX: u64 = 3_700_000;
-/// A text file read into the message, where there's no copying into the
-/// folder (a server whose helper can't save files).
 pub const TEXT_MAX: u64 = 250_000;
-/// A file copied into the session's folder: a large dataset is fine, but a
-/// copy of a disk image or a video most likely isn't what was meant.
 pub const FILE_MAX: u64 = 2_000_000_000;
 
-/// The agent's note for a file copied into the session's folder; the path
-/// follows it, alone on the last line, so a replayed session can read it back.
 const SAVED_NOTE: &str = "[Endeavor] The user attached a file. The app saved a copy into this session's folder, where \
     your file tools can read it and notebook code can load it, at this path relative to the folder:\n";
 
@@ -646,7 +523,6 @@ fn image_type(name: &str) -> Option<&'static str> {
     })
 }
 
-/// "1.2 MB", "340 KB", "12 bytes".
 pub fn size_text(bytes: u64) -> String {
     match bytes {
         b if b >= 1_000_000 => format!("{:.1} MB", b as f64 / 1_000_000.),
@@ -655,8 +531,6 @@ pub fn size_text(bytes: u64) -> String {
     }
 }
 
-/// A file picked with "+" (or dropped, or pasted) as an attachment, or why it
-/// can't be one, in plain words.
 pub fn upload(name: &str, bytes: Vec<u8>) -> Result<Attachment, String> {
     too_big(name, bytes.len() as u64)?;
     if let Some(mime) = image_type(name) {
@@ -676,7 +550,6 @@ fn too_big(name: &str, size: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// Read a picked file into an attachment (a file over its cap isn't read).
 pub fn upload_file(path: &Path) -> Result<Attachment, String> {
     let name = file_name(path);
     let meta = std::fs::metadata(path).map_err(|e| format!("Couldn't read {name}: {e}"))?;
@@ -688,34 +561,22 @@ pub fn upload_file(path: &Path) -> Result<Attachment, String> {
     upload(&name, bytes)
 }
 
-/// What a file added with "+" (or dropped, or pasted) becomes.
 #[derive(Debug, PartialEq)]
 pub enum Added {
-    /// A chip: an image, or a file to copy into the folder on send.
     Chip(Attachment),
-    /// A file already in the session's folder: an @ mention of this path.
     Mention(String),
 }
 
-/// Where the session's folder is, for what an added file becomes.
 #[derive(Clone, Debug)]
 pub enum Folder {
-    /// On this Mac.
     Here(PathBuf),
-    /// On a server whose helper can save files into it, or not chosen yet.
     Elsewhere,
-    /// On a server whose helper can't (an older one).
     Unwritable,
 }
 
-/// Why files go in the message on a server whose helper is too old to save them.
 pub const UNWRITABLE: &str = "This server's copy of Endeavor's helper can't save files into the session's folder, \
     so files go in the message instead (text up to 250 KB).";
 
-/// A picked file for a session whose folder is `folder`. Images go in the
-/// message; a file already in a folder on this Mac is mentioned; any other
-/// file is copied in when the message is sent. Where the folder can't take
-/// files, files are read into the message instead.
 pub fn add_file(path: &Path, folder: &Folder) -> Result<Added, String> {
     let name = file_name(path);
     if matches!(folder, Folder::Unwritable) || image_type(&name).is_some() {
@@ -736,8 +597,6 @@ pub fn add_file(path: &Path, folder: &Folder) -> Result<Added, String> {
     Ok(Added::Chip(Attachment::Upload { source: path.to_path_buf(), size: meta.len() }))
 }
 
-/// `file`'s path relative to `folder`, if it's inside it (through symlinks,
-/// such as /tmp → /private/tmp).
 pub fn relative_inside(folder: &Path, file: &Path) -> Option<String> {
     let folder = folder.canonicalize().ok()?;
     let file = file.canonicalize().ok()?;
@@ -765,11 +624,6 @@ fn same_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
     }
 }
 
-/// Put `source` in the session's folder and return its path relative to the
-/// folder: where it already is, if it's inside; else `data/<name>`, reusing a
-/// file there with the same contents, or numbering the name past ones that
-/// differ. A copy goes in under a temporary name first, so one cut short
-/// never looks finished.
 pub fn save_into(folder: &Path, source: &Path) -> Result<String, String> {
     if let Some(inside) = relative_inside(folder, source) {
         return Ok(inside);
@@ -797,10 +651,8 @@ pub fn save_into(folder: &Path, source: &Path) -> Result<String, String> {
     }
 }
 
-/// A file request to a server's helper, and its answer.
 pub type Ask = dyn Fn(Request) -> Result<Reply, String> + Send;
 
-/// How far a file being sent to a server has got: `sent` of `size` bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Progress {
     pub name: String,
@@ -808,25 +660,14 @@ pub struct Progress {
     pub size: u64,
 }
 
-/// Where a message's `Upload`s go when it's sent.
 pub enum Dest {
-    /// The session's folder on this Mac.
     Here(PathBuf),
-    /// The session's folder on a server, through its helper.
-    /// `folder` is in the server's `/` rules (`Place::path`).
     Server { folder: String, ask: Box<Ask>, progress: Box<dyn Fn(Progress) + Send> },
-    /// Into the message: the server's helper can't save files, or isn't connected.
     Message,
 }
 
-/// How much of a file goes in one `Write`: small enough not to hold up the
-/// notebook's traffic on the same connection for long.
 const PIECE: usize = 1 << 20;
 
-/// Send `source` into the session's folder `folder` on a server and return
-/// its path relative to the folder, by the same rule as `save_into`: a file
-/// in `data/` with the same contents (size and SHA-256, so nothing is sent),
-/// else a new one, numbered past names whose contents differ.
 pub fn send_to_server(folder: &str, source: &Path, ask: &Ask, progress: &dyn Fn(Progress)) -> Result<String, String> {
     use std::io::Read;
     let name = file_name(source);
@@ -865,9 +706,6 @@ pub fn send_to_server(folder: &str, source: &Path, ask: &Ask, progress: &dyn Fn(
     }
 }
 
-/// Before a message goes: each `Upload` is copied into the session's folder
-/// and becomes `Saved`, or is read into the message where it can't be. Also
-/// returns why any couldn't be.
 pub fn place_uploads(attachments: Vec<Attachment>, dest: &Dest) -> (Vec<Attachment>, Vec<String>) {
     let mut placed = Vec::new();
     let mut refused = Vec::new();
@@ -923,17 +761,10 @@ pub(crate) fn unbase64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-// ---------------------------------------------------------------------------
-// @ mentions
-// ---------------------------------------------------------------------------
-
-/// How a mentioned path reads in the text: `@data/decay.csv`, quoted if it has spaces.
 pub fn token(path: &str) -> String {
     if path.contains(char::is_whitespace) { format!("@\"{path}\"") } else { format!("@{path}") }
 }
 
-/// The "@query" being typed just before `cursor` (a byte offset): its range,
-/// "@" included, and the query. The "@" starts the text or follows a space.
 pub fn typing_mention(text: &str, cursor: usize) -> Option<(Range<usize>, &str)> {
     let before = text.get(..cursor)?;
     let at = before.rfind('@')?;
@@ -942,8 +773,6 @@ pub fn typing_mention(text: &str, cursor: usize) -> Option<(Range<usize>, &str)>
     (starts_word && !query.contains(char::is_whitespace) && !query.starts_with('"')).then_some((at..cursor, query))
 }
 
-/// Where each mention's token is in `text`: a token counts only as a whole
-/// word, followed by the end, a space or punctuation.
 pub fn token_ranges(text: &str, mentions: &[String]) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     for path in mentions {
@@ -963,7 +792,6 @@ pub fn token_ranges(text: &str, mentions: &[String]) -> Vec<Range<usize>> {
     ranges
 }
 
-/// The mentions still in `text`, in the order they appear.
 pub fn mentioned(text: &str, mentions: &[String]) -> Vec<String> {
     let mut found: Vec<(usize, String)> = mentions
         .iter()
@@ -973,10 +801,6 @@ pub fn mentioned(text: &str, mentions: &[String]) -> Vec<String> {
     found.into_iter().map(|(_, path)| path).collect()
 }
 
-/// An edit that deleted part of a mention deletes all of it, so one backspace
-/// removes `@data/decay.csv`. Given the text before and after an edit, returns
-/// the text with the rest of any partly deleted token removed, and where the
-/// cursor goes; None when no token was cut.
 pub fn keep_tokens_whole(old: &str, new: &str, mentions: &[String]) -> Option<(String, usize)> {
     if new.len() >= old.len() {
         return None;
@@ -986,7 +810,6 @@ pub fn keep_tokens_whole(old: &str, new: &str, mentions: &[String]) -> Option<(S
     let max_suffix = new.len() - prefix;
     let suffix = old.bytes().rev().zip(new.bytes().rev()).take(max_suffix).take_while(|(a, b)| a == b).count();
     let suffix = (0..=suffix).rev().find(|&s| old.is_char_boundary(old.len() - s) && new.is_char_boundary(new.len() - s))?;
-    // Only pure deletions: nothing new was typed in their place.
     if prefix + suffix != new.len() {
         return None;
     }
@@ -1003,9 +826,6 @@ pub fn keep_tokens_whole(old: &str, new: &str, mentions: &[String]) -> Option<(S
     Some((format!("{}{}", &old[..start], &old[end..]), start))
 }
 
-/// Paths matching what's typed after "@", best first: the letters in order
-/// (not necessarily together); a match in the file's own name, at its start,
-/// or in one piece ranks higher, and so do shorter paths. At most `max`.
 pub fn fuzzy<'a>(query: &str, paths: &'a [String], max: usize) -> Vec<&'a str> {
     let query: Vec<char> = query.to_lowercase().chars().collect();
     let mut scored: Vec<(i64, &str)> = paths
@@ -1047,29 +867,6 @@ mod tests {
     use super::*;
 
     const NB: &str = "6a1b2c3d-0000-4000-8000-1234567890ab";
-
-    #[test]
-    fn a_huge_picked_output_keeps_its_start_and_end() {
-        assert_eq!(output_text("0.42"), "0.42");
-        let exact = "x".repeat(OUTPUT_MAX);
-        assert_eq!(output_text(&exact), exact);
-        // 200,000 lines, as the Desktop audit's Text output: its first 3,500 and last 500 characters.
-        let huge: String = (0..200_000).map(|i| format!("line {i}\n")).collect();
-        let cut = output_text(&huge);
-        let n = huge.chars().count();
-        assert!(cut.starts_with(&huge[..3500]) && cut.ends_with(&huge[huge.len() - 500..]));
-        assert!(cut.contains(&format!("\n[{} characters of this output left out here.]\n", fmt_thousands(n - 4000))), "{}", &cut[3490..3600]);
-        // Characters, not bytes: an emoji isn't split.
-        let wide = "é😀".repeat(3000);
-        let cut = output_text(&wide);
-        assert!(cut.contains("\n[2,000 characters of this output left out here.]\n"));
-        assert!(cut.starts_with(&"é😀".repeat(1750)) && cut.ends_with(&"é😀".repeat(250)));
-    }
-
-    fn fmt_thousands(n: usize) -> String {
-        let s = n.to_string();
-        s.as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",")
-    }
 
     fn cell(id: &str, code: &str) -> Cell {
         Cell { id: id.into(), code: code.into() }
@@ -1157,11 +954,19 @@ mod tests {
     }
 
     #[test]
+    fn claude_code_reads_a_slash_command_only_from_the_first_block() {
+        let fit = cell("c1", "fit = curve_fit(model, t, y, p0)");
+        let attachments = [Attachment::Error { notebook: NB.into(), cell: fit, text: "BoundsError".into() }];
+        let blocks = texts(&prompt_blocks("/compact keep the fit", &attachments, &[], Backend::Pluto));
+        assert_eq!(blocks[0], "/compact keep the fit");
+        assert!(blocks[1].starts_with("[Endeavor] The user attached notebook cells"));
+    }
+
+    #[test]
     fn notebook_blocks_parse_back_as_sent() {
         let attachments = [
             Attachment::Cells { notebook: NB.into(), cells: vec![cell("c1", "rates = 1"), cell("c2", "")], ask: CellAsk::About },
             Attachment::Cells { notebook: NB.into(), cells: vec![cell("c3", "")], ask: CellAsk::Before },
-            // Code that looks like the block's own tags stays code.
             Attachment::Error { notebook: NB.into(), cell: cell("c4", "html\"<cell uri=\\\"x\\\">\" # </error>"), text: "LoadError:\n  in expression".into() },
         ];
         for attachment in attachments {
@@ -1206,6 +1011,10 @@ mod tests {
             quote(in_rates(Part::Lines { first: 3, last: 5, text: "rows = rand(1:n, n)\nfit(rows)\nend;".into() }), "Is sampling with replacement right here?"),
             quote(in_rates(Part::Figure(Arc::new(b"hi!".to_vec()))), "Why does the fit miss these early points?"),
             quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into(), "c2".into()], png: Arc::new(Vec::new()) }, ""),
+            quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into()], png: Arc::new(b"box".to_vec()) }, "this"),
+            quote(in_rates(Part::Whole("rates = 1\nfit()".into())), "and the cell"),
+            quote(in_rates(Part::WholeOutput("0.42".into())), ""),
+            quote(in_rates(Part::Output("42".into())), "this number"),
         ];
         let attachments: Vec<Attachment> = quotes.into_iter().map(Attachment::Quote).collect();
         let all = texts(&prompt_blocks("Check these before I write this up.", &attachments, &[], Backend::Pluto));
@@ -1216,11 +1025,15 @@ mod tests {
                 "> refits the model on 1,000 resampled copies\n> — Claude's reply, 14:02\n\nWhy 1,000 and not 10,000?".to_string(),
                 format!("<quote cell=\"rates\" lines=\"3-5\" uri=\"notebook://pluto/{NB}/cell/c1\">\nrows = rand(1:n, n)\nfit(rows)\nend;\n</quote>\nIs sampling with replacement right here?"),
                 format!("<quote cell=\"rates\" part=\"figure\" uri=\"notebook://pluto/{NB}/cell/c1\"/>\nWhy does the fit miss these early points?"),
-                "image image/png aGkh".into(),
                 format!("<quote part=\"box\" uri=\"notebook://pluto/{NB}/cell/c1 notebook://pluto/{NB}/cell/c2\"/>"),
+                format!("<quote part=\"box\" uri=\"notebook://pluto/{NB}/cell/c1\"/>\nthis"),
+                "image image/png Ym94".into(),
+                format!("<quote cell=\"rates\" uri=\"notebook://pluto/{NB}/cell/c1\"/>\nand the cell"),
+                format!("<quote cell=\"rates\" part=\"output\" uri=\"notebook://pluto/{NB}/cell/c1\"/>"),
+                format!("<quote cell=\"rates\" part=\"output\" uri=\"notebook://pluto/{NB}/cell/c1\">\n42\n</quote>\nthis number"),
                 "Check these before I write this up.".into(),
             ],
-            "a box without a picture goes without an image"
+            "lines go with their text; a cell, an output and a figure by name only; a box with its picture, and without one if none was taken"
         );
         let chat_only = [Attachment::Quote(quote(Quoted::Reply { text: "x".into(), at: None }, ""))];
         assert_eq!(texts(&prompt_blocks("", &chat_only, &[], Backend::Pluto)), ["> x\n> — Claude's reply"], "no notebook note, and no words");
@@ -1231,18 +1044,46 @@ mod tests {
         let quotes = [
             quote(Quoted::Reply { text: "one\n\ntwo".into(), at: Some("Sat 9:10".into()) }, "and?\n\nmore"),
             quote(Quoted::Reply { text: "x".into(), at: None }, ""),
-            quote(in_rates(Part::Whole("rates = 1\n</quote> # not the end".into())), "whole"),
-            quote(in_rates(Part::Lines { first: 2, last: 2, text: "fit()".into() }), ""),
-            quote(in_rates(Part::Output("0.42 ± 0.03".into())), "hm"),
+            quote(in_rates(Part::Whole(String::new())), "whole"),
+            quote(in_rates(Part::Lines { first: 2, last: 2, text: "fit()\n</quote> # not the end".into() }), ""),
+            quote(in_rates(Part::WholeOutput(String::new())), "hm"),
+            quote(in_rates(Part::Output("0.42 ± 0.03".into())), "selected"),
             quote(in_rates(Part::Figure(Arc::new(Vec::new()))), ""),
             quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into()], png: Arc::new(Vec::new()) }, "is this real?"),
+            quote(Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: "HTML(\"\"\"<svg/> & co".into(), part: Part::WholeOutput(String::new()) }, "odd name"),
+            quote(Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: "&quot; uri=\"x\"".into(), part: Part::Lines { first: 1, last: 1, text: "a".into() } }, ""),
         ];
+        let odd = quote(Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: "Text(\"Sensor log <a> & b\")".into(), part: Part::Whole(String::new()) }, "");
+        assert_eq!(quote_block(&odd, Backend::Pluto), format!("<quote cell=\"Text(&quot;Sensor log &lt;a&gt; &amp; b&quot;)\" uri=\"notebook://pluto/{NB}/cell/c1\"/>"));
         for q in quotes {
             let block = quote_block(&q, Backend::Pluto);
             assert_eq!(replayed_quote(&block), Some(Attachment::Quote(q)), "{block}");
         }
+        let old = format!("<quote cell=\"rates\" part=\"output\" uri=\"notebook://pluto/{NB}/cell/c1\">\n0.42\n</quote>\nhm");
+        assert_eq!(replayed_quote(&old), Some(Attachment::Quote(quote(in_rates(Part::Output("0.42".into())), "hm"))));
+        let old = format!("<quote cell=\"rates\" uri=\"notebook://pluto/{NB}/cell/c1\">\nrates = 1\n</quote>");
+        assert_eq!(replayed_quote(&old), Some(Attachment::Quote(quote(in_rates(Part::Whole("rates = 1".into())), ""))));
         assert_eq!(replayed_quote("> just a blockquote the user typed"), None);
         assert_eq!(replayed_quote("plain words"), None);
+    }
+
+    #[test]
+    fn sending_picks_now_takes_the_quotes_staged_in_the_composer_and_leaves_the_rest() {
+        let staged = Attachment::Quote(quote(in_rates(Part::Whole(String::new())), "first"));
+        let file = Attachment::Text { name: "notes.txt".into(), text: "x".into() };
+        let mut composer = vec![staged.clone(), file.clone()];
+        assert_eq!(take_staged_quotes(&mut composer), [staged]);
+        assert_eq!(composer, [file]);
+    }
+
+    #[test]
+    fn a_reopened_quote_that_names_a_cell_or_output_has_no_excerpt_to_draw() {
+        for part in [Part::Whole(String::new()), Part::WholeOutput(String::new())] {
+            let q = quote(in_rates(part), "hm");
+            let Some(Attachment::Quote(back)) = replayed_quote(&quote_block(&q, Backend::Pluto)) else { panic!("didn't parse") };
+            assert_eq!(back.excerpt(), None);
+        }
+        assert_eq!(quote(in_rates(Part::Output("0.42".into())), "").excerpt(), Some("0.42"));
     }
 
     #[test]
@@ -1341,16 +1182,11 @@ mod tests {
     fn one_backspace_deletes_a_whole_mention() {
         let mentions = vec!["data/decay.csv".to_string()];
         let old = "fit @data/decay.csv now";
-        // Backspace at the token's end.
         assert_eq!(keep_tokens_whole(old, "fit @data/decay.cs now", &mentions), Some(("fit  now".into(), 4)));
-        // Forward delete at its start.
         assert_eq!(keep_tokens_whole(old, "fit data/decay.csv now", &mentions), Some(("fit  now".into(), 4)));
-        // Deleting a selection that covers it whole is already whole.
         assert_eq!(keep_tokens_whole(old, "fit  now", &mentions), None);
-        // Edits elsewhere, and typing, are left alone.
         assert_eq!(keep_tokens_whole(old, "fi @data/decay.csv now", &mentions), None);
         assert_eq!(keep_tokens_whole(old, "fit @data/decay.csv now!", &mentions), None);
-        // A selection from inside the token to past it takes the whole token.
         assert_eq!(keep_tokens_whole(old, "fit @data/dnow", &mentions), Some(("fit now".into(), 4)));
     }
 
@@ -1363,8 +1199,6 @@ mod tests {
         assert!(fuzzy("zzz", &paths, 5).is_empty());
     }
 
-    /// A fresh folder for one test: `session/` (the session's folder) and
-    /// `elsewhere/` beside it.
     fn scratch(test: &str) -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("endeavor-attach-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -1419,7 +1253,6 @@ mod tests {
         let (session, _) = scratch("inside");
         let csv = write(&session.join("raw/run 1.csv"), b"t,y");
         assert_eq!(add_file(&csv, &Folder::Here(session.clone())), Ok(Added::Mention("raw/run 1.csv".into())));
-        // The same folder by another route (macOS's /tmp → /private/tmp).
         let other_route = session.join("raw/../raw/run 1.csv");
         assert_eq!(relative_inside(&session, &other_route).as_deref(), Some("raw/run 1.csv"));
         assert_eq!(save_into(&session, &csv).unwrap(), "raw/run 1.csv");
@@ -1435,19 +1268,15 @@ mod tests {
         let sheet = write(&elsewhere.join("plate.xlsx"), &[0x50, 0x4b, 0x00, 0xff]);
         assert!(matches!(add_file(&sheet, &Folder::Here(session.clone())), Ok(Added::Chip(Attachment::Upload { size: 4, .. }))));
         assert_eq!(add_file(&elsewhere, &Folder::Here(session.clone())), Err("elsewhere is a folder; attach the files in it instead.".into()));
-        // A server's folder: every non-image file is sent, even one that's in
-        // a folder on this Mac of the same path.
         assert!(matches!(add_file(&gel, &Folder::Elsewhere), Ok(Added::Chip(Attachment::Image { .. }))));
         assert!(matches!(add_file(&sheet, &Folder::Elsewhere), Ok(Added::Chip(Attachment::Upload { size: 4, .. }))));
         let inside = write(&session.join("raw/run.csv"), b"t,y");
         assert_eq!(add_file(&inside, &Folder::Elsewhere), Ok(Added::Chip(Attachment::Upload { source: inside.clone(), size: 3 })));
-        // A server whose helper can't save files: read into the message, as before.
         let notes = write(&elsewhere.join("notes.txt"), b"t,y");
         assert_eq!(add_file(&notes, &Folder::Unwritable), Ok(Added::Chip(Attachment::Text { name: "notes.txt".into(), text: "t,y".into() })));
         assert_eq!(add_file(&sheet, &Folder::Unwritable), Err("plate.xlsx isn't text or a PNG, JPEG, GIF or WebP image, so it can't be attached yet.".into()));
     }
 
-    /// A server's folder at `folder`, its helper's answers given here.
     fn server(folder: &Path, progress: Arc<std::sync::Mutex<Vec<(u64, u64)>>>) -> Dest {
         Dest::Server {
             folder: crate::hosts::text(folder),
@@ -1475,18 +1304,15 @@ mod tests {
         let size = big.len() as u64;
         assert_eq!(*progress.lock().unwrap(), [(PIECE as u64, size), (2 * PIECE as u64, size), (size, size)]);
 
-        // The same contents again: found, nothing sent.
         progress.lock().unwrap().clear();
         let same = write(&elsewhere.join("b/decay.csv"), &big);
         assert_eq!(place_uploads(vec![upload(&same)], &dest).0, [saved("data/decay.csv")]);
         assert!(progress.lock().unwrap().is_empty(), "nothing was sent");
-        // Different contents under the same name: numbered.
         let other = write(&elsewhere.join("c/decay.csv"), b"t,y\n0,2\n");
         assert_eq!(place_uploads(vec![upload(&other)], &dest).0, [saved("data/decay (2).csv")]);
         assert_eq!(std::fs::read(session.join("data/decay (2).csv")).unwrap(), b"t,y\n0,2\n");
         assert_eq!(std::fs::read_dir(session.join("data")).unwrap().count(), 2, "no parts left behind");
 
-        // A helper that answers with an error: refused, in plain words.
         let failing = Dest::Server { folder: crate::hosts::text(&session.join("nope")), ask: Box::new(|_| Err("The connection closed.".into())), progress: Box::new(|_| {}) };
         let (placed, refused) = place_uploads(vec![upload(&other)], &failing);
         assert!(placed.is_empty());

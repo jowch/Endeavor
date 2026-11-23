@@ -1,4 +1,3 @@
-// A chip in the chat asks the page to show its cell, or for the cell's code now.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

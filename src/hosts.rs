@@ -1,7 +1,3 @@
-//! The machines sessions can run on besides This Mac, kept in `hosts.json` in
-//! Application Support (This Mac is implicit and never stored), and how the app
-//! names a host and a folder or file on it.
-
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -19,45 +15,27 @@ pub struct Hosts {
     pub servers: Vec<Server>,
 }
 
-/// A machine reached over SSH: a plain server, where the runtime runs as a
-/// detached process, or a cluster's login node, where it runs in a Slurm job.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Server {
-    /// Stable across renames; what sessions will refer to.
     pub id: String,
     pub name: String,
-    /// An alias from `~/.ssh/config`, or `user@host`.
     pub ssh_host: String,
     pub port: Option<u16>,
-    /// A julia path, or a shell line such as `module load julia`; unset looks
-    /// on the login shell's PATH, then downloads Endeavor's own Julia.
     pub julia: Option<String>,
-    /// An Rscript path, or a shell line such as `module load R`, for R notebooks;
-    /// unset is the login shell's Rscript. Endeavor doesn't download R.
     pub r: Option<String>,
-    /// Overrides Settings' "Stop idle notebooks after" for this server.
     pub idle_stop: Option<IdleStop>,
-    /// Set for a cluster: Julia runs in a Slurm job.
     pub cluster: Option<Cluster>,
-    /// Its SSH host or port changed, and no session has started there since. The folders used
-    /// there before were another sign-in's, so New session starts in the new home (#48).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub fresh: bool,
 }
 
-/// A cluster's Slurm settings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Cluster {
-    /// The account jobs are charged to; None is the user's default.
     pub account: Option<String>,
-    /// What a new session's job asks for (its resources chip starts here).
     pub resources: Resources,
-    /// Where Julia keeps packages; None is `$SCRATCH/endeavor/depot` if the
-    /// cluster sets `$SCRATCH` (home quotas are small), else ~/.cache/endeavor/depot.
     pub depot: Option<String>,
-    /// As the last Test connection found them.
     pub partitions: Vec<Partition>,
     pub scratch: Option<String>,
 }
@@ -70,10 +48,6 @@ impl Cluster {
         }
     }
 
-    /// Take the partitions a connect listed, and fit the defaults to them (a
-    /// cluster saved without Test connection still has the preset's size), and
-    /// `draft`, a new session's resources copied from those defaults before
-    /// the partitions arrived, to its own partition.
     pub fn take_partitions(&mut self, partitions: Vec<Partition>, scratch: Option<String>, draft: Option<&mut Resources>) {
         self.partitions = partitions;
         self.scratch = scratch;
@@ -84,9 +58,6 @@ impl Cluster {
         }
     }
 
-    /// The job a session with `resources` asks for, kept within what its
-    /// partition's largest node has: sizes saved before Test connection listed
-    /// the partitions would otherwise ask for more than any node has.
     pub fn job(&self, resources: &Resources) -> JobRequest {
         let mut resources = resources.clone();
         resources.clip(self.partition(resources.partition.as_deref()));
@@ -94,7 +65,6 @@ impl Cluster {
     }
 }
 
-/// A machine sessions run on: This Mac, or a server by its id.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HostId {
@@ -104,9 +74,6 @@ pub enum HostId {
 }
 
 impl HostId {
-    /// The local folder Claude Code works in for sessions on this host: the
-    /// session's own folder on This Mac; for a server, one folder per server in
-    /// Application Support (its files are out of reach of Claude's own tools).
     pub fn agent_cwd(&self, folder: &str) -> PathBuf {
         match self {
             HostId::ThisMac => PathBuf::from(folder),
@@ -114,7 +81,6 @@ impl HostId {
         }
     }
 
-    /// `name` (or a relative path) in the folder `dir` on this host.
     pub fn join(&self, dir: &str, name: &str) -> String {
         match self {
             HostId::ThisMac => text(&Path::new(dir).join(name)),
@@ -122,7 +88,6 @@ impl HostId {
         }
     }
 
-    /// The folder `path` on this host is in, as with `Path::parent`.
     pub fn parent(&self, path: &str) -> Option<String> {
         match self {
             HostId::ThisMac => Path::new(path).parent().map(text),
@@ -130,7 +95,6 @@ impl HostId {
         }
     }
 
-    /// `path` on this host, then each folder it is in, as with `Path::ancestors`.
     pub fn ancestors(&self, path: &str) -> Vec<String> {
         match self {
             HostId::ThisMac => Path::new(path).ancestors().map(text).filter(|p| !p.is_empty()).collect(),
@@ -138,13 +102,10 @@ impl HostId {
         }
     }
 
-    /// The last part of `path` on this host, or the whole path when it has
-    /// none (`/`): how a folder is named in a list.
     pub fn folder_name(&self, path: &str) -> String {
         self.file_name(path).unwrap_or_else(|| path.to_owned())
     }
 
-    /// The last part of `path` on this host.
     pub fn file_name(&self, path: &str) -> Option<String> {
         match self {
             HostId::ThisMac => Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()),
@@ -152,9 +113,6 @@ impl HostId {
         }
     }
 
-    /// `path` relative to the folder `base` on this host, part by part: `""`
-    /// for `base` itself, None when it isn't inside. Written with `/` on a
-    /// server and with this computer's separator here.
     pub fn strip_prefix(&self, path: &str, base: &str) -> Option<String> {
         match self {
             HostId::ThisMac => Path::new(path).strip_prefix(base).ok().map(text),
@@ -162,7 +120,6 @@ impl HostId {
         }
     }
 
-    /// The server whose agent folder `cwd` is, if it is one.
     pub fn of_agent_cwd(cwd: &Path) -> Option<HostId> {
         let hosts = crate::install::app_dir().ok()?.join("hosts");
         let id = cwd.strip_prefix(&hosts).ok()?.to_str()?;
@@ -170,15 +127,10 @@ impl HostId {
     }
 }
 
-/// A folder or file on a host. Saved lists from before servers hold plain
-/// paths, which are This Mac's.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(from = "SavedPlace")]
 pub struct Place {
     pub host: HostId,
-    /// As text in the host's rules: This Mac's own, or a server's `/` rules
-    /// whatever this computer's are (a `PathBuf` on Windows would turn a
-    /// Linux path's `/` into `\`). Take it apart with the host's methods below.
     pub path: String,
 }
 
@@ -199,34 +151,27 @@ impl From<SavedPlace> for Place {
 }
 
 impl Place {
-    /// Written part by part, so a trailing separator or a `.` part doesn't
-    /// make the same folder a second place (`PathBuf`'s `==` ignored them).
     pub fn local(path: impl AsRef<Path>) -> Place {
         Place { host: HostId::ThisMac, path: text(&path.as_ref().components().collect::<PathBuf>()) }
     }
 
-    /// The path on This Mac; None for a server's.
     pub fn here(&self) -> Option<&Path> {
         (self.host == HostId::ThisMac).then(|| Path::new(&self.path))
     }
 
-    /// `name` (or a relative path) in this folder.
     pub fn join(&self, name: &str) -> Place {
         Place { host: self.host.clone(), path: self.host.join(&self.path, name) }
     }
 
-    /// The folder this is in.
     pub fn parent(&self) -> Option<Place> {
         self.host.parent(&self.path).map(|path| Place { host: self.host.clone(), path })
     }
 
-    /// The last part of the path, or the whole path when it has none (`/`).
     pub fn name(&self) -> String {
         self.host.folder_name(&self.path)
     }
 }
 
-/// A path of This Mac as `Place` keeps it.
 pub fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -236,7 +181,6 @@ impl Hosts {
         crate::install::app_dir().ok().map(|d| Hosts::load_from(&d.join(FILE))).unwrap_or_default()
     }
 
-    /// A file that doesn't parse is set aside first, so a save can't overwrite the servers it holds.
     fn load_from(path: &Path) -> Hosts {
         crate::load_json_at(path)
     }
@@ -249,7 +193,6 @@ impl Hosts {
 
     fn save_to(&self, path: &Path) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        // Whole or not at all: a crash or a full disk mid-write leaves the old list.
         crate::write_atomic(path, json.as_bytes()).map_err(|e| format!("Couldn't save {}: {e}", path.display()))
     }
 
@@ -257,7 +200,6 @@ impl Hosts {
         self.servers.iter().find(|s| s.id == id)
     }
 
-    /// A host's name as the app shows it.
     pub fn name(&self, host: &HostId) -> String {
         match host {
             HostId::ThisMac => crate::platform::this_computer!().into(),
@@ -265,11 +207,6 @@ impl Hosts {
         }
     }
 
-    /// The name the server dialog saves for host `id`: `typed`, else the SSH
-    /// host, with " (cluster)" for a cluster so it isn't taken for the server
-    /// itself. A name left empty is numbered past the names other hosts have;
-    /// a typed one they have is refused. Sessions and notes tell hosts apart
-    /// by name, so two can't share one.
     pub fn name_for(&self, id: &str, typed: &str, ssh_host: &str, cluster: bool) -> Result<String, String> {
         let typed = typed.trim();
         if !typed.is_empty() {
@@ -281,19 +218,15 @@ impl Hosts {
         Ok(self.free_name(id, &if cluster { format!("{ssh_host} (cluster)") } else { ssh_host.to_owned() }))
     }
 
-    /// `base`, or "`base` 2", "`base` 3"… whichever no host but `id` has.
     pub fn free_name(&self, id: &str, base: &str) -> String {
         std::iter::once(base.to_owned()).chain((2..).map(|n| format!("{base} {n}"))).find(|name| !self.name_taken(id, name)).unwrap_or_default()
     }
 
-    /// Whether a host other than `id` is called `name`, ignoring case. "Local"
-    /// is how the notebook header names this computer.
     fn name_taken(&self, id: &str, name: &str) -> bool {
         let same = |other: &str| other.trim().to_lowercase() == name.trim().to_lowercase();
         [crate::platform::this_computer!(), "Local"].into_iter().any(same) || self.servers.iter().any(|s| s.id != id && same(&s.name))
     }
 
-    /// Add `server`, or replace the one with its id.
     pub fn put(&mut self, server: Server) {
         match self.servers.iter_mut().find(|s| s.id == server.id) {
             Some(existing) => *existing = server,
@@ -312,12 +245,6 @@ impl Server {
         format!("server-{nanos:x}")
     }
 
-    /// The helper's launcher and its state folder's name in ~/.cache/endeavor.
-    /// A plain server's is empty: the helper's own default, which the plugin's
-    /// `endeavor serve` and `mcp` use too, so both share one runtime there. The
-    /// helper keeps using the app's older `state` folder while a runtime there
-    /// is alive (EndeavorMCP#110). A cluster's folder is its own, so the same
-    /// machine can also be a plain server entry without the two sharing a runtime.
     pub fn launcher(&self) -> [String; 2] {
         match &self.cluster {
             None => ["process".into(), String::new()],
@@ -325,7 +252,6 @@ impl Server {
         }
     }
 
-    /// The dialog's SSH host field: `host`, or `host:port`.
     pub fn ssh_target(&self) -> String {
         match self.port {
             Some(port) => format!("{}:{port}", self.ssh_host),
@@ -333,7 +259,6 @@ impl Server {
         }
     }
 
-    /// Read the dialog's SSH host field back: a trailing `:port` is the port.
     pub fn parse_target(text: &str) -> Result<(String, Option<u16>), String> {
         let text = text.trim();
         if text.is_empty() {
@@ -351,8 +276,6 @@ impl Server {
         }
     }
 
-    /// The helper's Julia arguments for this server. A path to a julia binary
-    /// (which may hold spaces) is used as is; anything else is a shell line.
     pub fn julia_args(&self) -> [String; 2] {
         let is_path = |j: &str| (j.starts_with('/') || j.starts_with("~/")) && j.rsplit('/').next().is_some_and(|name| name.starts_with("julia"));
         match self.julia.as_deref().map(str::trim).filter(|j| !j.is_empty()) {
@@ -363,8 +286,6 @@ impl Server {
     }
 }
 
-/// `Host` names in `~/.ssh/config` (and the files it `Include`s by plain
-/// path), without patterns, for the SSH host field's suggestions.
 pub fn ssh_config_hosts() -> Vec<String> {
     let ssh = wire::files::home().join(".ssh");
     let mut hosts = Vec::new();
@@ -409,7 +330,6 @@ mod tests {
         let small = Partition { name: "standard".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
         let big = Partition { name: "big".into(), default: false, max_minutes: Some(60), cpus: 64, mem_mb: 512 * 1024 };
         let cluster = Cluster { partitions: vec![small, big], account: Some("lab".into()), ..Default::default() };
-        // Medium, as a cluster saved before Test connection has it.
         let job = cluster.job(&Resources::default());
         assert_eq!((job.resources.cpus, job.resources.mem_gb, job.resources.minutes), (4, 7, 480), "the default partition's node");
         assert_eq!(job.account.as_deref(), Some("lab"));
@@ -423,7 +343,6 @@ mod tests {
     fn partitions_arriving_fit_the_defaults_and_the_draft() {
         let small = Partition { name: "standard".into(), default: true, max_minutes: None, cpus: 4, mem_mb: 7492 };
         let short = Partition { name: "short".into(), default: false, max_minutes: Some(60), cpus: 2, mem_mb: 4096 };
-        // Added without Test connection: Medium, and a draft copied from it.
         let mut cluster = Cluster::default();
         let mut draft = Resources { partition: Some("short".into()), ..cluster.resources.clone() };
         cluster.take_partitions(vec![small, short], Some("/scratch".into()), Some(&mut draft));
@@ -455,7 +374,6 @@ mod tests {
         assert!(text.contains("\"idle_stop\": \"week\"") && text.contains("\"port\": 2222"), "{text}");
         hosts.remove("a");
         assert_eq!(hosts.servers.len(), 1);
-        // A list cut short reads as none, and is kept aside rather than saved over.
         std::fs::write(&path, &text[..text.len() / 2]).unwrap();
         assert_eq!(Hosts::load_from(&path), Hosts::default());
         assert!(dir.join(format!("{FILE}.bad")).exists());
@@ -486,7 +404,6 @@ mod tests {
         assert_eq!(lab.ancestors("/home/jc"), ["/home/jc", "/home", "/"]);
         assert_eq!(lab.strip_prefix("/home/jc/qpcr/sub/a.jl", "/home/jc/qpcr").as_deref(), Some("sub/a.jl"));
         assert_eq!(lab.strip_prefix("/home/jc/qpcr2/a.jl", "/home/jc/qpcr"), None);
-        // What Windows reads as a drive or a separator is only part of a name on a server.
         assert_eq!(lab.file_name(r"/home/jc/C:\x.jl").as_deref(), Some(r"C:\x.jl"));
         assert_eq!(lab.join("/home/jc", "C:x"), "/home/jc/C:x");
         assert!(folder.here().is_none());
@@ -500,8 +417,6 @@ mod tests {
         assert_eq!(folder.join("data").path, text(&home.join("data")));
         assert_eq!(folder.join("data").parent(), Some(folder.clone()));
         assert_eq!(HostId::ThisMac.strip_prefix(&text(&home.join("a.jl")), &folder.path).as_deref(), Some("a.jl"));
-        // macOS's and Windows's temp folder end in a separator; the same
-        // folder with and without it is one place.
         assert_eq!(Place::local(home.join("x").join("")), Place::local(home.join("x")));
         assert_eq!(Place::local(home.join(".").join("x")), Place::local(home.join("x")));
     }
@@ -545,12 +460,10 @@ mod tests {
         let server = |id: &str, name: &str| Server { id: id.into(), name: name.into(), ssh_host: "lab".into(), ..Default::default() };
         let mut hosts = Hosts::default();
         hosts.put(server("a", "lab"));
-        // Left empty: a cluster on the same login host isn't named like the server.
         assert_eq!(hosts.name_for("new", "", "lab", true).as_deref(), Ok("lab (cluster)"));
         assert_eq!(hosts.name_for("new", "  ", "lab", false).as_deref(), Ok("lab 2"));
         hosts.put(server("b", "lab (cluster)"));
         assert_eq!(hosts.name_for("new", "", "lab", true).as_deref(), Ok("lab (cluster) 2"));
-        // Typed: another host's name, in any case, is refused; a host keeps its own.
         assert!(hosts.name_for("new", " LAB ", "lab", false).unwrap_err().contains("\"LAB\""));
         assert!(hosts.name_for("new", crate::platform::this_computer!(), "lab", false).is_err());
         assert!(hosts.name_for("new", "local", "lab", false).is_err());
@@ -559,7 +472,6 @@ mod tests {
         assert_eq!(hosts.name_for("new", "gpu box", "lab", false).as_deref(), Ok("gpu box"));
         hosts.put(server("c", "Über"));
         assert!(hosts.name_for("new", "über", "lab", false).is_err());
-        // Add as cluster fills in the next free name, so Save doesn't refuse it.
         assert_eq!(hosts.free_name("", "lab (cluster)"), "lab (cluster) 2");
     }
 

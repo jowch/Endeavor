@@ -1,4 +1,3 @@
-// Find in the notebook (src/find.ts), for the view in Claude's desktop app, whose own ⌘F doesn't search the view.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -13,7 +12,6 @@ function find(html) {
   return (q) => Array.from(window.find.findMatches(root, q), (r) => r.toString());
 }
 
-// A cell as CodeMirror draws it: each line its own element, a token per span.
 const cell = (lines, output) =>
   `<pluto-cell><pluto-input><div class="cm-content">${lines.map((l) => `<div class="cm-line">${l}</div>`).join("")}</div></pluto-input>` +
   `<pluto-output>${output}</pluto-output></pluto-cell>`;
@@ -35,7 +33,6 @@ test("a match doesn't run from one line, paragraph or cell into the next", () =>
   assert.deepEqual(search("endstart"), []);
   assert.deepEqual(search("startz"), []);
   assert.deepEqual(search("y = 2"), ["y = 2"]);
-  // A <br> breaks the line too.
   const br = find(`<pluto-notebook>${cell(["a"], "<span>one<br>two</span>")}</pluto-notebook>`);
   assert.deepEqual(br("onetwo"), []);
   assert.deepEqual(br("two"), ["two"]);

@@ -1,6 +1,3 @@
-//! Runs of tool calls: the calls between two agent messages fold into one line
-//! that says in plain words what they did ("Read 2 files, ran a command").
-
 use std::ops::Range;
 
 use agent_client_protocol::schema::v1::{ToolCallStatus, ToolKind};
@@ -9,13 +6,10 @@ use serde_json::Value;
 use crate::celldiff;
 use crate::session::Entry;
 
-/// Entries a run is made of: tool calls, the thinking between them, and a
-/// pending prompt (drawn above the composer, not in the transcript).
 pub fn is_member(entry: &Entry) -> bool {
     matches!(entry, Entry::Tool { .. } | Entry::Thought { .. } | Entry::Permission { .. })
 }
 
-/// The run entry `ix` belongs to: the members around it, if one of them is a tool call.
 pub fn run_at(entries: &[Entry], ix: usize) -> Option<Range<usize>> {
     if !is_member(entries.get(ix)?) {
         return None;
@@ -25,22 +19,12 @@ pub fn run_at(entries: &[Entry], ix: usize) -> Option<Range<usize>> {
     entries[start..end].iter().any(|e| matches!(e, Entry::Tool { .. })).then_some(start..end)
 }
 
-/// A call failed: the agent says so, or a notebook tool refused it. A denied
-/// call isn't a failure (see `denied`).
-///
-/// A refusal's JSON is `mcp.rs::tool_error`'s shape: `{"error": kind,
-/// "message": ...}`, and nothing else. A successful reply can also carry an
-/// `"error"` field (`read_cell` and `edit_cell` show the cell's own error
-/// alongside `cell_id`, `applied` and the rest), so only the two-key shape
-/// means the tool itself failed.
 pub fn failed(status: ToolCallStatus, title: &str, output: Option<&Value>) -> bool {
     !denied(output)
         && (status == ToolCallStatus::Failed
             || (celldiff::notebook_tool(title).is_some() && output.and_then(celldiff::tool_json).as_ref().is_some_and(is_refusal)))
 }
 
-/// Whether a notebook call's answer says a cell it ran or read has an error
-/// (the call itself went through).
 pub fn cell_error(title: &str, output: Option<&Value>) -> bool {
     if celldiff::notebook_tool(title).is_none() {
         return false;
@@ -51,9 +35,6 @@ pub fn cell_error(title: &str, output: Option<&Value>) -> bool {
         || reply["outputs"]["changed"].as_array().into_iter().flatten().any(has_error)
 }
 
-/// Calls the transcript leaves out: Claude Code's own plumbing, which says
-/// nothing about the work (ToolSearch loads the descriptions of more tools).
-/// One that failed or was denied stays, since it can explain what came next.
 pub fn hidden(title: &str, status: ToolCallStatus, output: Option<&Value>) -> bool {
     title == "ToolSearch" && !failed(status, title, output) && !denied(output)
 }
@@ -62,16 +43,8 @@ fn is_refusal(reply: &Value) -> bool {
     reply.as_object().is_some_and(|o| o.len() == 2 && o.contains_key("error") && o.contains_key("message"))
 }
 
-/// Claude Code's own text for a denied call.
 const DENIED_TEXT: &str = "User refused permission to run tool";
 
-/// A live denial is known right away, from the approval card's answer
-/// (`session::Approval::Denied`). A reopened session has no such answer to
-/// replay, only the call's raw result: for the agent's own prompt
-/// `DENIED_TEXT` and nothing else, as a plain string or (a notebook tool's
-/// MCP shape) the first content block's text; for a run the runtime asked
-/// about, its `not_approved` error, or for an edit that was to run after,
-/// the edit's receipt with a `not_approved` warning (the edit was kept).
 pub fn denied(output: Option<&Value>) -> bool {
     fn text(v: &Value) -> Option<&str> {
         v.as_str().or_else(|| v.get(0).and_then(|c| c["text"].as_str()))
@@ -84,10 +57,6 @@ pub fn denied(output: Option<&Value>) -> bool {
     result["error"] == "not_approved" || unrun
 }
 
-/// One kind of work, worded as "`verb` `one`" for a single one and
-/// "`verb` `many`" (with `{n}` the count) for several; `does` is the verb
-/// before it happens ("edit a cell"), `doing` while it happens ("Editing a
-/// cell"), `verb` after ("edited a cell").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Act {
     doing: &'static str,
@@ -107,7 +76,6 @@ impl Act {
     }
 }
 
-/// A notebook tool call in plain words, as asked for: "edit a cell", "run 2 cells".
 pub fn asked(title: &str, input: &Value) -> Option<String> {
     celldiff::notebook_tool(title)?;
     let (act, n) = act_of(title, ToolKind::Other, input);
@@ -146,7 +114,6 @@ const CLOSE_NOTEBOOK: Act = act("Closing", "close", "closed", "the notebook", "t
 const SKILL: Act = act("Using", "use", "used", "a skill", "{n} skills");
 const OTHER: Act = act("Using", "use", "used", "a tool", "{n} tools");
 
-/// What a running call can be named by on the working line.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Names {
     File,
@@ -154,10 +121,6 @@ pub enum Names {
     Nothing,
 }
 
-/// A running call for the working line, in the same words as the folded runs:
-/// its verb ("Reading"), the phrase to show when it names nothing ("Reading a
-/// file", "Editing 2 cells"), and what it can be named by. None for a tool
-/// there are no words for.
 pub fn doing(title: &str, kind: ToolKind, input: &Value) -> Option<(&'static str, String, Names)> {
     let (act, n) = act_of(title, kind, input);
     let names = match act {
@@ -169,7 +132,6 @@ pub fn doing(title: &str, kind: ToolKind, input: &Value) -> Option<(&'static str
     Some((act.doing, format!("{} {}", act.doing, act.object(n)), names))
 }
 
-/// What a call did, and how many of it (cells edited, say).
 fn act_of(title: &str, kind: ToolKind, input: &Value) -> (Act, usize) {
     let count = |field: &str| input[field].as_array().map_or(1, |a| a.len().max(1));
     if let Some(tool) = celldiff::notebook_tool(title) {
@@ -218,8 +180,6 @@ fn act_of(title: &str, kind: ToolKind, input: &Value) -> (Act, usize) {
     (act, 1)
 }
 
-/// A run's folded line, by kind in the order each first appears:
-/// "Read 2 files, listed a folder, ran a command".
 pub fn summary<'a>(calls: impl IntoIterator<Item = (&'a str, ToolKind, &'a Value)>) -> String {
     let mut acts: Vec<(Act, usize)> = Vec::new();
     for (title, kind, input) in calls {
@@ -399,13 +359,11 @@ mod tests {
 
     #[test]
     fn a_cells_own_error_in_a_successful_reply_is_not_a_failure() {
-        // read_cell: the cell errored, but the read itself succeeded.
         let read = json!([{"type": "text", "text":
             "{\"cell_id\":\"c1\",\"code\":\"1/0\",\"output\":\"\",\"errored\":true,\"running\":false,\"queued\":false,\
               \"code_folded\":false,\"stale\":false,\"error\":{\"msg\":\"DivideError\"}}"}]);
         assert!(!super::failed(ToolCallStatus::Completed, "mcp__notebook__read_cell", Some(&read)), "the cell's own error isn't the tool's");
 
-        // edit_cell: the edit applied, but the cell still shows an earlier run's error.
         let edit = json!([{"type": "text", "text":
             "{\"applied\":true,\"mutation\":{},\"cell_order\":[],\"execution_order\":[],\"affected_cells\":[],\
               \"execution\":{\"status\":\"idle\"},\"outputs\":{\"changed\":[]},\"pending_run\":[],\"warnings\":[],\
@@ -416,25 +374,20 @@ mod tests {
 
     #[test]
     fn a_denied_call_is_told_apart_from_a_failed_one() {
-        // The exact shape captured from a reopened session: a plain string,
-        // for a built-in tool the agent denied.
         let denied = json!("User refused permission to run tool");
         assert!(super::denied(Some(&denied)));
         assert!(!super::failed(ToolCallStatus::Failed, "Bash", Some(&denied)), "a denial isn't shown as a failure");
 
-        // The same text, in a notebook tool's MCP content shape.
         let denied_mcp = json!([{"type": "text", "text": "User refused permission to run tool"}]);
         assert!(super::denied(Some(&denied_mcp)));
         assert!(!super::failed(ToolCallStatus::Failed, "mcp__notebook__execute_cell", Some(&denied_mcp)));
 
-        // A run the runtime asked about, denied: its refusal, or an edit kept but not run.
         let refused = json!([{"type": "text", "text": "{\"error\":\"not_approved\",\"message\":\"The user chose not to run this.\"}"}]);
         assert!(super::denied(Some(&refused)));
         assert!(!super::failed(ToolCallStatus::Failed, "mcp__notebook__execute_cell", Some(&refused)));
         let kept = json!([{"type": "text", "text": "{\"applied\":true,\"warnings\":[\"not_approved::The user chose not to run this yet. The edit is kept, staged and not run.\"]}"}]);
         assert!(super::denied(Some(&kept)));
 
-        // A real failure still counts as one.
         assert!(!super::denied(Some(&json!("some other error"))));
         assert!(!super::denied(None));
     }
