@@ -585,6 +585,7 @@ impl Workspace {
             PaneShows::Stopped(_) => "stopped",
             PaneShows::Crashed => "crashed",
             PaneShows::Opening => "opening",
+            PaneShows::PythonPreview => "python_preview",
             PaneShows::Page => "page",
         };
         let page = (shown == PaneShows::Page).then(|| {
@@ -593,7 +594,7 @@ impl Workspace {
             let reported = s.notebook.as_deref().is_some_and(|id| p.notebook == id);
             json!({
                 "notebook": s.notebook,
-                "backend": crate::viewed_notebook(&url).map(|(kind, _)| kind.name()),
+                "backend": crate::viewed_kind(&url).map(|kind| kind.name()),
                 "look": self.settings.notebook_theme,
                 "safe_preview": reported && p.safe,
                 "read_only": self.read_only(s),

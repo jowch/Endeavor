@@ -591,7 +591,7 @@ impl crate::Workspace {
             return Err("not a Pluto notebook");
         }
         let runtime = self.connection(&ask.host).and_then(|c| c.runtime.as_ref()).ok_or("no runtime")?;
-        let url = Backend::Pluto.notebook_url(&runtime.page_url, &ask.notebook);
+        let url = Backend::Pluto.notebook_url(&runtime.page_url, &ask.notebook, "");
         if ask.asked.elapsed() >= WAIT {
             return Err("the agent stopped waiting");
         }

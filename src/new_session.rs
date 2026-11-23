@@ -56,10 +56,13 @@ pub fn new_kinds(host: &HostId) -> &'static [Backend] {
 }
 
 /// A notebook file's kind from its name, in any host's rules: `.R` is R's, the rest Julia's.
+pub const SHOWS_PYTHON: bool = cfg!(not(windows));
+
 pub fn kind_of_path(path: &str) -> Backend {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     match name.rsplit_once('.') {
         Some((_, "R" | "r")) => Backend::Ember,
+        Some((_, "py")) => Backend::Marimo,
         _ => Backend::Pluto,
     }
 }
@@ -2051,6 +2054,7 @@ mod tests {
         assert_eq!(NotebookChoice::Existing("/home/jc/fits/decay.jl".into()).kind(), Backend::Pluto);
         assert_eq!(NotebookChoice::Existing("/home/jc/fits/counts.R".into()).kind(), Backend::Ember);
         assert_eq!(kind_of_path(r"C:\Users\jc\counts.r"), Backend::Ember);
+        assert_eq!(kind_of_path("/home/jc/fits/fit.py"), Backend::Marimo);
         assert_eq!(kind_of_path("/home/jc/my.R/decay.jl"), Backend::Pluto);
         assert_eq!(kind_of_path("/home/jc/R"), Backend::Pluto);
     }

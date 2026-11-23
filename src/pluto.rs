@@ -91,7 +91,7 @@ pub fn set_notebook(bridge: &Bridge, owner: u64, path: &str) -> Result<(), Strin
 pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend) -> Result<(), String> {
     // The core forgets kinds when it restarts, so every call says it.
     let kind = crate::new_session::kind_name(kind);
-    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder, "kind": kind })).map(|_| ())
+    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder, "kind": kind, "shows_python": crate::new_session::SHOWS_PYTHON })).map(|_| ())
 }
 
 /// Make `dir` the folder Pluto suggests when saving a new notebook.
@@ -134,6 +134,15 @@ pub type Endings = std::collections::HashSet<(String, u64)>;
 /// have, as (path, language, why), and the endings to keep for the next push. Keyed on the time
 /// too, so a notebook that opened again and whose R ended again between two pushes shows its
 /// second ending (#122).
+pub fn waits_to_run(notebooks: &serde_json::Value, path: &str) -> bool {
+    notebooks.as_array().into_iter().flatten().any(|nb| nb["path"] == path && nb["execution_allowed"] == false)
+}
+
+pub fn newly_allowed(before: &serde_json::Value, after: &serde_json::Value) -> Vec<String> {
+    let allowed = |list: &serde_json::Value, path: &str| list.as_array().into_iter().flatten().any(|nb| nb["path"] == path && nb["execution_allowed"] == true);
+    after.as_array().into_iter().flatten().filter_map(|nb| nb["path"].as_str()).filter(|path| waits_to_run(before, path) && allowed(after, path)).map(str::to_owned).collect()
+}
+
 pub fn new_endings(last: &Endings, event: &serde_json::Value) -> (Vec<(String, String, String)>, Endings) {
     let ended = engine_ended(event);
     let new = ended.iter().filter(|(path, _, _, at)| !last.contains(&(path.clone(), *at))).map(|(path, language, why, _)| (path.clone(), language.clone(), why.clone())).collect();
@@ -708,6 +717,19 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_python_page_loads_once_its_notebook_may_run() {
+        let preview = serde_json::json!([{ "path": "/w/fit.py", "execution_allowed": false }, { "path": "/w/a.jl", "execution_allowed": true }]);
+        let running = serde_json::json!([{ "path": "/w/fit.py", "execution_allowed": true }, { "path": "/w/a.jl", "execution_allowed": true }]);
+        assert!(super::waits_to_run(&preview, "/w/fit.py"));
+        assert!(!super::waits_to_run(&running, "/w/fit.py"));
+        assert!(!super::waits_to_run(&preview, "/w/other.py"), "a notebook the runtime doesn't list isn't waiting");
+        assert_eq!(super::newly_allowed(&preview, &running), ["/w/fit.py"]);
+        assert!(super::newly_allowed(&running, &running).is_empty(), "already running: no reload");
+        assert!(super::newly_allowed(&serde_json::Value::Null, &running).is_empty(), "opened straight into running");
+    }
+
     use super::*;
 
     #[test]

@@ -221,6 +221,7 @@ pub enum PaneShows {
     Crashed,
     /// "Opening <file>…".
     Opening,
+    PythonPreview,
     Page,
 }
 
@@ -723,7 +724,8 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());
-        let tools = (endeavor && shown).then(|| {
+        let our_tools_in_page = session.kind != Backend::Marimo;
+        let tools = (endeavor && shown && our_tools_in_page).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             [
                 header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
@@ -756,7 +758,7 @@ impl Workspace {
             .child(div().flex_1())
             .children(self.job_ends(&session.place.host))
             .children(busy)
-            .when(shown, |d| d.child(point))
+            .when(shown && our_tools_in_page, |d| d.child(point))
             .children(tools.into_iter().flatten())
             .when(session.notebook_path.is_some(), |d| d.child(self.notebook_more(key, cx)))
             .into_any_element()
@@ -1403,6 +1405,18 @@ impl Workspace {
                     .child(div().mt(px(6.)).child(page_button("start-notebook", Glyph::Play, "Start", true).on_click(cx.listener(move |this, _, _, cx| this.start_notebook(key, cx)))))
                     .into_any_element()
             }
+            PaneShows::PythonPreview => {
+                let notebook = session.notebook.clone();
+                new_session::turtle_pane()
+                    .child(page_title(div().flex().gap(px(6.)).child(mono(file)).child("is in safe preview")))
+                    .child(page_text("A Python notebook shows here once it's allowed to run, since opening it installs the packages it names, and that runs code."))
+                    .child(div().mt(px(6.)).child(page_button("run-notebook", Glyph::Play, "Run notebook", true).on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(notebook) = notebook.clone() {
+                            this.run_notebook(notebook, cx);
+                        }
+                    }))))
+                    .into_any_element()
+            }
             PaneShows::Opening => new_session::turtle_pane()
                 .child(div().flex().items_baseline().text_color(theme::text_muted()).child("Opening ").child(new_session::file_name(file)).child("…"))
                 .when(self.opening.stuck, |d| {
@@ -1451,6 +1465,9 @@ impl Workspace {
         // A page taken down with its runtime (`close_page`), or whose web content process
         // ended (no address), stays covered until the reopened one loads.
         let blank = matches!(crate::webcontent::url(self.webview.read(cx).raw()).as_str(), "about:blank" | "");
+        if session.kind == Backend::Marimo && self.connection(&session.place.host).is_some_and(|c| pluto::waits_to_run(&c.notebooks, session.notebook_path.as_deref().unwrap_or_default())) {
+            return PaneShows::PythonPreview;
+        }
         if session.notebook.is_some() && !blank { PaneShows::Page } else { PaneShows::Opening }
     }
 

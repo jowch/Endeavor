@@ -1338,6 +1338,7 @@ impl Workspace {
             cx.notify();
         }
         let exits = crate::crash::new_exits(&connection.notebooks, &list, &event["cells"]);
+        let now_running = pluto::newly_allowed(&connection.notebooks, &list);
         connection.notebooks = list;
         for (notebook, cell, name) in pluto::user_edits(&connection.cells, &event["cells"]) {
             for session in self.sessions.iter_mut().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())) {
@@ -1363,6 +1364,10 @@ impl Workspace {
             self.note_stopped_file(host, path, cx);
         }
         self.crash_progress(host);
+        let python_pages: Vec<u64> = self.sessions.iter().filter(|s| s.place.host == *host && s.kind == Backend::Marimo && s.notebook_path.as_ref().is_some_and(|p| now_running.contains(p))).map(|s| s.key).collect();
+        for key in python_pages {
+            self.reload_notebook(key, cx);
+        }
         for (path, cell) in exits {
             self.notebook_stopped((host.clone(), path), cell, cx);
         }

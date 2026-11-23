@@ -137,6 +137,10 @@ fn viewed_notebook(url: &str) -> Option<(Backend, &str)> {
     Backend::ALL.into_iter().find_map(|kind| Some((kind, kind.notebook_id(url).filter(|id| annotate::is_uuid(id))?)))
 }
 
+fn viewed_kind(url: &str) -> Option<Backend> {
+    viewed_notebook(url).map(|(kind, _)| kind).or_else(|| Backend::Marimo.notebook_path(url).map(|_| Backend::Marimo))
+}
+
 actions!(
     endeavor,
     [
@@ -1767,7 +1771,7 @@ impl Workspace {
             return None;
         }
         let url = crate::webcontent::url(self.webview.read(cx).raw());
-        let id = viewed_notebook_id(&url)?.to_owned();
+        let id = self.shown_notebook_id(&url)?;
         let (mut edits, mut restored) = (Vec::new(), Vec::new());
         if let Some(session) = self.active.and_then(|key| self.session_mut(key)) {
             session.notebook = Some(id.clone());
@@ -2305,20 +2309,38 @@ impl Workspace {
         self.sessions.iter().find(|s| s.key == key).map_or(Backend::Pluto, |s| s.kind)
     }
 
+    fn notebook_path(&self, host: &HostId, id: &str) -> Option<String> {
+        let session = self.sessions.iter().filter(|s| &s.place.host == host && s.notebook.as_deref() == Some(id)).find_map(|s| s.notebook_path.clone());
+        let listed = || self.connection(host)?.last_notebooks.iter().find(|(nb, _)| nb == id).map(|(_, path)| path.clone());
+        session.or_else(listed)
+    }
+
+    fn notebook_id_at(&self, path: &str) -> Option<String> {
+        let session = self.sessions.iter().filter(|s| s.notebook_path.as_deref() == Some(path)).find_map(|s| s.notebook.clone());
+        let listed = || self.connections.values().find_map(|c| c.last_notebooks.iter().find(|(_, at)| at == path).map(|(nb, _)| nb.clone()));
+        session.or_else(listed)
+    }
+
+    fn shown_notebook_id(&self, url: &str) -> Option<String> {
+        match viewed_notebook_id(url) {
+            Some(id) => Some(id.to_owned()),
+            None => self.notebook_id_at(&Backend::Marimo.notebook_path(url)?),
+        }
+    }
+
     /// Whose notebook `id` of `host` is, from its file's name: a session's file, else the runtime's
     /// last list of open notebooks, else Julia's.
     pub fn notebook_kind(&self, host: &HostId, id: &str) -> Backend {
-        let session = self.sessions.iter().filter(|s| &s.place.host == host && s.notebook.as_deref() == Some(id)).find_map(|s| s.notebook_path.clone());
-        let listed = || self.connection(host)?.last_notebooks.iter().find(|(nb, _)| nb == id).map(|(_, path)| path.clone());
-        session.or_else(listed).map_or(Backend::Pluto, |path| new_session::kind_of_path(&path))
+        self.notebook_path(host, id).map_or(Backend::Pluto, |path| new_session::kind_of_path(&path))
     }
 
     /// Show notebook `id` of `host` in the pane: Pluto's page, or Ember's for an R notebook.
     pub fn load_notebook(&mut self, host: &HostId, id: &str, cx: &mut Context<Self>) {
-        let kind = self.notebook_kind(host, id);
+        let path = self.notebook_path(host, id).unwrap_or_default();
+        let kind = new_session::kind_of_path(&path);
         let Some(runtime) = self.connection(host).and_then(|c| c.runtime.as_ref()) else { return };
         // page_url carries the runtime's token; keep it app-side.
-        let url = kind.notebook_url(&runtime.page_url, id);
+        let url = kind.notebook_url(&runtime.page_url, id, &path);
         #[cfg(debug_assertions)]
         let url = if notebook_pane::test_stuck_opening().is_some_and(|keep| keep) { "about:blank".to_owned() } else { url };
         self.webview.update(cx, |w, _| w.load_url(&url));
@@ -2657,8 +2679,8 @@ impl Workspace {
     /// Mark the shown notebook's cells in the page (unrun, author).
     pub fn push_cells(&self, cx: &mut Context<Self>) {
         let url = crate::webcontent::url(self.webview.read(cx).raw());
-        let Some(id) = viewed_notebook_id(&url) else { return };
-        let cells = self.connections.values().find_map(|c| c.cells.get(id).cloned()).unwrap_or_else(|| serde_json::json!([]));
+        let Some(id) = self.shown_notebook_id(&url) else { return };
+        let cells = self.connections.values().find_map(|c| c.cells.get(&id).cloned()).unwrap_or_else(|| serde_json::json!([]));
         self.send_to_page(&serde_json::json!({ "type": "cells", "cells": cells }), cx);
     }
 
@@ -3533,6 +3555,13 @@ mod tests {
         assert_eq!(viewed_notebook(&format!("http://127.0.0.1:1234/ember/edit?id={id}")), Some((Backend::Ember, id)));
         assert_eq!(viewed_notebook(&format!("http://127.0.0.1:1234/edit?id={id}")), Some((Backend::Pluto, id)));
         assert_eq!(viewed_notebook("http://127.0.0.1:1234/ember/edit?id=../x"), None);
+    }
+
+    #[test]
+    fn a_marimo_page_shows_a_python_notebook_by_its_path() {
+        assert_eq!(super::viewed_kind("http://127.0.0.1:1234/marimo/?file=/w/fit.py&token=t"), Some(Backend::Marimo));
+        assert_eq!(viewed_notebook("http://127.0.0.1:1234/marimo/?file=/w/fit.py"), None, "its id comes from the runtime's list, by path");
+        assert_eq!(super::viewed_kind("http://127.0.0.1:1234/edit?id=6a1b2c3d-0000-4000-8000-1234567890ab"), Some(Backend::Pluto));
     }
 
     /// `pending_moved` (the "notebook moved" note waiting to reach the agent,
