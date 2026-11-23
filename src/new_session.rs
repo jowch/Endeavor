@@ -517,8 +517,6 @@ impl Workspace {
         if self.draft.host == HostId::ThisMac || agent.facts().on_servers { agent } else { Agent::Claude }
     }
 
-    /// Why the agent chip says Claude when the user picked another agent: theirs doesn't run
-    /// sessions on servers (#218). Back on this computer, their pick comes back.
     pub fn agent_fallback_text(&self) -> Option<String> {
         let (picked, used) = (self.draft.agent, self.draft_agent());
         (picked != used).then(|| format!("{} runs on {} only, so this session uses {}.", picked.facts().name, crate::platform::this_computer!(lower), used.facts().name))
