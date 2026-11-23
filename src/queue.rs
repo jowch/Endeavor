@@ -1,8 +1,3 @@
-//! Queued messages above the composer: a heading that says how they go, then
-//! one row each. ✎ puts a message in the composer while its row keeps its
-//! place; ✕ removes it at once, with Undo for a few seconds; ↑ sends it now.
-//! Clicking a row's words opens the whole message in place.
-
 use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
@@ -16,22 +11,16 @@ use crate::outbox::{Dispatch, Outbox, UNDO_FOR};
 use crate::session::Session;
 use crate::theme::{self, FocusRing as _};
 
-/// With more than this many rows, the stack shows `SHOWN` and "N more ›".
 const FOLD_OVER: usize = 4;
 const SHOWN: usize = 3;
-/// Chips a closed row shows before "+N".
 const ROW_CHIPS: usize = 2;
 
-/// A queued message being edited in the composer, and what the composer held
-/// before, which comes back once the edit is done.
 pub struct QueueEdit {
     pub key: u64,
     aside: (String, Vec<Attachment>),
 }
 
 impl Workspace {
-    /// ✎ on row `ix` of session `key`: the message goes into the composer and
-    /// its row stays as a placeholder. Words already in the box are set aside.
     pub fn edit_queued(&mut self, key: u64, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_queue_edit(window, cx);
         let Some((text, attachments)) = self.session_mut(key).and_then(|s| s.begin_edit(ix)) else { return };
@@ -40,20 +29,16 @@ impl Workspace {
         self.restore_composer(text, attachments, window, cx);
     }
 
-    /// Whether the composer holds session `key`'s queued message being edited.
     pub fn editing_queued(&self, key: u64) -> bool {
         self.queue_edit.as_ref().is_some_and(|e| e.key == key)
     }
 
-    /// The edit went back in its place: what the box held before comes back.
     pub fn queue_edit_done(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(QueueEdit { aside: (text, attachments), .. }) = self.queue_edit.take() {
             self.restore_composer(text, attachments, window, cx);
         }
     }
 
-    /// Esc while editing: the queued message stays as it was, and the box
-    /// gets back what it held. False when nothing was being edited.
     pub fn cancel_queue_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(edit) = self.queue_edit.take() else { return false };
         self.queue_do(edit.key, cx, Outbox::cancel_edit);
@@ -63,7 +48,6 @@ impl Workspace {
         true
     }
 
-    /// Run a queue action on session `key` and send what it starts.
     fn queue_do(&mut self, key: u64, cx: &mut Context<Self>, act: impl FnOnce(&mut Outbox) -> Option<Dispatch>) {
         let Some(session) = self.session_mut(key) else { return };
         let effects = session.queue_action(act);
@@ -85,8 +69,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The heading over the queue: why it waits (Claude or the server out of
-    /// reach, paused), or how its messages go.
     fn render_queue_heading_line(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some(held) = self.render_queue_heading(session) {
             return Some(held);
@@ -121,7 +103,6 @@ impl Workspace {
         )
     }
 
-    /// Messages waiting for Claude, under their heading.
     pub fn render_queue(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let key = session.key;
         let outbox = &session.outbox;
@@ -167,8 +148,6 @@ impl Workspace {
         div().flex().flex_col().gap(px(6.)).children(self.render_queue_heading_line(session, cx).map(|line| arriving("queue-heading", line))).children(rows)
     }
 
-    /// One closed row: its number, its first chips, its words cut to fit, and
-    /// ↑ (on hover), ✎ and ✕.
     fn render_queued_row(&self, session: &Session, ix: usize, n: Option<usize>, cx: &mut Context<Self>) -> AnyElement {
         let key = session.key;
         let q = &session.outbox.items[ix];
@@ -209,7 +188,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// A row opened in place: everything the sent bubble will show.
     fn render_open_row(&self, session: &Session, ix: usize, n: Option<usize>, cx: &mut Context<Self>) -> AnyElement {
         let key = session.key;
         let q = &session.outbox.items[ix];
@@ -222,9 +200,7 @@ impl Workspace {
             .filter(|(_, a)| !matches!(a, Attachment::Quote(_)))
             .map(|(i, a)| chip(ElementId::NamedInteger("queued-chip".into(), (id << 8) | i as u64), a).h(theme::chat_px(20.)))
             .collect();
-        // The bubble's quote parts, under ids of their own.
         let quotes = self.render_sent_quotes(key, 0xF0_0000 | (id as usize & 0xFFFF), &q.attachments, cx);
-        // With nothing above the words, they take the first line.
         let words_first = chips.is_empty() && quotes.is_empty();
         let words = (!q.text.is_empty()).then(|| {
             div()
@@ -275,7 +251,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// ↑ (shown on hover), ✎ and ✕, and ⌃ on an opened row.
     fn row_buttons(&self, session: &Session, ix: usize, group: &SharedString, open: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let key = session.key;
         let id = session.outbox.items[ix].id;
@@ -300,8 +275,6 @@ impl Workspace {
             shape(name, icon, label, color).track_focus(&session.queue_focus(id, name, cx)).focus_ring_on(row_surface())
         };
         let send = if can_send {
-            // Drawn see-through rather than hidden, so Tab still reaches it, and
-            // shown with its ring once it has focus (this replaces the ring's own style).
             button("queued-send", Glyph::ArrowUp, "Send now (⌘↩)", theme::text_primary())
                 .opacity(0.)
                 .group_hover(group.clone(), |s| s.opacity(1.))
@@ -322,7 +295,6 @@ impl Workspace {
             })
     }
 
-    /// Where a removed message was, for `UNDO_FOR`: "Removed "…"" and Undo.
     fn render_removed_row(&self, session: &Session, text: &str, cx: &mut Context<Self>) -> AnyElement {
         let key = session.key;
         let focus = session.outbox.removed_at(Instant::now()).map(|r| session.queue_focus(r.message.id, "queued-undo", cx));
@@ -357,13 +329,10 @@ impl Workspace {
     }
 }
 
-/// The rows' surface: sunken, or the composer's white in light.
 fn row_surface() -> Rgba {
     if theme::is_light() { theme::composer_bg() } else { theme::bg_sunken() }
 }
 
-/// A row's frame: rounded, with a hairline, on the sunken surface (on the
-/// composer's white, with its shadow, in light).
 fn row_frame(group: &SharedString, id: u64) -> Stateful<Div> {
     div()
         .id(ElementId::NamedInteger("queued".into(), id))
@@ -380,7 +349,6 @@ fn number(n: usize) -> Div {
     div().w(px(12.)).flex_shrink_0().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(n.to_string())
 }
 
-/// The row of the message being edited: a dashed placeholder that keeps its place.
 fn editing_row(n: Option<usize>) -> AnyElement {
     div()
         .h(theme::chat_px(32.))
@@ -402,7 +370,6 @@ fn editing_row(n: Option<usize>) -> AnyElement {
         .into_any_element()
 }
 
-/// Rising in from the composer as it appears.
 fn arriving(name: &'static str, element: AnyElement) -> AnyElement {
     crate::motion::arriving(div().child(element), name, false).into_any_element()
 }
