@@ -95,8 +95,8 @@ pub struct Connection {
     pub cells: serde_json::Value,
     /// Paths the runtime listed as stopped for being idle, as last pushed.
     pub idle_stopped: HashSet<String>,
-    /// Paths the runtime listed as closed because R ended, as last pushed.
-    pub engine_ended: HashSet<String>,
+    /// Paths the runtime listed as closed because R ended, with when, as last pushed.
+    pub engine_ended: pluto::Endings,
     /// Bumped when the runtime starts or goes, so an old runtime's event reader stops.
     watching: Arc<AtomicU64>,
     /// A server's connection dropped by itself (not a Stop, disconnect or
@@ -1544,9 +1544,8 @@ impl Workspace {
         }
         connection.idle_stopped = stops.into_iter().map(|(path, ..)| path).collect();
         // A notebook whose R ended shows the crash page, with why. Only new entries count, as for idle stops.
-        let ended = pluto::engine_ended(&event);
-        let new_ended: Vec<(String, String, String)> = ended.iter().filter(|(path, ..)| !connection.engine_ended.contains(path)).cloned().collect();
-        connection.engine_ended = ended.into_iter().map(|(path, ..)| path).collect();
+        let (new_ended, ended) = pluto::new_endings(&connection.engine_ended, &event);
+        connection.engine_ended = ended;
         let list = event["notebooks"].take();
         // Julia runs after all, whoever started it (the agent's own open, say): its failure is over.
         if list.as_array().is_some_and(|l| l.iter().any(|nb| nb["path"].as_str().is_some_and(|p| p.ends_with(".jl")))) {
