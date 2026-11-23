@@ -1079,10 +1079,9 @@
       switch (target.part) {
         case "cell":
           return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
-        case "code": {
-          const lines = code.split("\n").length;
-          return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el: el2 };
-        }
+        // A click on the code picks the cell; a drag over its lines picks those lines.
+        case "code":
+          return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
         case "output":
           return { pick: { part: "output", cell: cell.id, code, text: (el2.innerText ?? el2.textContent ?? "").trim() || widgetValues(el2) }, el: el2 };
         case "figure":
@@ -1126,7 +1125,8 @@
         if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
           const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
-        } else out.push(p.pick);
+        } else if (answered && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
+        else out.push(p.pick);
       }
       sendQuote(out, comment, add, ref);
     }
