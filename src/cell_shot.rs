@@ -35,8 +35,8 @@ pub struct Ask {
     pub cell: String,
     /// When the listener asked: once it has stopped waiting (`WAIT`), the ask is dropped.
     pub asked: std::time::Instant,
-    /// The PNG, in base64; None when there's no picture.
-    pub reply: std::sync::mpsc::Sender<Option<String>>,
+    /// The picture; None when there's none.
+    pub reply: std::sync::mpsc::Sender<Option<endeavor_mcp::Picture>>,
 }
 
 /// How long the listener waits for a picture. Then the agent gets the
@@ -52,7 +52,7 @@ pub const DEADLINE: Duration = Duration::from_secs(8);
 pub const IDLE: Duration = Duration::from_secs(300);
 
 /// The listener's side: each picture is asked of the app on `asks`, and waited for.
-pub fn snapshot(host: HostId, asks: futures::channel::mpsc::UnboundedSender<Ask>) -> Box<endeavor_mcp::Snapshot> {
+pub fn snapshot(host: HostId, asks: futures::channel::mpsc::UnboundedSender<Ask>) -> Box<endeavor_mcp::Pictures> {
     let asks = std::sync::Mutex::new(asks);
     Box::new(move |_session, notebook, cell| {
         let (reply, answer) = std::sync::mpsc::channel();
@@ -82,16 +82,25 @@ pub fn find_script(cell: &str) -> String {
     )
 }
 
-/// The page script that measures the output: its rect and the viewport's size, in CSS pixels. A
-/// bar fixed over the top of the page (Pluto's) is cut off the top of a tall output; "covered" if
-/// something else on the page (a popup) is drawn over the middle of what's left in view. A hit on
-/// an element around the output counts as the output: the point fell through a layer of it that
-/// takes no clicks (`pointer-events: none`).
+/// The page script that measures the output: its rect and the viewport's size, in CSS pixels, and
+/// its whole height. First it hides what floats over the page (Pluto's bars, its Live docs button):
+/// this view is only for pictures (#163). A bar still over the top of the page is cut off the top
+/// of a tall output; "covered" if something else on the page (a popup) is drawn over the middle of
+/// what's left in view. A hit on an element around the output counts as the output: the point fell
+/// through a layer of it that takes no clicks (`pointer-events: none`).
 pub fn measure_script(cell: &str) -> String {
     format!(
         r#"(() => {{
   const out = document.querySelector('pluto-cell[id="{cell}"] > pluto-output');
   if (!out) return null;
+  for (const el of document.body.querySelectorAll("*")) {{
+    if (el.contains(out) || out.contains(el)) continue;
+    const position = getComputedStyle(el).position;
+    if (position === "fixed" || position === "sticky") {{
+      el.style.setProperty("opacity", "0", "important");
+      el.style.setProperty("pointer-events", "none", "important");
+    }}
+  }}
   const r = out.getBoundingClientRect();
   const x = r.left + r.width / 2, bottom = Math.min(r.bottom, innerHeight);
   let top = Math.max(r.top, 0);
@@ -103,19 +112,27 @@ pub fn measure_script(cell: &str) -> String {
   }}
   const over = document.elementFromPoint(x, (top + bottom) / 2);
   if (top >= bottom || (over && !out.contains(over) && !over.contains(out))) return "covered";
-  return [r.left, top, r.width, r.bottom - top, innerWidth, innerHeight];
+  return [r.left, top, r.width, r.bottom - top, innerWidth, innerHeight, r.height];
 }})()"#
     )
 }
 
+/// When a picture stops short of its output: (the height shown, the output's whole height).
+pub type Cut = Option<(u32, u32)>;
+
+/// A picture being taken: the PNG and its cut, or why there's none.
+type ShotJob = futures::future::LocalBoxFuture<'static, Result<(Vec<u8>, Cut), &'static str>>;
+
 /// The part of the output inside the viewport, as x, y, width, height, from
-/// `measure_script`'s answer; None if there's none worth a picture.
-pub fn visible_rect(measured: &str) -> Option<[f64; 4]> {
+/// `measure_script`'s answer; None if there's none worth a picture. With it, when the output is
+/// taller than that part: (the height shown, the output's whole height), for the agent (#163).
+pub fn visible_rect(measured: &str) -> Option<([f64; 4], Cut)> {
     let v: Vec<f64> = serde_json::from_str(measured).ok()?;
-    let [left, top, width, height, view_width, view_height] = v[..] else { return None };
+    let [left, top, width, height, view_width, view_height, whole] = v[..] else { return None };
     let (x, y) = (left.max(0.), top.max(0.));
     let (w, h) = ((left + width).min(view_width) - x, (top + height).min(view_height) - y);
-    (w >= 2. && h >= 2.).then_some([x, y, w, h])
+    let cut = (whole - h >= 2.).then(|| (h.round() as u32, whole.round() as u32));
+    (w >= 2. && h >= 2.).then_some(([x, y, w, h], cut))
 }
 
 #[cfg(target_os = "macos")]
@@ -475,10 +492,13 @@ mod tests {
 
     #[test]
     fn the_picture_is_the_part_of_the_output_in_view() {
-        assert_eq!(visible_rect("[20, 0, 600, 300, 900, 1200]"), Some([20., 0., 600., 300.]));
-        assert_eq!(visible_rect("[20, 900, 600, 900, 900, 1200]"), Some([20., 900., 600., 300.]), "cut at the bottom");
-        assert_eq!(visible_rect("[-10, -5, 600, 300, 400, 1200]"), Some([0., 0., 400., 295.]), "and at the edges");
-        assert_eq!(visible_rect("[20, 0, 600, 0, 900, 1200]"), None, "an empty output");
+        assert_eq!(visible_rect("[20, 0, 600, 300, 900, 1200, 300]"), Some(([20., 0., 600., 300.], None)));
+        assert_eq!(visible_rect("[20, 900, 600, 900, 900, 1200, 900]"), Some(([20., 900., 600., 300.], Some((300, 900)))), "cut at the bottom, and said so");
+        assert_eq!(visible_rect("[-10, -5, 600, 300, 400, 1200, 305]"), Some(([0., 0., 400., 295.], Some((295, 305)))), "and at the edges");
+        assert_eq!(visible_rect("[0, 0, 600, 855, 900, 855, 920]"), Some(([0., 0., 600., 855.], Some((855, 920)))), "a tall output, from its top (the Mac check)");
+        assert_eq!(visible_rect("[0, 40, 600, 300, 900, 1200, 300.5]"), Some(([0., 40., 600., 300.], None)), "half a pixel isn't a cut");
+        assert_eq!(visible_rect("[20, 0, 600, 0, 900, 1200, 0]"), None, "an empty output");
+        assert_eq!(visible_rect("[20, 0, 600, 300, 900, 1200]"), None, "an answer from before the whole height");
         assert_eq!(visible_rect("null"), None);
         assert_eq!(visible_rect("\"absent\""), None);
     }
@@ -490,11 +510,11 @@ mod tests {
         let answering = std::thread::spawn(move || {
             let ask = futures::executor::block_on(futures::StreamExt::next(&mut taken)).unwrap();
             assert_eq!((ask.notebook.as_str(), ask.cell.as_str()), ("nb", "cell"));
-            ask.reply.send(Some("cGljdHVyZQ==".into())).unwrap();
+            ask.reply.send(Some(endeavor_mcp::Picture { png: "cGljdHVyZQ==".into(), cut: Some((855, 920)) })).unwrap();
             // The app went away: no answer.
             drop(taken);
         });
-        assert_eq!(snapshot("7", "nb", "cell").as_deref(), Some("cGljdHVyZQ=="));
+        assert_eq!(snapshot("7", "nb", "cell"), Some(endeavor_mcp::Picture { png: "cGljdHVyZQ==".into(), cut: Some((855, 920)) }));
         answering.join().unwrap();
         assert_eq!(snapshot("7", "nb", "cell"), None);
     }
@@ -538,7 +558,7 @@ impl crate::Workspace {
         match self.cell_shot_job(&ask, window, cx) {
             Ok(job) => Box::pin(async move {
                 let (png, outcome) = match job.await {
-                    Ok(png) => (Some(crate::attach::base64(&png)), "picture"),
+                    Ok((png, cut)) => (Some(endeavor_mcp::Picture { png: crate::attach::base64(&png), cut }), if cut.is_some() { "picture, cut" } else { "picture" }),
                     Err(why) => (None, why),
                 };
                 let _ = ask.reply.send(png);
@@ -565,7 +585,7 @@ impl crate::Workspace {
         .detach();
     }
 
-    fn cell_shot_job(&mut self, ask: &Ask, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Result<futures::future::LocalBoxFuture<'static, Result<Vec<u8>, &'static str>>, &'static str> {
+    fn cell_shot_job(&mut self, ask: &Ask, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Result<ShotJob, &'static str> {
         use wire::backend::Backend;
         if self.notebook_kind(&ask.host, &ask.notebook) != Backend::Pluto {
             return Err("not a Pluto notebook");
@@ -600,7 +620,7 @@ impl crate::Workspace {
 /// pane is checked between steps, and there is no picture once it isn't on screen. The second
 /// view itself hides at once, as the user's view does (`Second::follow_pane`), and has the user's
 /// view's holes as they open (`overlay::set_second`): the checks here only place it.
-async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::BackgroundExecutor) -> Result<Vec<u8>, &'static str> {
+async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::BackgroundExecutor) -> Result<(Vec<u8>, Cut), &'static str> {
     let deadline = std::time::Instant::now() + DEADLINE;
     let behind = || if shooter.keep_behind() { Ok(()) } else { Err(NOT_ON_SCREEN) };
     loop {
@@ -626,14 +646,14 @@ async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::Backg
     if measured == "\"covered\"" {
         return Err("the output is covered on the page");
     }
-    let rect = visible_rect(&measured).ok_or("the output is empty")?;
+    let (rect, cut) = visible_rect(&measured).ok_or("the output is empty")?;
     let shot = crate::snapshot::png(&shooter.view, rect);
     let timeout = executor.timer(Duration::from_secs(3));
     let png = match futures::future::select(shot, timeout).await {
         futures::future::Either::Left((png, _)) => png.ok().flatten(),
         futures::future::Either::Right(_) => None,
     };
-    png.ok_or("WebKit couldn't draw the output")
+    png.map(|png| (png, cut)).ok_or("WebKit couldn't draw the output")
 }
 
 /// The JSON of what `js` gives in `view`; None if it fails or takes over a second.

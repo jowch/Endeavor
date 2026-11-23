@@ -1,14 +1,8 @@
-// While the notebook's server is out of reach, the page stays readable but
-// takes no edits, and Pluto doesn't reconnect: the app loads the notebook
-// afresh once the server is back, and a page reconnecting to a restarted
-// Julia (a new secret) would only be refused with a "lost authentication" alert.
-
 import { on } from "./bridge";
 
 const CLASS = "endeavor-readonly";
 let readonly = false;
 
-/** Pluto's reconnects go nowhere while read-only. */
 function holdReconnects(): void {
   const Real = window.WebSocket;
   const Held = function (this: unknown, url: string | URL, protocols?: string | string[]) {
@@ -28,7 +22,6 @@ function style(): void {
   document.head.append(css);
 }
 
-/** No typing into a cell that had focus when the server went away. */
 function blockKeys(e: KeyboardEvent): void {
   if (!readonly) return;
   const inNotebook = e.target instanceof Element && e.target.closest("pluto-notebook");
@@ -47,7 +40,6 @@ export function setReadonly(on: boolean): void {
   }
 }
 
-// At load, before Pluto opens its first connection.
 holdReconnects();
 
 export function initReadonly(): void {

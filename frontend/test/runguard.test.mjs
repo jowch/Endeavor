@@ -1,5 +1,3 @@
-// The user's own run asks first when it would reach a cell a chat card is
-// asking to run (src/runguard.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -20,7 +18,6 @@ test("a run reaches its cells and everything downstream of them", async () => {
   });
   globalThis.window ??= {};
   const { reach } = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString("base64")}`);
-  // a = 5; b = a + 1; c = b * 2 and d = a - 1, as Pluto maps them; e stands alone.
   const deps = {
     [A]: { downstream_cells_map: { a: [B, D] }, upstream_cells_map: {} },
     [B]: { downstream_cells_map: { b: [C] }, upstream_cells_map: { a: [A] } },
@@ -32,7 +29,6 @@ test("a run reaches its cells and everything downstream of them", async () => {
   assert.deepEqual(reach([D, "e"], deps).sort(), [D, "e"]);
 });
 
-/** A notebook page with cells a, b, c (b = a + 1, c = b * 2), `a` edited in its editor and not submitted. */
 async function page({ safe = false } = {}) {
   const cell = (id) =>
     `<pluto-cell id="${id}"><pluto-runarea class="run"><button class="runcell"></button></pluto-runarea>` +
@@ -62,7 +58,6 @@ async function page({ safe = false } = {}) {
     selected_cells: [],
   };
   window.eval(readFileSync(new URL("../dist/page.js", import.meta.url), "utf8"));
-  // Pluto's own handlers, which see only what gets past the guard.
   const pluto = [];
   window.document.addEventListener("keydown", (e) => pluto.push(`${e.ctrlKey ? "Ctrl+" : ""}${e.shiftKey ? "Shift+" : ""}${e.key}`));
   for (const button of window.document.querySelectorAll("button.runcell")) button.addEventListener("click", () => pluto.push(`run ${button.closest("pluto-cell").id}`));
@@ -81,13 +76,11 @@ test("nothing waiting, or nothing reached: the run goes straight to Pluto", asyn
   assert.deepEqual(p.pluto, ["Ctrl+s"]);
   assert.equal(p.dialog(), null);
 
-  // A card asks to run a, but ⇧Enter in c reaches only c.
   p.waiting([{ id: A, name: "a" }]);
   p.key(p.window.document.querySelector(`[id="${C}"] .cm-content`), { key: "Enter", shiftKey: true });
   assert.deepEqual(p.pluto, ["Ctrl+s", "Shift+Enter"]);
   assert.equal(p.dialog(), null);
 
-  // Safe preview: ⌘S saves without running, so it never asks.
   const safe = await page({ safe: true });
   safe.waiting([{ id: B, name: "b" }]);
   safe.save();
@@ -99,19 +92,16 @@ test("a run reaching a cell Claude asks to run asks first: Show, Cancel, Run any
   const p = await page();
   p.waiting([{ id: B, name: "b" }]);
 
-  // ⌘S submits a, whose change re-runs b.
   p.save();
   assert.deepEqual(p.pluto, [], "Pluto never saw it");
   assert.equal(p.dialog().querySelector("b").textContent, "Claude is waiting for your answer on b.");
   assert.match(p.dialog().textContent, /Running your changes now also runs it\./);
   assert.deepEqual([...p.dialog().querySelectorAll("button")].map((b) => b.textContent), ["Show b", "Cancel", "Run anyway"]);
 
-  // Show b outlines it, and the question stays.
   p.button("show").click();
   assert.ok(p.window.document.getElementById(B).classList.contains("endeavor-guard-show"));
   assert.ok(p.dialog());
 
-  // Cancel (or Esc): nothing runs, nothing is answered.
   p.button("cancel").click();
   assert.equal(p.dialog(), null);
   assert.ok(!p.window.document.getElementById(B).classList.contains("endeavor-guard-show"));
@@ -120,8 +110,11 @@ test("a run reaching a cell Claude asks to run asks first: Show, Cancel, Run any
   assert.equal(p.dialog(), null);
   assert.deepEqual(p.pluto, []);
   assert.deepEqual(p.sent.filter((m) => m.type === "run_anyway"), []);
+});
 
-  // Run anyway (⏎): the user's ⌘S goes to Pluto, and once b is under way the card is answered.
+test("Run anyway answers the cards only once the cells run, so Claude's approved call doesn't run them twice", async () => {
+  const p = await page();
+  p.waiting([{ id: B, name: "b" }]);
   p.save();
   p.key(p.window.document.body, { key: "Enter" });
   assert.equal(p.dialog(), null);

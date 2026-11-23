@@ -1,5 +1,3 @@
-// ⏎ in the notebook answers the chat's waiting card only while nothing in the
-// page has the keyboard (src/cardkey.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

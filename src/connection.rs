@@ -1,9 +1,3 @@
-//! The app's line to each host's runtime: This Mac's connects and starts at
-//! launch; a server's connects when it's picked in the Where chip (its files
-//! can be browsed then) and starts Julia when a session on it needs one. Each
-//! host keeps its own local listener, so its sessions' MCP URL survives
-//! reconnects and restarts.
-
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -33,127 +27,59 @@ use crate::theme::TextButton as _;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
     Connecting,
-    /// Connected, with no runtime yet: its files can be browsed.
     Browsing,
     Starting,
     Ready,
-    /// Julia exited or couldn't start; still connected, so Start tries again.
     Died(String),
-    /// Couldn't connect, or the connection closed.
     Failed(String),
 }
 
-/// One host's connection, and what the app follows of its runtime.
 pub struct Connection {
     pub status: Status,
-    /// Which connect this is: a thread still reporting on an older one is ignored.
     id: u64,
-    /// This Mac's helper. A server's is its `Line`'s.
     pub channel: Option<Arc<Channel>>,
-    /// A server's line is connected (its helper is up).
     linked: bool,
     pub hello: Option<Hello>,
     pub runtime: Option<Runtime>,
-    /// Start Julia once connected (a session is waiting for it).
     start_when_connected: bool,
-    /// On a cluster: the job the next start submits (the resources of the
-    /// session that asked for it); else the cluster's defaults.
     pub job_request: Option<JobRequest>,
-    /// Cancel was pressed while Julia started (a job waited in the queue).
     cancelling: bool,
-    /// Stop Julia once connected (Stop in Settings' host list).
     stop_when_connected: bool,
-    /// Start Julia again once the Stop under way ends (`restart_host`).
     start_after_stop: bool,
-    /// Bumped by each check and stop, so an older check's answer is dropped.
     check: u64,
-    /// A Stop is under way.
     pub stopping: bool,
-    /// What the last check found running there, while connected without a
-    /// runtime; Err if the check failed.
     pub found: Option<Result<RuntimeState, String>>,
-    /// On a cluster, the job Julia is starting in.
     pub job: Option<String>,
-    /// Why Slurm says that job waits ("Priority", "Resources"), while it does.
     pub queue_reason: Option<String>,
     pub steps: Steps,
-    /// Open notebooks (id, path) as last seen, to reopen after a restart.
     pub last_notebooks: Vec<(String, String)>,
-    /// The notebooks the user had let run when they restarted or repaired
-    /// Julia, with each file's modification time then: they reopen running if
-    /// the file is unchanged. After a crash, Restart Julia fills it (with no
-    /// time: Julia's gone, so it can't be read) for the notebooks that were
-    /// running; any other start leaves it empty, so they reopen in safe preview.
     pub resume: Vec<(String, Option<f64>)>,
-    /// Connects and starts that failed in a row, across reconnects.
     pub failures: u32,
-    /// Why Restart Julia's stop failed, said once the start that follows it is ready.
     pub not_restarted: Option<String>,
-    /// The runtime's notebook list as last pushed (`list_notebooks` shape).
     pub notebooks: serde_json::Value,
-    /// Per-notebook cell states as last pushed ({notebook_id: [state]}).
     pub cells: serde_json::Value,
-    /// Paths the runtime listed as stopped for being idle, as last pushed.
     pub idle_stopped: HashSet<String>,
-    /// Paths the runtime listed as closed because R ended, as last pushed.
-    pub engine_ended: HashSet<String>,
-    /// Bumped when the runtime starts or goes, so an old runtime's event reader stops.
+    pub engine_ended: pluto::Endings,
     watching: Arc<AtomicU64>,
-    /// A server's connection dropped by itself (not a Stop, disconnect or
-    /// remove) and hasn't come back, or a session waiting to open there
-    /// couldn't reach it: Endeavor tries again, its sessions' messages wait,
-    /// and it shows as "Can't reach". None for any other connect that never
-    /// got through (a bad host name while adding it, a wrong password): that
-    /// stays "Not connected", with Reconnect.
     pub lost: Option<Lost>,
-    /// The Julia (pid, node) a server's dropped connection left running: a
-    /// line that gets back to it, however long the drop, carries on with the
-    /// page and notebooks as they were.
     dropped: Option<(u32, String)>,
-    /// Julia exited by itself (not a Stop, a restart or a quit), and hasn't
-    /// been started since.
     pub crashed: bool,
-    /// How the app can use its runtime (`older_runtime`); none until a
-    /// runtime is ready.
     pub older: Option<crate::older_runtime::Version>,
-    /// Julia is starting for a notebook the app is opening (the runtime starts
-    /// it when a Julia notebook first needs it, and says `julia_starting`
-    /// meanwhile): the pane's step log.
     pub julia: Option<Steps>,
-    /// The app's calls waiting for Julia now: `julia` goes when the last ends.
     julia_waits: u32,
-    /// Why Julia couldn't start for the notebook the app opened last, or for
-    /// a start the app watched (`julia_status`).
     pub julia_failed: Option<String>,
-    /// Where Julia is, as the runtime last said (`endeavor/julia_status`); none
-    /// from a runtime too old to say.
     pub julia_status: Option<pluto::JuliaStatus>,
-    /// The Julia the runtime says it started last; none before it has, or from a runtime too old to say.
     pub julia_started: Option<pluto::Started>,
-    /// R notebooks' setup (R, then Ember) for an R notebook the app is opening
-    /// (the runtime says `r_installing` meanwhile): the pane's step log.
     pub r: Option<Steps>,
-    /// The app's calls waiting for R now: `r` goes when the last ends.
     r_waits: u32,
-    /// Why R notebooks couldn't start for the R notebook the app opened last,
-    /// or for a start the app watched (`r_status`): the error, `r_failed::…`
-    /// or `r_not_found::…`.
     pub r_failed: Option<String>,
-    /// Where R notebooks' setup is, as the runtime last said (`endeavor/r_status`);
-    /// none from a runtime too old to say.
     pub r_status: Option<pluto::RStatus>,
-    /// The R the runtime says runs; none while none does, or from a runtime too old to say.
     pub r_started: Option<pluto::Started>,
 }
 
-/// A dropped server connection.
 #[derive(Clone)]
 pub struct Lost {
-    /// The dropped runtime's Pluto address (`http://host:port/`), if its
-    /// notebook was showing: that page stays, read-only.
     page: Option<String>,
-    /// Its status when it dropped: the reconnect starts Julia again if it ran
-    /// or was starting, and shows it stopped if it was.
     was: Status,
 }
 
@@ -163,17 +89,13 @@ impl Lost {
     }
 }
 
-/// The starting pane's step log: what's done, what's under way (since when),
-/// and the latest line of Julia's output.
 #[derive(Clone, Debug)]
 pub struct Steps {
     pub done: Vec<String>,
     pub current: String,
     pub since: Instant,
     pub detail: Option<String>,
-    /// Julia was found or reattached to, so only starting it is left.
     found_julia: bool,
-    /// R notebooks' setup, not Julia's or the runtime's.
     for_r: bool,
 }
 
@@ -196,7 +118,6 @@ impl Steps {
         }
     }
 
-    /// What's left after the current step, shown faint.
     pub fn pending(&self) -> Vec<&'static str> {
         let mut left = Vec::new();
         if self.current == pluto::OPENING {
@@ -209,7 +130,6 @@ impl Steps {
         left
     }
 
-    /// A line of Julia's download or boot log.
     fn log(&mut self, line: &str) {
         let text = line.trim_start_matches(['┌', '│', '└', ' ']).trim();
         if text.is_empty() {
@@ -228,7 +148,6 @@ impl Steps {
 }
 
 impl Steps {
-    /// The notebook is still opening (`pluto::OPENING`), Julia or R being up: a step under way is done.
     fn opening(&mut self) {
         if self.current == pluto::OPENING {
             return;
@@ -238,7 +157,6 @@ impl Steps {
         self.detail = Some(if self.for_r { "The first notebook can take a minute to open." } else { "The first notebook after Julia starts takes a while to compile." }.into());
     }
 
-    /// The step log of a call that first hears `step`: a notebook already opening with Julia or R up, or `start`.
     fn first(step: &str, start: impl FnOnce() -> Steps) -> Steps {
         let mut steps = start();
         if step == pluto::OPENING {
@@ -247,13 +165,10 @@ impl Steps {
         steps
     }
 
-    /// R notebooks' setup, starting with R.
     fn r() -> Steps {
         Steps { for_r: true, ..Steps::new("Starting R") }
     }
 
-    /// What the runtime said R notebooks' setup is doing (`pluto::r_installing`):
-    /// installing Endeavor's own R, then Ember. A finished step stays ticked.
     fn r_step(&mut self, step: &str) {
         if step == pluto::OPENING {
             return self.opening();
@@ -271,9 +186,6 @@ impl Steps {
         self.detail = step.starts_with("Installing").then(|| "The first time takes a few minutes.".into());
     }
 
-    /// What the runtime said Julia is doing while it starts it for a notebook
-    /// (`pluto::julia_starting`): a download with its percentage, then Julia
-    /// starting and loading Pluto, whose first time installs its packages.
     fn julia(&mut self, step: &str) {
         if step == pluto::OPENING {
             return self.opening();
@@ -298,10 +210,6 @@ impl Steps {
 }
 
 impl Steps {
-    /// What the runtime says Julia is doing (`endeavor/julia_status`): the step
-    /// as `julia` reads it, and after a couple of minutes without any sign of
-    /// progress, how long it has been, since the runtime stops a start that
-    /// makes none for long.
     fn julia_status(&mut self, step: &str, quiet: u64) {
         self.julia(step);
         if quiet >= 120 {
@@ -310,29 +218,19 @@ impl Steps {
     }
 }
 
-/// The last word of a downloading line: "Downloading Julia 1.12.6… 42%" -> "42%".
 fn percent(line: &str) -> Option<&str> {
     line.rsplit(' ').next().filter(|w| w.ends_with('%'))
 }
 
-/// How a connect or start went, from its thread.
 enum Update {
     Event(Event),
-    /// This Mac's setup progress.
     Local(Progress),
-    /// The helper is up: This Mac's channel (a server's goes through its `Line`), and its hello.
     Connected(Result<(Option<Arc<Channel>>, Hello), String>),
     Started(Result<Runtime, String>),
     Notice(Notice),
 }
 
 impl Connection {
-    /// The runtime said where R notebooks' setup is: an R notebook's pane shows
-    /// its steps while it's under way, whoever is waiting (the agent opening or
-    /// making an R notebook), and why a start failed, once, with Try again (or
-    /// Install R, when there's no R). The steps go when it ends, unless one of
-    /// the app's own calls still waits. An update to Ember while R runs is not
-    /// a step: R is ready. False when nothing changed.
     fn r_status_now(&mut self, status: pluto::RStatus) -> bool {
         if self.r_status.as_ref() == Some(&status) {
             return false;
@@ -358,11 +256,9 @@ impl Connection {
         true
     }
 
-    /// The app's calls waiting for `kind`'s language to start.
     fn waits(&mut self, kind: Backend) -> &mut u32 {
         match kind {
             Backend::Pluto => &mut self.julia_waits,
-            // ponytail: Python notebooks (marimo) don't open in the app yet (the runtime refuses them), so R's count stands in.
             Backend::Ember | Backend::Marimo => &mut self.r_waits,
         }
     }
@@ -416,13 +312,10 @@ impl Connection {
         self.runtime.as_ref().map(|r| r.bridge.clone())
     }
 
-    /// The helper is up: This Mac's channel, or a server's line.
     fn connected(&self) -> bool {
         self.channel.is_some() || self.linked
     }
 
-    /// A server's connection is gone, by itself or for new settings: its page, if `shown`, stays up
-    /// read-only, and a line that gets back to the same Julia carries on with the page and notebooks.
     fn lose(&mut self, reason: String, shown: bool) {
         let was = self.status.clone();
         let gone = self.forget_runtime();
@@ -433,21 +326,15 @@ impl Connection {
         self.lost = Some(Lost { page, was });
     }
 
-    /// The helper went: there is nothing to talk to until the next connect.
     fn unlink(&mut self) {
         self.channel = None;
         self.linked = false;
     }
 
-    /// Dropped, and between tries to reconnect.
     pub fn waiting_to_reconnect(&self) -> bool {
         self.lost.is_some() && matches!(self.status, Status::Failed(_))
     }
 
-    /// A connect that didn't get through because the server is out of reach,
-    /// while it was already lost or a session waits to open there: it stays
-    /// lost, to be tried again, and starts Julia once back if this connect was
-    /// to. False, and nothing changes, for any other failure.
     fn keep_trying(&mut self, error: &str, session_waits: bool) -> bool {
         if !crate::offline::unreachable(error) || (self.lost.is_none() && !session_waits) {
             return false;
@@ -458,23 +345,16 @@ impl Connection {
         true
     }
 
-    /// Back from a drop to a job waiting in the queue: no longer lost, so the
-    /// pane shows the wait, with Cancel, rather than "Can't reach" for as long
-    /// as the queue takes. Returns the kept page, which gives way.
     fn back_to_a_queue(&mut self) -> Option<String> {
         self.lost.take().and_then(|lost| lost.page)
     }
 
-    /// `runtime` is the Julia this server connection was on, still ready or
-    /// left by a drop: the line got back to it.
     fn same_julia(&self, runtime: &Runtime) -> bool {
         let ready = self.runtime.as_ref().filter(|_| self.status == Status::Ready).map(|r| (r.pid, &r.node));
         let was = ready.or(self.dropped.as_ref().map(|(pid, node)| (*pid, node)));
         was.is_some_and(|(pid, node)| pid == runtime.pid && *node == runtime.node)
     }
 
-    /// Stop following the runtime that's going; `last_notebooks` stays for the reopen.
-    /// Returns it, for `Workspace::close_page`.
     #[must_use]
     fn forget_runtime(&mut self) -> Option<Runtime> {
         self.watching.fetch_add(1, Ordering::SeqCst);
@@ -501,13 +381,10 @@ impl Workspace {
         self.connections.get(host).map(|c| &c.status)
     }
 
-    /// The bridge of `host`'s runtime, while it's ready.
     pub fn bridge(&self, host: &HostId) -> Option<Bridge> {
         self.connections.get(host).and_then(Connection::bridge)
     }
 
-    /// A host whose Julia stopped by itself and hasn't started since, by name
-    /// ("This Mac", a server's), for the sidebar's status line.
     pub fn crashed_host(&self) -> Option<String> {
         let mut crashed: Vec<&HostId> = self.connections.iter().filter(|(_, c)| c.crashed && matches!(c.status, Status::Died(_))).map(|(h, _)| h).collect();
         crashed.sort_by_key(|h| **h != HostId::ThisMac);
@@ -517,21 +394,22 @@ impl Workspace {
         })
     }
 
-    /// The runtime of the session `key`'s host.
     pub fn session_bridge(&self, key: u64) -> Option<Bridge> {
         let session = self.sessions.iter().find(|s| s.key == key)?;
         self.bridge(&session.place.host)
     }
 
-    /// Take `gone`'s notebook page out of the web view. Left there, it keeps
-    /// reconnecting to its port, where the host's next runtime listens, which
-    /// doesn't have the notebook the page shows.
+    pub(crate) fn note_session_kind(&self, host: &HostId, key: u64, kind: Backend) {
+        if let Some(listener) = self.listeners.get(host) {
+            listener.session_kind(key, kind);
+        }
+    }
+
     fn close_page(&mut self, gone: Option<Runtime>, cx: &mut Context<Self>) {
         let Some((origin, _)) = gone.as_ref().and_then(|r| r.page_url.split_once('?')) else { return };
         self.blank_page(origin, cx);
     }
 
-    /// Take down the page if it's from `origin` (a runtime that went away).
     fn blank_page(&mut self, origin: &str, cx: &mut Context<Self>) {
         let shown = crate::webcontent::url(self.webview.read(cx).raw());
         if !origin.is_empty() && shown.starts_with(origin) {
@@ -539,13 +417,11 @@ impl Workspace {
         }
     }
 
-    /// The web view shows a page of `host`'s runtime.
     fn shows_page_of(&self, host: &HostId, cx: &App) -> bool {
         let Some((origin, _)) = self.connections.get(host).and_then(|c| c.runtime.as_ref()).and_then(|r| r.page_url.split_once('?')) else { return false };
         crate::webcontent::url(self.webview.read(cx).raw()).starts_with(origin)
     }
 
-    /// What answers for `host`'s runtime while it's connected: This Mac's helper, or a server's line.
     pub fn helper(&self, host: &HostId) -> Option<Helper> {
         let connection = self.connections.get(host)?;
         if let Some(channel) = &connection.channel {
@@ -560,16 +436,13 @@ impl Workspace {
             return Ok(listener.clone());
         }
         let listener = Listener::start(&self.hosts.name(host))?;
-        listener.set_snapshot(crate::cell_shot::snapshot(host.clone(), self.cell_shots.clone()));
+        listener.set_pictures(crate::cell_shot::snapshot(host.clone(), self.cell_shots.clone()));
         listener.set_restart(crate::restart_ask::hook(host.clone(), self.restart_asks.clone()));
         self.listeners.insert(host.clone(), listener.clone());
         Ok(listener)
     }
 
-    /// Connect to `host` unless it's connected or connecting; `start` also
-    /// starts Julia once it is.
     pub fn connect_host(&mut self, host: &HostId, start: bool, cx: &mut Context<Self>) {
-        // Nothing starts while the app's own files are missing.
         if self.missing_files.is_some() {
             return;
         }
@@ -594,7 +467,6 @@ impl Workspace {
         };
         let mut connection = Connection::new(id, Status::Connecting, first);
         connection.start_when_connected = start;
-        // A reconnect keeps what the runtime last had open, to reopen it.
         if let Some(old) = self.connections.remove(host) {
             connection.last_notebooks = old.last_notebooks;
             connection.resume = old.resume;
@@ -606,9 +478,7 @@ impl Workspace {
         match host {
             HostId::ThisMac => {
                 let (tx, rx) = futures::channel::mpsc::unbounded::<Update>();
-                // The helper runs this Julia for as long as it lives (runtime::connect).
                 self.settings_checks.local_julia = Some(self.settings.julia_preference());
-                // Which Julia that runs, for Settings and the state dump: the user's own when they have one.
                 self.check_users_julia(cx);
                 self.settings_checks.local_r = Some(self.settings.r.clone());
                 std::thread::spawn(move || {
@@ -629,12 +499,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// `host`'s line, opened unless one for `server` as it is now is open: one
-    /// made from the server's old connection settings is closed and a new one
-    /// opened on its socket, so its port, which is in the MCP URL of the
-    /// agents on the host, carries on. A line is kept otherwise; one that
-    /// gave up is asked to try again. A line that is connected already
-    /// reports it again, to the connection just made.
     fn open_line(&mut self, host: &HostId, server: &Server, cx: &mut Context<Self>) -> Result<(), String> {
         let mut socket = None;
         if let Some(line) = self.lines.get(host) {
@@ -643,21 +507,17 @@ impl Workspace {
                 let session = line.session.clone();
                 let status = session.status();
                 if matches!(status.state, LineState::Failed(_)) && !signed_in(&status) {
-                    // An attach starts nothing; a start the connection wants follows once connected.
                     session.request(&client::Want::Attach { install: true });
                 } else if !signed_in(&status) {
-                    // A line in its pause between tries tries now, not at its next try.
                     session.retry_now();
                 }
                 let status = session.status();
-                // What it already reported is told again, to the connection just made.
                 let id = self.connections.get(host).map_or(0, |c| c.id);
                 for change in changes(&LineStatus { state: LineState::Connecting, hello: None, ..status.clone() }, &status) {
                     self.on_change(host, id, change, cx);
                 }
                 return Ok(());
             }
-            // Taken now, not when the close in its thread gets there: the port is never free in between.
             socket = line.session.hand_over_port();
             self.close_line(host, cx);
         }
@@ -667,7 +527,6 @@ impl Workspace {
         let events = tx.clone();
         let session = Arc::new(remote::open(server, auth, socket, Box::new(move |event| drop(events.unbounded_send(LineUpdate::Event(event)))))?);
         let closed: Arc<AtomicBool> = Arc::default();
-        // Every change of the session's state, in order; it says few of them with an event.
         std::thread::spawn({
             let (session, closed) = (session.clone(), closed.clone());
             move || {
@@ -703,7 +562,6 @@ impl Workspace {
         Ok(())
     }
 
-    /// Close `host`'s line, if it has one: the helper is let go, and Julia keeps running there.
     fn close_line(&mut self, host: &HostId, cx: &mut Context<Self>) {
         if let Some(line) = self.lines.remove(host) {
             let _ = self.drop_asks(line.sign_in.id, None, cx);
@@ -711,7 +569,6 @@ impl Workspace {
         }
     }
 
-    /// What `host`'s line (of `generation`) heard, applied to its connection of the moment.
     fn on_line(&mut self, host: &HostId, generation: u64, update: LineUpdate, cx: &mut Context<Self>) {
         if !self.lines.get(host).is_some_and(|l| l.generation == generation) {
             return;
@@ -726,13 +583,10 @@ impl Workspace {
                 let now = *now;
                 let last = line.last.replace(now.clone()).unwrap_or(LineStatus { state: LineState::Connecting, hello: None, ..now.clone() });
                 let (source, ssh_host) = (line.sign_in.id, line.server.ssh_host.clone());
-                // A try that ended took its ssh with it: its questions go, and its error shows instead.
-                // Only those asked before the change was seen: the next try may already be asking.
                 let gave_up = try_ended(&last, &now) && self.drop_asks(source, Some(seen), cx);
                 for mut change in changes(&last, &now) {
                     match &mut change {
                         Change::ConnectFailed(why) if gave_up => *why = remote::gave_up(&ssh_host),
-                        // An answer that worked: a later question isn't a retry.
                         Change::Connected(_) => {
                             if let Some(line) = self.lines.get(host) {
                                 line.sign_in.forget();
@@ -749,14 +603,10 @@ impl Workspace {
         }
     }
 
-    /// Hold `change` back while a drop may pass (`LOST_GRACE`): true when it is
-    /// held or was the blip's end. A change that ends the wait otherwise first
-    /// tells the drop and what came since.
     fn hold(&mut self, host: &HostId, generation: u64, change: &Change, cx: &mut Context<Self>) -> bool {
         let ready_pid = self.connections.get(host).filter(|c| c.status == Status::Ready).and_then(|c| c.runtime.as_ref()).map(|r| r.pid);
         let Some(line) = self.lines.get_mut(host) else { return false };
         match (&mut line.held, change) {
-            // Back to the same Julia: nothing happened, as far as the app goes.
             (Some(held), Change::Started(runtime)) if runtime.pid == held.pid => {
                 line.held = None;
                 true
@@ -777,7 +627,6 @@ impl Workspace {
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(LOST_GRACE).await;
                     let _ = this.update(cx, |this, cx| {
-                        // This drop's hold only: a later one waits its own time.
                         if this.lines.get(&host).and_then(|l| l.held.as_ref()).is_some_and(|h| h.id == id) {
                             this.release(&host, generation, cx);
                         }
@@ -791,7 +640,6 @@ impl Workspace {
         }
     }
 
-    /// Tell the connection about a held drop, and what the line heard since.
     fn release(&mut self, host: &HostId, generation: u64, cx: &mut Context<Self>) {
         let Some(held) = self.lines.get_mut(host).filter(|l| l.generation == generation).and_then(|l| l.held.take()) else { return };
         let Some(id) = self.connections.get(host).map(|c| c.id) else { return };
@@ -800,7 +648,6 @@ impl Workspace {
         }
     }
 
-    /// One change of a server's line, as the connection's update it stands for.
     fn on_change(&mut self, host: &HostId, id: u64, change: Change, cx: &mut Context<Self>) {
         let update = match change {
             Change::Connected(hello) => Update::Connected(Ok((None, hello_of(&hello)))),
@@ -809,12 +656,10 @@ impl Workspace {
             Change::Started(runtime) => Update::Started(Ok(runtime_of(runtime))),
             Change::StartFailed(why) => Update::Started(Err(why)),
             Change::Died(why) => Update::Notice(Notice::Died(why)),
-            // The app's own stop, or Cancel: a start that it cut short ends as cancelled.
             Change::Stopped => match self.connections.get(host) {
                 Some(c) if c.status == Status::Starting => Update::Started(Err(String::new())),
                 _ => return,
             },
-            // The line went on with Julia by itself, as after a reconnect.
             Change::Starting => {
                 let name = self.hosts.name(host);
                 let Some(connection) = self.connections.get_mut(host).filter(|c| c.id == id && matches!(c.status, Status::Browsing | Status::Died(_))) else { return };
@@ -827,9 +672,7 @@ impl Workspace {
         self.on_update(host.clone(), id, update, cx);
     }
 
-    /// Start Julia on a connected host (or attach to the one running there).
     pub fn start_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
-        // A cluster restarted from its pane runs the shown session's resources.
         let shown = self.active_session().filter(|s| s.place.host == *host).and_then(|s| s.resources.clone());
         let line = self.lines.get(host).map(|l| l.session.clone());
         let listener = match host {
@@ -874,18 +717,13 @@ impl Workspace {
                 });
                 self.follow(host.clone(), id, rx, cx);
             }
-            // The line says how it goes (`on_line`). Julia is installed without asking, as it always was.
             (_, _, Some(session)) => session.request(&client::Want::Start { job, install: true }),
             _ => {}
         }
         cx.notify();
     }
 
-    /// Stop This Mac's Julia and start it again (Settings → Restart Julia).
-    /// Another Julia chosen since it started needs a new helper, which a
-    /// reconnect starts with it.
     pub fn restart_local(&mut self, cx: &mut Context<Self>) {
-        // The helper was started with both: a new one takes the new choice.
         if self.julia_changed() || self.r_changed() {
             return self.reconnect_local(false, cx);
         }
@@ -900,7 +738,6 @@ impl Workspace {
         self.close_page(gone, cx);
         self.status = "Restarting Julia…".into();
         let stop = cx.background_executor().spawn(async move {
-            // Asked before the listener turns the app's calls away too.
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(listener) = listener {
                 listener.restarting();
@@ -913,7 +750,6 @@ impl Workspace {
                 if let Some(connection) = this.connections.get_mut(&host) {
                     connection.status = Status::Died(String::new());
                     connection.resume = resume;
-                    // Julia that didn't stop is still running: the start attaches to it again, and says why.
                     connection.not_restarted = stopped.err();
                 }
                 this.start_host(&host, cx);
@@ -923,9 +759,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// What to offer beside Retry for `host`'s trouble: Repair once This
-    /// Mac's has outlasted Retry twice, and for a server with no helper for
-    /// its platform, how to get one.
     pub fn fixes(&self, host: &HostId, reason: &str) -> Vec<Fix> {
         let repair = *host == HostId::ThisMac && self.connections.get(host).is_some_and(|c| c.failures > REPAIR_AFTER);
         let helper = remote::HelperFix::of(reason).map(|fix| match fix.command() {
@@ -935,8 +768,6 @@ impl Workspace {
         repair.then_some(Fix::Repair).into_iter().chain(helper).collect()
     }
 
-    /// A fix's button: `small` beside the new-session screen's notice, else a
-    /// secondary one beside a pane's primary action.
     pub fn fix_button(&self, fix: Fix, small: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
             .id(fix.id())
@@ -963,23 +794,16 @@ impl Workspace {
         }
     }
 
-    /// Settings → Repair Julia, or Repair beside This Mac's error: stop
-    /// Julia and the helper, clear the runtime's state that can go stale
-    /// (`runtime::clear_state`), then connect and start again.
     pub fn repair_local(&mut self, cx: &mut Context<Self>) {
         self.reconnect_local(true, cx);
     }
 
-    /// Stop This Mac's Julia and its helper, clear the runtime's state if
-    /// `clear`, then connect and start again.
     fn reconnect_local(&mut self, clear: bool, cx: &mut Context<Self>) {
         let host = HostId::ThisMac;
         let (channel, running, gone) = match self.connections.get_mut(&host) {
-            // Still installing Julia: nothing to repair yet.
             Some(c) if c.status == Status::Connecting => return,
             Some(c) => {
                 let running = c.bridge().map(|bridge| (bridge, c.notebooks.clone()));
-                // Updates from the connect or start under way are dropped from now on.
                 c.id = next_connect_id();
                 let gone = c.forget_runtime();
                 c.status = Status::Starting;
@@ -995,7 +819,6 @@ impl Workspace {
         let work = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(channel) = channel {
-                // A Julia that doesn't stop here is stopped by its recorded group below, on a repair.
                 if let Err(e) = channel.stop() {
                     eprintln!("Stopping Julia: {e}");
                 }
@@ -1023,7 +846,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Make sure `host`'s Julia is running or on its way (a session needs it).
     pub fn ensure_runtime(&mut self, host: &HostId, cx: &mut Context<Self>) {
         match self.status(host) {
             Some(Status::Ready | Status::Starting) => {}
@@ -1037,7 +859,6 @@ impl Workspace {
             while let Some(update) = rx.next().await {
                 let applied = this.update(cx, |this, cx| {
                     this.on_update(host.clone(), id, update, cx);
-                    // A server's sessions wait while it reconnects, and go once it's back.
                     this.sync_holds(cx);
                 });
                 if applied.is_err() {
@@ -1078,7 +899,6 @@ impl Workspace {
                 connection.steps.advance(format!("Got a node: {reason}"), "Starting Julia");
             }
             Update::Event(Event::Queued { job, reason, .. }) => {
-                // The job this start submitted, or one it found waiting.
                 connection.job.get_or_insert(job);
                 connection.steps.now("Waiting for a node");
                 connection.steps.detail = wire::slurm::reason_text(&reason).map(|r| format!("Slurm: {r}"));
@@ -1107,8 +927,6 @@ impl Workspace {
                     connection.steps.advance(format!("Connected to {name}"), "Finding Julia");
                 }
                 let (start, stop) = (connection.start_when_connected, connection.stop_when_connected);
-                // Back as it was. One that starts Julia again keeps its page, read-only and
-                // lost, until Julia is up; one with no page shows the start (a queue may be long).
                 let keeps_page = start && connection.lost.as_ref().is_some_and(|l| l.page.is_some());
                 let back = if keeps_page { None } else { connection.lost.take() };
                 if let Some(Lost { was: Status::Died(reason), .. }) = back {
@@ -1138,8 +956,6 @@ impl Workspace {
                     }
                 }
             }
-            // Back on the same Julia, after a drop however long or a look that
-            // missed one: the page and its notebooks carry on, nothing reopens.
             Update::Started(Ok(runtime)) if !local && connection.same_julia(&runtime) => {
                 let watched = connection.runtime.is_some();
                 connection.lost = None;
@@ -1166,7 +982,6 @@ impl Workspace {
                 }
             }
             Update::Started(Ok(runtime)) => {
-                // The kept page gives way to the notebook reopened on the new connection.
                 connection.lost = None;
                 connection.dropped = None;
                 connection.job = None;
@@ -1184,7 +999,6 @@ impl Workspace {
                 self.on_ready(&host, cx);
                 self.warn_before_job_ends(&host, cx);
             }
-            // The connection dropped under the start: it reconnects as lost.
             Update::Started(Err(_)) if connection.lost.is_some() && !connection.connected() => {}
             Update::Started(Err(_)) if connection.cancelling => {
                 connection.cancelling = false;
@@ -1206,23 +1020,18 @@ impl Workspace {
                         setup.fail(e);
                     }
                 }
-                // A restart on a server (`restart_host`) said it was restarting too.
                 if let Some(listener) = self.listeners.get(&host) {
                     listener.restart_failed();
                 }
             }
-            // Heard already, from the runtime or the helper's end.
             Update::Notice(Notice::Lost(_)) if !connection.connected() => {}
-            // A server that drops reconnects by itself; its notebook, if showing, stays up read-only meanwhile.
             Update::Notice(Notice::Lost(reason)) if !local => {
                 connection.lose(reason, shown);
-                // A blip often passes: the first try comes soon.
                 if self.offline_since().is_none() {
                     self.retry_lost(host.clone(), std::time::Duration::from_secs(2), cx);
                 }
             }
             Update::Notice(notice) => {
-                // Heard only when Julia went by itself: the app's own stops leave first.
                 let crashed = matches!(notice, Notice::Died(_)).then(|| crate::crash::running_notebooks(&connection.notebooks));
                 connection.dropped = None;
                 let gone = connection.forget_runtime();
@@ -1248,9 +1057,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// `host`'s settings were saved. A line made from its old connection settings connects again
-    /// with the new ones at once, as after a drop: back on the same Julia, its page and notebooks
-    /// carry on, and its port stays (`open_line`), so the agents there do too (EndeavorMCP#47).
     pub fn settings_saved(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let HostId::Server(id) = host else { return };
         let (Some(line), Some(server)) = (self.lines.get(host), self.hosts.server(id)) else { return };
@@ -1264,31 +1070,25 @@ impl Workspace {
         if connection.connected() {
             connection.lose(format!("Connecting to {name} with its new settings"), shown);
         } else if connection.status == Status::Connecting {
-            // A connect under way with the old settings gives way to one with the new.
             connection.status = Status::Failed(String::new());
         } else {
-            // Not connected: the next connect uses the new settings.
             return;
         }
         let julia = start || connection.lost.as_ref().is_some_and(Lost::had_julia);
         self.connect_host(host, julia, cx);
     }
 
-    /// A dropped server's reconnect: it starts Julia again only if it ran.
     pub fn reconnect_lost(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let julia = self.connections.get(host).and_then(|c| c.lost.as_ref()).is_some_and(Lost::had_julia);
         self.connect_host(host, julia, cx);
     }
 
-    /// Connected, before any runtime: the new-session screen can use its files,
-    /// and (with `check`) the host list hears what runs there.
     fn on_connected(&mut self, host: &HostId, check: bool, cx: &mut Context<Self>) {
         if check && *host != HostId::ThisMac {
             self.check_host(host, cx);
         }
         self.fetch_partitions(host, cx);
         if self.draft.host == *host {
-            // An open folder browser lists again, after a reconnect.
             if let Some(path) = self.draft.browser.as_ref().map(|b| b.path.clone()) {
                 self.browse_to(path, cx);
             }
@@ -1302,8 +1102,6 @@ impl Workspace {
         }
     }
 
-    /// `host`'s runtime is up: tell it what the app knows, follow its notebooks,
-    /// and start the sessions waiting on it.
     fn on_ready(&mut self, host: &HostId, cx: &mut Context<Self>) {
         if *host == HostId::ThisMac {
             self.settings_checks.repairing = false;
@@ -1311,8 +1109,6 @@ impl Workspace {
         let Some(bridge) = self.bridge(host) else { return };
         let reattached = self.connections.get(host).and_then(|c| c.runtime.as_ref()).is_some_and(|r| r.reattached);
         if *host == HostId::ThisMac {
-            // First launch: the assistant picked on the setup screen, once picked.
-            // Other launches start their agents at launch (`main`), or when needed.
             let agent = self.setup.as_ref().and_then(|s| s.agent);
             if let Some(agent) = agent
                 && let Some(commands) = self.links.get_mut(agent).rx.take()
@@ -1341,7 +1137,6 @@ impl Workspace {
                 }
             }
         }
-        // A new runtime knows no session's notebook or policy.
         let on_host: Vec<&Session> = self.sessions.iter().filter(|s| s.place.host == *host).collect();
         let bound: Vec<(u64, String)> = on_host.iter().filter_map(|s| Some((s.key, s.notebook_path.clone()?))).collect();
         let folders: Vec<(u64, String, Backend)> = on_host.iter().map(|s| (s.key, s.place.path.clone(), s.kind)).collect();
@@ -1352,6 +1147,7 @@ impl Workspace {
             cx.background_executor().spawn(async move { pluto::set_notebook(&bridge, key, &path) }).detach();
         }
         for (key, folder, kind) in folders {
+            self.note_session_kind(host, key, kind);
             let bridge = bridge.clone();
             cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
         }
@@ -1366,8 +1162,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Follow `host`'s notebook list (pushed on every change) for the end-of-turn
-    /// run check, the idle stops and reopening notebooks after a crash.
     fn watch_notebooks(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get(host) else { return };
         let Some(bridge) = connection.bridge() else { return };
@@ -1382,8 +1176,6 @@ impl Workspace {
         if r_status {
             self.watch_r(host, bridge.clone(), watching.clone(), mine, cx);
         }
-        // A long-lived blocking read: its own thread, not the executor's pool. If the
-        // stream drops it reconnects, until this runtime is replaced or dies.
         let current = watching.clone();
         std::thread::spawn(move || {
             while current.load(Ordering::SeqCst) == mine {
@@ -1396,8 +1188,6 @@ impl Workspace {
         let host = host.clone();
         cx.spawn(async move |this, cx| {
             while let Some(event) = rx.next().await {
-                // A runtime that's going still sends its list as it closes: it
-                // must not replace what the next runtime reopens.
                 if watching.load(Ordering::SeqCst) != mine {
                     break;
                 }
@@ -1409,9 +1199,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Follow where Julia is on `host`'s runtime (`endeavor/julia_status`), while
-    /// it's the one `watching` follows: every second while Julia starts, else
-    /// every few. It never starts Julia.
     fn watch_julia(&mut self, host: &HostId, bridge: Bridge, watching: Arc<AtomicU64>, mine: u64, cx: &mut Context<Self>) {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<(pluto::JuliaStatus, Option<pluto::Started>)>();
         let current = watching.clone();
@@ -1441,10 +1228,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The runtime said where Julia is: the pane shows its steps while it
-    /// starts, whoever started it (the agent, a warm-up), except over a
-    /// session with no notebook yet (`starting_ahead`), and why a start it
-    /// watched failed (a stall the runtime ended, say), with Try again.
     fn on_julia_status(&mut self, host: &HostId, status: pluto::JuliaStatus, started: Option<pluto::Started>, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get_mut(host) else { return };
         if connection.julia_started != started {
@@ -1475,16 +1258,12 @@ impl Workspace {
         }
         let ended = was_starting && !matches!(status, pluto::JuliaStatus::Starting { .. });
         connection.julia_status = Some(status);
-        // The start may have installed Endeavor's own Julia: Settings says so.
         if ended && *host == HostId::ThisMac && self.settings_panel.is_some() {
             self.check_own_julia(cx);
         }
         cx.notify();
     }
 
-    /// Follow where R notebooks' setup is on `host`'s runtime (`endeavor/r_status`),
-    /// as `watch_julia` does Julia's: every second while it's under way, else
-    /// every few. It never starts R.
     fn watch_r(&mut self, host: &HostId, bridge: Bridge, watching: Arc<AtomicU64>, mine: u64, cx: &mut Context<Self>) {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<(pluto::RStatus, Option<pluto::Started>)>();
         let current = watching.clone();
@@ -1514,7 +1293,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The runtime said where R notebooks' setup is (`Connection::r_status_now`).
     fn on_r_status(&mut self, host: &HostId, status: pluto::RStatus, started: Option<pluto::Started>, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get_mut(host) else { return };
         let moved = connection.r_started != started;
@@ -1526,9 +1304,6 @@ impl Workspace {
 
     fn on_notebooks_event(&mut self, host: &HostId, mut event: serde_json::Value, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get_mut(host) else { return };
-        // A notebook the runtime just stopped for being idle shows stopped, with
-        // Start, in every session on it. Only new entries count: a stale one must
-        // not stop a notebook the user has started again since.
         let stops = pluto::idle_stopped(&event);
         let mut new_stops = Vec::new();
         for (path, hours, safe_preview) in &stops {
@@ -1543,12 +1318,9 @@ impl Workspace {
             }
         }
         connection.idle_stopped = stops.into_iter().map(|(path, ..)| path).collect();
-        // A notebook whose R ended shows the crash page, with why. Only new entries count, as for idle stops.
-        let ended = pluto::engine_ended(&event);
-        let new_ended: Vec<(String, String, String)> = ended.iter().filter(|(path, ..)| !connection.engine_ended.contains(path)).cloned().collect();
-        connection.engine_ended = ended.into_iter().map(|(path, ..)| path).collect();
+        let (new_ended, ended) = pluto::new_endings(&connection.engine_ended, &event);
+        connection.engine_ended = ended;
         let list = event["notebooks"].take();
-        // Julia runs after all, whoever started it (the agent's own open, say): its failure is over.
         if list.as_array().is_some_and(|l| l.iter().any(|nb| nb["path"].as_str().is_some_and(|p| p.ends_with(".jl")))) {
             connection.julia_failed = None;
         }
@@ -1595,7 +1367,6 @@ impl Workspace {
             self.notebook_stopped((host.clone(), path), cell, cx);
         }
         for (path, language, why) in new_ended {
-            // The runtime names the file canonically; a session may have it spelled otherwise (case, links).
             let path = self.sessions.iter().filter(|s| s.place.host == *host).filter_map(|s| s.notebook_path.as_deref()).find(|own| same_file(host, own, &path)).map_or(path.clone(), str::to_owned);
             let at = (host.clone(), path);
             self.crashes.ended(at.clone(), language, why);
@@ -1603,15 +1374,6 @@ impl Workspace {
         }
     }
 
-    /// Reopen the notebooks that were open in `host`'s last runtime (unless this
-    /// one has them open already, as after a reconnect), and point each session
-    /// (and the pane) at the reopened copy. Pluto saves on every change, so the
-    /// files are current. They open in safe preview, except the ones in
-    /// `resume` whose files haven't changed since.
-    ///
-    /// Each session's own notebook reopens too, even if the last runtime's list
-    /// had lost it: a restart during an earlier reopen leaves the list empty,
-    /// and a session left without its notebook shows "Opening" for good.
     fn reopen_notebooks(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get_mut(host) else { return };
         let Some(runtime) = connection.runtime.as_ref() else { return };
@@ -1630,7 +1392,6 @@ impl Workspace {
         let steps = [self.julia_steps(host, Backend::Pluto, cx), self.julia_steps(host, Backend::Ember, cx)];
         let reopen = cx.background_executor().spawn(async move {
             let failed = std::cell::RefCell::new([None, None]);
-            // Failures the pane doesn't explain, by path: the session showing one says why (#244).
             let unexplained = std::cell::RefCell::new(Vec::new());
             let list = || pluto::call_tool(&bridge, "list_notebooks", serde_json::json!({})).ok();
             let find = |listed: &Option<serde_json::Value>, path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
@@ -1645,7 +1406,6 @@ impl Workspace {
                             let r = crate::new_session::kind_of_path(&path) == Backend::Ember;
                             match pluto::until_julia(|| pluto::open_notebook(&bridge, &path, run), &|step| steps[r as usize].step(step)) {
                                 Ok(nb) => nb,
-                                // Opened meanwhile (the session's own open, or Claude's).
                                 Err(e) => find(&list(), &path).or_else(|| {
                                     eprintln!("Couldn't reopen {path}: {e}");
                                     if pane_failure(crate::new_session::kind_of_path(&path), &e).is_some() {
@@ -1674,7 +1434,6 @@ impl Workspace {
             let previewed = reopened.iter().filter(|(.., previewed)| *previewed).count();
             let reopened: Vec<(String, String)> = reopened.into_iter().map(|(id, path, _)| (id, path)).collect();
             let _ = this.update(cx, |this, cx| {
-                // The runtime went (a second restart) while this reopen ran: the next one's reopen does it.
                 if this.connections.get(&host).and_then(|c| c.runtime.as_ref()).is_none_or(|r| r.pid != this_runtime) {
                     eprintln!("Dropped a reopen of {} notebook(s) on {}: its runtime has gone", reopened.len(), this.hosts.name(&host));
                     return;
@@ -1685,7 +1444,6 @@ impl Workspace {
                 for session in this.sessions.iter_mut().filter(|s| s.place.host == host) {
                     let own = session.notebook_path.as_deref().filter(|_| session.stopped.is_none() && !session.missing);
                     session.notebook = own.and_then(by_path).or_else(|| session.notebook.as_deref().and_then(new_id));
-                    // Each pass says why afresh: an earlier pass's error mustn't show over this one's Julia or R pane.
                     if own.is_some() {
                         session.open_failed = None;
                     }
@@ -1695,12 +1453,9 @@ impl Workspace {
                         lost.push((session.key, failed));
                     }
                 }
-                // A notice from an earlier pass goes once its session has no failed open to show.
                 if this.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(crate::notice::Retry::OpenNotebook(k, _)) if this.sessions.iter().any(|s| s.key == *k && s.place.host == host && s.open_failed.is_none()))) {
                     this.notice = None;
                 }
-                // A file that's gone shows File not found; an open that failed for another reason
-                // says why over the pane, with Try again, as the session's own open does.
                 for (key, failed) in lost {
                     this.check_missing(key, failed, cx);
                 }
@@ -1723,7 +1478,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Stop open notebooks after the host's idle limit: a server's own, else Settings'.
     pub fn send_idle_limit(&self, host: &HostId, cx: &mut Context<Self>) {
         let Some(bridge) = self.bridge(host) else { return };
         let limit = match host {
@@ -1731,14 +1485,11 @@ impl Workspace {
             HostId::ThisMac => None,
         };
         let hours = f64::from(limit.unwrap_or(self.settings.idle_stop).hours());
-        // A limit of seconds for a check of the idle stop, in a debug build only.
         #[cfg(debug_assertions)]
         let hours = std::env::var("ENDEAVOR_TEST_IDLE_SECS").ok().and_then(|s| s.parse::<f64>().ok()).map_or(hours, |secs| secs / 3600.0);
-        // ponytail: a failed send leaves the runtime on its default (48 hours) until the next start.
         cx.background_executor().spawn(async move { pluto::set_idle_limit(&bridge, hours) }).detach();
     }
 
-    /// When the running cluster job on `host` ends (Unix seconds), and whether that's soon.
     pub fn job_end(&self, host: &HostId) -> Option<(u64, bool)> {
         let connection = self.connections.get(host).filter(|c| c.status == Status::Ready)?;
         let at = connection.runtime.as_ref()?.job.as_ref()?.ends_at?;
@@ -1746,7 +1497,6 @@ impl Workspace {
         Some((at, at.saturating_sub(now) <= job_warning_window().as_secs()))
     }
 
-    /// "Job ends 18:40", for the notebook header of a session on a cluster.
     pub fn job_ends(&self, host: &HostId) -> Option<AnyElement> {
         let (at, soon) = self.job_end(host)?;
         Some(
@@ -1767,7 +1517,6 @@ impl Workspace {
         matches!(host, HostId::Server(id) if self.hosts.server(id).is_some_and(|s| s.cluster.is_some()))
     }
 
-    /// Cancel starting Julia on a cluster: the queued job is cancelled.
     pub fn cancel_start(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(helper) = self.helper(host) else { return };
         let Some(connection) = self.connections.get_mut(host).filter(|c| c.status == Status::Starting) else { return };
@@ -1777,9 +1526,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Ask a connected host what runs there (a runtime, or a cluster job for
-    /// one), without taking it over. A host that isn't connected connects,
-    /// which then asks.
     pub fn check_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let helper = self.helper(host);
         let Some(connection) = self.connections.get_mut(host).filter(|c| matches!(c.status, Status::Browsing | Status::Died(_))) else {
@@ -1810,16 +1556,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Stop Julia on `host` (Settings' host list): its runtime, or on a
-    /// cluster its job, queued or running, whether or not this app attached
-    /// to it. A host that isn't connected connects first. Sessions on it then
-    /// show Julia stopped, with Start.
     pub fn stop_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         self.stop_host_then(host, false, cx);
     }
 
-    /// Stop Julia on `host`, and with `start`, start it again once it stopped, reopening the
-    /// notebooks the user had let run to run again.
     fn stop_host_then(&mut self, host: &HostId, start: bool, cx: &mut Context<Self>) {
         match self.status(host) {
             Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) => {}
@@ -1840,15 +1580,12 @@ impl Workspace {
         let helper = self.helper(host);
         let Some(connection) = self.connections.get_mut(host) else { return };
         let Some(helper) = helper.filter(|_| !connection.stopping) else { return };
-        // What runs now resumes after the start, as after Settings → Restart Julia.
         let running = connection.bridge().filter(|_| start && connection.status == Status::Ready).map(|bridge| (bridge, connection.notebooks.clone()));
         let gone = if connection.status == Status::Starting {
-            // The start under way ends as cancelled (Update::Started).
             connection.cancelling = true;
             None
         } else {
             connection.status = Status::Died(String::new());
-            // With notebooks to look at first, the listener is told once they have been (below).
             if let Some(listener) = self.listeners.get(host).filter(|_| running.is_none()) {
                 listener.disconnected();
             }
@@ -1865,10 +1602,8 @@ impl Workspace {
         if *host == HostId::ThisMac {
             self.status = "Stopping Julia…".into();
         }
-        // The agent's calls meanwhile hear that it is restarting, not that it was disconnected.
         let listener = self.listeners.get(host).filter(|_| start).cloned();
         let stop = cx.background_executor().spawn(async move {
-            // The app's calls go through the listener too: which notebooks run is asked before it turns them away.
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(listener) = listener {
                 listener.restarting();
@@ -1883,7 +1618,6 @@ impl Workspace {
                 if let Some(connection) = this.connections.get_mut(&host).filter(|c| c.id == id) {
                     connection.stopping = false;
                     if let Err(e) = stopped {
-                        // It may still run: ask what does.
                         connection.start_after_stop = false;
                         this.status = not_stopped(&this.hosts.name(&host), &e).into();
                         if host == HostId::ThisMac {
@@ -1913,20 +1647,14 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Stop Julia on `host` and start it again: for Julia an older Endeavor
-    /// started, which this one can't attach to or keeps as it is, or that the
-    /// agent asked the user to restart (`restart_ask`).
     pub fn restart_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         self.stop_host_then(host, true, cx);
     }
 
-    /// ssh on `host`'s line is asking the user something (a password, a code):
-    /// the server answered, so it isn't out of reach.
     pub fn signing_in(&self, host: &HostId) -> bool {
         self.lines.get(host).is_some_and(|line| self.asks.iter().any(|ask| ask.question().source == line.sign_in.id))
     }
 
-    /// What runs on `host`, as far as the app knows, for the host list and the Where menu.
     pub fn host_state(&self, host: &HostId) -> HostState {
         let Some(c) = self.connections.get(host) else { return HostState::Unknown };
         if c.stopping {
@@ -1942,7 +1670,6 @@ impl Workspace {
                 Some(Ok(found)) => HostState::from(found),
                 Some(Err(_)) => HostState::Connected,
             },
-            // Started since by another app, as a check found.
             Status::Died(_) => match &c.found {
                 Some(Ok(found @ (RuntimeState::Running { .. } | RuntimeState::Queued { .. } | RuntimeState::Starting))) => HostState::from(found),
                 _ => HostState::NotRunning,
@@ -1959,8 +1686,6 @@ impl Workspace {
         }
     }
 
-    /// When a cluster job's end is near, say so in the chat of each session on
-    /// it: the notebook file is saved, and a new job can run it again.
     fn warn_before_job_ends(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(connection) = self.connections.get(host) else { return };
         let Some(ends_at) = connection.runtime.as_ref().and_then(|r| r.job.as_ref()).and_then(|j| j.ends_at) else { return };
@@ -1991,7 +1716,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Leave a host (its server was removed): its runtime keeps running.
     pub fn disconnect_host(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let Some(mut connection) = self.connections.remove(host) else { return };
         if let Some(listener) = self.listeners.get(host) {
@@ -2006,17 +1730,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The app is quitting: every runtime keeps running. A server's idle stop
-    /// covers it; This Mac's goes on until its notebooks are idle, then ends once
-    /// none is open (its helper's `--exit-idle-after-client`, #274).
     pub fn quit_runtimes(&mut self) {
         for connection in self.connections.values() {
             if let Some(channel) = &connection.channel {
                 channel.quit(true);
             }
         }
-        // Each server's helper is let go, and Julia keeps running there; a
-        // server slow to answer isn't waited for long.
         let closing: Vec<_> = self.lines.drain().map(|(_, line)| line.close()).collect();
         let until = Instant::now() + Duration::from_secs(2);
         while closing.iter().any(|c| !c.is_finished()) && Instant::now() < until {
@@ -2024,11 +1743,6 @@ impl Workspace {
         }
     }
 
-    /// For a call to `host`'s runtime that may wait for Julia to start, or
-    /// for R notebooks to be set up (`kind`, `pluto::until_julia`): what it hears
-    /// goes to the pane's step log for that language until it and every other
-    /// such call end.
-    // A runtime that says where Julia is (`watch_julia`) shows the same steps every second, whoever waits.
     pub fn julia_steps(&mut self, host: &HostId, kind: Backend, cx: &mut Context<Self>) -> JuliaSteps {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<String>();
         if let Some(connection) = self.connections.get_mut(host) {
@@ -2074,17 +1788,14 @@ impl Workspace {
         JuliaSteps(tx)
     }
 
-    /// The empty page's line while `host`'s Julia starts ahead (`starting_ahead`).
     pub fn julia_ahead(&self, host: &HostId) -> Option<String> {
         self.connections.get(host)?.julia.as_ref().map(ahead_line)
     }
 
-    /// The same while R notebooks' setup is under way (for another session, or the agent).
     pub fn r_ahead(&self, host: &HostId) -> Option<String> {
         self.connections.get(host)?.r.as_ref().map(ahead_line)
     }
 
-    /// How many of the app's own calls (an open, New notebook) wait on `host`'s Julia, or R (`kind`).
     pub fn app_waits(&self, host: &HostId, kind: Backend) -> u32 {
         self.connections.get(host).map_or(0, |c| match kind {
             Backend::Pluto => c.julia_waits,
@@ -2092,8 +1803,6 @@ impl Workspace {
         })
     }
 
-    /// A call that needed Julia, or R (`kind`), on `host` ended with `error`:
-    /// if it couldn't start, the pane says why, with Try again.
     pub fn julia_answer(&mut self, host: &HostId, kind: Backend, error: Option<&str>, cx: &mut Context<Self>) {
         let failed = error.and_then(|e| pane_failure(kind, e));
         let Some(connection) = self.connections.get_mut(host) else { return };
@@ -2106,9 +1815,6 @@ impl Workspace {
         }
     }
 
-    /// The pane's Try again after Julia couldn't start: start it again (a
-    /// runtime that says where Julia is starts it only when asked, after a
-    /// failure), then open the shown session's notebook again.
     fn retry_julia(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let mut start = None;
         if let Some(connection) = self.connections.get_mut(host) {
@@ -2129,7 +1835,6 @@ impl Workspace {
                     let started = started.await;
                     let _ = this.update(cx, |this, cx| {
                         match started {
-                            // A start just asked for keeps the Julia last said until the watch says the new one.
                             Ok(status) => {
                                 let started = this.connections.get(&host).and_then(|c| c.julia_started.clone());
                                 this.on_julia_status(&host, status, started, cx)
@@ -2152,15 +1857,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The pane's Try again, or Install R, after R notebooks couldn't start:
-    /// open the shown session's notebook again. `install`: first let the runtime
-    /// install Endeavor's own R, which the person has just agreed to.
     fn retry_r(&mut self, host: &HostId, install: bool, cx: &mut Context<Self>) {
         let bridge = self.connections.get_mut(host).and_then(|connection| {
             connection.r_failed = None;
             connection.bridge()
         });
-        // Its notebook opens again, or with none yet (the pane's New notebook), it's made again.
         let Some(again) = self.r_retry_target(host) else { return cx.notify() };
         match bridge.filter(|_| install) {
             Some(bridge) => {
@@ -2180,8 +1881,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The session shown, when it waits on `host` for a notebook: what the R failure pane's
-    /// buttons open again. The pane shows only over such a session (`pane_shows`, #128).
     fn r_retry_target(&self, host: &HostId) -> Option<(u64, Option<String>)> {
         let waiting = self.active_session().filter(|s| s.place.host == *host && waits_for_notebook(s));
         waiting.map(|s| (s.key, s.notebook_path.clone()))
@@ -2194,9 +1893,6 @@ impl Workspace {
         }
     }
 
-    /// What the notebook pane shows while `host` isn't ready; None once it is,
-    /// and while a dropped server's page stays up, read-only, as it reconnects.
-    /// `kind`: the shown notebook's, whose language's setup the pane shows.
     pub fn host_pane_state(&self, host: &HostId, kind: Backend, cx: &App) -> Option<HostPane> {
         let connection = self.connections.get(host);
         if let Some(lost) = connection.and_then(|c| c.lost.as_ref()) {
@@ -2204,7 +1900,6 @@ impl Workspace {
             return (!lost.page.as_deref().is_some_and(|page| shown.starts_with(page))).then_some(HostPane::Lost);
         }
         Some(match connection.map_or(Status::Connecting, |c| c.status.clone()) {
-            // Ready, and Julia (or R) starting for a notebook the app opens, or unable to.
             Status::Ready => match (kind, connection) {
                 (Backend::Pluto, Some(Connection { julia_failed: Some(why), .. })) => HostPane::JuliaFailed(why.clone()),
                 (Backend::Pluto, Some(Connection { julia: Some(steps), .. })) => HostPane::JuliaStarting(steps.current.clone()),
@@ -2220,9 +1915,6 @@ impl Workspace {
         })
     }
 
-    /// The notebook pane while `host` isn't ready: its state, and what to do
-    /// about it. `start`: Reconnect also starts Julia, as a session needs; the
-    /// new-session screen only browses the host's files. `kind`: the shown notebook's.
     pub fn host_pane(&self, host: &HostId, kind: Backend, start: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.host_pane_state(host, kind, cx)?;
         let connection = self.connections.get(host);
@@ -2251,14 +1943,12 @@ impl Workspace {
         let pane = match state {
             HostPane::Lost => {
                 let offline = self.offline_since().is_some();
-                // A session's pane has "Can't reach" above it already.
                 if start {
                     let text = if offline { format!("Endeavor reconnects to {name} when you're back online.") } else { format!("Endeavor reconnects to {name} by itself.") };
                     resting.child(div().text_color(theme::text_muted()).child(text))
                 } else {
                     let text = if offline { "Endeavor reconnects when you're back online." } else { "Endeavor reconnects by itself." };
                     let host = host.clone();
-                    // Opens Settings at the server, where Try now and its connection settings are.
                     let title = div()
                         .id("cant-reach-host")
                         .role(Role::Link)
@@ -2368,20 +2058,10 @@ impl Workspace {
     }
 }
 
-/// Whether a session with no notebook keeps its own page, with New notebook,
-/// over the host's `state`: Julia starting ahead (for the session, the agent or
-/// a warm-up), with none of the app's calls (`waits`) waiting on it. Covering
-/// the page hid New notebook for the whole of a first setup, and the page came
-/// back at Ready, so a click looked dropped. A click counts as a wait, so the
-/// pane then shows the start. R's setup for another session or the agent
-/// (`r_status`) leaves it showing the same way.
 pub fn starting_ahead(state: &HostPane, waits: u32) -> bool {
     waits == 0 && matches!(state, HostPane::JuliaStarting(_) | HostPane::RStarting(_))
 }
 
-/// The empty page's line while Julia starts ahead: the step, with a download's
-/// percentage or how long there's been no sign of progress. Not the log's
-/// other lines, so it stays one short line.
 fn ahead_line(steps: &Steps) -> String {
     match steps.detail.as_deref() {
         Some(pct) if pct.ends_with('%') => format!("{} {pct}", steps.current),
@@ -2390,50 +2070,29 @@ fn ahead_line(steps: &Steps) -> String {
     }
 }
 
-/// The notebook pane of a host that isn't ready.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostPane {
-    /// A server's connection dropped by itself: "Can't reach", reconnecting.
     Lost,
-    /// Connecting, or the runtime starting: the step log.
     Starting,
-    /// The runtime is ready and Julia is starting for a notebook the app
-    /// opens: the step log, and the step under way.
     JuliaStarting(String),
-    /// Julia couldn't start for the notebook the app opened: why, and Try again.
     JuliaFailed(String),
-    /// The runtime is ready and R notebooks are being set up for an R notebook
-    /// the app opens: the step log, and the step under way.
     RStarting(String),
-    /// R notebooks couldn't start for the R notebook the app opened: why, and
-    /// Try again, or Install R where Endeavor can install its own.
     RFailed(String),
     Stopping,
-    /// "Julia isn't running", and why.
     NotRunning(String),
-    /// Julia stopped by itself: "Julia stopped unexpectedly", and why.
     Crashed(String),
-    /// "Not connected", and why.
     NotConnected(String),
 }
 
-/// What installing Endeavor's own R would be here, while it isn't installed: a Mac it has an R for.
 pub fn own_r_offered() -> Option<wire::Item> {
     own_r_item().filter(|_| endeavor_mcp::r::own_installed().is_none())
 }
 
-/// Endeavor's own R, where this computer can have it (a Mac), installed or not.
 pub fn own_r_item() -> Option<wire::Item> {
-    // Asked once: it runs `uname` and `sw_vers`.
     static OFFERED: std::sync::OnceLock<Option<wire::Item>> = std::sync::OnceLock::new();
     OFFERED.get_or_init(endeavor_mcp::r::own_offered).clone()
 }
 
-/// The failure the notebook pane shows for a call's `error` in a session of
-/// `kind` (`julia_answer`), with Try again; None if the pane doesn't show it,
-/// so the caller must. R's keeps its code: the pane offers Install R for
-/// `r_not_found`. A notebook still opening when the app stopped waiting shows
-/// the same way, with its own words.
 pub fn pane_failure(kind: Backend, error: &str) -> Option<String> {
     match kind {
         Backend::Pluto => pluto::julia_failed(error).or_else(|| pluto::open_stuck(error)).map(str::to_owned),
@@ -2442,7 +2101,6 @@ pub fn pane_failure(kind: Backend, error: &str) -> Option<String> {
     }
 }
 
-/// Hears what Julia is doing for a call that waits for it (`Workspace::julia_steps`).
 #[derive(Clone)]
 pub struct JuliaSteps(futures::channel::mpsc::UnboundedSender<String>);
 
@@ -2452,47 +2110,27 @@ impl JuliaSteps {
     }
 }
 
-/// Send how the connect went, then, if it got through, wait for the helper's
-/// end: a drop is heard as `Notice::Lost` whether or not Julia runs.
-/// A server's `client::Session`, with what the app keeps of it.
 pub(crate) struct Line {
     session: Arc<client::Session>,
-    /// ssh's prompts come through it while the session lives.
     _asker: client::Asker,
-    /// Its ssh's sign-in: a Cancel, forgotten when the user connects again,
-    /// and the questions to take down when a connect fails (`remote::SignIn`).
     sign_in: remote::SignIn,
-    /// The server as the line was opened for it.
     server: Server,
-    /// Set once the line is closed: its watcher stops.
     closed: Arc<AtomicBool>,
-    /// The status last applied (`on_line`).
     last: Option<LineStatus>,
-    /// Tells this line's updates from a line opened after it for the same host.
     generation: u64,
-    /// A drop under a ready runtime, not yet told to the connection (`LOST_GRACE`).
     held: Option<Held>,
 }
 
-/// A drop the line may get over by itself: told only if it doesn't come back
-/// to the same runtime within `LOST_GRACE`, with what it heard meanwhile.
 struct Held {
-    /// Tells this hold from a later one, for its timer.
     id: u64,
     pid: u32,
     why: String,
     since: Vec<Change>,
 }
 
-/// How long a server's dropped connection may take to come back to the same
-/// Julia before the app shows it lost. The line usually gets it back in well
-/// under a second, and Pluto's page reconnects by itself; tearing the runtime
-/// down and opening it again meanwhile breaks the page's reconnect.
 const LOST_GRACE: Duration = Duration::from_secs(2);
 
 impl Line {
-    /// Let the helper go, end the connection and stop watching, in a thread:
-    /// a close waits for a connect under way to be cut short.
     fn close(self) -> std::thread::JoinHandle<()> {
         self.closed.store(true, Ordering::SeqCst);
         let Line { session, _asker, .. } = self;
@@ -2503,47 +2141,34 @@ impl Line {
     }
 }
 
-/// What a server's line tells the app.
 enum LineUpdate {
     Event(SessionEvent),
-    /// The line's status, and when its watcher saw it.
     Status(Box<LineStatus>, Instant),
 }
 
-/// A try to sign in ended (and its ssh with it): the line isn't signed in and
-/// its step moved on. The session says each failed try in `step`, and on a
-/// line that was connected before it tries again without a `Failed` state.
 fn try_ended(last: &LineStatus, now: &LineStatus) -> bool {
     !signed_in(now) && now.step != last.step
 }
 
-/// One change of a server's line, in the app's terms (`changes`).
 #[derive(Clone, Debug, PartialEq)]
 enum Change {
     Connected(client::HelloInfo),
     ConnectFailed(String),
-    /// The connection dropped; the line gets it back by itself.
     Lost(String),
-    /// Julia went on starting by itself (as a reconnect does), or the app's start began.
     Starting,
     Started(client::RuntimeInfo),
     StartFailed(String),
-    /// Julia stopped by itself; the reason, without the line's "Julia on X stopped."
     Died(String),
-    /// The app's stop or cancel ended Julia, or the start under way; or an attach found nothing running.
     Stopped,
 }
 
-/// Signed in and the helper up: the line is connected, whatever its runtime does.
 fn signed_in(status: &LineStatus) -> bool {
     status.state != LineState::Connecting && status.hello.as_ref().is_some_and(|h| !h.node.is_empty())
 }
 
-/// What the runtime does, as far as `changes` tells states apart.
 #[derive(PartialEq)]
 enum Phase<'a> {
     Idle,
-    /// Nothing runs any more, for the reason given; after an attach that found nothing, nothing to tell.
     Gone(&'a str),
     Starting,
     Ready(&'a client::RuntimeInfo),
@@ -2561,9 +2186,6 @@ fn phase(status: &LineStatus) -> Phase<'_> {
     }
 }
 
-/// How a server's line went from `last` to `now`, as the updates the app has
-/// always had from its connects and starts. Between two looks the line may
-/// pass through states unseen; what it ends in decides.
 fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
     let mut out = Vec::new();
     let (was_in, is_in) = (signed_in(last), signed_in(now));
@@ -2590,7 +2212,6 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
         return out;
     }
     match (before, after) {
-        // The same Julia, seen again (attached anew after a drop the looks missed).
         (Phase::Ready(was), Phase::Ready(runtime)) if (was.pid, &was.node) == (runtime.pid, &runtime.node) => {}
         (_, Phase::Ready(runtime)) => {
             if !matches!(last.state, LineState::Starting { .. } | LineState::Queued(_)) {
@@ -2602,30 +2223,21 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
         (Phase::Ready(_), Phase::Starting) => {}
         (Phase::Ready(_), Phase::Failed(why) | Phase::Gone(why)) => out.push(match &now.gone {
             Some(client::Gone::Died(reason)) => Change::Died(reason.clone()),
-            // It went some other way, unseen between two looks: its words say how.
             None => Change::Died(why.to_owned()),
         }),
         (Phase::Starting | Phase::Ready(_), Phase::Idle) => out.push(Change::Stopped),
-        // An attach finding nothing running: the session shows it as starting until it has asked
-        // (EndeavorMCP's `begin_start`), so nothing failed and nothing stopped (#56). A runtime that
-        // went says how in `gone`; a new wish clears that, so an attach has none.
         (Phase::Starting, Phase::Gone(_)) if now.gone.is_none() => out.push(Change::Stopped),
         (Phase::Starting, Phase::Failed(why) | Phase::Gone(why)) => out.push(Change::StartFailed(why.to_owned())),
-        // A start that ended before it was seen to begin.
         (Phase::Idle | Phase::Gone(_), Phase::Failed(why)) => out.push(Change::StartFailed(why.to_owned())),
         (Phase::Idle | Phase::Gone(_) | Phase::Failed(_), Phase::Idle | Phase::Gone(_)) | (Phase::Failed(_), Phase::Failed(_)) | (Phase::Starting, Phase::Starting) => {}
     }
     out
 }
 
-/// Session `s` waits for its notebook: none open yet, and not stopped or gone. An R failure
-/// shows only over such a session, whose open (or new notebook) its Try again repeats; any
-/// other R session shows its own pane, since nothing clears the failure until R starts again.
 pub fn waits_for_notebook(s: &crate::session::Session) -> bool {
     s.notebook.is_none() && s.stopped.is_none() && !s.missing
 }
 
-/// The helper's hello, as the app's connections keep it.
 fn hello_of(hello: &client::HelloInfo) -> Hello {
     let launcher = match hello.launcher.as_deref() {
         Some("slurm") => Some(client::Launcher::Slurm),
@@ -2635,7 +2247,6 @@ fn hello_of(hello: &client::HelloInfo) -> Hello {
     Hello { protocol: wire::PROTOCOL, node: hello.node.clone(), home: hello.home.clone(), slurm: hello.slurm, uploads: hello.uploads, launcher }
 }
 
-/// A server's runtime, as the app follows it.
 fn runtime_of(runtime: client::RuntimeInfo) -> Runtime {
     let version = crate::older_runtime::Version::of_server(&runtime);
     Runtime {
@@ -2649,15 +2260,10 @@ fn runtime_of(runtime: client::RuntimeInfo) -> Runtime {
     }
 }
 
-/// The same connection to a server: a change in anything else (its name, its
-/// idle stop, a cluster's account, depot or default resources, which each job
-/// request reads from the server as it is then) keeps the line open. Of the
-/// cluster, the line uses only that there is one (`Server::launcher`).
 fn same_connection(a: &Server, b: &Server) -> bool {
     (&a.ssh_host, a.port, &a.julia, &a.r, a.cluster.is_some()) == (&b.ssh_host, b.port, &b.julia, &b.r, b.cluster.is_some())
 }
 
-/// What answers for a host's runtime: This Mac's helper, or a server's line.
 #[derive(Clone)]
 pub enum Helper {
     Local(Arc<Channel>),
@@ -2665,7 +2271,6 @@ pub enum Helper {
 }
 
 impl Helper {
-    /// Ask about the host's files. Blocks: call it off the main thread.
     pub fn files(&self, request: Request) -> Result<Reply, String> {
         match self {
             Helper::Local(channel) => channel.files(request),
@@ -2673,8 +2278,6 @@ impl Helper {
         }
     }
 
-    /// Stop Julia there, or the start under way, even one another connection
-    /// began (a start the line resumed after a drop, or the plugin's). Blocks.
     pub fn stop(&self) -> Result<(), String> {
         match self {
             Helper::Local(channel) => channel.force_stop(),
@@ -2692,30 +2295,22 @@ fn report_until_closed(tx: &futures::channel::mpsc::UnboundedSender<Update>, res
     }
 }
 
-/// Of the open notebooks (`list_notebooks` shape), the ones the user has let
-/// run, with each file's modification time now.
 fn running_files(bridge: &Bridge, notebooks: &serde_json::Value) -> Vec<(String, Option<f64>)> {
     let allowed = notebooks.as_array().into_iter().flatten().filter(|nb| nb["execution_allowed"] == true);
     allowed.filter_map(|nb| nb["path"].as_str()).filter_map(|path| Some((path.to_owned(), Some(pluto::file_info(bridge, path).ok()??)))).collect()
 }
 
-/// A new `Connection::id`.
 fn next_connect_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The sidebar's status while This Mac's Julia is down; why shows where it's
-/// down (the new-session screen's notice, the notebook pane).
 const JULIA_NOT_RUNNING: &str = "Julia not running";
 
-/// Failures in a row before Repair shows beside Retry: the first, and Retry twice.
 const REPAIR_AFTER: u32 = 2;
 
-/// What Repair does, in a line (Settings, and beside This Mac's error).
 pub const REPAIR_NOTE: &str = "Repair stops Julia, clears its saved state and compiled runtime, and starts it again. Notebooks, packages and settings stay.";
 
-/// An action offered beside a connection's error.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Fix {
     Repair,
@@ -2741,8 +2336,6 @@ impl Fix {
     }
 }
 
-/// How long before a cluster job's end the chat warns: 15 minutes, or in a
-/// debug build `ENDEAVOR_JOB_WARNING_SECONDS` (to try it on a short job).
 fn job_warning_window() -> Duration {
     #[cfg(debug_assertions)]
     if let Some(secs) = std::env::var("ENDEAVOR_JOB_WARNING_SECONDS").ok().and_then(|v| v.parse().ok()) {
@@ -2751,7 +2344,6 @@ fn job_warning_window() -> Duration {
     Duration::from_secs(15 * 60)
 }
 
-/// Elapsed time as "0:12" or "1:02:03".
 pub fn elapsed(since: Instant) -> String {
     let s = since.elapsed().as_secs();
     if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
@@ -2759,8 +2351,6 @@ pub fn elapsed(since: Instant) -> String {
 
 const WALKER_R: f32 = 22.;
 
-/// The starting pane: the slowly walking turtle, the current step with its
-/// elapsed time, and the short step log. No progress bar.
 fn starting_pane(steps: &Steps) -> Div {
     let row = |mark: AnyElement, text: String, color: Rgba| {
         div().flex().items_center().gap(px(10.)).child(div().w(px(12.)).flex().justify_center().child(mark)).child(div().text_color(color).child(text))
@@ -2799,7 +2389,6 @@ fn starting_pane(steps: &Steps) -> Div {
         }))
 }
 
-/// The turtle walking slowly in place; standing still under Reduce motion.
 fn walker() -> Canvas<()> {
     canvas(
         |_, _, _| (),
@@ -2823,12 +2412,10 @@ fn walker() -> Canvas<()> {
     )
 }
 
-/// The status line once Julia is back after Restart Julia's stop failed with `why`.
 fn not_restarted(why: &str) -> String {
     format!("Julia didn't restart, so Endeavor is still using the Julia that was running. {}", stop_reason(why))
 }
 
-/// The status line when Stop failed on `host` with `why`.
 fn not_stopped(host: &str, why: &str) -> String {
     match why.strip_prefix("Julia was not stopped: ") {
         Some(rest) => format!("Notebooks on {host} were not stopped: {rest}"),
@@ -2836,27 +2423,16 @@ fn not_stopped(host: &str, why: &str) -> String {
     }
 }
 
-/// The helper's "Julia was not stopped: <why>" as just the why, with a capital.
 fn stop_reason(why: &str) -> String {
     let rest = why.strip_prefix("Julia was not stopped: ").unwrap_or(why);
     let mut chars = rest.chars();
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
-/// Back on the same Julia, the shown notebook's page loads again when the web
-/// view is at `at`. A page let go meanwhile (another session was shown) loads
-/// as any switch does. So does one still waiting to reconnect: after a long drop
-/// Pluto's page backs off and may not try again for minutes, and with nothing to
-/// reopen a load can't race. Not if a cell has an edit that hasn't been run:
-/// leaving the page would lose it, so Pluto's own reconnect keeps it. A page
-/// that reconnected within the last state tick loads once more, which is harmless.
 fn load_again(at: &str, origin: &str, page: &crate::annotate::PageState, notebook: &str) -> bool {
     !at.starts_with(origin) || (page.notebook == notebook && !page.connected && !page.unsaved)
 }
 
-/// Why Julia failed, when that's news: Julia wasn't failed already. Not only
-/// after `starting`, since a start can fail between two polls (a first Julia
-/// notebook opened offline) and the watcher sees `not_started`, then `failed`.
 fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaStatus) -> Option<&'a str> {
     match now {
         pluto::JuliaStatus::Failed { message, .. } if !matches!(before, Some(pluto::JuliaStatus::Failed { .. })) => Some(message),
@@ -2864,15 +2440,11 @@ fn new_failure<'a>(before: Option<&pluto::JuliaStatus>, now: &'a pluto::JuliaSta
     }
 }
 
-/// A failure R's setup has just reached, as the pane keeps it (`code::message`,
-/// which `pluto::r_failed` reads), like `new_failure`.
 fn r_failure(before: Option<&pluto::RStatus>, now: &pluto::RStatus) -> Option<String> {
     let pluto::RStatus::Failed { code, .. } = now else { return None };
     new_failure(before, now).map(|message| format!("{}::{message}", if code == "r_not_found" { "r_not_found" } else { "r_failed" }))
 }
 
-/// Whether `a` and `b` name the same file on `host`: spelled the same, or, on this computer, the same once
-/// canonical (a file system that ignores case, a link). A server's paths are compared as spelled.
 pub(crate) fn same_file(host: &HostId, a: &str, b: &str) -> bool {
     a == b || (*host == HostId::ThisMac && matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b))
 }
@@ -2884,14 +2456,11 @@ mod tests {
     use wire::backend::Backend;
     use crate::pluto;
 
-    /// New notebook leaves an error to the pane only when the pane shows it: any
-    /// other error gets a notice, so a click never ends in nothing.
     #[test]
     fn the_pane_shows_only_its_own_kinds_failures() {
         let julia = "julia_failed::Julia stopped while starting (exit 1).";
         assert_eq!(pane_failure(Backend::Pluto, julia).as_deref(), Some("Julia stopped while starting (exit 1)."));
         assert_eq!(pane_failure(Backend::Pluto, "open_stuck::It's still opening.").as_deref(), Some("It's still opening."));
-        // R's failure in a Julia session: the pane shows Julia's state, so the click's caller says it.
         assert_eq!(pane_failure(Backend::Pluto, "r_failed::R stopped while starting"), None);
         assert_eq!(pane_failure(Backend::Pluto, "invalid_path::Give an absolute path"), None);
         assert_eq!(pane_failure(Backend::Pluto, "The connection to the runtime closed."), None);
@@ -2900,8 +2469,6 @@ mod tests {
         assert_eq!(pane_failure(Backend::Ember, julia), None);
     }
 
-    /// Julia starting ahead leaves an empty session's New notebook showing; a
-    /// click, or an open, waiting on Julia shows the start instead.
     #[test]
     fn a_start_ahead_leaves_new_notebook_showing() {
         let julia = HostPane::JuliaStarting("Installing packages".into());
@@ -2915,8 +2482,6 @@ mod tests {
         assert!(!starting_ahead(&HostPane::RFailed("r_failed::Couldn't install Ember".into()), 0));
     }
 
-    /// What the runtime says of R's setup reaches the pane: its steps while it's
-    /// under way, a failure once, and neither after it starts again or is ready.
     #[test]
     fn r_status_puts_the_setup_and_a_failure_on_the_pane_once() {
         use crate::pluto::JuliaStatus::{Failed, NotStarted, Ready, Starting};
@@ -2933,12 +2498,10 @@ mod tests {
         assert_eq!(c.r_failed.as_deref(), Some("r_failed::Couldn't install Ember"), "the pane says why");
         assert!(c.r.is_none(), "no call of the app's waits");
 
-        // Try again clears it; the runtime still says the same failure, which isn't news.
         c.r_failed = None;
         assert!(!c.r_status_now(failed.clone()));
         assert_eq!(c.r_failed, None, "stays dismissed");
 
-        // Starting again, or ready, clears an old failure.
         c.r_failed = Some("r_failed::old".into());
         assert!(c.r_status_now(Starting { step: "Updating Ember".into(), quiet: 0 }));
         assert_eq!(c.r_failed, None);
@@ -2947,7 +2510,6 @@ mod tests {
         assert!(c.r_status_now(Ready));
         assert_eq!((c.r.is_none(), c.r_failed.is_none()), (true, true));
 
-        // While the app's own open waits, its steps stay, and a failure wins on the pane.
         c.r_waits = 1;
         assert!(c.r_status_now(Starting { step: "Starting R".into(), quiet: 0 }));
         assert!(c.r_status_now(failed));
@@ -2955,7 +2517,6 @@ mod tests {
         assert_eq!(c.r_failed.as_deref(), Some("r_failed::Couldn't install Ember"));
     }
 
-    /// The empty page's line keeps a download's percentage and a stall's warning, not the log.
     #[test]
     fn the_start_ahead_line_keeps_progress_and_stalls() {
         let mut steps = Steps::new("Starting Julia");
@@ -2989,7 +2550,6 @@ mod tests {
     fn r_setup_the_runtime_reports_shows_its_steps_and_a_failure_the_pane_reads() {
         use crate::pluto::JuliaStatus::{Failed, NotStarted, Ready, Starting};
         let starting = |step: &str| Starting { step: step.into(), quiet: 0 };
-        // The steps as EndeavorMCP's `r_status` says them, one after another.
         let mut steps = Steps::r();
         steps.r_step("Installing Endeavor's own R 4.6.1");
         steps.r_step("Installing Ember for R notebooks");
@@ -3003,13 +2563,11 @@ mod tests {
         assert_eq!(r_failure(Some(&NotStarted), &no_r).as_deref(), Some("r_not_found::Couldn't find R"), "the pane offers Install R");
         assert_eq!(r_failure(Some(&failed), &failed), None, "said once");
         assert_eq!(r_failure(Some(&starting("Starting R")), &Ready), None);
-        // R runs while a newer Ember installs: ready, not a step.
         assert_eq!(pluto::RStatus::from(&serde_json::json!({ "state": "ready", "updating": true })), Ok(Ready));
     }
 
     #[test]
     fn a_failed_try_while_reconnecting_ends_its_sign_in() {
-        // What the session says through a reconnect whose try fails (EndeavorMCP client/session.rs).
         let step = |state: LineState, step: &str| LineStatus { step: Some(step.into()), hello: None, ..line(state, "") };
         let trying = step(LineState::Connecting, "Connecting to lab");
         let failed = step(LineState::Connecting, "Lost the connection to lab: The connection to lab ended: the server stopped waiting for the sign-in.");
@@ -3062,19 +2620,14 @@ mod tests {
         assert_eq!(changes(&starting, &line(LineState::Failed("no Julia".into()), "lab")), [Change::StartFailed("no Julia".into())]);
         assert_eq!(changes(&starting, &connected), [Change::Stopped], "the app's cancel");
         assert_eq!(changes(&ready, &connected), [Change::Stopped], "the app's stop");
-        // An attach (a line asked to try again after it gave up) that finds nothing running.
         assert!(changes(&connected, &line(LineState::NothingRunning, "lab")).is_empty());
-        // The same attach, looked at while it asked: it ends the start with nothing to say (#56).
         let nothing = LineStatus { step: Some("No runtime is running on lab".into()), ..line(LineState::NothingRunning, "lab") };
         assert_eq!(changes(&starting, &nothing), [Change::Stopped]);
-        // A runtime that went unseen between two looks still says why.
         let went = LineStatus { gone: Some(client::Gone::Died("out of memory".into())), step: Some("out of memory".into()), ..line(LineState::NothingRunning, "lab") };
         assert_eq!(changes(&starting, &went), [Change::StartFailed("out of memory".into())]);
         assert_eq!(changes(&line(LineState::NothingRunning, "lab"), &starting), [Change::Starting]);
-        // A stop refused while a start goes on (a helper that can't force it) ends that start's wait.
         let refused = "Julia was not stopped: it is still starting. Try again once it is up, or force the stop to cancel the start.";
         assert_eq!(changes(&starting, &line(LineState::Failed(refused.into()), "lab")), [Change::StartFailed(refused.into())]);
-        // The same Julia seen again, attached anew: nothing to tell.
         assert!(changes(&ready, &line(LineState::Ready(client::RuntimeInfo { reattached: true, ..runtime(7) }), "lab")).is_empty());
         assert_eq!(changes(&ready, &line(LineState::Ready(runtime(8)), "lab")), [Change::Starting, Change::Started(runtime(8))], "another Julia");
     }
@@ -3137,17 +2690,14 @@ mod tests {
         died.step = Some("Julia on lab stopped. It ran out of memory.".into());
         died.gone = Some(client::Gone::Died("It ran out of memory.".into()));
         assert_eq!(changes(&ready, &died), [Change::Died("It ran out of memory.".into())]);
-        // The session's typed reason gives the why, however its words go; with none, the words are the why.
         died.step = Some("Julia on lab ended: out of memory.".into());
         assert_eq!(changes(&ready, &died), [Change::Died("It ran out of memory.".into())]);
         let failed = line(LineState::Failed("Julia on lab couldn't start.".into()), "lab");
         assert_eq!(changes(&ready, &failed), [Change::Died("Julia on lab couldn't start.".into())]);
-        // A drop keeps the hello until the next connect begins.
         let mut dropped = line(LineState::Connecting, "lab");
         dropped.step = Some("Lost the connection to lab; connecting again".into());
         assert_eq!(changes(&ready, &dropped), [Change::Lost("Lost the connection to lab; connecting again".into())]);
         assert!(changes(&dropped, &line(LineState::Connecting, "")).is_empty(), "nor while it tries again");
-        // Back, it goes on with Julia by itself.
         let back = changes(&line(LineState::Connecting, ""), &line(LineState::Ready(runtime(7)), "lab"));
         assert!(matches!(&back[..], [Change::Connected(_), Change::Starting, Change::Started(r)] if r.pid == 7));
     }
@@ -3186,17 +2736,14 @@ mod tests {
 
     #[test]
     fn a_notebook_still_opening_is_its_own_step() {
-        // Julia started for this call, then the notebook took longer than one call: Julia's step is done.
         let mut steps = Steps::new("Starting Julia");
         steps.julia("Julia 1.12.6 is starting and loading Pluto");
         steps.julia(pluto::OPENING);
         assert_eq!((steps.done.as_slice(), steps.current.as_str()), (["Started Julia 1.12.6 and Pluto".to_owned()].as_slice(), pluto::OPENING));
         assert!(steps.pending().is_empty(), "the open is the step under way");
         assert!(steps.detail.as_deref().is_some_and(|d| !d.contains('/')), "no path: {:?}", steps.detail);
-        // Julia was up already: no Julia step is claimed.
         let steps = Steps::first(pluto::OPENING, || Steps::new("Starting Julia"));
         assert_eq!((steps.done.len(), steps.current.as_str()), (0, pluto::OPENING));
-        // R's the same way.
         let mut r = Steps::first("Installing Ember", Steps::r);
         r.r_step("Installing Ember");
         r.r_step(pluto::OPENING);

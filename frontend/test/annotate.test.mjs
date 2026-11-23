@@ -1,5 +1,3 @@
-// Point in a fake Pluto page: what the pointer picks, lines dragged over code,
-// boxes, and the quote message the app gets.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -42,17 +40,17 @@ test("a click picks the smallest thing under the pointer; Shift adds", async () 
   assert.equal($("#annotate-bar .status").textContent, "Output of rates");
   assert.ok($("pluto-output p").classList.contains("annotate-picked"));
   click($(".cm-line"));
-  assert.equal($("#annotate-bar .status").textContent, "Lines 1–3 of rates", "a click on code picks the code block");
+  assert.equal($("#annotate-bar .status").textContent, "Cell rates", "a click on code picks the cell; a drag picks lines");
   assert.ok(!$("pluto-output p").classList.contains("annotate-picked"), "a plain click replaces the pick");
-  click(window.document.getElementById(A), { shiftKey: true });
+  click($("pluto-output p"), { shiftKey: true });
   assert.equal($("#annotate-bar .status").textContent, "2 picks");
   comment("Is sampling with replacement right here?");
   assert.deepEqual(sent.at(-1), {
     type: "quote",
     notebook: NB,
     picks: [
-      { part: "lines", cell: A, code: CODE, lines: [1, 3], text: CODE },
       { part: "cell", cell: A, code: CODE },
+      { part: "output", cell: A, code: CODE, text: "Each resample draws rows." },
     ],
     comment: "Is sampling with replacement right here?",
     add: false,

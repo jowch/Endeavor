@@ -1,5 +1,3 @@
-// The notebook view in Claude's desktop app (src/view.ts): the quote text Claude
-// gets, the look with Pluto's own header, and Point only from the user's own keys.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -25,36 +23,53 @@ function page() {
   return { window, told, $: (s) => window.document.querySelector(s) };
 }
 
-test("picks become the same <quote> text the app sends (but for a long output, cut below)", () => {
+function viewModule() {
   const { outputFiles } = buildSync({ entryPoints: [new URL("../src/view.ts", import.meta.url).pathname], bundle: true, format: "iife", globalName: "view", write: false });
   const { window } = new JSDOM("", { runScripts: "outside-only" });
   window.eval(`${outputFiles[0].text};window.view = view;`);
-  const { quoteText } = window.view;
+  return window.view;
+}
+const breaksClaudesRules = (text) => text.length > 8000 || /\n\n\n\n/.test(text) || /[ \t]{65}/.test(text) || /[\u00ad\u200b\u2060\ufeff]/.test(text);
+
+test("picks become quotes that name what was picked, with no code or output but the lines the user picked, and a box's picture by its id", () => {
+  const { quoteText, chatMessage } = viewModule();
   const uri = `notebook://pluto/${NB}/cell/${A}`;
   assert.equal(
     quoteText(NB, [{ part: "lines", cell: A, code: CODE, lines: [2, 2], text: "  fit(rows)" }, { part: "figure", cell: A, code: CODE, shot: 1 }], "Why fit here?"),
     `<quote cell="rates" lines="2-2" uri="${uri}">\n  fit(rows)\n</quote>\n\n<quote cell="rates" part="figure" uri="${uri}"/>\nWhy fit here?`,
   );
+  assert.equal(quoteText(NB, [{ part: "lines", cell: A, code: "total = 1", lines: [1, 1], text: "total = 1" }], ""), `<quote cell="total" lines="1-1" uri="${uri}">\ntotal = 1\n</quote>`);
+  const gappy = { part: "lines", cell: A, code: CODE + "\n\n\n\n\nend", lines: [2, 7], text: "a\n\n\n\n\nb" };
+  assert.match(chatMessage(NB, [{ picks: [gappy], comment: "" }]), /were shortened to fit/);
+  assert.doesNotMatch(chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: "a\n\n\n\n\nb" }], comment: "" }]), /were shortened/);
+  assert.equal(quoteText(NB, [{ part: "cell", cell: A, code: CODE }, { part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], ""), `<quote cell="rates" uri="${uri}"/>\n\n<quote cell="rates" part="output" uri="${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A, A] }], ""), `<quote part="box" uri="${uri} ${uri}"/>`);
-  // An R notebook is Ember's, as the app names it.
-  assert.equal(quoteText(NB, [{ part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], "", "ember"), `<quote cell="rates" part="output" uri="notebook://ember/${NB}/cell/${A}">\n[1] 1 4 9\n</quote>`);
+  assert.equal(quoteText(NB, [{ part: "box", cells: [A] }], "", "pluto", ["0123456789abcdef"]), `<quote part="box" uri="${uri}" crop="0123456789abcdef"/>`);
+  assert.equal(quoteText(NB, [{ part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], "", "ember"), `<quote cell="rates" part="output" uri="notebook://ember/${NB}/cell/${A}"/>`);
+  const long = Array.from({ length: 3000 }, (_, i) => `y${i} = ${i}`).join("\n");
+  const msg = chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: long }], comment: "Is this slow?" }]);
+  assert.ok(msg.startsWith("\u2193\n\n[Endeavor] The user picked parts of the notebook") && msg.includes("with the notebook MCP tools (read_cell, view_cell_output)"));
+  assert.ok(msg.endsWith(`<quote cell="y0" uri="${uri}"/>\nIs this slow?`) && msg.length < 1500, `${msg.length} characters`);
 });
 
-test("a huge output's text is cut to its start and end, saying how much is left out", () => {
-  const { outputFiles } = buildSync({ entryPoints: [new URL("../src/view.ts", import.meta.url).pathname], bundle: true, format: "iife", globalName: "view", write: false });
-  const { window } = new JSDOM("", { runScripts: "outside-only" });
-  window.eval(`${outputFiles[0].text};window.view = view;`);
-  const { quoteText, OUTPUT_MAX } = window.view;
-  const short = "x".repeat(OUTPUT_MAX);
-  assert.ok(quoteText(NB, [{ part: "output", cell: A, code: CODE, text: short }], "").includes(`\n${short}\n`), "up to the limit, all of it");
-  const big = Array.from({ length: 200000 }, (_, i) => String(i + 1)).join("\n");
-  const said = quoteText(NB, [{ part: "output", cell: A, code: CODE, text: big }], "Why?");
-  assert.ok(said.length < OUTPUT_MAX + 400, `cut (${said.length} characters)`);
-  assert.ok(said.includes("\n1\n2\n3\n") && said.includes("\n199999\n200000\n</quote>\nWhy?"), "its start and its end");
-  assert.match(said, /\n\[1,284,894 characters of this output left out here\.\]\n/);
-  // Never between the halves of a surrogate pair.
-  const emoji = quoteText(NB, [{ part: "output", cell: A, code: CODE, text: "a".repeat(OUTPUT_MAX - 501) + "\u{1F600}".repeat(1000) }], "");
-  assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(emoji), "no half pairs");
+test("↩'s message keeps to what Claude takes: no long runs of blank lines or spaces, no invisible characters, 8,000 at most", () => {
+  const { chatSafe, chatMessage, MESSAGE_MAX } = viewModule();
+  assert.equal(MESSAGE_MAX, 8000);
+  assert.equal(chatSafe("a\n\n\nb"), "a\n\n\nb", "three line breaks stay");
+  assert.equal(chatSafe("a\n\n  \n\t\n\nb"), "a\n\n\nb");
+  assert.equal(chatSafe("a\r\n\r\n\r\n\r\nb"), "a\n\n\nb");
+  assert.equal(chatSafe(`x${" ".repeat(64)}y`), `x${" ".repeat(64)}y`);
+  assert.equal(chatSafe(`x${" ".repeat(200)}y`), `x${" ".repeat(64)}y`);
+  assert.equal(chatSafe("soft\u00adhy\u200bphen\u2060\ufeff"), "softhyphen");
+  assert.equal(chatSafe("\u{1F468}\u200d\u{1F469}"), "\u{1F468}\u200d\u{1F469}", "emoji keep their joiners");
+  const pick = { part: "cell", cell: A, code: CODE };
+  const comment = "Why?\n\n\n\n\nAnd this\u200b?";
+  const msg = chatMessage(NB, [{ picks: [pick], comment }]);
+  assert.ok(!breaksClaudesRules(msg) && msg.endsWith("\nWhy?\n\n\nAnd this?"));
+  assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(8000) }]), null);
+  const room = 8000 - chatMessage(NB, [{ picks: [pick], comment: "c" }]).length + 1;
+  assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room) }]).length, 8000);
+  assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room + 1) }]), null);
 });
 
 test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {
@@ -65,11 +80,9 @@ test("the view's look leaves Pluto's header and docs panel to the toolbar's rule
   assert.ok(!css.includes("#helpbox-wrapper"), "not the app's drawer");
   assert.equal(window.document.documentElement.dataset.endeavorLook, "endeavor");
   assert.match($("#endeavor-point").textContent, /Point⌘⇧E/);
-  // Claude's side panel goes down to about 320 px: smaller headings there, and long words wrap.
   const narrow = $("#endeavor-narrow").textContent;
   assert.match(narrow, /max-width: 600px[\s\S]*h1 \{ font-size: 1\.6rem/);
   assert.match(narrow, /overflow-wrap: break-word/);
-  // Claude's desktop app can't reach endeavor:, so JuliaMono comes from the host the view allows.
   const fonts = $("#endeavor-fonts").textContent;
   assert.ok(!fonts.includes("endeavor://"), "not the app's bundled copy");
   assert.equal(fonts.match(/url\("https:\/\/cdn\.jsdelivr\.net\/gh\/cormullion\/juliamono@v0\.63\.2\/webfonts\/JuliaMono-(Regular|Bold|RegularItalic)\.woff2"\)/g)?.length, 3);
@@ -83,7 +96,6 @@ test("Point sends nothing for keys a page script makes up", async () => {
   $("#annotate-bar textarea").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(told.sent, [], "an untrusted ↩ doesn't reach Claude's chat");
-  // ⌘⇧E from a script doesn't toggle Point either.
   window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "E", metaKey: true, shiftKey: true }));
   assert.ok(window.document.body.classList.contains("annotating"));
 });
@@ -169,7 +181,6 @@ test("the toolbar says what Pluto is doing, and leaves what needs the user to Pl
   assert.equal(fileName(undefined), "Notebook");
 });
 
-// The view with a way to post the page's messages as the user's ↩ would (jsdom makes no trusted keys).
 function pageWithSend({ focused }) {
   const { outputFiles } = buildSync({
     stdin: { contents: `import "./src/view"; import { send } from "./src/bridge"; window.testSend = send;`, resolveDir: new URL("..", import.meta.url).pathname, loader: "ts" },
@@ -183,7 +194,8 @@ function pageWithSend({ focused }) {
   window.document.hasFocus = () => focused.now;
   window.eval(outputFiles[0].text);
   const sent = [];
-  window.EndeavorView.start(NB, { canSend: true, send: async (t) => void sent.push(t) });
+  window.testHost = { canSend: true, send: async (t) => void sent.push(t) };
+  window.EndeavorView.start(NB, window.testHost);
   const quote = () => window.testSend({ type: "quote", notebook: NB, picks: [{ part: "output", cell: A, code: "x", text: "0.42" }], comment: "Why?", add: false, ref: 1 });
   return { window, sent, quote, on: () => window.document.body.classList.contains("annotating") };
 }
@@ -193,7 +205,6 @@ test("after ↩, Point ends once the view has lost the keyboard to Claude's box,
   const { window, sent, quote, on } = pageWithSend({ focused });
   window.__endeavor.receive({ type: "annotate", on: true });
   quote();
-  assert.match(window.document.getElementById("endeavor-sent").textContent, /^Sending to Claude's chat/);
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(sent.length, 1);
   assert.match(window.document.getElementById("endeavor-sent").textContent, /message box/);
@@ -211,6 +222,65 @@ test("after ↩, Point ends at once when the keyboard is already in Claude's box
   assert.ok(!on());
 });
 
+test("a box's picture is drawn in the view and kept by the host, and its quote names it; a box with nothing to draw goes without", async () => {
+  const { window, sent } = pageWithSend({ focused: { now: false } });
+  const kept = [];
+  const ctx = { fillStyle: "", fillRect() {}, scale() {}, drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(256).fill(255) }) };
+  window.HTMLCanvasElement.prototype.getContext = function () { return ctx; };
+  window.HTMLCanvasElement.prototype.toDataURL = () => "data:image/png;base64,QUJD";
+  const plot = window.document.createElement("canvas");
+  plot.width = 200; plot.height = 100;
+  plot.getBoundingClientRect = () => ({ left: 10, top: 10, right: 210, bottom: 110, width: 200, height: 100 });
+  window.document.querySelector("pluto-output").append(plot);
+  window.testHost.crop = async (png, id) => void kept.push([png, id]);
+  const box = (rect, ref) => window.testSend({ type: "quote", notebook: NB, picks: [{ part: "box", cells: [A], rect }], comment: "This bump?", add: false, ref });
+  box({ left: 0, top: 0, right: 100, bottom: 60 }, 1);
+  assert.ok(sent.length === 1 && kept.length === 0);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(kept.length, 1);
+  const [png, id] = kept[0];
+  assert.ok(png === "QUJD" && /^[0-9a-f]{16}$/.test(id), id);
+  assert.ok(sent[0].endsWith(`<quote part="box" uri="notebook://pluto/${NB}/cell/${A}" crop="${id}"/>\nThis bump?`), sent[0].slice(-160));
+  box({ left: 400, top: 400, right: 500, bottom: 500 }, 2);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(kept.length, 1);
+  assert.ok(sent[1].endsWith(`<quote part="box" uri="notebook://pluto/${NB}/cell/${A}"/>\nThis bump?`), sent[1].slice(-120));
+  window.testSend({ type: "quote", notebook: NB, picks: [{ part: "box", cells: [A], rect: { left: 0, top: 0, right: 100, bottom: 60 } }], comment: "c".repeat(9000), add: false, ref: 3 });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(sent.length === 2 && kept.length === 1);
+});
+
+test("↩ with a comment too long for Claude's box sends nothing and gives the pick back; one that ⌘↩ added is let go", async () => {
+  const { window, sent } = pageWithSend({ focused: { now: true } });
+  window.__endeavor.receive({ type: "annotate", on: true });
+  const pick = { part: "output", cell: A, code: "x", text: "0.42" };
+  const said = () => window.document.getElementById("endeavor-sent").textContent;
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "c".repeat(9000), add: false, ref: 1 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 0);
+  assert.match(said(), /^Too long for Claude's message box \(8,000 characters\)\. Shorten your comment/);
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "c".repeat(9000), add: true });
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "Why?", add: false, ref: 2 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 0);
+  assert.match(said(), /so those picks were let go\. Press (↩|Enter) to send this one\.$/);
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "Why?", add: false, ref: 3 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].endsWith("/>\nWhy?") && !sent[0].includes("ccc"));
+  window.__endeavor.receive({ type: "annotate", on: true });
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "a".repeat(5000), add: true });
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "b".repeat(5000), add: false, ref: 4 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 2);
+  assert.ok(sent[1].includes("a".repeat(5000)) && !sent[1].includes("bbb"));
+  assert.match(said(), /^Sent what (⌘↩|Ctrl\+Enter) added: .* then press (↩|Enter) to send this one\.$/);
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "b".repeat(5000), add: false, ref: 5 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 3);
+  assert.ok(sent[2].includes("b".repeat(5000)) && !sent[2].includes("aaa"));
+});
+
 test("the view brings Claude's new cell into view, until the user scrolls somewhere else", async () => {
   const { window, $ } = page();
   const scrolled = [];
@@ -221,21 +291,18 @@ test("the view brings Claude's new cell into view, until the user scrolls somewh
     cell.scrollIntoView = () => scrolled.push(id);
     $("body").append(cell);
   };
-  // Cells drawn as the page loads aren't followed.
   add("loading");
   await new Promise((r) => setTimeout(r, 1700));
   assert.deepEqual(scrolled, []);
   add("new1");
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(scrolled, ["new1"]);
-  // The user scrolls away from the end (well after the view's own scroll): new cells stay out of view.
   await new Promise((r) => setTimeout(r, 1100));
   Object.defineProperty(window.document.documentElement, "scrollHeight", { value: 5000, configurable: true });
   window.dispatchEvent(new window.Event("scroll"));
   add("new2");
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(scrolled, ["new1"]);
-  // Back at the end: followed again.
   Object.defineProperty(window.document.documentElement, "scrollHeight", { value: window.innerHeight, configurable: true });
   window.dispatchEvent(new window.Event("scroll"));
   add("new3");

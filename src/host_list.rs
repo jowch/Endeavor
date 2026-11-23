@@ -1,33 +1,20 @@
-//! What runs on each host, in words, and what Settings' "Where notebooks run"
-//! offers for it.
-
 use gpui::*;
 use wire::files::RuntimeState;
 
 use crate::theme;
 
-/// What runs on a host, as far as the app knows.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostState {
-    /// Not connected, so not known.
     Unknown,
     Connecting,
-    /// Connected, asking what runs there.
     Checking,
-    /// Connected, but the check failed.
     Connected,
     Starting,
     Stopping,
-    /// `job`: a cluster job's id and when it ends.
     Running { notebooks: Option<usize>, job: Option<(String, Option<u64>)> },
-    /// A cluster job waits in the queue, or (`starting`) has a node and Julia
-    /// is starting. `reason`: why Slurm says it waits ("Priority", "Resources").
     Queued { job: String, starting: bool, reason: Option<String> },
     NotRunning,
-    /// The connection dropped; Endeavor reconnects by itself.
     Lost,
-    /// The connection dropped, and ssh is asking the user something while it
-    /// reconnects: the server answered, so it isn't "Can't reach".
     SigningIn,
     Failed(String),
 }
@@ -39,7 +26,6 @@ impl From<&RuntimeState> for HostState {
             RuntimeState::Running { notebooks, job, .. } => {
                 HostState::Running { notebooks: notebooks.map(|n| n as usize), job: job.as_ref().map(|j| (j.id.clone(), j.ends_at)) }
             }
-            // A running job's reason slot carries its node.
             RuntimeState::Queued { job, state, reason } => {
                 let starting = state == "RUNNING";
                 HostState::Queued { job: job.clone(), starting, reason: (!starting).then(|| reason.clone()) }
@@ -50,7 +36,6 @@ impl From<&RuntimeState> for HostState {
 }
 
 impl HostState {
-    /// "Running · 2 notebooks open", "Queued · job 16", …
     pub fn text(&self) -> String {
         match self {
             HostState::Unknown => "Not connected".into(),
@@ -86,24 +71,18 @@ impl HostState {
     }
 }
 
-/// The small filled dot that marks a host with Julia running.
 pub fn running_dot() -> Div {
     div().flex_shrink_0().size(px(6.)).rounded_full().bg(theme::accent())
 }
 
-/// The one thing Settings offers for a host in a state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HostAct {
-    /// Stop Julia (asks first).
     Stop,
-    /// Cancel a job still waiting in the queue (asks first).
     CancelJob,
-    /// Try to reach it again now.
     TryNow,
 }
 
 impl HostState {
-    /// Settings' words for it: the state line, and a line of advice under it.
     pub fn words(&self) -> (String, Option<String>) {
         match self {
             HostState::NotRunning => ("Not running · starts when you open a session there".into(), None),
@@ -113,8 +92,6 @@ impl HostState {
         }
     }
 
-    /// Settings' button for it, if any: at most one, and none for a host at
-    /// rest (opening a session there starts it).
     pub fn action(&self) -> Option<HostAct> {
         match self {
             HostState::Queued { starting: false, .. } => Some(HostAct::CancelJob),
@@ -139,7 +116,6 @@ mod tests {
             words(HostState::Lost),
             (("Can't reach · reconnects by itself".into(), Some("If it needs your university's VPN, check that it's on.".into())), Some(HostAct::TryNow))
         );
-        // ssh asking for a password while it reconnects: no VPN advice, and no Try now under the question.
         assert_eq!(words(HostState::SigningIn), (("Signing in…".into(), None), None));
         assert_eq!(words(HostState::Queued { job: "16".into(), starting: false, reason: None }), (("Queued · job 16 · waiting for a free node".into(), None), Some(HostAct::CancelJob)));
         assert_eq!(words(HostState::Queued { job: "16".into(), starting: true, reason: None }).1, Some(HostAct::Stop));
