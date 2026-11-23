@@ -102,7 +102,6 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 
 | Where | Shortcut | Upgrade when |
 |---|---|---|
-| `transcript.rs` | long diffs are cut, not scrollable | real notebooks hit it |
 | `diagram.rs` `cached` | GPUI keeps each picture it has drawn for the window's life, so each width a diagram is laid out at keeps its pixels (about 1 to 3 MB) | a session with many diagrams, resized often, grows noticeably |
 | `notify.rs` `flash` | on Windows, "Claude is waiting for you" flashes the taskbar button instead of showing a notification, and coming back doesn't open the session that asked | a toast, with the app's AppUserModelID on the installer's Start menu shortcut |
 | `cell_shot.rs` | the agent's picture of an HTML output is taken only while the notebook pane is on screen | a picture asked for behind Settings |
