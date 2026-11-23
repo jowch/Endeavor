@@ -1005,7 +1005,7 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
                 let details = details::details(title, *kind, path.as_deref(), args, output.as_ref(), failed, !all_diffs.is_empty(), &name);
                 // The list's item that holds this row: its run's first entry.
                 let item = runs::run_at(&session.entries, ix).map_or(ix, |run| run.start);
-                render_call_box(details, &all_diffs, key << 32 | ix as u64, (session.list.clone(), item), window, cx)
+                render_call_box(details, &all_diffs, call_key(key, &call.0), (session.list.clone(), item), window, cx)
             }).flatten();
             div()
                 .flex()
@@ -1064,6 +1064,35 @@ const DETAIL_MAX_SHARE: f32 = 0.4;
 /// The width of the fades at a box's cut edges.
 const FADE: f32 = 32.;
 
+/// An opened call box's state (Show all, where each part is scrolled to), by
+/// element id. Unlike `use_keyed_state`, it isn't dropped when the list stops
+/// drawing a box scrolled far off screen, so the box comes back as it was
+/// (#191). The ids hold the session's key and the entry's index, and a box
+/// holds a few small values, so the map only grows with boxes opened.
+#[derive(Default)]
+struct KeptStates(std::collections::HashMap<ElementId, AnyEntity>);
+
+impl Global for KeptStates {}
+
+fn kept_state<T: 'static>(id: ElementId, cx: &mut App, init: impl FnOnce(&mut App) -> T) -> Entity<T> {
+    if let Some(kept) = cx.default_global::<KeptStates>().0.get(&id).and_then(|e| e.clone().downcast::<T>().ok()) {
+        return kept;
+    }
+    let value = init(cx);
+    let kept = cx.new(|_| value);
+    cx.global_mut::<KeptStates>().0.insert(id, kept.clone().into_any());
+    kept
+}
+
+/// The ids of session `key`'s box for tool call `call`, by the call's id rather than its entry's
+/// index: a replay or a copy renumbers the entries, and another box would get this one's kept state.
+fn call_key(key: u64, call: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (key, call).hash(&mut hasher);
+    hasher.finish()
+}
+
 /// An opened call as one box: what it was asked (the command, the file) on a
 /// strip at the top; its edits and output below, up to `DETAIL_LINES` lines
 /// unless shown in full, each line on one line, scrolling sideways; and a
@@ -1082,7 +1111,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     // Copy takes what the box shows; when the output was cut, the footer says so.
     let copy_text = body.iter().chain(&errors).map(details::Part::text).collect::<Vec<_>>().join("\n");
     let shown_text = body.iter().map(details::Part::text).collect::<Vec<_>>().join("\n");
-    let show_all = window.use_keyed_state(id("call-all"), cx, |_, _| false);
+    let show_all = kept_state(id("call-all"), cx, |_| false);
     let all = *show_all.read(cx);
     let line = theme::chat_px(DETAIL_LINE);
     // The whole box keeps within its share of the window (#191): the output's cap leaves room
@@ -1103,7 +1132,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .py(px(6.))
             .bg(theme::bg_card())
             .when(!body.is_empty() || !errors.is_empty() || !diffs.is_empty() || status.is_some(), |d| d.border_b_1().border_color(theme::border()))
-            .children(strip.into_iter().enumerate().map(|(n, part)| strip_part(part, ElementId::NamedInteger(format!("call-strip-{n}").into(), key), window, cx)))
+            .children(strip.into_iter().enumerate().map(|(n, part)| strip_part(part, ElementId::NamedInteger(format!("call-strip-{n}").into(), key), cx)))
     });
 
     // Diffs, output and errors share the cap, so the box stays within it (#308): what one
@@ -1118,7 +1147,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     let [diffs_cap, output_cap, errors_cap] = caps.map(px);
 
     // The diffs scroll within their share; Show all opens them, past the lines a closed box draws.
-    let diffs_handle = window.use_keyed_state(id("call-diffs-scroll"), cx, |_, _| ScrollHandle::new()).read(cx).clone();
+    let diffs_handle = kept_state(id("call-diffs-scroll"), cx, |_| ScrollHandle::new()).read(cx).clone();
     let (diffs_offset, diffs_max) = (diffs_handle.offset(), diffs_handle.max_offset());
     let diffs_cut = !all && (diffs_max.y > px(0.5) || diffs.iter().any(|d| d.lines.len() > DIFF_LINES));
     let diffs = (!diffs.is_empty()).then(|| {
@@ -1129,7 +1158,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .flex_col()
             .gap(px(6.))
             .py(px(6.))
-            .children(diffs.iter().enumerate().map(|(n, diff)| render_diff(diff, all, ElementId::NamedInteger(format!("call-diff-{n}").into(), key), window, cx)));
+            .children(diffs.iter().enumerate().map(|(n, diff)| render_diff(diff, all, ElementId::NamedInteger(format!("call-diff-{n}").into(), key), cx)));
         div()
             .relative()
             .when(!body.is_empty() || !errors.is_empty(), |d| d.border_b_1().border_color(theme::border()))
@@ -1139,7 +1168,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     });
 
     // The output: one area that scrolls both ways, faded where it's cut.
-    let handle = window.use_keyed_state(id("call-out-scroll"), cx, |_, _| ScrollHandle::new()).read(cx).clone();
+    let handle = kept_state(id("call-out-scroll"), cx, |_| ScrollHandle::new()).read(cx).clone();
     let (offset, max) = (handle.offset(), handle.max_offset());
     let cut_below = !all && max.y > px(0.5);
     let more_below = cut_below && offset.y > -max.y + px(1.);
@@ -1158,7 +1187,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     });
 
     // Errors wrap, under the output, within their share of the cap. Show all opens them too.
-    let errors_handle = window.use_keyed_state(id("call-errors-scroll"), cx, |_, _| ScrollHandle::new()).read(cx).clone();
+    let errors_handle = kept_state(id("call-errors-scroll"), cx, |_| ScrollHandle::new()).read(cx).clone();
     let (err_offset, err_max) = (errors_handle.offset(), errors_handle.max_offset());
     let errors_cut = !all && !errors.is_empty() && err_max.y > px(0.5);
     let errors = (!errors.is_empty()).then(|| {
@@ -1313,10 +1342,10 @@ fn fade(edge: FadeEdge, bg: Rgba) -> Div {
 /// One thing on a call's top strip: the command after a `$`, or label and
 /// value rows (a path shortened to its folder and name, the whole path on
 /// hover), or a sentence. Each stays on one line and scrolls sideways.
-fn strip_part(part: details::Part, id: ElementId, window: &mut Window, cx: &mut App) -> AnyElement {
+fn strip_part(part: details::Part, id: ElementId, cx: &mut App) -> AnyElement {
     use details::Part;
-    let one_line = |content: AnyElement, id: ElementId, window: &mut Window, cx: &mut App| {
-        let handle = window.use_keyed_state(id.clone(), cx, |_, _| ScrollHandle::new()).read(cx).clone();
+    let one_line = |content: AnyElement, id: ElementId, cx: &mut App| {
+        let handle = kept_state(id.clone(), cx, |_| ScrollHandle::new()).read(cx).clone();
         let max = handle.max_offset();
         let more_right = max.x > px(0.5) && handle.offset().x > -max.x + px(1.);
         div()
@@ -1333,7 +1362,7 @@ fn strip_part(part: details::Part, id: ElementId, window: &mut Window, cx: &mut 
             .gap(px(8.))
             .line_height(theme::chat_px(DETAIL_LINE))
             .child(div().flex_none().text_color(theme::text_faint()).child("$"))
-            .child(one_line(div().text_color(theme::text_secondary()).child(command.replace('\n', " ⏎ ")).into_any_element(), id, window, cx))
+            .child(one_line(div().text_color(theme::text_secondary()).child(command.replace('\n', " ⏎ ")).into_any_element(), id, cx))
             .into_any_element(),
         Part::Fields(rows) => div()
             .flex()
@@ -1351,7 +1380,7 @@ fn strip_part(part: details::Part, id: ElementId, window: &mut Window, cx: &mut 
                     .flex()
                     .gap(px(8.))
                     .child(div().flex_none().min_w(px(44.)).font_family(theme::SANS).text_color(theme::text_faint()).child(label))
-                    .child(one_line(shown, ElementId::Name(format!("{id}-{n}").into()), window, cx))
+                    .child(one_line(shown, ElementId::Name(format!("{id}-{n}").into()), cx))
             }))
             .into_any_element(),
         other => div().font_family(theme::SANS).text_color(theme::text_muted()).child(other.text()).into_any_element(),
@@ -1445,7 +1474,7 @@ const DIFF_LINES: usize = 60;
 
 /// A cell edit as coloured lines: its +/− signs stay put while the code
 /// scrolls sideways under a long line. Only its first `DIFF_LINES` unless `all`.
-fn render_diff(diff: &celldiff::CellDiff, all: bool, id: ElementId, window: &mut Window, cx: &mut App) -> AnyElement {
+fn render_diff(diff: &celldiff::CellDiff, all: bool, id: ElementId, cx: &mut App) -> AnyElement {
     use celldiff::Change;
     let max_lines = if all { usize::MAX } else { DIFF_LINES };
     let line = theme::chat_px(DETAIL_LINE);
@@ -1459,7 +1488,7 @@ fn render_diff(diff: &celldiff::CellDiff, all: bool, id: ElementId, window: &mut
             Change::Same => ("", None, text.as_str()),
         })
         .collect();
-    let handle = window.use_keyed_state(id.clone(), cx, |_, _| ScrollHandle::new()).read(cx).clone();
+    let handle = kept_state(id.clone(), cx, |_| ScrollHandle::new()).read(cx).clone();
     let max = handle.max_offset();
     let more_right = max.x > px(0.5) && handle.offset().x > -max.x + px(1.);
     let sign_color = |sign: &str| match sign {
