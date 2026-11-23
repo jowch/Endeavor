@@ -714,6 +714,11 @@ enum Done {
     SignedIn(Result<AuthenticateResponse, agent_client_protocol::Error>),
 }
 
+fn hand_off_permission(events: &UnboundedSender<AgentEvent>, request: RequestPermissionRequest, responder: Responder<RequestPermissionResponse>) {
+    let session = request.session_id.clone();
+    let _ = events.unbounded_send(AgentEvent::Session(session, SessionEvent::Permission(request, responder)));
+}
+
 async fn run(
     agent: Agent,
     command: Vec<String>,
@@ -742,8 +747,7 @@ async fn run(
                 if let Ok(dialect) = name_asks.lock() {
                     dialect.permission(&mut request);
                 }
-                let session = request.session_id.clone();
-                let _ = permit.unbounded_send(AgentEvent::Session(session, SessionEvent::Permission(request, responder)));
+                hand_off_permission(&permit, request, responder);
                 Ok(())
             },
             agent_client_protocol::on_receive_request!(),

@@ -31,7 +31,7 @@ fn run_in_job(args: &[String]) -> Result<i32, String> {
     let app: u32 = app.parse().map_err(|_| format!("not a process id: {app}"))?;
 
     match job() {
-        Ok(job) => std::mem::forget(job),
+        Ok(job) => hold_until_exit(job),
         Err(e) => eprintln!("Starting the agent without a job, so what it starts may outlive it: {e}"),
     }
 
@@ -56,6 +56,11 @@ fn run_in_job(args: &[String]) -> Result<i32, String> {
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(windows)]
+fn hold_until_exit(job: std::os::windows::io::OwnedHandle) {
+    std::mem::forget(job);
 }
 
 #[cfg(windows)]

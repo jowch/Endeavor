@@ -338,6 +338,7 @@ fn stop_recorded_in(state_dir: &Path) {
 
 #[cfg(unix)]
 fn stop_group(pid: i32, _started: Option<u64>) {
+    // SAFETY (both): plain syscalls; a group that's gone only returns ESRCH.
     let alive = || unsafe { libc::kill(-pid, 0) } == 0;
     for signal in [libc::SIGTERM, libc::SIGKILL] {
         unsafe { libc::kill(-pid, signal) };
