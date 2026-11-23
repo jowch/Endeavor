@@ -149,6 +149,50 @@ Antigravity's permission requests lose "Allow Always": Antigravity keeps that
 answer as a rule of its own, which the app can't show or remove, and which
 would hold in Manual too.
 
+## Modes, prompts and replay (`session.rs`)
+
+- **Modes.** Plan is the agent's plan mode, and the runtime is told `plan`
+  too, since Claude's plan mode restricts only its own tools, not the
+  notebook's. Ask to run and Auto are both the agent's auto mode; the run gate
+  decides whether runs ask. Manual is the agent's default mode, with the
+  runtime holding edits as well. The agent starts every session, new or
+  reopened, in its own default mode, so the app then puts it in the session's
+  start mode (the new-session screen's pick, or the mode it was last in). The
+  agent confirms a switch through its `mode` config option. Plan's end is
+  recognised by the adapters' option ids (`PLAN_START`, claude-agent-acp's
+  then codex-acp's); starting means the agent's auto mode, and whether runs
+  ask is the app's.
+- **The agent's own prompt or the runtime's card** (`runtime_asks_instead`).
+  When the runtime, from the app's build, holds a notebook call by the
+  session's mode, the agent's own prompt for it is let through with no card,
+  and the runtime's ask is the one card. For an agent that asks before every
+  notebook write (Codex), a call the runtime doesn't hold goes through too.
+  Only a title that names a notebook tool exactly is let through: a shell
+  call's title is its command line, which the model writes. The call's kind
+  can't decide it, since Codex marks its notebook calls `execute`.
+- **Prompts after the turn** (`drop_prompts`). A run the runtime still holds
+  is denied when the turn ends, so it can't happen afterwards: an agent that
+  gives up waiting and ends its turn (Codex, after about two minutes) never
+  cancels the call itself. A runtime ask that no call waits on stays up,
+  since the runtime keeps the answer for the agent's same call later; Allow
+  on it sends "Go ahead". A restart card's Restart still restarts after the
+  turn, since the user's press is what restarts.
+- **Other agents' shapes.** Cursor's permission request carries no
+  `rawInput`, only the arguments as a fenced json block in its content, and
+  Codex's carries only the call's id; the call itself arrived first, so the
+  request takes its title and input from the recorded call. Cursor's finished
+  notebook call carries only `{"success": true}`, so the app asks the runtime
+  for the result (`Effect::FetchResult`).
+- **Replay.** A replayed open or close is history: its notebook id belonged
+  to an earlier Julia, so it opens nothing live, and the notebook Endeavor
+  recorded wins over the history's, since the user may have located the file
+  since. Claude Code marks a turn it stopped mid-flight with a synthetic user
+  message, which replays as the same note a live stop shows. The adapter
+  replays links and text files as text, with a text file's contents after
+  the rest. Without a generated title, Claude Code titles a session with its
+  prompt's text, which starts with the app's "[Endeavor] …" note, so such a
+  title is ignored.
+
 ## Ending the process tree on Windows
 
 On Unix the ACP library starts the adapter as its own process group and kills

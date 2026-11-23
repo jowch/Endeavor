@@ -1,12 +1,3 @@
-//! sessions.json: Endeavor's own record of each session, which the sidebar
-//! draws from at launch without waiting for any agent. Each agent's listing
-//! then brings it up to date (`merge`). User names stay in titles.json and
-//! archiving in archived.json.
-//!
-//! Only the person deleting a session removes its record. A listing that
-//! leaves a session out (the agent signed out, a fresh profile, a list that
-//! failed partway) marks it missing for this launch, and it stays.
-
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
@@ -20,22 +11,15 @@ pub use crate::agent::Agent;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub agent: Agent,
-    /// None for a session saved as a bare id, until its agent lists it in a folder.
     pub place: Option<Place>,
-    /// The agent's title, or the first message's while it has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Last activity, in Unix seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<u64>,
-    /// Its notebook's kind, for a session reopened before it has a notebook;
-    /// None is Julia's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<Backend>,
 }
 
-/// What one listing covers. On This Mac an agent lists one folder; a server's
-/// sessions all share one agent folder, so its listing covers the whole host.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Scope {
     Folder(Place),
@@ -51,7 +35,6 @@ impl Scope {
     }
 }
 
-/// A session as an agent's listing gives it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Listed {
     pub id: String,
@@ -62,15 +45,11 @@ pub struct Listed {
 #[derive(Debug, Default, PartialEq)]
 pub struct Records {
     records: HashMap<String, Record>,
-    /// Scopes each agent has listed this launch (not saved).
     listed: HashSet<(Agent, Scope)>,
-    /// Sessions the latest listing of their scope left out (not saved).
     missing: HashSet<String>,
 }
 
 impl Records {
-    /// Reads sessions.json in any of its shapes: records; before that, each
-    /// session's place; before servers, a list of ids.
     pub fn parse(json: &str) -> Records {
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -89,7 +68,6 @@ impl Records {
         Records { records, ..Records::default() }
     }
 
-    /// What sessions.json holds.
     pub fn saved(&self) -> &HashMap<String, Record> {
         &self.records
     }
@@ -98,35 +76,28 @@ impl Records {
         self.records.get(id)
     }
 
-    /// Whether any session has a folder to show under.
     pub fn any_placed(&self) -> bool {
         self.records.values().any(|r| r.place.is_some())
     }
 
-    /// Whether Endeavor has any session of `agent`'s.
     pub fn any_of(&self, agent: Agent) -> bool {
         self.records.values().any(|r| r.agent == agent)
     }
 
-    /// Sessions with a folder, newest first (no time last).
     pub fn placed(&self) -> Vec<(&str, &Record)> {
         let mut placed: Vec<_> = self.records.iter().filter(|(_, r)| r.place.is_some()).map(|(id, r)| (id.as_str(), r)).collect();
         placed.sort_by(|a, b| b.1.updated.cmp(&a.1.updated).then_with(|| a.0.cmp(b.0)));
         placed
     }
 
-    /// A folder's sessions, newest first.
     pub fn in_folder(&self, folder: &Place) -> Vec<(&str, &Record)> {
         self.placed().into_iter().filter(|(_, r)| r.place.as_ref() == Some(folder)).collect()
     }
 
-    /// Whether `agent` has listed the sessions at `place` this launch.
     pub fn was_listed(&self, agent: Agent, place: &Place) -> bool {
         self.listed.iter().any(|(by, scope)| *by == agent && scope.covers(place))
     }
 
-    /// A session started (or a copy made) in `place`: recorded if it's new,
-    /// with now as its last activity. True if anything changed.
     pub fn started(&mut self, id: &str, agent: Agent, place: &Place, now: u64) -> bool {
         match self.records.get_mut(id) {
             Some(record) if record.place.as_ref() == Some(place) => false,
@@ -141,14 +112,12 @@ impl Records {
         }
     }
 
-    /// A session's notebook kind, when it isn't Julia's. True if it changed.
     pub fn set_kind(&mut self, id: &str, kind: Backend) -> bool {
         let Some(record) = self.records.get_mut(id) else { return false };
         let kind = (kind != Backend::Pluto).then_some(kind);
         std::mem::replace(&mut record.kind, kind) != kind
     }
 
-    /// A session's title changed, or it had activity at `now`. True if anything changed.
     pub fn touch(&mut self, id: &str, title: Option<&str>, now: Option<u64>) -> bool {
         let Some(record) = self.records.get_mut(id) else { return false };
         let before = record.clone();
@@ -161,28 +130,15 @@ impl Records {
         *record != before
     }
 
-    /// The person deleted the session: the one way a record goes.
     pub fn remove(&mut self, id: &str) -> bool {
         self.missing.remove(id);
         self.records.remove(id).is_some()
     }
 
-    /// Whether the latest listing of the session's folder left it out.
     pub fn is_missing(&self, id: &str) -> bool {
         self.missing.contains(id)
     }
 
-    /// Bring the record up to date with one agent's listing of `scope`: new
-    /// titles and times for Endeavor's own sessions. Others the agent lists,
-    /// such as the Claude Code CLI's, aren't added, except one in `known`
-    /// (ids Endeavor still has a name, notebook or mode for) listed in a
-    /// folder, which brings back a record an older Endeavor dropped. That
-    /// agent's sessions in `scope` a `complete` listing (no further page)
-    /// leaves out are marked missing and kept, since an empty or short list
-    /// can mean the agent is signed out or looking at another profile; `keep`
-    /// (open sessions, which an agent may not list until their first turn)
-    /// aren't marked. Other agents' sessions are untouched. True if a record
-    /// changed.
     pub fn merge(&mut self, agent: Agent, scope: Scope, listed: Vec<Listed>, complete: bool, keep: &HashSet<String>, known: &HashSet<String>) -> bool {
         let before = self.records.clone();
         let ids: HashSet<&str> = listed.iter().map(|l| l.id.as_str()).collect();
@@ -380,8 +336,6 @@ mod tests {
 
     #[test]
     fn signed_out_then_back_in() {
-        // Signed out (or a fresh profile), the agent lists nothing; signed back
-        // in, it lists them all again and nothing was lost on the way.
         let mut records = two_sessions();
         let saved = records.saved().clone();
         let f = Scope::Folder(Place::local("/f"));
@@ -403,15 +357,12 @@ mod tests {
         assert_eq!(records.get("a").and_then(|r| r.title.as_deref()), Some("A2"));
         assert_eq!(records.get("b"), Some(&record(Some(Place::local("/f")), Some("B"), Some(8))));
         assert!(records.is_missing("b") && !records.is_missing("a"));
-        // The next, full listing has it again.
         records.merge(Agent::Claude, f, vec![listed("a", None, None), listed("b", None, None)], true, &none(), &none());
         assert!(!records.is_missing("b"));
     }
 
     #[test]
     fn a_first_page_marks_nothing_missing() {
-        // The agent has more pages (Codex pages over every thread, then filters
-        // by folder), so a session left out may just be on a later page.
         let mut records = two_sessions();
         let known = HashSet::from(["lost".to_owned()]);
         let changed = records.merge(Agent::Claude, Scope::Folder(Place::local("/f")), vec![listed("a", Some("A2"), Some(20)), listed("lost", None, None)], false, &none(), &known);
@@ -441,8 +392,6 @@ mod tests {
 
     #[test]
     fn a_listed_session_endeavor_still_knows_comes_back() {
-        // An older Endeavor dropped "lost" from sessions.json, but titles.json
-        // or notebooks.json still has it; the agent lists it in /f.
         let mut records = Records::parse(r#"{"a": {"agent": "claude", "place": "/f"}}"#);
         let known = HashSet::from(["lost".to_owned()]);
         let changed = records.merge(

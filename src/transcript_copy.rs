@@ -1,11 +1,3 @@
-//! Endeavor's own copy of each session's transcript, kept in its app support
-//! folder (`transcripts/<session id>.json`) so a past session's history shows
-//! the moment it opens, before the agent has replayed it. Display only: the
-//! agent's copy stays the one that counts, and this one is never sent to it.
-//!
-//! When the agent's replay finishes, it replaces the copy (`merge`). The
-//! replay carries no message ids, so the two are matched by order and text.
-
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,24 +11,17 @@ use crate::hosts::Place;
 use crate::outbox::Delivery;
 use crate::session::{Approval, Entry, Session};
 
-/// Longer strings in a tool call's input or output are cut to this many characters.
 const STRING_MAX: usize = 4000;
-/// Longer lists in a tool call's input or output keep their first this many items.
 const LIST_MAX: usize = 100;
-/// A picture in a message bigger than this (base64) isn't kept; the replay brings it back.
 const IMAGE_MAX: usize = 150_000;
 
-/// The note where the replay's history parts from the copy's.
 pub const REPLACED: &str = "Earlier messages were replaced (compacted, or rewound outside Endeavor)";
 
-/// One transcript entry as saved. Prompts, run-state notes and failure cards
-/// aren't kept: they only mean something while the session that made them runs.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Saved {
     User {
         text: String,
-        /// The message's chips, as the blocks the agent replays for them.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         blocks: Vec<ContentBlock>,
         #[serde(default, skip_serializing_if = "is_turn")]
@@ -78,7 +63,6 @@ enum Saved {
     },
     Changes {
         cells: Vec<ChangedCell>,
-        /// The user pressed Restore on this card and it put the cells back.
         #[serde(default, skip_serializing_if = "is_false")]
         restored: bool,
     },
@@ -99,8 +83,6 @@ fn is_turn(delivery: &Delivery) -> bool {
 struct File {
     version: u32,
     entries: Vec<serde_json::Value>,
-    /// What the user's restores put back that the agent hasn't heard yet
-    /// (`Session::restored`): told with the first message after a reopen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     untold: Vec<String>,
 }
@@ -113,7 +95,6 @@ fn time(secs: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(secs)
 }
 
-/// A tool call's input or output, with long strings and lists cut short.
 fn trimmed(value: &serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
     match value {
@@ -124,7 +105,6 @@ fn trimmed(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// Whether a saved tool call's output had a string cut short by `trimmed`.
 pub(crate) fn was_trimmed(value: &serde_json::Value) -> bool {
     use serde_json::Value;
     match value {
@@ -135,9 +115,6 @@ pub(crate) fn was_trimmed(value: &serde_json::Value) -> bool {
     }
 }
 
-/// A sent message's blocks as the agent replays them: links and text files
-/// come back as text, a text file's contents after the rest
-/// (claude-agent-acp's `promptToClaude`).
 pub(crate) fn as_replayed(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
     let text = |s: String| ContentBlock::Text(TextContent::new(s));
     let (mut content, mut context) = (Vec::new(), Vec::new());
@@ -156,7 +133,6 @@ pub(crate) fn as_replayed(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
     content.into_iter().chain(context).collect()
 }
 
-/// A message's chips, read back from their blocks the way a replay reads them.
 fn chips(blocks: Vec<ContentBlock>) -> Vec<Attachment> {
     if blocks.is_empty() {
         return Vec::new();
@@ -171,11 +147,9 @@ fn chips(blocks: Vec<ContentBlock>) -> Vec<Attachment> {
     }
 }
 
-/// `restored`: the entry is a changed-cells card the user restored.
 fn saved(entry: &Entry, restored: bool) -> Option<Saved> {
     Some(match entry {
         Entry::User { text, attachments, delivery, sent, .. } => {
-            // Read back only as chips, which don't keep the cell links' engine.
             let blocks = as_replayed(attach::prompt_blocks("", attachments, &[], wire::backend::Backend::Pluto))
                 .into_iter()
                 .filter(|b| !matches!(b, ContentBlock::Image(image) if image.data.len() > IMAGE_MAX))
@@ -218,19 +192,13 @@ fn entry(saved: Saved) -> Entry {
     }
 }
 
-/// A copy read back: its entries, and where among them the changed-cells
-/// cards the user restored are.
 #[derive(Default)]
 pub struct Copy {
     pub entries: Vec<Entry>,
     pub restored: Vec<usize>,
-    /// Restores the agent hadn't heard of yet.
     pub untold: Vec<String>,
 }
 
-/// The copy's file contents, or None when there's nothing worth keeping.
-/// `restored`: the entries that are changed-cells cards the user restored;
-/// `untold`: what those restores put back that the agent hasn't heard yet.
 pub fn to_json(entries: &[Entry], restored: &[usize], untold: &[String]) -> Option<String> {
     if !entries.iter().any(keyed) {
         return None;
@@ -244,7 +212,6 @@ pub fn to_json(entries: &[Entry], restored: &[usize], untold: &[String]) -> Opti
     serde_json::to_string(&File { version: 1, entries, untold: untold.to_vec() }).ok()
 }
 
-/// A copy read back. Entries this version doesn't know are left out.
 pub fn from_json(json: &str) -> Option<Copy> {
     let file: File = serde_json::from_str(json).ok()?;
     let mut copy = Copy { untold: file.untold, ..Copy::default() };
@@ -257,7 +224,6 @@ pub fn from_json(json: &str) -> Option<Copy> {
     copy.entries.iter().any(keyed).then_some(copy)
 }
 
-/// Where a session's copy lives; None for an id that isn't a plain file name.
 fn file(id: &str) -> Option<PathBuf> {
     let plain = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     plain.then(|| crate::app_file(&format!("transcripts/{id}.json"))).flatten()
@@ -269,7 +235,6 @@ pub fn load(id: &str) -> Option<Copy> {
 
 pub fn save(id: &str, entries: &[Entry], restored: &[usize], untold: &[String]) {
     let (Some(path), Some(json)) = (file(id), to_json(entries, restored, untold)) else { return };
-    // ponytail: best effort; without a copy the session opens on its summary as before.
     let _ = crate::write_atomic(&path, json.as_bytes());
 }
 
@@ -279,13 +244,10 @@ pub fn delete(id: &str) {
     }
 }
 
-/// The entries a replay brings back, to match on: messages and tool calls.
-/// Thoughts, plans, notes and cards are carried along but not matched.
 fn keyed(entry: &Entry) -> bool {
     matches!(entry, Entry::User { .. } | Entry::Agent { .. } | Entry::Tool { .. })
 }
 
-/// The same message or call, by its text (a call by its id or its title).
 fn same(a: &Entry, b: &Entry) -> bool {
     match (a, b) {
         (Entry::User { text: x, .. }, Entry::User { text: y, .. }) => x.trim() == y.trim(),
@@ -295,11 +257,6 @@ fn same(a: &Entry, b: &Entry) -> bool {
     }
 }
 
-/// A matched entry takes what the replay knows better: a call's whole input
-/// and output, a message's chips with their pictures. What only Endeavor
-/// knows stays: when a message was sent, how a prompt was answered, what's
-/// open, and a notebook call's result the runtime gave where the agent's
-/// replay has none (Cursor replays `{"success": true}`).
 fn carry(copy: &mut Entry, replay: Entry) {
     match replay {
         Entry::Tool { id, title, kind, path, status, input, output, diffs, approval, .. } => {
@@ -322,29 +279,20 @@ fn carry(copy: &mut Entry, replay: Entry) {
     }
 }
 
-/// How the replay compared with the copy.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Swap {
-    /// Every entry matched: nothing moves.
     Same,
-    /// The replay matched everything and added this many messages after it.
     Added { messages: usize },
-    /// Earlier entries differ (compacted, or rewound, outside Endeavor).
     Changed,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Merged {
     pub swap: Swap,
-    /// Where the entry that was at the top of the view is now; `found`: it's
-    /// still there (else this is where the thread parts, and the view goes there).
     pub anchor: usize,
     pub found: bool,
 }
 
-/// Replace the copy (shown, with `top` the entry at the top of the view)
-/// with the agent's replay, keeping the copy's entries wherever they match
-/// so the view stays where it was.
 pub fn merge(copy: &mut Vec<Entry>, replay: Vec<Entry>, top: usize) -> Merged {
     let top = top.min(copy.len().saturating_sub(1));
     let ck: Vec<usize> = (0..copy.len()).filter(|&i| keyed(&copy[i])).collect();
@@ -358,7 +306,6 @@ pub fn merge(copy: &mut Vec<Entry>, replay: Vec<Entry>, top: usize) -> Merged {
         for (c, r) in ck.iter().zip(&rk) {
             carry(&mut copy[*c], replay[*r].take().expect("each replayed entry is taken once"));
         }
-        // What the copy's last turn ended with (its card, its notes) the copy has already.
         let first_new = rk.get(matched).copied().unwrap_or(replay.len());
         let added: Vec<Entry> = replay.drain(first_new.max(from)..).flatten().collect();
         let swap = if added.is_empty() {
@@ -388,25 +335,16 @@ pub fn merge(copy: &mut Vec<Entry>, replay: Vec<Entry>, top: usize) -> Merged {
     Merged { swap: Swap::Changed, anchor, found }
 }
 
-/// What waits below a view the replay left in place.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Below {
     New(usize),
     Changed,
 }
 
-/// Whether what a replay left below has been seen: the user scrolled to the end, or the
-/// list follows its end and is there. Sending a message moves it there, and since GPUI
-/// 0.3.11 the list's scroll handler doesn't always run for that (it skips a scroll that
-/// doesn't move), so `reached_end` alone left the button up.
 pub fn clears_below(reached_end: bool, following_tail: bool, at_end: Option<bool>) -> bool {
     reached_end || (following_tail && at_end == Some(true))
 }
 
-/// The floating button above the composer: its words, or None when it
-/// doesn't show. It shows while a replay has left something below the view
-/// (`below`), or the user has scrolled up from the end (`following` stopped,
-/// `at_end` false; None while the list can't tell).
 pub fn pill(following: bool, at_end: Option<bool>, below: Option<Below>) -> Option<String> {
     let shows = below.is_some() || (!following && at_end == Some(false));
     shows.then(|| match below {
@@ -418,7 +356,6 @@ pub fn pill(following: bool, at_end: Option<bool>, below: Option<Below>) -> Opti
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: that brings in gpui's own `#[test]`.
     use super::{Below, Merged, REPLACED, Swap, clears_below, from_json, merge, pill, to_json};
     use crate::attach::{Attachment, Quote, Quoted};
     use crate::celldiff::{CellChange, ChangedCell};
@@ -451,7 +388,6 @@ mod tests {
         }
     }
 
-    /// Each entry in a word or two, to compare against.
     fn words(entries: &[Entry]) -> Vec<String> {
         entries
             .iter()
@@ -523,17 +459,14 @@ mod tests {
     #[test]
     fn a_restored_card_is_saved_as_restored_where_it_ends_up() {
         let card = |n: &str| Entry::Changes(vec![ChangedCell { cell: n.into(), name: n.into(), change: CellChange::Edited, added: 1, removed: 1, before: Some("a = 1".into()), after: Some("a = 2".into()), notebook: None, unseen: false }]);
-        // The run-state entry isn't kept, so the restored card moves up one.
         let entries = vec![Entry::RunState(Vec::new()), agent("Done."), card("a"), card("b")];
         let json = to_json(&entries, &[3], &[]).unwrap();
         assert!(!json.contains(r#""restored":false"#), "only a restored card says so: {json}");
         assert!(!json.contains("untold"), "nothing untold, nothing saved: {json}");
         let back = from_json(&json).unwrap();
         assert_eq!((words(&back.entries).len(), back.restored, back.untold.len()), (3, vec![2], 0));
-        // A restore the agent hasn't heard of yet comes back with the copy (#141).
         let untold = vec!["put back `b` as they were before one of your turns".to_string()];
         assert_eq!(from_json(&to_json(&entries, &[3], &untold).unwrap()).unwrap().untold, untold);
-        // A copy saved before this reads as nothing restored.
         let old = from_json(r#"{"version": 1, "entries": [{"type": "agent", "text": "Hi"}, {"type": "changes", "cells": []}]}"#).unwrap();
         assert_eq!(old.restored, Vec::<usize>::new());
     }
@@ -599,7 +532,6 @@ mod tests {
 
     #[test]
     fn when_earlier_messages_differ_the_thread_updates_around_the_view() {
-        // Compacted: the first turn is gone from the replay; the view was on the second reply.
         let mut copy = vec![user("Load the data"), agent("Loaded."), user("Fit the decay"), agent("The rate is 0.09."), Entry::Note("You edited `rates`".into())];
         let replay = vec![user("Summary of earlier work"), user("Fit the decay"), agent("The rate is 0.09."), user("Plot it")];
         let merged = merge(&mut copy, replay, 3);
@@ -614,11 +546,9 @@ mod tests {
     fn a_rewind_keeps_what_still_matches_and_the_view_goes_where_the_thread_parts() {
         let mut copy = vec![user("Load the data"), agent("Loaded."), user("Fit the decay"), agent("The rate is 0.09.")];
         let replay = vec![user("Load the data"), agent("Loaded."), user("Fit a line instead"), agent("The slope is 2.")];
-        // The view's top was on the reply the rewind removed.
         let merged = merge(&mut copy, replay, 3);
         assert_eq!(merged, Merged { swap: Swap::Changed, anchor: 2, found: false });
         assert_eq!(words(&copy), ["you: Load the data", "claude: Loaded.", format!("note: {REPLACED}").as_str(), "you: Fit a line instead", "claude: The slope is 2."]);
-        // A view above where they part stays on its own entry.
         let mut copy = vec![user("Load the data"), agent("Loaded."), user("Fit the decay")];
         let merged = merge(&mut copy, vec![user("Load the data"), agent("Loaded."), user("Fit a line")], 1);
         assert_eq!(merged, Merged { swap: Swap::Changed, anchor: 1, found: true });
@@ -640,9 +570,7 @@ mod tests {
     fn what_a_replay_left_below_clears_once_the_list_follows_its_end_there() {
         assert!(clears_below(true, false, Some(false)));
         assert!(clears_below(false, true, Some(true)));
-        // Kept in place after the replay: not following, so not cleared even if it measures at the end.
         assert!(!clears_below(false, false, Some(true)));
-        // Following but not there yet, or the list can't tell.
         assert!(!clears_below(false, true, Some(false)));
         assert!(!clears_below(false, true, None));
     }
