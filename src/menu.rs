@@ -579,11 +579,11 @@ mod tests {
 
     #[test]
     fn app_menu_shortcuts_read_like_the_apps_others() {
-        let text = |s: &str| super::keystroke_text(&gpui::KeybindingKeystroke::from_keystroke(gpui::Keystroke::parse(s).unwrap()));
+        let text = |s: &'static str| super::keystroke_text(&gpui::KeybindingKeystroke::from_keystroke(gpui::Keystroke::parse(s).unwrap()));
         if cfg!(target_os = "macos") {
-            assert_eq!(text("secondary-shift-e"), "Shift+⌘E");
+            assert_eq!(text(crate::platform::keys!("shift-e")), "Shift+⌘E");
         } else {
-            assert_eq!(text("secondary-shift-e"), "Ctrl+Shift+E");
+            assert_eq!(text(crate::platform::keys!("shift-e")), "Ctrl+Shift+E");
             assert_eq!(text("ctrl-shift-g"), "Ctrl+Shift+G");
             assert_eq!(text("ctrl-,"), "Ctrl+,");
         }

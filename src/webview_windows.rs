@@ -17,7 +17,7 @@ use wry::WebViewExtWindows;
 /// does (`src/webkeys.rs`), less ⌘M: Ctrl+M is Pluto's, and Windows has no
 /// such shortcut. WebView2 doesn't say which keys the page used, so the
 /// app's other Ctrl shortcuts stay with the page, unlike on Linux.
-const APP_FIRST: [&str; 10] = ["secondary-q", "secondary-,", "secondary-b", "secondary-=", "secondary--", "secondary-0", "secondary-shift-e", "secondary-f", "secondary-g", "secondary-shift-g"];
+const APP_FIRST: [&str; 10] = ["ctrl-q", "ctrl-,", "ctrl-b", "ctrl-=", "ctrl--", "ctrl-0", "ctrl-shift-e", "ctrl-f", "ctrl-g", "ctrl-shift-g"];
 
 thread_local! {
     /// WebView2 has the keyboard: its controller's GotFocus came after its LostFocus.
@@ -406,6 +406,19 @@ pub fn edit(webview: &wry::WebView, action: gpui::OsAction) {
         if let Err(e) = unsafe { page.CallDevToolsProtocolMethod(&HSTRING::from("Input.dispatchKeyEvent"), &HSTRING::from(params), None) } {
             eprintln!("Edit menu {command} in the notebook: {e}");
             return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every app-first key parses. Since gpui-pre 0.3.11 a `secondary-` key
+    /// fails to parse, and the `.ok()` above would drop it without a word.
+    #[test]
+    fn every_app_first_key_parses() {
+        for key in super::APP_FIRST {
+            let keystroke = gpui::Keystroke::parse(key).unwrap_or_else(|_| panic!("{key} doesn't parse"));
+            assert!(keystroke.modifiers.control, "{key} has no Ctrl");
         }
     }
 }
