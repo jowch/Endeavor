@@ -1,6 +1,3 @@
-//! First-run installs into Endeavor's Application Support folder: pinned,
-//! checksummed downloads of runtimes the app doesn't bundle (design doc §11).
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -8,23 +5,14 @@ use std::time::Duration;
 
 use endeavor_mcp::embedded;
 
-/// The app's own files (`adapter/`): Contents/Resources inside Endeavor.app
-/// (Resources beside bin on Windows), else, in a debug build, the source tree
-/// (`cargo run`). A release build never falls back to the source tree, which
-/// exists only on the machine that built it: `missing_files` says so instead.
 pub fn resources() -> PathBuf {
     bundle_resources().unwrap_or_else(|| if source_fallback() { PathBuf::from(env!("CARGO_MANIFEST_DIR")) } else { expected_resources().unwrap_or_default() })
 }
 
-/// Debug builds use the source tree's files. `ENDEAVOR_TEST_NO_SOURCE_FALLBACK`
-/// makes one behave like a release build here, to check `missing_files`.
 fn source_fallback() -> bool {
     cfg!(debug_assertions) && std::env::var_os("ENDEAVOR_TEST_NO_SOURCE_FALLBACK").is_none()
 }
 
-/// What the app says at startup when its files aren't beside it: a release
-/// build run from inside a zip Explorer opened, or a copy of the program taken
-/// out of Endeavor.app.
 pub fn missing_files() -> Option<String> {
     if bundle_resources().is_some() || source_fallback() {
         return None;
@@ -42,16 +30,11 @@ pub fn missing_files() -> Option<String> {
     })
 }
 
-/// The Julia side of the runtime (`runtime/`), unpacked from the helper crate
-/// into the app's folder once per version.
 pub fn runtime() -> Result<PathBuf, String> {
     let dir = endeavor_mcp::unpack(&app_dir()?.join("runtime-files"), embedded::RUNTIME_VERSION, embedded::RUNTIME_FILES)?;
     Ok(dir.join("runtime"))
 }
 
-/// The Pluto skills as the Claude Code plugin the app loads, unpacked the same
-/// way. The app holds the folder while it runs: Claude sessions read it for
-/// as long as they last, and another version's unpack removes unheld folders.
 pub fn plugin() -> Result<PathBuf, String> {
     static LEASE: OnceLock<Option<endeavor_mcp::Lease>> = OnceLock::new();
     let dir = endeavor_mcp::unpack(&app_dir()?.join("plugin"), embedded::PLUGIN_VERSION, embedded::PLUGIN_FILES)?;
@@ -59,7 +42,6 @@ pub fn plugin() -> Result<PathBuf, String> {
     Ok(dir.join("plugin"))
 }
 
-/// Running from Endeavor.app, not a source checkout.
 pub fn bundled() -> bool {
     bundle_resources().is_some()
 }
@@ -68,14 +50,11 @@ fn bundle_resources() -> Option<PathBuf> {
     expected_resources().filter(|r| r.join("adapter").is_dir())
 }
 
-/// Where the app's files belong: Resources beside the program's own folder.
 fn expected_resources() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(exe.parent()?.parent()?.join("Resources"))
 }
 
-/// Endeavor's folder in Application Support, on Linux in XDG_DATA_HOME, and on
-/// Windows in %LOCALAPPDATA% (runtimes, Julia depot, app state).
 pub fn app_dir() -> Result<PathBuf, String> {
     if cfg!(windows) {
         let local = std::env::var_os("LOCALAPPDATA").filter(|d| !d.is_empty()).ok_or("LOCALAPPDATA isn't set")?;
@@ -89,17 +68,7 @@ pub fn app_dir() -> Result<PathBuf, String> {
     Ok(data.join("endeavor"))
 }
 
-/// Download a pinned tarball (a zip on Windows), resuming a partial one, check
-/// its SHA-256, and unpack its `top` folder to `dir` (the whole of it when
-/// `top` is empty: a zip with its files at the top). `what` names it in
-/// progress and errors.
 pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &str, u64), progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
-    // One install per folder at a time: two agents starting together both want
-    // Node.js, and would share the download and the unpacking folder (#99). The
-    // second waits, then finds the folder the first put in place. Callers come
-    // here only when the folder's program is missing, and the folder appears
-    // only by the rename below, so a folder that's there is a finished install.
-    // The lock is per process: two Endeavors at once aren't covered.
     let lock = install_lock(dir);
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
     if dir.exists() {
@@ -120,7 +89,6 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
         return Err(format!("The {what} download was corrupt or tampered with (SHA-256 {got}); it was deleted. Try again to download it afresh."));
     }
 
-    // Unpack beside the target, then rename, so a half-unpacked Julia is never used.
     progress(format!("Unpacking {what}…"), None);
     let staging = parent.join(format!("{name}.unpacking"));
     let _ = std::fs::remove_dir_all(&staging);
@@ -136,16 +104,10 @@ pub fn tarball(dir: &Path, what: &str, top: &str, (url, sha256, size): (&str, &s
     Ok(())
 }
 
-/// Download `url` to `file` with curl, resuming what's already there, and
-/// report progress against the expected `size`.
 pub fn download(url: &str, file: &Path, what: &str, size: u64, progress: &dyn Fn(String, Option<f32>)) -> Result<(), String> {
-    // ponytail: curl outlives an app quit mid-download; a relaunch that overlaps it
-    // fails the SHA check and starts over. Kill it on quit if that bites.
     let mut curl = Command::new("curl");
     endeavor_mcp::client::no_window(&mut curl);
     let mut curl = curl
-        // A connection that stalls (one that died across a sleep) fails after a
-        // minute instead of hanging until TCP gives up.
         .args(["-fsSL", "--retry", "3", "--speed-limit", "1024", "--speed-time", "60", "-C", "-", "-o"])
         .arg(file)
         .arg(url)
@@ -171,7 +133,6 @@ pub fn download(url: &str, file: &Path, what: &str, size: u64, progress: &dyn Fn
     Ok(())
 }
 
-/// The lock for installs into `dir`, the same one for every caller in this process.
 fn install_lock(dir: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
     static LOCKS: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>> = OnceLock::new();
     let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
@@ -186,20 +147,12 @@ pub fn sha256_of(file: &Path) -> Result<String, String> {
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Remove what older pins left in the app's folder: the folders (and partial
-/// downloads) named `prefix` and a version older than `version`, such as
-/// `julia-1.12.5` beside `julia-1.12.6`. Newer ones stay: another build
-/// sharing the folder (an installed app beside a development build) may use
-/// them. Those holding a path in `keep` stay too. Best effort: what can't be
-/// removed (a file in use on Windows) stays until next time.
 pub fn remove_other_versions(prefix: &str, version: &str, keep: &[&Path]) {
     if let Ok(app) = app_dir() {
         remove_other_versions_in(&app, prefix, version, keep);
     }
 }
 
-/// Remove every version named `prefix` from the app's folder, but those
-/// holding a path in `keep`: on Windows juliaup's Julia replaces the app's own.
 pub fn remove_all_versions(prefix: &str, keep: &[&Path]) {
     if let Ok(app) = app_dir() {
         remove_versions_in(&app, prefix, None, keep);
@@ -212,16 +165,13 @@ fn remove_other_versions_in(app: &Path, prefix: &str, version: &str, keep: &[&Pa
     }
 }
 
-/// Those older than `below`, or with none, all.
 fn remove_versions_in(app: &Path, prefix: &str, below: Option<&[u64]>, keep: &[&Path]) {
     let Ok(entries) = std::fs::read_dir(app) else { return };
-    // Compared canonical, so a Settings path in another case or form still matches.
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
     let keep: Vec<PathBuf> = keep.iter().map(|k| canonical(k)).collect();
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        // A version older than this one (not this one's download or unpacking).
         let older = name.strip_prefix(prefix).and_then(version_of).is_some_and(|v| below.is_none_or(|below| v.as_slice() < below));
         if !older || keep.iter().any(|k| k.starts_with(canonical(&path))) {
             continue;
@@ -234,7 +184,6 @@ fn remove_versions_in(app: &Path, prefix: &str, below: Option<&[u64]>, keep: &[&
     }
 }
 
-/// The version a name starts with, as numbers: "1.12.6.unpacking" -> [1, 12, 6].
 fn version_of(name: &str) -> Option<Vec<u64>> {
     let digits = name.split(|c: char| !c.is_ascii_digit() && c != '.').next()?;
     let parts: Vec<u64> = digits.split('.').filter(|p| !p.is_empty()).map(|p| p.parse().ok()).collect::<Option<_>>()?;
@@ -244,7 +193,6 @@ fn version_of(name: &str) -> Option<Vec<u64>> {
 #[cfg(unix)]
 fn unpack(tarball: &Path, into: &Path) -> Result<std::process::ExitStatus, String> {
     let zip = tarball.to_string_lossy().ends_with(".zip.part");
-    // GNU tar can't read a zip; the Mac's bsdtar can, keeping the programs' modes.
     if zip && cfg!(target_os = "linux") {
         return Command::new("unzip").arg("-q").arg(tarball).arg("-d").arg(into).status().map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => "unzip isn't installed. Install it (for example `sudo apt install unzip`), then try again.".to_owned(),
@@ -259,8 +207,6 @@ fn unpack(zip: &Path, into: &Path) -> Result<std::process::ExitStatus, String> {
     windows_tar().arg("-xf").arg(zip).arg("-C").arg(into).status().map_err(|e| e.to_string())
 }
 
-/// Windows' own bsdtar, which reads zips. A `tar` earlier on PATH may be GNU
-/// tar from Git for Windows, which doesn't, and takes `C:` for a remote host.
 #[cfg(windows)]
 fn windows_tar() -> Command {
     let system = std::env::var_os("SystemRoot").map(|root| PathBuf::from(root).join("System32").join("tar.exe"));
@@ -302,7 +248,6 @@ mod tests {
         let mut pack = Command::new("tar");
         #[cfg(unix)]
         pack.arg("-czf");
-        // -a: the format from the file name.
         #[cfg(windows)]
         let mut pack = windows_tar();
         #[cfg(windows)]
@@ -324,15 +269,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Two installs of the same thing at once (two agents wanting Node.js):
-    /// one downloads and unpacks, the other waits and finds it there (#99).
     #[test]
     fn two_installs_at_once_both_succeed() {
         let tmp = std::env::temp_dir().join(format!("endeavor-install-twice-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let src = tmp.join("src/thing-1.0/bin");
         std::fs::create_dir_all(&src).unwrap();
-        // Big enough that the two would overlap without the lock.
         std::fs::write(src.join("thing"), vec![b'x'; 8 << 20]).unwrap();
         let kind = if cfg!(windows) { "zip" } else { "tar.gz" };
         let archive = tmp.join(format!("thing.{kind}"));
@@ -358,8 +300,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// A zip with its files at the top, as Antigravity's are: unpacked with an
-    /// empty `top`, its program still runnable.
     #[test]
     #[cfg(unix)]
     fn installs_a_zip_and_keeps_its_programs_runnable() {

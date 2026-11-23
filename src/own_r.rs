@@ -1,8 +1,3 @@
-//! Endeavor's own R on a Mac, for Settings › Notebooks › R: whether it's
-//! installed, with Install and Remove (EndeavorMCP's `r::own_installed`,
-//! `install_own` and `remove_own`). The runtime offers to install it when an
-//! R notebook finds no R; these do it ahead of time, or undo it.
-
 use endeavor_mcp::r::{self, OwnR};
 use futures::StreamExt;
 use gpui::*;
@@ -12,14 +7,10 @@ use crate::connection::Status;
 use crate::hosts::HostId;
 use crate::own_julia::Job;
 
-/// What Settings knows about Endeavor's own R.
 #[derive(Default)]
 pub struct OwnRState {
-    /// As last looked for; none until looked.
     pub found: Option<Option<OwnR>>,
-    /// Install or Remove under way, or why the last one failed.
     pub job: Option<Job>,
-    /// Remove it once this computer's runtime has stopped: it may be running it.
     remove_after_stop: bool,
 }
 
@@ -36,7 +27,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Install: in its own thread, since a download takes minutes.
     pub fn install_own_r(&mut self, cx: &mut Context<Self>) {
         if matches!(self.own_r.job, Some(Job::Installing(_) | Job::Removing)) {
             return;
@@ -74,7 +64,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Remove, after asking. This computer's notebooks stop first, since R notebooks may be running it.
     pub fn confirm_remove_own_r(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let running = self.local_running();
         let mut detail = String::new();
@@ -97,7 +86,6 @@ impl Workspace {
         self.connections.get(&HostId::ThisMac).is_some_and(|c| c.status == Status::Ready)
     }
 
-    /// This computer's runtime stopped (`stopped`: or didn't): a Remove waiting for it goes ahead.
     pub fn own_r_after_stop(&mut self, stopped: bool, cx: &mut Context<Self>) {
         if !std::mem::take(&mut self.own_r.remove_after_stop) {
             return;
