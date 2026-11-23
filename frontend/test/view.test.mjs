@@ -50,6 +50,7 @@ test("picks become quotes that name what was picked, with no code or output but 
   assert.doesNotMatch(chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: "a\n\n\n\n\nb" }], comment: "" }]), /were shortened/);
   assert.equal(quoteText(NB, [{ part: "cell", cell: A, code: CODE }, { part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], ""), `<quote cell="rates" uri="${uri}"/>\n\n<quote cell="rates" part="output" uri="${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A, A] }], ""), `<quote part="box" uri="${uri} ${uri}"/>`);
+  assert.equal(quoteText(NB, [{ part: "output", cell: A, code: 'HTML("""<svg/> & co""")', text: "" }], ""), `<quote cell="HTML(&quot;&quot;&quot;&lt;svg/&gt; &amp; co&quot;&quot;&quot;)" part="output" uri="${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A] }], "", "pluto", ["0123456789abcdef"]), `<quote part="box" uri="${uri}" crop="0123456789abcdef"/>`);
   // An R notebook is Ember's, as the app names it.
   assert.equal(quoteText(NB, [{ part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], "", "ember"), `<quote cell="rates" part="output" uri="notebook://ember/${NB}/cell/${A}"/>`);

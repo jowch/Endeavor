@@ -454,6 +454,7 @@ pub fn quote_block(quote: &Quote, backend: Backend) -> String {
         }
         Quoted::Cell { notebook, cell, name, part } => {
             let uri = cell_uri(backend, notebook, cell);
+            let name = escaped_attr(name);
             let out = match part {
                 Part::Whole(_) => format!("<quote cell=\"{name}\" uri=\"{uri}\"/>"),
                 Part::Lines { first, last, text } => format!("<quote cell=\"{name}\" lines=\"{first}-{last}\" uri=\"{uri}\">\n{text}\n</quote>"),
@@ -491,7 +492,7 @@ pub fn replayed_quote(block: &str) -> Option<Attachment> {
             (_, Some(end)) => (&rest[..end], false, &rest[end + 2..]),
             _ => return None,
         };
-        let attr = |key: &str| attrs.split_once(&format!("{key}=\"")).and_then(|(_, v)| v.split_once('"')).map(|(v, _)| v);
+        let attr = |key: &str| attrs.split_once(&format!(" {key}=\"")).or_else(|| attrs.strip_prefix(&format!("{key}=\"")).map(|v| ("", v))).and_then(|(_, v)| v.split_once('"')).map(|(v, _)| v);
         let (body, comment) = if closed {
             (None, rest)
         } else {
@@ -524,12 +525,24 @@ pub fn replayed_quote(block: &str) -> Option<Attachment> {
                     (None, None, Some(code)) => Part::Whole(code.into()),
                     _ => return None,
                 };
-                Quoted::Cell { notebook, cell, name: attr("cell")?.into(), part }
+                Quoted::Cell { notebook, cell, name: unescaped_attr(attr("cell")?), part }
             }
         };
         Some(Quote { from, comment: comment.into() })
     };
     from_notebook(block).or_else(|| from_reply(block)).map(Attachment::Quote)
+}
+
+pub fn take_staged_quotes(attachments: &mut Vec<Attachment>) -> Vec<Attachment> {
+    attachments.extract_if(.., |a| matches!(a, Attachment::Quote(_))).collect()
+}
+
+fn escaped_attr(value: &str) -> String {
+    value.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn unescaped_attr(value: &str) -> String {
+    value.replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 }
 
 /// `body\n</tag>\n…` → (body, …).
@@ -1208,7 +1221,11 @@ mod tests {
             quote(in_rates(Part::Output("0.42 ± 0.03".into())), "selected"),
             quote(in_rates(Part::Figure(Arc::new(Vec::new()))), ""),
             quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into()], png: Arc::new(Vec::new()) }, "is this real?"),
+            quote(Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: "HTML(\"\"\"<svg/> & co".into(), part: Part::WholeOutput(String::new()) }, "odd name"),
+            quote(Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: "&quot; uri=\"x\"".into(), part: Part::Lines { first: 1, last: 1, text: "a".into() } }, ""),
         ];
+        let odd = quote(Quoted::Cell { notebook: NB.into(), cell: "c1".into(), name: "Text(\"Sensor log <a> & b\")".into(), part: Part::Whole(String::new()) }, "");
+        assert_eq!(quote_block(&odd, Backend::Pluto), format!("<quote cell=\"Text(&quot;Sensor log &lt;a&gt; &amp; b&quot;)\" uri=\"notebook://pluto/{NB}/cell/c1\"/>"));
         for q in quotes {
             let block = quote_block(&q, Backend::Pluto);
             assert_eq!(replayed_quote(&block), Some(Attachment::Quote(q)), "{block}");
@@ -1219,6 +1236,15 @@ mod tests {
         assert_eq!(replayed_quote(&old), Some(Attachment::Quote(quote(in_rates(Part::Whole("rates = 1".into())), ""))));
         assert_eq!(replayed_quote("> just a blockquote the user typed"), None);
         assert_eq!(replayed_quote("plain words"), None);
+    }
+
+    #[test]
+    fn sending_picks_now_takes_the_quotes_staged_in_the_composer_and_leaves_the_rest() {
+        let staged = Attachment::Quote(quote(in_rates(Part::Whole(String::new())), "first"));
+        let file = Attachment::Text { name: "notes.txt".into(), text: "x".into() };
+        let mut composer = vec![staged.clone(), file.clone()];
+        assert_eq!(take_staged_quotes(&mut composer), [staged]);
+        assert_eq!(composer, [file]);
     }
 
     #[test]

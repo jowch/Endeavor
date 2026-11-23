@@ -2443,6 +2443,9 @@ impl Workspace {
             return cx.notify();
         }
         let Some(key) = self.active else { return };
+        let mut staged = attach::take_staged_quotes(&mut self.composer.attachments);
+        staged.extend(quotes);
+        let quotes = staged;
         self.open_before_sending(key, cx);
         let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
         blocks.extend(attach::prompt_blocks("", &quotes, &[], self.session_kind(key)));

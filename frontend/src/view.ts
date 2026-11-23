@@ -123,10 +123,12 @@ function compose(notebook: string, quoted: Quoted[], engine: Engine, bare: Set<P
   );
 }
 
+export const escapedAttr = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 /** One pick as a `<quote>`: what was picked, by name, with a box's picture by its id (`crop`). */
 export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string, bare = false): string {
   if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
-  const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
+  const at = `cell="${escapedAttr(cellName(pick.code))}"`;
   const where = uri(notebook, pick.cell, engine);
   switch (pick.part) {
     case "cell":

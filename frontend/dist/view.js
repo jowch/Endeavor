@@ -1527,9 +1527,10 @@ ${note}${bare.size ? BARE_NOTE : ""}${LEAD_NOTE}
 ` + quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops, bare)).join("\n\n")
     );
   }
+  var escapedAttr = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   function quoteBlock(notebook, pick, engine = "pluto", crop, bare = false) {
     if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
-    const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
+    const at = `cell="${escapedAttr(cellName(pick.code))}"`;
     const where = uri(notebook, pick.cell, engine);
     switch (pick.part) {
       case "cell":
