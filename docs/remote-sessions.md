@@ -139,13 +139,153 @@ listener port, which is in the MCP URL of the agents there, so their tools
 keep working. One that gave up is asked to try again. On quit, servers detach; their idle stop
 (the server's own setting, else Settings') covers forgotten notebooks.
 
+**A runtime another Endeavor started** (`src/older_runtime.rs`), one left
+running from before the app was updated, is used as it is when its core
+offers the app's interface (`endeavor_mcp::CORE_INTERFACE`, the rule
+EndeavorMCP's own clients use) or the app's own build started it; the app
+names a build by `remote::version()`, which its runtimes report. Any other
+runtime gets a note in each session on its host until it restarts. A runtime
+that says neither its build nor its interface predates the core recording
+its build (EndeavorMCP 808662c, 2026-10-03), so it may predate the runtime
+holding runs for the user's answer (b0cab29, 2026-10-02); it runs no code.
+One that doesn't know session kinds (interface below 6) would make an R or
+Python session's pathless `new_notebook` in Julia without a word, so the app
+refuses that call and says how to get the session's kind.
+
+**Which helper a server gets** (`remote::helper_for`): one the app ships,
+else on this computer's platform the one cargo built, else one downloaded from
+EndeavorMCP's Helpers release for the library build this app pins, when the
+app was built knowing that build's key. The Windows app ships none and always
+downloads. A downloaded helper is kept in `helpers/` in the app's folder and
+used again offline. The release keeps the builds of recent pins only, so a
+copy that hasn't updated in a while can find its build gone.
+
+**State folders.** A plain server uses the helper's default state folder,
+the one the plugin's `endeavor serve` and `mcp` use, so the app and the plugin
+share one runtime there; the helper keeps using the app's older `state`
+folder while a runtime in it is alive (EndeavorMCP#110). A cluster's folder is
+its own, so the same machine can also be a plain server entry without the two
+sharing a runtime. This Mac's state folder is likewise the plugin's.
+
+**This Mac's helper** is the app itself in helper mode (`--helper`, with
+`endeavor` as argv[0]), so `ps` tells it from the app. It starts with
+`--own-r` (only this computer may be offered Endeavor's own R), `--any-node`
+(the state folder is named after this computer, so a record in it with
+another node name is this computer's from before a rename),
+`--julia-when-needed`, and `--exit-idle-after-client`. It runs in its own
+process group, so a Ctrl-C meant for the app in a terminal doesn't kill the
+helper before it can stop Julia. A runtime an older version kept in the app's
+own folder is stopped once and its folder removed; the app stops it itself,
+because the helper's `stop` refuses a record made under another host name.
+
 **Local sessions use the same path.** The app can run the helper as a child
 process without SSH, so local and remote share one transport, with local as
-the case that skips SSH. Whether local runtimes should also survive the app
-quitting is a user setting (decided 2026-09-26): by default local notebooks
-quit with the app; with the setting on, the local runtime keeps running and the
-app reconnects to it on the next launch, as with a remote host. Either way,
-notebooks stop after 48 hours idle (a setting), even while the app is open.
+the case that skips SSH. This Mac's runtime outlives the app the same way:
+after a quit, a crash or a kill it stays up until its notebooks are idle,
+then ends once none is open (`--exit-idle-after-client`, #274), and a launch
+before then reattaches. Notebooks stop after the idle limit (48 hours by
+default, a setting), even while the app is open.
+
+## How the app follows a host's runtime
+
+`src/connection.rs` keeps one `Connection` per host. This Mac's connects and
+starts at launch. A server's connects when it's picked in the Where chip, so
+its files can be browsed, and starts Julia when a session there needs it.
+What the code relies on, beyond what its names say:
+
+- **Old news is dropped by generation.** Each connect gets an `id`, each line
+  a `generation`, each check a `check` count, and each runtime the app follows
+  a `watching` number. A thread still reporting on an older one is ignored.
+  This matters most for the notebook list: a runtime that's going still sends
+  its list as it closes, and that list must not replace what the next runtime
+  reopens.
+- **The page goes with its runtime** (`close_page`). Left in the web view,
+  Pluto's page keeps reconnecting to its port, where the host's next runtime
+  listens, without the notebook the page shows.
+- **New connection settings keep the port** (`open_line`, `settings_saved`).
+  The new line opens on the old one's socket, which is handed over before the
+  old line closes, so the port is never free in between and the agents' MCP
+  URLs keep working (EndeavorMCP#47). Anything else about a server (its name,
+  idle stop, a cluster's account, depot or default resources) leaves the line
+  open (`same_connection`), since each job request reads those as they are
+  then.
+- **A failed sign-in try takes its questions with it** (`try_ended`): only the
+  ones asked before the change was seen, since the next try may already be
+  asking.
+- **An attach that finds nothing running isn't a failure** (#56). The line
+  shows it as starting until it has asked, so nothing failed and nothing
+  stopped.
+- **Reopening after a restart** (`reopen_notebooks`). Pluto saves on every
+  change, so the files are current. Notebooks reopen in safe preview, except
+  those in `resume`, the ones the user had let run when they restarted or
+  repaired Julia, whose files are unchanged since. After a crash, Restart Julia
+  fills `resume` with no times, since Julia is gone and can't be asked. Each
+  session's own notebook reopens even if the last runtime's list had lost it,
+  because a restart during an earlier reopen leaves that list empty, and a
+  session left without its notebook would show "Opening" for good. A reopen
+  that a second restart overtook leaves the work to the next one's reopen.
+  Each pass says why afresh, so an earlier pass's error never shows over this
+  one's pane.
+- **Back on the same Julia, the page loads again** (`load_again`), unless a
+  cell has an edit that hasn't been run, which leaving the page would lose;
+  then Pluto's own reconnect keeps it. After a long drop Pluto's page backs
+  off and may not try again for minutes, so a load is needed, and with
+  nothing to reopen it can't race.
+- **Only new idle stops and R endings count.** A stale entry must not stop a
+  notebook the user has started again since.
+- **A Julia failure is news only once** (`new_failure`), and not only after
+  `starting`: a start can fail between two polls (a first Julia notebook
+  opened offline), so the watcher sees `not_started`, then `failed`.
+- **Julia starting ahead keeps an empty session's page** (`starting_ahead`).
+  Covering it hid New notebook for the whole of a first setup, and the page
+  came back at Ready, so a click looked dropped. A click counts as a wait, so
+  the pane then shows the start.
+- **Repair shows after the first failure and two Retries** (`REPAIR_AFTER`),
+  for This Mac only.
+- **Quitting leaves every runtime running.** Each server's helper is let go
+  without waiting long on a slow server, and its idle stop covers forgotten
+  notebooks.
+
+## The app's own calls to the runtime
+
+`src/pluto.rs` is the app's line to a runtime's tools, for what shouldn't
+depend on the agent: policies, answers to run cards, Restore, Stop, the
+end-of-turn run-state check. Each call is one JSON-RPC request to the
+runtime's loopback `/endeavor/call`, over HTTP/1.0: the bridge sends no
+Content-Length, so the body is read to the end.
+
+- **Two tokens.** The bearer token opens every path but Pluto's pages; the
+  pages' token opens those (EndeavorMCP interface 8), and the bearer token
+  gets a 401 there. An older runtime has no pages' token and takes the bearer
+  token for its pages. Both stay the same across a host's runtimes.
+- **Every `set_session_folder` says the session's kind**, because the core
+  forgets kinds when it restarts.
+- **How long a call waits.** Most wait 10 s (`CALL_WAIT`). One that may start
+  Julia waits 55 s (`JULIA_CALL_WAIT`): the core answers within 45 s that
+  Julia is still starting or the notebook still opening, and this leaves room
+  for that answer to arrive, over ssh too. `until_julia` calls again while the
+  answer says Julia is starting, R's setup is installing, or the notebook is
+  opening. The runtime's open has no limit of its own, so the app stops
+  waiting after 10 minutes (`OPENING_LIMIT`) rather than leave a hung Julia's
+  pane waiting for ever.
+- **A run card's answer carries the user's own run** (`answer_run`): the
+  cells the user ran while it waited, each with its `last_run` from before,
+  so the approved call doesn't run them again. An older runtime hears this
+  separately (`run_anyway`).
+- **Stop goes to the runtime too** (`stop_session`). The runtime doesn't hear
+  the agent's stop when no tool call is under way, so it interrupts the
+  session's runs only when the app says so.
+- **R endings are keyed on their time** (`new_endings`), so a notebook that
+  opened again and whose R ended again between two pushes shows its second
+  ending (#122).
+- **Run-state notes only shrink** (`still_true`): each keeps only the cells
+  still unrun or running, so an old note doesn't take on a later turn's
+  work. A cell queued for a run is pending until it finishes, so it is
+  counted once.
+- **A notebook id is matched ignoring case**: it is a UUID, which only its
+  case may write otherwise.
+- **A read timeout** is WouldBlock on Unix and TimedOut on Windows; both read
+  "The notebook didn't answer."
 
 ## Launchers
 
@@ -335,6 +475,23 @@ password prompt, ssh says the connection ended, which the reconnect retries,
 so the next try asks again. After a key's passphrase prompt, ssh says
 "Permission denied", which isn't retried, so the line stops and waits for
 Reconnect (EndeavorMCP #64).
+
+The app remembers two things per sign-in between ssh's questions
+(`remote::SignIn`):
+
+- **A Cancel.** ssh takes a cancelled password or code as a wrong one and
+  asks again, up to three times, whatever the askpass's exit status (only a
+  key's passphrase is given up at once). So for 60 s after a Cancel
+  (`DECLINED_FOR`), ssh's repeats are cancelled without asking, until the user
+  connects again.
+- **An answer.** ssh asks the same question again, in the same words, only
+  when the answer didn't work, so the same question within 30 s
+  (`RETRY_WITHIN`) is shown as a retry. One case is wrong and left so: a try
+  with the right answer that fails for another reason (the helper, say),
+  followed within 30 s by the next try's question. It needs a failure right
+  after signing in.
+
+A question taken down because its connect ended (`Gone`) isn't a Cancel.
 
 ## Rejected alternatives
 

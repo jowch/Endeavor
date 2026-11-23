@@ -1529,7 +1529,8 @@ impl Workspace {
     /// Tell session `key`'s runtime the session's folder and notebook kind, if it's up.
     fn send_session_folder(&self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
-        let Some((folder, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.path.clone(), s.kind)) else { return };
+        let Some((host, folder, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.place.path.clone(), s.kind)) else { return };
+        self.note_session_kind(&host, key, kind);
         cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
     }
 
@@ -2442,6 +2443,9 @@ impl Workspace {
             return cx.notify();
         }
         let Some(key) = self.active else { return };
+        let mut staged = attach::take_staged_quotes(&mut self.composer.attachments);
+        staged.extend(quotes);
+        let quotes = staged;
         self.open_before_sending(key, cx);
         let mut blocks: Vec<_> = self.viewing_context(cx).into_iter().collect();
         blocks.extend(attach::prompt_blocks("", &quotes, &[], self.session_kind(key)));

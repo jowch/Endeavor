@@ -69,8 +69,6 @@ cd frontend && npm install && npm test && npm run -s check   # rebuilds dist/pag
   `with_priority`. One that shows over the notebook cuts its hole with
   `layer::cut`. The tooltips and the Point tip are the exception: they compute
   their own rect and call `overlay::set_hole` themselves.
-- Deliberate shortcuts are marked `ponytail:` in the code and listed in
-  `docs/roadmap.md`.
 
 ## Working in a Claude Code cloud session
 
@@ -81,6 +79,27 @@ needs it as the environment's setup script). The app runs under `Xvfb :99`
 and its state dump works there. Without Julia's hosts allowed, the app stops
 at "Couldn't set up Julia"; without an API key there is no real Claude turn.
 Say which of these limited a check rather than claiming it passed.
+
+## No comments
+
+Don't write comments, and that includes `///` and `//!` doc comments: this
+crate isn't published, so they only ever reach someone reading the source.
+Comments go stale; code doesn't. When you want to explain something, change
+the code so it says it: a better name, a smaller function, a type, an
+`assert!`, or a test that fails if someone undoes it. When the reason can't
+live in code (a platform quirk, why the obvious way was rejected), put it in
+the commit message, where `git blame` finds it, or in `docs/` if it's design.
+Deliberate shortcuts are listed in `docs/roadmap.md` by file and function.
+
+Only these stay, because a tool or a reader outside the source needs them:
+license headers, shebangs, lint and format directives (`#[allow]`,
+`eslint-disable`, `# shellcheck`), build-tool pragmas, and `// SAFETY:` on an
+`unsafe` block, which states the invariant the compiler can't check. UI text,
+MCP tool descriptions and skill text are product strings, not comments. Leave
+vendored and generated files alone (`vendor/`, `frontend/dist/`).
+
+The rule covers every file: Rust, TypeScript, shell, YAML, TOML. Reviewers
+flag every new comment that isn't one of the kept kinds above.
 
 ## Style
 
