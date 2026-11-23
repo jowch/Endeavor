@@ -264,8 +264,9 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
         // The same question as the notebook's safe-preview callout: once, not "always".
         buttons.extend(deny.map(|d| ("Not now".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
-    } else if matches!(tool, "approve_install" | "answer_prompt" | "restart_notebook" | "close_notebook") && *runs_code {
-        // One download, one answer, one restart or close: "always" would turn on Auto for every later run.
+    } else if matches!(tool, "approve_install" | "answer_prompt" | "restart_notebook" | "close_notebook" | "apply_package_update") && *runs_code {
+        // One download, one answer, one restart, close or package update: "always" would turn on Auto
+        // for every later run, and a package update changes the file and can restart R (#153).
         buttons.extend(deny.map(|d| ("Deny".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
     } else if let Some(allow) = allow {
@@ -1366,6 +1367,10 @@ mod tests {
         assert_eq!(add.lines.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["Nothing depends on it yet."]);
         assert_eq!(buttons(&add).iter().map(|b| (b.0.as_str(), b.2)).collect::<Vec<_>>(), vec![("Deny", Scope::Once), ("Always this session", Scope::Session), ("Add and run", Scope::Once)]);
         assert!(add.folder.is_none());
+
+        // A package update changes the file and can restart R: asked each time, never "always" (#153).
+        let update = prompt(&mut s, "mcp__notebook__apply_package_update", ToolKind::Other, json!({ "notebook_id": "n", "date": "2026-10-01" }), true, gate());
+        assert_eq!(buttons(&update).iter().map(|b| (b.0.as_str(), b.2)).collect::<Vec<_>>(), vec![("Deny", Scope::Once), ("Update", Scope::Once)]);
 
         let run = prompt(&mut s, "mcp__notebook__execute_cell", ToolKind::Other, json!({ "cell_id": "a" }), true, gate());
         assert_eq!(run.heading, "Run a cell?");
