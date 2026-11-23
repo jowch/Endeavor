@@ -617,7 +617,9 @@ const ASKS_ITSELF: [&str; 1] = ["mcp__notebook__request_restart"];
 /// sessions don't use.
 /// Endeavor added by hand as an MCP server named `endeavor` (`claude mcp add
 /// endeavor`, as EndeavorMCP's docs show, or a folder's `.mcp.json`) is off
-/// for the same reason, by the permission rule for the whole server.
+/// for the same reason: denied in the flag settings, so it doesn't start and
+/// its instructions don't reach Claude (#251), and by the permission rule for
+/// the whole server.
 fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
     let disallowed: Vec<&str> = std::iter::once(USERS_ENDEAVOR_SERVER).chain(if on_server { LOCAL_TOOLS.as_slice() } else { &[] }.iter().copied()).collect();
@@ -627,7 +629,7 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_j
             "settingSources": sources,
             "strictMcpConfig": !personal,
             "plugins": [{ "type": "local", "path": plugin_dir }],
-            "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false } },
+            "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false }, "deniedMcpServers": [{ "serverName": USERS_ENDEAVOR_SERVER_NAME }] },
             "disallowedTools": disallowed,
             "allowedTools": allowed,
         } }
@@ -637,6 +639,9 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_j
 /// Endeavor's plugin as a user installs it from EndeavorMCP's marketplace,
 /// for Claude Code and Codex alike.
 const USERS_ENDEAVOR_PLUGIN: &str = "endeavor@endeavor";
+
+/// The name a user gives Endeavor's server when they add it by hand.
+const USERS_ENDEAVOR_SERVER_NAME: &str = "endeavor";
 
 /// Every tool of an MCP server the user named `endeavor`, as a Claude Code rule.
 const USERS_ENDEAVOR_SERVER: &str = "mcp__endeavor";
@@ -1522,7 +1527,7 @@ mod tests {
         for own in [false, true] {
             for on_server in [false, true] {
                 let settings = &session_options(own, "/p", on_server)["claudeCode"]["options"]["settings"];
-                assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false } }));
+                assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false }, "deniedMcpServers": [{ "serverName": "endeavor" }] }));
             }
         }
         let codex = super::CODEX.env.iter().find(|(name, _)| *name == "CODEX_CONFIG").expect("Codex's adapter gets CODEX_CONFIG").1;
