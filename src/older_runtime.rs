@@ -5,8 +5,11 @@
 //! or when the app's own build started it. Any other runtime gets a note in
 //! each session on its host until it restarts. One kind is held back further:
 //! a runtime too old to ask the user before a run runs no code (`refusal`).
+//! And a runtime too old to know a session's kind would make an R or Python
+//! session's pathless new notebook in Julia, so the app refuses that call.
 
 use serde_json::Value;
+use wire::backend::Backend;
 
 use crate::agent::Agent;
 
@@ -66,6 +69,17 @@ impl Version {
         }
     }
 
+    /// Its core keeps the kind `endeavor/set_session_folder` says for a session, and makes the
+    /// session's pathless `new_notebook` of that kind (interface 6 on, EndeavorMCP b923400).
+    /// An older one makes it Pluto's whatever the session's kind.
+    pub fn has_session_kinds(self) -> bool {
+        match self {
+            Version::Usable => true,
+            Version::Other(interface) => interface.is_some_and(|i| i >= 6),
+            Version::NoRunGate => false,
+        }
+    }
+
     /// Its core says where R notebooks' setup is (`endeavor/r_status`, interface 9 on).
     pub fn has_r_status(self) -> bool {
         match self {
@@ -111,11 +125,32 @@ pub fn restarted(host: &str) -> String {
     format!("Julia on {host} now runs this version of Endeavor. Ask to run asks before each run again.")
 }
 
-/// Why the app refuses an agent's call to `tool` with `arguments` on a
-/// runtime of `version`, as the tool error the agent reads: a runtime that
-/// may not ask before a run runs no code, in any mode.
-pub fn refusal(version: Version, tool: &str, arguments: &Value) -> Option<String> {
-    (version == Version::NoRunGate && endeavor_mcp::runs_code(tool, arguments)).then(|| refused("This notebook's Julia"))
+/// Why the app refuses an agent's call to `tool` with `arguments` in a session
+/// of `kind`, on `host`'s runtime of `version`, as the tool error the agent
+/// reads. A runtime that may not ask before a run runs no code, in any mode.
+/// And on one that doesn't know session kinds, a `new_notebook` without a path
+/// in an R or Python session would make a Julia notebook without a word, so it
+/// says how to get the session's kind instead.
+pub fn refusal(version: Version, host: &str, kind: Backend, tool: &str, arguments: &Value) -> Option<String> {
+    if version == Version::NoRunGate && endeavor_mcp::runs_code(tool, arguments) {
+        return Some(refused("This notebook's Julia"));
+    }
+    let pathless = arguments["path"].as_str().is_none_or(|path| path.trim().is_empty());
+    (tool == "new_notebook" && pathless && kind != Backend::Pluto && !version.has_session_kinds()).then(|| not_of_its_kind(host, kind))
+}
+
+/// Why a pathless `new_notebook` in a session of `kind` is refused on `host`'s runtime (`refusal`).
+fn not_of_its_kind(host: &str, kind: Backend) -> String {
+    let restart = format!(
+        "don't stop it yourself: call request_restart, which asks the user whether to restart Endeavor on {host}. That closes its open notebooks, and starts this version."
+    );
+    let (language, way) = match kind {
+        Backend::Marimo => ("Python", format!("To make one, {restart}")),
+        _ => ("R", format!("Call new_notebook again with a path ending in .R, in this session's folder. If that is refused too, {restart}")),
+    };
+    format!(
+        "ArgumentError: older_runtime::Endeavor on {host} was started by an older version, which makes a notebook without a path in Julia, so it can't make this session's {language} notebook that way. {way}"
+    )
 }
 
 /// The same refusal on `host`'s listener (`client::Messages::no_run_gate`), where the library makes it.
@@ -163,7 +198,7 @@ mod tests {
 
     #[test]
     fn a_runtime_with_no_run_gate_runs_no_code_in_any_mode() {
-        let refused = |version: Version, tool: &str, arguments: Value| refusal(version, tool, &arguments).is_some();
+        let refused = |version: Version, tool: &str, arguments: Value| refusal(version, "lab", Backend::Pluto, tool, &arguments).is_some();
         assert!(refused(Version::NoRunGate, "execute_cell", json!({ "cell_id": "a" })));
         assert!(refused(Version::NoRunGate, "edit_cell", json!({ "cell_id": "a", "code": "1", "run_after": true })));
         assert!(refused(Version::NoRunGate, "run_shell", json!({ "command": "ls" })));
@@ -172,7 +207,24 @@ mod tests {
         assert!(!refused(Version::Other(None), "execute_cell", json!({ "cell_id": "a" })), "it holds runs itself");
         assert!(!refused(Version::Other(Some(CORE_INTERFACE + 1)), "execute_cell", json!({ "cell_id": "a" })));
         assert!(!refused(Version::Usable, "execute_cell", json!({ "cell_id": "a" })));
-        let why = refusal(Version::NoRunGate, "execute_cell", &json!({ "cell_id": "a" })).unwrap();
+        let why = refusal(Version::NoRunGate, "lab", Backend::Pluto, "execute_cell", &json!({ "cell_id": "a" })).unwrap();
         assert!(why.contains("call request_restart") && why.contains("don't stop it yourself"), "the agent asks the user, and only that: {why}");
+    }
+
+    #[test]
+    fn a_runtime_without_session_kinds_refuses_an_r_or_python_sessions_pathless_new_notebook() {
+        let why = |version: Version, kind: Backend, arguments: Value| refusal(version, "lab", kind, "new_notebook", &arguments);
+        let r = why(Version::Other(Some(5)), Backend::Ember, json!({})).unwrap();
+        assert!(r.starts_with("ArgumentError: older_runtime::Endeavor on lab was started by an older version") && r.contains("R notebook"), "{r}");
+        assert!(r.contains("a path ending in .R") && r.contains("call request_restart") && r.contains("don't stop it yourself"), "{r}");
+        let python = why(Version::Other(None), Backend::Marimo, json!({ "path": null })).unwrap();
+        assert!(python.contains("Python notebook") && python.contains("call request_restart") && !python.contains(".R"), "{python}");
+        assert!(why(Version::NoRunGate, Backend::Ember, json!({ "path": " " })).is_some(), "an empty path is no path");
+        assert!(why(Version::Other(Some(5)), Backend::Ember, json!({ "path": "a.R" })).is_none(), "a path says its kind");
+        assert!(why(Version::Other(Some(5)), Backend::Pluto, json!({})).is_none());
+        assert!(why(Version::Other(Some(6)), Backend::Ember, json!({})).is_none(), "interface 6 keeps session kinds");
+        assert!(why(Version::Other(Some(CORE_INTERFACE + 1)), Backend::Ember, json!({})).is_none());
+        assert!(why(Version::Usable, Backend::Marimo, json!({})).is_none());
+        assert!(refusal(Version::Other(Some(5)), "lab", Backend::Ember, "list_notebooks", &json!({})).is_none());
     }
 }
