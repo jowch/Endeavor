@@ -50,28 +50,44 @@ export function chatSafe(text: string): string {
 export type Quoted = { picks: Pick[]; comment: string; crops?: (string | undefined)[] };
 
 export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
+  const bare = new Set<Pick>();
+  const longest = quoted.flatMap((q) => q.picks).filter((p) => p.part === "lines").sort((a, b) => b.text.length - a.text.length);
+  for (;;) {
+    const message = compose(notebook, quoted, engine, bare);
+    if (message.length <= MESSAGE_MAX) return message;
+    const next = longest.shift();
+    if (!next) return null;
+    bare.add(next);
+  }
+}
+
+export const BARE_NOTE = " Some picked lines were too long for Claude's message box, so they go by their line numbers only (a quote with lines and no body): read them with read_cell.";
+
+function compose(notebook: string, quoted: Quoted[], engine: Engine, bare: Set<Pick>): string {
   const shortened = quoted.some((q) =>
-    q.picks.some((p) => p.part === "lines" && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
+    q.picks.some((p) => p.part === "lines" && !bare.has(p) && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
   );
   const note = shortened
     ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.`
     : quoteNote(engine);
-  const message = chatSafe(
-    `${LEAD}\n\n${note}${LEAD_NOTE}\n\n` +
-      quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops)).join("\n\n"),
+  return chatSafe(
+    `${LEAD}\n\n${note}${bare.size ? BARE_NOTE : ""}${LEAD_NOTE}\n\n` +
+      quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops, bare)).join("\n\n"),
   );
-  return message.length <= MESSAGE_MAX ? message : null;
 }
 
-export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string): string {
+export const escapedAttr = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string, bare = false): string {
   if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
-  const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
+  const at = `cell="${escapedAttr(cellName(pick.code))}"`;
   const where = uri(notebook, pick.cell, engine);
   switch (pick.part) {
     case "cell":
       return `<quote ${at} uri="${where}"/>`;
     case "lines":
-      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
+      const lines = `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}"`;
+      return bare ? `${lines}/>` : `${lines}>\n${pick.text}\n</quote>`;
     case "output":
       return `<quote ${at} part="output" uri="${where}"/>`;
     case "figure":
@@ -79,8 +95,8 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
   }
 }
 
-export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto", crops: (string | undefined)[] = []): string {
-  const blocks = picks.map((p, i) => quoteBlock(notebook, p, engine, crops[i]));
+export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto", crops: (string | undefined)[] = [], bare: Set<Pick> = new Set()): string {
+  const blocks = picks.map((p, i) => quoteBlock(notebook, p, engine, crops[i], bare.has(p)));
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
@@ -286,6 +302,7 @@ export function start(notebook: string, host: Host): void {
     }
     const earlier = added.splice(0);
     say("Sending to Claude's chat…", 0);
+    const byNumber = message.includes(BARE_NOTE);
     const sending = host.send(message);
     const going = held ? earlier : [...earlier, draw(now)];
     sending.then(
@@ -293,7 +310,7 @@ export function start(notebook: string, host: Host): void {
         going.forEach(keep);
         if (held) return say(`Sent what ${mac ? "⌘↩" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8000);
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
-        say("On its way to Claude's message box. Send it from there.", 8000);
+        say(`On its way to Claude's message box${byNumber ? ", with the longest picked lines by their numbers only" : ""}. Send it from there.`, 8000);
         const end = () => {
           const left = pointState();
           if (!left.picks.length && !left.comment.trim()) point(false);
