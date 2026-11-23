@@ -88,10 +88,7 @@ pub enum Part {
     /// Lines `first..=last` of the cell's code, counted from 1, and the text
     /// quoted from them.
     Lines { first: usize, last: usize, text: String },
-    /// Text the user selected in the cell's output (rendered Markdown included), sent as it was.
     Output(String),
-    /// The cell's whole output, picked with Point: sent by name only, as the agent reads it now. Its text is
-    /// for the card.
     WholeOutput(String),
     /// The cell's output as a picture.
     Figure(Arc<Vec<u8>>),
@@ -298,7 +295,6 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
         match attachment {
             Attachment::Quote(quote) => {
                 blocks.push(note(quote_block(quote, kind)));
-                // Only a box's picture goes: a figure's the agent sees with view_cell_output, as it is now.
                 if let (Quoted::Box { .. }, Some(png)) = (&quote.from, quote.picture()) {
                     blocks.push(ContentBlock::Image(ImageContent::new(base64(png), "image/png")));
                 }
@@ -459,8 +455,6 @@ pub fn quote_block(quote: &Quote, backend: Backend) -> String {
         Quoted::Cell { notebook, cell, name, part } => {
             let uri = cell_uri(backend, notebook, cell);
             let out = match part {
-                // A cell or its whole output is named, and the agent reads it as it is now; what the user selected
-                // or picked lines of goes with its text.
                 Part::Whole(_) => format!("<quote cell=\"{name}\" uri=\"{uri}\"/>"),
                 Part::Lines { first, last, text } => format!("<quote cell=\"{name}\" lines=\"{first}-{last}\" uri=\"{uri}\">\n{text}\n</quote>"),
                 Part::Output(text) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\">\n{text}\n</quote>"),
@@ -1219,7 +1213,6 @@ mod tests {
             let block = quote_block(&q, Backend::Pluto);
             assert_eq!(replayed_quote(&block), Some(Attachment::Quote(q)), "{block}");
         }
-        // A session from before quotes named cells and outputs only: their text comes back.
         let old = format!("<quote cell=\"rates\" part=\"output\" uri=\"notebook://pluto/{NB}/cell/c1\">\n0.42\n</quote>\nhm");
         assert_eq!(replayed_quote(&old), Some(Attachment::Quote(quote(in_rates(Part::Output("0.42".into())), "hm"))));
         let old = format!("<quote cell=\"rates\" uri=\"notebook://pluto/{NB}/cell/c1\">\nrates = 1\n</quote>");

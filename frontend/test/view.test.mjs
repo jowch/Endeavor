@@ -80,7 +80,6 @@ test("↩'s message keeps to what Claude takes: no long runs of blank lines or s
   const room = 8000 - chatMessage(NB, [{ picks: [pick], comment: "c" }]).length + 1;
   assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room) }]).length, 8000);
   assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room + 1) }]), null);
-  // Picked lines too long to fit go by their line numbers, and the note says to read them; a comment still isn't cut.
   const many = Array.from({ length: 300 }, (_, i) => `rows${i} = fit(data[${i}, :], model)`);
   const drag = { part: "lines", cell: A, code: many.join("\n"), lines: [1, 300], text: many.join("\n") };
   const bare = chatMessage(NB, [{ picks: [drag], comment: "Why so slow?" }]);
@@ -88,7 +87,6 @@ test("↩'s message keeps to what Claude takes: no long runs of blank lines or s
   assert.match(bare, /go by their line numbers only \(a quote with lines and no body\): read them with read_cell/);
   assert.doesNotMatch(chatMessage(NB, [{ picks: [{ ...drag, lines: [1, 2], text: many.slice(0, 2).join("\n") }], comment: "" }]), /line numbers only/);
   assert.equal(chatMessage(NB, [{ picks: [drag], comment: "c".repeat(8000) }]), null);
-  // Only the longest picks go by number: a short pick next to a long drag keeps its text.
   const short = { part: "lines", cell: A, code: CODE, lines: [2, 2], text: "  fit(rows)" };
   const both = chatMessage(NB, [{ picks: [short, drag], comment: "" }, { picks: [{ ...drag, lines: [1, 299] }], comment: "and this" }]);
   assert.ok(both.length <= 8000 && both.includes(`lines="2-2" uri="notebook://pluto/${NB}/cell/${A}">\n  fit(rows)\n</quote>`), "the short pick keeps its text");

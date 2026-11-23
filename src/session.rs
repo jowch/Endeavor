@@ -4111,7 +4111,6 @@ mod tests {
         }
         let [Entry::User { text, attachments, .. }] = s.entries.as_slice() else { panic!("one user entry") };
         assert_eq!(text.as_ref(), "why do these bunch up?");
-        // A figure's picture isn't sent (the agent sees it with view_cell_output), so it comes back without one.
         let mut back = sent.clone();
         if let Attachment::Quote(Quote { from: Quoted::Cell { part: Part::Figure(png), .. }, .. }) = &mut back[3] {
             *png = Arc::new(Vec::new());

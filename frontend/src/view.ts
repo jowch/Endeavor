@@ -95,12 +95,6 @@ export function chatSafe(text: string): string {
 /** One ↩ or ⌘↩: its picks, the user's comment, and the id of each box pick's picture (`notebook_crop`), by place. */
 export type Quoted = { picks: Pick[]; comment: string; crops?: (string | undefined)[] };
 
-/**
- * The message ↩ passes to the chat: the lead and the note, then each ⌘↩'s and this ↩'s quotes and comments, within
- * Claude's rules (chatSafe). When it doesn't fit, the longest picked lines go by their line numbers only, one pick at a
- * time until it does (BARE_NOTE says so). Null
- * when it's still longer than MESSAGE_MAX: the comments (never cut) or the picks are too many.
- */
 export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
   const bare = new Set<Pick>();
   const longest = quoted.flatMap((q) => q.picks).filter((p) => p.part === "lines").sort((a, b) => b.text.length - a.text.length);
@@ -138,7 +132,6 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
     case "cell":
       return `<quote ${at} uri="${where}"/>`;
     case "lines":
-      // Lines the user picked go with their text (a click on the code picks the cell), unless they can't fit.
       const lines = `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}"`;
       return bare ? `${lines}/>` : `${lines}>\n${pick.text}\n</quote>`;
     case "output":

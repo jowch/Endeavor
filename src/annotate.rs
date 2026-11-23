@@ -283,7 +283,6 @@ fn pick_quote(pick: &serde_json::Value, notebook: &str) -> Option<(Quoted, Optio
             }
             Part::Lines { first, last, text: text() }
         }
-        // Text the user selected goes as it was (reply.ts); an output picked with Point goes by name.
         "output" if pick.get("selected").and_then(|s| s.as_bool()) == Some(true) => Part::Output(text()),
         "output" => Part::WholeOutput(text()),
         "figure" => Part::Figure(png()),
