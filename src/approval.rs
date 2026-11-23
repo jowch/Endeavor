@@ -322,7 +322,7 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
     let what = match tool {
         "restart_notebook" => Some("Every value is cleared. A Julia notebook then runs every cell again; an R notebook's cells wait to be run."),
         "close_notebook" => Some("The notebook stops and every value is cleared. Its code stays saved, and Start opens it again."),
-        "apply_package_update" => Some("The notebook's package date and versions change and the new packages install. If R had one of them loaded, it restarts."),
+        "apply_package_update" => Some("The notebook's package date and versions change and the new packages install. An R notebook restarts if it had one of them loaded; a Python notebook always restarts, and its cells wait to be run."),
         "approve_install" if new_packages(preview).is_some() => Some("They install into this notebook's environment, then the cells waiting on them run."),
         "approve_install" => Some("The packages download and install, then the cells waiting on them run."),
         "answer_prompt" => Some("The cell goes on with this answer."),
