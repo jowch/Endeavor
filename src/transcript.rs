@@ -273,7 +273,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .gap(px(2.))
             .text_size(theme::chat_body())
             .line_height(theme::chat_line_body())
-            .child(div().id(id("agent-text")).role(Role::Article).aria_label(spoken(text)).child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx)))
+            .child(div().id(id("agent-text")).role(Role::Article).aria_label(session.reply_spoken(ix, text)).child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx)))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
         Entry::Note(text) if session.restart_offered_at(ix) => {
@@ -434,7 +434,7 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
     div().flex().items_center().gap(px(4.)).h(theme::chat_px(20.)).children(copy).children(time).into_any_element()
 }
 
-fn spoken(text: &str) -> String {
+pub(crate) fn spoken(text: &str) -> String {
     let Ok(root) = markdown::to_mdast(text, &markdown::ParseOptions::gfm()) else { return text.to_owned() };
     let mut out = String::new();
     speak(&root, &mut out);
