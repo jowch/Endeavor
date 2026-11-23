@@ -2,6 +2,8 @@
 // natively; the view's frame can't take a screenshot, so it draws what it can of the box itself: images,
 // SVG and canvases. Text, HTML and WebGL (drawn without preserveDrawingBuffer, as Makie's and plotly's 3D
 // views are) don't come out, and an image from another site can't be read back (headless, 2026-11-23).
+// An SVG is drawn from a copy on its own, so the page's CSS and web fonts don't reach it: a figure styled
+// by the page or set in a web font comes out in its own attributes' look and a fallback font.
 
 import type { Box } from "./quote";
 

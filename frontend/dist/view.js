@@ -1481,7 +1481,7 @@ footer form#feedback { display: none !important; }
   }
 
   // src/view.ts
-  var format = (engine) => "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). The quotes hold no code or output: read them with the notebook MCP tools (read_cell, view_cell_output). A box's `crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells.";
+  var format = (engine) => "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). The quotes hold no code or output: read them with the notebook MCP tools (read_cell, view_cell_output). A box's `crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells. Only what could be drawn is in it, and when nothing could be, there's none.";
   var quoteNote = (engine = "pluto") => "[Endeavor] The user picked parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
   var LEAD = "\u2193";
   var LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
@@ -1663,7 +1663,6 @@ ${comment}` : blocks.join("\n\n");
     if (started) return;
     started = true;
     const engine = host2.engine === "ember" ? "ember" : "pluto";
-    const added = [];
     const receive = (msg) => window.__endeavor?.receive(msg);
     const sent = document.createElement("div");
     sent.id = "endeavor-sent";
@@ -1675,32 +1674,28 @@ ${comment}` : blocks.join("\n\n");
       if (ms) hide = window.setTimeout(() => sent.classList.remove("shown"), ms);
     };
     const point = (on2) => receive({ type: "annotate", on: on2 });
-    const crops = (picks) => Promise.all(
-      picks.map(async (p) => {
-        if (p.part !== "box" || !p.rect || !host2.crop) return void 0;
-        const png = await drawBox(p.rect).catch(() => null);
-        if (!png) return void 0;
-        const id = [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
-        host2.crop(png, id).catch(() => {
-        });
-        return id;
-      })
+    const ids = (picks) => picks.map(
+      (p) => p.part === "box" && p.rect && host2.crop ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("") : void 0
     );
-    let queue = Promise.resolve();
-    setHost((msg) => {
-      queue = queue.then(() => quote(msg)).catch(() => {
+    const draw = (q) => ({
+      ...q,
+      pngs: q.picks.map((p, i) => q.crops?.[i] && p.part === "box" && p.rect ? drawBox(p.rect).catch(() => null) : Promise.resolve(null))
+    });
+    const keep = (q) => q.pngs.forEach((png, i) => {
+      const id = q.crops?.[i];
+      if (id) png.then((png2) => png2 ? host2.crop?.(png2, id) : void 0).catch(() => {
       });
     });
-    const quote = async (msg) => {
+    const added = [];
+    setHost((msg) => {
       if (msg.type !== "quote" || !msg.picks.length) return;
       if (msg.add) {
-        added.push({ picks: msg.picks, comment: msg.comment, crops: await crops(msg.picks) });
+        added.push(draw({ picks: msg.picks, comment: msg.comment, crops: ids(msg.picks) }));
         return say(`${added.length} added. ${mac ? "\u21A9" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
       }
       const enter = mac ? "\u21A9" : "Enter";
       const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
-      if (msg.picks.some((p) => p.part === "box")) say("Sending to Claude's chat\u2026", 0);
-      const now = { picks: msg.picks, comment: msg.comment, crops: await crops(msg.picks) };
+      const now = { picks: msg.picks, comment: msg.comment, crops: ids(msg.picks) };
       const giveBack = () => msg.ref !== void 0 && receive({ type: "quote_sent", ref: msg.ref, ok: false });
       let message = chatMessage(notebook, [...added, now], engine);
       let held = false;
@@ -1719,8 +1714,11 @@ ${comment}` : blocks.join("\n\n");
       }
       const earlier = added.splice(0);
       say("Sending to Claude's chat\u2026", 0);
-      host2.send(message).then(
+      const sending = host2.send(message);
+      const going = held ? earlier : [...earlier, draw(now)];
+      sending.then(
         () => {
+          going.forEach(keep);
           if (held) return say(`Sent what ${mac ? "\u2318\u21A9" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8e3);
           if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: true });
           say("On its way to Claude's message box. Send it from there.", 8e3);
@@ -1737,7 +1735,7 @@ ${comment}` : blocks.join("\n\n");
           say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "\u21A9" : "Enter"} sends again.`);
         }
       );
-    };
+    });
     initTheme("web");
     initNarrow();
     initSpace();

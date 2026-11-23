@@ -55,7 +55,7 @@ const format = (engine: Engine) =>
   "line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's " +
   "output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells " +
   "under it). The quotes hold no code or output: read them with the notebook MCP tools (read_cell, view_cell_output). A box's " +
-  "`crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells.";
+  "`crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells. Only what could be drawn is in it, and when nothing could be, there's none.";
 
 /** What Claude is told once in a message that quotes the notebook. */
 export const quoteNote = (engine: Engine = "pluto") =>
@@ -312,8 +312,6 @@ export function start(notebook: string, host: Host): void {
   if (started) return;
   started = true;
   const engine: Engine = host.engine === "ember" ? "ember" : "pluto";
-  // What ⌘↩ added since the last ↩.
-  const added: Quoted[] = [];
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
   const sent = document.createElement("div");
   sent.id = "endeavor-sent";
@@ -326,36 +324,39 @@ export function start(notebook: string, host: Host): void {
     if (ms) hide = window.setTimeout(() => sent.classList.remove("shown"), ms);
   };
   const point = (on: boolean) => receive({ type: "annotate", on });
-  // Each box pick's picture's id, by the pick's place; none for a box nothing in can be drawn. The picture is drawn
-  // here and goes to the host without waiting: Claude's desktop app takes a view's message only just after the
-  // user's press (2026-11-12), and Claude reads the picture after the user sends it.
-  const crops = (picks: Pick[]) =>
-    Promise.all(
-      picks.map(async (p) => {
-        if (p.part !== "box" || !p.rect || !host.crop) return undefined;
-        const png = await drawBox(p.rect).catch(() => null);
-        if (!png) return undefined;
-        const id = [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
-        host.crop(png, id).catch(() => {});
-        return id;
-      }),
+  // Each box pick's picture's id, by the pick's place. The id goes in the message at once and the picture
+  // follows: Claude's desktop app takes a view's message only just after the user's press (2026-11-12), and
+  // Claude reads the picture after the user sends it. A box nothing in can be drawn has an id with no picture,
+  // which EndeavorMCP's view_cell_output says. Pictures are kept for Claude only for a message that goes.
+  type Drawn = Quoted & { pngs: Promise<string | null>[] };
+  const ids = (picks: Pick[]) =>
+    picks.map((p) =>
+      p.part === "box" && p.rect && host.crop
+        ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("")
+        : undefined,
     );
-  // One ↩ or ⌘↩ at a time, in order: a picture takes a moment, and a ↩ goes after the ⌘↩ before it.
-  let queue = Promise.resolve();
-  setHost((msg: ToApp) => {
-    queue = queue.then(() => quote(msg)).catch(() => {});
+  // Draws now, while the picks are still on the page as they were.
+  const draw = (q: Quoted): Drawn => ({
+    ...q,
+    pngs: q.picks.map((p, i) => (q.crops?.[i] && p.part === "box" && p.rect ? drawBox(p.rect).catch(() => null) : Promise.resolve(null))),
   });
-  const quote = async (msg: ToApp) => {
+  const keep = (q: Drawn) =>
+    q.pngs.forEach((png, i) => {
+      const id = q.crops?.[i];
+      if (id) png.then((png) => (png ? host.crop?.(png, id) : undefined)).catch(() => {});
+    });
+  // What ⌘↩ added since the last ↩.
+  const added: Drawn[] = [];
+  setHost((msg: ToApp) => {
     if (msg.type !== "quote" || !msg.picks.length) return;
     // ⌘↩ adds to the message the next ↩ passes, kept here.
     if (msg.add) {
-      added.push({ picks: msg.picks, comment: msg.comment, crops: await crops(msg.picks) });
+      added.push(draw({ picks: msg.picks, comment: msg.comment, crops: ids(msg.picks) }));
       return say(`${added.length} added. ${mac ? "↩" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
     }
     const enter = mac ? "↩" : "Enter";
     const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
-    if (msg.picks.some((p) => p.part === "box")) say("Sending to Claude's chat…", 0);
-    const now: Quoted = { picks: msg.picks, comment: msg.comment, crops: await crops(msg.picks) };
+    const now: Quoted = { picks: msg.picks, comment: msg.comment, crops: ids(msg.picks) };
     // This ↩'s picks and comment back in Point, at once (the ↩ didn't send them).
     const giveBack = () => msg.ref !== undefined && receive({ type: "quote_sent", ref: msg.ref, ok: false });
     let message = chatMessage(notebook, [...added, now], engine);
@@ -379,8 +380,12 @@ export function start(notebook: string, host: Host): void {
     const earlier = added.splice(0);
     // Claude's desktop app takes a few seconds to show it in its box (2–7 s, 2026-11-12): say it's on its way.
     say("Sending to Claude's chat…", 0);
-    host.send(message).then(
+    const sending = host.send(message);
+    // Drawn just after the press, kept once Claude's app takes the message (it shows it in its box only then).
+    const going = held ? earlier : [...earlier, draw(now)];
+    sending.then(
       () => {
+        going.forEach(keep);
         if (held) return say(`Sent what ${mac ? "⌘↩" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8000);
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
         say("On its way to Claude's message box. Send it from there.", 8000);
@@ -401,7 +406,7 @@ export function start(notebook: string, host: Host): void {
         say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "↩" : "Enter"} sends again.`);
       },
     );
-  };
+  });
   initTheme("web");
   initNarrow();
   initSpace();

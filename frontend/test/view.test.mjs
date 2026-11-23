@@ -70,7 +70,10 @@ test("↩'s message keeps to what Claude takes: no long runs of blank lines or s
   assert.ok(!breaksClaudesRules(msg) && msg.endsWith("\nWhy?\n\n\nAnd this?"));
   // Comments are never cut: too long, and there's nothing to send.
   assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(8000) }]), null);
-  assert.ok(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(7000) }]).length <= 8000);
+  // Right up to 8,000 it goes, whole.
+  const room = 8000 - chatMessage(NB, [{ picks: [pick], comment: "c" }]).length + 1;
+  assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room) }]).length, 8000);
+  assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room + 1) }]), null);
 });
 
 test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {
@@ -241,16 +244,23 @@ test("a box's picture is drawn in the view and kept by the host, and its quote n
   window.testHost.crop = async (png, id) => void kept.push([png, id]);
   const box = (rect, ref) => window.testSend({ type: "quote", notebook: NB, picks: [{ part: "box", cells: [A], rect }], comment: "This bump?", add: false, ref });
   box({ left: 0, top: 0, right: 100, bottom: 60 }, 1);
+  // The message goes at once, before the picture is drawn: Claude's app takes it only just after the press.
+  assert.ok(sent.length === 1 && kept.length === 0);
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(kept.length, 1);
   const [png, id] = kept[0];
   assert.ok(png === "QUJD" && /^[0-9a-f]{16}$/.test(id), id);
   assert.ok(sent[0].endsWith(`<quote part="box" uri="notebook://pluto/${NB}/cell/${A}" crop="${id}"/>\nThis bump?`), sent[0].slice(-160));
-  // A box over nothing the view can draw: no picture, and the quote names its cells.
+  // A box over nothing the view can draw: its id goes in the message, as it goes at once, but no picture is kept.
   box({ left: 400, top: 400, right: 500, bottom: 500 }, 2);
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(kept.length, 1);
-  assert.ok(sent[1].endsWith(`<quote part="box" uri="notebook://pluto/${NB}/cell/${A}"/>\nThis bump?`));
+  assert.match(sent[1], /<quote part="box" uri="[^"]+" crop="[0-9a-f]{16}"\/>\nThis bump\?$/);
+  assert.ok(!sent[1].includes(id), "each box its own id");
+  // A message too long to go keeps no picture.
+  window.testSend({ type: "quote", notebook: NB, picks: [{ part: "box", cells: [A], rect: { left: 0, top: 0, right: 100, bottom: 60 } }], comment: "c".repeat(9000), add: false, ref: 3 });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(sent.length === 2 && kept.length === 1);
 });
 
 test("↩ with a comment too long for Claude's box sends nothing and gives the pick back; one that ⌘↩ added is let go", async () => {
