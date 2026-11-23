@@ -87,9 +87,10 @@ impl Listener {
         self.version.kinds.lock().unwrap().insert(key.to_string(), kind);
     }
 
-    /// The agent's `view_cell_output` gets `snapshot`'s picture when the runtime has none (`cell_shot`).
-    pub fn set_snapshot(&self, snapshot: Box<endeavor_mcp::Snapshot>) {
-        self.relay.set_snapshot(snapshot);
+    /// The agent's `view_cell_output` gets `pictures`' picture when the runtime has none
+    /// (`cell_shot`), told when it stops short of the output.
+    pub fn set_pictures(&self, pictures: Box<endeavor_mcp::Pictures>) {
+        self.relay.set_pictures(pictures);
     }
 
     /// The agent can ask the user to restart the runtime (`restart_ask`).
