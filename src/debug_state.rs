@@ -217,8 +217,6 @@ impl Workspace {
         })
     }
 
-    /// Each host the app has connected to: its state as the Where chip shows it, and while it
-    /// starts, the start's steps (on a cluster: job submitted, waiting for a node, got a node) (#46).
     fn hosts_debug(&self) -> Value {
         use crate::host_list::HostState;
         let mut hosts: Vec<(&crate::hosts::HostId, &crate::connection::Connection)> = self.connections.iter().collect();
