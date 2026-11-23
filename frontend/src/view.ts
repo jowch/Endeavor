@@ -122,9 +122,15 @@ export type Quoted = { picks: Pick[]; comment: string };
 export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
   const head = `${LEAD}\n\n${quoteNote(engine)}${LEAD_NOTE}\n\n`;
   const cut = "left out here to fit Claude's message box; read the cell with the notebook tools.";
+  // chatSafe shortens runs of blank lines and spaces in quoted code too: say so, as for a cut.
+  const shortened = quoted.some((q) => q.picks.some((p) => {
+    const body = bodyOf(p);
+    return body !== undefined && chatSafe(body) !== body.replace(/\r\n?/g, "\n");
+  }));
+  const note = shortened ? `${head.slice(0, -2)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.\n\n` : head;
   const build = (cap: number) =>
     chatSafe(
-      head +
+      note +
         quoted
           .map(({ picks, comment }) => {
             const blocks = picks.map((p) => {
@@ -379,24 +385,35 @@ export function start(notebook: string, host: Host): void {
       added.push({ picks: msg.picks, comment: msg.comment });
       return say(`${added.length} added. ${mac ? "↩" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
     }
-    const message = chatMessage(notebook, [...added, { picks: msg.picks, comment: msg.comment }], engine);
+    const enter = mac ? "↩" : "Enter";
+    const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
+    const now = { picks: msg.picks, comment: msg.comment };
+    // This ↩'s picks and comment back in Point, at once (the ↩ didn't send them).
+    const giveBack = () => msg.ref !== undefined && receive({ type: "quote_sent", ref: msg.ref, ok: false });
+    let message = chatMessage(notebook, [...added, now], engine);
+    // Whether this ↩'s picks wait in Point for the next ↩ while what ⌘↩ added goes alone.
+    let held = false;
     if (message === null) {
-      // Too long even with the quoted texts cut: the comments (never cut) or the number of picks. Point gets this
-      // ↩'s picks and comment back. When what ⌘↩ added is the cause, it goes: Point can't give it back to edit.
-      if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: false });
-      const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
-      const enter = mac ? "↩" : "Enter";
-      if (added.length && chatMessage(notebook, [{ picks: msg.picks, comment: msg.comment }], engine) !== null) {
-        added.length = 0;
-        return say(`Too long for Claude's message box (${max}) with what ${mac ? "⌘↩" : "Ctrl+Enter"} added, so those picks were let go. ${enter} sends this one.`, 8000);
+      // Too long even with the quoted texts cut: the comments (never cut) or the number of picks.
+      if (!added.length || chatMessage(notebook, [now], engine) === null) {
+        giveBack();
+        return say(`Too long for Claude's message box (${max}). Shorten your comment or pick less, then press ${enter}.`, 8000);
       }
-      return say(`Too long for Claude's message box (${max}). Shorten your comment or pick less, then press ${enter}.`, 8000);
+      message = chatMessage(notebook, added, engine);
+      giveBack();
+      // What ⌘↩ added can't go back to Point to edit: it goes alone, and only if even that can't fit, it's let go.
+      if (message === null) {
+        added.length = 0;
+        return say(`Too long for Claude's message box (${max}) with what ${mac ? "⌘↩" : "Ctrl+Enter"} added, so those picks were let go. Press ${enter} to send this one.`, 8000);
+      }
+      held = true;
     }
     const earlier = added.splice(0);
     // Claude's desktop app takes a few seconds to show it in its box (2–7 s, 2026-11-12): say it's on its way.
     say("Sending to Claude's chat…", 0);
     host.send(message).then(
       () => {
+        if (held) return say(`Sent what ${mac ? "⌘↩" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8000);
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
         say("On its way to Claude's message box. Send it from there.", 8000);
         // The user sends it from Claude's box, where the view's keys (Escape, ⌘⇧E) don't reach, so Point
@@ -412,7 +429,7 @@ export function start(notebook: string, host: Host): void {
       (e) => {
         // What ⌘↩ added stays here; Point gets its picks and comment back, for ↩ to send again.
         added.unshift(...earlier);
-        if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: false });
+        if (!held) giveBack();
         say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "↩" : "Enter"} sends again.`);
       },
     );

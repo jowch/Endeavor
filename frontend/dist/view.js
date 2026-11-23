@@ -1444,8 +1444,15 @@ ${quoteNote(engine)}${LEAD_NOTE}
 
 `;
     const cut = "left out here to fit Claude's message box; read the cell with the notebook tools.";
+    const shortened = quoted.some((q) => q.picks.some((p) => {
+      const body = bodyOf(p);
+      return body !== void 0 && chatSafe(body) !== body.replace(/\r\n?/g, "\n");
+    }));
+    const note = shortened ? `${head.slice(0, -2)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.
+
+` : head;
     const build = (cap) => chatSafe(
-      head + quoted.map(({ picks, comment }) => {
+      note + quoted.map(({ picks, comment }) => {
         const blocks = picks.map((p) => {
           const body = bodyOf(p);
           return quoteBlock(notebook, p, engine, body === void 0 ? void 0 : cutMiddle(chatSafe(body), cap, Math.min(OUTPUT_END, Math.floor(cap / 4)), cut));
@@ -1652,33 +1659,42 @@ ${comment}` : blocks.join("\n\n");
         added.push({ picks: msg.picks, comment: msg.comment });
         return say(`${added.length} added. ${mac ? "\u21A9" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
       }
-      const message = chatMessage(notebook, [...added, { picks: msg.picks, comment: msg.comment }], engine);
+      const enter = mac ? "\u21A9" : "Enter";
+      const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
+      const now = { picks: msg.picks, comment: msg.comment };
+      const giveBack = () => msg.ref !== void 0 && receive({ type: "quote_sent", ref: msg.ref, ok: false });
+      let message = chatMessage(notebook, [...added, now], engine);
+      let held = false;
       if (message === null) {
-        if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: false });
-        const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
-        const enter = mac ? "\u21A9" : "Enter";
-        if (added.length && chatMessage(notebook, [{ picks: msg.picks, comment: msg.comment }], engine) !== null) {
-          added.length = 0;
-          return say(`Too long for Claude's message box (${max}) with what ${mac ? "\u2318\u21A9" : "Ctrl+Enter"} added, so those picks were let go. ${enter} sends this one.`, 8e3);
+        if (!added.length || chatMessage(notebook, [now], engine) === null) {
+          giveBack();
+          return say(`Too long for Claude's message box (${max}). Shorten your comment or pick less, then press ${enter}.`, 8e3);
         }
-        return say(`Too long for Claude's message box (${max}). Shorten your comment or pick less, then press ${enter}.`, 8e3);
+        message = chatMessage(notebook, added, engine);
+        giveBack();
+        if (message === null) {
+          added.length = 0;
+          return say(`Too long for Claude's message box (${max}) with what ${mac ? "\u2318\u21A9" : "Ctrl+Enter"} added, so those picks were let go. Press ${enter} to send this one.`, 8e3);
+        }
+        held = true;
       }
       const earlier = added.splice(0);
       say("Sending to Claude's chat\u2026", 0);
       host2.send(message).then(
         () => {
+          if (held) return say(`Sent what ${mac ? "\u2318\u21A9" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8e3);
           if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: true });
           say("On its way to Claude's message box. Send it from there.", 8e3);
           const end = () => {
-            const now = pointState();
-            if (!now.picks.length && !now.comment.trim()) point(false);
+            const now2 = pointState();
+            if (!now2.picks.length && !now2.comment.trim()) point(false);
           };
           if (!document.hasFocus()) end();
           else window.addEventListener("blur", end, { once: true });
         },
         (e) => {
           added.unshift(...earlier);
-          if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: false });
+          if (!held) giveBack();
           say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "\u21A9" : "Enter"} sends again.`);
         }
       );

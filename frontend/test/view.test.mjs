@@ -83,6 +83,8 @@ test("↩'s message keeps to what Claude takes: no long runs of blank lines or s
   assert.ok(msg.startsWith("\u2193\n\n[Endeavor] The user quoted parts of the notebook"));
   assert.ok(msg.endsWith(`<quote cell="f" uri="notebook://pluto/${NB}/cell/${A}">\nf(x) = x\n\n\ng(x) = 2x\n</quote>\nWhy?`));
   assert.ok(!breaksClaudesRules(msg));
+  assert.ok(msg.includes("were shortened to fit Claude's message box"), "Claude is told the quote was shortened");
+  assert.ok(!chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: "f(x) = x\r\n\r\ng(x) = 2x" }], comment: "" }]).includes("shortened"), "but not when nothing was");
 });
 
 test("a long cell, or picks that ⌘↩ added up, are cut to fit Claude's 8,000 characters; comments never are", () => {
@@ -279,11 +281,23 @@ test("↩ with a comment too long for Claude's box sends nothing and gives the p
   window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "Why?", add: false, ref: 2 });
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(sent.length, 0);
-  assert.match(said(), /so those picks were let go/);
+  assert.match(said(), /so those picks were let go\. Press (↩|Enter) to send this one\.$/);
   window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "Why?", add: false, ref: 3 });
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(sent.length, 1);
   assert.ok(sent[0].endsWith("</quote>\nWhy?") && !sent[0].includes("ccc"));
+  // What ⌘↩ added fits alone but not with this ↩: it goes alone, and this pick waits in Point.
+  window.__endeavor.receive({ type: "annotate", on: true });
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "a".repeat(5000), add: true });
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "b".repeat(5000), add: false, ref: 4 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 2);
+  assert.ok(sent[1].includes("a".repeat(5000)) && !sent[1].includes("bbb"));
+  assert.match(said(), /^Sent what (⌘↩|Ctrl\+Enter) added: .* then press (↩|Enter) to send this one\.$/);
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "b".repeat(5000), add: false, ref: 5 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 3);
+  assert.ok(sent[2].includes("b".repeat(5000)) && !sent[2].includes("aaa"));
 });
 
 test("the view brings Claude's new cell into view, until the user scrolls somewhere else", async () => {
