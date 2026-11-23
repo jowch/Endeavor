@@ -289,8 +289,10 @@ does it set `CODEX_PATH` to a small script in the app's folder
 (`codex-without-endeavor`, `.cmd` on Windows) that runs that Codex with
 `-c mcp_servers.endeavor.enabled=false` (#251). A `-c` layer merges key by
 key, so the server is off and the app's `notebook` still comes in per
-session. A server added after the adapter started, or in a folder's
-`.codex`, isn't seen. Claude's sessions turn that server off with
+session. When `CODEX_PATH` is already set, Endeavor leaves it alone and adds
+no script. The list is given 5 seconds; if it stalls or fails, Endeavor
+starts Codex without the script, as if no such server were listed. A server
+added after the adapter started, or in a folder's `.codex`, isn't seen. Claude's sessions turn that server off with
 `deniedMcpServers` in the flag settings and a `mcp__endeavor` rule.
 
 The adapter also drops a server the client sends when the user's config

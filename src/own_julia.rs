@@ -1,10 +1,3 @@
-//! Endeavor's own Julia on this computer, for Settings › Notebooks › Julia:
-//! whether it's installed, with Install and Remove (EndeavorMCP's
-//! `julia::own_installed`, `install_own` and `remove_own`). The runtime
-//! installs it by itself the first time a Julia notebook needs it; these do it
-//! ahead of time, or undo it. Where the computer has juliaup, Endeavor's Julia
-//! is juliaup's channel for the pinned version, not a second Julia.
-
 use endeavor_mcp::julia::{self, OwnFrom, OwnJulia};
 use futures::StreamExt;
 use gpui::*;
@@ -14,26 +7,20 @@ use crate::connection::Status;
 use crate::hosts::HostId;
 use crate::pluto::JuliaStatus;
 
-/// What Settings knows about Endeavor's own Julia.
 #[derive(Default)]
 pub struct OwnJuliaState {
-    /// As last looked for; none until looked.
     pub found: Option<Option<OwnJulia>>,
-    /// Install or Remove under way, or why the last one failed.
     pub job: Option<Job>,
-    /// Remove it once this computer's runtime has stopped: it was running it.
     remove_after_stop: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Job {
-    /// The step under way ("Downloading Julia 1.12.6… 42%").
     Installing(String),
     Removing,
     Failed(String),
 }
 
-/// What Settings says about it, and whether it offers Remove.
 pub fn describe(found: &OwnJulia) -> (&'static str, Option<&'static str>, bool) {
     match found.from {
         OwnFrom::Download => ("Installed", None, true),
@@ -44,7 +31,6 @@ pub fn describe(found: &OwnJulia) -> (&'static str, Option<&'static str>, bool) 
 }
 
 impl Workspace {
-    /// Look for Endeavor's own Julia (asking juliaup, if there is one, takes a moment).
     pub fn check_own_julia(&mut self, cx: &mut Context<Self>) {
         let look = cx.background_executor().spawn(async { julia::own_installed() });
         cx.spawn(async move |this, cx| {
@@ -57,26 +43,21 @@ impl Workspace {
         .detach();
     }
 
-    /// This computer's runtime is starting Julia now (perhaps downloading it).
     pub fn julia_starting_here(&self) -> bool {
         self.connections.get(&HostId::ThisMac).is_some_and(|c| matches!(c.julia_status, Some(JuliaStatus::Starting { .. })) || c.julia.is_some())
     }
 
-    /// This computer's runtime runs Endeavor's own Julia, or is starting it.
     fn own_julia_running(&self) -> bool {
         let Some(c) = self.connections.get(&HostId::ThisMac).filter(|c| c.status == Status::Ready) else { return false };
         let julia = match c.julia_status {
             Some(JuliaStatus::Ready | JuliaStatus::Starting { .. }) => true,
             Some(JuliaStatus::NotStarted | JuliaStatus::Failed { .. }) => false,
-            // A runtime too old to say started Julia with itself.
             None => true,
         };
-        // The runtime says which Julia it started.
         if let Some(started) = &c.julia_started {
             return julia && started.endeavors;
         }
         use endeavor_mcp::julia::Preference;
-        // Auto runs Endeavor's when the user's own Julia can't be used, or there is none.
         let yours = matches!(&self.settings_checks.users_julia, Some(Some(Ok(_))));
         let own = match self.settings_checks.local_julia.as_ref().map(|started| self.effective(started)) {
             Some(Preference::Endeavors) => true,
@@ -86,8 +67,6 @@ impl Workspace {
         julia && own
     }
 
-    /// Install: in its own thread, since a download takes minutes.
-    // ponytail: a Julia notebook opened while this runs can download too; roadmap.md.
     pub fn install_own_julia(&mut self, cx: &mut Context<Self>) {
         if matches!(self.own_julia.job, Some(Job::Installing(_) | Job::Removing)) {
             return;
@@ -125,7 +104,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Remove, after asking: notebooks that run it stop first.
     pub fn confirm_remove_own_julia(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let running = self.own_julia_running();
         let mut detail = String::new();
@@ -147,7 +125,6 @@ impl Workspace {
         });
     }
 
-    /// This computer's runtime stopped (`stopped`: or didn't): a Remove waiting for it goes ahead.
     pub fn own_julia_after_stop(&mut self, stopped: bool, cx: &mut Context<Self>) {
         if !std::mem::take(&mut self.own_julia.remove_after_stop) {
             return;
@@ -190,10 +167,6 @@ mod tests {
     use super::describe;
     use endeavor_mcp::julia::{OwnFrom, OwnJulia};
 
-    /// A Windows computer's first Julia notebook: the core installs juliaup for
-    /// the account (the Microsoft Store with winget, else juliaup's App
-    /// Installer file), then adds the pinned Julia's channel, as Settings'
-    /// Install does. `.github/workflows/juliaup.yml` runs it.
     #[cfg(windows)]
     #[test]
     #[ignore = "installs juliaup and Julia for this account; run on a computer without juliaup"]
@@ -202,7 +175,6 @@ mod tests {
         let version = endeavor_mcp::julia::JULIA_VERSION;
         assert_eq!(endeavor_mcp::julia::own_installed(), None, "this computer already has Endeavor's Julia");
         let started = Instant::now();
-        // When juliaup was in and Julia's channel began, to split the time between the two steps.
         let (mut installing, mut adding) = (false, None);
         let own = endeavor_mcp::julia::install_own(&mut |step| {
             installing |= step.starts_with("Installing juliaup");
@@ -221,11 +193,8 @@ mod tests {
         let said = std::process::Command::new(&own.julia).arg("--version").output().unwrap_or_else(|why| panic!("{} --version: {why}", own.julia.display()));
         assert_eq!(String::from_utf8_lossy(&said.stdout).trim(), format!("julia version {version}"));
         assert_eq!(endeavor_mcp::julia::own_installed().map(|own| own.julia), Some(own.julia.clone()), "Settings finds it");
-        // A juliaup with no channels makes the first one its default.
         assert_eq!(own.from, OwnFrom::Juliaup { added: true, default: true }, "{own:?}");
 
-        // The runtime's Julia is the channel's own julia.exe, the one next to its libjulia.dll, not
-        // juliaup's launcher (the WindowsApps alias or ~/.juliaup/bin), which picks a channel each time.
         let (found, found_version) = endeavor_mcp::julia::find(&endeavor_mcp::julia::Source::Own, false, &mut |step| eprintln!("{step}"))
             .unwrap_or_else(|why| panic!("{}", why.message()));
         assert_eq!(found_version, version);
@@ -233,17 +202,14 @@ mod tests {
         let file = found.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_ascii_lowercase();
         assert_eq!(file, "julia.exe", "{}", found.display());
         assert!(found.parent().is_some_and(|bin| bin.join("libjulia.dll").is_file()), "no libjulia.dll next to {}: juliaup's launcher, not the channel's Julia", found.display());
-        // Julia itself says where it runs from, which none of our code decides.
         let bindir = std::process::Command::new(&found).args(["--startup-file=no", "-e", "print(Sys.BINDIR)"]).output().unwrap_or_else(|why| panic!("{}: {why}", found.display()));
         let bindir = String::from_utf8_lossy(&bindir.stdout).trim().to_owned();
         let canonical = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|why| panic!("{}: {why}", path.display()));
         assert_eq!(canonical(std::path::Path::new(&bindir)), canonical(found.parent().unwrap()), "{} runs Julia from {bindir}", found.display());
 
-        // Remove leaves juliaup's default where it is and says what to do instead.
         let why = endeavor_mcp::julia::remove_own().expect_err("juliaup's default was removed");
         assert!(why.starts_with(&format!("juliaup uses Julia {version} as its default, so it stays.")), "{why}");
         assert_eq!(endeavor_mcp::julia::own_installed().map(|own| own.julia), Some(own.julia.clone()), "the channel is still there");
-        // For the workflow's summary.
         if let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
             use std::io::Write;
             let line = format!("juliaup installed in {}; Julia {version} added in {}.\n", minutes(installed), minutes(total - installed));

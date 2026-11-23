@@ -232,7 +232,8 @@ To wait for something, poll the dump. For example, loop until
   an R notebook's page (Ember) shows its messages that way, not with `alert`. Null when the page isn't on screen. While an alert is
   open the page can't answer, and `page` is `{"error": …}`.
 - `cell_shot`. How the last picture of a cell's output for the agent went:
-  `picture`, or why there was none, such as "the output is empty" or "the
+  `picture` (`picture, cut` when the output was taller than the view, which
+  the agent is told), or why there was none, such as "the output is empty" or "the
   notebook pane isn't on screen". Null before the first one.
   `cell_shot_view` is the second web view that takes it: `none` (not made
   yet, or let go after 5 idle minutes), `hidden`, or `shown` (behind the
@@ -347,6 +348,11 @@ These are read by debug builds only.
 - `ENDEAVOR_CLAUDE_CLI`: a program that stands in for `claude` in `claude
   auth status`, `login` and `logout`, so sign-in, the account on Settings'
   Claude page and Sign out can be tested without touching the real sign-in.
+- `ENDEAVOR_TEST_AGENT`: a program that runs in place of every assistant's
+  ACP adapter. `scripts/test-agent.js` is a scripted stand-in: it answers each
+  message with one line saying no real assistant answered, and runs no tools.
+  Use it for checks that need a session but not a real turn, such as on a
+  cloud VM ([cloud.md](cloud.md)).
 - `ENDEAVOR_CODEX_CLI`: a program that stands in for the Codex adapter's
   `cli` and `login`, so Codex's sign-in can be tested without touching the
   real account. It gets the same arguments.
@@ -372,6 +378,28 @@ These are read by debug builds only.
 - `ENDEAVOR_TEST_MCP_URL` and `ENDEAVOR_TEST_TOKEN`: a runtime's `/mcp`
   address and its token, for the ignored live tests in `src/agent.rs` that
   bring their own runtime (`cargo test -- --ignored live_list_and_load`).
+  Those tests drive a real agent:
+  - `live_list_and_load`: a finished session is listed for its folder and
+    reloads with its history.
+  - `live_fork`: a fork gets a new id whose load replays the original's
+    history.
+  - `live_tools_through_authenticated_bridge`: the agent reaches the
+    runtime's tools through the token-protected bridge. It starts this
+    computer's runtime itself.
+  - `live_modes` (with `--nocapture`): what the agent offers as modes and
+    config, and that a mode switch is confirmed (through the `mode` config
+    option; a mode update comes only when it falls back to another mode).
+  - `live_two_sessions`: two sessions on one connection with overlapping
+    turns, each reply routed to its own session.
+  - `live_codex_session_and_plan_mode` (with `--nocapture`): Codex's session
+    through the dialect, with no model turn. Run it in a private `HOME` (the
+    adapter installs into the app's folder there), with `CODEX_HOME` at a
+    signed-in Codex and `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:9/mcp`.
+- `cargo test -- --ignored live_die_and_restart --nocapture` (in
+  `src/runtime.rs`) checks the recovery path through This Mac's helper: it
+  kills the runtime as a crash or OOM kill would, and the same helper starts a
+  new one. It is slow (it starts Julia twice), and shares the state folder, so
+  quit any Endeavor first.
 - `ENDEAVOR_TEST_VIEW_CELL`: a file path. Write `<notebook id> <cell id>`
   to it, and the app makes the agent's `view_cell_output` call for the open
   session's notebook on this computer, through its own port as the agent
