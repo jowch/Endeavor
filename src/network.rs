@@ -314,9 +314,11 @@ mod platform {
         changed(context);
     }
 
-    /// From a system thread, once per change; `combine` drops repeats.
+    static READ_THEN_SEND: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn changed(context: *const c_void) {
         let tx = unsafe { &*(context as *const UnboundedSender<bool>) };
+        let _in_order = READ_THEN_SEND.lock().unwrap_or_else(|e| e.into_inner());
         let _ = tx.unbounded_send(online());
     }
 
