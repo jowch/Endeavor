@@ -347,6 +347,11 @@ These are read by debug builds only.
 - `ENDEAVOR_CLAUDE_CLI`: a program that stands in for `claude` in `claude
   auth status`, `login` and `logout`, so sign-in, the account on Settings'
   Claude page and Sign out can be tested without touching the real sign-in.
+- `ENDEAVOR_TEST_AGENT`: a program that runs in place of every assistant's
+  ACP adapter. `scripts/test-agent.js` is a scripted stand-in: it answers each
+  message with one line saying no real assistant answered, and runs no tools.
+  Use it for checks that need a session but not a real turn, such as on a
+  cloud VM ([cloud.md](cloud.md)).
 - `ENDEAVOR_CODEX_CLI`: a program that stands in for the Codex adapter's
   `cli` and `login`, so Codex's sign-in can be tested without touching the
   real account. It gets the same arguments.
