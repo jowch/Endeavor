@@ -193,7 +193,7 @@ pub fn card(title: impl Into<SharedString>, body: impl Into<SharedString>, butto
 /// would take it as up and down. The panel's own scrolling runs before this
 /// and moves the offset by the turn already, so this looks at where it was.
 pub fn hand_on(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
-    panel.on_scroll_wheel(move |event, window, cx| {
+    panel.on_scroll(move |event, window, cx| {
         let delta = event.delta.pixel_delta(window.line_height());
         let (max, at) = (handle.max_offset(), handle.offset().y - delta.y);
         let keeps_y = delta.y != px(0.) && max.y > px(0.) && if delta.y < px(0.) { at > -max.y } else { at < px(0.) };

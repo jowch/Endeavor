@@ -56,6 +56,26 @@ macro_rules! shortcut {
 
 pub(crate) use shortcut;
 
+/// A `secondary-` key binding: `cmd-` on macOS, `ctrl-` elsewhere. GPUI's
+/// `KeyBinding::new` and `Keystroke::parse` stopped resolving `secondary-` in
+/// gpui-pre 0.3.11 (it panics or fails), so the app spells it out at build time.
+/// `keys!("shift-e")` is `cmd-shift-e` on macOS.
+#[cfg(target_os = "macos")]
+macro_rules! keys {
+    ($key:literal) => {
+        concat!("cmd-", $key)
+    };
+}
+
+#[cfg(not(target_os = "macos"))]
+macro_rules! keys {
+    ($key:literal) => {
+        concat!("ctrl-", $key)
+    };
+}
+
+pub(crate) use keys;
+
 /// The menu item that runs `reveal` on a notebook, and on a session's folder.
 pub const REVEAL: &str = if cfg!(target_os = "macos") { "Reveal in Finder" } else if cfg!(windows) { "Show in File Explorer" } else { "Show in Files" };
 pub const REVEAL_FOLDER: &str = if cfg!(target_os = "macos") { "Reveal folder in Finder" } else if cfg!(windows) { "Show folder in File Explorer" } else { "Show folder in Files" };
