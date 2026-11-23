@@ -121,6 +121,7 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
 | `install.rs` first-run installs | Node 24.21.0 pinned in code (bump URL, SHA-256, size per release; Julia's pin is EndeavorMCP's, checked by `runtime.rs`); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
 | `own_julia.rs` `install_own_julia` | Settings' Install and a Julia notebook opened meanwhile can both download Endeavor's Julia at once (Install waits while the runtime is starting Julia, not the other way round); the second fails its check or rename, and trying again works | it bites |
+| `vendor/gpui-wry` | the notebook web view's GPUI glue is a copy of gpui-wry 0.6.6, so its GPUI pin moves with ours; upstream's successor, gpui-webview, can draw menus over the page on macOS and Linux with GPUI Fast | gpui-webview with GPUI Fast lets menus over the notebook drop their holes |
 | `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
 | `.github/workflows/nightly.yml` | without the Developer ID secrets the Mac nightly builds ad-hoc signed and isn't published; Apple Silicon only | sharing (above) |
 | `.github/workflows/windows.yml`, `scripts/installer.iss` | the Windows build and its installer aren't signed (SmartScreen warns) | the installer is shared (#12) |

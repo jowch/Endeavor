@@ -29,7 +29,7 @@ actions!(composer, [AddFiles, ListUp, ListDown, ListPick, ListFill, PickMode1, P
 /// Keys for the composer's lists. Registered after gpui-component's, so they
 /// beat the text box's own up, down, enter and tab while a list is open.
 pub fn key_bindings() -> Vec<KeyBinding> {
-    let mut bindings = vec![KeyBinding::new("secondary-u", AddFiles, Some("Input")), KeyBinding::new("secondary-u", AddFiles, None)];
+    let mut bindings = vec![KeyBinding::new(crate::platform::keys!("u"), AddFiles, Some("Input")), KeyBinding::new(crate::platform::keys!("u"), AddFiles, None)];
     for context in ["MentionList > Input", "SlashList > Input", "ModeMenu > Input", "ModeMenu"] {
         bindings.push(KeyBinding::new("up", ListUp, Some(context)));
         bindings.push(KeyBinding::new("down", ListDown, Some(context)));
