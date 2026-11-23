@@ -1501,8 +1501,6 @@ impl Workspace {
         list.iter().any(|nb| nb["path"] == path)
     }
 
-    /// Load session `key`'s notebook page again, the way opening it does: by
-    /// the id its runtime has for the file now.
     pub(crate) fn on_out_of_step(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.active else { return };
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
@@ -1525,6 +1523,8 @@ impl Workspace {
         }
     }
 
+    /// Load session `key`'s notebook page again, the way opening it does: by
+    /// the id its runtime has for the file now.
     pub fn reload_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         match (session.notebook_path.clone(), session.notebook.clone()) {
