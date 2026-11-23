@@ -1,11 +1,3 @@
-//! The Julia runtime (Pluto + EndeavorRuntime, runtime/boot.jl), reached through
-//! the `endeavor` helper (docs/remote-sessions.md): the app runs it as a
-//! child on This Mac, and over ssh on a server (remote.rs). The helper answers
-//! file requests from the start, and attaches to the runtime in its state
-//! folder or starts one when asked. The webview, the agent and the app reach a
-//! host's runtime through that host's local listener, whose one loopback port
-//! stays the same for the whole launch.
-
 use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -26,24 +18,13 @@ use crate::older_runtime::Version;
 use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
 
-/// Which Julia runs, and the checks of a chosen one, are EndeavorMCP's (`julia`): the app and a
-/// server pick Julia one way.
 pub use endeavor_mcp::julia::{Chosen as ChosenJulia, JULIA_VERSION, check_chosen, min_version as min_julia};
 
-/// A host's listener (`endeavor_mcp::client::Listener`): the app's loopback
-/// port for its runtime, for Pluto's page, the agent's MCP and the app's
-/// calls. Each connection is relayed to the runtime of the moment. It refuses
-/// the code runs of a runtime too old to ask before a run, and a pathless
-/// `new_notebook` that a runtime too old to know session kinds would make in
-/// Julia for an R or Python session (`older_runtime::refusal`).
 pub struct Listener {
     relay: Arc<client::Listener>,
     version: Arc<Known>,
 }
 
-/// The attached runtime's version (`older_runtime::Version`); none while a
-/// start is under way. And each agent session's notebook kind, as the app last
-/// told the runtime (`Listener::session_kind`), by the session's key.
 #[derive(Default)]
 struct Known {
     version: Mutex<Option<Version>>,
@@ -52,8 +33,6 @@ struct Known {
     kinds: Mutex<HashMap<String, Backend>>,
 }
 
-/// How long a call waits for the version of a runtime being attached: only
-/// from when the listener relays to it until `start_runtime` returns.
 const VERSION_WAIT: Duration = Duration::from_secs(2);
 
 impl Known {
@@ -64,7 +43,6 @@ impl Known {
 
     fn refusal(&self, session: &str, tool: &str, arguments: &serde_json::Value) -> Option<String> {
         let kind = self.kinds.lock().unwrap().get(session).copied().unwrap_or(Backend::Pluto);
-        // Only a code run, or an R or Python session's new notebook, waits for the version.
         if !endeavor_mcp::runs_code(tool, arguments) && (tool != "new_notebook" || kind == Backend::Pluto) {
             return None;
         }
@@ -82,56 +60,39 @@ impl Listener {
         Ok(Arc::new(Listener { relay, version }))
     }
 
-    /// Session `key`'s notebook kind, as the app tells the runtime (`pluto::set_session_folder`).
     pub fn session_kind(&self, key: u64, kind: Backend) {
         self.version.kinds.lock().unwrap().insert(key.to_string(), kind);
     }
 
-    /// The agent's `view_cell_output` gets `pictures`' picture when the runtime has none
-    /// (`cell_shot`), told when it stops short of the output.
     pub fn set_pictures(&self, pictures: Box<endeavor_mcp::Pictures>) {
         self.relay.set_pictures(pictures);
     }
 
-    /// The agent can ask the user to restart the runtime (`restart_ask`).
     pub fn set_restart(&self, ask: Box<endeavor_mcp::AskRestart>) {
         self.relay.set_restart(ask);
     }
 
-    /// Julia is restarting (Settings → Restart Julia, or `restart_host`).
     pub fn restarting(&self) {
         self.relay.restarting();
     }
 
-    /// The restart `restarting` announced didn't work out: Julia didn't come back.
     pub fn restart_failed(&self) {
         self.relay.restart_failed();
     }
 
-    /// The user stopped or disconnected `self`'s host on purpose: nothing
-    /// will reconnect it by itself, unlike a drop.
     pub fn disconnected(&self) {
         self.relay.disconnected();
     }
 }
 
-/// A runtime the app is attached to, as its host's listener serves it.
 #[derive(Clone, Debug)]
 pub struct Runtime {
-    /// Pluto's start page, with the token that lets the web view in.
     pub page_url: String,
     pub bridge: Bridge,
-    /// Its process, which tells it from the host's next runtime (the URLs
-    /// and the token stay the same).
     pub pid: u32,
-    /// It was already running (kept after the last quit, or on a server); this
-    /// connect didn't start it.
     pub reattached: bool,
-    /// The machine it runs on.
     pub node: String,
-    /// The cluster job it runs in.
     pub job: Option<wire::slurm::Job>,
-    /// How the app can use it: as it is, or with a note (`older_runtime`).
     pub version: Version,
 }
 
@@ -143,29 +104,14 @@ impl From<client::Runtime> for Runtime {
     }
 }
 
-/// Start the runtime on `channel` (or attach to the one running) and relay
-/// `listener`'s connections to it from now on; on a cluster, `job` is what to
-/// submit. Blocks until it's ready; `on_message` hears `Progress`, `Found`,
-/// `Submitted` and `Queued` meanwhile, and `notice` the first word of the
-/// runtime going away later, unless the app is the one stopping it. The helper
-/// installs what the start needs without asking, as it always has.
 pub fn start_runtime(channel: &Channel, listener: &Arc<Listener>, job: Option<JobRequest>, on_message: &mut dyn FnMut(ToApp), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     let options = StartOptions { job, install: true, ..StartOptions::default() };
-    // A call that reaches the new runtime before this returns waits for its version.
     let before = listener.version.version.lock().unwrap().take();
     let started = channel.start_runtime(&listener.relay, &options, on_message, notice).map(Runtime::from).map_err(StartError::message);
-    // A start that failed left the runtime before it attached, if any.
     listener.version.set(started.as_ref().map_or(before, |runtime| Some(runtime.version)));
     started
 }
 
-
-
-/// The core's `--julia`, as EndeavorMCP chooses it from Settings (`julia::choose`): the chosen
-/// Julia while it's there and is Julia; else, unless Settings ask for Endeavor's, the user's own
-/// (the login shell's, juliaup's) when it's new enough; else Endeavor's own, the pinned Julia, which
-/// the core installs the first time a Julia notebook needs it (with juliaup where there is juliaup,
-/// always on Windows).
 fn julia_arg() -> String {
     let source = endeavor_mcp::julia::choose(&crate::settings::Settings::load().julia_preference(), None);
     #[cfg(not(windows))]
@@ -175,15 +121,11 @@ fn julia_arg() -> String {
     source.value().unwrap_or_else(|| "auto".into())
 }
 
-/// Where the core keeps the Julia it downloads (EndeavorMCP's `julia::download_dir`).
 #[cfg(not(windows))]
 fn own_julia_dir() -> PathBuf {
     endeavor_mcp::paths::Env::here().server_root().join(format!("julia-{JULIA_VERSION}"))
 }
 
-/// The Julia an older Endeavor downloaded into the app's folder becomes the
-/// core's own (`~/.cache/endeavor/julia-<version>`), so it isn't downloaded
-/// again. Only while no runtime runs, since one may be running that Julia.
 #[cfg(not(windows))]
 fn move_old_julia() {
     let Ok(app_dir) = crate::install::app_dir() else { return };
@@ -195,19 +137,12 @@ fn move_old_julia() {
     let moved = new.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::rename(&old, &new));
     match moved {
         Ok(()) => eprintln!("Moved Endeavor's Julia {JULIA_VERSION} to {}", new.display()),
-        // Another disk, say: the core downloads its own when it needs it, and the old one goes after the next start.
         Err(e) => eprintln!("Couldn't move {} to {}: {e}", old.display(), new.display()),
     }
 }
 
-/// `endeavor --helper ARGS…` runs as the helper, like `endeavor ARGS…` on a server (see main).
 pub const HELPER_FLAG: &str = "--helper";
 
-/// The helper binary as cargo builds it, next to the app's own executable
-/// (`cargo test` runs from target/*/deps): what a macOS server is sent from a
-/// source checkout. The app has it in `helpers/` with the Linux ones
-/// (`remote::helper_for`). This Mac runs the app itself as its helper instead
-/// (`helper_command`).
 pub fn helper_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("no executable folder")?;
@@ -219,9 +154,6 @@ pub fn helper_binary() -> Result<PathBuf, String> {
         .ok_or_else(|| format!("Endeavor's runtime helper (endeavor-helper) is missing from {}.", dir.display()))
 }
 
-/// This Mac's helper: the app itself in helper mode, named `endeavor` in its
-/// argv[0] like a server's helper, with `--helper` telling it from the app in
-/// `ps`. A test binary can't act as the helper, so tests run the built one.
 pub fn helper_command() -> Result<Command, String> {
     if cfg!(test) {
         return Ok(Command::new(helper_binary()?));
@@ -233,8 +165,6 @@ pub fn helper_command() -> Result<Command, String> {
     Ok(command)
 }
 
-/// The program ssh runs as its askpass: the app, which acts as the helper's
-/// askpass mode when started with its socket in the environment (see main).
 pub fn helper_program() -> Result<PathBuf, String> {
     if cfg!(test) {
         return helper_binary();
@@ -242,12 +172,8 @@ pub fn helper_program() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| format!("Couldn't find Endeavor's own program: {e}"))
 }
 
-/// The `--julia` the last `connect` gave the helper: what a runtime it starts runs (`auto`: the core's choice).
 static STARTED_WITH: Mutex<Option<String>> = Mutex::new(None);
 
-/// Run This Mac's helper and wait for its hello. Julia itself is installed and
-/// started the first time a Julia notebook needs it, not with the runtime
-/// (`--julia-when-needed`).
 pub fn connect() -> Result<(Channel, Hello), String> {
     let julia = julia_arg();
     *STARTED_WITH.lock().unwrap() = Some(julia.clone());
@@ -263,22 +189,13 @@ pub fn connect() -> Result<(Channel, Hello), String> {
         .args(["--julia", &julia, "--julia-when-needed", "--runtime"])
         .arg(crate::install::runtime()?)
         .args(["--depot", &depot])
-        // Read as a server's R setting is: a path, or a shell line. R starts with the first R notebook.
         .args(client::Server { r: crate::settings::Settings::load().r, ..Default::default() }.r_args())
-        // This computer, and only it, may be offered Endeavor's own R when none is found (a Mac).
         .arg("--own-r")
-        // The state folder is named after this computer, so a record in it with
-        // another node name is this computer's from before it was renamed.
         .arg("--any-node");
     if let Some(build) = crate::remote::build() {
         command.args(["--build", build]);
     }
-    // However the app goes (a quit, a crash, a kill), the runtime stays up until
-    // its notebooks are idle, then ends once none is open (#274).
     command.arg("--exit-idle-after-client");
-    // Its own process group: a Ctrl-C meant for the app in a terminal must not
-    // kill the helper before it can stop Julia. On Windows the helper is the
-    // app's own GUI program, so it opens no console window either way.
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
     #[cfg(unix)]
     command.process_group(0);
@@ -292,43 +209,28 @@ pub fn connect() -> Result<(Channel, Hello), String> {
     Ok((channel, hello))
 }
 
-/// This Mac's state folder: the one the plugin and `endeavor serve` use here
-/// (EndeavorMCP's `paths`), so the app and the plugin find one runtime and share
-/// it rather than each starting its own on the same notebook (EndeavorMCP #110).
 pub fn state_dir() -> PathBuf {
     endeavor_mcp::paths::Env::here().state_dir()
 }
 
-/// Where versions before the shared folder kept This Mac's runtime.
 fn old_state_dir(app_dir: &Path) -> PathBuf {
     app_dir.join("runtime")
 }
 
-/// A runtime an older version kept running in the app's own folder is stopped
-/// and the old folder removed, once, so it doesn't run on beside the shared one.
-/// Its notebooks were saved as they changed, and the app opens them again in
-/// the new runtime. The app stops it itself rather than through the helper's
-/// `stop`, which refuses a record made under another host name (a renamed Mac),
-/// and only a process that is still that runtime.
 fn retire_old_state(app_dir: &Path) {
     retire_old_state_in(&old_state_dir(app_dir), &stop_old);
 }
 
-/// Stop the runtime recorded in the old folder `old`, if it still runs from
-/// there; whether its process group is gone now.
 fn stop_old(old: &Path) -> bool {
     let Some(pid) = record(old).and_then(|r| r["pid"].as_u64()) else { return true };
     if runs_from(pid, old) {
         stop_recorded_in(old);
     } else {
-        // A pid the system has given another process since, or a runtime this check can't see.
         eprintln!("The runtime recorded in {} (pid {pid}) isn't running from there; not stopping that process.", old.display());
     }
     i32::try_from(pid).is_ok_and(group_gone)
 }
 
-/// Whether no process of the group `pgid` runs any more: none is left (ESRCH),
-/// or only zombies are.
 #[cfg(unix)]
 fn group_gone(pgid: i32) -> bool {
     // SAFETY: signal 0 only checks.
@@ -342,21 +244,16 @@ fn group_gone(pgid: i32) -> bool {
     })
 }
 
-/// Windows can't tell here, so the old folder stays (only its record goes).
 #[cfg(windows)]
 fn group_gone(_pgid: i32) -> bool {
     false
 }
 
-/// Whether process `pid` is a runtime started with `state_dir`, so a pid the
-/// system gave another process since isn't ended. `-ww`: the whole command line. On Windows `stop_group`
-/// checks the recorded start time instead.
 #[cfg(unix)]
 fn runs_from(pid: u64, state_dir: &Path) -> bool {
     let args = Command::new("ps").args(["-ww", "-p", &pid.to_string(), "-o", "args="]).stderr(Stdio::null()).output();
     let Ok(out) = args else { return false };
     let (args, flag) = (String::from_utf8_lossy(&out.stdout), format!("--state-dir {}", state_dir.display()));
-    // The folder ends there: not a longer path that starts with it.
     args.match_indices(&flag).any(|(at, _)| args[at + flag.len()..].chars().next().is_none_or(char::is_whitespace))
 }
 
@@ -365,15 +262,11 @@ fn runs_from(_pid: u64, _state_dir: &Path) -> bool {
     true
 }
 
-/// `retire_old_state` for the folder `old`, where `stop` stops the runtime
-/// recorded there and says whether it's gone. The record goes either way, so
-/// this happens once; the folder (token, locks, log) goes only with the runtime.
 fn retire_old_state_in(old: &Path, stop: &dyn Fn(&Path) -> bool) {
     if !old.join("runtime.json").exists() {
         return;
     }
     if stop(old) {
-        // Nothing uses the old folder now: its record, token, locks and log go.
         if let Err(e) = std::fs::remove_dir_all(old) {
             eprintln!("Couldn't remove {}: {e}", old.display());
         }
@@ -389,28 +282,18 @@ fn retire_old_state_in(old: &Path, stop: &dyn Fn(&Path) -> bool) {
     eprintln!("This Mac's runtime is now in {}, shared with the plugin.", state_dir().display());
 }
 
-/// `runtime.json` in `state_dir`, if there is one.
 fn record(state_dir: &Path) -> Option<serde_json::Value> {
     std::fs::read_to_string(state_dir.join("runtime.json")).ok().and_then(|t| serde_json::from_str(&t).ok())
 }
 
-/// A runtime `endeavor mcp` or `serve` started records its notebooks folder; one the app started has none.
 fn started_by_plugin(record: &serde_json::Value) -> bool {
     record.get("folder").is_some_and(|folder| !folder.is_null())
 }
 
-/// JULIA_DEPOT_PATH for This Mac's runtime: the app's depot, then an empty
-/// entry, behind which EndeavorMCP puts the user's own depot (~/.julia) when
-/// Julia starts (`paths::with_user_depot`), so their registries and packages are found.
 fn depot_list(app_dir: &Path) -> String {
     format!("{}{}", app_dir.join("depot").display(), if cfg!(windows) { ';' } else { ':' })
 }
 
-/// Repair runtime: stop the runtime recorded in This Mac's state folder if one
-/// still runs (no helper holds it by now), and remove what can go stale: the
-/// state and lock files, and the precompiled EndeavorRuntime. The bridge token
-/// (the agent's MCP config carries it), the log, the depot's packages and
-/// Julia stay. Returns what it removed.
 pub fn clear_state() -> Result<Vec<PathBuf>, String> {
     clear_state_in(&state_dir(), &crate::install::app_dir()?)
 }
@@ -433,14 +316,8 @@ fn clear_state_in(state_dir: &Path, app_dir: &Path) -> Result<Vec<PathBuf>, Stri
     Ok(removed)
 }
 
-/// `endeavor.exe --stop-runtime`: the Windows installer stops a runtime kept
-/// running before it replaces or removes the exe, which that runtime's core
-/// runs from. Its open notebooks are already saved (Pluto saves on each change).
 pub const STOP_FLAG: &str = "--stop-runtime";
 
-/// Stop the runtimes the app's exe runs, if they still run: the one recorded in
-/// This Mac's state folder, unless the plugin started it from its own binary,
-/// and one an older version kept in the app's folder.
 pub fn stop_recorded() {
     if let Ok(app_dir) = crate::install::app_dir() {
         stop_recorded_in(&old_state_dir(&app_dir));
@@ -459,9 +336,6 @@ fn stop_recorded_in(state_dir: &Path) {
     }
 }
 
-/// The runtime runs in its own session, so its recorded pid (the core's, or
-/// Julia's for a runtime an older helper started) is its group's: end the
-/// group (the core, Julia and its notebook workers), politely first.
 #[cfg(unix)]
 fn stop_group(pid: i32, _started: Option<u64>) {
     // SAFETY (both): plain syscalls; a group that's gone only returns ESRCH.
@@ -477,17 +351,11 @@ fn stop_group(pid: i32, _started: Option<u64>) {
     }
 }
 
-/// Windows: the core recorded as `pid`, started at `started`, and with it
-/// Julia and its workers (its Job Object).
 #[cfg(windows)]
 fn stop_group(pid: i32, started: Option<u64>) {
     endeavor_mcp::end_recorded_runtime(pid, started);
 }
 
-/// Start This Mac's runtime on `channel` (or attach to the one running) and
-/// relay `listener` to it. Julia isn't part of it: it starts when a Julia
-/// notebook first needs it. `progress` hears the start; `notice` hears if the
-/// runtime goes away later.
 pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn Fn(Progress), notice: impl FnOnce(Notice) + Send + 'static) -> Result<Runtime, String> {
     progress(Progress::new(Step::Runtime, "Starting the notebook runtime…"));
     let runtime = start_runtime(channel, listener, None, &mut |message| {
@@ -495,10 +363,6 @@ pub fn start_local(channel: &Channel, listener: &Arc<Listener>, progress: &dyn F
             eprintln!("{line}");
         }
     }, notice)?;
-    // A fresh start means no runtime runs a Julia from the app's own folder:
-    // remove those, in the background, since deleting 300 MB can take a while
-    // on Windows. The core keeps its own Julia elsewhere (juliaup's on
-    // Windows), so only a Julia chosen in Settings stays.
     if !runtime.reattached {
         std::thread::spawn(|| {
             let chosen = crate::settings::Settings::load().julia;
@@ -588,9 +452,6 @@ mod tests {
     }
 }
 
-/// Live check of the recovery path through the helper (slow; starts Julia twice;
-/// stop any Endeavor first, since it shares the state folder):
-/// `cargo test -- --ignored live_die_and_restart --nocapture`.
 #[cfg(test)]
 #[test]
 #[ignore]
@@ -601,7 +462,6 @@ fn live_die_and_restart() {
     let first = start_local(&channel, &listener, &|_| {}, move |notice| drop(heard_tx.send(notice))).expect("start");
     let list = crate::pluto::call_tool(&first.bridge, "list_notebooks", serde_json::json!({})).unwrap();
     println!("connected (reattached: {}); list_notebooks = {list}", first.reattached);
-    // SIGKILL, like a crash or OOM kill.
     let state = std::fs::read_to_string(state_dir().join("runtime.json")).unwrap();
     let pid = serde_json::from_str::<serde_json::Value>(&state).unwrap()["pid"].to_string();
     Command::new("kill").args(["-9", &pid]).status().unwrap();
@@ -613,7 +473,6 @@ fn live_die_and_restart() {
         other => panic!("expected Died, got {other:?}"),
     }
 
-    // The helper stayed: the same channel starts a new one.
     let second = start_local(&channel, &listener, &|_| {}, |_| {}).expect("start again");
     assert!(!second.reattached);
     assert_eq!(second.bridge, first.bridge, "agent's MCP URL and token must survive a restart");
@@ -657,8 +516,6 @@ fn an_old_runtime_is_stopped_once_and_its_folder_removed() {
     assert!(!old.exists(), "the old folder goes, locks and all");
 }
 
-/// Wait until `ps` shows `pid` started with `--state-dir dir`: on macOS it can
-/// show a child just spawned with the parent's command line until it execs.
 #[cfg(all(test, unix))]
 fn wait_runs_from(pid: u32, dir: &Path) {
     if !(0..50).any(|_| runs_from(u64::from(pid), dir) || { std::thread::sleep(Duration::from_millis(100)); false }) {
@@ -698,7 +555,6 @@ fn the_old_folder_goes_only_once_its_runtime_is_gone() {
         std::fs::write(old.join("runtime.json"), format!(r#"{{"pid": {pid}}}"#)).unwrap();
         std::fs::write(old.join("start.lock"), "").unwrap();
     };
-    // A live pid that isn't a runtime started from there: not stopped, and the folder stays.
     let mut other = Command::new("sleep").arg("60").process_group(0).spawn().unwrap();
     record(other.id());
     retire_old_state_in(&old, &stop_old);
@@ -706,8 +562,6 @@ fn the_old_folder_goes_only_once_its_runtime_is_gone() {
     assert!(!old.join("runtime.json").exists() && old.join("start.lock").exists(), "only the record goes");
     let _ = other.kill();
     let _ = other.wait();
-    // The old runtime, which isn't the app's child (launchd or init adopted it), leading its own
-    // group: stopped, and the folder goes with it.
     let spawn = Command::new("sh")
         .args(["-c", r#"perl -e 'setpgrp(0,0); exec @ARGV' sh -c "sleep 60; :" core --state-dir "$1" </dev/null >/dev/null 2>&1 & echo $!"#, "sh"])
         .arg(&old).output().unwrap();
@@ -716,7 +570,6 @@ fn the_old_folder_goes_only_once_its_runtime_is_gone() {
     record(core);
     retire_old_state_in(&old, &stop_old);
     assert!(!old.exists(), "the folder goes with the runtime");
-    // Linux: a group left with only a zombie counts as gone (a container's PID 1 may never reap).
     #[cfg(target_os = "linux")]
     {
         let mut child = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).process_group(0).spawn().unwrap();
@@ -738,7 +591,6 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "x").unwrap();
     };
-    // A recorded runtime that still runs, in its own group like the core's (with Julia in it).
     let mut julia = Command::new("sleep").arg("600").process_group(0).spawn().unwrap();
     std::fs::create_dir_all(app.join("runtime")).unwrap();
     std::fs::write(app.join("runtime/runtime.json"), format!(r#"{{"pid": {}}}"#, julia.id())).unwrap();
@@ -751,7 +603,6 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
     let removed = clear_state_in(&app.join("runtime"), &app).unwrap();
     let removed: Vec<String> = removed.iter().map(|p| p.strip_prefix(&app).unwrap().display().to_string()).collect();
     assert_eq!(removed, ["runtime/runtime.json", "runtime/lock", "depot/compiled/v1.12/EndeavorRuntime"]);
-    // Its group can be empty a moment before the child is ours to reap (seen on macOS), so poll.
     let stopped = (0..50).any(|_| {
         let gone = julia.try_wait().unwrap().is_some();
         if !gone {
@@ -767,8 +618,6 @@ fn repair_clears_stale_state_and_keeps_the_rest() {
     let _ = std::fs::remove_dir_all(&app);
 }
 
-// What the Windows installer relies on before it replaces endeavor.exe: the
-// recorded core is ended, and a pid reused by a later process isn't.
 #[cfg(all(test, windows))]
 #[test]
 fn stop_recorded_ends_the_recorded_process_only() {
@@ -794,7 +643,6 @@ fn stop_recorded_ends_the_recorded_process_only() {
     let _ = std::fs::remove_dir_all(&state);
 }
 
-/// The cloud VMs' setup script installs this Julia and the pinned Rust too (docs/cloud.md).
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn the_cloud_setup_script_pins_the_same_julia() {

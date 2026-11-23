@@ -1,9 +1,3 @@
-//! Offline is waiting, not failure: nothing turns red or orange, every offline
-//! state has a quiet Try now, and Endeavor carries on by itself when the
-//! network is back. Claude's messages wait in the queue, the notebook on This
-//! Mac keeps working, a server's notebook stays readable but read-only, and a
-//! first launch's setup pauses.
-
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -22,16 +16,12 @@ use crate::splash::{Setup, Step};
 use crate::theme;
 use crate::theme::FocusRing as _;
 
-/// How long a server that can't be reached waits between tries.
 pub const RETRY_EVERY: Duration = Duration::from_secs(15);
 
-/// An agent's usage limit, reached: when it resets, if the agent said.
 pub struct UsageLimit {
     pub until: Option<SystemTime>,
 }
 
-/// Each agent's usage limit while it's reached. Claude's limit holds only
-/// Claude's sessions; Codex can still answer, and the other way round.
 #[derive(Default)]
 pub struct UsageLimits(BTreeMap<Agent, UsageLimit>);
 
@@ -52,19 +42,15 @@ impl UsageLimits {
         self.0.insert(agent, UsageLimit { until });
     }
 
-    /// Whether `agent` had a limit to end.
     pub fn end(&mut self, agent: Agent) -> bool {
         self.0.remove(&agent).is_some()
     }
 
-    /// The agents whose limit has reset by `now`.
     pub fn reset_by(&self, now: SystemTime) -> Vec<Agent> {
         self.0.iter().filter(|(_, l)| l.until.is_some_and(|until| now >= until)).map(|(a, _)| *a).collect()
     }
 }
 
-/// A connect error that means the server couldn't be reached (as opposed to,
-/// say, a refused key): worth trying again by itself.
 pub fn unreachable(error: &str) -> bool {
     let error = error.to_lowercase();
     [
@@ -79,7 +65,6 @@ pub fn unreachable(error: &str) -> bool {
         "broken pipe",
         "host is down",
         "closed unexpectedly",
-        // remote::explain's words for the same.
         "didn't answer",
         "couldn't reach",
         "refused the connection",
@@ -90,7 +75,6 @@ pub fn unreachable(error: &str) -> bool {
 }
 
 impl Workspace {
-    /// Follow the system's network status for the life of the window.
     pub fn watch_network(&mut self, cx: &mut Context<Self>) {
         let mut changes = crate::network::watch();
         cx.spawn(async move |this, cx| {
@@ -120,7 +104,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Try now: look at the network this moment and pick up whatever waits.
     pub fn try_now(&mut self, cx: &mut Context<Self>) {
         if self.probing {
             return;
@@ -129,8 +112,6 @@ impl Workspace {
         let probe = cx.background_executor().spawn(async { crate::network::probe() });
         cx.spawn(async move |this, cx| {
             let online = probe.await;
-            // Only good news is taken from here: the system's status says when
-            // the network goes, and it won't say again if this was wrong.
             let _ = this.update(cx, |this, cx| {
                 this.probing = false;
                 if online && this.offline_since.is_none() {
@@ -146,7 +127,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Back online: setup goes on, and servers that dropped reconnect.
     fn carry_on(&mut self, cx: &mut Context<Self>) {
         if self.setup.as_ref().is_some_and(Setup::failed) {
             self.retry_setup(cx);
@@ -157,10 +137,6 @@ impl Workspace {
         }
     }
 
-    /// A session's turn failed. A usage limit or a lost sign-in waits at once.
-    /// Otherwise, if Claude can't be reached from here either, that's offline
-    /// even while the system has a network (a dead Wi-Fi, say): the message
-    /// waits and goes again once it can be reached. Else the turn failed.
     pub fn turn_failed(&mut self, key: u64, kind: Option<String>, error: String, cx: &mut Context<Self>) {
         let trouble = crate::trouble::classify(kind.as_deref(), &error);
         if matches!(trouble, Trouble::UsageLimit(_) | Trouble::SignIn) {
@@ -187,9 +163,6 @@ impl Workspace {
         .detach();
     }
 
-    /// A turn hit `agent`'s usage limit: that agent's sessions' messages
-    /// wait until it resets (when the message said when), then go by
-    /// themselves. The other agent's sessions carry on.
     pub fn hit_usage_limit(&mut self, agent: Agent, reset: Option<Reset>, cx: &mut Context<Self>) {
         let until = reset.and_then(|r| crate::trouble::resolve(r, SystemTime::now(), crate::trouble::local_offset()));
         self.usage_limits.hit(agent, until);
@@ -197,15 +170,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Every second: past an agent's reset, its waiting messages go.
     pub fn check_usage_limit(&mut self, cx: &mut Context<Self>) {
         for agent in self.usage_limits.reset_by(SystemTime::now()) {
             self.end_usage_limit(agent, cx);
         }
     }
 
-    /// `agent`'s limit has reset, or Try now: what waited goes. If the limit
-    /// still holds, the next turn says so again.
     pub fn end_usage_limit(&mut self, agent: Agent, cx: &mut Context<Self>) {
         if self.usage_limits.end(agent) {
             self.sync_holds(cx);
@@ -213,8 +183,6 @@ impl Workspace {
         }
     }
 
-    /// The usage-limit line above the session's composer, as it reads now:
-    /// only while the session's own agent is at its limit.
     pub fn usage_line(&self, session: &Session) -> Option<String> {
         let limit = self.usage_limits.get(session.agent)?;
         let waiting = session.unanswered.is_some() || !session.outbox.items.is_empty();
@@ -231,8 +199,6 @@ impl Workspace {
         Some(failure::wait_line(Lead::Clock, text, try_now, cx).into_any_element())
     }
 
-    /// The composer's placeholder while messages wait for the agent: until
-    /// the usage limit resets, or until the agent's process is back.
     pub fn waiting_placeholder(&self, agent: crate::agent::Agent) -> Option<SharedString> {
         use crate::agent_process::State;
         match self.links.get(agent).process.state {
@@ -250,8 +216,6 @@ impl Workspace {
         })
     }
 
-    /// Offline on Claude's API's word, not the system's, which won't say when
-    /// it's back: look again every `RETRY_EVERY` until it is.
     fn recheck(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             loop {
@@ -269,8 +233,6 @@ impl Workspace {
         .detach();
     }
 
-    /// A server's connection dropped: try again after `wait`, unless it's
-    /// back, given up on, or waiting for the network.
     pub fn retry_lost(&mut self, host: HostId, wait: Duration, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
@@ -284,7 +246,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The session's notebook can be read but not changed: its server is out of reach.
     pub fn read_only(&self, session: &Session) -> bool {
         match &session.place.host {
             HostId::ThisMac => false,
@@ -296,7 +257,6 @@ impl Workspace {
         button(id, if self.probing { "Trying…" } else { "Try now" }, Look::Secondary).h(px(height)).on_click(cx.listener(|this, _, _, cx| this.try_now(cx)))
     }
 
-    /// One grey line above the composer while offline.
     pub fn offline_line(&self, session: Option<&Session>) -> Option<&'static str> {
         self.offline_since?;
         let on_server = session.is_some_and(|s| s.place.host != HostId::ThisMac);
@@ -326,7 +286,6 @@ impl Workspace {
         )
     }
 
-    /// The pane warning's words: its line, or its title and line.
     pub fn pane_warning(&self, session: &Session) -> (String, Option<&'static str>) {
         if self.offline_since.is_some() {
             ("Looks like you're offline. Endeavor will reconnect when you're back online.".into(), None)
@@ -337,7 +296,6 @@ impl Workspace {
         }
     }
 
-    /// The one warning at the top of a server's notebook pane while it's out of reach.
     pub fn render_pane_warning(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.read_only(session) {
             return None;
@@ -361,8 +319,6 @@ impl Workspace {
             .line_height(px(17.))
             .text_color(theme::text_secondary());
         let host = session.place.host.clone();
-        // ssh asks for a password or code: the server answered, so no "offline" glyph,
-        // and no Try now, which would start the sign-in over under the question.
         let signing_in = self.offline_since.is_none() && self.signing_in(&host);
         let frame = frame.when(!signing_in, |f| f.child(glyph_at(Glyph::WifiOff, theme::text_muted(), 13. / 12.)));
         let body = match self.pane_warning(session) {
@@ -374,7 +330,6 @@ impl Workspace {
                 .flex_col()
                 .gap(px(1.))
                 .child(
-                    // Opens Settings at the server, where Try now and its connection settings are.
                     div()
                         .id("cant-reach-settings")
                         .role(Role::Link)
@@ -398,7 +353,6 @@ impl Workspace {
         Some(frame.child(body).when(!signing_in, |f| f.child(self.try_now_button("try-now-pane", 24., cx))).into_any_element())
     }
 
-    /// The queue's heading while its messages wait for Claude to be reachable.
     pub fn queue_heading(&self, session: &Session) -> Option<String> {
         if !self.holds(session) || session.outbox.items.is_empty() {
             return None;
@@ -432,8 +386,6 @@ impl Workspace {
         )
     }
 
-    /// First launch without a network: each step says whether it needs the
-    /// internet, and setup carries on by itself once it's back.
     pub fn render_offline_setup(&self, setup: &Setup, cx: &mut Context<Self>) -> AnyElement {
         let current = setup.step();
         let steps = Step::ALL.map(|step| {
@@ -513,7 +465,6 @@ mod tests {
         assert!(limits.holds(Agent::Claude));
         assert!(!limits.holds(Agent::Codex));
         limits.hit(Agent::Codex, None);
-        // Claude's reset ends Claude's limit only; Codex's, with no time, waits for Try now.
         assert_eq!(limits.reset_by(now), []);
         assert_eq!(limits.reset_by(now + Duration::from_secs(60)), [Agent::Claude]);
         assert!(limits.end(Agent::Claude));

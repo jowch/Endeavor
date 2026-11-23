@@ -1,5 +1,8 @@
 # Other agents: Cursor, Codex, Antigravity and Gemini
 
+How the app runs the agents it supports today is in
+[agent-connection.md](agent-connection.md).
+
 Endeavor runs three agents: Claude Code, through the
 `@agentclientprotocol/claude-agent-acp` adapter; Codex, through
 `@agentclientprotocol/codex-acp` (This Mac only; see

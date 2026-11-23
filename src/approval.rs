@@ -1,6 +1,3 @@
-//! The pending-approval card above the composer: run/edit/plan prompts, the
-//! plan card, and the pinned running plan.
-
 use std::path::Path;
 
 use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, PlanEntry, PlanEntryStatus, ToolKind};
@@ -19,42 +16,28 @@ use crate::theme;
 use crate::theme::FocusRing as _;
 use crate::transcript::markdown_style;
 
-/// The pending approval card, as it reads.
 pub(crate) struct ApprovalView {
     pub heading: String,
-    /// "1 of 3" while several prompts wait.
     pub count: Option<String>,
-    /// What it would run or change: code, a command, a diff.
     pub code: Option<CardCode>,
     pub lines: Vec<(String, Tone)>,
-    /// Plan mode's end: the plan to approve, in place of code and lines.
     pub plan: Option<PlanCard>,
     pub buttons: Vec<CardButton>,
-    /// "In this folder", under the ⌄ on Always this session: the agent's own
-    /// lasting rule, offered when the agent keeps those in the folder.
     pub folder: Option<PermissionOption>,
-    /// The notebook cells it asks to run, those that re-run after them, and
-    /// those it needs that never ran (they run first).
     pub cells: Vec<String>,
     pub rerun: Vec<String>,
     pub needed: Vec<String>,
-    /// The prompts waiting behind this one, by their questions.
     pub then: Vec<String>,
-    /// The cells' names, as the heading names them.
     pub names: Vec<String>,
 }
 
-/// A card's code box.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CardCode {
     Plain(String),
-    /// The change, removed lines first, in the transcript's diff colours.
     Diff(Vec<(Change, String)>),
-    /// Code going away (a deleted cell), struck through.
     Struck(String),
 }
 
-/// The card shows this many lines of code until "Show all N lines".
 pub(crate) const CODE_LINES: usize = 8;
 
 impl CardCode {
@@ -69,7 +52,6 @@ impl CardCode {
         self.lines().len()
     }
 
-    /// As plain text (diff lines marked "- " and "+ "), cut to the first lines unless `all`.
     pub fn text(&self, all: bool) -> String {
         let lines = self.lines();
         let mut shown: Vec<String> = lines
@@ -89,7 +71,6 @@ impl CardCode {
     }
 }
 
-/// A line's colour; `backticked` names in it are mono.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Tone {
     Muted,
@@ -99,16 +80,12 @@ pub(crate) enum Tone {
 
 pub(crate) struct CardButton {
     pub label: String,
-    /// The key that presses it.
     pub hint: &'static str,
     pub weight: Weight,
     pub option: PermissionOption,
-    /// How far the answer reaches.
     pub scope: Scope,
 }
 
-/// How a card's button looks and where it sits: the answer that declines on
-/// the left, plain, then the others outlined, and the one ⏎ presses filled.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Weight {
     Quiet,
@@ -126,8 +103,6 @@ impl Weight {
     }
 }
 
-/// The card for the first prompt waiting: the only heavy element (accent
-/// edge, soft ring, filled primary), with a count and the prompts behind it.
 pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
     let waiting = session.waiting_prompts();
     let mut view = view_at(session, *waiting.first()?)?;
@@ -136,25 +111,19 @@ pub(crate) fn approval_view(session: &Session) -> Option<ApprovalView> {
     Some(view)
 }
 
-/// How far ⌘⏎ in an empty message box answers the card shown: this session
-/// only when the card offers Always this session, else once, as ⏎ does.
 pub(crate) fn command_enter_scope(session: &Session) -> Scope {
     let always = approval_view(session).is_some_and(|view| view.buttons.iter().any(|b| b.scope == Scope::Session));
     if always { Scope::Session } else { Scope::Once }
 }
 
-/// The notebook cells prompt `ix` asks to run (none for any other prompt).
 pub(crate) fn run_cells_at(session: &Session, ix: usize) -> Vec<String> {
     view_at(session, ix).map(|v| v.cells).unwrap_or_default()
 }
 
-/// The names prompt `ix`'s heading gives its cells ("rates").
 pub(crate) fn heading_names_at(session: &Session, ix: usize) -> Vec<String> {
     view_at(session, ix).map(|v| v.names).unwrap_or_default()
 }
 
-/// The cells every waiting run card asks to run, each once, with what it
-/// defines when known: the page asks before the user's own run reaches one.
 pub(crate) fn waiting_run_cells(session: &Session) -> Vec<(String, Option<String>)> {
     let mut cells: Vec<(String, Option<String>)> = Vec::new();
     for ix in session.waiting_prompts() {
@@ -176,14 +145,10 @@ pub(crate) fn waiting_run_cells(session: &Session) -> Vec<(String, Option<String
     cells
 }
 
-/// A prompt's question ("Run `rates`?"), for the note when it went unanswered.
 pub(crate) fn heading_at(session: &Session, ix: usize) -> Option<String> {
     view_at(session, ix).map(|v| v.heading)
 }
 
-/// What one prompt's card says. Runs get "Run N cells?", the cells, and how
-/// many dependents re-run; the agent's own prompts get a question in its
-/// verb (Edit, Create, Run, Fetch) and never its option labels or tool names.
 fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
     let Entry::Permission { title, code, options, runs_code, tool, input, preview, plan, kind, path, .. } = session.entries.get(ix)? else { return None };
     if let Some(plan) = plan {
@@ -223,7 +188,6 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
         if let Some(reason) = input["reason"].as_str().filter(|r| !r.trim().is_empty()) {
             lines.push((reason.trim().to_owned(), Tone::Secondary));
         }
-        // Only the session's notebook crashed: only it starts again (`restart_ask::only_notebook_crashed`).
         let heading = if let Some(only) = input["only"].as_str() {
             lines.push((format!("Only {only} starts again; its file is saved. Other notebooks on {host} keep running."), Tone::Muted));
             format!("Restart {only}?")
@@ -256,16 +220,13 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
     let rerun = preview.as_ref().map(|p| p.dependent_ids.clone()).unwrap_or_default();
     let needed = preview.as_ref().map(|p| p.needed_ids.clone()).unwrap_or_default();
 
-    // (label, key, option, scope)
     let mut buttons: Vec<(String, &'static str, PermissionOption, Scope)> = Vec::new();
     let allow = option_of_kind(options, PermissionOptionKind::AllowOnce);
     let deny = option_of_kind(options, PermissionOptionKind::RejectOnce);
     if matches!(tool, "allow_execution" | endeavor_mcp::REQUEST_RESTART) && *runs_code {
-        // The same question as the notebook's safe-preview callout: once, not "always".
         buttons.extend(deny.map(|d| ("Not now".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
     } else if matches!(tool, "approve_install" | "answer_prompt" | "restart_notebook" | "close_notebook") && *runs_code {
-        // One download, one answer, one restart or close: "always" would turn on Auto for every later run.
         buttons.extend(deny.map(|d| ("Deny".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
     } else if let Some(allow) = allow {
@@ -294,18 +255,15 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
     Some(ApprovalView { heading: ask.heading, count: None, code: ask.code, lines: ask.lines, plan: None, buttons, folder, cells, rerun, needed, then: vec![], names: ask.names })
 }
 
-/// "About 1.3 GB to download." (or MB), for the download card's muted line.
 fn download_size(bytes: u64) -> String {
     let mb = (bytes as f64 / 1e6).ceil().max(1.0);
     if mb < 950.0 {
         return format!("About {mb} MB to download.");
     }
-    // 999 MB reads "About 1 GB", not "1000 MB" or "1.0 GB".
     let gb = format!("{:.1}", mb / 1e3);
     format!("About {} GB to download.", gb.strip_suffix(".0").unwrap_or(&gb))
 }
 
-/// A prompt's question, the word on its ⏎ button, and its body.
 #[derive(Default)]
 struct Prompt {
     heading: String,
@@ -315,8 +273,6 @@ struct Prompt {
     names: Vec<String>,
 }
 
-/// A run card (the execution gate): "Run `rates`?" with the cell's code, the
-/// edit as a diff, a new cell's code, a deleted cell struck through.
 fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview: Option<&pluto::RunPreview>) -> Prompt {
     let question = run_question(tool, preview, input);
     let what = match tool {
@@ -332,12 +288,10 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
     if let Some(what) = what {
         let mut lines = Vec::new();
         let code = (tool == "answer_prompt").then(|| {
-            // What the cell asks, then the answer; an empty answer is a press of Enter (#171).
             if let Some(asked) = preview.and_then(|p| p.question.as_deref()) {
                 lines.push((format!("The cell asks: {}", cut_line(asked, 80)), Tone::Secondary));
             }
             let text = input["text"].as_str().unwrap_or("");
-            // Only spaces would show as nothing: say how many.
             CardCode::Plain(match text.chars().count() {
                 0 => "(Enter)".to_owned(),
                 n if text.chars().all(|c| c == ' ') => format!("({n} space{})", if n == 1 { "" } else { "s" }),
@@ -397,13 +351,10 @@ fn run_prompt(session: &Session, tool: &str, input: &serde_json::Value, preview:
     Prompt { heading: question.heading, verb: question.button, code, lines, names: question.names }
 }
 
-/// The agent's own prompt (Manual, or a call its rules ask about), in Endeavor's words.
-/// `existing`: for a write, the file's text when the prompt came, if it was there.
 fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &serde_json::Value, path: Option<&Path>, existing: Option<&str>) -> Prompt {
     let field = |name: &str| input[name].as_str().filter(|s| !s.trim().is_empty());
     let here = crate::platform::this_computer!();
     let folder = tilde(Path::new(&session.place.path));
-    // A file inside the session's folder by its path there, else by its name.
     let named = |file: &str| {
         Path::new(file).strip_prefix(&session.place.path).ok().map(|p| p.display().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(|| file_name(file))
     };
@@ -500,7 +451,6 @@ fn agent_prompt(session: &Session, title: &str, kind: Option<ToolKind>, input: &
     Prompt { heading: format!("Allow {short}?"), verb: "Allow", code: None, lines: full.into_iter().collect(), ..Default::default() }
 }
 
-/// A tool's title without its raw name: `mcp__github__create_issue` → "`create issue` from `github`".
 fn plain_title(title: &str) -> String {
     match title.trim().strip_prefix("mcp__").map(|t| t.split_once("__").unwrap_or((t, ""))) {
         Some((server, "")) => format!("a `{server}` tool"),
@@ -523,7 +473,6 @@ pub fn render_approval(session: &Session, notebook_shown: bool, window: &Window,
             let focus = session.approval_focus(i, cx);
             let id = ElementId::NamedInteger("perm".into(), (key << 32) | (ix as u64 * 16 + i as u64));
             let button = approval_button(id, &label, hint, weight, &focus).on_click(cx.listener(move |this, _, _, cx| this.with_session(key, cx, |s| s.answer(ix, &option, scope))));
-            // "Always this session" with a ⌄ for "In this folder", when the agent keeps folder rules.
             let button = match (&folder, scope) {
                 (Some(folder), Scope::Session) => always_split(session, ix, button, folder.clone(), always_menu, cx),
                 _ => button.into_any_element(),
@@ -555,7 +504,6 @@ pub fn render_approval(session: &Session, notebook_shown: bool, window: &Window,
         approval_card(heading, body, buttons)
     } else {
         let mut body: Vec<AnyElement> = Vec::new();
-        // The asked-about cell is off screen in the notebook: a line to show it.
         if notebook_shown && session.asks.cells_visible == Some(false) && !view.cells.is_empty() {
             let cells = view.cells.clone();
             body.push(
@@ -605,8 +553,6 @@ pub fn render_approval(session: &Session, notebook_shown: bool, window: &Window,
         }));
         approval_card(heading, body, buttons)
     };
-    // One height through a run of queued prompts: the chat above doesn't move.
-    // The opened code box doesn't count: closing it again shrinks the card.
     let height = session.asks.card_height.clone();
     let measure = !session.asks.code_open;
     let min = height.get().filter(|_| measure);
@@ -642,7 +588,6 @@ pub fn render_approval(session: &Session, notebook_shown: bool, window: &Window,
     Some(div().flex().flex_col().gap(px(6.)).child(card).children(then).into_any_element())
 }
 
-/// The outlined "Always this session" with its ⌄, which opens This session / In this folder.
 fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: PermissionOption, open: bool, cx: &mut Context<Workspace>) -> AnyElement {
     let key = session.key;
     let chevron = div()
@@ -719,7 +664,6 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
         .into_any_element()
 }
 
-/// A card's code box: the first lines (all of them, scrolling past `max_h`, once opened).
 fn code_box(code: &CardCode, open: bool, max_h: Pixels, id: ElementId) -> AnyElement {
     let lines = code.lines();
     let total = lines.len();
@@ -754,7 +698,6 @@ fn code_box(code: &CardCode, open: bool, max_h: Pixels, id: ElementId) -> AnyEle
         .into_any_element()
 }
 
-/// A faint "Show all …" / "Show the whole plan" toggle under a card's code or plan.
 fn toggle_link(id: ElementId, label: &str, open: bool, focus: &FocusHandle) -> Stateful<Div> {
     div()
         .id(id)
@@ -773,8 +716,6 @@ fn toggle_link(id: ElementId, label: &str, open: bool, focus: &FocusHandle) -> S
         .child(if open { "⌄" } else { "›" })
 }
 
-/// The agent's own options as buttons, for a prompt without an allow-once
-/// option: declining first, then the rest, in Endeavor's words.
 fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, PermissionOption, Scope)> {
     let rank = |o: &PermissionOption| match o.kind {
         PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways => 0,
@@ -798,27 +739,17 @@ fn option_buttons(options: &[PermissionOption]) -> Vec<(String, &'static str, Pe
         .collect()
 }
 
-/// Plan mode's plan, as its card shows it.
 pub(crate) struct PlanCard {
-    /// The plan's own title, from a heading that opens it ("Plan:" dropped).
     pub title: Option<String>,
-    /// Its first numbered list, as written (markdown), when it has one: the
-    /// card shows these steps until the user asks for the whole plan.
     pub steps: Option<String>,
-    /// The whole plan (markdown), without its title.
     pub full: String,
-    /// The whole plan is showing.
     pub open: bool,
 }
 
-/// A plan's own title, from the heading that opens it.
 pub(crate) fn plan_title(markdown: &str) -> Option<String> {
     plan_card(markdown).title
 }
 
-/// Splits a plan (markdown) into its title, its numbered steps and the rest.
-/// Steps are the first run of top-level numbered items ("1. …", "2) …"),
-/// with the lines indented under them; the list needs two items or more.
 fn plan_card(markdown: &str) -> PlanCard {
     let mut lines: Vec<&str> = markdown.lines().collect();
     while lines.first().is_some_and(|l| l.trim().is_empty()) {
@@ -846,7 +777,6 @@ fn plan_card(markdown: &str) -> PlanCard {
         } else if steps.is_empty() {
             continue;
         } else if line.trim().is_empty() {
-            // A blank line inside the list only if the list goes on after it.
             let next = lines[i + 1..].iter().find(|l| !l.trim().is_empty());
             if !next.is_some_and(|l| numbered(l) || l.starts_with([' ', '\t'])) {
                 break;
@@ -860,15 +790,11 @@ fn plan_card(markdown: &str) -> PlanCard {
     PlanCard { title, steps, full, open: false }
 }
 
-/// A plan's markdown inside its card: headings at body size, so the steps and
-/// sections read as one plan rather than a document.
 fn plan_style() -> TextViewStyle {
     markdown_style().heading_font_size(|_, _| theme::chat_body())
 }
 
-/// Plan mode's end: Keep planning · Start in Auto · **Start**.
 fn plan_buttons(options: &[PermissionOption]) -> Vec<CardButton> {
-    // (label, key, option, runs without asking, weight)
     let buttons: Vec<(&str, &'static str, Option<&PermissionOption>, bool, Weight)> = vec![
         ("Keep planning", "esc", option_of_kind(options, PermissionOptionKind::RejectOnce), false, Weight::Quiet),
         ("Start in Auto", crate::platform::shortcut!("⏎"), plan_option(options), true, Weight::Outlined),
@@ -880,7 +806,6 @@ fn plan_buttons(options: &[PermissionOption]) -> Vec<CardButton> {
         .collect()
 }
 
-/// "Let this notebook run?"'s line about it: "bootstrap.jl · 7 cells · uses CSV, Plots".
 fn notebook_summary(file: Option<&str>, preview: Option<&pluto::RunPreview>) -> Option<String> {
     let mut parts: Vec<String> = file.map(str::to_owned).into_iter().collect();
     if let Some(p) = preview {
@@ -893,7 +818,6 @@ fn notebook_summary(file: Option<&str>, preview: Option<&pluto::RunPreview>) -> 
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-/// Packages a notebook's code imports (`using A, B`, `import C: f`), in order.
 fn imported_packages<'a>(codes: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for line in codes.flat_map(str::lines) {
@@ -911,7 +835,6 @@ fn imported_packages<'a>(codes: impl Iterator<Item = &'a str>) -> Vec<String> {
     names
 }
 
-/// `text`'s first non-blank line, cut to `max` characters with "…".
 pub(crate) fn cut_line(text: &str, max: usize) -> String {
     let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
     match line.char_indices().nth(max) {
@@ -920,30 +843,17 @@ pub(crate) fn cut_line(text: &str, max: usize) -> String {
     }
 }
 
-/// Packages new to a Julia or Python notebook that `approve_install` would install, from its
-/// preview; none for an R notebook's large download, or before the preview arrives.
 fn new_packages(preview: Option<&pluto::RunPreview>) -> Option<&[String]> {
     preview.and_then(|p| p.asking.as_ref()).filter(|a| a.new && !a.packages.is_empty()).map(|a| a.packages.as_slice())
 }
 
-/// The packages an `approve_install` card named, which its yes covers and no others (EndeavorMCP
-/// #418): a package the notebook came to need after the card asks again. Empty where the card named
-/// none (its preview never came, or it is R's download, which isn't about names: the runtime goes by
-/// the download there). The app's yes to this call is always this card: the agent's own prompt for
-/// it is answered by the runtime's hold, and the call is never let through on arrival.
 pub(crate) fn shown_packages(tool: &str, preview: Option<&pluto::RunPreview>) -> Option<Vec<String>> {
     (tool == "approve_install").then(|| new_packages(preview).map(<[String]>::to_vec).unwrap_or_default())
 }
 
-/// `approve_install`'s question: "Install Makie and WGLMakie, new to this notebook?" for a Julia or
-/// Python notebook's new packages (no size: nothing is measured), R's download question otherwise,
-/// and a plain one until the preview says which.
 fn install_question(preview: Option<&pluto::RunPreview>) -> RunQuestion {
     let asking = preview.and_then(|p| p.asking.as_ref());
     if let (Some(names), Some(asking)) = (new_packages(preview), asking) {
-        // Every name, however many: the yes sends them all (`shown_packages`), so what the card shows
-        // is what it approves, and none hides behind "and N more". A long list wraps.
-        // A likely typo says what it is close to: "pandsa (close to pandas)".
         let named = |name: &String| match asking.close_to.iter().find(|(p, _)| p == name) {
             Some((_, near)) => format!("{name} (close to {near})"),
             None => name.clone(),
@@ -955,38 +865,25 @@ fn install_question(preview: Option<&pluto::RunPreview>) -> RunQuestion {
     }
     match asking {
         Some(_) => RunQuestion { heading: "Download and install the packages?".into(), button: "Download", names: vec![] },
-        // Until the runtime says what waits, or if it couldn't.
         None => RunQuestion { heading: "Install the packages?".into(), button: "Install", names: vec![] },
     }
 }
 
-/// Whether a card asks the runtime about its call before it is answered: the cells a run would run
-/// (`previews_cells`), what `approve_install` would install, or what `answer_prompt`'s cell asks.
 pub(crate) fn fetches_preview(tool: &str) -> bool {
     previews_cells(tool) || matches!(tool, "approve_install" | "answer_prompt")
 }
 
-/// Whether a run card asks the runtime which cells a call would run: not for
-/// a shell command, or a call on the whole notebook that names no cells.
 pub(crate) fn previews_cells(tool: &str) -> bool {
     !matches!(tool, "run_shell" | "restart_notebook" | "close_notebook" | "apply_package_update" | "approve_install" | "answer_prompt" | "set_input")
 }
 
-/// A run card's question ("Run `fit`?", "Delete a cell?", "Add `x` and run
-/// it?"), the word on its ⏎ button, and the cells it would run.
 pub(crate) struct RunQuestion {
     pub heading: String,
     pub button: &'static str,
     pub names: Vec<String>,
 }
 
-/// Every run card asks "<Verb> <what>?": `name` for one cell with a name, "a
-/// cell" for one without, "N cells", "all N cells". Before the runtime says
-/// what would run, the call's input says what it can. A cell is named by what
-/// it defines, else by its first line; a cell being edited or added by its new
-/// code, since the preview only knows the code before the edit.
 fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_json::Value) -> RunQuestion {
-    // Whole-notebook runs that name no cells: their own question, never "Run 0 cells?".
     match tool {
         "restart_notebook" => return RunQuestion { heading: "Restart the notebook?".into(), button: "Restart", names: vec![] },
         "close_notebook" => return RunQuestion { heading: "Close the notebook?".into(), button: "Close", names: vec![] },
@@ -1010,7 +907,6 @@ fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_j
         }
         _ => {}
     }
-    // The runtime can't say what a cell that doesn't exist yet would run.
     let preview = preview.filter(|_| tool != "add_cell");
     let new_code = input["code"].as_str().filter(|_| matches!(tool, "edit_cell" | "add_cell"));
     let label = |code: &str| if code.trim().is_empty() { String::new() } else { cell_label(code) };
@@ -1044,8 +940,6 @@ fn run_question(tool: &str, preview: Option<&pluto::RunPreview>, input: &serde_j
     RunQuestion { heading, button, names }
 }
 
-/// The approval card's frame: accent edge, soft ring, a heading, its body, and
-/// a footer of buttons (the one that declines on the left).
 fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weight, AnyElement)>) -> AnyElement {
     let (left, right): (Vec<_>, Vec<_>) = buttons.into_iter().partition(|(weight, _)| *weight == Weight::Quiet);
     div()
@@ -1069,16 +963,11 @@ fn approval_card(heading: AnyElement, body: Vec<AnyElement>, buttons: Vec<(Weigh
                 .border_t_1()
                 .border_color(theme::accent().opacity(0.25))
                 .children(left.into_iter().map(|(_, b)| b.into_any_element()))
-                // Wraps too: at a large chat text size, Always this session and the
-                // filled answer don't fit side by side.
                 .child(div().flex_1().flex().flex_wrap().justify_end().gap(px(4.)).children(right.into_iter().map(|(_, b)| b))),
         )
         .into_any_element()
 }
 
-/// A card's heading: chat subhead size, medium, with `backticked` names in
-/// chat code size mono.
-/// `count` ("1 of 3") sits at its right, muted.
 fn card_heading(text: &str, count: Option<&str>) -> AnyElement {
     let heading = inline_code(text, theme::chat_code()).text_size(theme::chat_subhead()).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary());
     match count {
@@ -1117,7 +1006,6 @@ fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus
         .tab_stop(true)
         .map(|d| match weight {
             Weight::Primary => d.bg(theme::accent()).text_color(gpui::white()).font_weight(FontWeight::SEMIBOLD).focus_ring_on(theme::bg_urgent()),
-            // Its outline is the reserved 2 px border, so focus only recolours it.
             Weight::Outlined => d
                 .border_color(theme::control_edge())
                 .text_color(theme::text_row_active())
@@ -1129,26 +1017,21 @@ fn approval_button(id: ElementId, label: &str, hint: &str, weight: Weight, focus
         .when(!hint.is_empty(), |d| d.child(div().text_size(theme::chat_meta_small()).font_weight(FontWeight::NORMAL).opacity(0.6).child(hint.to_string())))
 }
 
-/// Text with `backticked` spans in mono at `mono` size.
 fn inline_code(text: &str, mono: Pixels) -> Div {
-    // Plain text wraps as text does, even inside a long word.
     if !text.contains('`') {
         return div().child(text.to_owned());
     }
     div().flex().flex_wrap().children(text.split('`').enumerate().map(move |(i, part)| {
-        // Flex drops a part's edge spaces; non-breaking ones survive.
         let d = div().child(part.replace(' ', "\u{a0}"));
         if i % 2 == 1 { d.font_family(theme::MONO).font_weight(FontWeight::NORMAL).text_size(mono) } else { d }
     }))
 }
 
-/// "Progress · 1 of 3": steps done of all.
 pub(crate) fn progress(entries: &[PlanEntry]) -> String {
     let done = entries.iter().filter(|e| e.status == PlanEntryStatus::Completed).count();
     format!("Progress · {done} of {}", entries.len())
 }
 
-/// The plan checklist: ✓ done (struck through), ◐ current (bright), ○ upcoming (grey).
 pub(crate) fn plan_rows(entries: &[PlanEntry]) -> impl Iterator<Item = Div> + '_ {
     entries.iter().map(|e| {
         let (mark, mark_color, text_color) = match e.status {
@@ -1164,7 +1047,6 @@ pub(crate) fn plan_rows(entries: &[PlanEntry]) -> impl Iterator<Item = Div> + '_
     })
 }
 
-/// The running turn's plan, pinned above the composer; click the header to fold it.
 pub fn render_pinned_plan(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let Entry::Plan(entries) = &session.entries[session.pinned_plan()?] else { return None };
     let (key, folded) = (session.key, session.plan_folded);
@@ -1210,7 +1092,6 @@ mod tests {
     use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, SessionMode, SessionModeState, ToolCallId, ToolKind};
     use serde_json::{Value, json};
 
-    /// Claude Code's options for a Bash call with a suggested rule (the adapter's own labels).
     fn claude_options() -> Vec<PermissionOption> {
         vec![
             PermissionOption::new("allow-once", "Yes", PermissionOptionKind::AllowOnce),
@@ -1304,8 +1185,6 @@ mod tests {
         assert_eq!(bash.code, Some(super::CardCode::Plain("npm test".into())));
         assert_eq!(bash.lines[0].0, "Runs the tests");
         assert!(bash.lines[1].0.starts_with("In ") && bash.lines[1].0.ends_with(&crate::hosts::text(&std::path::Path::new("projects").join("decay-fits"))));
-        // ⏎ allows once, ⌘⏎ is Always this session (allow-once, remembered by Endeavor),
-        // and "In this folder" is the agent's own allow-always, under the ⌄.
         assert_eq!(
             buttons(&bash),
             vec![
@@ -1372,7 +1251,6 @@ mod tests {
         assert_eq!(run.code, Some(super::CardCode::Plain("…".into())), "before the runtime says what it runs");
         assert_eq!(run.lines[0].0, "Finding out what it runs…");
         assert_eq!(run.cells, vec!["a".to_string()]);
-        // Once the runtime says: `b` needs `a`, which never ran, and `c` re-runs after it.
         if let Some(Entry::Permission { preview, .. }) = s.entries.last_mut() {
             *preview = Some(crate::pluto::RunPreview {
                 count: 1,
@@ -1402,7 +1280,6 @@ mod tests {
             ..Default::default()
         };
         let heading = |tool, p: &RunPreview, input| super::run_question(tool, Some(p), &input).heading;
-        // A new notebook's empty first cell, edited and run in one call.
         assert_eq!(heading("edit_cell", &one(None, ""), json!({ "code": "x = 1\ny = 2", "run_after": true })), "Edit `x` and run it?");
         assert_eq!(heading("execute_cell", &one(None, ""), json!({})), "Run a cell?");
         assert_eq!(heading("execute_cell", &one(Some(""), "  \n"), json!({})), "Run a cell?");
@@ -1467,7 +1344,6 @@ mod tests {
     fn a_notebooks_new_packages_ask_to_install_them_by_name() {
         use super::{new_packages, run_question};
         use crate::pluto::{self, RunPreview};
-        // EndeavorMCP #397/#355: a Julia or Python notebook's new packages have no size, and "install" is the word.
         let asking = |new, packages: &[&str]| Some(RunPreview { asking: Some(pluto::Asking { new, packages: packages.iter().map(|p| p.to_string()).collect(), close_to: vec![], bytes: None }), ..Default::default() });
         let ask = |preview: Option<RunPreview>| {
             let q = run_question("approve_install", preview.as_ref(), &json!({ "notebook_id": "n" }));
@@ -1475,19 +1351,15 @@ mod tests {
         };
         assert_eq!(ask(asking(true, &["Example"])), ("Install Example, new to this notebook?".into(), "Install"));
         assert_eq!(ask(asking(true, &["Makie", "WGLMakie"])), ("Install Makie and WGLMakie, new to this notebook?".into(), "Install"));
-        // Every name the yes approves is on the card (EndeavorMCP #418): none hides behind "and 2 more".
         let six = asking(true, &["A", "B", "C", "D", "E", "F"]);
         assert_eq!(ask(six.clone()), ("Install A, B, C, D, E and F, new to this notebook?".into(), "Install"));
         assert_eq!(super::shown_packages("approve_install", six.as_ref()), Some(["A", "B", "C", "D", "E", "F"].map(String::from).to_vec()), "and the yes sends those six");
-        // An R notebook's large download keeps its question; before the preview, neither word is promised.
         assert_eq!(ask(asking(false, &["GO.db"])), ("Download and install the packages?".into(), "Download"));
         assert_eq!(ask(None), ("Install the packages?".into(), "Install"));
         assert_eq!(ask(Some(RunPreview::default())), ("Install the packages?".into(), "Install"), "a preview that couldn't say what waits");
         assert_eq!(new_packages(asking(true, &[]).as_ref()), None);
-        // A likely typo says what it is close to (EndeavorMCP #417).
         let typo = Some(RunPreview { asking: Some(pluto::Asking { new: true, packages: vec!["pandsa".into()], close_to: vec![("pandsa".into(), "pandas".into())], bytes: None }), ..Default::default() });
         assert_eq!(ask(typo.clone()), ("Install pandsa (close to pandas), new to this notebook?".into(), "Install"));
-        // Its yes names the packages the card did, which it covers and no others (EndeavorMCP #418).
         assert_eq!(super::shown_packages("approve_install", typo.as_ref()), Some(vec!["pandsa".to_owned()]));
         assert_eq!(super::shown_packages("approve_install", asking(false, &["GO.db"]).as_ref()), Some(vec![]), "R's download names none");
         assert_eq!(super::shown_packages("approve_install", None), Some(vec![]), "nor a card whose preview never came");

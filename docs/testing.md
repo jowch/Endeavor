@@ -378,6 +378,28 @@ These are read by debug builds only.
 - `ENDEAVOR_TEST_MCP_URL` and `ENDEAVOR_TEST_TOKEN`: a runtime's `/mcp`
   address and its token, for the ignored live tests in `src/agent.rs` that
   bring their own runtime (`cargo test -- --ignored live_list_and_load`).
+  Those tests drive a real agent:
+  - `live_list_and_load`: a finished session is listed for its folder and
+    reloads with its history.
+  - `live_fork`: a fork gets a new id whose load replays the original's
+    history.
+  - `live_tools_through_authenticated_bridge`: the agent reaches the
+    runtime's tools through the token-protected bridge. It starts this
+    computer's runtime itself.
+  - `live_modes` (with `--nocapture`): what the agent offers as modes and
+    config, and that a mode switch is confirmed (through the `mode` config
+    option; a mode update comes only when it falls back to another mode).
+  - `live_two_sessions`: two sessions on one connection with overlapping
+    turns, each reply routed to its own session.
+  - `live_codex_session_and_plan_mode` (with `--nocapture`): Codex's session
+    through the dialect, with no model turn. Run it in a private `HOME` (the
+    adapter installs into the app's folder there), with `CODEX_HOME` at a
+    signed-in Codex and `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:9/mcp`.
+- `cargo test -- --ignored live_die_and_restart --nocapture` (in
+  `src/runtime.rs`) checks the recovery path through This Mac's helper: it
+  kills the runtime as a crash or OOM kill would, and the same helper starts a
+  new one. It is slow (it starts Julia twice), and shares the state folder, so
+  quit any Endeavor first.
 - `ENDEAVOR_TEST_VIEW_CELL`: a file path. Write `<notebook id> <cell id>`
   to it, and the app makes the agent's `view_cell_output` call for the open
   session's notebook on this computer, through its own port as the agent
