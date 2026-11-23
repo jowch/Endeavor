@@ -16,6 +16,7 @@ import { initQuote } from "./quote";
 import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
 import { initFolded } from "./folded";
+import { initOutOfStep } from "./outofstep";
 import { initRail } from "./rail";
 import { initRunGuard } from "./runguard";
 import { initReveal } from "./reveal";
@@ -28,6 +29,7 @@ function init() {
   // First: other features read `context.agent` from their own "context"
   // handlers, registered after this one so it has already updated it.
   initState();
+  initOutOfStep();
   initTheme();
   initQuote();
   initAskBox();

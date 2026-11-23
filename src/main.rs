@@ -2334,6 +2334,12 @@ impl Workspace {
                 self.apply_look(cx);
                 self.sync_page_context(cx);
             }
+            // Pluto's "please refresh your browser": load the page again instead (#285).
+            Some(annotate::Message::OutOfStep) => {
+                if let Some(key) = self.active {
+                    self.reload_notebook(key, cx);
+                }
+            }
             Some(annotate::Message::State(state)) => return self.on_page_state(state, cx),
             Some(annotate::Message::RunNotebook { notebook }) => self.run_notebook(notebook, cx),
             Some(annotate::Message::RunAnyway { notebook, cells }) => self.run_anyway(notebook, cells, cx),

@@ -61,6 +61,8 @@ pub struct Ask {
 pub enum Message {
     /// The page script loaded and wants the current cell states.
     Ready,
+    /// Pluto's page got out of step with the server and would ask the user to refresh (#285).
+    OutOfStep,
     Mode(bool),
     Ask(Ask),
     /// Picks with Point, or Reply on a selected text, with the user's comment.
@@ -152,6 +154,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
     let uuid = |key: &str| v.get(key)?.as_str().filter(|s| is_uuid(s)).map(str::to_owned);
     match v.get("type")?.as_str()? {
         "ready" => Some(Message::Ready),
+        "out_of_step" => Some(Message::OutOfStep),
         // Fix with Claude / Explain on a cell's error.
         "ask" => {
             let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
@@ -347,6 +350,7 @@ mod tests {
     fn parses_valid_messages() {
         assert_eq!(parse_with(r#"{"type":"mode","on":true}"#, ""), Some(Message::Mode(true)));
         assert_eq!(parse_with(r#"{"type":"ready"}"#, ""), Some(Message::Ready));
+        assert_eq!(parse_with(r#"{"type":"out_of_step"}"#, ""), Some(Message::OutOfStep));
         let ask = |kind: &str| {
             parse_with(
                 &format!(r#"{{"type":"ask","kind":"{kind}","notebook":"{NB}","cell":"{C1}","code":"x = lsq(1)","error":"UndefVarError: lsq"}}"#),

@@ -8,6 +8,8 @@ import type { Pick } from "./quote";
 /** Messages the page sends the app. */
 export type ToApp =
   | { type: "ready" }
+  // Pluto would alert that its page is out of step with the server: load the page again.
+  | { type: "out_of_step" }
   | { type: "mode"; on: boolean }
   // What Point picked, or a selection Reply quotes, with the user's comment:
   // sent now, or (`add`) added to the composer's message.
