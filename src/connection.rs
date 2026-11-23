@@ -523,6 +523,14 @@ impl Workspace {
         self.bridge(&session.place.host)
     }
 
+    /// Session `key`'s kind, for `host`'s listener: said with every `pluto::set_session_folder`, so
+    /// the listener knows the kind the runtime was told (`runtime::Listener::session_kind`).
+    pub(crate) fn note_session_kind(&self, host: &HostId, key: u64, kind: Backend) {
+        if let Some(listener) = self.listeners.get(host) {
+            listener.session_kind(key, kind);
+        }
+    }
+
     /// Take `gone`'s notebook page out of the web view. Left there, it keeps
     /// reconnecting to its port, where the host's next runtime listens, which
     /// doesn't have the notebook the page shows.
@@ -1352,6 +1360,7 @@ impl Workspace {
             cx.background_executor().spawn(async move { pluto::set_notebook(&bridge, key, &path) }).detach();
         }
         for (key, folder, kind) in folders {
+            self.note_session_kind(host, key, kind);
             let bridge = bridge.clone();
             cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
         }

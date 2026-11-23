@@ -11,11 +11,13 @@ use std::io::ErrorKind;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use endeavor_mcp::client::{self, StartError, StartOptions};
 use wire::ToApp;
+use wire::backend::Backend;
 use wire::slurm::JobRequest;
 
 pub use endeavor_mcp::client::{Channel, Hello, Notice};
@@ -31,19 +33,23 @@ pub use endeavor_mcp::julia::{Chosen as ChosenJulia, JULIA_VERSION, check_chosen
 /// A host's listener (`endeavor_mcp::client::Listener`): the app's loopback
 /// port for its runtime, for Pluto's page, the agent's MCP and the app's
 /// calls. Each connection is relayed to the runtime of the moment. It refuses
-/// the code runs of a runtime too old to ask before a run
-/// (`older_runtime::refusal`).
+/// the code runs of a runtime too old to ask before a run, and a pathless
+/// `new_notebook` that a runtime too old to know session kinds would make in
+/// Julia for an R or Python session (`older_runtime::refusal`).
 pub struct Listener {
     relay: Arc<client::Listener>,
     version: Arc<Known>,
 }
 
 /// The attached runtime's version (`older_runtime::Version`); none while a
-/// start is under way.
+/// start is under way. And each agent session's notebook kind, as the app last
+/// told the runtime (`Listener::session_kind`), by the session's key.
 #[derive(Default)]
 struct Known {
     version: Mutex<Option<Version>>,
     changed: Condvar,
+    host: String,
+    kinds: Mutex<HashMap<String, Backend>>,
 }
 
 /// How long a call waits for the version of a runtime being attached: only
@@ -56,22 +62,29 @@ impl Known {
         self.changed.notify_all();
     }
 
-    fn refusal(&self, tool: &str, arguments: &serde_json::Value) -> Option<String> {
-        if !endeavor_mcp::runs_code(tool, arguments) {
+    fn refusal(&self, session: &str, tool: &str, arguments: &serde_json::Value) -> Option<String> {
+        let kind = self.kinds.lock().unwrap().get(session).copied().unwrap_or(Backend::Pluto);
+        // Only a code run, or an R or Python session's new notebook, waits for the version.
+        if !endeavor_mcp::runs_code(tool, arguments) && (tool != "new_notebook" || kind == Backend::Pluto) {
             return None;
         }
         let version = self.version.lock().unwrap();
         let (version, _) = self.changed.wait_timeout_while(version, VERSION_WAIT, |v| v.is_none()).unwrap();
-        crate::older_runtime::refusal((*version)?, tool, arguments)
+        crate::older_runtime::refusal((*version)?, &self.host, kind, tool, arguments)
     }
 }
 
 impl Listener {
     pub fn start(name: &str) -> Result<Arc<Listener>, String> {
-        let version = Arc::new(Known::default());
+        let version = Arc::new(Known { host: name.to_owned(), ..Known::default() });
         let known = version.clone();
-        let relay = client::Listener::with_refuse(name, Box::new(move |_session, tool, arguments| known.refusal(tool, arguments)))?;
+        let relay = client::Listener::with_refuse(name, Box::new(move |session, tool, arguments| known.refusal(session, tool, arguments)))?;
         Ok(Arc::new(Listener { relay, version }))
+    }
+
+    /// Session `key`'s notebook kind, as the app tells the runtime (`pluto::set_session_folder`).
+    pub fn session_kind(&self, key: u64, kind: Backend) {
+        self.version.kinds.lock().unwrap().insert(key.to_string(), kind);
     }
 
     /// The agent's `view_cell_output` gets `pictures`' picture when the runtime has none
@@ -544,13 +557,34 @@ mod tests {
     fn the_listener_refuses_code_runs_only_on_a_runtime_with_no_run_gate() {
         use crate::older_runtime::Version;
         let listener = super::Listener::start("lab-server").unwrap();
-        let refused = |tool: &str| listener.version.refusal(tool, &serde_json::json!({ "cell_id": "a" })).is_some();
+        let refused = |tool: &str| listener.version.refusal("1", tool, &serde_json::json!({ "cell_id": "a" })).is_some();
         for (build, interface) in [(None, None), (Some("0.1.0-0000000000000000"), None), (None, Some(endeavor_mcp::CORE_INTERFACE + 1))] {
             let version = ready(build, interface).version;
             listener.version.set(Some(version));
             assert_eq!(refused("execute_cell"), version == Version::NoRunGate, "{build:?} {interface:?}");
             assert!(!refused("read_cell"));
         }
+    }
+
+    #[test]
+    fn the_listener_refuses_a_pathless_new_notebook_in_an_r_session_on_a_runtime_without_session_kinds() {
+        use crate::older_runtime::Version;
+        use serde_json::json;
+        use wire::backend::Backend;
+        let listener = super::Listener::start("lab-server").unwrap();
+        listener.session_kind(1, Backend::Ember);
+        listener.session_kind(2, Backend::Pluto);
+        let refused = |session: &str, arguments: serde_json::Value| listener.version.refusal(session, "new_notebook", &arguments);
+        listener.version.set(Some(Version::Other(Some(5))));
+        let why = refused("1", json!({})).expect("an R session's pathless new_notebook");
+        assert!(why.contains("Endeavor on lab-server") && why.contains("ending in .R") && why.contains("request_restart"), "{why}");
+        assert!(refused("1", json!({ "path": "a.R" })).is_none(), "a path says the kind itself");
+        assert!(refused("2", json!({})).is_none(), "a Julia session's notebook is Julia's anyway");
+        assert!(refused("3", json!({})).is_none(), "a session whose kind the app never said");
+        listener.version.set(Some(Version::Other(Some(6))));
+        assert!(refused("1", json!({})).is_none(), "the runtime knows session kinds");
+        listener.version.set(Some(Version::Usable));
+        assert!(refused("1", json!({})).is_none());
     }
 }
 

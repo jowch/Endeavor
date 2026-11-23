@@ -117,10 +117,16 @@ pub fn measure_script(cell: &str) -> String {
     )
 }
 
+/// When a picture stops short of its output: (the height shown, the output's whole height).
+pub type Cut = Option<(u32, u32)>;
+
+/// A picture being taken: the PNG and its cut, or why there's none.
+type ShotJob = futures::future::LocalBoxFuture<'static, Result<(Vec<u8>, Cut), &'static str>>;
+
 /// The part of the output inside the viewport, as x, y, width, height, from
 /// `measure_script`'s answer; None if there's none worth a picture. With it, when the output is
 /// taller than that part: (the height shown, the output's whole height), for the agent (#163).
-pub fn visible_rect(measured: &str) -> Option<([f64; 4], Option<(u32, u32)>)> {
+pub fn visible_rect(measured: &str) -> Option<([f64; 4], Cut)> {
     let v: Vec<f64> = serde_json::from_str(measured).ok()?;
     let [left, top, width, height, view_width, view_height, whole] = v[..] else { return None };
     let (x, y) = (left.max(0.), top.max(0.));
@@ -579,7 +585,7 @@ impl crate::Workspace {
         .detach();
     }
 
-    fn cell_shot_job(&mut self, ask: &Ask, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Result<futures::future::LocalBoxFuture<'static, Result<(Vec<u8>, Option<(u32, u32)>), &'static str>>, &'static str> {
+    fn cell_shot_job(&mut self, ask: &Ask, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Result<ShotJob, &'static str> {
         use wire::backend::Backend;
         if self.notebook_kind(&ask.host, &ask.notebook) != Backend::Pluto {
             return Err("not a Pluto notebook");
@@ -614,7 +620,7 @@ impl crate::Workspace {
 /// pane is checked between steps, and there is no picture once it isn't on screen. The second
 /// view itself hides at once, as the user's view does (`Second::follow_pane`), and has the user's
 /// view's holes as they open (`overlay::set_second`): the checks here only place it.
-async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::BackgroundExecutor) -> Result<(Vec<u8>, Option<(u32, u32)>), &'static str> {
+async fn take(shooter: &Shooter, cell: &str, fresh: bool, executor: &gpui::BackgroundExecutor) -> Result<(Vec<u8>, Cut), &'static str> {
     let deadline = std::time::Instant::now() + DEADLINE;
     let behind = || if shooter.keep_behind() { Ok(()) } else { Err(NOT_ON_SCREEN) };
     loop {
