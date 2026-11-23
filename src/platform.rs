@@ -91,6 +91,14 @@ pub fn reveal(path: &Path) {
 #[cfg(target_os = "linux")]
 pub const WAYLAND_DISPLAY_KEPT: &str = "ENDEAVOR_WAYLAND_DISPLAY";
 
+/// The Wayland display main hid from GPUI, for a program the app starts that
+/// should reach the desktop as the user's own would: the agent, whose tool
+/// calls may open a link (#162).
+#[cfg(target_os = "linux")]
+pub fn wayland_display() -> Option<String> {
+    std::env::var(WAYLAND_DISPLAY_KEPT).ok().filter(|display| !display.is_empty())
+}
+
 /// `program`, to open a link or folder, with the desktop's own display: a
 /// browser already running on Wayland takes a link only from an opener that
 /// can reach it there, so without WAYLAND_DISPLAY the link is lost.
