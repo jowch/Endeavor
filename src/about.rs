@@ -62,8 +62,7 @@ pub enum AppUpdate {
     Ready(String),
     /// Ready, but an agent is working: Restart waits until it's done.
     ReadyAfterTurn(String),
-    /// Newer, but Endeavor can't replace itself where it is; `protected` when macOS kept it from
-    /// changing its own app in a folder it can write to.
+    /// Newer, but Endeavor can't replace itself where it is.
     Manual { build: String, protected: bool },
     Failed(String),
 }

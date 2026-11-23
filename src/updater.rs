@@ -124,8 +124,6 @@ pub fn offer(m: &Manifest, commit: &str, committed: &str) -> Option<Offer> {
 pub struct Place {
     pub app: PathBuf,
     pub replaceable: bool,
-    /// Mac: its folder is writable but macOS won't let it change the app itself, as when it was
-    /// started from a terminal without App Management permission (#166).
     pub protected: bool,
 }
 
@@ -154,8 +152,8 @@ pub fn place() -> Result<Place, &'static str> {
     }
     let app = bundle_of(&exe).ok_or("not running from Endeavor.app")?;
     let folder = app.parent().is_some_and(writable);
-    let own = writable(&app);
-    Ok(Place { replaceable: folder && own, protected: folder && !own, app })
+    let own = write_access(&app);
+    Ok(Place { replaceable: folder && own.is_ok(), protected: folder && own == Err(NoWrite::AppManagement), app })
 }
 
 #[cfg(debug_assertions)]
@@ -178,17 +176,35 @@ fn install_of(exe: &Path) -> Option<PathBuf> {
     (bin.file_name()? == "bin").then(|| bin.parent().map(Path::to_owned)).flatten()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum NoWrite {
+    AppManagement,
+    Other,
+}
+
+fn writable(path: &Path) -> bool {
+    write_access(path).is_ok()
+}
+
 #[cfg(not(unix))]
-fn writable(_: &Path) -> bool {
-    false
+fn write_access(_: &Path) -> Result<(), NoWrite> {
+    Err(NoWrite::Other)
 }
 
 #[cfg(unix)]
-fn writable(path: &Path) -> bool {
+fn write_access(path: &Path) -> Result<(), NoWrite> {
     use std::os::unix::ffi::OsStrExt as _;
-    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return false };
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return Err(NoWrite::Other) };
     // SAFETY: a valid C string.
-    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+    if unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0 {
+        return Ok(());
+    }
+    Err(no_write_for(std::io::Error::last_os_error().raw_os_error()))
+}
+
+#[cfg(unix)]
+fn no_write_for(errno: Option<i32>) -> NoWrite {
+    if errno == Some(libc::EPERM) { NoWrite::AppManagement } else { NoWrite::Other }
 }
 
 /// How long after a check the next one is due: a day, or an hour after one
@@ -600,6 +616,15 @@ fn run_installer(setup: &Path, commit: &str, dir: &Path, relaunch: bool) -> Resu
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn only_eperm_counts_as_macos_app_management() {
+        assert_eq!(super::no_write_for(Some(libc::EPERM)), super::NoWrite::AppManagement);
+        assert_eq!(super::no_write_for(Some(libc::EACCES)), super::NoWrite::Other);
+        assert_eq!(super::no_write_for(Some(libc::EROFS)), super::NoWrite::Other);
+        assert_eq!(super::no_write_for(None), super::NoWrite::Other);
+    }
+
     use super::*;
 
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
