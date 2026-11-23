@@ -416,7 +416,7 @@ export function start(notebook: string, host: Host): void {
         going.forEach(keep);
         if (held) return say(`Sent what ${mac ? "⌘↩" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8000);
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
-        say(`On its way to Claude's message box${byNumber ? ", with the picked lines by their numbers only: their text was too long" : ""}. Send it from there.`, 8000);
+        say(`On its way to Claude's message box${byNumber ? ", with the longest picked lines by their numbers only" : ""}. Send it from there.`, 8000);
         // The user sends it from Claude's box, where the view's keys (Escape, ⌘⇧E) don't reach, so Point
         // ends once the view has lost the keyboard, unless something was picked or typed since.
         // While the keyboard stays here, Point stays on for the next pick, and Escape ends it.

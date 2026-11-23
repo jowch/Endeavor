@@ -1752,7 +1752,7 @@ ${comment}` : blocks.join("\n\n");
           going.forEach(keep);
           if (held) return say(`Sent what ${mac ? "\u2318\u21A9" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8e3);
           if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: true });
-          say(`On its way to Claude's message box${byNumber ? ", with the picked lines by their numbers only: their text was too long" : ""}. Send it from there.`, 8e3);
+          say(`On its way to Claude's message box${byNumber ? ", with the longest picked lines by their numbers only" : ""}. Send it from there.`, 8e3);
           const end = () => {
             const left = pointState();
             if (!left.picks.length && !left.comment.trim()) point(false);
