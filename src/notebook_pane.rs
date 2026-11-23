@@ -1215,7 +1215,14 @@ impl Workspace {
             self.ensure_runtime(&host, cx);
             return self.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", "The notebook runtime isn't running yet.", Some(Retry::NewNotebook(key))), cx);
         };
+        // A runtime too old to know session kinds would make an R or Python session's notebook in Julia.
+        if kind != wire::backend::Backend::Pluto && self.connections.get(&host).and_then(|c| c.older).is_some_and(|v| !v.has_session_kinds()) {
+            let language = if kind == wire::backend::Backend::Marimo { "Python" } else { "R" };
+            let why = format!("Julia on {} was started by an older version of Endeavor, which can't make {language} notebooks this way. Restart Julia to use this one.", self.hosts.name(&host));
+            return self.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &why, None), cx);
+        }
         eprintln!("New notebook for session {key}");
+        self.note_session_kind(&host, key, kind);
         let steps = self.julia_steps(&host, kind, cx);
         let task = cx.background_executor().spawn(async move {
             // The runtime makes it in the session's folder, and of its kind: say them first, since a

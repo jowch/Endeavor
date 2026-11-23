@@ -1529,7 +1529,8 @@ impl Workspace {
     /// Tell session `key`'s runtime the session's folder and notebook kind, if it's up.
     fn send_session_folder(&self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
-        let Some((folder, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.path.clone(), s.kind)) else { return };
+        let Some((host, folder, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.place.path.clone(), s.kind)) else { return };
+        self.note_session_kind(&host, key, kind);
         cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
     }
 
