@@ -88,8 +88,11 @@ pub enum Part {
     /// Lines `first..=last` of the cell's code, counted from 1, and the text
     /// quoted from them.
     Lines { first: usize, last: usize, text: String },
-    /// Text from the cell's output (rendered Markdown included).
+    /// Text the user selected in the cell's output (rendered Markdown included), sent as it was.
     Output(String),
+    /// The cell's whole output, picked with Point: sent by name only, as the agent reads it now. Its text is
+    /// for the card.
+    WholeOutput(String),
     /// The cell's output as a picture.
     Figure(Arc<Vec<u8>>),
 }
@@ -101,7 +104,7 @@ impl Part {
             Part::Whole(_) => "whole cell".into(),
             Part::Lines { first, last, .. } if first == last => format!("line {first}"),
             Part::Lines { first, last, .. } => format!("lines {first}–{last}"),
-            Part::Output(_) => "output".into(),
+            Part::Output(_) | Part::WholeOutput(_) => "output".into(),
             Part::Figure(_) => "figure".into(),
         }
     }
@@ -143,7 +146,7 @@ impl Quote {
     pub fn excerpt(&self) -> Option<&str> {
         match &self.from {
             Quoted::Reply { text, .. } => Some(text),
-            Quoted::Cell { part: Part::Whole(text) | Part::Lines { text, .. } | Part::Output(text), .. } => Some(text),
+            Quoted::Cell { part: Part::Whole(text) | Part::Lines { text, .. } | Part::Output(text) | Part::WholeOutput(text), .. } => Some(text),
             Quoted::Cell { part: Part::Figure(_), .. } | Quoted::Box { .. } => None,
         }
     }
@@ -295,7 +298,8 @@ pub fn prompt_blocks(text: &str, attachments: &[Attachment], mentioned: &[String
         match attachment {
             Attachment::Quote(quote) => {
                 blocks.push(note(quote_block(quote, kind)));
-                if let Some(png) = quote.picture() {
+                // Only a box's picture goes: a figure's the agent sees with view_cell_output, as it is now.
+                if let (Quoted::Box { .. }, Some(png)) = (&quote.from, quote.picture()) {
                     blocks.push(ContentBlock::Image(ImageContent::new(base64(png), "image/png")));
                 }
             }
@@ -412,9 +416,11 @@ fn quote_note(kind: Backend) -> String {
         "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> \
     followed by their comment on it. A quote's uri, notebook://{}/{{notebook_id}}/cell/{{cell_id}}, names its cell \
     (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was \
-    quoted when it isn't code: `output` (text from the cell's output), `figure` (the cell's output; the image after \
-    the quote shows it) or `box` (a box the user drew over the notebook; the image after the quote shows what was in \
-    it, and `uri` lists the cells under it). Read current code and outputs with the notebook MCP tools.",
+    quoted when it isn't code: `output` (the cell's output), `figure` (the cell's output, a picture) or `box` (a box \
+    the user drew over the notebook; the image after the quote shows what was in it, and `uri` lists the cells under \
+    it). A quote with a body holds what the user selected or the lines they picked, as it was then; the others \
+    hold no code or output, only the name of what was picked. Read \
+    what the cells hold now with the notebook MCP tools (read_cell, view_cell_output).",
         kind.name()
     )
 }
@@ -440,25 +446,6 @@ const FROM_REPLY: &str = "> — Claude's reply";
 /// </quote>
 /// Is sampling with replacement right here?
 /// ```
-/// How much of a picked output's text goes in a quote, in characters. An output can be
-/// megabytes (a 200,000-line `Text` is about 1.3 MB): past this, its start and end with a
-/// note, as the Desktop notebook view cuts it (`frontend/src/view.ts`, `outputText`).
-const OUTPUT_MAX: usize = 4000;
-const OUTPUT_END: usize = 500;
-
-/// `text` cut to `OUTPUT_MAX` characters, its start and end kept, saying how much was left out.
-fn output_text(text: &str) -> std::borrow::Cow<'_, str> {
-    let count = text.chars().count();
-    if count <= OUTPUT_MAX {
-        return text.into();
-    }
-    let at = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
-    let (end, start) = (OUTPUT_MAX - OUTPUT_END, count - OUTPUT_END);
-    let left = start - end;
-    let left = left.to_string().as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",");
-    format!("{}\n[{left} characters of this output left out here.]\n{}", &text[..at(end)], &text[at(start)..]).into()
-}
-
 pub fn quote_block(quote: &Quote, backend: Backend) -> String {
     let (quoted, gap) = match &quote.from {
         Quoted::Reply { text, at } => {
@@ -472,9 +459,12 @@ pub fn quote_block(quote: &Quote, backend: Backend) -> String {
         Quoted::Cell { notebook, cell, name, part } => {
             let uri = cell_uri(backend, notebook, cell);
             let out = match part {
-                Part::Whole(code) => format!("<quote cell=\"{name}\" uri=\"{uri}\">\n{code}\n</quote>"),
+                // A cell or its whole output is named, and the agent reads it as it is now; what the user selected
+                // or picked lines of goes with its text.
+                Part::Whole(_) => format!("<quote cell=\"{name}\" uri=\"{uri}\"/>"),
                 Part::Lines { first, last, text } => format!("<quote cell=\"{name}\" lines=\"{first}-{last}\" uri=\"{uri}\">\n{text}\n</quote>"),
-                Part::Output(text) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\">\n{}\n</quote>", output_text(text)),
+                Part::Output(text) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\">\n{text}\n</quote>"),
+                Part::WholeOutput(_) => format!("<quote cell=\"{name}\" part=\"output\" uri=\"{uri}\"/>"),
                 Part::Figure(_) => format!("<quote cell=\"{name}\" part=\"figure\" uri=\"{uri}\"/>"),
             };
             (out, "\n")
@@ -530,7 +520,9 @@ pub fn replayed_quote(block: &str) -> Option<Attachment> {
                 let (notebook, cell) = notebook_of(attr("uri")?)?;
                 let part = match (part, attr("lines"), body) {
                     (Some("figure"), _, None) => Part::Figure(Arc::new(Vec::new())),
+                    (Some("output"), _, None) => Part::WholeOutput(String::new()),
                     (Some("output"), _, Some(text)) => Part::Output(text.into()),
+                    (None, None, None) => Part::Whole(String::new()),
                     (None, Some(lines), Some(text)) => {
                         let (first, last) = lines.split_once('-')?;
                         Part::Lines { first: first.parse().ok()?, last: last.parse().ok()?, text: text.into() }
@@ -1048,29 +1040,6 @@ mod tests {
 
     const NB: &str = "6a1b2c3d-0000-4000-8000-1234567890ab";
 
-    #[test]
-    fn a_huge_picked_output_keeps_its_start_and_end() {
-        assert_eq!(output_text("0.42"), "0.42");
-        let exact = "x".repeat(OUTPUT_MAX);
-        assert_eq!(output_text(&exact), exact);
-        // 200,000 lines, as the Desktop audit's Text output: its first 3,500 and last 500 characters.
-        let huge: String = (0..200_000).map(|i| format!("line {i}\n")).collect();
-        let cut = output_text(&huge);
-        let n = huge.chars().count();
-        assert!(cut.starts_with(&huge[..3500]) && cut.ends_with(&huge[huge.len() - 500..]));
-        assert!(cut.contains(&format!("\n[{} characters of this output left out here.]\n", fmt_thousands(n - 4000))), "{}", &cut[3490..3600]);
-        // Characters, not bytes: an emoji isn't split.
-        let wide = "é😀".repeat(3000);
-        let cut = output_text(&wide);
-        assert!(cut.contains("\n[2,000 characters of this output left out here.]\n"));
-        assert!(cut.starts_with(&"é😀".repeat(1750)) && cut.ends_with(&"é😀".repeat(250)));
-    }
-
-    fn fmt_thousands(n: usize) -> String {
-        let s = n.to_string();
-        s.as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",")
-    }
-
     fn cell(id: &str, code: &str) -> Cell {
         Cell { id: id.into(), code: code.into() }
     }
@@ -1206,6 +1175,10 @@ mod tests {
             quote(in_rates(Part::Lines { first: 3, last: 5, text: "rows = rand(1:n, n)\nfit(rows)\nend;".into() }), "Is sampling with replacement right here?"),
             quote(in_rates(Part::Figure(Arc::new(b"hi!".to_vec()))), "Why does the fit miss these early points?"),
             quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into(), "c2".into()], png: Arc::new(Vec::new()) }, ""),
+            quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into()], png: Arc::new(b"box".to_vec()) }, "this"),
+            quote(in_rates(Part::Whole("rates = 1\nfit()".into())), "and the cell"),
+            quote(in_rates(Part::WholeOutput("0.42".into())), ""),
+            quote(in_rates(Part::Output("42".into())), "this number"),
         ];
         let attachments: Vec<Attachment> = quotes.into_iter().map(Attachment::Quote).collect();
         let all = texts(&prompt_blocks("Check these before I write this up.", &attachments, &[], Backend::Pluto));
@@ -1216,11 +1189,15 @@ mod tests {
                 "> refits the model on 1,000 resampled copies\n> — Claude's reply, 14:02\n\nWhy 1,000 and not 10,000?".to_string(),
                 format!("<quote cell=\"rates\" lines=\"3-5\" uri=\"notebook://pluto/{NB}/cell/c1\">\nrows = rand(1:n, n)\nfit(rows)\nend;\n</quote>\nIs sampling with replacement right here?"),
                 format!("<quote cell=\"rates\" part=\"figure\" uri=\"notebook://pluto/{NB}/cell/c1\"/>\nWhy does the fit miss these early points?"),
-                "image image/png aGkh".into(),
                 format!("<quote part=\"box\" uri=\"notebook://pluto/{NB}/cell/c1 notebook://pluto/{NB}/cell/c2\"/>"),
+                format!("<quote part=\"box\" uri=\"notebook://pluto/{NB}/cell/c1\"/>\nthis"),
+                "image image/png Ym94".into(),
+                format!("<quote cell=\"rates\" uri=\"notebook://pluto/{NB}/cell/c1\"/>\nand the cell"),
+                format!("<quote cell=\"rates\" part=\"output\" uri=\"notebook://pluto/{NB}/cell/c1\"/>"),
+                format!("<quote cell=\"rates\" part=\"output\" uri=\"notebook://pluto/{NB}/cell/c1\">\n42\n</quote>\nthis number"),
                 "Check these before I write this up.".into(),
             ],
-            "a box without a picture goes without an image"
+            "lines go with their text; a cell, an output and a figure by name only; a box with its picture, and without one if none was taken"
         );
         let chat_only = [Attachment::Quote(quote(Quoted::Reply { text: "x".into(), at: None }, ""))];
         assert_eq!(texts(&prompt_blocks("", &chat_only, &[], Backend::Pluto)), ["> x\n> — Claude's reply"], "no notebook note, and no words");
@@ -1231,9 +1208,10 @@ mod tests {
         let quotes = [
             quote(Quoted::Reply { text: "one\n\ntwo".into(), at: Some("Sat 9:10".into()) }, "and?\n\nmore"),
             quote(Quoted::Reply { text: "x".into(), at: None }, ""),
-            quote(in_rates(Part::Whole("rates = 1\n</quote> # not the end".into())), "whole"),
-            quote(in_rates(Part::Lines { first: 2, last: 2, text: "fit()".into() }), ""),
-            quote(in_rates(Part::Output("0.42 ± 0.03".into())), "hm"),
+            quote(in_rates(Part::Whole(String::new())), "whole"),
+            quote(in_rates(Part::Lines { first: 2, last: 2, text: "fit()\n</quote> # not the end".into() }), ""),
+            quote(in_rates(Part::WholeOutput(String::new())), "hm"),
+            quote(in_rates(Part::Output("0.42 ± 0.03".into())), "selected"),
             quote(in_rates(Part::Figure(Arc::new(Vec::new()))), ""),
             quote(Quoted::Box { notebook: NB.into(), cells: vec!["c1".into()], png: Arc::new(Vec::new()) }, "is this real?"),
         ];
@@ -1241,6 +1219,11 @@ mod tests {
             let block = quote_block(&q, Backend::Pluto);
             assert_eq!(replayed_quote(&block), Some(Attachment::Quote(q)), "{block}");
         }
+        // A session from before quotes named cells and outputs only: their text comes back.
+        let old = format!("<quote cell=\"rates\" part=\"output\" uri=\"notebook://pluto/{NB}/cell/c1\">\n0.42\n</quote>\nhm");
+        assert_eq!(replayed_quote(&old), Some(Attachment::Quote(quote(in_rates(Part::Output("0.42".into())), "hm"))));
+        let old = format!("<quote cell=\"rates\" uri=\"notebook://pluto/{NB}/cell/c1\">\nrates = 1\n</quote>");
+        assert_eq!(replayed_quote(&old), Some(Attachment::Quote(quote(in_rates(Part::Whole("rates = 1".into())), ""))));
         assert_eq!(replayed_quote("> just a blockquote the user typed"), None);
         assert_eq!(replayed_quote("plain words"), None);
     }

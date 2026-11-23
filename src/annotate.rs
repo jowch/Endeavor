@@ -283,7 +283,9 @@ fn pick_quote(pick: &serde_json::Value, notebook: &str) -> Option<(Quoted, Optio
             }
             Part::Lines { first, last, text: text() }
         }
-        "output" => Part::Output(text()),
+        // Text the user selected goes as it was (reply.ts); an output picked with Point goes by name.
+        "output" if pick.get("selected").and_then(|s| s.as_bool()) == Some(true) => Part::Output(text()),
+        "output" => Part::WholeOutput(text()),
         "figure" => Part::Figure(png()),
         _ => return None,
     };
@@ -387,6 +389,7 @@ mod tests {
                 {{"part":"lines","cell":"{C1}","code":"s = sum(xs)\nt = 2","lines":[1,1],"text":"s = sum(xs)"}},
                 {{"part":"figure","cell":"{C1}","code":"plot(xs)","shot":3}},
                 {{"part":"output","cell":"{C1}","code":"","text":"0.42"}},
+                {{"part":"output","cell":"{C1}","code":"","text":"42","selected":true}},
                 {{"part":"cell","cell":"{C1}","code":"y = 2"}},
                 {{"part":"box","cells":["{C1}"],"shot":4}}]}}"#
         );
@@ -398,7 +401,8 @@ mod tests {
                 quotes: vec![
                     (in_c1("s", Part::Lines { first: 1, last: 1, text: "s = sum(xs)".into() }), None),
                     (in_c1("plot(xs)", Part::Figure(png())), Some(3)),
-                    (in_c1("cell", Part::Output("0.42".into())), None),
+                    (in_c1("cell", Part::WholeOutput("0.42".into())), None),
+                    (in_c1("cell", Part::Output("42".into())), None),
                     (in_c1("y", Part::Whole("y = 2".into())), None),
                     (Quoted::Box { notebook: NB.into(), cells: vec![C1.into()], png: png() }, Some(4)),
                 ],

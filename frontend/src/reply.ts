@@ -54,7 +54,7 @@ export function selectedInCell(): Found | null {
   }
   if (!element?.closest("pluto-output")) return null;
   const quote = selection.toString().trim();
-  return quote ? { cell, pick: { part: "output", cell: cell.id, code, text: quote }, quote, range: range.cloneRange() } : null;
+  return quote ? { cell, pick: { part: "output", cell: cell.id, code, text: quote, selected: true }, quote, range: range.cloneRange() } : null;
 }
 
 let pill: HTMLElement | null = null;

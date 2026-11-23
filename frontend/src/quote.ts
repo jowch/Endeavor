@@ -14,7 +14,7 @@ export type Box = { left: number; top: number; right: number; bottom: number };
 export type Pick =
   | { part: "cell"; cell: string; code: string }
   | { part: "lines"; cell: string; code: string; lines: [number, number]; text: string }
-  | { part: "output"; cell: string; code: string; text: string }
+  | { part: "output"; cell: string; code: string; text: string; selected?: boolean }
   | { part: "figure"; cell: string; code: string; shot?: number }
   // `rect`: where the box is on the page (page coordinates), for a host that draws its picture itself (Claude's notebook view).
   | { part: "box"; cells: string[]; shot?: number; rect?: Box };

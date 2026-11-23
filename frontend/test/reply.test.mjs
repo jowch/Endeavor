@@ -72,7 +72,7 @@ test(`⌘${key.toUpperCase()} on output text opens the prompt; ⌘↩ adds the q
   assert.deepEqual(sent.at(-1), {
     type: "quote",
     notebook: NB,
-    picks: [{ part: "output", cell: CELL, code: "rates = map(1:1000) do _\n  rows = rand(1:n, n)\n  fit(rows)\nend", text: "middle 95%" }],
+    picks: [{ part: "output", cell: CELL, code: "rates = map(1:1000) do _\n  rows = rand(1:n, n)\n  fit(rows)\nend", text: "middle 95%", selected: true }],
     comment: "why 95?",
     add: true,
   });
