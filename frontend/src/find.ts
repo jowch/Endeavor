@@ -86,7 +86,6 @@ type Highlights = { set(name: string, value: unknown): void; delete(name: string
 const highlights = (): Highlights | undefined => (globalThis as any).CSS?.highlights;
 const Highlight = (): (new (...ranges: Range[]) => unknown) | undefined => (globalThis as any).Highlight;
 
-
 export function initFind(button: HTMLButtonElement): { open(): void } {
   const style = document.createElement("style");
   style.id = "endeavor-find-style";

@@ -9,7 +9,6 @@ const css = `
 
 let rail: HTMLElement;
 
-
 function draw() {
   const marked = [...document.querySelectorAll<HTMLElement>('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
   if (!marked.length) {

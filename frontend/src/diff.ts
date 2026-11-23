@@ -62,7 +62,6 @@ export function changedSpan(a: string, b: string): [number, number, number] {
 type View = any;
 let cm: { Decoration: any; Compartment: any; appendConfig: any; decorations: any; extender: any } | null = null;
 
-
 function classes(view: View) {
   if (cm) return cm;
   const EditorView = view.constructor;

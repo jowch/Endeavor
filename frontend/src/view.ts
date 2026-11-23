@@ -86,7 +86,6 @@ export function quoteText(notebook: string, picks: Pick[], comment: string, engi
 
 const DRAWER = 40;
 
-
 const BAR = 32;
 
 const chrome = `

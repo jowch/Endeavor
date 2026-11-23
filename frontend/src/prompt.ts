@@ -136,7 +136,6 @@ function sendAsk(o: Open, add: boolean, e: Event) {
   if (t.kind === "selection" && add) window.getSelection()?.removeAllRanges();
 }
 
-
 export function openAsk(t: Target): void {
   closeAsk(false);
   hidePill();

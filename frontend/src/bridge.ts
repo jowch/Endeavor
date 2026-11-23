@@ -108,7 +108,6 @@ export function send(msg: ToApp): void {
   post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
 }
 
-
 export const byUser = (e: Event): boolean => e.isTrusted || (!nonce && !host);
 
 export function on<T extends ToPage["type"]>(type: T, handler: (msg: Extract<ToPage, { type: T }>) => void): void {

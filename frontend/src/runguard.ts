@@ -179,7 +179,6 @@ function show(hit: Waiting[], changes: boolean, replay: () => void, deps: Depend
   el.querySelector<HTMLButtonElement>(".run")!.focus();
 }
 
-
 function guard(e: Event) {
   if (replaying || !waiting.length || !byUser(e)) return;
   const st = editor();

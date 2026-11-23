@@ -47,7 +47,6 @@ const css = `
   body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
 `;
 
-
 const DRAG = 4;
 
 export type Target = { part: "cell" | "code" | "output" | "figure"; cell: HTMLElement; el: HTMLElement };

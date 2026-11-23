@@ -65,7 +65,6 @@ function place() {
   if (notebook && callout.nextElementSibling !== notebook) notebook.before(callout);
 }
 
-
 export function initSafe(): void {
   const style = document.createElement("style");
   style.textContent = css;

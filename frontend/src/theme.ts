@@ -233,7 +233,6 @@ pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; o
 pluto-runarea > span { font-size: 10px; }
 `;
 
-
 const appChrome = `
 header#pluto-nav, footer { display: none !important; }
 #helpbox-wrapper { display: block !important; }

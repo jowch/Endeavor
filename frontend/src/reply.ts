@@ -30,7 +30,6 @@ export function linesSelected(doc: EditorDoc, selection: { from: number; to: num
   return [doc.lineAt(selection.from).number, doc.lineAt(lastChar).number];
 }
 
-
 export function selectedInCell(): Found | null {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
@@ -57,7 +56,6 @@ export function selectedInCell(): Found | null {
 }
 
 let pill: HTMLElement | null = null;
-
 
 export function hidePill(): void {
   pill?.remove();
