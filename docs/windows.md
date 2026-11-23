@@ -502,6 +502,38 @@ open, then stops a runtime kept running after Endeavor quit (`endeavor.exe
 Its notebooks are already saved. Uninstalling does the same. Uninstalling leaves
 `%LOCALAPPDATA%\Endeavor` (Julia, the agents, sessions and settings).
 
+### How the installer works
+
+`scripts/installer.iss` is an Inno Setup 6 script, built by `windows.yml`
+from the package layout (`ISCC /DVersion=… /DBuild=<commit> /DDist=<folder
+holding Endeavor\> /DWebView2Setup=<bootstrapper> scripts\installer.iss`). It
+installs per user and is never elevated (`{autopf}` is
+`%LOCALAPPDATA%\Programs`), and WebView2's bootstrapper then installs for this
+user too.
+
+- **Quitting the app first.** The app holds a named mutex while it's open
+  (`platform::init`), and the installer waits for it before stopping the
+  app's runtime, which runs from `bin\endeavor.exe` and holds it open.
+  Restart Manager can't close a runtime (it has no window). An update the
+  app started (`/UPDATE`) runs as the app quits, so it waits up to 30 seconds
+  rather than asking; run silently after that, the answer is Cancel and the
+  install stops with the old app in place. The runtime is stopped again just
+  before files are copied, in case an Endeavor started in between. Setup's
+  own close of running programs is the fallback for one opened after that,
+  and isn't reopened. Silent, it would close any program holding a file
+  without asking, so the app's updates pass `/NOCLOSEAPPLICATIONS`.
+- **Resources is replaced whole**, so a file the new version dropped can't
+  linger. The old one is moved aside first rather than deleted: an install
+  that stops partway (a file held open, say) puts it back and the old app
+  still works, and the move fails at once, before anything changed, when
+  something holds a file in it. Only a `Resources.old` this run moved is put
+  back, since one left by an earlier run is older than the one in use.
+- **Restart.** An update the app started with Restart opens the new app
+  afterwards, and if the install didn't finish, opens the old one again so
+  the user isn't left with nothing (not when it is still open).
+- **Uninstalling** stops the runtime after the "Are you sure?" question, since
+  an open exe can't be removed, and leaves `%LOCALAPPDATA%\Endeavor`.
+
 ## Try a build from CI
 
 No Rust or Visual Studio is needed for this.

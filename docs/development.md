@@ -1,7 +1,8 @@
 # Development
 
 How to build Endeavor from source and work on it. For how to check a change
-from a script, see [testing.md](testing.md). For status and plans, see
+from a script, see [testing.md](testing.md); for what CI checks and how
+the nightly is published, [ci.md](ci.md). For status and plans, see
 [roadmap.md](roadmap.md) and [pluto-agent-design-doc.md](pluto-agent-design-doc.md). How the parts
 fit is in [agent-connection.md](agent-connection.md) (the agent),
 [remote-sessions.md](remote-sessions.md) (runtimes on this computer and on

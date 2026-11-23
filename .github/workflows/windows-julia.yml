@@ -1,18 +1,3 @@
-# A real Julia notebook on Windows, through the runtime the app runs
-# (issue #198). Nothing else in CI runs real Julia on Windows: EndeavorMCP's
-# real-Julia tests are Unix only, and its Windows tests use a stand-in julia.exe.
-#
-# scripts/julia-smoke.py starts the app's exe as the helper's stdio MCP
-# server (`endeavor.exe --helper mcp`, what the plugin runs), and as an agent
-# would: makes a notebook, runs a cell, checks its output, closes it, and
-# stops the runtime. The runner has no Julia, so the runtime gets its own,
-# as on a user's first run (juliaup, then Julia and Pluto: several minutes).
-# A debug build, so ENDEAVOR_TEST_BROWSER keeps it from opening a browser.
-#
-# It runs on pull requests that change the runtime's pins or this check
-# (Cargo.lock pins EndeavorMCP), once a week, and by hand. Not again on the
-# push to main: the PR already ran it on the same code, and the daily pin
-# would pay 11 minutes twice.
 name: Windows Julia
 
 on:
