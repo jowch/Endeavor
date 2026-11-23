@@ -14,6 +14,7 @@ use crate::runs;
 use crate::session::{Entry, Scope, Session, cell_label, file_name, folder_name, option_of_kind, plan_option};
 use crate::theme;
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
 use crate::theme::TabStop as _;
 use crate::transcript::markdown_style;
 
@@ -608,6 +609,7 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
         .cursor_pointer()
         .focusable()
         .tab_stop(true)
+        .keeps_keyboard_on_click()
         .focus_visible(|s| s.border_color(theme::focus_ring()))
         .hover(|s| s.bg(theme::bg_raised()))
         .when(open, |d| d.bg(theme::bg_raised()))

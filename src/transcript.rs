@@ -273,7 +273,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .gap(px(2.))
             .text_size(theme::chat_body())
             .line_height(theme::chat_line_body())
-            .child(div().id(id("agent-text")).role(Role::Article).aria_label(text.clone()).child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx)))
+            .child(div().id(id("agent-text")).role(Role::Article).aria_label(spoken(text)).child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx)))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
         Entry::Note(text) if session.restart_offered_at(ix) => {
@@ -432,6 +432,35 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
             .child(crate::when::ago(at))
     });
     div().flex().items_center().gap(px(4.)).h(theme::chat_px(20.)).children(copy).children(time).into_any_element()
+}
+
+fn spoken(text: &str) -> String {
+    let Ok(root) = markdown::to_mdast(text, &markdown::ParseOptions::gfm()) else { return text.to_owned() };
+    let mut out = String::new();
+    speak(&root, &mut out);
+    out.trim_end().to_owned()
+}
+
+fn speak(node: &markdown::mdast::Node, out: &mut String) {
+    use markdown::mdast::Node;
+    match node {
+        Node::Text(t) => out.push_str(&t.value),
+        Node::InlineCode(c) => out.push_str(&c.value),
+        Node::InlineMath(m) => out.push_str(&m.value),
+        Node::Image(i) => out.push_str(&i.alt),
+        Node::Break(_) => out.push('\n'),
+        Node::Code(c) => out.push_str(&c.value),
+        Node::Math(m) => out.push_str(&m.value),
+        Node::Html(_) | Node::Definition(_) | Node::Yaml(_) | Node::Toml(_) => {}
+        _ => node.children().into_iter().flatten().for_each(|child| speak(child, out)),
+    }
+    let ends_a_line = matches!(node, Node::Paragraph(_) | Node::Heading(_) | Node::Code(_) | Node::Math(_) | Node::TableRow(_) | Node::ThematicBreak(_));
+    let ends_a_cell = matches!(node, Node::TableCell(_));
+    if ends_a_line && !out.ends_with('\n') {
+        out.push('\n');
+    } else if ends_a_cell {
+        out.push(' ');
+    }
 }
 
 fn markdown(state: &Entity<TextViewState>, chat_width: f32, cx: &mut Context<Workspace>) -> TextView {
@@ -1695,4 +1724,11 @@ mod tests {
         let bash = super::running_line(super::tool_line("Terminal", ToolKind::Execute, None, &null), "Terminal", ToolKind::Execute, &null, true);
         assert_eq!((bash.verb, bash.object), ("Running a command".into(), None), "a command before its input arrives");
     }
+
+    #[test]
+    fn a_reply_is_read_aloud_without_its_markdown() {
+        let reply = "## Fit\n\nThe **rate** is `0.09`, see [the docs](https://example.com/a?b=1).\n\n- one\n- two\n\n```julia\nx = 1\n```";
+        assert_eq!(super::spoken(reply), "Fit\nThe rate is 0.09, see the docs.\none\ntwo\nx = 1");
+    }
+
 }

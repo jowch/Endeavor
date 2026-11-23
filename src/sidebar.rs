@@ -12,6 +12,7 @@ use crate::row_marks::{self, RowFacts, RowMark};
 use crate::session::Session;
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
 use crate::theme::TabStop as _;
 
 fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
@@ -28,6 +29,7 @@ fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
         .border_color(gpui::transparent_black())
         .focusable()
         .tab_stop(true)
+        .keeps_keyboard_on_click()
         .focus_visible(|s| s.border_color(theme::focus_ring()))
         .rounded(px(4.))
         .cursor_pointer()

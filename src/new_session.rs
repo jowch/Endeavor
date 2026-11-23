@@ -20,6 +20,7 @@ use crate::session::folder_name;
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme, when};
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
 use crate::theme::TextButton as _;
 use crate::theme::TabStop as _;
 
@@ -1446,6 +1447,7 @@ fn gear_button(id: impl Into<ElementId>, group: impl Into<SharedString>) -> Stat
         .hover(|s| s.bg(theme::bg_raised()))
         .focusable()
         .tab_stop(true)
+        .keeps_keyboard_on_click()
         .focus_visible(|s| s.opacity(1.).shadow(theme::ring(theme::popover_bg())))
         .child(glyph(Glyph::Gear, theme::text_muted()))
 }
