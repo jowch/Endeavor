@@ -108,7 +108,7 @@ impl Workspace {
         let Some(Reply::Pill(selected)) = self.reply.take() else { return };
         let agent = self.sessions.iter().find(|s| s.key == selected.key).map_or_else(crate::agent::Agent::default, |s| s.agent);
         // ↩ sends, ⌘↩ adds to the message, ⇧↩ is a new line; six lines, then it scrolls.
-        let input = cx.new(|cx| TextareaState::new(window, cx).placeholder(format!("Reply to {}", agent.name())).submit_on_enter(true).auto_grow(1, 6));
+        let input = cx.new(|cx| TextareaState::new(window, cx).placeholder(format!("Reply to {}", agent.name())).submit_on_enter(true).auto_grow(1, 6).scroll_bounce(false));
         cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
             match event {
                 InputEvent::PressEnter { secondary, shift: false } => this.finish_reply(*secondary, window, cx),
