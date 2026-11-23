@@ -62,15 +62,16 @@ pub enum AppUpdate {
     Ready(String),
     /// Ready, but an agent is working: Restart waits until it's done.
     ReadyAfterTurn(String),
-    /// Newer, but Endeavor can't replace itself where it is.
-    Manual(String),
+    /// Newer, but Endeavor can't replace itself where it is; `protected` when macOS kept it from
+    /// changing its own app in a folder it can write to.
+    Manual { build: String, protected: bool },
     Failed(String),
 }
 
 impl AppUpdate {
     /// Something for the user to do about it.
     pub fn actionable(&self) -> bool {
-        matches!(self, AppUpdate::Ready(_) | AppUpdate::ReadyAfterTurn(_) | AppUpdate::Manual(_))
+        matches!(self, AppUpdate::Ready(_) | AppUpdate::ReadyAfterTurn(_) | AppUpdate::Manual { .. })
     }
 }
 
@@ -111,7 +112,7 @@ pub fn notices(updates: &Updates) -> Vec<Notice> {
     match &updates.app {
         AppUpdate::Ready(build) => rows.push(Notice { text: format!("Endeavor build {build} is ready to install."), button: Some(("Restart", Action::Restart, true)) }),
         AppUpdate::ReadyAfterTurn(build) => rows.push(Notice { text: format!("Endeavor build {build} is ready to install once the agent is done."), button: None }),
-        AppUpdate::Manual(build) => rows.push(Notice { text: format!("Endeavor build {build} is out."), button: Some(("Download", Action::Download, true)) }),
+        AppUpdate::Manual { build, .. } => rows.push(Notice { text: format!("Endeavor build {build} is out."), button: Some(("Download", Action::Download, true)) }),
         _ => {}
     }
     let primary = !updates.app.actionable();
@@ -163,7 +164,12 @@ pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
         AppUpdate::UpToDate => ("Up to date".to_owned(), check, false),
         AppUpdate::Ready(build) => (format!("Build {build} is ready. It installs when Endeavor restarts."), Some(("Restart", Action::Restart, true)), true),
         AppUpdate::ReadyAfterTurn(build) => (format!("Build {build} is ready. Restart comes back once the agent is done."), None, true),
-        AppUpdate::Manual(build) => (
+        AppUpdate::Manual { build, protected: true } => (
+            format!("Build {build} is out. macOS didn't let Endeavor change its own app: open Endeavor from Finder or the Dock to update, or download the new build."),
+            Some(("Download", Action::Download, true)),
+            true,
+        ),
+        AppUpdate::Manual { build, protected: false } => (
             format!("Build {build} is out. Endeavor can't replace itself where it is: {}.", if cfg!(windows) { "download the installer and run it" } else { "download it and drag it to Applications" }),
             Some(("Download", Action::Download, true)),
             true,
@@ -562,9 +568,11 @@ mod tests {
         assert_eq!(row(AppUpdate::Checking(None)), ("Checking for a newer build…".into(), None, false));
         assert_eq!(row(AppUpdate::Checking(Some(40))), ("Downloading the newest build… 40%".into(), None, false));
         assert_eq!(row(AppUpdate::Failed("couldn't reach GitHub".into())), ("Couldn't check for a newer build: couldn't reach GitHub.".into(), Some("Check now"), false));
-        assert_eq!(row(AppUpdate::Manual("abc1234".into())).1, Some("Download"));
+        assert_eq!(row(AppUpdate::Manual { build: "abc1234".into(), protected: false }).1, Some("Download"));
+        let protected = row(AppUpdate::Manual { build: "abc1234".into(), protected: true });
+        assert_eq!(protected.0, "Build abc1234 is out. macOS didn't let Endeavor change its own app: open Endeavor from Finder or the Dock to update, or download the new build.", "not Applications: the folder is fine (#166)");
         assert_eq!(row(AppUpdate::ReadyAfterTurn("abc1234".into())), ("Build abc1234 is ready. Restart comes back once the agent is done.".into(), None, true));
-        let manual = notices(&Updates { app: AppUpdate::Manual("abc1234".into()), adapter: Adapter::Available("0.4".into()) });
+        let manual = notices(&Updates { app: AppUpdate::Manual { build: "abc1234".into(), protected: false }, adapter: Adapter::Available("0.4".into()) });
         assert_eq!(manual.iter().map(|n| n.button.map(|b| (b.1, b.2))).collect::<Vec<_>>(), [Some((Action::Download, true)), Some((Action::UpdateAdapter, false))]);
     }
 

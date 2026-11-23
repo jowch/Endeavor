@@ -232,7 +232,7 @@ impl Workspace {
             "channel": crate::updater::CHANNEL,
             "commit": crate::updater::COMMIT,
             "committed": crate::updater::COMMITTED,
-            "app": u.place.as_ref().ok().map(|p| json!({ "path": p.app, "replaceable": p.replaceable })),
+            "app": u.place.as_ref().ok().map(|p| json!({ "path": p.app, "replaceable": p.replaceable, "protected": p.protected })),
             "update": state,
         })
     }

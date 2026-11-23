@@ -124,6 +124,9 @@ pub fn offer(m: &Manifest, commit: &str, committed: &str) -> Option<Offer> {
 pub struct Place {
     pub app: PathBuf,
     pub replaceable: bool,
+    /// Mac: its folder is writable but macOS won't let it change the app itself, as when it was
+    /// started from a terminal without App Management permission (#166).
+    pub protected: bool,
 }
 
 /// Whether this build checks for updates at all; why not when it doesn't.
@@ -133,7 +136,7 @@ pub fn place() -> Result<Place, &'static str> {
     // itself (a newer build is offered as a download).
     #[cfg(debug_assertions)]
     if test_manifest().is_some() {
-        return Ok(Place { app: std::env::current_exe().unwrap_or_default(), replaceable: false });
+        return Ok(Place { app: std::env::current_exe().unwrap_or_default(), replaceable: false, protected: false });
     }
     if !cfg!(any(target_os = "macos", windows)) {
         return Err("only the Mac and Windows apps update themselves");
@@ -147,11 +150,12 @@ pub fn place() -> Result<Place, &'static str> {
         // Installed by the installer, which can replace it; not a build
         // unzipped by hand.
         let replaceable = app.join(UNINSTALLER).is_file();
-        return Ok(Place { app, replaceable });
+        return Ok(Place { app, replaceable, protected: false });
     }
     let app = bundle_of(&exe).ok_or("not running from Endeavor.app")?;
-    let replaceable = app.parent().is_some_and(writable) && writable(&app);
-    Ok(Place { app, replaceable })
+    let folder = app.parent().is_some_and(writable);
+    let own = writable(&app);
+    Ok(Place { replaceable: folder && own, protected: folder && !own, app })
 }
 
 #[cfg(debug_assertions)]
@@ -487,7 +491,7 @@ while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
 next="$app.next" old="$app.replaced"
 rm -rf "$next" "$old"
 if ditto "$new" "$next" && mv "$app" "$old"; then
-  if mv "$next" "$app"; then rm -rf "$old" "$new"; else mv "$old" "$app"; rm -rf "$next"; : > "$failed"; fi
+  if mv "$next" "$app"; then rm -rf "$old" "$new"; rmdir "${new%/*}" 2>/dev/null; else mv "$old" "$app"; rm -rf "$next"; : > "$failed"; fi
 else
   rm -rf "$next"; : > "$failed"
 fi
@@ -665,7 +669,7 @@ mod tests {
 
     #[test]
     fn checks_are_daily_and_retried_hourly_after_a_failure() {
-        let place = Place { app: PathBuf::from("/Applications/Endeavor.app"), replaceable: true };
+        let place = Place { app: PathBuf::from("/Applications/Endeavor.app"), replaceable: true, protected: false };
         let mut u = Updater { place: Ok(place.clone()), state: State::Waiting, progress: Arc::default(), last_try: None };
         let t0 = Instant::now();
         assert!(u.due(t0));
@@ -839,6 +843,7 @@ mod tests {
         script.wait().unwrap();
         verify(&installed, &team).unwrap();
         assert!(!failed.exists() && !staged.exists());
+        assert!(!staged.parent().unwrap().exists(), "the staged build's folder goes too (#166)");
         assert!(!apps.join("Endeavor.app.next").exists() && !apps.join("Endeavor.app.replaced").exists());
 
         // On another volume with no room for the new app, the copy fails and
