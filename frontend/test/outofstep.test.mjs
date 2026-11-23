@@ -1,4 +1,3 @@
-// Pluto's "Oopsie!! please refresh your browser" alert loads the page again instead (#285).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -16,6 +15,7 @@ test("Pluto's out-of-step alert asks the app to load the page again, once, and o
   window.alert("Oopsie!! please refresh your browser and everything will be alright!");
   window.alert("Hoppla!! Bitte aktualisiere deinen Browser und alles wird in Ordnung sein!");
   window.alert("Something else");
-  assert.deepEqual(shown, ["Something else"], "only the other alert shows");
+  window.alert("Oopsie!! please refresh your browser");
+  assert.deepEqual(shown, ["Something else", "Oopsie!! please refresh your browser"], "only Pluto's exact texts are held back: a reworded one shows, as before");
   assert.equal(sent.filter((type) => type === "out_of_step").length, 1, "the app is asked once for this page");
 });

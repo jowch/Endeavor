@@ -2,7 +2,6 @@ import type { Pick } from "./quote";
 
 export type ToApp =
   | { type: "ready" }
-  // Pluto would alert that its page is out of step with the server: load the page again.
   | { type: "out_of_step" }
   | { type: "mode"; on: boolean }
   | { type: "quote"; notebook: string | null; picks: Pick[]; comment: string; add: boolean; ref?: number }

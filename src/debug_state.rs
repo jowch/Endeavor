@@ -211,6 +211,7 @@ impl Workspace {
                 "details": n.details().then(|| json!({ "open": n.details_open, "text": n.raw })),
             })),
             "page": page,
+            "out_of_step_reload_secs_ago": self.active.and_then(|key| self.sessions.iter().find(|s| s.key == key)).and_then(|s| s.out_of_step_reload).map(|at| at.elapsed().as_secs()),
             "cell_shot": self.second.last,
             "cell_shot_view": self.second.view(),
         })

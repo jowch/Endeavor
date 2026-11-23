@@ -1,12 +1,6 @@
-// Pluto's "Oopsie!! please refresh your browser" alert: its page got out of
-// step with the server, as after several quick reconnects (#285). The alert
-// blocks the window and talks of a browser the user doesn't have, so the page
-// asks the app to load it again instead, once.
-
 import { send } from "./bridge";
 
-/** Pluto's text for it (`t_oopsie_pls_refresh` in each of its languages). */
-const OUT_OF_STEP = [
+const PLUTO_OUT_OF_STEP_TEXTS = [
   "Oopsie!! please refresh your browser and everything will be alright!",
   "عذراً!! يرجى تحديث المتصفح وسيعود كل شيء إلى مساره!",
   "哎呀！！请刷新您的浏览器，一切都会好起来的！",
@@ -25,15 +19,10 @@ const OUT_OF_STEP = [
   "Hups! Päivitä selain ja kaikki on taas kunnossa!",
 ];
 
-/** Whether `message` is Pluto saying its page is out of step with the server. */
 export function isOutOfStep(message: unknown): boolean {
-  return OUT_OF_STEP.includes(String(message ?? "").trim());
+  return PLUTO_OUT_OF_STEP_TEXTS.includes(String(message ?? "").trim());
 }
 
-/**
- * Wrap `w.alert` so Pluto's out-of-step alert isn't shown: the app is asked,
- * once for this page, to load it again (`ask`). Every other alert shows as before.
- */
 export function wrapAlert(w: { alert: (message?: unknown) => void }, ask: () => void): void {
   const shown = w.alert;
   let asked = false;

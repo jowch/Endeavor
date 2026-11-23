@@ -2627,7 +2627,7 @@ ${text.value}` : sent.comment;
   }
 
   // src/outofstep.ts
-  var OUT_OF_STEP = [
+  var PLUTO_OUT_OF_STEP_TEXTS = [
     "Oopsie!! please refresh your browser and everything will be alright!",
     "\u0639\u0630\u0631\u0627\u064B!! \u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0645\u062A\u0635\u0641\u062D \u0648\u0633\u064A\u0639\u0648\u062F \u0643\u0644 \u0634\u064A\u0621 \u0625\u0644\u0649 \u0645\u0633\u0627\u0631\u0647!",
     "\u54CE\u5440\uFF01\uFF01\u8BF7\u5237\u65B0\u60A8\u7684\u6D4F\u89C8\u5668\uFF0C\u4E00\u5207\u90FD\u4F1A\u597D\u8D77\u6765\u7684\uFF01",
@@ -2646,7 +2646,7 @@ ${text.value}` : sent.comment;
     "Hups! P\xE4ivit\xE4 selain ja kaikki on taas kunnossa!"
   ];
   function isOutOfStep(message) {
-    return OUT_OF_STEP.includes(String(message ?? "").trim());
+    return PLUTO_OUT_OF_STEP_TEXTS.includes(String(message ?? "").trim());
   }
   function wrapAlert(w, ask) {
     const shown2 = w.alert;

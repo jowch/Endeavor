@@ -51,6 +51,7 @@ pub enum Retry {
     NewNotebook(u64),
     /// Session `key`'s notebook at the path, whose open failed.
     OpenNotebook(u64, String),
+    ReloadNotebook(u64),
     SignOut,
     /// The Julia the runtime on this host runs on was removed (`julia_removed`): only a
     /// restart of Julia helps, so the notice offers that instead of Try again (#230).
@@ -64,6 +65,7 @@ impl Retry {
             Retry::Rename(_) => "Choose another name",
             Retry::MoveTo(_) => "Move to…",
             Retry::RestartJulia(_) => "Restart Julia",
+            Retry::ReloadNotebook(_) => "Load it again",
             _ => "Try again",
         }
     }
@@ -143,7 +145,7 @@ impl Workspace {
     /// The host whose runtime a notice's action went to: its session's.
     fn retry_host(&self, retry: &Retry) -> Option<HostId> {
         let key = match retry {
-            Retry::Export { key, .. } | Retry::Rename(key) | Retry::MoveTo(key) | Retry::RestartNotebook(key) | Retry::StopNotebook(key, _) | Retry::NewNotebook(key) | Retry::OpenNotebook(key, _) => Some(*key),
+            Retry::Export { key, .. } | Retry::Rename(key) | Retry::MoveTo(key) | Retry::RestartNotebook(key) | Retry::StopNotebook(key, _) | Retry::NewNotebook(key) | Retry::OpenNotebook(key, _) | Retry::ReloadNotebook(key) => Some(*key),
             // A notebook no session shows: its host isn't known, so the notice keeps Try again.
             Retry::RunNotebook(notebook) => self.session_showing(notebook),
             Retry::SignOut => return None,
@@ -164,6 +166,7 @@ impl Workspace {
             Retry::StopNotebook(key, path) => self.stop_notebook(key, path, cx),
             Retry::NewNotebook(key) => self.new_notebook_here(key, cx),
             Retry::OpenNotebook(key, path) => self.open_for_session(key, path, false, cx),
+            Retry::ReloadNotebook(key) => self.reload_notebook(key, cx),
             Retry::SignOut => self.sign_out_now(cx),
             Retry::RestartJulia(host) => self.confirm_restart_julia(&host, window, cx),
         }

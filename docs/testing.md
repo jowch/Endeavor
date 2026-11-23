@@ -96,6 +96,9 @@ To wait for something, poll the dump. For example, loop until
   `resets_in_secs`, or null when Claude Code's message gave no time.
   `codex` has the same `usage_limit` for Codex: one agent's limit doesn't
   hold the other's sessions.
+- `out_of_step_reload_secs_ago`. How long ago the active session's page
+  was loaded again because Pluto's page lost its place with the server
+  (#285), or null. A second loss within a minute shows the notice instead.
 - `notice`. A one-off failure's notice (a failed export, rename, move, run,
   restart, stop, new notebook or sign out), or null: its `spot` (where it
   hangs: `notebook_name`, `notebook_buttons`, `notebook_pane` or

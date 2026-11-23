@@ -61,7 +61,6 @@ pub struct Ask {
 pub enum Message {
     /// The page script loaded and wants the current cell states.
     Ready,
-    /// Pluto's page got out of step with the server and would ask the user to refresh (#285).
     OutOfStep,
     Mode(bool),
     Ask(Ask),

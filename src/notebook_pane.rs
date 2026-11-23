@@ -206,6 +206,21 @@ impl NotebookAction {
     }
 }
 
+pub const OUT_OF_STEP_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[derive(Debug, PartialEq)]
+pub enum OutOfStepAnswer {
+    Reload,
+    Notice,
+}
+
+pub fn out_of_step_answer(last_reload: Option<std::time::Instant>, now: std::time::Instant) -> OutOfStepAnswer {
+    match last_reload {
+        Some(last) if now.saturating_duration_since(last) < OUT_OF_STEP_WINDOW => OutOfStepAnswer::Notice,
+        _ => OutOfStepAnswer::Reload,
+    }
+}
+
 /// What the notebook pane shows for a session: a page drawn natively, or the
 /// notebook's own page in the web view.
 #[derive(Clone, Debug, PartialEq)]
@@ -1488,6 +1503,28 @@ impl Workspace {
 
     /// Load session `key`'s notebook page again, the way opening it does: by
     /// the id its runtime has for the file now.
+    pub(crate) fn on_out_of_step(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.active else { return };
+        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
+        if !matches!(self.pane_shows(session, cx), PaneShows::Page) {
+            return;
+        }
+        let now = std::time::Instant::now();
+        match out_of_step_answer(session.out_of_step_reload, now) {
+            OutOfStepAnswer::Reload => {
+                if let Some(session) = self.session_mut(key) {
+                    session.out_of_step_reload = Some(now);
+                }
+                eprintln!("Notebook page out of step with the server: loading it again");
+                self.reload_notebook(key, cx);
+            }
+            OutOfStepAnswer::Notice => {
+                eprintln!("Notebook page out of step again within {OUT_OF_STEP_WINDOW:?}: not loading it again by itself");
+                self.show_notice(Notice::new(Spot::Pane, "The notebook page lost its place", "It lost its place again. Load it again, or restart the notebook if it keeps happening.", Some(Retry::ReloadNotebook(key))), cx);
+            }
+        }
+    }
+
     pub fn reload_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         match (session.notebook_path.clone(), session.notebook.clone()) {
@@ -1661,6 +1698,16 @@ mod tests {
     use super::{OPENING_GRACE, OpeningStep, OpeningWatch};
     use wire::backend::Backend;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn an_out_of_step_page_reloads_once_a_minute_then_asks_the_user() {
+        use super::{OUT_OF_STEP_WINDOW, OutOfStepAnswer, out_of_step_answer};
+        let now = Instant::now() + Duration::from_secs(3600);
+        assert_eq!(out_of_step_answer(None, now), OutOfStepAnswer::Reload);
+        assert_eq!(out_of_step_answer(Some(now - Duration::from_secs(5)), now), OutOfStepAnswer::Notice);
+        assert_eq!(out_of_step_answer(Some(now - OUT_OF_STEP_WINDOW + Duration::from_millis(1)), now), OutOfStepAnswer::Notice);
+        assert_eq!(out_of_step_answer(Some(now - OUT_OF_STEP_WINDOW), now), OutOfStepAnswer::Reload);
+    }
 
     #[test]
     fn a_stuck_opening_reloads_once_then_offers_the_button() {
