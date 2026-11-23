@@ -97,25 +97,35 @@ export type Quoted = { picks: Pick[]; comment: string; crops?: (string | undefin
 
 /**
  * The message ↩ passes to the chat: the lead and the note, then each ⌘↩'s and this ↩'s quotes and comments, within
- * Claude's rules (chatSafe). Null when it's longer than MESSAGE_MAX: the comments (never cut) or the picks are too many.
+ * Claude's rules (chatSafe). Picked lines too long to fit go by their line numbers only (BARE_NOTE says so). Null
+ * when it's still longer than MESSAGE_MAX: the comments (never cut) or the picks are too many.
  */
 export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
+  const whole = compose(notebook, quoted, engine, false);
+  if (whole.length <= MESSAGE_MAX) return whole;
+  if (!quoted.some((q) => q.picks.some((p) => p.part === "lines"))) return null;
+  const bare = compose(notebook, quoted, engine, true);
+  return bare.length <= MESSAGE_MAX ? bare : null;
+}
+
+export const BARE_NOTE = " The picked lines were too long for Claude's message box, so they go by their line numbers only: read them with read_cell.";
+
+function compose(notebook: string, quoted: Quoted[], engine: Engine, bare: boolean): string {
   // chatSafe shortens runs of blank lines and spaces in the picked lines too: say so, since they go as they were.
-  const shortened = quoted.some((q) =>
+  const shortened = !bare && quoted.some((q) =>
     q.picks.some((p) => p.part === "lines" && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
   );
   const note = shortened
     ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.`
     : quoteNote(engine);
-  const message = chatSafe(
-    `${LEAD}\n\n${note}${LEAD_NOTE}\n\n` +
-      quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops)).join("\n\n"),
+  return chatSafe(
+    `${LEAD}\n\n${note}${bare ? BARE_NOTE : ""}${LEAD_NOTE}\n\n` +
+      quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops, bare)).join("\n\n"),
   );
-  return message.length <= MESSAGE_MAX ? message : null;
 }
 
 /** One pick as a `<quote>`: what was picked, by name, with a box's picture by its id (`crop`). */
-export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string): string {
+export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string, bare = false): string {
   if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
   const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
   const where = uri(notebook, pick.cell, engine);
@@ -123,8 +133,9 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
     case "cell":
       return `<quote ${at} uri="${where}"/>`;
     case "lines":
-      // Lines the user picked go with their text (a click on the code picks the cell).
-      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
+      // Lines the user picked go with their text (a click on the code picks the cell), unless they can't fit.
+      const lines = `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}"`;
+      return bare ? `${lines}/>` : `${lines}>\n${pick.text}\n</quote>`;
     case "output":
       return `<quote ${at} part="output" uri="${where}"/>`;
     case "figure":
@@ -133,8 +144,8 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
 }
 
 /** The quotes of one ↩ or ⌘↩: each pick, then the comment after the last. */
-export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto", crops: (string | undefined)[] = []): string {
-  const blocks = picks.map((p, i) => quoteBlock(notebook, p, engine, crops[i]));
+export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto", crops: (string | undefined)[] = [], bare = false): string {
+  const blocks = picks.map((p, i) => quoteBlock(notebook, p, engine, crops[i], bare));
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
@@ -391,6 +402,7 @@ export function start(notebook: string, host: Host): void {
     const earlier = added.splice(0);
     // Claude's desktop app takes a few seconds to show it in its box (2–7 s, 2026-11-12): say it's on its way.
     say("Sending to Claude's chat…", 0);
+    const byNumber = message.includes(BARE_NOTE);
     const sending = host.send(message);
     // Drawn just after the press, kept once Claude's app takes the message (it shows it in its box only then).
     const going = held ? earlier : [...earlier, draw(now)];
@@ -399,7 +411,7 @@ export function start(notebook: string, host: Host): void {
         going.forEach(keep);
         if (held) return say(`Sent what ${mac ? "⌘↩" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8000);
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
-        say("On its way to Claude's message box. Send it from there.", 8000);
+        say(`On its way to Claude's message box${byNumber ? ", with the picked lines by their numbers only: their text was too long" : ""}. Send it from there.`, 8000);
         // The user sends it from Claude's box, where the view's keys (Escape, ⌘⇧E) don't reach, so Point
         // ends once the view has lost the keyboard, unless something was picked or typed since.
         // While the keyboard stays here, Point stays on for the next pick, and Escape ends it.

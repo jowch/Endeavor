@@ -80,6 +80,14 @@ test("↩'s message keeps to what Claude takes: no long runs of blank lines or s
   const room = 8000 - chatMessage(NB, [{ picks: [pick], comment: "c" }]).length + 1;
   assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room) }]).length, 8000);
   assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room + 1) }]), null);
+  // Picked lines too long to fit go by their line numbers, and the note says to read them; a comment still isn't cut.
+  const many = Array.from({ length: 300 }, (_, i) => `rows${i} = fit(data[${i}, :], model)`);
+  const drag = { part: "lines", cell: A, code: many.join("\n"), lines: [1, 300], text: many.join("\n") };
+  const bare = chatMessage(NB, [{ picks: [drag], comment: "Why so slow?" }]);
+  assert.ok(bare.length <= 8000 && bare.endsWith(`<quote cell="rows0" lines="1-300" uri="notebook://pluto/${NB}/cell/${A}"/>\nWhy so slow?`), bare.slice(-200));
+  assert.match(bare, /go by their line numbers only: read them with read_cell/);
+  assert.doesNotMatch(chatMessage(NB, [{ picks: [{ ...drag, lines: [1, 2], text: many.slice(0, 2).join("\n") }], comment: "" }]), /line numbers only/);
+  assert.equal(chatMessage(NB, [{ picks: [drag], comment: "c".repeat(8000) }]), null);
 });
 
 test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {
