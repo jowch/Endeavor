@@ -402,6 +402,53 @@ pub(crate) fn bundled_codex() -> Option<PathBuf> {
     })
 }
 
+/// Endeavor added by hand to Codex as a server named `endeavor`
+/// (`[mcp_servers.endeavor]`, as EndeavorMCP's docs show) would give the
+/// agent notebook tools beside the app's, outside its cards. `CODEX_CONFIG`
+/// can't turn it off: the adapter replaces its `mcp_servers` with the servers
+/// the app sends, and a partial `mcp_servers.endeavor` makes Codex refuse to
+/// start for a user without that server. So only when the user's Codex lists
+/// one does the adapter run Codex through a small script that adds
+/// `-c mcp_servers.endeavor.enabled=false` (#251). None otherwise, and the
+/// adapter runs its own Codex as before. A server added after the adapter
+/// started, or in a folder's `.codex`, isn't seen.
+fn codex_without_users_endeavor() -> Option<PathBuf> {
+    let codex = bundled_codex()?;
+    let mut list = std::process::Command::new(&codex);
+    list.args(["mcp", "list", "--json"]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    endeavor_mcp::client::no_window(&mut list);
+    let listed = list.output().ok().filter(|out| out.status.success())?;
+    if !lists_users_endeavor(&listed.stdout) {
+        return None;
+    }
+    let script = crate::install::app_dir().ok()?.join(if cfg!(windows) { "codex-without-endeavor.cmd" } else { "codex-without-endeavor" });
+    std::fs::write(&script, codex_script(&codex)).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).ok()?;
+    }
+    Some(script)
+}
+
+/// Whether `codex mcp list --json` lists an enabled server named `endeavor`.
+fn lists_users_endeavor(json: &[u8]) -> bool {
+    let Ok(serde_json::Value::Array(servers)) = serde_json::from_slice(json) else { return false };
+    servers.iter().any(|server| server["name"] == USERS_ENDEAVOR_SERVER_NAME && server["enabled"] != false)
+}
+
+/// The script that runs `codex` with the user's `endeavor` server off, and
+/// the adapter's arguments (`app-server`) after.
+fn codex_script(codex: &Path) -> String {
+    let off = format!("mcp_servers.{USERS_ENDEAVOR_SERVER_NAME}.enabled=false");
+    if cfg!(windows) {
+        // The adapter runs it through the shell, as `"<script>" app-server`.
+        format!("@\"{}\" -c {off} %*\r\n", codex.display())
+    } else {
+        format!("#!/bin/sh\nexec '{}' -c {off} \"$@\"\n", codex.display().to_string().replace('\'', "'\\''"))
+    }
+}
+
 /// Debug builds only: while the file `ENDEAVOR_TEST_NO_STEERING` names exists,
 /// Cmd+Enter takes the path for an agent that can't steer (stop, then send).
 fn test_no_steering() -> bool {
@@ -472,6 +519,11 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
             vec![exe.display().to_string()]
         }
     };
+    if agent == Agent::Codex
+        && let Some(codex) = codex_without_users_endeavor()
+    {
+        env.push(format!("CODEX_PATH={}", codex.display()));
+    }
     if facts.private_temp {
         let temp = crate::install::app_dir()?.join(format!("{}-temp", agent_slug(agent)));
         // What an earlier start left: a killed server can't clean up after itself.
@@ -1538,6 +1590,22 @@ mod tests {
             let off = &session_options(true, "/p", on_server)["claudeCode"]["options"]["disallowedTools"];
             assert_eq!(off[0], "mcp__endeavor");
         }
+    }
+
+    /// Codex runs through the script only for a user whose Codex lists an `endeavor` server (#251).
+    #[test]
+    fn codex_turns_off_a_hand_added_endeavor_server_only_when_there_is_one() {
+        let listed = |servers: serde_json::Value| super::lists_users_endeavor(servers.to_string().as_bytes());
+        assert!(!listed(serde_json::json!([])), "none: the adapter's own Codex, as before");
+        assert!(!listed(serde_json::json!([{ "name": "notebook", "enabled": true }])));
+        assert!(listed(serde_json::json!([{ "name": "other", "enabled": true }, { "name": "endeavor", "enabled": true }])));
+        assert!(!listed(serde_json::json!([{ "name": "endeavor", "enabled": false }])), "already off");
+        assert!(!super::lists_users_endeavor(b"WARNING: not JSON"));
+        let script = super::codex_script(std::path::Path::new("/opt/it's/codex"));
+        #[cfg(unix)]
+        assert_eq!(script, "#!/bin/sh\nexec '/opt/it'\\''s/codex' -c mcp_servers.endeavor.enabled=false \"$@\"\n");
+        #[cfg(windows)]
+        assert!(script.starts_with("@\"/opt/it's/codex\" -c mcp_servers.endeavor.enabled=false %*"));
     }
 
     /// The user's own CODEX_CONFIG keeps its keys; Endeavor's win where they meet.
