@@ -57,6 +57,62 @@ test("a huge output's text is cut to its start and end, saying how much is left 
   assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(emoji), "no half pairs");
 });
 
+// Claude turns away a view's message past 8,000 characters, with more than 3 line breaks or 64 spaces in a row,
+// or with invisible characters (its send-messages doc, 2026-11-23), so ↩'s message keeps within them.
+function viewModule() {
+  const { outputFiles } = buildSync({ entryPoints: [new URL("../src/view.ts", import.meta.url).pathname], bundle: true, format: "iife", globalName: "view", write: false });
+  const { window } = new JSDOM("", { runScripts: "outside-only" });
+  window.eval(`${outputFiles[0].text};window.view = view;`);
+  return window.view;
+}
+const breaksClaudesRules = (text) => text.length > 8000 || /\n\n\n\n/.test(text) || /[ \t]{65}/.test(text) || /[\u00ad\u200b\u2060\ufeff]/.test(text);
+
+test("↩'s message keeps to what Claude takes: no long runs of blank lines or spaces, no invisible characters", () => {
+  const { chatSafe, chatMessage, MESSAGE_MAX } = viewModule();
+  assert.equal(MESSAGE_MAX, 8000);
+  assert.equal(chatSafe("a\n\n\nb"), "a\n\n\nb", "three line breaks stay");
+  assert.equal(chatSafe("a\n\n  \n\t\n\nb"), "a\n\n\nb");
+  assert.equal(chatSafe("a\r\n\r\n\r\n\r\nb"), "a\n\n\nb");
+  assert.equal(chatSafe(`x${" ".repeat(64)}y`), `x${" ".repeat(64)}y`);
+  assert.equal(chatSafe(`x${" ".repeat(200)}y`), `x${" ".repeat(64)}y`);
+  assert.equal(chatSafe("soft\u00adhy\u200bphen\u2060\ufeff"), "softhyphen");
+  assert.equal(chatSafe("\u{1F468}\u200d\u{1F469}"), "\u{1F468}\u200d\u{1F469}", "emoji keep their joiners");
+  // A short message is the lead, the note and the quotes, as before.
+  const code = "f(x) = x\n\n\n\n\ng(x) = 2x";
+  const msg = chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code }], comment: "Why?" }]);
+  assert.ok(msg.startsWith("\u2193\n\n[Endeavor] The user quoted parts of the notebook"));
+  assert.ok(msg.endsWith(`<quote cell="f" uri="notebook://pluto/${NB}/cell/${A}">\nf(x) = x\n\n\ng(x) = 2x\n</quote>\nWhy?`));
+  assert.ok(!breaksClaudesRules(msg));
+  assert.ok(msg.includes("were shortened to fit Claude's message box"), "Claude is told the quote was shortened");
+  assert.ok(!chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: "f(x) = x\r\n\r\ng(x) = 2x" }], comment: "" }]).includes("shortened"), "but not when nothing was");
+});
+
+test("a long cell, or picks that ⌘↩ added up, are cut to fit Claude's 8,000 characters; comments never are", () => {
+  const { chatMessage } = viewModule();
+  const long = Array.from({ length: 3000 }, (_, i) => `y${i} = ${i}`).join("\n");
+  const one = chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: long }], comment: "Is this slow?" }]);
+  assert.ok(!breaksClaudesRules(one), `${one.length} characters`);
+  assert.ok(one.length > 7500, "cut as little as fits");
+  assert.ok(one.includes("\ny0 = 0\ny1 = 1\n") && one.includes("\ny2999 = 2999\n</quote>\nIs this slow?"), "its start, its end and the comment");
+  assert.match(one, /\n\[[\d,]+ characters left out here to fit Claude's message box; read the cell with the notebook tools\.\]\n/);
+  // Three picks added with ⌘↩ and the ↩: the long ones are cut to the same length, the short one stays whole.
+  const quoted = [
+    { picks: [{ part: "cell", cell: A, code: long }], comment: "First" },
+    { picks: [{ part: "lines", cell: A, code: long, lines: [1, 3000], text: long }], comment: "Second" },
+    { picks: [{ part: "output", cell: A, code: long, text: "0.42" }, { part: "figure", cell: A, code: long }], comment: "Third" },
+  ];
+  const all = chatMessage(NB, quoted);
+  assert.ok(!breaksClaudesRules(all), `${all.length} characters`);
+  assert.equal(all.match(/characters left out here/g).length, 2);
+  assert.ok(all.includes("\n0.42\n</quote>") && all.includes('part="figure"'));
+  for (const c of ["\nFirst\n", "\nSecond\n", "\nThird"]) assert.ok(all.includes(c), c);
+  // Never between the halves of a surrogate pair.
+  const emoji = chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: "\u{1F600}".repeat(9000) }], comment: "" }]);
+  assert.ok(!breaksClaudesRules(emoji) && !/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(emoji));
+  // Comments too long to fit even with every quote cut: nothing to send.
+  assert.equal(chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: long }], comment: "c".repeat(8000) }]), null);
+});
+
 test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {
   const { window, $ } = page();
   const css = $("#endeavor-theme").textContent;
@@ -209,6 +265,39 @@ test("after ↩, Point ends at once when the keyboard is already in Claude's box
   quote();
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(!on());
+});
+
+test("↩ with a comment too long for Claude's box sends nothing and gives the pick back; one that ⌘↩ added is let go", async () => {
+  const { window, sent } = pageWithSend({ focused: { now: true } });
+  window.__endeavor.receive({ type: "annotate", on: true });
+  const pick = { part: "output", cell: A, code: "x", text: "0.42" };
+  const said = () => window.document.getElementById("endeavor-sent").textContent;
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "c".repeat(9000), add: false, ref: 1 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 0);
+  assert.match(said(), /^Too long for Claude's message box \(8,000 characters\)\. Shorten your comment/);
+  // A long comment added with ⌘↩ can't come back to Point to shorten: it goes, and the next ↩ sends.
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "c".repeat(9000), add: true });
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "Why?", add: false, ref: 2 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 0);
+  assert.match(said(), /so those picks were let go\. Press (↩|Enter) to send this one\.$/);
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "Why?", add: false, ref: 3 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].endsWith("</quote>\nWhy?") && !sent[0].includes("ccc"));
+  // What ⌘↩ added fits alone but not with this ↩: it goes alone, and this pick waits in Point.
+  window.__endeavor.receive({ type: "annotate", on: true });
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "a".repeat(5000), add: true });
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "b".repeat(5000), add: false, ref: 4 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 2);
+  assert.ok(sent[1].includes("a".repeat(5000)) && !sent[1].includes("bbb"));
+  assert.match(said(), /^Sent what (⌘↩|Ctrl\+Enter) added: .* then press (↩|Enter) to send this one\.$/);
+  window.testSend({ type: "quote", notebook: NB, picks: [pick], comment: "b".repeat(5000), add: false, ref: 5 });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 3);
+  assert.ok(sent[2].includes("b".repeat(5000)) && !sent[2].includes("aaa"));
 });
 
 test("the view brings Claude's new cell into view, until the user scrolls somewhere else", async () => {
