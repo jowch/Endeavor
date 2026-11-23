@@ -108,6 +108,196 @@ text, so it doesn't fit edits that already landed.
   runtime refuses edits and runs. Same for Ask to run vs Auto, and for
   Manual's edits: the runtime's policy decides, not the agent's settings.
 
+## The notebook view in Claude's desktop app
+
+`frontend/src/view.ts` and the files it uses are EndeavorMCP's notebook view
+in Claude's desktop app. What the desktop app does, as probed on a Mac in
+November 2026, decides how the view works:
+
+- **Messages.** The view's message goes into Claude's message box for the
+  user to send, after anything they typed, with its leading whitespace
+  trimmed. So a visible mark (an arrow) starts it and keeps its newlines; a
+  dash read to Claude as the user's own text. Claude takes at most 8,000
+  characters, at most 3 line breaks or 64 spaces and tabs in a row, and no
+  invisible characters, and turns away anything else every time. The app only
+  takes a view's message just after the user's press, and shows it after 2 to
+  7 seconds, so the view says "Sending to Claude's chat…". Context for later
+  turns (`ui/update-model-context`) never reached Claude in the Code tab, so
+  it isn't used.
+- **Quotes.** Unlike the app's, the view's quotes name what was picked and
+  carry no code or output, except lines the user picked: a long cell's code
+  went over 8,000 characters (#328), and Claude reads the rest with its tools.
+- **Pictures.** The frame can't take a screenshot, so `crop.ts` draws a box's
+  images, SVGs and canvases itself. Text, HTML, WebGL drawn without
+  `preserveDrawingBuffer` (Makie's and plotly's 3D views) and images from
+  another site don't come out. An SVG is drawn from a copy on its own, so the
+  page's CSS and web fonts don't reach it. The picture's id goes in the
+  message at once and the picture follows, since Claude reads it only after
+  the user sends.
+- **Point** ends once the message is on its way and the view has lost the
+  keyboard: the user sends from Claude's box, where the view's keys don't
+  reach.
+- **Find.** Desktop's ⌘F searches Desktop's page, not the view's frame, so
+  the view has its own Find.
+- **Links.** The frame may not open windows, so links go through the host
+  (`ui/open-link`). Any other link that loads a page would replace the view
+  with a blank one, since the frame's page has no address of its own.
+- **Space.** Claude's side panel is about 513 by 721 px, down to 320 wide,
+  and reports no safe-area insets. Measured at 320 px, Pluto's own margins
+  left 226 px of code (Ember's 170). So the view keeps only what the cells
+  need: the room for the eye (and Ember's run button) left of a cell, the run
+  time and add-cell buttons between cells, two digits of line numbers (Point
+  shows them), and room under the last cell for Point's bar. From 760 px wide
+  it is full screen: a wider centred column, with Docs and Status as a sheet
+  down the right. Markdown headings are smaller and long words wrap.
+  `space.ts` moves the column to the left edge while a sheet is open; that
+  rule's selector must outweigh the full-screen column rule's. The column rule
+  is (1,2,2), since its `:has(.plutoui-toc.aside)` counts two classes; the
+  sheet rule is (1,2,4). Simplifying either selector can silently flip which
+  one wins.
+- **Palette.** While the host sends its style variables, the page takes
+  Claude's backgrounds, greys and borders, keeping Endeavor's accent, code and
+  diff colours.
+- **Completions and new cells.** Claude's edits land while a cursor sits in a
+  cell, and Pluto's completion list stayed up over the notebook for as long
+  as Claude worked, so the view closes a list nobody is using. A cell Claude
+  adds is brought into view while the user follows along.
+- **CodeMirror** scrolls the cursor into view by the window's top edge and
+  ignores `scroll-padding`, so the view keeps the cursor below its toolbar
+  itself.
+
+## Page and app messages
+
+The notebook page and the app talk over one channel, `frontend/src/bridge.ts`.
+The page sends `ToApp` messages over wry's `window.ipc`, and `src/annotate.rs`
+parses them. The app sends `ToPage` messages by evaluating
+`window.__endeavor.receive(<json>)`, and each feature registers handlers with
+`on` (several may listen to one type, such as `cells`). Claude's desktop
+notebook view (`view.ts`) uses the same messages, with a host handler in place
+of IPC.
+
+**Only the app's own messages count.** Notebook output can run JavaScript, and
+a message it posts could become a prompt. So the app puts a per-launch secret
+in place of `__ENDEAVOR_NONCE__` and drops messages without it. bridge.ts is
+an initialization script, so it captures the secret and webkit's
+`postMessage` before any page script runs; code that later patches
+`window.ipc` or webkit's handler gets neither. `byUser` accepts only trusted
+events, so a script can't click or type a prompt into being. Tests run with no
+secret and no host, and can't make trusted events, so there `byUser` lets
+them through. `test/bridge.test.mjs` checks all three.
+
+Page to app:
+
+- `ready`, and `mode` (Point on or off).
+- `quote`: what Point picked, or a selection Reply quotes, with the user's
+  comment. It is sent now, or, with `add`, added to the composer's message.
+  `ref` is set by a host that answers each ↩ (the desktop view), which echoes
+  it back in `quote_sent`.
+- `shoot`: take a picture of this viewport rect (CSS pixels) for a quote; the
+  app answers `shot`.
+- `ask`: Fix with Claude or Explain on a cell's error.
+- `prompt`: ⌘E on a cell, or the agent button between cells. `where` is
+  `about` the cell, `fill` an empty cell, or a new cell `before` or `after` it.
+  Sent now (queued while the agent works) or, with `add`, added to the
+  composer.
+- `code`: a cell's code, answering the app's `code` (null when the cell isn't
+  there).
+- `state`: the shown notebook's state for the header, whenever it changes.
+- `asked_visible`: whether a cell the chat's card asks to run is on screen.
+- `run_notebook`: Run notebook in the safe-preview callout.
+- `run_anyway`: the user's run reaches cells a card asks to run; the app
+  answers those cards.
+- `answer_card`: ⏎ in the page with nothing focused answers card `card`, as
+  its filled button does.
+- `fix_package` and `restart`: the Status failure box's buttons.
+- `error_ask_show` and `error_ask_cancel`: on an error box the agent is
+  answering, show its message in the chat, or take a queued one out.
+- `debug`: answering the app's `debug` with what the page shows (Point and its
+  picks, each pick's source as the app names it, the drawer's tab, the
+  callout, Reply's pill or prompt, the open prompt, and the alerts shown).
+
+App to page:
+
+- `annotate` (Point on or off), and `quote_sent` (whether the desktop view's
+  chat took quote `ref`; when it didn't, the picks and comment go back to
+  Point).
+- `cells`: the shown notebook's cells, whenever they change and after `ready`.
+- `theme`: `endeavor`, `pluto`, or `view` (the Endeavor look inside the
+  desktop view, keeping Pluto's own header and panels).
+- `reveal`: scroll to these cells and outline them briefly (a chip in the chat
+  was clicked).
+- `code`: ask for a cell's code. `shot`: picture `id` is taken, or couldn't
+  be, so the page shows its overlay again.
+- `drawer`: open Live docs or Status, or shut the drawer (null).
+- `context`: where the notebook runs (`host`), the session's agent (absent
+  means Claude), whether the agent is asking to run (`asking`), `readonly`
+  (the server is out of reach), `crash` (Julia stopped twice, so it opened in
+  safe preview; the body names cells in backticks), the card's `ask_cells`,
+  the `rerun_cells` after them and the never-run `needed_ids` that run first,
+  `working` (the prompts' ↩ queues), `error_asks`, every waiting run card's
+  cells and names (`waiting_runs`, so the user's own run asks before reaching
+  one), and the waiting `card` that ⏎ answers. `main.ts` registers
+  `initState`'s handler first, so every feature's own `context` handler reads
+  the new agent from the same message.
+- `action`: Share and ⋮ items that act in the page with Pluto's functions.
+- `debug`: a debug build's state dump asks what the page shows.
+
+## The agent's picture of an HTML output (`cell_shot.rs`)
+
+When the runtime has no picture of a cell's output for `view_cell_output`
+(an HTML or JS output: a widget, an interactive plot), the listener asks the
+app for one (`endeavor_mcp::Snapshot`). The app takes it from a second web
+view of the same notebook, behind the user's one, scrolled to the cell, so
+the user's view never moves. A rect off screen in the user's own view comes
+back blank; a second view scrolled to it draws HTML and WebGL alike, even a
+canvas that drew once.
+
+- The second view is another Pluto client of the notebook. It loads the page
+  as a reload would, so what the user did inside a widget (a selection) isn't
+  in the picture. It has none of the user's view's setup (page.js), so Pluto
+  loads JuliaMono from its CDN there: offline, code in a picture is in
+  another monospace font. It hides what floats over the page (Pluto's bars,
+  Live docs), since it is only for pictures (#163).
+- It is placed exactly behind the user's view, with the same holes, and only
+  while the user's view is on screen and not dimmed: anything over the user's
+  view would show the second one through it. It is let go after a while with
+  no picture, so it isn't a Pluto client for the rest of the day.
+- On a Mac it goes directly under the user's view among its siblings: both are
+  built on the same parent, and the one added last starts on top (#259). macOS
+  ends a hidden view's process first when memory is short; that is this
+  view's own, and the user's notebook isn't loaded again.
+- On Linux it is an X child window stacked under the user's: WebKitGTK draws a
+  hidden view's snapshot too, but runs no animation frames there, so a plot
+  drawn from one would be blank. It is shown to GTK from the start and hidden
+  by unmapping its X window, since a view shown again through GTK keeps the
+  size GTK picks, not the pane's.
+- On Windows it is a child window just under the user's, shown without
+  activating (not wry's `set_visible`, whose SW_SHOW may activate), so the
+  keyboard stays in the user's cell. The picture is WebView2's
+  (`snapshot_windows.rs`).
+- The picture waits two frames after the scroll, and on a page just loaded
+  long enough for a widget that draws after it (WebGL).
+
+## Julia or R stopping under a notebook (`crash.rs`)
+
+The pane says so, with Restart Julia, which reopens the notebook and runs it
+again. If Julia stops again during that run, the notebook opens in safe
+preview instead, so a cell that takes Julia down can't do it in a loop. A
+stop heard just after a restart is the restart's own, and a rerun never
+seen running is taken as done after a while (an idle R notebook's list
+doesn't change), so a stop after that is a first one.
+
+A notebook's own Julia (Pluto runs each notebook in a process of its own) is
+seen to stop in the runtime's notebook list (`exited`, with the cells that
+were running) and through its page; the cell is remembered from while Julia
+ran, since the list after a stop can't say. All of a host's Julia stopping is
+heard from its helper, for each notebook that was running there.
+
+R ending works the same way: the runtime closes every R notebook with it and
+says why (`engine_ended`), and Start R again opens the notebook again,
+running it only if it was allowed to run before, so one in safe preview
+doesn't run without the user.
+
 ## Frontend tech
 
 - `frontend/` is TypeScript, built with esbuild into one bundle,

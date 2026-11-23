@@ -1,13 +1,3 @@
-// The drawer at the bottom of the notebook (Endeavor look): Live docs and
-// Status share it, and it resizes from its top edge. The header's book and
-// pulse buttons open it on a tab (`drawer` messages); it reports its tab back
-// in the `state` summary. Live docs is Pluto's own panel, moved into the
-// drawer by CSS (it follows the cursor as in Pluto). Status is ours, from
-// status.ts: the current step in bold, the steps under it, then packages,
-// dependencies and cells, with the raw Pkg log behind Show log. On a first run
-// that installs packages Status opens by itself, and closes when the run ends
-// unless the user opened it.
-
 import { byUser, on, send } from "./bridge";
 import { context, current, every, notebookId, onNotebook, report, setDrawerSource, type Drawer } from "./state";
 import type { NotebookLike, StatusModel } from "./status";
@@ -17,11 +7,6 @@ const HEADER = 36;
 const css = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
-  /* Separate from --endeavor-drawer-h (the drawer's own height, which also
-     sizes Pluto's Live docs panel): while dragging the grip, only the
-     drawer's height changes every frame; the body's padding -- and so the
-     whole notebook's layout -- only catches up once the drag ends (see
-     setHeight's settle parameter below). */
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
@@ -79,7 +64,6 @@ const css = `
   #endeavor-drawer .foot { display: flex; justify-content: flex-end; margin-top: 10px; }
   #endeavor-drawer pre.log { margin: 6px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto; border-radius: 6px;
     background: var(--e-bg-card); color: var(--e-text-secondary); font: 11px/1.45 JuliaMono, ui-monospace, monospace; white-space: pre-wrap; }
-  /* Live docs: Pluto's panel, filling the drawer under its tabs. */
   html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"] #helpbox-wrapper {
     display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
     height: calc(var(--endeavor-drawer-h) - ${HEADER}px); z-index: 71; }
@@ -103,12 +87,9 @@ const pulse = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" strok
 let drawer: HTMLElement;
 let body: HTMLElement;
 let tab: Drawer = null;
-/** The drawer opened by itself for a first run; closes again when the run ends. */
 let auto = false;
-/** Already opened by itself for this page (once per notebook load). */
 let autoDone = false;
 let showLog = false;
-/** Groups the user folded or unfolded, by name; otherwise open while busy or failed. */
 const folded = new Map<string, boolean>();
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -121,9 +102,6 @@ function height(): number {
   return Math.round(window.innerHeight * 0.42);
 }
 
-/** `settle`: also move the body's padding (and so relayout the notebook) to
- * match. False while dragging: only the drawer's own height (and Live docs')
- * moves every frame; the caller settles the padding once, when the drag ends. */
 function setHeight(h: number, settle = true) {
   const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
   const root = document.documentElement.style;
@@ -132,7 +110,6 @@ function setHeight(h: number, settle = true) {
   return clamped;
 }
 
-/** Set while the drawer tells Pluto's panel which tab to show, so that isn't taken for Pluto asking. */
 let echoing = false;
 
 export function openDrawer(next: Drawer, byItself = false): void {
@@ -142,7 +119,6 @@ export function openDrawer(next: Drawer, byItself = false): void {
   else delete document.documentElement.dataset.endeavorDrawer;
   drawer.dataset.tab = next ?? "";
   for (const b of drawer.querySelectorAll<HTMLElement>("header [data-tab]")) b.classList.toggle("active", b.dataset.tab === next);
-  // Pluto's panel shows its Live docs tab only while ours is on it.
   echoing = true;
   window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: next === "docs" ? "docs" : null }));
   echoing = false;
@@ -150,7 +126,6 @@ export function openDrawer(next: Drawer, byItself = false): void {
   report();
 }
 
-/** The user chose a tab. Only then does the docs search take the cursor: Pluto opens docs while someone types in a cell. */
 function pick(next: Drawer): void {
   openDrawer(next);
   if (next === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
@@ -253,7 +228,6 @@ function render() {
   }
 }
 
-/** Status opens by itself while a first run installs packages, and shuts after, unless the user opened it. */
 function follow(_: NotebookLike, m: StatusModel) {
   const installing = m.steps[1].phase === "busy" && m.packages.some((p) => p.state === "installing" || p.state === "precompiling");
   if (installing && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
@@ -286,9 +260,6 @@ export function initDrawer(): void {
   const grip = drawer.querySelector<HTMLElement>(".grip")!;
   grip.onpointerdown = (e) => {
     grip.setPointerCapture(e.pointerId);
-    // Coalesce to one setHeight per frame: a fast drag fires many pointermove
-    // events between paints, and setHeight(..., false) already skips the
-    // body's padding, so this only avoids redundant custom-property writes.
     let pending: number | null = null;
     let frame = 0;
     const move = (m: PointerEvent) => {
@@ -302,9 +273,6 @@ export function initDrawer(): void {
     const up = () => {
       grip.removeEventListener("pointermove", move);
       if (frame) cancelAnimationFrame(frame);
-      // Settle now: the body's padding (and the notebook's layout) catches
-      // up to the drawer's final height in this one relayout, not one per
-      // pointermove during the drag.
       const h = setHeight(pending ?? drawer.offsetHeight);
       try {
         localStorage.setItem("endeavor-drawer-h", String(h));
@@ -314,7 +282,6 @@ export function initDrawer(): void {
     grip.addEventListener("pointerup", up, { once: true });
   };
 
-  // Pluto opens Live docs itself (a cell starting with ?, ? in autocomplete, a docs link in an error): open ours there.
   window.addEventListener("open_bottom_right_panel", (e) => {
     if (!echoing && (e as CustomEvent).detail === "docs" && tab !== "docs") openDrawer("docs");
   });
@@ -327,6 +294,5 @@ export function initDrawer(): void {
     render();
   });
   onNotebook(follow);
-  // Elapsed times and spinners while something runs.
   every(1000, () => current()?.model.busy && render());
 }

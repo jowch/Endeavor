@@ -1,24 +1,9 @@
-// Endeavor's script for the notebook view in Claude's desktop app (EndeavorMCP's
-// views/notebook.html, which vendors the built dist/view.js): the Endeavor look
-// and Point on Pluto's page, without the app. The view passes a host: Point's
-// ↩ passes the picks and the comment to Claude's chat as the user's message
-// (MCP Apps' ui/message), with any that ⌘↩ added first: ⌘↩ keeps them here, in
-// the view, so they don't depend on what the host does with a second message.
-// Claude's desktop app puts the message in its message box for the user to send
-// (checked 2026-11-11). Context for later turns (ui/update-model-context) isn't
-// used: the desktop app's Code tab gave it to Claude on no turn at all. Pictures of
-// figures and boxes aren't taken here (the app takes them natively), so
-// those picks name their cells and Claude reads the output with its tools.
-// Unlike the app, Point ends once ↩'s message is on its way: the user sends it from Claude's
-// box, where the view's keys don't reach. The view fills Claude's panel: Pluto's header, footer and
-// floating tabs give way to one slim toolbar (the file, what Pluto is doing, Find, Docs, Status, Point). It also
-// closes a completion list nobody uses and follows the cells Claude adds.
-
 import { initAnnotate, pointState } from "./annotate";
 import { initAskBox } from "./askbox";
 import { findButton, initFind } from "./find";
 import { setHost, type ToApp } from "./bridge";
 import { cellName } from "./cellname";
+import { drawBox, mayDraw } from "./crop";
 import { mac, modHeld } from "./keys";
 import type { Pick } from "./quote";
 import { initNarrow } from "./narrow";
@@ -26,95 +11,99 @@ import { EMBER, PLUTO, initSpace } from "./space";
 import { statusModel, type NotebookLike } from "./status";
 import { initTheme } from "./theme";
 
-/** What the view gives the page: Claude's chat. */
 export type Host = {
-  /** Whether the host takes messages from the view (`send`); without it there is no Point. */
   canSend: boolean;
-  /** The notebook's engine, which names it in a quote's uri as the app does: "ember" for an R notebook. Pluto without it. */
   engine?: Engine;
-  /** Pass `text` to the chat as the user's message (the host may wait for the user to send it). */
   send(text: string): Promise<void>;
-  /** Open `url` in the user's browser (MCP Apps' ui/open-link; Claude's desktop app asks the user first). Without it, links stay as they are. */
   openLink?(url: string): Promise<void>;
+  crop?(png: string, crop: string): Promise<void>;
 };
 
-/** A notebook engine, by the name the app's quote uris use (wire's `Backend::name`). */
 export type Engine = "pluto" | "ember";
 
-/** How the quotes read. Keep in step with the app's attach::quote_note and quote_block (src/attach.rs). */
 const format = (engine: Engine) =>
   "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are " +
-  "line numbers in the cell's code, counting from 1. `part` says what was quoted when it isn't code: `output` (text from " +
-  "the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists " +
-  "the cells under it). No picture comes with a figure or box here: read current code and outputs with the notebook MCP tools.";
+  "line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's " +
+  "output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells " +
+  "under it). A `lines` quote holds the lines the user picked, as they were then; the others hold no code or output. Read " +
+  "what the cells hold now with the notebook MCP tools (read_cell, view_cell_output). A box's " +
+  "`crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells. Only what could be drawn is in it, and when nothing could be, there's none.";
 
-/** What Claude is told once in a message that quotes the notebook. */
 export const quoteNote = (engine: Engine = "pluto") =>
-  "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
+  "[Endeavor] The user picked parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
 
-// Claude's desktop app adds the message at the end of its box, straight after anything the user typed,
-// and trims its leading whitespace (probed 2026-11-12), so a visible mark starts it and its newlines
-// survive. A dash read to Claude as the user's own text cut off; an arrow pointing down, with a word
-// in the note, doesn't.
 const LEAD = "\u2193";
 const LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
 
 const uri = (notebook: string, cell: string, engine: Engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
 
-/**
- * How much of a picked output's text goes in a quote. Text goes to Claude's message box, and an output can be
- * megabytes (a 200,000-line `Text` sent 1.3 MB, headless 2026-11-12): past this, its start and end with a note.
- */
-export const OUTPUT_MAX = 4000;
-const OUTPUT_END = 500;
+export const MESSAGE_MAX = 8000;
 
-/** `text` cut to OUTPUT_MAX characters, its start and end kept, saying how much was left out. */
-export function outputText(text: string): string {
-  if (text.length <= OUTPUT_MAX) return text;
-  // Not between the two halves of a surrogate pair (an emoji, say).
-  const low = (i: number) => (text.charCodeAt(i) & 0xfc00) === 0xdc00;
-  let end = OUTPUT_MAX - OUTPUT_END;
-  if (low(end)) end--;
-  let start = text.length - OUTPUT_END;
-  if (low(start)) start++;
-  return `${text.slice(0, end)}\n[${(start - end).toLocaleString("en-US")} characters of this output left out here.]\n${text.slice(start)}`;
+export function chatSafe(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u00ad\u180e\u200b\u2060\ufeff]/g, "")
+    .replace(/(?:[ \t]*\n){4,}/g, "\n\n\n")
+    .replace(/[ \t]{65,}/g, (run) => run.slice(0, 64));
 }
 
-/** One pick as a `<quote>` (the app's attach::quote_block), except that the view cuts a long output (OUTPUT_MAX) and the app doesn't. */
-export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto"): string {
-  if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
-  const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
+export type Quoted = { picks: Pick[]; comment: string; crops?: (string | undefined)[] };
+
+export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
+  const bare = new Set<Pick>();
+  const longest = quoted.flatMap((q) => q.picks).filter((p) => p.part === "lines").sort((a, b) => b.text.length - a.text.length);
+  for (;;) {
+    const message = compose(notebook, quoted, engine, bare);
+    if (message.length <= MESSAGE_MAX) return message;
+    const next = longest.shift();
+    if (!next) return null;
+    bare.add(next);
+  }
+}
+
+export const BARE_NOTE = " Some picked lines were too long for Claude's message box, so they go by their line numbers only (a quote with lines and no body): read them with read_cell.";
+
+function compose(notebook: string, quoted: Quoted[], engine: Engine, bare: Set<Pick>): string {
+  const shortened = quoted.some((q) =>
+    q.picks.some((p) => p.part === "lines" && !bare.has(p) && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
+  );
+  const note = shortened
+    ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.`
+    : quoteNote(engine);
+  return chatSafe(
+    `${LEAD}\n\n${note}${bare.size ? BARE_NOTE : ""}${LEAD_NOTE}\n\n` +
+      quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops, bare)).join("\n\n"),
+  );
+}
+
+export const escapedAttr = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string, bare = false): string {
+  if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
+  const at = `cell="${escapedAttr(cellName(pick.code))}"`;
   const where = uri(notebook, pick.cell, engine);
   switch (pick.part) {
     case "cell":
-      return `<quote ${at} uri="${where}">\n${pick.code}\n</quote>`;
+      return `<quote ${at} uri="${where}"/>`;
     case "lines":
-      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
+      const lines = `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}"`;
+      return bare ? `${lines}/>` : `${lines}>\n${pick.text}\n</quote>`;
     case "output":
-      return `<quote ${at} part="output" uri="${where}">\n${outputText(pick.text)}\n</quote>`;
+      return `<quote ${at} part="output" uri="${where}"/>`;
     case "figure":
       return `<quote ${at} part="figure" uri="${where}"/>`;
   }
 }
 
-/** The quotes of one ↩ or ⌘↩: each pick, then the comment after the last. */
-export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto"): string {
-  const blocks = picks.map((p) => quoteBlock(notebook, p, engine));
+export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto", crops: (string | undefined)[] = [], bare: Set<Pick> = new Set()): string {
+  const blocks = picks.map((p, i) => quoteBlock(notebook, p, engine, crops[i], bare.has(p)));
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
-/** The Docs and Status drawer's height in a narrow panel, in % of the panel's height. */
 const DRAWER = 40;
 
-/** The toolbar's height, without Claude's inset above it. */
 const BAR = 32;
 
-// The view fills Claude's panel edge to edge, as an app does, not a website in a box: Pluto's own
-// website chrome (its header with the file box and Move, the share menu, the footer with Settings and
-// FAQ, the floating Live docs and Status tabs) gives way to one slim toolbar: the file's name, what
-// Pluto is doing, Docs, Status and Point. Pluto's header stays only as the band it turns into when the
-// notebook needs the user (Safe preview's Run notebook code, Restart, Julia stopped, Reconnecting),
-// under the toolbar. (Claude's desktop app reports no safe-area insets in its panel, 2026-11-12.)
 const chrome = `
   :root { --endeavor-bar: ${BAR}px; }
   body { padding-top: var(--endeavor-bar); box-sizing: border-box; }
@@ -124,8 +113,6 @@ const chrome = `
     display: block !important; position: sticky; top: var(--endeavor-bar); z-index: 60; }
   pluto-editor > header#pluto-nav nav#at_the_top > :not(#process_status) { display: none !important; }
   pluto-editor > header#pluto-nav nav#at_the_top { justify-content: center; }
-  /* What Pluto keeps at the top as the page scrolls (its "Save all changes" button) and where a jump
-     to a cell lands go under the toolbar, not behind it. */
   pluto-editor main > preamble { top: calc(var(--endeavor-bar) + 5px) !important; }
   html { scroll-padding-top: calc(var(--endeavor-bar) + 8px); }
   #endeavor-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 9997; box-sizing: border-box; height: var(--endeavor-bar);
@@ -140,13 +127,6 @@ const chrome = `
   #endeavor-bar button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
   #endeavor-bar button.on { color: var(--e-text-primary); background: var(--e-bg-raised); }
   #endeavor-bar .key { color: var(--e-text-faint); }
-  /* Live docs and Status: Pluto's own panel, opened from Docs or Status, as a sheet down the right side under the toolbar,
-     or in a panel too narrow to keep the code beside it, a drawer along the bottom (#211), with room
-     under the last cell to scroll it above the drawer. Not display: none when shut: Pluto alerts
-     "window too small to show docs" whenever it opens a panel it finds undisplayed, and it hides the
-     panel below 500px wide. Ember's (R) panel is its own wrapper
-     round the help, with a scrim below 640 px: the wrapper takes the sheet's place, and no scrim
-     covers the code. */
   #helpbox-wrapper { display: block !important; }
   pluto-helpbox.hidden { display: none !important; }
   ${PLUTO} pluto-helpbox, ${EMBER} #helpbox-wrapper.open { position: fixed !important; top: var(--endeavor-bar) !important; bottom: 0 !important;
@@ -155,25 +135,19 @@ const chrome = `
     box-shadow: -8px 0 24px var(--e-shadow-popover) !important; }
   ${EMBER} pluto-helpbox { position: static !important; width: auto !important; height: 100% !important; border: none !important; box-shadow: none !important; }
   ${EMBER} .ember-scrim { display: none !important; }
-  /* Its own tabs and close button: Docs and Status in the toolbar open and close it. */
   pluto-helpbox > header { display: none !important; }
   @media (max-width: 759px) {
     ${PLUTO} pluto-helpbox, ${EMBER} #helpbox-wrapper.open { top: auto !important; left: 0 !important; width: auto !important; height: ${DRAWER}vh !important;
       border-left: none !important; border-top: 1px solid var(--e-divider) !important; box-shadow: 0 -8px 24px var(--e-shadow-popover) !important; }
-    /* Ember's sheet slides in from the right below 1240 px; as a drawer it comes up from the bottom. */
     ${EMBER} #helpbox-wrapper.open { animation-name: ember-slide-up !important; }
     body:has(pluto-helpbox:not(.hidden)) pluto-editor:not(.disable_ui) > main { padding-bottom: calc(${DRAWER}vh + 24px) !important; }
   }
-  /* A narrow panel: the file's name before the shortcut and the panel buttons' words (their icons stay). */
   @media (max-width: 420px) {
     #endeavor-bar .key, #endeavor-bar .panel .word, #endeavor-find-button .word { display: none; }
   }
-  /* Pluto's floating safe-preview badge is hidden, as in the app: its band and each cell's
-     "Code not executed in Safe preview" already say it. */
   .outline-frame-actions-container.safe-preview { display: none !important; }
 `;
 
-// Point, from the toolbar, and what it says once ↩ has passed the picks on.
 const css = `
   #annotate-hint { top: calc(var(--endeavor-bar) + 8px) !important; }
   #endeavor-sent { position: fixed; left: 50%; top: calc(var(--endeavor-bar) + 8px); transform: translateX(-50%); z-index: 10001; display: none;
@@ -182,7 +156,6 @@ const css = `
   #endeavor-sent.shown { display: block; }
 `;
 
-/** What Pluto is doing, in words, for the toolbar: nothing when it's idle. What needs the user (Safe preview, Restart, Julia stopped, Reconnecting) is Pluto's own band. */
 export function doing(nb: NotebookLike | undefined): string {
   if (!nb?.cell_order) return "";
   const model = statusModel(nb);
@@ -191,20 +164,17 @@ export function doing(nb: NotebookLike | undefined): string {
   return "";
 }
 
-/** The file's name, without its folder. */
 export const fileName = (path: string | undefined): string => (path ? path.split(/[\\/]/).pop() || "Notebook" : "Notebook");
 
 const book = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 3.2c1.8-.6 3.7-.4 5.5.8 1.8-1.2 3.7-1.4 5.5-.8v9.6c-1.8-.6-3.7-.4-5.5.8-1.8-1.2-3.7-1.4-5.5-.8z"/><path d="M8 4v9.6"/></svg>`;
 
 const pulse = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8.5h3l1.8-4.5 3.4 8 1.8-3.5h3"/></svg>`;
 
-/** The toolbar's buttons for Pluto's panel: its tab, the word, the icon and the tooltip. */
 const PANELS: [tab: string, word: string, icon: string, title: string][] = [
   ["docs", "Docs", book, "Live docs: what the code under the cursor does"],
   ["process", "Status", pulse, "Status: what the notebook is doing, its packages and how long each step took"],
 ];
 
-/** The toolbar: the file's name, what Pluto is doing, Find, Docs, Status, and Point when the chat takes messages. */
 function initBar(withPoint: boolean, point: (on: boolean) => void): void {
   const style = document.createElement("style");
   style.id = "endeavor-chrome";
@@ -230,7 +200,6 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
       if (!e.isTrusted) return;
       const open = panelOpen(tab);
       window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: open ? null : tab }));
-      // The search box takes the cursor once Pluto has drawn the panel (it does so on its next render).
       if (!open && tab === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
     });
   pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
@@ -247,8 +216,6 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
     for (const [tab, button] of panels) button.classList.toggle("on", panelOpen(tab));
     pointButton?.classList.toggle("on", document.body.classList.contains("annotating"));
   };
-  // Pluto redraws the page whenever its state changes (a cell runs, a panel opens): follow its
-  // redraws, at most every 250 ms, rather than polling a page that is sitting still.
   let soon = 0;
   new MutationObserver(() => {
     if (!soon) soon = window.setTimeout(() => ((soon = 0), tick()), 250);
@@ -257,11 +224,6 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
   keepCursorBelowBar();
 }
 
-/**
- * Where the cursor moves in a cell, it stays in sight below the toolbar. CodeMirror scrolls the cursor
- * into view by the window's top edge and ignores scroll-padding, so a jump up (⌘↑, Page Up, a long
- * cell's first line) left it under the toolbar (headless, 2026-11-12).
- */
 function keepCursorBelowBar(): void {
   let queued = false;
   document.addEventListener("selectionchange", () => {
@@ -279,21 +241,16 @@ function keepCursorBelowBar(): void {
   });
 }
 
-/** Start the look and Point on this page, which shows notebook `notebook`. */
 let started = false;
 
 export function start(notebook: string, host: Host): void {
-  // Once: a later call (a notebook's own script, say) can't take Point's way into the chat.
   if (started) return;
   started = true;
   const engine: Engine = host.engine === "ember" ? "ember" : "pluto";
-  // What ⌘↩ added since the last ↩.
-  const added: string[] = [];
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
   const sent = document.createElement("div");
   sent.id = "endeavor-sent";
   let hide = 0;
-  // `ms`: how long it shows (0: until the next).
   const say = (text: string, ms = 4000) => {
     sent.textContent = text;
     sent.classList.add("shown");
@@ -301,35 +258,69 @@ export function start(notebook: string, host: Host): void {
     if (ms) hide = window.setTimeout(() => sent.classList.remove("shown"), ms);
   };
   const point = (on: boolean) => receive({ type: "annotate", on });
+  type Drawn = Quoted & { pngs: Promise<string | null>[] };
+  const ids = (picks: Pick[]) =>
+    picks.map((p) =>
+      p.part === "box" && p.rect && host.crop && mayDraw(p.rect)
+        ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("")
+        : undefined,
+    );
+  const draw = (q: Quoted): Drawn => ({
+    ...q,
+    pngs: q.picks.map((p, i) => (q.crops?.[i] && p.part === "box" && p.rect ? drawBox(p.rect).catch(() => null) : Promise.resolve(null))),
+  });
+  const keep = (q: Drawn) =>
+    q.pngs.forEach((png, i) => {
+      const id = q.crops?.[i];
+      if (id) png.then((png) => (png ? host.crop?.(png, id) : undefined)).catch(() => {});
+    });
+  const added: Drawn[] = [];
   setHost((msg: ToApp) => {
     if (msg.type !== "quote" || !msg.picks.length) return;
-    const text = quoteText(notebook, msg.picks, msg.comment, engine);
-    // ⌘↩ adds to the message the next ↩ passes, kept here.
     if (msg.add) {
-      added.push(text);
+      added.push(draw({ picks: msg.picks, comment: msg.comment, crops: ids(msg.picks) }));
       return say(`${added.length} added. ${mac ? "↩" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
     }
+    const enter = mac ? "↩" : "Enter";
+    const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
+    const now: Quoted = { picks: msg.picks, comment: msg.comment, crops: ids(msg.picks) };
+    const giveBack = () => msg.ref !== undefined && receive({ type: "quote_sent", ref: msg.ref, ok: false });
+    let message = chatMessage(notebook, [...added, now], engine);
+    let held = false;
+    if (message === null) {
+      if (!added.length || chatMessage(notebook, [now], engine) === null) {
+        giveBack();
+        return say(`Too long for Claude's message box (${max}). Shorten your comment or pick less, then press ${enter}.`, 8000);
+      }
+      message = chatMessage(notebook, added, engine);
+      giveBack();
+      if (message === null) {
+        added.length = 0;
+        return say(`Too long for Claude's message box (${max}) with what ${mac ? "⌘↩" : "Ctrl+Enter"} added, so those picks were let go. Press ${enter} to send this one.`, 8000);
+      }
+      held = true;
+    }
     const earlier = added.splice(0);
-    // Claude's desktop app takes a few seconds to show it in its box (2–7 s, 2026-11-12): say it's on its way.
     say("Sending to Claude's chat…", 0);
-    host.send(`${LEAD}\n\n${quoteNote(engine)}${LEAD_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
+    const byNumber = message.includes(BARE_NOTE);
+    const sending = host.send(message);
+    const going = held ? earlier : [...earlier, draw(now)];
+    sending.then(
       () => {
+        going.forEach(keep);
+        if (held) return say(`Sent what ${mac ? "⌘↩" : "Ctrl+Enter"} added: together they were too long for Claude's message box. Send it from there, then press ${enter} to send this one.`, 8000);
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
-        say("On its way to Claude's message box. Send it from there.", 8000);
-        // The user sends it from Claude's box, where the view's keys (Escape, ⌘⇧E) don't reach, so Point
-        // ends once the view has lost the keyboard, unless something was picked or typed since.
-        // While the keyboard stays here, Point stays on for the next pick, and Escape ends it.
+        say(`On its way to Claude's message box${byNumber ? ", with the longest picked lines by their numbers only" : ""}. Send it from there.`, 8000);
         const end = () => {
-          const now = pointState();
-          if (!now.picks.length && !now.comment.trim()) point(false);
+          const left = pointState();
+          if (!left.picks.length && !left.comment.trim()) point(false);
         };
         if (!document.hasFocus()) end();
         else window.addEventListener("blur", end, { once: true });
       },
       (e) => {
-        // What ⌘↩ added stays here; Point gets its picks and comment back, for ↩ to send again.
         added.unshift(...earlier);
-        if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: false });
+        if (!held) giveBack();
         say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "↩" : "Enter"} sends again.`);
       },
     );
@@ -343,7 +334,6 @@ export function start(notebook: string, host: Host): void {
   receive({ type: "theme", name: "view" });
   initBar(host.canSend, point);
   followClaudesPalette();
-  // A chat that doesn't take messages from the view gets the look and the toolbar, without Point.
   if (!host.canSend) return;
   initAskBox();
   initAnnotate(true);
@@ -352,7 +342,6 @@ export function start(notebook: string, host: Host): void {
   style.textContent = css;
   document.head.append(style);
   document.body.append(sent);
-  // ⌘⇧E (Ctrl+Shift+E) toggles Point, as in the app's menu.
   window.addEventListener(
     "keydown",
     (e) => {
@@ -365,21 +354,11 @@ export function start(notebook: string, host: Host): void {
   );
 }
 
-/** A link the view hands to the host: a web or mail address, not a jump within the page. */
 export function outsideLink(href: string | null): string | null {
   if (!href) return null;
   return /^(https?:|mailto:)/i.test(href.trim()) ? href.trim() : null;
 }
 
-/**
- * Links in cells and Live docs open in the user's browser through the host. The view's frame may not
- * open windows (Claude's desktop app gives it no allow-popups), so a click on one did nothing
- * (2026-11-12). Any other link that would load a page (href="#", a relative path, file:) instead
- * replaced the view with a blank one, as the frame's page is markup with no address of its own; a jump
- * within the page ("#cell") scrolls there. In the bubble phase, after the page's own handlers: a click
- * one of them handled (Pluto's Restart link, a widget's own) is left alone, and so is javascript:.
- * Only the user's own clicks open anything: a script's made-up click opens nothing.
- */
 export function initLinks(open: ((url: string) => Promise<void>) | undefined): void {
   document.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0) return;
@@ -397,15 +376,8 @@ export function initLinks(open: ((url: string) => Promise<void>) | undefined): v
   });
 }
 
-// Claude's palette with our accent (Jonathan's pick, 2026-11-12): in Claude's panel, the page's
-// backgrounds, text greys and borders are Claude's own, from the style variables the host sends
-// (MCP Apps' hostContext.styles.variables, which the view puts on <html>; Claude's desktop app sends
-// 76, each a light-dark() pair, so they follow the appearance as Pluto's colours do). Our accent,
-// the code's colours and the diff colours stay Endeavor's. Only while the host sent them: without,
-// the Endeavor look stays as it is.
 export const claudePalette = `
 html.claude-palette {
-  /* Pages, cards, raised controls */
   --e-bg-page: var(--color-background-primary);
   --e-bg-sidebar: var(--color-background-secondary);
   --e-bg-card: var(--color-background-secondary);
@@ -416,7 +388,6 @@ html.claude-palette {
   --e-menu-hover: var(--color-background-tertiary);
   --e-popover-bg: var(--color-background-primary);
   --e-dialog-bg: var(--color-background-primary);
-  /* Text */
   --e-text-primary: var(--color-text-primary);
   --e-text-secondary: var(--color-text-secondary);
   --e-text-muted: var(--color-text-secondary);
@@ -425,13 +396,11 @@ html.claude-palette {
   --e-text-faint: var(--color-text-tertiary);
   --e-text-dim: var(--color-text-tertiary);
   --e-hint-text: var(--color-text-secondary);
-  /* Edges */
   --e-border: var(--color-border-tertiary);
   --e-divider: var(--color-border-tertiary);
   --e-popover-edge: var(--color-border-secondary);
   --e-dialog-edge: var(--color-border-secondary);
   --e-control-edge: var(--color-border-primary);
-  /* Pluto's own colours that the Endeavor look sets */
   --main-bg-color: var(--color-background-primary);
   --header-bg-color: var(--color-background-primary);
   --footer-bg-color: var(--color-background-primary);
@@ -462,11 +431,9 @@ html.claude-palette {
 html.claude-palette .pluto-modal { border-color: var(--color-border-secondary); }
 `;
 
-/** Which of Claude's variables the palette needs; without all of them it stays off. */
 const PALETTE_NEEDS = ["--color-background-primary", "--color-background-secondary", "--color-background-tertiary", "--color-text-primary",
   "--color-text-secondary", "--color-text-tertiary", "--color-border-primary", "--color-border-secondary", "--color-border-tertiary"];
 
-/** Claude's palette is on while the host's variables are on <html> (the view sets them, and sets them again when Claude's change). */
 function followClaudesPalette(): void {
   const style = document.createElement("style");
   style.id = "endeavor-claude-palette";
@@ -478,20 +445,11 @@ function followClaudesPalette(): void {
   sync();
 }
 
-/** How long a code completion list may stay open with no key or click from the user. */
 const STRAY_MS = 5000;
 
-/**
- * Close Pluto's code completion list when the user isn't using it: open while the view doesn't have
- * the keyboard (the user is in Claude's chat), or for STRAY_MS with no key, click or pointer movement since it opened.
- * Claude's edits land in cells while a cursor sits in one, and a list could stay up over the notebook
- * for as long as Claude worked (2026-11-12). Escape to its editor closes it as the user's Escape would;
- * not while Point is on, whose own Escape ends Point (a list then closes once Point ends).
- */
 function closeStrayCompletions(): void {
   let lastInput = 0;
   let timer = 0;
-  // A pointer over the list, or a wheel turn, counts as using it.
   for (const type of ["keydown", "pointerdown", "pointermove", "wheel"]) window.addEventListener(type, (e) => e.isTrusted && (lastInput = Date.now()), { capture: true, passive: true });
   const list = () => document.querySelector(".cm-tooltip-autocomplete");
   const close = () => {
@@ -499,7 +457,6 @@ function closeStrayCompletions(): void {
     if (!open || document.body.classList.contains("annotating")) return;
     open.closest(".cm-editor")?.querySelector(".cm-content")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 27, bubbles: true, cancelable: true }));
   };
-  // Checked again STRAY_MS after it opened, or after the user's last key or click.
   const check = (openedAt: number) => {
     timer = 0;
     if (!list()) return;
@@ -513,19 +470,9 @@ function closeStrayCompletions(): void {
   window.addEventListener("blur", close);
 }
 
-/** How long since the user's last key or click before the view follows Claude's new cells. */
 const IDLE_MS = 2000;
-/** How long the view's own scroll to a cell takes, so its scroll events aren't taken for the user's. */
 const OWN_SCROLL_MS = 1000;
 
-/**
- * Bring a cell Claude adds into view: the user watches the notebook beside the chat, and otherwise the
- * new cell landed out of sight (2026-11-12). Only while the user follows along: once they scroll the
- * page somewhere else, it stays where they put it, until they scroll back to the end of the notebook
- * (as a chat follows its end). Not within IDLE_MS of a key or click either: a cell the user adds
- * themselves comes right after one, and Pluto shows it as usual. While the page first draws its
- * cells, nothing is followed: Pluto adds them in bursts until it has drawn the whole notebook.
- */
 function followNewCells(): void {
   let lastInput = 0;
   for (const type of ["keydown", "pointerdown"]) window.addEventListener(type, (e) => e.isTrusted && (lastInput = Date.now()), true);
@@ -562,7 +509,6 @@ function followNewCells(): void {
     const cell = added[added.length - 1];
     const since = Date.now();
     show(cell);
-    // Its output comes once it runs (a plot, say): keep it in view while it grows, for a while, while the user follows.
     const grow = new ResizeObserver(() => {
       if (!following || lastInput > since || Date.now() - since > 15000 || !cell.isConnected) return grow.disconnect();
       show(cell);

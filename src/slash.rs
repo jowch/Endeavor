@@ -1,25 +1,17 @@
-//! The slash-command list: Endeavor's own commands (/mode, /model), then the
-//! commands and skills Claude Code sends, minus the ones that don't belong in
-//! a notebook app. What's typed after "/" filters them by name, then by
-//! description. A command name followed by a space is one piece (a token).
-
 use std::ops::Range;
 
 use agent_client_protocol::schema::v1::{AvailableCommand, AvailableCommandInput};
 
-/// The list's keys, spelled out on Linux.
 #[cfg(target_os = "macos")]
 pub const FOOTER: &str = "↑↓ choose · ⏎ run · ⇥ fill in · esc close";
 #[cfg(not(target_os = "macos"))]
 pub const FOOTER: &str = "↑↓ choose · Enter run · Tab fill in · Esc close";
 pub const ENTER: &str = if cfg!(target_os = "macos") { "⏎" } else { "Enter" };
-/// /mode's key: the next mode.
 pub const SHIFT_TAB: &str = if cfg!(target_os = "macos") { "⇧⇥" } else { "Shift+Tab" };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
     Endeavor,
-    /// Claude Code's commands and skills: ACP doesn't say which is which.
     ClaudeCode,
 }
 
@@ -32,7 +24,6 @@ impl Group {
     }
 }
 
-/// Endeavor's own commands: they act in the app at once and are never sent.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Own {
     Mode,
@@ -45,26 +36,17 @@ pub struct Command {
     pub description: String,
     pub group: Group,
     pub own: Option<Own>,
-    /// The faint word after the name in the list ("instructions").
     pub hint: Option<String>,
-    /// The faint words after the caret once it's filled in. None: the
-    /// command takes nothing, so ⏎ runs it.
     pub words: Option<String>,
-    /// Not listed, but still a command when typed in full.
     pub hidden: bool,
 }
 
-/// Claude Code's commands the list leaves out. Typed in full they still go to
-/// Claude Code as written.
 const HIDDEN: &[&str] = &[
-    // New session does what /clear does.
     "clear",
-    // Endeavor's toolbar sets these; /mode and /model replace the first two.
     "model",
     "plan",
     "effort",
     "fast",
-    // For code projects: branches, pull requests, an app to drive.
     "review",
     "security-review",
     "pr-comments",
@@ -77,7 +59,6 @@ const HIDDEN: &[&str] = &[
     "run-skill-generator",
     "verify",
     "design-sync",
-    // Claude Code's own setup, files and terminal.
     "add-dir",
     "output-style",
     "update-config",
@@ -113,12 +94,9 @@ const HIDDEN: &[&str] = &[
 ];
 
 pub fn hidden(name: &str) -> bool {
-    // Endeavor's own skills are for Claude, which loads them itself.
     HIDDEN.contains(&name) || name.starts_with("endeavor:")
 }
 
-/// Endeavor's wording for a command's words where Claude Code's hint is
-/// missing or reads as syntax: (list hint, hint after the caret).
 fn wording(name: &str) -> Option<(&'static str, &'static str)> {
     Some(match name {
         "compact" => ("instructions", "instructions for the summary (optional)"),
@@ -127,7 +105,6 @@ fn wording(name: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// Claude Code's hint as words: brackets and "|" taken out.
 fn plain_hint(hint: &str) -> String {
     let kept: String = hint.chars().filter(|c| !"<>[]()".contains(*c)).map(|c| if c == '|' { ' ' } else { c }).collect();
     kept.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -149,9 +126,6 @@ fn endeavor() -> Vec<Command> {
     ]
 }
 
-/// Every command, listed or not: Endeavor's, then Claude Code's in the order
-/// it sent them (None: not sent yet). Claude Code's /model and /mode lose to
-/// Endeavor's.
 pub fn commands(agent: Option<&[AvailableCommand]>) -> Vec<Command> {
     let mut all = endeavor();
     for c in agent.unwrap_or_default() {
@@ -171,8 +145,6 @@ pub fn commands(agent: Option<&[AvailableCommand]>) -> Vec<Command> {
     all
 }
 
-/// One row of the filtered list, and the byte ranges to show brighter: in
-/// the name (without its "/"), or in the description.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub command: usize,
@@ -181,15 +153,11 @@ pub struct Row {
 
 #[derive(Debug, PartialEq)]
 pub enum Listing {
-    /// Names match (all of them for an empty query).
     Names(Vec<Row>),
-    /// No name matches; these descriptions do.
     Descriptions(Vec<Row>),
     Nothing,
 }
 
-/// How a name matches the query: 0 starts with it, 1 contains it, 2 has its
-/// letters in order. With the byte ranges of the matched letters.
 pub fn name_match(name: &str, query: &str) -> Option<(u8, Vec<Range<usize>>)> {
     let lower = name.to_lowercase();
     let query = query.to_lowercase();
@@ -216,8 +184,6 @@ pub fn name_match(name: &str, query: &str) -> Option<(u8, Vec<Range<usize>>)> {
     Some((2, marks))
 }
 
-/// The listed commands for what's typed after "/": by group, then names
-/// starting with it, containing it, with its letters in order.
 pub fn filter(query: &str, commands: &[Command]) -> Listing {
     let listed = || commands.iter().enumerate().filter(|(_, c)| !c.hidden);
     let mut named: Vec<(Group, u8, usize, Vec<Range<usize>>)> = listed().filter_map(|(i, c)| name_match(&c.name, query).map(|(tier, marks)| (c.group, tier, i, marks))).collect();
@@ -237,9 +203,6 @@ pub fn filter(query: &str, commands: &[Command]) -> Listing {
     if described.is_empty() { Listing::Nothing } else { Listing::Descriptions(described) }
 }
 
-/// Choices (a mode's or a model's names) for what's typed after the
-/// command: all for nothing typed; else those starting with it, then
-/// containing it. Indices into `names`.
 pub fn choices(query: &str, names: &[String]) -> Vec<usize> {
     let query = query.trim();
     let mut found: Vec<(u8, usize)> = names.iter().enumerate().filter_map(|(i, n)| name_match(n, query).filter(|(tier, _)| *tier < 2).map(|(tier, _)| (tier, i))).collect();
@@ -247,14 +210,10 @@ pub fn choices(query: &str, names: &[String]) -> Vec<usize> {
     found.into_iter().map(|(_, i)| i).collect()
 }
 
-/// What's typed after "/" while it's still the command's name: the box
-/// starts with "/" and holds no space yet.
 pub fn typing(text: &str) -> Option<&str> {
     text.strip_prefix('/').filter(|rest| !rest.contains(char::is_whitespace))
 }
 
-/// The command at the start of the text, when its name is followed by a
-/// space: one tinted piece. With the byte length of "/name".
 pub fn token<'a>(text: &str, commands: &'a [Command]) -> Option<(usize, &'a Command)> {
     let rest = text.strip_prefix('/')?;
     let end = rest.find(char::is_whitespace)?;
@@ -262,14 +221,10 @@ pub fn token<'a>(text: &str, commands: &'a [Command]) -> Option<(usize, &'a Comm
     Some((end + 1, command))
 }
 
-/// A message that starts with a slash command, as far as sending goes: its
-/// first word is "/name" with no other "/" (a path is not a command).
 pub fn is_command(text: &str) -> bool {
     text.strip_prefix('/').and_then(|rest| rest.split(char::is_whitespace).next()).is_some_and(|name| !name.is_empty() && !name.contains('/'))
 }
 
-/// Endeavor's command at the start of the text and what follows it, when
-/// the text is one: "/model sonnet" → (Model, "sonnet").
 pub fn own_command(text: &str) -> Option<(Own, &str)> {
     let rest = text.trim_start().strip_prefix('/')?;
     let (name, after) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
@@ -281,9 +236,6 @@ pub fn own_command(text: &str) -> Option<(Own, &str)> {
     Some((own, after.trim()))
 }
 
-/// A description shown from a little before byte `at`, so a match far into
-/// it stays in view: where the shown text starts in the original (less the
-/// "…" put in front), and the text.
 pub fn around(description: &str, at: usize) -> (usize, String) {
     const LEAD: usize = 16;
     if at <= LEAD + 8 {
@@ -295,9 +247,6 @@ pub fn around(description: &str, at: usize) -> (usize, String) {
     (from - ellipsis.len(), format!("{ellipsis}{}", &description[from..]))
 }
 
-/// What sending "/mode …" or "/model …" does: never send it. It applies
-/// the best of the choices (`names` lists them), or opens the list when
-/// nothing follows the command or nothing matches.
 #[derive(Debug, PartialEq)]
 pub enum OwnSend {
     Apply(Own, usize),
@@ -329,7 +278,6 @@ mod tests {
             .collect()
     }
 
-    /// Part of the list Claude Code sent on 2026-10-01 (adapter 0.81.2).
     fn sample() -> Vec<Command> {
         commands(Some(&agent(&[
             ("dataviz", None, "Use this skill whenever you are about to create ANY chart, graph, plot"),
@@ -366,13 +314,9 @@ mod tests {
     fn names_starting_with_the_text_come_first_then_containing_then_letters_in_order() {
         let all = sample();
         assert_eq!(names(&filter("co", &all), &all), ["/compact", "/context"]);
-        // "a": starts /a…: none; contains: dataviz, compact, usage, recap, goal; in order: none extra.
         assert_eq!(names(&filter("a", &all), &all), ["/dataviz", "/compact", "/usage", "/recap", "/goal"]);
-        // "ct": contains in /compact? no; /context? no. Letters in order: compact (c…t), context (c…t).
         assert_eq!(names(&filter("ct", &all), &all), ["/compact", "/context"]);
-        // "it": starts: none; contains: init; in order: compact? c-o-m-p-a-c-t has no i. dataviz: d-a-t-a-v-i-z no t after i.
         assert_eq!(names(&filter("it", &all), &all), ["/init"]);
-        // Endeavor's group stays first even when its match is weaker.
         assert_eq!(names(&filter("mo", &all), &all), ["/mode", "/model"]);
         assert_eq!(names(&filter("de", &all), &all), ["/mode", "/model"]);
     }
@@ -411,7 +355,6 @@ mod tests {
         for gone in ["/code-review", "/config", "/rename", "/endeavor:pluto-workflow"] {
             assert!(!shown.contains(&gone.to_string()), "{gone}");
         }
-        // Claude Code's /model gives way to Endeavor's.
         assert_eq!(all.iter().filter(|c| c.name == "model").map(|c| c.group).collect::<Vec<_>>(), [Group::Endeavor]);
         for name in ["clear", "plan", "review", "security-review", "pr-comments", "ultrareview", "batch", "autofix-pr", "simplify", "run", "add-dir", "output-style", "update-config", "fewer-permission-prompts", "debug", "claude-api", "insights", "team-onboarding", "loop", "schedule", "heapdump", "agents", "endeavor:pluto-session"] {
             assert!(hidden(name), "{name}");
@@ -444,11 +387,9 @@ mod tests {
         let all = sample();
         assert_eq!(token("/compact ", &all).map(|(len, c)| (len, c.name.as_str())), Some((8, "compact")));
         assert_eq!(token("/compact keep the fits", &all).map(|(len, _)| len), Some(8));
-        // One backspace: back to text, and the list again.
         assert_eq!(token("/compact", &all), None);
         assert_eq!(typing("/compact"), Some("compact"));
         assert_eq!(typing("/compact "), None);
-        // Hidden ones typed in full are still commands.
         assert_eq!(token("/config x=1", &all).map(|(_, c)| c.name.as_str()), Some("config"));
         assert_eq!(token("/nope x", &all), None);
         assert_eq!(token("/mode ", &all).map(|(_, c)| c.own), Some(Some(Own::Mode)));
@@ -475,7 +416,6 @@ mod tests {
         assert_eq!(own_send("/mode a", names), Some(OwnSend::Apply(Own::Mode, 1)));
         assert_eq!(own_send("/model", names), Some(OwnSend::Open(Own::Model)));
         assert_eq!(own_send("/model gpt", names), Some(OwnSend::Open(Own::Model)));
-        // Everything else goes to Claude as written.
         assert_eq!(own_send("/compact keep the fits", names), None);
         assert_eq!(own_send("/models", names), None);
         assert_eq!(own_send("use /model sonnet", names), None);

@@ -1,6 +1,3 @@
-// Endeavor's script for the notebook page, injected by the app into Pluto's
-// page (src/annotate.rs embeds the built dist/page.js).
-
 import { initActions } from "./actions";
 import { initAnnotate } from "./annotate";
 import { initAskBox } from "./askbox";
@@ -25,8 +22,6 @@ import { initTheme } from "./theme";
 import { watchRedraws } from "./redraw";
 
 function init() {
-  // First: other features read `context.agent` from their own "context"
-  // handlers, registered after this one so it has already updated it.
   initState();
   initTheme();
   initQuote();
@@ -48,7 +43,6 @@ function init() {
   initReadonly();
   initDebug();
   watchRedraws();
-  // Ask for the current state: this page may have loaded after it last changed.
   send({ type: "ready" });
 }
 

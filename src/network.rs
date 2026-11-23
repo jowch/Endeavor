@@ -1,12 +1,5 @@
-//! Whether this computer has a network path, from the system: Network
-//! framework's path monitor on macOS, route changes over netlink on Linux.
-//! Offline is waiting, not failure: the app holds Claude's messages and
-//! reconnects servers once a path is back.
-
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
-/// Every change in whether the network is reachable (true: online), starting
-/// with the current state.
 pub fn watch() -> UnboundedReceiver<bool> {
     let (tx, rx) = unbounded();
     let system = unbounded::<bool>();
@@ -17,15 +10,10 @@ pub fn watch() -> UnboundedReceiver<bool> {
 
 const API: (&str, u16) = ("api.anthropic.com", 443);
 
-/// Try now: can Claude's API be reached this moment, the way Claude Code
-/// reaches it? A few seconds at most.
 pub fn probe() -> bool {
     !forced_offline() && reachable(&route(|name| std::env::var(name).ok()), API)
 }
 
-/// How Claude Code gets to the API, from the environment the agent inherits
-/// from this app. It reads the proxy variables only, never the system's proxy
-/// settings, so neither does this.
 #[derive(Debug, PartialEq)]
 enum Route {
     Direct,
@@ -36,16 +24,10 @@ enum Route {
 struct Proxy {
     host: String,
     port: u16,
-    /// `user:password` from the proxy's URL, decoded.
     auth: Option<String>,
-    /// An `http://` proxy, which takes a CONNECT. Any other (TLS to the proxy,
-    /// SOCKS) is only checked for being there.
     http: bool,
 }
 
-/// Claude Code's choice: the first of `https_proxy`, `HTTPS_PROXY`,
-/// `http_proxy` and `HTTP_PROXY` that is set, unless `no_proxy`/`NO_PROXY`
-/// names the API's host.
 fn route(env: impl Fn(&str) -> Option<String>) -> Route {
     let set = |name: &str| env(name).filter(|v| !v.is_empty());
     let Some(url) = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"].into_iter().find_map(set) else { return Route::Direct };
@@ -56,8 +38,6 @@ fn route(env: impl Fn(&str) -> Option<String>) -> Route {
     proxy(&url).map_or(Route::Direct, Route::Proxy)
 }
 
-/// A `NO_PROXY` list names `host`: `*`, the host, `.domain` for it and its
-/// subdomains, or `host:port`.
 fn bypasses(list: &str, (host, port): (&str, u16)) -> bool {
     if list.trim() == "*" {
         return true;
@@ -73,7 +53,6 @@ fn bypasses(list: &str, (host, port): (&str, u16)) -> bool {
     })
 }
 
-/// A proxy URL; a bare `host:port` is taken as `http://`.
 fn proxy(url: &str) -> Option<Proxy> {
     let (scheme, rest) = url.split_once("://").unwrap_or(("http", url));
     let scheme = scheme.to_lowercase();
@@ -98,8 +77,6 @@ fn proxy(url: &str) -> Option<Proxy> {
     (!host.is_empty()).then(|| Proxy { host: host.to_owned(), port, auth, http: scheme == "http" })
 }
 
-/// Can `target` be reached by `route`: a TCP connect straight to it, or a
-/// CONNECT through the proxy that the proxy answers with 200.
 fn reachable(route: &Route, (host, port): (&str, u16)) -> bool {
     use std::io::{BufRead, BufReader, Write};
     use std::net::{TcpStream, ToSocketAddrs};
@@ -161,8 +138,6 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// Debug builds only: offline while the file `ENDEAVOR_FORCE_OFFLINE` names
-/// exists, whatever the system says, to test offline without cutting the network.
 fn forced_offline() -> bool {
     #[cfg(debug_assertions)]
     if let Some(file) = std::env::var_os("ENDEAVOR_FORCE_OFFLINE") {
@@ -171,14 +146,12 @@ fn forced_offline() -> bool {
     false
 }
 
-/// The system's answers, with the debug override, sent on when they change.
 fn combine(system: UnboundedReceiver<bool>, tx: UnboundedSender<bool>) {
     use futures::StreamExt;
     use std::time::Duration;
     let mut system = system;
     let mut online = true;
     let mut sent: Option<bool> = None;
-    // The override is a file, so it is looked at twice a second while it's set.
     let poll = cfg!(debug_assertions) && std::env::var_os("ENDEAVOR_FORCE_OFFLINE").is_some();
     loop {
         let next = if poll {
@@ -214,7 +187,6 @@ mod platform {
     use block2::RcBlock;
     use futures::channel::mpsc::UnboundedSender;
 
-    /// nw_path_status_satisfied.
     const SATISFIED: c_int = 1;
 
     #[link(name = "Network", kind = "framework")]
@@ -230,7 +202,6 @@ mod platform {
         fn dispatch_queue_create(label: *const c_char, attr: *mut c_void) -> *mut c_void;
     }
 
-    /// The monitor and its queue live as long as the app.
     pub fn monitor(tx: UnboundedSender<bool>) {
         unsafe {
             let monitor = nw_path_monitor_create();
@@ -249,8 +220,6 @@ mod platform {
 mod platform {
     use futures::channel::mpsc::UnboundedSender;
 
-    /// Listen for route and address changes over netlink; after each, look for
-    /// a default route again.
     pub fn monitor(tx: UnboundedSender<bool>) {
         let _ = tx.unbounded_send(online());
         std::thread::spawn(move || unsafe {
@@ -280,8 +249,6 @@ mod platform {
     }
 }
 
-/// Windows: after each interface or route change, look for a default route on
-/// an interface that is up (#11).
 #[cfg(windows)]
 mod platform {
     use futures::channel::mpsc::UnboundedSender;
@@ -293,7 +260,6 @@ mod platform {
 
     pub fn monitor(tx: UnboundedSender<bool>) {
         let _ = tx.unbounded_send(online());
-        // Lives for the app's life, as the notifications do: they are never cancelled.
         let context = Box::into_raw(Box::new(tx)) as *const c_void;
         let mut interfaces: HANDLE = std::ptr::null_mut();
         let mut routes: HANDLE = std::ptr::null_mut();
@@ -322,12 +288,10 @@ mod platform {
         let _ = tx.unbounded_send(online());
     }
 
-    /// A default route (prefix length 0) that isn't loopback, on an interface that is up.
     fn online() -> bool {
         unsafe {
             let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
             if GetIpForwardTable2(AF_UNSPEC, &mut table) != NO_ERROR || table.is_null() {
-                // Can't tell: the probe still catches a network that is down.
                 return true;
             }
             let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
@@ -345,8 +309,6 @@ mod platform {
     }
 }
 
-/// A default route on an interface other than loopback, in /proc/net/route's
-/// and /proc/net/ipv6_route's formats.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn has_default_route(v4: &str, v6: &str) -> bool {
     const RTF_UP: u32 = 0x1;
@@ -377,7 +339,6 @@ mod tests {
     fn the_probe_takes_the_proxy_claude_code_would() {
         assert_eq!(route_with(&[]), Route::Direct);
         assert_eq!(route_with(&[("HTTPS_PROXY", "http://proxy.lab:3128")]), proxy("proxy.lab", 3128, None, true));
-        // Lowercase first, then HTTP_PROXY when no HTTPS one is set; an empty value doesn't count.
         assert_eq!(route_with(&[("HTTPS_PROXY", "http://upper:1"), ("https_proxy", "http://lower:2")]), proxy("lower", 2, None, true));
         assert_eq!(route_with(&[("https_proxy", ""), ("HTTP_PROXY", "plain:8080")]), proxy("plain", 8080, None, true));
         assert_eq!(route_with(&[("HTTPS_PROXY", "http://me%40lab:p%3Ass@proxy/")]), proxy("proxy", 80, Some("me@lab:p:ss"), true));
@@ -397,8 +358,6 @@ mod tests {
         assert_eq!(route_with(&[("HTTPS_PROXY", "http://proxy:3128"), ("no_proxy", "x"), ("NO_PROXY", ".anthropic.com")]), Route::Direct);
     }
 
-    /// A one-shot proxy on localhost that answers a CONNECT with `status`
-    /// and hands back the request it got.
     fn fake_proxy(status: &'static str) -> (u16, std::thread::JoinHandle<String>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

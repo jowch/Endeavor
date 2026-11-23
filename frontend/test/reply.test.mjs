@@ -1,4 +1,3 @@
-// Reply on a selection in the notebook: the pill, the prompt, and what the app gets.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -17,7 +16,6 @@ async function page(platform = "MacIntel") {
   );
   const { window } = dom;
   Object.defineProperty(window.navigator, "platform", { value: platform });
-  // jsdom lays nothing out: every selection is one line box.
   window.Range.prototype.getClientRects = () => [{ left: 10, top: 20, right: 110, bottom: 38 }];
   const sent = [];
   window.ipc = { postMessage: (body) => sent.push(JSON.parse(body)) };
@@ -72,7 +70,7 @@ test(`⌘${key.toUpperCase()} on output text opens the prompt; ⌘↩ adds the q
   assert.deepEqual(sent.at(-1), {
     type: "quote",
     notebook: NB,
-    picks: [{ part: "output", cell: CELL, code: "rates = map(1:1000) do _\n  rows = rand(1:n, n)\n  fit(rows)\nend", text: "middle 95%" }],
+    picks: [{ part: "output", cell: CELL, code: "rates = map(1:1000) do _\n  rows = rand(1:n, n)\n  fit(rows)\nend", text: "middle 95%", selected: true }],
     comment: "why 95?",
     add: true,
   });
@@ -124,4 +122,14 @@ test("the pill sits under the selection's end, or above its start with no room b
   assert.deepEqual(place.pillPlace(lines, 800), { left: 152, top: 246 });
   assert.deepEqual(place.pillPlace(lines, 270), { left: 152, top: 164 }, "36 px below doesn't fit in 270");
   assert.deepEqual(place.pillPlace([{ left: 0, top: 10, right: 20, bottom: 30 }], 800), { left: 4, top: 36 }, "kept off the left edge");
+});
+
+test("a selection that ends at a line's start, as a triple-click does, doesn't take that line", () => {
+  const { outputFiles } = buildSync({ entryPoints: [new URL("../src/reply.ts", import.meta.url).pathname], bundle: true, format: "iife", globalName: "reply", write: false });
+  const { window } = new JSDOM(`<body></body>`, { runScripts: "outside-only" });
+  window.eval(`${outputFiles[0].text};window.reply = reply;`);
+  const text = "a = 1\nb = 2\nc = 3\n";
+  const doc = { lineAt: (pos) => ({ number: text.slice(0, pos).split("\n").length }) };
+  assert.deepEqual([...window.reply.linesSelected(doc, { from: 6, to: 12 })], [2, 2]);
+  assert.deepEqual([...window.reply.linesSelected(doc, { from: 6, to: 13 })], [2, 3]);
 });
