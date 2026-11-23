@@ -1,4 +1,5 @@
 import { on, send } from "./bridge";
+import { dom } from "./engine";
 
 const css = `
   pluto-cell.endeavor-flash { outline: 2px solid var(--e-accent); outline-offset: 4px; border-radius: 4px;
@@ -23,7 +24,7 @@ function sayGone() {
 }
 
 export function cellCode(cell: Element | null): string {
-  const content = cell?.querySelector("pluto-input .cm-content") as any;
+  const content = cell?.querySelector(`${dom().input} .cm-content`) as any;
   const view = content?.cmTile?.root?.view;
   if (view) return view.state.doc.toString();
   const lines = content ? [...content.querySelectorAll(".cm-line")].map((l: Element) => l.textContent ?? "") : [];

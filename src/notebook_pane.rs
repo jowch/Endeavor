@@ -796,7 +796,7 @@ impl Workspace {
         let error_asks: Vec<_> = session.error_asks().into_iter().map(|(cell, kind, queued)| serde_json::json!({ "cell": cell, "kind": kind, "queued": queued })).collect();
         // Every waiting run card's cells: a run of the user's that reaches one asks first.
         let waiting: Vec<serde_json::Value> = crate::approval::waiting_run_cells(session).into_iter().map(|(id, name)| serde_json::json!({ "id": id, "name": name })).collect();
-        let msg = serde_json::json!({ "type": "context", "host": host, "agent": session.agent.name(), "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix });
+        let msg = serde_json::json!({ "type": "context", "host": host, "agent": session.agent.name(), "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix, "notebook": session.notebook });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
