@@ -1183,15 +1183,26 @@ impl Workspace {
             let info = task.await;
             let _ = this.update(cx, |this, cx| match (info, failed) {
                 (Ok(None), _) => this.with_session(key, cx, |s| s.missing = true),
-                // Over the pane, so only for the session it shows.
-                (_, Some((path, e))) if this.active == Some(key) => {
-                    let title = format!("Couldn't open {}", folder_name(Path::new(&path)));
-                    this.show_notice(Notice::new(Spot::Pane, title, &e, Some(Retry::OpenNotebook(key, path))), cx);
+                // Kept on the session, and shown over the pane while it's on screen.
+                (_, Some(failed)) => {
+                    this.with_session(key, cx, |s| s.open_failed = Some(failed));
+                    this.show_open_failed(key, cx);
                 }
                 _ => {}
             });
         })
         .detach();
+    }
+
+    /// Session `key`'s failed open (`Session::open_failed`), as a notice over the pane with Try
+    /// again, when the session is on screen and its notebook still isn't open.
+    pub fn show_open_failed(&mut self, key: u64, cx: &mut Context<Self>) {
+        if self.active != Some(key) {
+            return;
+        }
+        let Some((path, e)) = self.sessions.iter().find(|s| s.key == key && s.notebook.is_none()).and_then(|s| s.open_failed.clone()) else { return };
+        let title = format!("Couldn't open {}", folder_name(Path::new(&path)));
+        self.show_notice(Notice::new(Spot::Pane, title, &e, Some(Retry::OpenNotebook(key, path))), cx);
     }
 
     /// New notebook, from the empty pages: made in the session's folder and shown.
@@ -1412,7 +1423,9 @@ impl Workspace {
     pub fn pane_shows(&self, session: &Session, cx: &App) -> PaneShows {
         if let Some(host) = self.host_pane_state(&session.place.host, session.kind, cx) {
             let empty = session.notebook_path.is_none() && session.notebook.is_none();
-            if !(empty && crate::connection::starting_ahead(&host, self.app_waits(&session.place.host, session.kind))) {
+            // R's failure is about a session waiting for its notebook; others show their own pane (#128).
+            let not_about_it = matches!(host, HostPane::RFailed(_)) && !crate::connection::waits_for_notebook(session);
+            if !not_about_it && !(empty && crate::connection::starting_ahead(&host, self.app_waits(&session.place.host, session.kind))) {
                 return PaneShows::Host(host);
             }
         }

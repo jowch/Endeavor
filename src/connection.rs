@@ -1630,6 +1630,8 @@ impl Workspace {
         let steps = [self.julia_steps(host, Backend::Pluto, cx), self.julia_steps(host, Backend::Ember, cx)];
         let reopen = cx.background_executor().spawn(async move {
             let failed = std::cell::RefCell::new([None, None]);
+            // Failures the pane doesn't explain, by path: the session showing one says why (#244).
+            let unexplained = std::cell::RefCell::new(Vec::new());
             let list = || pluto::call_tool(&bridge, "list_notebooks", serde_json::json!({})).ok();
             let find = |listed: &Option<serde_json::Value>, path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
             let listed = list();
@@ -1646,8 +1648,10 @@ impl Workspace {
                                 // Opened meanwhile (the session's own open, or Claude's).
                                 Err(e) => find(&list(), &path).or_else(|| {
                                     eprintln!("Couldn't reopen {path}: {e}");
-                                    if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).or_else(|| pluto::open_stuck(&e)).is_some() {
+                                    if pane_failure(crate::new_session::kind_of_path(&path), &e).is_some() {
                                         failed.borrow_mut()[r as usize].get_or_insert(e);
+                                    } else {
+                                        unexplained.borrow_mut().push((path.clone(), e));
                                     }
                                     None
                                 })?,
@@ -1658,11 +1662,11 @@ impl Workspace {
                     Some((result["notebook_id"].as_str()?.to_owned(), path, previewed))
                 })
                 .collect::<Vec<_>>();
-            (reopened, failed.into_inner())
+            (reopened, failed.into_inner(), unexplained.into_inner())
         });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
-            let (reopened, [julia_failed, r_failed]) = reopen.await;
+            let (reopened, [julia_failed, r_failed], unexplained) = reopen.await;
             let _ = this.update(cx, |this, cx| {
                 this.julia_answer(&host, Backend::Pluto, julia_failed.as_deref(), cx);
                 this.julia_answer(&host, Backend::Ember, r_failed.as_deref(), cx);
@@ -1681,13 +1685,24 @@ impl Workspace {
                 for session in this.sessions.iter_mut().filter(|s| s.place.host == host) {
                     let own = session.notebook_path.as_deref().filter(|_| session.stopped.is_none() && !session.missing);
                     session.notebook = own.and_then(by_path).or_else(|| session.notebook.as_deref().and_then(new_id));
-                    if own.is_some() && session.notebook.is_none() {
-                        lost.push(session.key);
+                    // Each pass says why afresh: an earlier pass's error mustn't show over this one's Julia or R pane.
+                    if own.is_some() {
+                        session.open_failed = None;
+                    }
+                    if let Some(path) = own.filter(|_| session.notebook.is_none()) {
+                        let failed = unexplained.iter().find(|(p, _)| p == path).cloned();
+                        session.open_failed = failed.clone();
+                        lost.push((session.key, failed));
                     }
                 }
-                // A file that's gone shows File not found.
-                for key in lost {
-                    this.check_missing(key, None, cx);
+                // A notice from an earlier pass goes once its session has no failed open to show.
+                if this.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(crate::notice::Retry::OpenNotebook(k, _)) if this.sessions.iter().any(|s| s.key == *k && s.place.host == host && s.open_failed.is_none()))) {
+                    this.notice = None;
+                }
+                // A file that's gone shows File not found; an open that failed for another reason
+                // says why over the pane, with Try again, as the session's own open does.
+                for (key, failed) in lost {
+                    this.check_missing(key, failed, cx);
                 }
                 if let Some((host, id)) = this.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
                     this.load_notebook(&host, &id, cx);
@@ -2145,9 +2160,8 @@ impl Workspace {
             connection.r_failed = None;
             connection.bridge()
         });
-        let waiting = self.active_session().filter(|s| s.place.host == *host && s.notebook.is_none() && s.stopped.is_none() && !s.missing);
         // Its notebook opens again, or with none yet (the pane's New notebook), it's made again.
-        let Some(again) = waiting.map(|s| (s.key, s.notebook_path.clone())) else { return cx.notify() };
+        let Some(again) = self.r_retry_target(host) else { return cx.notify() };
         match bridge.filter(|_| install) {
             Some(bridge) => {
                 let allowed = cx.background_executor().spawn(async move { pluto::allow_r_install(&bridge) });
@@ -2164,6 +2178,13 @@ impl Workspace {
             None => self.open_again(again, cx),
         }
         cx.notify();
+    }
+
+    /// The session shown, when it waits on `host` for a notebook: what the R failure pane's
+    /// buttons open again. The pane shows only over such a session (`pane_shows`, #128).
+    fn r_retry_target(&self, host: &HostId) -> Option<(u64, Option<String>)> {
+        let waiting = self.active_session().filter(|s| s.place.host == *host && waits_for_notebook(s));
+        waiting.map(|s| (s.key, s.notebook_path.clone()))
     }
 
     fn open_again(&mut self, (key, path): (u64, Option<String>), cx: &mut Context<Self>) {
@@ -2509,7 +2530,7 @@ enum Change {
     StartFailed(String),
     /// Julia stopped by itself; the reason, without the line's "Julia on X stopped."
     Died(String),
-    /// The app's stop or cancel ended Julia, or the start under way.
+    /// The app's stop or cancel ended Julia, or the start under way; or an attach found nothing running.
     Stopped,
 }
 
@@ -2585,12 +2606,23 @@ fn changes(last: &LineStatus, now: &LineStatus) -> Vec<Change> {
             None => Change::Died(why.to_owned()),
         }),
         (Phase::Starting | Phase::Ready(_), Phase::Idle) => out.push(Change::Stopped),
+        // An attach finding nothing running: the session shows it as starting until it has asked
+        // (EndeavorMCP's `begin_start`), so nothing failed and nothing stopped (#56). A runtime that
+        // went says how in `gone`; a new wish clears that, so an attach has none.
+        (Phase::Starting, Phase::Gone(_)) if now.gone.is_none() => out.push(Change::Stopped),
         (Phase::Starting, Phase::Failed(why) | Phase::Gone(why)) => out.push(Change::StartFailed(why.to_owned())),
         // A start that ended before it was seen to begin.
         (Phase::Idle | Phase::Gone(_), Phase::Failed(why)) => out.push(Change::StartFailed(why.to_owned())),
         (Phase::Idle | Phase::Gone(_) | Phase::Failed(_), Phase::Idle | Phase::Gone(_)) | (Phase::Failed(_), Phase::Failed(_)) | (Phase::Starting, Phase::Starting) => {}
     }
     out
+}
+
+/// Session `s` waits for its notebook: none open yet, and not stopped or gone. An R failure
+/// shows only over such a session, whose open (or new notebook) its Try again repeats; any
+/// other R session shows its own pane, since nothing clears the failure until R starts again.
+pub fn waits_for_notebook(s: &crate::session::Session) -> bool {
+    s.notebook.is_none() && s.stopped.is_none() && !s.missing
 }
 
 /// The helper's hello, as the app's connections keep it.
@@ -3032,6 +3064,12 @@ mod tests {
         assert_eq!(changes(&ready, &connected), [Change::Stopped], "the app's stop");
         // An attach (a line asked to try again after it gave up) that finds nothing running.
         assert!(changes(&connected, &line(LineState::NothingRunning, "lab")).is_empty());
+        // The same attach, looked at while it asked: it ends the start with nothing to say (#56).
+        let nothing = LineStatus { step: Some("No runtime is running on lab".into()), ..line(LineState::NothingRunning, "lab") };
+        assert_eq!(changes(&starting, &nothing), [Change::Stopped]);
+        // A runtime that went unseen between two looks still says why.
+        let went = LineStatus { gone: Some(client::Gone::Died("out of memory".into())), step: Some("out of memory".into()), ..line(LineState::NothingRunning, "lab") };
+        assert_eq!(changes(&starting, &went), [Change::StartFailed("out of memory".into())]);
         assert_eq!(changes(&line(LineState::NothingRunning, "lab"), &starting), [Change::Starting]);
         // A stop refused while a start goes on (a helper that can't force it) ends that start's wait.
         let refused = "Julia was not stopped: it is still starting. Try again once it is up, or force the stop to cancel the start.";

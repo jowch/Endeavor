@@ -365,6 +365,9 @@ pub struct Session {
     pub stopped: Option<Stopped>,
     /// Its notebook file isn't there (moved, renamed or deleted outside Endeavor).
     pub missing: bool,
+    /// Its notebook's open failed for a reason the pane doesn't show: the path and the error,
+    /// shown as a notice with Try again whenever the session is on screen (#244).
+    pub open_failed: Option<(String, String)>,
     /// Cells the user changed since the agent last heard (cell id, name); told
     /// with the next prompt.
     pub user_edits: Vec<(String, Option<String>)>,
@@ -705,6 +708,7 @@ impl Session {
             kind: Backend::Pluto,
             stopped: None,
             missing: false,
+            open_failed: None,
             user_edits: Vec::new(),
             restores: HashMap::new(),
             restored: Vec::new(),
@@ -3052,7 +3056,7 @@ mod tests {
         assert!(answers(&effects).is_empty() && matches!(effects.as_slice(), [Effect::PreviewRun { .. }, Effect::Asked(_)]), "the download waits for the user");
         let card = s.pending_permission().expect("the install card");
         // The yes names the packages the card did, so it covers those only (EndeavorMCP #418).
-        s.set_preview(card, crate::pluto::RunPreview { asking: Some(crate::pluto::Asking { new: true, packages: vec!["Example".into()], close_to: vec![] }), ..Default::default() });
+        s.set_preview(card, crate::pluto::RunPreview { asking: Some(crate::pluto::Asking { new: true, packages: vec!["Example".into()], close_to: vec![], bytes: None }), ..Default::default() });
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
         let later = s.take_later();
         assert!(matches!(later.as_slice(), [Effect::AnswerRun { ask: 41, allow: true, packages: Some(p), .. }] if p == &["Example".to_owned()]), "the card's names go with the yes");

@@ -197,7 +197,7 @@ impl Workspace {
             "settings": self.settings_debug(cx),
             // ⌘= / ⌘− / ⌘0: which pane they size now, and each pane's size (1 is 100%).
             "zoom": {
-                "target": if self.zooms_chat(cx) { "chat" } else { "notebook" },
+                "target": if self.zooms_chat(None, cx) { "chat" } else { "notebook" },
                 "notebook": if self.settings.zoom > 0. { self.settings.zoom } else { 1. },
                 "chat": crate::theme::chat_scale(),
                 "chat_body_px": f32::from(crate::theme::chat_body()),

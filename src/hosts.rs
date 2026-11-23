@@ -40,6 +40,10 @@ pub struct Server {
     pub idle_stop: Option<IdleStop>,
     /// Set for a cluster: Julia runs in a Slurm job.
     pub cluster: Option<Cluster>,
+    /// Its SSH host or port changed, and no session has started there since. The folders used
+    /// there before were another sign-in's, so New session starts in the new home (#48).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fresh: bool,
 }
 
 /// A cluster's Slurm settings.
