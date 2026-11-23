@@ -1,7 +1,3 @@
-// Reply on text selected in the notebook: a selection in one cell's code,
-// output or rendered Markdown offers a "Reply ⌘E" pill under it; the pill (or
-// ⌘E, or ⌘J) opens the prompt with the quote (prompt.ts).
-
 import { byUser } from "./bridge";
 import { pillPlace } from "./place";
 import { type Pick } from "./quote";
@@ -18,10 +14,8 @@ const css = `
   #endeavor-reply-pill .key { font-size: 11px; color: var(--e-text-faint); }
 `;
 
-/** Text selected in one cell, as a pick, and the range it covers. */
 export type Found = { cell: HTMLElement; pick: Pick; quote: string; range: Range };
 
-/** A line's number in a cell's editor, counting from 1 (from the DOM when there's no editor to ask). */
 function lineOf(node: Node, content: Element): number {
   const view = (content as any).cmTile?.root?.view;
   if (view) return view.state.doc.lineAt(view.posAtDOM(node)).number;
@@ -29,7 +23,13 @@ function lineOf(node: Node, content: Element): number {
   return [...content.querySelectorAll(".cm-line")].indexOf(line as Element) + 1;
 }
 
-/** The text selected inside one cell: code (with its lines), or output text. */
+type EditorDoc = { lineAt(pos: number): { number: number } };
+
+export function linesSelected(doc: EditorDoc, selection: { from: number; to: number }): [number, number] {
+  const lastChar = Math.max(selection.from, selection.to - 1);
+  return [doc.lineAt(selection.from).number, doc.lineAt(lastChar).number];
+}
+
 export function selectedInCell(): Found | null {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
@@ -44,10 +44,8 @@ export function selectedInCell(): Found | null {
     const view = (content as any).cmTile?.root?.view;
     const main = view?.state.selection.main;
     let [first, last] = [lineOf(range.startContainer, content), lineOf(range.endContainer, content)];
-    // A selection that ends at a line's start (a triple-click) doesn't take that line.
-    if (main && !main.empty) [first, last] = [view.state.doc.lineAt(main.from).number, view.state.doc.lineAt(Math.max(main.from, main.to - 1)).number];
+    if (main && !main.empty) [first, last] = linesSelected(view.state.doc, main);
     if (first < 1 || last < first) return null;
-    // Without the editor to ask, the whole lines: the page's text has no line breaks.
     const quote = main && !main.empty ? view.state.sliceDoc(main.from, main.to) : code.split("\n").slice(first - 1, last).join("\n");
     if (!quote.trim()) return null;
     return { cell, pick: { part: "lines", cell: cell.id, code, lines: [first, last], text: quote }, quote, range: range.cloneRange() };
@@ -64,13 +62,11 @@ export function hidePill(): void {
   pill = null;
 }
 
-/** The selection's line boxes, in the viewport. */
 export function rangeRects(range: Range): DOMRect[] {
   const rects = [...range.getClientRects()];
   return rects.length ? rects : [range.getBoundingClientRect()];
 }
 
-/** Offer the pill for each new selection; `open` opens the prompt for it. */
 export function initReply(open: (found: Found) => void): void {
   const style = document.createElement("style");
   style.textContent = css;
@@ -78,7 +74,6 @@ export function initReply(open: (found: Found) => void): void {
   document.addEventListener("mouseup", (e) => {
     const target = e.target as Element;
     if (pill?.contains(target) || target.closest?.("[data-endeavor-ui]") || document.body.classList.contains("annotating")) return;
-    // After the browser has settled the selection.
     setTimeout(() => {
       hidePill();
       const found = selectedInCell();
@@ -90,7 +85,6 @@ export function initReply(open: (found: Found) => void): void {
       const at = pillPlace(rangeRects(found.range), window.innerHeight);
       pill.style.left = `${at.left + window.scrollX}px`;
       pill.style.top = `${at.top + window.scrollY}px`;
-      // Keep the selection: pressing the pill would otherwise clear it first.
       pill.onmousedown = (event) => event.preventDefault();
       pill.querySelector("button")!.onclick = (event) => byUser(event) && open(found);
       document.body.append(pill);
