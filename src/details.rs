@@ -1,7 +1,3 @@
-//! What an opened tool call shows: its input as what it means (the command,
-//! the file and lines read, a search's pattern and folder) and its output as
-//! text or the key facts of a notebook tool's answer. Never raw JSON.
-
 use std::path::Path;
 
 use agent_client_protocol::schema::v1::ToolKind;
@@ -11,24 +7,16 @@ use crate::celldiff;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Part {
-    /// A shell command, on the strip at the top of the call's box.
     Command(String),
-    /// Code, in a mono block.
     Code(String),
-    /// Label and value rows.
     Fields(Vec<(String, String)>),
-    /// A sentence, with `backticked` names in mono.
     Line(String),
-    /// Output, as plain mono text.
     Text(String),
-    /// A failure, in the error colour.
     Error(String),
-    /// A file's lines with their numbers.
     Numbered(Vec<(usize, String)>),
 }
 
 impl Part {
-    /// The part as plain text, as Copy puts it on the clipboard.
     pub fn text(&self) -> String {
         match self {
             Part::Command(t) | Part::Code(t) | Part::Text(t) | Part::Error(t) => t.clone(),
@@ -43,25 +31,17 @@ impl Part {
 pub struct Details {
     pub input: Vec<Part>,
     pub output: Vec<Part>,
-    /// How a command ended, when that was a failure: "Exit code 2",
-    /// "Timed out". Shown under the output.
     pub status: Option<String>,
-    /// Some of the output was left out: past `MAX_CHARS` or `MAX_LINES`, or
-    /// by the saved transcript's own cut. What's shown is only the start.
     pub cut: bool,
 }
 
 thread_local! {
-    /// Set by `cut` and `numbered` when they leave something out.
     static LEFT_OUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Long outputs are cut to this much.
 const MAX_CHARS: usize = 20_000;
 const MAX_LINES: usize = 2_000;
 
-/// An opened call. `diffed`: its edits are shown as diffs, which then stand for
-/// its input. `name` names a cell by its id, when the transcript has seen it.
 pub fn details(
     title: &str,
     kind: ToolKind,
@@ -85,7 +65,6 @@ pub fn details(
             None => call_output(kind, output, failed, diffed),
         },
     };
-    // An exit code or a timeout says how the call ended, not what it printed.
     let mut status = Vec::new();
     output_parts.retain(|part| match part {
         Part::Error(text) if is_ending(text) => {
@@ -99,20 +78,15 @@ pub fn details(
     Details { input: input_parts, output: output_parts, status, cut }
 }
 
-/// "Exit code 2", "Timed out", "Stopped by a signal".
 fn is_ending(text: &str) -> bool {
     text == "Timed out" || text == "Stopped by a signal" || text.strip_prefix("Exit code ").is_some_and(|n| n.trim().parse::<i64>().is_ok())
 }
 
-/// A cell's error as the notebook shows it: the message (`msg`, else
-/// `message`, else the plain text), without Julia's name for the notebook's
-/// module.
 fn error_text(error: &Value) -> Option<String> {
     let text = ["msg", "message", "plain_error"].iter().find_map(|k| error[*k].as_str()).or(error.as_str()).map(str::to_owned).or_else(|| compact(error))?;
     Some(without_module(&text))
 }
 
-/// "not defined in `Main.var\"workspace#4\"`" reads "not defined in this notebook".
 fn without_module(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -132,7 +106,6 @@ fn field<'a>(input: &'a Value, name: &str) -> Option<&'a str> {
     input[name].as_str().filter(|s| !s.trim().is_empty())
 }
 
-/// "lines 10–59" from a read's first line and count.
 fn line_range(first: Option<u64>, count: Option<u64>) -> Option<String> {
     match (first, count) {
         (None, None) => None,
@@ -207,13 +180,11 @@ fn notebook_input(tool: &str, input: &Value, diffed: bool, name: &dyn Fn(&str) -
     }
 }
 
-/// A cell's name as code (`rates`), unless it is words from the cell's first-line comment.
 fn code_name(name: String) -> String {
     let words = name.contains(' ') && !name.contains(',') && !crate::session::looks_like_code(&name);
     if words { name } else { format!("`{name}`") }
 }
 
-/// A cell by its name, else its id's first characters.
 fn cell_label(id: &str, name: &dyn Fn(&str) -> Option<String>) -> String {
     match name(id) {
         Some(n) => code_name(n),
@@ -230,8 +201,6 @@ fn cells_label(ids: &[&str], name: &dyn Fn(&str) -> Option<String>) -> String {
     names.join(", ")
 }
 
-/// A JSON object's fields as label and value rows, without braces; `skip`
-/// leaves fields out.
 fn facts(value: &Value, skip: &[&str]) -> Vec<(String, String)> {
     match value.as_object() {
         Some(fields) => fields.iter().filter(|(k, _)| !skip.contains(&k.as_str())).filter_map(|(k, v)| fact(k, v)).collect(),
@@ -243,8 +212,6 @@ fn fact(key: &str, value: &Value) -> Option<(String, String)> {
     Some((key.replace('_', " "), compact(value)?))
 }
 
-/// A value on one line: scalars as themselves, lists joined, objects as
-/// "key: value" pairs; nothing for null or empty.
 fn compact(value: &Value) -> Option<String> {
     match value {
         Value::Null => None,
@@ -273,8 +240,6 @@ fn compact(value: &Value) -> Option<String> {
     }
 }
 
-/// A tool result as text: the text itself, or its content blocks' texts
-/// (a tool reference by its name).
 pub fn plain_text(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
@@ -302,7 +267,6 @@ fn cut(text: &str) -> String {
     }
 }
 
-/// Text without the agent's `<system-reminder>` blocks.
 fn without_reminders(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -319,9 +283,6 @@ fn without_reminders(text: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// A file read back with its line numbers ("    12\tcode" or "12→code"), or
-/// None when the text isn't numbered. Once the first line is, a line that
-/// isn't (a "[File truncated…]" note) keeps its place with no number (0).
 fn numbered(text: &str) -> Option<Vec<(usize, String)>> {
     let one = |line: &str| -> Option<(usize, String)> {
         let trimmed = line.trim_start();
@@ -342,8 +303,6 @@ fn numbered(text: &str) -> Option<Vec<(usize, String)>> {
     Some(out)
 }
 
-/// A failure's text: "Exit code 2" on its own line, in the error colour, then
-/// the rest as output.
 fn failure(text: &str) -> Vec<Part> {
     let text = without_reminders(text);
     let mut lines = text.splitn(2, '\n');
@@ -362,7 +321,6 @@ fn call_output(kind: ToolKind, output: &Value, failed: bool, diffed: bool) -> Ve
     if failed {
         return if text.trim().is_empty() { Vec::new() } else { failure(&text) };
     }
-    // The diff says it; "The file … has been updated" adds nothing.
     if diffed {
         return Vec::new();
     }
@@ -378,7 +336,6 @@ fn call_output(kind: ToolKind, output: &Value, failed: bool, diffed: bool) -> Ve
     vec![Part::Text(cut(&text))]
 }
 
-/// A notebook tool's answer as its key facts.
 fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<String>) -> Vec<Part> {
     let Some(json) = celldiff::tool_json(output) else {
         let text = plain_text(output);
@@ -388,7 +345,6 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
         let message = json["message"].as_str().filter(|m| !m.is_empty()).unwrap_or(error);
         return vec![Part::Error(message.to_string())];
     }
-    // A cell's name from the answer's own code, else from what the transcript has seen.
     let named = |id: &str| match (json["cell_id"].as_str() == Some(id)).then(|| json["code"].as_str()).flatten().map(crate::session::cell_label) {
         Some(n) => code_name(n),
         None => cell_label(id, name),
@@ -473,8 +429,6 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
             parts.extend(cell_output(&json));
             parts
         }
-        // A read of a cell whose code the agent already has leaves the code
-        // out; the input names the cell.
         _ if json["code_unchanged"] == true && json["cell_id"].is_string() => cell_output(&json),
         _ => {
             let rows = facts(&json, &["notebook_id", "cell_order", "execution_order"]);
@@ -483,7 +437,6 @@ fn notebook_output(tool: &str, output: &Value, name: &dyn Fn(&str) -> Option<Str
     }
 }
 
-/// A cell's output, or its error.
 fn cell_output(cell: &Value) -> Vec<Part> {
     if let Some(error) = cell.get("error").filter(|e| !e.is_null()) {
         return error_text(error).map(Part::Error).into_iter().collect();
@@ -491,8 +444,6 @@ fn cell_output(cell: &Value) -> Vec<Part> {
     field(cell, "output").map(|o| Part::Text(cut(o))).into_iter().collect()
 }
 
-/// A notebook edit or run's receipt: what it applied to, what ran and how it
-/// went, the outputs that changed and any warnings.
 fn receipt(json: &Value, named: &dyn Fn(&str) -> String) -> Vec<Part> {
     let mutation = &json["mutation"];
     let ids = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect() };
@@ -522,7 +473,6 @@ fn receipt(json: &Value, named: &dyn Fn(&str) -> String) -> Vec<Part> {
             "completed" => "finished",
             "staged" => "not run yet",
             "timeout" => "timed out",
-            // When the call answered; it may have finished since.
             "running" => "started",
             other => other,
         };
@@ -549,7 +499,6 @@ fn receipt(json: &Value, named: &dyn Fn(&str) -> String) -> Vec<Part> {
             }
         }
     }
-    // Notes for the agent ("cells running; read them for the result") are left out.
     for warning in json["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|w| !w.starts_with("async_execution::")) {
         let text = warning.split_once("::").map_or(warning, |(_, m)| m);
         parts.push(Part::Line(text.to_string()));
@@ -576,7 +525,6 @@ mod tests {
         let read: String = (1..=super::MAX_LINES + 5).map(|n| format!("{n}\tline\n")).collect();
         let d = open("Read", ToolKind::Read, json!({"file_path": "/a/b.jl"}), Some(json!(read)), false, false);
         assert!(d.cut && matches!(&d.output[..], [Part::Numbered(lines)] if lines.len() == super::MAX_LINES));
-        // The saved transcript's own cut, after a reopen.
         let saved: String = "y".repeat(4000) + "…";
         assert!(open("Bash", ToolKind::Execute, json!({"command": "cat big"}), Some(json!(saved)), false, false).cut);
         assert!(!open("Bash", ToolKind::Execute, json!({"command": "ls"}), Some(json!("a\nb")), false, false).cut);
