@@ -42,11 +42,8 @@ test("picks become quotes that name what was picked, with no code or output but 
     quoteText(NB, [{ part: "lines", cell: A, code: CODE, lines: [2, 2], text: "  fit(rows)" }, { part: "figure", cell: A, code: CODE, shot: 1 }], "Why fit here?"),
     `<quote cell="rates" lines="2-2" uri="${uri}">\n  fit(rows)\n</quote>\n\n<quote cell="rates" part="figure" uri="${uri}"/>\nWhy fit here?`,
   );
-  // A click on the code picks all its lines, which names the cell, with no code.
-  assert.equal(quoteText(NB, [{ part: "lines", cell: A, code: CODE, lines: [1, 3], text: CODE }], ""), `<quote cell="rates" uri="${uri}"/>`);
-  // A trailing newline makes no line: every line of such a cell names it too.
-  assert.equal(quoteText(NB, [{ part: "lines", cell: A, code: CODE + "\n", lines: [1, 3], text: CODE }], ""), `<quote cell="rates" uri="${uri}"/>`);
-  assert.ok(quoteText(NB, [{ part: "lines", cell: A, code: CODE + "\n", lines: [1, 2], text: "x" }], "").includes(">\nx\n</quote>"));
+  // Every line picked, even of a one-line cell, goes with its text, as Point's bar says ("Line 1 of total").
+  assert.equal(quoteText(NB, [{ part: "lines", cell: A, code: "total = 1", lines: [1, 1], text: "total = 1" }], ""), `<quote cell="total" lines="1-1" uri="${uri}">\ntotal = 1\n</quote>`);
   // Picked lines that chatSafe shortens: the note says so; other picks don't add it.
   const gappy = { part: "lines", cell: A, code: CODE + "\n\n\n\n\nend", lines: [2, 7], text: "a\n\n\n\n\nb" };
   assert.match(chatMessage(NB, [{ picks: [gappy], comment: "" }]), /were shortened to fit/);
@@ -260,12 +257,11 @@ test("a box's picture is drawn in the view and kept by the host, and its quote n
   const [png, id] = kept[0];
   assert.ok(png === "QUJD" && /^[0-9a-f]{16}$/.test(id), id);
   assert.ok(sent[0].endsWith(`<quote part="box" uri="notebook://pluto/${NB}/cell/${A}" crop="${id}"/>\nThis bump?`), sent[0].slice(-160));
-  // A box over nothing the view can draw: its id goes in the message, as it goes at once, but no picture is kept.
+  // A box over text alone: nothing in it may draw, so its quote names no picture, and none is kept.
   box({ left: 400, top: 400, right: 500, bottom: 500 }, 2);
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(kept.length, 1);
-  assert.match(sent[1], /<quote part="box" uri="[^"]+" crop="[0-9a-f]{16}"\/>\nThis bump\?$/);
-  assert.ok(!sent[1].includes(id), "each box its own id");
+  assert.ok(sent[1].endsWith(`<quote part="box" uri="notebook://pluto/${NB}/cell/${A}"/>\nThis bump?`), sent[1].slice(-120));
   // A message too long to go keeps no picture.
   window.testSend({ type: "quote", notebook: NB, picks: [{ part: "box", cells: [A], rect: { left: 0, top: 0, right: 100, bottom: 60 } }], comment: "c".repeat(9000), add: false, ref: 3 });
   await new Promise((r) => setTimeout(r, 20));

@@ -634,10 +634,9 @@
       switch (target.part) {
         case "cell":
           return { pick: { part: "cell", cell: cell.id, code }, el };
-        case "code": {
-          const lines = code.split("\n").length;
-          return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el };
-        }
+        // A click on the code picks the cell; a drag over its lines picks those lines.
+        case "code":
+          return { pick: { part: "cell", cell: cell.id, code }, el };
         case "output":
           return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() || widgetValues(el) }, el };
         case "figure":
@@ -1028,6 +1027,23 @@ ${text.value}` : sent.comment;
       return false;
     }
   }
+  function inBox(box) {
+    const found = [];
+    for (const el of document.querySelectorAll("img, canvas, svg:not(svg svg)")) {
+      if (el.closest(OURS)) continue;
+      const r = el.getBoundingClientRect();
+      const [left, top] = [r.left + window.scrollX, r.top + window.scrollY];
+      if (!r.width || !r.height || left >= box.right || left + r.width <= box.left || top >= box.bottom || top + r.height <= box.top) continue;
+      found.push({ el, left, top, width: r.width, height: r.height });
+    }
+    return found;
+  }
+  function mayDraw(box) {
+    if (box.right - box.left < 2 || box.bottom - box.top < 2) return false;
+    return inBox(box).some(
+      ({ el }) => el instanceof SVGSVGElement || (el instanceof HTMLImageElement ? el.complete && el.naturalWidth > 0 && readable(el) : el instanceof HTMLCanvasElement && el.width > 0 && el.height > 0 && readable(el))
+    );
+  }
   async function drawBox(box) {
     const width = box.right - box.left;
     const height = box.bottom - box.top;
@@ -1042,14 +1058,10 @@ ${text.value}` : sent.comment;
     g.fillRect(0, 0, canvas.width, canvas.height);
     g.scale(scale, scale);
     let drawn = 0;
-    for (const el of document.querySelectorAll("img, canvas, svg:not(svg svg)")) {
-      if (el.closest(OURS)) continue;
-      const r = el.getBoundingClientRect();
-      const [left, top] = [r.left + window.scrollX, r.top + window.scrollY];
-      if (!r.width || !r.height || left >= box.right || left + r.width <= box.left || top >= box.bottom || top + r.height <= box.top) continue;
+    for (const { el, left, top, width: w, height: h } of inBox(box)) {
       const source = await drawable(el);
       if (!source || !readable(source)) continue;
-      g.drawImage(source, left - box.left, top - box.top, r.width, r.height);
+      g.drawImage(source, left - box.left, top - box.top, w, h);
       drawn++;
     }
     if (!drawn) return null;
@@ -1492,7 +1504,7 @@ footer form#feedback { display: none !important; }
   }
   function chatMessage(notebook, quoted, engine = "pluto") {
     const shortened = quoted.some(
-      (q) => q.picks.some((p) => p.part === "lines" && !wholeCell(p) && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n"))
+      (q) => q.picks.some((p) => p.part === "lines" && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n"))
     );
     const note = shortened ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.` : quoteNote(engine);
     const message = chatSafe(
@@ -1504,7 +1516,6 @@ ${note}${LEAD_NOTE}
     );
     return message.length <= MESSAGE_MAX ? message : null;
   }
-  var wholeCell = (pick) => pick.lines[0] === 1 && pick.lines[1] >= pick.code.replace(/\r?\n$/, "").split(/\r?\n/).length;
   function quoteBlock(notebook, pick, engine = "pluto", crop) {
     if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
     const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
@@ -1513,7 +1524,6 @@ ${note}${LEAD_NOTE}
       case "cell":
         return `<quote ${at} uri="${where}"/>`;
       case "lines":
-        if (wholeCell(pick)) return `<quote ${at} uri="${where}"/>`;
         return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">
 ${pick.text}
 </quote>`;
@@ -1683,7 +1693,7 @@ ${comment}` : blocks.join("\n\n");
     };
     const point = (on2) => receive({ type: "annotate", on: on2 });
     const ids = (picks) => picks.map(
-      (p) => p.part === "box" && p.rect && host2.crop ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("") : void 0
+      (p) => p.part === "box" && p.rect && host2.crop && mayDraw(p.rect) ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("") : void 0
     );
     const draw = (q) => ({
       ...q,

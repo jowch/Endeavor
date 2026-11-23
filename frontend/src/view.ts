@@ -20,7 +20,7 @@ import { initAskBox } from "./askbox";
 import { findButton, initFind } from "./find";
 import { setHost, type ToApp } from "./bridge";
 import { cellName } from "./cellname";
-import { drawBox } from "./crop";
+import { drawBox, mayDraw } from "./crop";
 import { mac, modHeld } from "./keys";
 import type { Pick } from "./quote";
 import { initNarrow } from "./narrow";
@@ -102,7 +102,7 @@ export type Quoted = { picks: Pick[]; comment: string; crops?: (string | undefin
 export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
   // chatSafe shortens runs of blank lines and spaces in the picked lines too: say so, since they go as they were.
   const shortened = quoted.some((q) =>
-    q.picks.some((p) => p.part === "lines" && !wholeCell(p) && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
+    q.picks.some((p) => p.part === "lines" && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
   );
   const note = shortened
     ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.`
@@ -114,10 +114,6 @@ export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine =
   return message.length <= MESSAGE_MAX ? message : null;
 }
 
-/** Whether a lines pick holds every line of its cell's code (a trailing newline makes no line), as a click on the code does. */
-const wholeCell = (pick: Extract<Pick, { part: "lines" }>) =>
-  pick.lines[0] === 1 && pick.lines[1] >= pick.code.replace(/\r?\n$/, "").split(/\r?\n/).length;
-
 /** One pick as a `<quote>`: what was picked, by name, with a box's picture by its id (`crop`). */
 export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string): string {
   if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
@@ -127,8 +123,7 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
     case "cell":
       return `<quote ${at} uri="${where}"/>`;
     case "lines":
-      // A click on the code picks all its lines: that names the cell. Lines the user picked go with their text.
-      if (wholeCell(pick)) return `<quote ${at} uri="${where}"/>`;
+      // Lines the user picked go with their text (a click on the code picks the cell).
       return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
     case "output":
       return `<quote ${at} part="output" uri="${where}"/>`;
@@ -341,12 +336,13 @@ export function start(notebook: string, host: Host): void {
   const point = (on: boolean) => receive({ type: "annotate", on });
   // Each box pick's picture's id, by the pick's place. The id goes in the message at once and the picture
   // follows: Claude's desktop app takes a view's message only just after the user's press (2026-11-12), and
-  // Claude reads the picture after the user sends it. A box nothing in can be drawn has an id with no picture,
-  // which EndeavorMCP's view_cell_output says. Pictures are kept for Claude only for a message that goes.
+  // Claude reads the picture after the user sends it. A box over text alone (nothing in it may draw, mayDraw) gets
+  // no id; one whose images all turn out undrawable has an id with no picture, which EndeavorMCP's view_cell_output
+  // says. Pictures are kept for Claude only for a message that goes.
   type Drawn = Quoted & { pngs: Promise<string | null>[] };
   const ids = (picks: Pick[]) =>
     picks.map((p) =>
-      p.part === "box" && p.rect && host.crop
+      p.part === "box" && p.rect && host.crop && mayDraw(p.rect)
         ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("")
         : undefined,
     );

@@ -272,10 +272,9 @@ export function initAnnotate(answered = false): void {
     switch (target.part) {
       case "cell":
         return { pick: { part: "cell", cell: cell.id, code }, el };
-      case "code": {
-        const lines = code.split("\n").length;
-        return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el };
-      }
+      // A click on the code picks the cell; a drag over its lines picks those lines.
+      case "code":
+        return { pick: { part: "cell", cell: cell.id, code }, el };
       case "output":
         return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() || widgetValues(el) }, el };
       case "figure":

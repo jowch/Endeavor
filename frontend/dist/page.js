@@ -1079,10 +1079,9 @@
       switch (target.part) {
         case "cell":
           return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
-        case "code": {
-          const lines = code.split("\n").length;
-          return { pick: { part: "lines", cell: cell.id, code, lines: [1, lines], text: code }, el: el2 };
-        }
+        // A click on the code picks the cell; a drag over its lines picks those lines.
+        case "code":
+          return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
         case "output":
           return { pick: { part: "output", cell: cell.id, code, text: (el2.innerText ?? el2.textContent ?? "").trim() || widgetValues(el2) }, el: el2 };
         case "figure":

@@ -51,6 +51,31 @@ function readable(source: CanvasImageSource): boolean {
   }
 }
 
+/** The images, canvases and outer SVGs in `box` (page coordinates), with their page rects, leaving out the view's own. */
+function inBox(box: Box): { el: Element; left: number; top: number; width: number; height: number }[] {
+  const found = [];
+  // Nested svgs come with their outer one.
+  for (const el of document.querySelectorAll("img, canvas, svg:not(svg svg)")) {
+    if (el.closest(OURS)) continue;
+    const r = el.getBoundingClientRect();
+    const [left, top] = [r.left + window.scrollX, r.top + window.scrollY];
+    if (!r.width || !r.height || left >= box.right || left + r.width <= box.left || top >= box.bottom || top + r.height <= box.top) continue;
+    found.push({ el, left, top, width: r.width, height: r.height });
+  }
+  return found;
+}
+
+/**
+ * Whether anything in `box` may draw, told at once, before the message goes: an image or canvas that draws
+ * readable, or an SVG (which only drawing tells). False for a box over text alone, which gets no picture.
+ */
+export function mayDraw(box: Box): boolean {
+  if (box.right - box.left < 2 || box.bottom - box.top < 2) return false;
+  return inBox(box).some(({ el }) =>
+    el instanceof SVGSVGElement || (el instanceof HTMLImageElement ? el.complete && el.naturalWidth > 0 && readable(el) : el instanceof HTMLCanvasElement && el.width > 0 && el.height > 0 && readable(el)),
+  );
+}
+
 /**
  * A PNG (base64, no `data:` prefix) of what the view can draw in `box` (page coordinates), on the page's
  * background, or null when nothing in it can be drawn.
@@ -69,15 +94,10 @@ export async function drawBox(box: Box): Promise<string | null> {
   g.fillRect(0, 0, canvas.width, canvas.height);
   g.scale(scale, scale);
   let drawn = 0;
-  // Nested svgs come with their outer one.
-  for (const el of document.querySelectorAll("img, canvas, svg:not(svg svg)")) {
-    if (el.closest(OURS)) continue;
-    const r = el.getBoundingClientRect();
-    const [left, top] = [r.left + window.scrollX, r.top + window.scrollY];
-    if (!r.width || !r.height || left >= box.right || left + r.width <= box.left || top >= box.bottom || top + r.height <= box.top) continue;
+  for (const { el, left, top, width: w, height: h } of inBox(box)) {
     const source = await drawable(el);
     if (!source || !readable(source)) continue;
-    g.drawImage(source, left - box.left, top - box.top, r.width, r.height);
+    g.drawImage(source, left - box.left, top - box.top, w, h);
     drawn++;
   }
   if (!drawn) return null;
