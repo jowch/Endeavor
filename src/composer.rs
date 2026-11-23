@@ -1,10 +1,3 @@
-//! The composer, one for the chat and the new-session screen: chips for what
-//! goes along (inside the box, above the text), the text with its @ mentions,
-//! the send button, and the row under the box: "+", Point and the mode on the
-//! left; model, effort and the context ring on the right. The new-session
-//! screen adds only its chips above the box. Controls that need an open
-//! notebook stay in place, greyed out, until there is one.
-
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -26,8 +19,6 @@ use crate::theme::FocusRing as _;
 
 actions!(composer, [AddFiles, ListUp, ListDown, ListPick, ListFill, PickMode1, PickMode2, PickMode3, PickMode4]);
 
-/// Keys for the composer's lists. Registered after gpui-component's, so they
-/// beat the text box's own up, down, enter and tab while a list is open.
 pub fn key_bindings() -> Vec<KeyBinding> {
     let mut bindings = vec![KeyBinding::new(crate::platform::keys!("u"), AddFiles, Some("Input")), KeyBinding::new(crate::platform::keys!("u"), AddFiles, None)];
     for context in ["MentionList > Input", "SlashList > Input", "ModeMenu > Input", "ModeMenu"] {
@@ -50,24 +41,19 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 pub enum Menu {
     Plus,
     Mode,
-    /// A config option's picker ("model", "effort").
     Config(&'static str),
 }
 
-/// A folder's files for the @ list.
 pub enum Files {
     Loading,
     Ready(Vec<String>),
     Failed(String),
 }
 
-/// How many rows the @ list shows.
 const MENTIONS_SHOWN: usize = 8;
 
-/// The slash list's height: about 12 rows, then it scrolls.
 const SLASH_LIST_MAX: f32 = 340.;
 
-/// A choice after /mode or /model, as the toolbar's menus offer it.
 #[derive(Clone)]
 pub(crate) struct Choice {
     pub name: String,
@@ -82,11 +68,8 @@ enum ChoicePick {
     Model(SessionConfigValueId),
 }
 
-/// The slash list as it stands for the box's text.
 pub(crate) enum SlashView {
-    /// "/" and a name being typed: the commands that match.
     Commands { commands: Vec<slash::Command>, listing: Listing, query: String, waiting: bool },
-    /// "/mode " or "/model ": its choices.
     Choices { own: Own, choices: Vec<Choice> },
 }
 
@@ -99,8 +82,6 @@ impl SlashView {
         }
     }
 
-    /// The row selected as the list opens or its text changes: the first, or
-    /// the current choice when every choice shows.
     fn initial(&self) -> usize {
         match self {
             SlashView::Choices { choices, .. } => choices.iter().position(|c| c.current).unwrap_or(0),
@@ -110,41 +91,25 @@ impl SlashView {
 }
 
 pub struct Composer {
-    /// Chips in the box, sent with the next message.
     pub attachments: Vec<Attachment>,
-    /// Paths picked from the @ list; their tokens in the text stay whole.
     pub mentions: Vec<String>,
-    /// The text as last seen, to notice an edit that cut a mention.
     last_text: String,
     pub menu: Option<Menu>,
-    /// The "@query" being typed (its byte range), which opens the @ list.
     typing: Option<(Range<usize>, String)>,
-    /// The highlighted row of the open list (the @, slash or mode list).
     selected: usize,
-    /// The text the slash list was closed on with Esc; it opens again once
-    /// the text changes.
     slash_closed: Option<String>,
     slash_scroll: ScrollHandle,
-    /// Each folder's files, listed on the first @ there.
     files: HashMap<Place, Files>,
-    /// Why the last files couldn't be attached.
     pub notice: Option<String>,
-    /// The chip under the pointer, whose preview shows.
     hovered: Option<usize>,
-    /// The box's height in lines as last set: (fewest, most).
     rows: std::cell::Cell<(usize, usize)>,
-    /// Toolbar buttons' Tab-stop handles.
     focus_plus: FocusHandle,
     focus_point: FocusHandle,
     focus_mode: FocusHandle,
-    /// The config chips' (model, effort, speed), in the agent's order.
     focus_config: [FocusHandle; 3],
     focus_send: FocusHandle,
     pub(crate) focus_context: FocusHandle,
-    /// The context ring's popover.
     pub context: crate::context::RingPopover,
-    /// Draft-chip remove buttons, resized to match `attachments` each render.
-    /// A `RefCell` (like `rows` above) since render only has `&self`.
     focus_chip_remove: std::cell::RefCell<Vec<FocusHandle>>,
 }
 
@@ -174,7 +139,6 @@ impl Composer {
         }
     }
 
-    /// The remove button's handle for chip `i`, growing the pool if this is a new attachment.
     fn chip_remove_focus(&self, i: usize, cx: &App) -> FocusHandle {
         let mut pool = self.focus_chip_remove.borrow_mut();
         while pool.len() <= i {
@@ -184,8 +148,6 @@ impl Composer {
     }
 }
 
-/// A sent chip's popover: which chip, and the cell's code now once the page
-/// says (None inside: the cell is gone).
 pub struct ChipPopover {
     pub key: u64,
     pub entry: usize,
@@ -193,8 +155,6 @@ pub struct ChipPopover {
     pub now: Option<Option<String>>,
 }
 
-/// The glyph for a chip's icon. Quote cards use it too, so a quote shows
-/// the same icon everywhere.
 pub fn icon_glyph(icon: Icon) -> Glyph {
     match icon {
         Icon::Cell => Glyph::Code,
@@ -207,16 +167,11 @@ pub fn icon_glyph(icon: Icon) -> Glyph {
     }
 }
 
-/// A 22px chip: icon, then the label (names in mono).
 pub fn chip(id: ElementId, attachment: &Attachment) -> Stateful<Div> {
     let error = attachment.icon() == Icon::Error;
     label_chip(id, glyph(icon_glyph(attachment.icon()), if error { theme::danger() } else { theme::text_muted() }), attachment.label())
 }
 
-/// The chip every attachment and quote is drawn with: an icon, then the
-/// label, at most 240px wide. Only the name gives way, cut with "…", so the
-/// words around it ("error in", "· figure") always show and nothing spills
-/// past the edge.
 pub fn label_chip(id: ElementId, icon: impl IntoElement, label: Label) -> Stateful<Div> {
     let words = |text: String| div().flex_shrink_0().whitespace_nowrap().child(text);
     div()
@@ -262,7 +217,6 @@ fn mime_of(format: ImageFormat) -> Option<&'static str> {
     })
 }
 
-/// Code or text in a small mono panel, cut to its first lines.
 fn text_panel(text: &str, lines: usize, color: Rgba) -> Div {
     let mut shown: Vec<&str> = text.lines().take(lines).collect();
     if text.lines().count() > lines {
@@ -281,7 +235,6 @@ fn text_panel(text: &str, lines: usize, color: Rgba) -> Div {
         .child(shown.join("\n").replace('\t', "    "))
 }
 
-/// What a chip carries, for its hover preview and its popover.
 fn preview_body(attachment: &Attachment, agent: crate::agent::Agent) -> Div {
     match attachment {
         Attachment::Cells { cells, .. } => div().flex().flex_col().gap(px(6.)).children(cells.iter().take(3).map(|c| text_panel(&c.code, 6, theme::text_secondary()))),
@@ -306,7 +259,6 @@ fn thumbnail(mime: &str, bytes: &[u8]) -> Div {
     div().child(img(Arc::new(Image::from_bytes(image_format(mime), bytes.to_vec()))).max_w(px(320.)).max_h(px(200.)).rounded(px(4.)).object_fit(ObjectFit::Contain))
 }
 
-/// The preview's heading: the chip's name, and what it is.
 fn preview_heading(attachment: &Attachment) -> String {
     match attachment {
         Attachment::Cells { cells, .. } if cells.len() == 1 => format!("{} · cell", cells[0].name()),
@@ -332,20 +284,15 @@ fn popup() -> Div {
         .text_color(theme::text_primary())
 }
 
-/// A row to pick in a popup. GPUI makes no accessibility node for an element
-/// without a role, so every row takes one and a name.
 fn popup_row(id: ElementId, selected: bool, role: Role, name: impl Into<SharedString>) -> Stateful<Div> {
     inert_row(id).role(role).aria_label(name).cursor_pointer().when(selected, |d| d.bg(theme::menu_hover())).hover(|s| s.bg(theme::menu_hover()))
 }
 
-/// A menu row that can't be picked (greyed by the caller).
 fn inert_row(id: ElementId) -> Stateful<Div> {
     div().id(id).flex().items_center().gap(px(8.)).px(px(8.)).py(px(5.)).rounded(px(5.))
 }
 
 impl Workspace {
-    /// The folder the composer's @ list lists: the session's, or the one
-    /// chosen on the new-session screen.
     fn composer_place(&self) -> Option<Place> {
         match self.active_session() {
             Some(session) => Some(session.place.clone()),
@@ -357,8 +304,6 @@ impl Workspace {
         self.input.read(cx).value().trim().is_empty() && self.composer.attachments.is_empty()
     }
 
-    /// Take what's in the composer to send: the words, the chips, and the
-    /// mentions still in the words. None when there's nothing.
     pub fn take_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<(String, Vec<Attachment>, Vec<String>)> {
         if self.composer_empty(cx) {
             return None;
@@ -372,7 +317,6 @@ impl Workspace {
         Some((text, attachments, mentioned))
     }
 
-    /// Put a message back in the composer (a queued one being edited).
     pub fn restore_composer(&mut self, text: String, attachments: Vec<Attachment>, window: &mut Window, cx: &mut Context<Self>) {
         self.composer.attachments = attachments;
         self.input.update(cx, |s, cx| {
@@ -383,7 +327,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The text changed: keep mentions whole, and follow an "@query" being typed.
     pub fn on_composer_input(&mut self, event: &InputEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(event, InputEvent::Change) {
             return;
@@ -420,7 +363,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// List a folder's files for the @ list, once per folder and launch.
     fn list_files(&mut self, place: Place, cx: &mut Context<Self>) {
         if matches!(self.composer.files.get(&place), Some(Files::Loading | Files::Ready(_))) {
             return;
@@ -441,7 +383,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The @ list's rows for what's typed.
     fn mention_matches(&self) -> Vec<String> {
         let Some((_, query)) = &self.composer.typing else { return Vec::new() };
         match self.composer_place().and_then(|p| self.composer.files.get(&p)) {
@@ -450,7 +391,6 @@ impl Workspace {
         }
     }
 
-    /// Put an @ mention of `path` in the text at the cursor, as its own word.
     fn insert_mention(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         if !self.composer.mentions.contains(&path) {
             self.composer.mentions.push(path.clone());
@@ -462,7 +402,6 @@ impl Workspace {
         self.input.update(cx, |s, cx| s.replace(token, window, cx));
     }
 
-    /// Put the picked path in the text where "@query" was.
     fn pick_mention(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some((range, _)) = self.composer.typing.take() else { return };
         self.file_tip_done();
@@ -505,12 +444,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Every slash command: Endeavor's, and Claude Code's once it has sent them.
     pub(crate) fn slash_commands(&self) -> Vec<slash::Command> {
         slash::commands(self.active_session().map(|s| s.commands.as_slice()).filter(|c| !c.is_empty()))
     }
 
-    /// The choices after /mode or /model that match what follows it.
     fn own_choices(&self, own: Own, query: &str) -> Vec<Choice> {
         let all: Vec<Choice> = match own {
             Own::Mode => {
@@ -533,7 +470,6 @@ impl Workspace {
         slash::choices(query, &names).into_iter().map(|i| all[i].clone()).collect()
     }
 
-    /// The slash list for the box's text, unless Esc closed it.
     pub(crate) fn slash_view(&self, cx: &App) -> Option<SlashView> {
         if self.composer.typing.is_some() {
             return None;
@@ -552,7 +488,6 @@ impl Workspace {
         Some(SlashView::Choices { own, choices: self.own_choices(own, rest) })
     }
 
-    /// Put `text` in the box with the caret at its end.
     pub(crate) fn set_composer_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         let end = text.len();
         self.input.update(cx, |s, cx| {
@@ -566,7 +501,6 @@ impl Workspace {
         }
     }
 
-    /// Send what's in the box: to the session, or to start one.
     fn send_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.active.is_some() {
             self.submit(false, window, cx);
@@ -575,15 +509,11 @@ impl Workspace {
         }
     }
 
-    /// ⏎ (or a click) on the slash list's row `i`: a command that takes
-    /// nothing runs; one that takes words, and Endeavor's, are filled in. ⇥
-    /// (`fill`) only fills in. A choice after /mode or /model applies.
     fn slash_choose(&mut self, view: SlashView, i: usize, fill: bool, window: &mut Window, cx: &mut Context<Self>) {
         match view {
             SlashView::Commands { commands, listing, .. } => {
                 let rows = match listing {
                     Listing::Names(rows) | Listing::Descriptions(rows) => rows,
-                    // Not a command: ⏎ sends it as a message.
                     Listing::Nothing if !fill => return self.send_composer(window, cx),
                     Listing::Nothing => return,
                 };
@@ -604,8 +534,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A /mode or /model choice: applied at once, as the toolbar's menu
-    /// would; the box clears and nothing is sent.
     fn apply_choice(&mut self, pick: ChoicePick, window: &mut Window, cx: &mut Context<Self>) {
         match pick {
             ChoicePick::Mode(i) => self.pick_mode(i, cx),
@@ -615,9 +543,6 @@ impl Workspace {
         self.set_composer_text(String::new(), window, cx);
     }
 
-    /// Sending "/mode …" or "/model …" (with the list closed, or ⌘⏎): it is
-    /// Endeavor's, so it applies the best match and is never sent. With
-    /// nothing after it, or no match, the list opens. False: not Endeavor's.
     pub(crate) fn run_own_command(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let text = self.input.read(cx).value().trim().to_string();
         let names = |own| self.own_choices(own, "").into_iter().map(|c| c.name).collect();
@@ -639,7 +564,6 @@ impl Workspace {
         true
     }
 
-    /// The slash list and the command token, for the debug state.
     pub(crate) fn slash_state(&self, cx: &App) -> serde_json::Value {
         use serde_json::json;
         let text = self.input.read(cx).value().to_string();
@@ -737,7 +661,6 @@ impl Workspace {
         }
     }
 
-    /// Esc closes the composer's menus and lists first.
     pub fn close_composer_menus(&mut self, cx: &mut Context<Self>) -> bool {
         let slash = self.slash_view(cx).is_some();
         if slash {
@@ -758,13 +681,11 @@ impl Workspace {
         self.composer.typing = None;
         if menu == Menu::Mode {
             self.composer.selected = self.mode_list().1.unwrap_or(0);
-            // The menu's number keys work while the box has the keyboard.
             self.input.update(cx, |s, cx| s.focus(window, cx));
         }
         cx.notify();
     }
 
-    /// Pick a model or effort: for this session, and for the agent's sessions after it.
     fn pick_config(&mut self, id: &'static str, value: SessionConfigValueId, cx: &mut Context<Self>) {
         self.composer.menu = None;
         let agent = self.composer_agent(self.active_session());
@@ -777,8 +698,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A config option's choices for the composer: the session's, or, before
-    /// one exists, the last session's with the user's picks applied.
     fn config_for(&self, session: Option<&Session>, id: &str) -> Option<(SessionConfigValueId, Vec<SessionConfigSelectOption>)> {
         if let Some(session) = session {
             return session.config_choices(id);
@@ -789,24 +708,20 @@ impl Workspace {
         Some((picked.unwrap_or(current), options))
     }
 
-    /// The agent the composer is for: the session's, or the new session's.
     pub fn composer_agent(&self, session: Option<&Session>) -> crate::agent::Agent {
         session.map_or_else(|| self.draft_agent(), |s| s.agent)
     }
 
-    /// The toolbar's mode ("Ask to run", "Plan"…).
     pub fn mode_label(&self, session: Option<&Session>) -> Option<String> {
         let (choices, current) = self.mode_list();
         current.and_then(|i| choices.get(i)).map(|c| c.name.clone()).or_else(|| session.and_then(Session::mode_name))
     }
 
-    /// The toolbar's pick for a config option ("model", "effort").
     pub fn config_label(&self, session: Option<&Session>, id: &str) -> Option<String> {
         let (current, options) = self.config_for(session, id)?;
         options.iter().find(|o| o.value == current).map(|o| o.name.clone())
     }
 
-    /// ⌘U and "+" → "Add files or photos": the native picker, several at once.
     pub fn add_files(&mut self, _: &AddFiles, window: &mut Window, cx: &mut Context<Self>) {
         self.composer.menu = None;
         let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach".into()) });
@@ -819,8 +734,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Where added files are copied into (or mentioned from): the session's
-    /// folder, or the draft's.
     fn attach_folder(&self) -> attach::Folder {
         match self.composer_place() {
             Some(Place { host: HostId::ThisMac, path }) => attach::Folder::Here(path.into()),
@@ -829,14 +742,10 @@ impl Workspace {
         }
     }
 
-    /// Whether `host`'s helper can save files into a session's folder, as far
-    /// as the app knows: yes until a connected one says otherwise.
     pub(crate) fn helper_saves_files(&self, host: &HostId) -> bool {
         self.connection(host).and_then(|c| c.hello.as_ref()).is_none_or(|h| h.uploads)
     }
 
-    /// Added files become chips or @ mentions (`attach::add_file`, off the
-    /// main thread); refusals say why.
     pub fn attach_paths(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let folder = self.attach_folder();
         let unwritable = matches!(folder, attach::Folder::Unwritable);
@@ -867,7 +776,6 @@ impl Workspace {
         .detach();
     }
 
-    /// A pasted image (or copied files) becomes a chip; text pastes as usual.
     pub fn paste_into_composer(&mut self, item: &ClipboardItem, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut taken = false;
         for entry in item.entries() {
@@ -902,17 +810,10 @@ impl Workspace {
         taken
     }
 
-    // -----------------------------------------------------------------------
-    // Sent chips
-    // -----------------------------------------------------------------------
-
-    /// Scroll the notebook to these cells and outline them briefly.
     pub fn reveal_cells(&self, cells: Vec<String>, cx: &mut Context<Self>) {
         self.send_to_page(&serde_json::json!({ "type": "reveal", "cells": cells }), cx);
     }
 
-    /// A chip on a sent message: cells show in the notebook; the rest open a
-    /// popover with what was sent.
     pub fn click_sent_chip(&mut self, key: u64, entry: usize, chip: usize, cx: &mut Context<Self>) {
         let Some(Entry::User { attachments, .. }) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.entries.get(entry)) else { return };
         let Some(attachment) = attachments.get(chip) else { return };
@@ -930,7 +831,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The page said what a cell's code is now.
     pub fn on_cell_code(&mut self, cell: String, code: Option<String>, cx: &mut Context<Self>) {
         let Some(popover) = &self.chip_popover else { return };
         let asked = self
@@ -948,12 +848,6 @@ impl Workspace {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Rendering
-    // -----------------------------------------------------------------------
-
-    /// The composer: the box and the row under it, with their menus. The chat
-    /// passes its session; the new-session screen passes None.
     pub fn render_composer(&self, session: Option<&Session>, notebook_open: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let rows = if session.is_some() { (1, 10) } else { (2, 10) };
         if self.composer.rows.replace(rows) != rows {
@@ -1037,7 +931,6 @@ impl Workspace {
             .children(self.render_list(session, slash, cx))
             .children(self.render_hover_preview(session));
         div()
-            // As the transcript's (render_chat): the new session's composer isn't inside it.
             .line_height(theme::chat_px(19.5))
             .key_context(list_context)
             .on_action(cx.listener(Self::list_up))
@@ -1058,9 +951,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// A tint behind each @ mention in the text, and behind a slash command
-    /// at its start, so each reads as one piece; after a command alone, the
-    /// words it takes, faint.
     fn token_marks(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let input = self.input.clone();
         let mentions = self.composer.mentions.clone();
@@ -1133,7 +1023,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The slash list above the box, as wide as it.
     fn render_slash(&self, view: SlashView, agent: crate::agent::Agent, cx: &mut Context<Self>) -> AnyElement {
         let selected = self.composer.selected;
         let heading = |text: String| div().px(px(8.)).pt(px(6.)).pb(px(2.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(text);
@@ -1158,9 +1047,6 @@ impl Workspace {
                 if found.is_empty() {
                     after.push(line(format!("No command named /{query}. {} sends “/{query}” to {} as a message.", slash::ENTER, agent.name())));
                 }
-                // The name column: just wide enough for the longest visible
-                // name and its faint hint, capped so one long one doesn't
-                // crowd every description out.
                 let mono_width = |text: &str, size: Pixels| text.chars().count() as f32 * size.as_f32() * 0.625;
                 let name_col = found
                     .iter()
@@ -1267,8 +1153,6 @@ impl Workspace {
         div().absolute().bottom(relative(1.)).mb(px(6.)).occlude().left_0().right_0().child(list).into_any_element()
     }
 
-    /// The open list above the box: the slash list, the @ list, or a menu
-    /// from the row under it.
     fn render_list(&self, session: Option<&Session>, slash: Option<SlashView>, cx: &mut Context<Self>) -> Option<AnyElement> {
         let above = |d: Div| d.absolute().bottom(relative(1.)).mb(px(6.)).occlude();
         if let Some(view) = slash {
@@ -1386,8 +1270,6 @@ impl Workspace {
                     .into_any_element()
             }
         };
-        // Deferred so the menu sits above the click-outside backdrop, which would
-        // otherwise take its clicks and close it.
         let (place, anchor) = match menu {
             Menu::Config(_) => (div().right_0(), Anchor::BottomRight),
             _ => (div().left(px(-11.)), Anchor::BottomLeft),
@@ -1395,7 +1277,6 @@ impl Workspace {
         Some(place.absolute().top(px(-6.)).child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(anchor).child(crate::motion::arriving(div().occlude().child(body), "composer-menu-in", false)))).into_any_element())
     }
 
-    /// The hovered chip's preview, above the box.
     fn render_hover_preview(&self, session: Option<&Session>) -> Option<AnyElement> {
         let attachment = self.composer.attachments.get(self.composer.hovered?)?;
         Some(
@@ -1418,7 +1299,6 @@ impl Workspace {
     }
 
     fn render_toolbar(&self, session: Option<&Session>, notebook_open: bool, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // Narrow for its text: a bigger chat text size needs the room as a narrower column would.
         let narrow = self.settings.layout.chat_width < 400. * theme::chat_scale();
         let mode = self.mode_label(session);
         let open = |menu: Menu| self.composer.menu == Some(menu);
@@ -1427,7 +1307,6 @@ impl Workspace {
             .items_center()
             .gap(px(2.))
             .h(theme::chat_px(24.))
-            // Lines the + up with the text in the box, and the ring with the send button.
             .pl(px(4.5))
             .pr(px(8.))
             .text_size(theme::chat_meta())
@@ -1489,7 +1368,6 @@ impl Workspace {
                     .filter_map(|(&(id, name), focus)| {
                         let label = self.config_label(session, id)?;
                         let short = label.strip_suffix(" (recommended)").unwrap_or(&label).to_owned();
-                        // Narrow, two "Default"s both cut to "Defa…": say which setting each is.
                         let short = if narrow && short.to_lowercase().starts_with("default") { name.to_owned() } else { short };
                         Some(
                             tool_button(id)
@@ -1510,8 +1388,6 @@ impl Workspace {
             .child(self.render_context_ring(session, window, cx))
     }
 
-    /// Chips above a sent message (its quotes are in the bubble), and the
-    /// popover of the one clicked.
     pub fn render_sent_chips(&self, key: u64, entry: usize, attachments: &[Attachment], cx: &mut Context<Self>) -> Option<AnyElement> {
         let popover = self.chip_popover.as_ref().filter(|p| p.key == key && p.entry == entry);
         let chips: Vec<_> = attachments
@@ -1603,13 +1479,10 @@ impl Workspace {
                         ),
                 )
             });
-        // Closed by the shared click-outside backdrop (main.rs); occlude()
-        // keeps a click on the popover itself from reaching it.
         div().absolute().top(relative(1.)).right_0().mt(px(4.)).child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::TopRight).child(body))).into_any_element()
     }
 }
 
-/// Keep the composer's list keys and mentions in step with the text box.
 pub fn subscribe(input: &Entity<gpui_component::input::TextareaState>, window: &mut Window, cx: &mut Context<Workspace>) {
     cx.subscribe_in(input, window, |this, _, event: &InputEvent, window, cx| this.on_composer_input(event, window, cx)).detach();
 }
