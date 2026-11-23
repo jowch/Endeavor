@@ -92,8 +92,8 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
 
 ## Known shortcuts
 
-Deliberate simplifications with their upgrade path, marked `ponytail:` in the
-code. This is all of them; add a row with each new marker. The runtime's own
+Deliberate simplifications with their upgrade path, named by file and
+function. This is all of them; add a row with each new one. The runtime's own
 shortcuts are EndeavorMCP's, tracked in its
 [issues](https://github.com/jowch/EndeavorMCP/issues); the
 two this list used to carry (`view_cell_output` has no timeout while the
@@ -104,13 +104,14 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 |---|---|---|
 | `diagram.rs` `cached` | GPUI keeps each picture it has drawn for the window's life, so each width a diagram is laid out at keeps its pixels (about 1 to 3 MB) | a session with many diagrams, resized often, grows noticeably |
 | `notify.rs` `flash` | on Windows, "Claude is waiting for you" flashes the taskbar button instead of showing a notification, and coming back doesn't open the session that asked | a toast, with the app's AppUserModelID on the installer's Start menu shortcut |
-| `cell_shot.rs` | the agent's picture of an HTML output is taken only while the notebook pane is on screen | a picture asked for behind Settings |
+| `connection.rs` `waits`, `notebook_pane.rs` `engine_logo` | Python notebooks (marimo) don't open in the app yet: R's count stands in for Python's, and there's no marimo logo | marimo opens in the app ([marimo.md](marimo.md)) |
+| `cell_shot.rs` `cell_shot_job` | the agent's picture of an HTML output is taken only while the notebook pane is on screen | a picture asked for behind Settings |
 | `frontend/src/diff.ts` | the page's diff is an O(n·m) table; when the two versions' line counts multiply past 250,000, no diff is shown | big cells need a diff |
 | `server_dialog.rs` `drop_asks` | when a sign-in ends while another server's question waits behind it, that question comes to the front without the focus | two servers asking at once happens in practice |
-| `connection.rs` idle limit | a failed send leaves the runtime on its default idle stop (48 hours) until the next start | it fails in practice |
+| `connection.rs` `send_idle_limit` | a failed send leaves the runtime on its default idle stop (48 hours) until the next start | it fails in practice |
 | `main.rs` `send_binding`, `follow_folder`, `send_policy` | sends to the runtime are fire and forget: a failed one leaves the session unbound until it opens, Pluto suggesting the previous folder, or the run policy stale until the next change | a failed send is seen |
 | `main.rs` `check_run_state` | the run-state note warns about every open notebook on the host, not only the session's | it confuses someone |
-| `agent.rs` session list | only the first page of a folder's past sessions is listed | a folder's history outgrows a page |
+| `agent.rs` `run`, session list | only the first page of a folder's past sessions is listed | a folder's history outgrows a page |
 | `agent.rs` mode, close, delete | sent fire and forget; the agent confirms a mode change itself, and a failed close or delete leaves the file behind | it bites |
 | `main.rs` `save_json_at`, `settings.rs`, `transcript_copy.rs` | small files are saved best effort: a failed save keeps the last good file (`write_atomic`) and loses only that change; without a transcript copy a session opens on its summary | a lost change is seen |
 | `main.rs` `write_atomic` | `sync_all` runs on the caller's thread, the UI thread for most saves | a save on a hot path |
@@ -118,8 +119,8 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 | `menu.rs` `pick` | the app menu's Cut, Copy, Paste and Select All reach the notebook 100 ms after it gets the keyboard back, on Linux only; on Windows they act on the app's own text boxes | a paste is lost, or Windows' menu (#10) |
 | `webview_windows.rs` `SETTLE_MS` | find answers "No matches" only once WebView2's match count has stayed put for 400 ms, and a late count from the search before can answer a new one (untried on Windows) | the find bar is wrong or slow on Windows |
 | `save_image.rs` `make_room` | choosing Replace in the image Save dialog removes the old file before the new one is written, so a failed save loses it | a failed save is seen |
-| `logs.rs` | the log isn't rotated within a run | a long run makes a big file |
-| `install.rs` first-run installs | Node 24.21.0 pinned in code (bump URL, SHA-256, size per release; Julia's pin is EndeavorMCP's, checked by `runtime.rs`); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
+| `logs.rs` `start` | the log isn't rotated within a run | a long run makes a big file |
+| `install.rs` `download`, first-run installs | Node 24.21.0 pinned in code (bump URL, SHA-256, size per release; Julia's pin is EndeavorMCP's, checked by `runtime.rs`); curl outlives a quit mid-download, and a relaunch that overlaps it fails the SHA check and starts over | an upgrade, or overlapping launches bite |
 | `own_julia.rs` `install_own_julia` | Settings' Install and a Julia notebook opened meanwhile can both download Endeavor's Julia at once (Install waits while the runtime is starting Julia, not the other way round); the second fails its check or rename, and trying again works | it bites |
 | `vendor/gpui-wry` | the notebook web view's GPUI glue is a copy of gpui-wry 0.6.6, so its GPUI pin moves with ours; upstream's successor, gpui-webview, can draw menus over the page on macOS and Linux with GPUI Fast | gpui-webview with GPUI Fast lets menus over the notebook drop their holes |
 | `scripts/bundle.sh` | the Mac app is ad-hoc signed | sharing (above) |
