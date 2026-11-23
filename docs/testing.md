@@ -395,6 +395,11 @@ These are read by debug builds only.
     through the dialect, with no model turn. Run it in a private `HOME` (the
     adapter installs into the app's folder there), with `CODEX_HOME` at a
     signed-in Codex and `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:9/mcp`.
+- `cargo test -- --ignored live_die_and_restart --nocapture` (in
+  `src/runtime.rs`) checks the recovery path through This Mac's helper: it
+  kills the runtime as a crash or OOM kill would, and the same helper starts a
+  new one. It is slow (it starts Julia twice), and shares the state folder, so
+  quit any Endeavor first.
 - `ENDEAVOR_TEST_VIEW_CELL`: a file path. Write `<notebook id> <cell id>`
   to it, and the app makes the agent's `view_cell_output` call for the open
   session's notebook on this computer, through its own port as the agent

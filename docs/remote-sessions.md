@@ -139,6 +139,45 @@ listener port, which is in the MCP URL of the agents there, so their tools
 keep working. One that gave up is asked to try again. On quit, servers detach; their idle stop
 (the server's own setting, else Settings') covers forgotten notebooks.
 
+**A runtime another Endeavor started** (`src/older_runtime.rs`), one left
+running from before the app was updated, is used as it is when its core
+offers the app's interface (`endeavor_mcp::CORE_INTERFACE`, the rule
+EndeavorMCP's own clients use) or the app's own build started it; the app
+names a build by `remote::version()`, which its runtimes report. Any other
+runtime gets a note in each session on its host until it restarts. A runtime
+that says neither its build nor its interface predates the core recording
+its build (EndeavorMCP 808662c, 2026-10-03), so it may predate the runtime
+holding runs for the user's answer (b0cab29, 2026-10-02); it runs no code.
+One that doesn't know session kinds (interface below 6) would make an R or
+Python session's pathless `new_notebook` in Julia without a word, so the app
+refuses that call and says how to get the session's kind.
+
+**Which helper a server gets** (`remote::helper_for`): one the app ships,
+else on this computer's platform the one cargo built, else one downloaded from
+EndeavorMCP's Helpers release for the library build this app pins, when the
+app was built knowing that build's key. The Windows app ships none and always
+downloads. A downloaded helper is kept in `helpers/` in the app's folder and
+used again offline. The release keeps the builds of recent pins only, so a
+copy that hasn't updated in a while can find its build gone.
+
+**State folders.** A plain server uses the helper's default state folder,
+the one the plugin's `endeavor serve` and `mcp` use, so the app and the plugin
+share one runtime there; the helper keeps using the app's older `state`
+folder while a runtime in it is alive (EndeavorMCP#110). A cluster's folder is
+its own, so the same machine can also be a plain server entry without the two
+sharing a runtime. This Mac's state folder is likewise the plugin's.
+
+**This Mac's helper** is the app itself in helper mode (`--helper`, with
+`endeavor` as argv[0]), so `ps` tells it from the app. It starts with
+`--own-r` (only this computer may be offered Endeavor's own R), `--any-node`
+(the state folder is named after this computer, so a record in it with
+another node name is this computer's from before a rename),
+`--julia-when-needed`, and `--exit-idle-after-client`. It runs in its own
+process group, so a Ctrl-C meant for the app in a terminal doesn't kill the
+helper before it can stop Julia. A runtime an older version kept in the app's
+own folder is stopped once and its folder removed; the app stops it itself,
+because the helper's `stop` refuses a record made under another host name.
+
 **Local sessions use the same path.** The app can run the helper as a child
 process without SSH, so local and remote share one transport, with local as
 the case that skips SSH. This Mac's runtime outlives the app the same way:
@@ -395,6 +434,23 @@ password prompt, ssh says the connection ended, which the reconnect retries,
 so the next try asks again. After a key's passphrase prompt, ssh says
 "Permission denied", which isn't retried, so the line stops and waits for
 Reconnect (EndeavorMCP #64).
+
+The app remembers two things per sign-in between ssh's questions
+(`remote::SignIn`):
+
+- **A Cancel.** ssh takes a cancelled password or code as a wrong one and
+  asks again, up to three times, whatever the askpass's exit status (only a
+  key's passphrase is given up at once). So for 60 s after a Cancel
+  (`DECLINED_FOR`), ssh's repeats are cancelled without asking, until the user
+  connects again.
+- **An answer.** ssh asks the same question again, in the same words, only
+  when the answer didn't work, so the same question within 30 s
+  (`RETRY_WITHIN`) is shown as a retry. One case is wrong and left so: a try
+  with the right answer that fails for another reason (the helper, say),
+  followed within 30 s by the next try's question. It needs a failure right
+  after signing in.
+
+A question taken down because its connect ended (`Gone`) isn't a Cancel.
 
 ## Rejected alternatives
 
