@@ -395,6 +395,14 @@ pub enum Below {
     Changed,
 }
 
+/// Whether what a replay left below has been seen: the user scrolled to the end, or the
+/// list follows its end and is there. Sending a message moves it there, and since GPUI
+/// 0.3.11 the list's scroll handler doesn't always run for that (it skips a scroll that
+/// doesn't move), so `reached_end` alone left the button up.
+pub fn clears_below(reached_end: bool, following_tail: bool, at_end: Option<bool>) -> bool {
+    reached_end || (following_tail && at_end == Some(true))
+}
+
 /// The floating button above the composer: its words, or None when it
 /// doesn't show. It shows while a replay has left something below the view
 /// (`below`), or the user has scrolled up from the end (`following` stopped,
@@ -411,7 +419,7 @@ pub fn pill(following: bool, at_end: Option<bool>, below: Option<Below>) -> Opti
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `#[test]`.
-    use super::{Below, Merged, REPLACED, Swap, from_json, merge, pill, to_json};
+    use super::{Below, Merged, REPLACED, Swap, clears_below, from_json, merge, pill, to_json};
     use crate::attach::{Attachment, Quote, Quoted};
     use crate::celldiff::{CellChange, ChangedCell};
     use crate::outbox::Delivery;
@@ -626,5 +634,16 @@ mod tests {
         assert_eq!(pill(false, Some(false), Some(Below::New(0))).as_deref(), Some("Jump to latest ↓"));
         assert_eq!(pill(false, None, Some(Below::Changed)).as_deref(), Some("Jump to latest ↓"));
         assert_eq!(pill(false, None, None), None, "a list too short to scroll");
+    }
+
+    #[test]
+    fn what_a_replay_left_below_clears_once_the_list_follows_its_end_there() {
+        assert!(clears_below(true, false, Some(false)));
+        assert!(clears_below(false, true, Some(true)));
+        // Kept in place after the replay: not following, so not cleared even if it measures at the end.
+        assert!(!clears_below(false, false, Some(true)));
+        // Following but not there yet, or the list can't tell.
+        assert!(!clears_below(false, true, Some(false)));
+        assert!(!clears_below(false, true, None));
     }
 }

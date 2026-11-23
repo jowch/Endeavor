@@ -778,6 +778,8 @@ impl Workspace {
                 .placeholder("Type / for commands")
                 .submit_on_enter(true)
                 .auto_grow(1, 10)
+                // gpui-base 0.9 bounces a long draft at its ends on macOS; the chat stays still meanwhile.
+                .scroll_bounce(false)
         });
         composer::subscribe(&input, window, cx);
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
@@ -3171,31 +3173,31 @@ fn main() {
         // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
-            KeyBinding::new("secondary-shift-e", ToggleAnnotation, None),
+            KeyBinding::new(crate::platform::keys!("shift-e"), ToggleAnnotation, None),
             // ⌘E on text selected in a reply; ⌘J is the older key for it.
-            KeyBinding::new("secondary-e", ReplyToSelection, Some("Input")),
-            KeyBinding::new("secondary-e", ReplyToSelection, None),
-            KeyBinding::new("secondary-j", ReplyToSelection, Some("Input")),
-            KeyBinding::new("secondary-j", ReplyToSelection, None),
+            KeyBinding::new(crate::platform::keys!("e"), ReplyToSelection, Some("Input")),
+            KeyBinding::new(crate::platform::keys!("e"), ReplyToSelection, None),
+            KeyBinding::new(crate::platform::keys!("j"), ReplyToSelection, Some("Input")),
+            KeyBinding::new(crate::platform::keys!("j"), ReplyToSelection, None),
             // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).
             // Only in the composer's box: everywhere else ⇧⇥ moves focus back.
             KeyBinding::new("shift-tab", CycleMode, Some("Composer > Input")),
             KeyBinding::new("shift-tab", CycleMode, Some("ModeMenu > Input")),
             KeyBinding::new("shift-tab", CycleMode, Some("MentionList > Input")),
             KeyBinding::new("shift-tab", CycleMode, Some("SlashList > Input")),
-            KeyBinding::new("secondary-b", ToggleSidebar, Some("Input")),
-            KeyBinding::new("secondary-b", ToggleSidebar, None),
-            KeyBinding::new("secondary-n", NewSession, Some("Input")),
-            KeyBinding::new("secondary-n", NewSession, None),
-            KeyBinding::new("secondary-,", OpenSettings, None),
-            KeyBinding::new("secondary-f", FindSetting, None),
-            KeyBinding::new("secondary-g", FindNext, None),
-            KeyBinding::new("secondary-shift-g", FindPrevious, None),
-            KeyBinding::new("secondary-q", Quit, None),
-            KeyBinding::new("secondary-m", Minimize, None),
-            KeyBinding::new("secondary-=", ZoomIn, None),
-            KeyBinding::new("secondary--", ZoomOut, None),
-            KeyBinding::new("secondary-0", ZoomReset, None),
+            KeyBinding::new(crate::platform::keys!("b"), ToggleSidebar, Some("Input")),
+            KeyBinding::new(crate::platform::keys!("b"), ToggleSidebar, None),
+            KeyBinding::new(crate::platform::keys!("n"), NewSession, Some("Input")),
+            KeyBinding::new(crate::platform::keys!("n"), NewSession, None),
+            KeyBinding::new(crate::platform::keys!(","), OpenSettings, None),
+            KeyBinding::new(crate::platform::keys!("f"), FindSetting, None),
+            KeyBinding::new(crate::platform::keys!("g"), FindNext, None),
+            KeyBinding::new(crate::platform::keys!("shift-g"), FindPrevious, None),
+            KeyBinding::new(crate::platform::keys!("q"), Quit, None),
+            KeyBinding::new(crate::platform::keys!("m"), Minimize, None),
+            KeyBinding::new(crate::platform::keys!("="), ZoomIn, None),
+            KeyBinding::new(crate::platform::keys!("-"), ZoomOut, None),
+            KeyBinding::new(crate::platform::keys!("0"), ZoomReset, None),
         ]);
         cx.bind_keys(composer::key_bindings());
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -3385,13 +3387,13 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
     if light {
         colors.popover = Some(theme::hex(theme::popover_bg()));
     }
-    let config = std::rc::Rc::new(ThemeConfig {
-        font_family: Some(theme::SANS.into()),
-        mono_font_family: Some(theme::MONO.into()),
-        mono_font_size: Some(f32::from(theme::size_code())),
-        colors,
-        ..(**base).clone()
-    });
+    // ThemeConfig is non_exhaustive since gpui-component 0.9: copy, then set.
+    let mut config: ThemeConfig = (**base).clone();
+    config.font_family = Some(theme::SANS.into());
+    config.mono_font_family = Some(theme::MONO.into());
+    config.mono_font_size = Some(f32::from(theme::size_code()));
+    config.colors = colors;
+    let config = std::rc::Rc::new(config);
     if light {
         ui.light_theme = config;
     } else {

@@ -282,6 +282,6 @@ mod tests {
         click(7);
         spin(&ctx);
         assert_eq!(super::take_clicked(), Some(42));
-        assert!(clicks.try_next().unwrap().is_some());
+        assert!(clicks.try_recv().is_ok());
     }
 }
