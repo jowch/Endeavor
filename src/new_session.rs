@@ -52,11 +52,16 @@ impl NotebookChoice {
 /// lists the files of. R notebooks don't run on Windows until Ember does, so a
 /// Windows computer offers Julia's only; servers run Linux or macOS.
 pub fn new_kinds(host: &HostId) -> &'static [Backend] {
-    if cfg!(windows) && *host == HostId::ThisMac { &[Backend::Pluto] } else { &Backend::ALL }
+    match host {
+        HostId::ThisMac if cfg!(windows) => &[Backend::Pluto],
+        HostId::ThisMac if SHOWS_PYTHON => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
+        _ => &Backend::ALL,
+    }
 }
 
-/// A notebook file's kind from its name, in any host's rules: `.R` is R's, the rest Julia's.
 pub const SHOWS_PYTHON: bool = cfg!(not(windows));
+
+/// A notebook file's kind from its name, in any host's rules: `.R` is R's, `.py` Python's, the rest Julia's.
 
 pub fn kind_of_path(path: &str) -> Backend {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);

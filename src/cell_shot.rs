@@ -759,6 +759,17 @@ impl crate::Workspace {
                 self.start_session(window, cx);
                 "started".to_owned()
             }
+            ("new", rest) => match rest.split_once(" ").and_then(|(kind, folder)| Some(([wire::backend::Backend::Pluto, wire::backend::Backend::Ember, wire::backend::Backend::Marimo].into_iter().find(|b| b.name() == kind)?, folder))) {
+                Some((kind, folder)) => {
+                    self.draft.host = HostId::ThisMac;
+                    self.draft.folder = Some(folder.to_owned());
+                    self.draft.notebook = crate::new_session::NotebookChoice::New(kind);
+                    self.input.update(cx, |s, cx| s.set_value("Start a notebook.", window, cx));
+                    self.start_session(window, cx);
+                    "started".to_owned()
+                }
+                None => "new <kind> <folder>".to_owned(),
+            },
             ("run", _) => match self.active_session().and_then(|s| s.notebook.clone()) {
                 Some(notebook) => {
                     self.run_notebook(notebook, cx);
