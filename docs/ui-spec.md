@@ -247,6 +247,10 @@ Boards XTurn, XStopped, XOpen. Three tiers. **Waiting** (Endeavor fixes it by it
 
 Enter send · ⌘⏎ steer running turn · with an approval card and an empty box: ⏎ answer (also in the notebook with nothing focused), ⌘⏎ always this session, Esc deny · ⌘E reply to the selection, or ask about the cell (⌘J also replies; in the prompt and Point's bar, ⏎ send, ⌘⏎ add to message) · Esc stop / deny · ⇧⇥ cycle mode · ⌘B sidebar · ⌘⇧E pointing · ⌘N new session · ⌘= / ⌘− / ⌘0 text size (View ▸ Zoom In / Zoom Out / Actual Size) of the pane used last: the notebook while it has the keyboard, else the chat after a click in its column, else the notebook. The chat's sizes scale from its type ladder in steps of 1.1× (three down to 75%, seven up to 195%, half pixels), with the transcript's and composer's line heights; its spacing and widths stay. Not while Settings covers the chat.
 
+## Keyboard and screen readers
+
+Every control that takes a click is a Tab stop with a focus ring, and ⏎ or Space clicks it. Like the app's other Tab stops, a click also gives it the keyboard. A button that shows only on hover (a row's ⋮, a host's gear, a message's Copy) also shows while it has the keyboard. Menu rows are Tab stops, with the ring just inside the row; the / and @ lists aren't, since ↑ and ↓ move through them while the message box keeps the keyboard. Text that explains a control (the sign-in card, setup's error, the new-session pane) and the messages themselves have accessibility nodes, so a screen reader reads them: in GPUI a plain string has none (`theme::words`). The Windows Expand/Invoke gap is #68.
+
 ## Open decisions
 
 - Undo for agent edits per change or per cell — explored, left out: a turn's edits depend on each other, so Restore puts back the whole turn (#79).

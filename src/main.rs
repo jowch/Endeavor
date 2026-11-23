@@ -125,6 +125,7 @@ use settings::Settings;
 use splash::{Progress, Setup};
 use wire::backend::Backend;
 use crate::theme::FocusRing as _;
+use crate::theme::TabStop as _;
 
 /// Notebook id from a notebook page's URL. Only the id is used: the URL may
 /// also carry the runtime's token, which must never reach the agent.
@@ -2697,6 +2698,7 @@ impl Workspace {
             .gap(px(3.))
             .rounded(px(4.))
             .cursor_pointer()
+            .tab_stop_on(theme::bg_sidebar())
             .when(menu.is_some(), |d| d.bg(theme::row_active()))
             .hover(|s| s.bg(theme::row_active()))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -2735,6 +2737,7 @@ impl Workspace {
             .justify_center()
             .rounded(px(4.))
             .cursor_pointer()
+            .tab_stop_on(theme::bg_page())
             .text_size(theme::size_subhead())
             .text_color(if menu.is_some() { theme::text_primary() } else { theme::text_muted() })
             .when(menu.is_some(), |d| d.bg(theme::row_active()))

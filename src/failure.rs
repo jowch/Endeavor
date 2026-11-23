@@ -11,6 +11,7 @@ use crate::new_session::{Glyph, glyph_at};
 use crate::signin::{Look, button_frame};
 use crate::theme;
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 /// A button with an icon before its label.
 pub fn action(id: impl Into<ElementId>, icon: Option<Glyph>, label: impl Into<SharedString>, look: Look) -> Stateful<Div> {
@@ -83,6 +84,7 @@ impl RenderOnce for Details {
                 .mr(px(-4.))
                 .rounded(px(4.))
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .text_size(theme::size_meta())
                 .text_color(theme::text_faint())
                 .hover(|s| s.text_color(theme::text_secondary()))
@@ -127,6 +129,7 @@ impl RenderOnce for Details {
                             .items_center()
                             .gap(px(4.))
                             .cursor_pointer()
+                            .tab_stop_on(theme::bg_page())
                             .text_size(theme::size_meta())
                             .text_color(theme::text_faint())
                             .hover(|s| s.text_color(theme::text_secondary()))
@@ -291,6 +294,7 @@ pub fn notice(title: impl Into<SharedString>, body: impl Into<SharedString>, but
                                 .justify_center()
                                 .rounded(px(4.))
                                 .cursor_pointer()
+                                .tab_stop_on(theme::popover_bg())
                                 .hover(|s| s.bg(theme::row_active()))
                                 .child(glyph_at(Glyph::Close, theme::text_faint(), 13. / 12.))
                                 .on_click(move |_, window, cx| close(window, cx)),

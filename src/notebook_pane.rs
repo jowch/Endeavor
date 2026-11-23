@@ -26,6 +26,7 @@ use crate::menu::MenuTarget;
 use crate::notice::{Notice, Retry, Spot};
 use crate::{Workspace, platform, pluto, theme};
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 /// An item in the notebook's ⋮ menu or its Share menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -492,6 +493,7 @@ fn header_button(id: &'static str, icon: Glyph, label: Option<&'static str>, act
         .px(px(6.))
         .rounded(px(4.))
         .cursor_pointer()
+        .tab_stop_on(theme::bg_page())
         .text_size(theme::size_meta())
         .text_color(if active { theme::text_primary() } else { theme::text_muted() })
         .when(active, |d| d.bg(theme::row_active()))
@@ -506,6 +508,7 @@ fn page_button(id: &'static str, icon: Glyph, label: impl Into<SharedString>, pr
     div()
         .id(id)
         .role(Role::Button)
+        .tab_stop_on(theme::bg_page())
         .flex()
         .items_center()
         .gap(px(6.))
@@ -679,6 +682,7 @@ impl Workspace {
                     .role(Role::Button)
                     .aria_label(format!("{label}, show status"))
                     .cursor_pointer()
+                    .tab_stop_on(theme::bg_page())
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("status"), cx)))
                     .into_any_element(),
@@ -687,6 +691,7 @@ impl Workspace {
                     .role(Role::Button)
                     .aria_label(format!("{label}, restart the notebook"))
                     .cursor_pointer()
+                    .tab_stop_on(theme::bg_page())
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| this.restart_notebook(key, cx)))
                     .into_any_element(),
@@ -706,6 +711,7 @@ impl Workspace {
                 .gap(px(6.))
                 .mr(px(4.))
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .text_size(theme::size_meta())
                 .text_color(theme::text_muted())
                 .hover(|s| s.text_color(theme::text_primary()))
@@ -1569,6 +1575,7 @@ impl Workspace {
                         .border_1()
                         .border_color(theme::control_edge())
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
                         .text_size(theme::size_meta())
                         .text_color(theme::text_secondary())
                         .when(open, |d| d.bg(theme::row_active()))
@@ -1638,7 +1645,7 @@ impl Workspace {
             .text_size(theme::size_body())
             .text_color(theme::text_primary())
             .children(rows)
-            .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child("Notebooks stop when the job's time runs out."));
+            .child(div().text_size(theme::size_meta()).text_color(theme::text_faint()).child(theme::words("Notebooks stop when the job's time runs out.")));
         div().absolute().top(px(32.)).left_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::TopLeft).child(body)))
     }
 }

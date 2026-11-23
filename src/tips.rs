@@ -8,6 +8,7 @@ use gpui::*;
 use crate::new_session::{Glyph, glyph_at};
 use crate::{Workspace, overlay, theme};
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 const ARROW: f32 = 7.;
 
@@ -89,6 +90,7 @@ fn got_it(id: &'static str) -> Stateful<Div> {
         .border_color(theme::control_edge())
         .bg(theme::bg_tag())
         .cursor_pointer()
+        .tab_stop_on(theme::bg_card())
         .hover(|s| s.bg(theme::composer_edge()))
         .text_color(theme::text_primary())
         .font_weight(FontWeight::MEDIUM)
@@ -146,7 +148,7 @@ impl Workspace {
                                 .flex()
                                 .flex_col()
                                 .gap(px(5.))
-                                .child(div().font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child("Two ways to add your file"))
+                                .child(div().font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(theme::words("Two ways to add your file")))
                                 .child(line("Type", "@", "to name a file in this session's folder."))
                                 .child(line("Use", "+", "to attach one from anywhere else.")),
                         )

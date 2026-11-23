@@ -200,6 +200,34 @@ pub trait FocusRing: InteractiveElement + Sized {
 
 impl<E: InteractiveElement> FocusRing for E {}
 
+/// Words a screen reader can read: in GPUI a plain string makes no
+/// accessibility node, so text around a button that explains it is lost (#81).
+/// The node is named by its words, so different words never share one.
+pub fn words(text: impl Into<SharedString>) -> gpui::Text {
+    let text = text.into();
+    gpui::Text::new(gpui::ElementId::Name(format!("words:{text}").into()), text)
+}
+
+/// A Tab stop for a clickable element that has no focus handle of its own (#81).
+/// GPUI keeps the handle with the element's id while frames draw it, so a control
+/// rebuilt each render needs none. Enter and Space click it, as with any focused
+/// element; like the app's other Tab stops, a click also gives it the keyboard.
+pub trait TabStop: StatefulInteractiveElement + FocusRing {
+    /// With the outside ring, its gap in `surface` (the colour the control sits on).
+    fn tab_stop_on(self, surface: Rgba) -> Self {
+        self.focusable().tab_stop(true).focus_ring_on(surface)
+    }
+
+    /// With the ring drawn just inside its edge, for a menu row or list row
+    /// that sits flush with its neighbours, where an outside ring would be cut off.
+    fn tab_stop_inside(self) -> Self {
+        let ring = BoxShadow { color: focus_ring().into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(2.), inset: true };
+        self.focusable().tab_stop(true).focus_visible(move |s| s.shadow(vec![ring]))
+    }
+}
+
+impl<E: StatefulInteractiveElement> TabStop for E {}
+
 /// A button's (or link's) words. In GPUI its visible text isn't its accessible
 /// name (a plain string makes no node a screen reader can read), so this
 /// sets both. A later `aria_label` still replaces the name. The name only

@@ -482,7 +482,7 @@ impl Workspace {
                     .child(glyph_at(Glyph::WifiOff, theme::text_secondary(), 15. / 12.))
                     .child("No internet connection"),
             )
-            .child(div().mt(px(-6.)).text_color(theme::text_secondary()).child("Setup needs the internet once. It will continue when you're back online."))
+            .child(div().mt(px(-6.)).text_color(theme::text_secondary()).child(theme::words("Setup needs the internet once. It will continue when you're back online.")))
             .child(div().py(px(4.)).flex().flex_col().children(steps))
             .child(
                 div()
@@ -490,11 +490,11 @@ impl Workspace {
                     .items_center()
                     .gap(px(8.))
                     .child(crate::orbit::orbit("setup-offline-orbit".into(), 14., cx))
-                    .child(div().flex_1().text_size(theme::size_meta()).text_color(theme::text_muted()).child("Waiting for a connection"))
+                    .child(div().flex_1().text_size(theme::size_meta()).text_color(theme::text_muted()).child(theme::words("Waiting for a connection")))
                     .child(self.try_now_button("try-now-setup", 26., cx)),
             )
             .child(div().h(px(1.)).mx(px(-16.)).bg(theme::border()))
-            .child(div().text_size(theme::size_meta()).line_height(px(17.)).text_color(theme::text_muted()).child("After setup, only Claude needs the internet."))
+            .child(div().text_size(theme::size_meta()).line_height(px(17.)).text_color(theme::text_muted()).child(theme::words("After setup, only Claude needs the internet.")))
             .into_any_element()
     }
 }

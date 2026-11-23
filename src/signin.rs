@@ -20,6 +20,7 @@ use crate::new_session::{Glyph, glyph, glyph_at};
 use crate::theme;
 use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 /// The two kinds of Claude account the CLI signs in with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,6 +304,7 @@ pub fn button_frame(id: impl Into<ElementId>, look: Look) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
+        .tab_stop_on(theme::bg_page())
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -331,6 +333,7 @@ fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Link)
+        .tab_stop_on(theme::bg_page())
         .flex()
         .items_center()
         .gap(px(4.))
@@ -346,11 +349,11 @@ fn title(text: impl IntoElement) -> Div {
 }
 
 fn body(text: impl Into<SharedString>) -> Div {
-    div().mt(px(-6.)).text_size(theme::size_body()).line_height(theme::line_body()).text_color(theme::text_secondary()).child(text.into())
+    div().mt(px(-6.)).text_size(theme::size_body()).line_height(theme::line_body()).text_color(theme::text_secondary()).child(theme::words(text))
 }
 
 fn meta(text: impl Into<SharedString>, color: Rgba) -> Div {
-    div().text_size(theme::size_meta()).line_height(px(17.)).text_color(color).child(text.into())
+    div().text_size(theme::size_meta()).line_height(px(17.)).text_color(color).child(theme::words(text))
 }
 
 /// One choice with its own button: the first is the one to pick when unsure.
@@ -624,7 +627,7 @@ impl Workspace {
         let not_yet = Agent::ALL.into_iter().filter(|a| !a.available()).map(|a| (a.name(), a.facts().maker));
         let not_yet: Vec<_> = not_yet.chain([("Cursor", "by Anysphere")]).map(|(name, by)| unavailable(name, by, "Not available yet")).collect();
         let mut panel = vec![
-            title("Choose your assistant").into_any_element(),
+            title(theme::words("Choose your assistant")).into_any_element(),
             body("Endeavor works with an AI assistant that writes and runs code in your notebook. Pick the one you have an account with.").into_any_element(),
         ];
         panel.extend(ready);
@@ -672,7 +675,7 @@ impl Workspace {
             Stage::Account => panel.children(self.account_choice(cx)),
             Stage::Expired => return None,
             Stage::Waiting(login) => panel
-                .child(title(div().flex().items_center().gap(px(8.)).child(crate::orbit::orbit("sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser")))
+                .child(title(div().flex().items_center().gap(px(8.)).child(crate::orbit::orbit("sign-in-orbit".into(), 14., cx)).child(theme::words("Finish signing in in your browser"))))
                 .child(body(format!("We opened {} in your browser. Sign in there, then come back. This screen moves on by itself.", login.method.site())))
                 .child(
                     div()
@@ -716,6 +719,7 @@ impl Workspace {
                 .pr(px(6.))
                 .rounded(px(4.))
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .text_size(theme::size_meta())
                 .text_color(theme::text_new())
                 .hover(|s| s.bg(theme::row_active()))
@@ -736,7 +740,7 @@ impl Workspace {
         let has_back = self.setup.is_some() || self.settings.sign_in_method.is_some();
         vec![
             has_back.then(|| back.into_any_element()),
-            Some(title("Sign in to Claude").into_any_element()),
+            Some(title(theme::words("Sign in to Claude")).into_any_element()),
             Some(body("Endeavor uses your own Claude account to answer you. Which kind do you have?").into_any_element()),
             Some(
                 choice(
@@ -802,6 +806,7 @@ impl Workspace {
                 .items_center()
                 .gap(px(3.))
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .text_size(theme::size_meta())
                 .text_color(theme::text_muted())
                 .hover(|s| s.text_color(theme::text_primary()))
@@ -815,7 +820,7 @@ impl Workspace {
                 }))
         });
         vec![
-            Some(title(div().flex().items_center().gap(px(8.)).child(glyph_at(Glyph::Warning, theme::danger(), 1.2)).child("Sign-in didn't finish")).into_any_element()),
+            Some(title(div().flex().items_center().gap(px(8.)).child(glyph_at(Glyph::Warning, theme::danger(), 1.2)).child(theme::words("Sign-in didn't finish"))).into_any_element()),
             Some(div().mt(px(-6.)).text_color(theme::text_primary()).child(says).into_any_element()),
             advice.map(|a| meta(a, theme::text_new()).into_any_element()),
             Some(
@@ -895,7 +900,7 @@ impl Workspace {
                         "Your sign-in has run out, so Claude can't answer."
                     };
                     card(true)
-                        .child(heading().child("Sign in to Claude again"))
+                        .child(heading().child(theme::words("Sign in to Claude again")))
                         .child(lines(vec![why.into(), format!("The notebook still works. Last time you used {}.", last.choice())]))
                         .child(
                             row()
@@ -904,7 +909,7 @@ impl Workspace {
                         )
                 }
                 Stage::Waiting(login) => card(false)
-                    .child(heading().child(crate::orbit::orbit("sign-in-card-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
+                    .child(heading().child(crate::orbit::orbit("sign-in-card-orbit".into(), 14., cx)).child(theme::words("Finish signing in in your browser")))
                     .child(lines(vec![format!("We opened {}. Sign in there; this card goes away by itself and your message sends.", login.method.site())]))
                     .child(
                         row()
@@ -953,15 +958,15 @@ impl Workspace {
         };
         let body = match self.antigravity_account {
             Google::SigningIn => div()
-                .child(heading.child(crate::orbit::orbit("antigravity-sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
+                .child(heading.child(crate::orbit::orbit("antigravity-sign-in-orbit".into(), 14., cx)).child(theme::words("Finish signing in in your browser")))
                 .child(lines(&[waiting, "Closed the page, or want another account? Cancel, then sign in again."]))
                 .child(row.child(cancel)),
             Google::Failed => div()
-                .child(heading.child("Antigravity sign-in didn't finish"))
+                .child(heading.child(theme::words("Antigravity sign-in didn't finish")))
                 .child(lines(&["The sign-in page closed or took more than 5 minutes. Try again."]))
                 .child(row.child(sign_in("Try again"))),
             _ => div()
-                .child(heading.child("Sign in to Antigravity"))
+                .child(heading.child(theme::words("Sign in to Antigravity")))
                 .child(lines(&["Antigravity uses your Google account. Sign in opens Google in your browser."]))
                 .child(row.child(sign_in("Sign in"))),
         };
@@ -998,15 +1003,15 @@ impl Workspace {
         };
         let body = match self.codex_account {
             Codex::SigningIn => div()
-                .child(heading.child(crate::orbit::orbit("codex-sign-in-orbit".into(), 14., cx)).child("Finish signing in in your browser"))
+                .child(heading.child(crate::orbit::orbit("codex-sign-in-orbit".into(), 14., cx)).child(theme::words("Finish signing in in your browser")))
                 .child(lines(&[waiting, "Closed the page, or want another account? Cancel, then sign in again."]))
                 .child(row.child(cancel)),
             Codex::Failed => div()
-                .child(heading.child("Codex sign-in didn't finish"))
+                .child(heading.child(theme::words("Codex sign-in didn't finish")))
                 .child(lines(&["Try again, or run codex login in a terminal and then check again."]))
                 .child(row.child(check).child(sign_in("Try again"))),
             _ => div()
-                .child(heading.child("Sign in to Codex"))
+                .child(heading.child(theme::words("Sign in to Codex")))
                 .child(lines(&[
                     "Codex uses your ChatGPT account. Sign in opens ChatGPT in your browser.",
                     "Already use the codex command? Run codex login in a terminal, then check again.",

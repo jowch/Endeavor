@@ -14,6 +14,7 @@ use crate::hosts::HostId;
 use crate::new_session::{Glyph, glyph_at};
 use crate::session::Session;
 use crate::theme;
+use crate::theme::TabStop as _;
 
 /// What a session waits for before it can open.
 #[derive(Clone, Debug, PartialEq)]
@@ -153,6 +154,7 @@ impl Workspace {
                 .px(px(6.))
                 .rounded(px(4.))
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .text_color(theme::text_secondary())
                 .hover(|s| s.text_color(theme::text_primary()).bg(theme::row_active()))
                 .child("Try now")

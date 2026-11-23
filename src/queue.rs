@@ -15,6 +15,7 @@ use crate::new_session::{Glyph, glyph};
 use crate::outbox::{Dispatch, Outbox, UNDO_FOR};
 use crate::session::Session;
 use crate::theme::{self, FocusRing as _};
+use crate::theme::TabStop as _;
 
 /// With more than this many rows, the stack shows `SHOWN` and "N more ›".
 const FOLD_OVER: usize = 4;
@@ -111,6 +112,7 @@ impl Workspace {
                             .role(Role::Button)
                             .aria_label("Send next")
                             .cursor_pointer()
+                            .tab_stop_on(theme::bg_page())
                             .text_color(theme::accent_text())
                             .hover(|s| s.underline())
                             .child("Send next")
@@ -155,6 +157,7 @@ impl Workspace {
                     .self_start()
                     .pl(px(10.))
                     .cursor_pointer()
+                    .tab_stop_on(theme::bg_page())
                     .text_size(theme::size_meta())
                     .text_color(theme::text_muted())
                     .hover(|s| s.text_color(theme::text_primary()))
@@ -198,6 +201,7 @@ impl Workspace {
                     .gap(px(4.))
                     .overflow_hidden()
                     .cursor_pointer()
+                    .tab_stop_on(row_surface())
                     .children(chips)
                     .when(more > 0, |d| d.child(div().flex_shrink_0().text_size(theme::size_meta_small()).text_color(theme::text_muted()).child(format!("+{more}"))))
                     .child(div().min_w_0().truncate().text_color(theme::text_secondary()).child(words))
@@ -232,6 +236,7 @@ impl Workspace {
                 .role(Role::Button)
                 .aria_label(q.text.clone())
                 .cursor_pointer()
+                .tab_stop_on(row_surface())
                 .text_size(theme::chat_body())
                 .line_height(theme::chat_line_body())
                 .text_color(theme::text_secondary())
@@ -396,7 +401,7 @@ fn editing_row(n: Option<usize>) -> AnyElement {
         .text_color(theme::text_muted())
         .children(n.map(number))
         .child(glyph(Glyph::Pencil, theme::text_muted()))
-        .child(div().flex_1().min_w_0().truncate().child("Editing in the box below · keeps its place"))
+        .child(div().flex_1().min_w_0().truncate().child(theme::words("Editing in the box below · keeps its place")))
         .child(div().flex_shrink_0().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("esc"))
         .child(div().flex_shrink_0().text_size(theme::chat_px(11.5)).text_color(theme::text_faint()).child("puts it back"))
         .into_any_element()

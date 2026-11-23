@@ -25,6 +25,7 @@ use crate::signin::Look;
 use crate::theme;
 use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 /// A run-state warning as the transcript shows it.
 pub(crate) fn run_state_line(warning: &pluto::RunWarning) -> String {
@@ -114,6 +115,7 @@ pub fn render_jump(session: &Session, cx: &mut Context<Workspace>) -> Option<Any
                     .bg(theme::popover_bg())
                     .shadow(theme::popover_shadow())
                     .cursor_pointer()
+                    .tab_stop_on(theme::bg_page())
                     .text_size(theme::chat_meta())
                     .text_color(theme::text_primary())
                     .hover(|s| s.bg(theme::button_hover()))
@@ -220,12 +222,13 @@ fn sent_command(session: &Session, text: &str) -> Option<usize> {
 
 /// A sent message's words, as written; a command at the start in the code
 /// font, tinted as it was in the box.
-fn user_text(session: &Session, text: &SharedString) -> AnyElement {
-    let Some(len) = sent_command(session, text) else { return text.clone().into_any_element() };
+/// A sent message's words, as a node a screen reader reads (#81); `id` is the entry's.
+fn user_text(session: &Session, id: ElementId, text: &SharedString) -> AnyElement {
+    let Some(len) = sent_command(session, text) else { return gpui::Text::new(id, text.clone()).into_any_element() };
     let color: Hsla = theme::text_primary().into();
     let run = |len, font_family: &'static str, background_color| TextRun { len, font: font(font_family), color, background_color, underline: None, strikethrough: None };
     let runs = vec![run(len, theme::MONO, Some(theme::accent().opacity(0.28).into())), run(text.len() - len, theme::SANS, None)];
-    StyledText::new(text.clone()).with_runs(runs.into_iter().filter(|r| r.len > 0).collect()).into_any_element()
+    gpui::InteractiveText::new(id, StyledText::new(text.clone()).with_runs(runs.into_iter().filter(|r| r.len > 0).collect())).into_any_element()
 }
 
 fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, window: &mut Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
@@ -261,7 +264,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             let unanswered = (session.unanswered == Some(ix)).then(|| this.render_unanswered(session.agent));
             let line_height = theme::chat_line_body();
             if text.is_empty() || bubble_lines(text, bubble_width(this.settings.layout.chat_width), window) <= FOLD_AFTER {
-                let bubble = bubble.when(!text.is_empty(), |d| d.child(user_text(session, text)));
+                let bubble = bubble.when(!text.is_empty(), |d| d.child(user_text(session, id("user-text"), text)));
                 return Some(column.child(bubble).children(delivered).children(unanswered).child(actions).into_any_element());
             }
             let fade = div()
@@ -273,7 +276,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .bg(linear_gradient(180., linear_color_stop(theme::bg_raised().opacity(0.), 0.), linear_color_stop(theme::bg_raised(), 1.)));
             let body = div()
                 .relative()
-                .child(user_text(session, text))
+                .child(user_text(session, id("user-text"), text))
                 .when(!*expanded, |d| d.max_h(line_height * FOLD_TO as f32).overflow_hidden().child(fade));
             column
                 .child(bubble.child(body))
@@ -282,6 +285,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                         .id(id("user-fold"))
                         .role(Role::Button)
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
                         .text_size(theme::chat_meta())
                         .text_color(muted)
                         .hover(|s| s.text_color(theme::text_primary()))
@@ -302,7 +306,9 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             // window's 13 px, so it didn't follow the chat's text size.
             .text_size(theme::chat_body())
             .line_height(theme::chat_line_body())
-            .child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx))
+            // The markdown view makes no accessibility node of its own, so a
+            // screen reader reads the reply from here (#81).
+            .child(div().id(id("agent-text")).role(Role::Article).aria_label(text.clone()).child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx)))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
         Entry::Note(text) if session.restart_offered_at(ix) => {
@@ -314,12 +320,13 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 .gap(px(4.))
                 .text_size(theme::chat_meta())
                 .text_color(muted)
-                .child(text.clone())
+                .child(Text::new(id("note"), text.clone()))
                 .child(
                     div()
                         .id(id("older-restart"))
                         .role(Role::Button)
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
                         .text_color(theme::text_secondary())
                         .hover(|s| s.text_color(theme::text_primary()))
                         .button_text("Restart…")
@@ -327,7 +334,7 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
                 )
                 .into_any_element()
         }
-        Entry::Note(text) => div().text_size(theme::chat_meta()).text_color(muted).child(text.clone()).into_any_element(),
+        Entry::Note(text) => div().text_size(theme::chat_meta()).text_color(muted).child(Text::new(id("note"), text.clone())).into_any_element(),
         Entry::Reopened(at) => {
             let rule = || div().flex_1().h(px(1.)).bg(theme::border());
             div()
@@ -543,6 +550,10 @@ fn copy_button(id: ElementId, text: String, label: &'static str) -> impl IntoEle
         .bg(theme::bg_card())
         .opacity(0.)
         .group_hover(MESSAGE, |s| s.opacity(1.))
+        // Shown while it has the keyboard, like on hover.
+        .focusable()
+        .tab_stop(true)
+        .focus_visible(|s| s.opacity(1.).shadow(theme::ring(theme::bg_page())))
         .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
         .button_text("Copy")
         .aria_label(label)
@@ -1252,6 +1263,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
                         .role(Role::Button)
                         .flex_none()
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_card())
                         .text_color(theme::text_secondary())
                         .hover(|s| s.text_color(theme::text_primary()))
                         .child(if all { "Show less" } else { "Show all" })
@@ -1280,6 +1292,7 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
                         .aria_label(if cut { "Copy what's shown" } else { "Copy the output" })
                         .flex_none()
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_card())
                         .text_color(theme::text_secondary())
                         .hover(|s| s.text_color(theme::text_primary()))
                         .child("Copy")
