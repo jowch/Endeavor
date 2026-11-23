@@ -725,7 +725,6 @@ async fn run(
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<AgentEvent>,
 ) -> Result<(), agent_client_protocol::Error> {
-    // Leading NAME=value arguments are the adapter's environment (AcpAgent::from_args).
     #[cfg(target_os = "linux")]
     let command: Vec<String> = crate::platform::wayland_display().map(|display| format!("WAYLAND_DISPLAY={display}")).into_iter().chain(command).collect();
     let adapter = AcpAgent::from_args(command)?;

@@ -3128,11 +3128,8 @@ fn main() {
     // X11 only, through XWayland on a Wayland desktop: wry embeds the notebook
     // only in an X11 window, and GPUI is built without its Wayland client, so
     // seeing WAYLAND_DISPLAY it would choose Wayland and panic. Kept aside for
-    // the programs that open links (platform::opener) and for the agent
-    // (agent::run). GTK is told in platform::init, so nothing the app starts
-    // inherits an X11-only GTK. The runtime helper, this program again, runs
-    // no window: it takes the display back, so Julia, R and what they open
-    // have it (#162).
+    // the programs that open links (platform::opener). GTK is told in
+    // platform::init, so nothing the app starts inherits an X11-only GTK.
     #[cfg(target_os = "linux")]
     if let Some(display) = std::env::var_os("WAYLAND_DISPLAY") {
         // SAFETY: first thing in main, before any other thread exists.
@@ -3141,7 +3138,7 @@ fn main() {
             std::env::remove_var("WAYLAND_DISPLAY");
         }
     } else if let Some(display) = std::env::var_os(platform::WAYLAND_DISPLAY_KEPT).filter(|_| std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG)) {
-        // SAFETY: as above.
+        // SAFETY: first thing in main, before any other thread exists.
         unsafe { std::env::set_var("WAYLAND_DISPLAY", display) };
     }
     // `claude auth login` opens its page through this app (signin::Login).
