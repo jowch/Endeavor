@@ -1,7 +1,3 @@
-//! A PNG of part of the notebook, for a box drawn with Point: WKWebView's own
-//! snapshot of a rect, which draws what the page shows (plots included)
-//! without screen-recording permission.
-
 use std::cell::Cell;
 
 use block2::RcBlock;
@@ -12,15 +8,10 @@ use objc2::{class, msg_send};
 
 use crate::overlay::CGRect;
 
-/// Wider boxes are scaled down to this many points (twice as many pixels on
-/// a Retina screen), which keeps the PNG well under the image cap.
 const MAX_WIDTH: f64 = 800.;
 
-/// NSBitmapImageFileTypePNG.
 const PNG: usize = 4;
 
-/// `rect` is x, y, width, height in the web view's points, from its top left.
-/// The receiver gets None when WebKit couldn't draw it.
 pub fn png(webview: &wry::WebView, rect: [f64; 4]) -> oneshot::Receiver<Option<Vec<u8>>> {
     use wry::WebViewExtMacOS;
     let (tx, rx) = oneshot::channel();
@@ -44,7 +35,6 @@ pub fn png(webview: &wry::WebView, rect: [f64; 4]) -> oneshot::Receiver<Option<V
     rx
 }
 
-/// An NSImage as PNG bytes.
 unsafe fn encode(image: *mut AnyObject) -> Option<Vec<u8>> {
     unsafe {
         let tiff: *mut AnyObject = msg_send![image, TIFFRepresentation];

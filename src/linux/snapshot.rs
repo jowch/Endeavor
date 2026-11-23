@@ -1,17 +1,10 @@
-//! A PNG of part of the notebook (macOS: `src/snapshot.rs`): WebKitGTK's own
-//! snapshot of what the web view shows, cut to a rect. It draws the page
-//! itself, plots and WebGL included, whatever is in front of the view.
-
 use futures::channel::oneshot;
 use gtk::cairo::{self, Format, ImageSurface};
 use gtk::gio;
 use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebViewExt};
 
-/// Wider boxes are scaled down to this many logical pixels, as on the Mac.
 const MAX_WIDTH: f64 = 800.;
 
-/// `rect` is x, y, width, height in the web view's logical pixels, from its
-/// top left. The receiver gets None when WebKit couldn't draw it.
 pub fn png(webview: &wry::WebView, rect: [f64; 4]) -> oneshot::Receiver<Option<Vec<u8>>> {
     use wry::WebViewExtUnix;
     let (tx, rx) = oneshot::channel();
@@ -22,7 +15,6 @@ pub fn png(webview: &wry::WebView, rect: [f64; 4]) -> oneshot::Receiver<Option<V
     rx
 }
 
-/// The part of `shot` at `rect`, at most `MAX_WIDTH` wide, in the shot's pixels.
 fn cut(shot: &cairo::Surface, [x, y, w, h]: [f64; 4]) -> Option<ImageSurface> {
     if w < 1. || h < 1. {
         return None;
@@ -42,7 +34,6 @@ fn cut(shot: &cairo::Surface, [x, y, w, h]: [f64; 4]) -> Option<ImageSurface> {
 fn encode(mut image: ImageSurface) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let (width, height, stride) = (image.width() as u32, image.height() as u32, image.stride() as usize);
     let data = image.data()?;
-    // Cairo's ARGB32 is premultiplied, in native byte order (BGRA on little-endian).
     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
     for row in data.chunks(stride).take(height as usize) {
         for px in row[..width as usize * 4].as_chunks::<4>().0 {
