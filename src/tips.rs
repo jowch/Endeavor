@@ -148,7 +148,7 @@ impl Workspace {
                                 .flex()
                                 .flex_col()
                                 .gap(px(5.))
-                                .child(div().font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(theme::words("Two ways to add your file")))
+                                .child(div().font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(theme::words("two-ways-to-add-your", "Two ways to add your file")))
                                 .child(line("Type", "@", "to name a file in this session's folder."))
                                 .child(line("Use", "+", "to attach one from anywhere else.")),
                         )

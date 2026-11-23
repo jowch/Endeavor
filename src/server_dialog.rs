@@ -1,7 +1,3 @@
-//! Adding a server or a cluster and its settings (the Where menu's gear),
-//! with Test connection; and the modal that shows ssh's password, two-factor
-//! and host-key prompts.
-
 use std::sync::Arc;
 use std::time::Instant;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,10 +21,7 @@ use crate::theme::TextButton as _;
 use crate::theme::TabStop as _;
 
 pub struct ServerDialog {
-    /// The server being edited; None adds one.
     editing: Option<String>,
-    /// The id a new server gets. Fixed for the dialog's life: Test connection
-    /// makes a state folder on the host named after it.
     new_id: String,
     name: Entity<InputState>,
     host: Entity<InputState>,
@@ -36,12 +29,10 @@ pub struct ServerDialog {
     r: Entity<InputState>,
     idle_stop: Option<IdleStop>,
     idle_menu: bool,
-    /// `Host` entries from ~/.ssh/config.
     ssh_hosts: Vec<String>,
     test: Option<TestRun>,
     confirm_remove: bool,
     error: Option<String>,
-    /// A cluster's own settings; None for a plain server.
     pub cluster: Option<ClusterFields>,
     _subscriptions: Vec<Subscription>,
 }
@@ -53,18 +44,15 @@ pub struct ClusterFields {
     pub partitions: Vec<Partition>,
     pub partition_menu: bool,
     scratch: Option<String>,
-    /// Test connection found Slurm (this time).
     detected: bool,
 }
 
 struct TestRun {
     id: u64,
     cancel: Arc<Cancel>,
-    /// Its ssh's questions, taken down when it ends.
     sign_in: remote::SignIn,
     host: String,
     done: Vec<String>,
-    /// What it's doing now, and the latest line of Julia's output.
     working: Option<String>,
     detail: Option<String>,
     failed: Option<String>,
@@ -75,7 +63,6 @@ enum TestUpdate {
     Done(Result<(), String>),
 }
 
-/// ssh's question on screen; the password field for a `Secret`.
 pub struct AskModal {
     question: Question,
     input: Entity<InputState>,
@@ -93,7 +80,6 @@ impl Workspace {
         self.open_host_dialog(editing, server, window, cx);
     }
 
-    /// Add a server or (with `cluster` set) a cluster, starting from `template`'s fields.
     pub fn open_new_host(&mut self, template: Server, window: &mut Window, cx: &mut Context<Self>) {
         self.open_host_dialog(None, template, window, cx);
     }
@@ -107,7 +93,6 @@ impl Workspace {
         let host = input(if server.ssh_host.is_empty() { String::new() } else { server.ssh_target() }, "alias, or user@host", window, cx);
         let julia = input(server.julia.clone().unwrap_or_default(), "module load julia", window, cx);
         let r = input(server.r.clone().unwrap_or_default(), "module load R", window, cx);
-        // The suggestions follow what's typed.
         let subscriptions = vec![cx.subscribe(&host, |_: &mut Workspace, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 cx.notify();
@@ -151,14 +136,11 @@ impl Workspace {
     pub(crate) fn close_server_dialog(&mut self, cx: &mut Context<Self>) {
         if let Some(test) = self.server_dialog.take().and_then(|d| d.test) {
             test.cancel.cancel();
-            // Its end finds no dialog to report to, so its questions go now.
             let _ = self.drop_asks(test.sign_in.id, None, cx);
         }
         cx.notify();
     }
 
-    /// The server as the dialog's fields describe it. With `saving`, a name
-    /// another host has is refused; otherwise (Test connection) it's kept.
     fn dialog_server(&self, saving: bool, cx: &App) -> Result<Server, String> {
         let dialog = self.server_dialog.as_ref().ok_or("no dialog")?;
         let (ssh_host, port) = Server::parse_target(&dialog.host.read(cx).value())?;
@@ -187,7 +169,6 @@ impl Workspace {
             r: (!r.is_empty()).then_some(r),
             idle_stop: dialog.idle_stop,
             cluster,
-            // `save_server` sets it.
             fresh: false,
         })
     }
@@ -199,9 +180,6 @@ impl Workspace {
         };
         let adding = self.server_dialog.as_ref().is_some_and(|d| d.editing.is_none());
         let id = server.id.clone();
-        // Signing in as someone else, or to another machine, makes the folders used there someone
-        // else's: New session starts in the home of whoever signs in next (#48). The folders stay
-        // recent, so the sidebar keeps that server's past sessions.
         let moved = self.hosts.server(&id).is_some_and(|old| (&old.ssh_host, old.port) != (&server.ssh_host, server.port));
         server.fresh = self.hosts.server(&id).is_some_and(|old| old.fresh) || moved;
         self.hosts.put(server);
@@ -215,17 +193,14 @@ impl Workspace {
             self.draft.browser = None;
         }
         if !adding {
-            // A connected server with new connection settings connects with them now.
             self.settings_saved(&host, cx);
         }
         if adding {
             self.set_draft_host(host, window, cx);
         } else if self.draft.host == host {
-            // New default resources for the session being set up.
             self.draft.resources = self.draft_cluster().map(|c| c.resources.clone());
             self.send_idle_limit(&host, cx);
         } else {
-            // Its idle override may have changed.
             self.send_idle_limit(&host, cx);
         }
         self.input.update(cx, |s, cx| s.focus(window, cx));
@@ -252,7 +227,6 @@ impl Workspace {
         }
     }
 
-    /// Start Test connection, or stop the one under way.
     fn test_server(&mut self, cx: &mut Context<Self>) {
         if let Some(test) = self.server_dialog.as_ref().and_then(|d| d.test.as_ref()).filter(|t| t.working.is_some()) {
             test.cancel.cancel();
@@ -299,7 +273,6 @@ impl Workspace {
     fn on_test_update(&mut self, id: u64, mut update: TestUpdate, cx: &mut Context<Self>) {
         let Some(test) = self.server_dialog.as_mut().and_then(|d| d.test.as_mut()).filter(|t| t.id == id) else { return };
         if let TestUpdate::Done(result) = &mut update {
-            // Its ssh is gone, so nothing is waiting for its answers any more.
             let (source, host) = (test.sign_in.id, test.host.clone());
             if self.drop_asks(source, None, cx)
                 && let Err(why) = result
@@ -358,7 +331,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A question from ssh: shown now, or after the one on screen.
     pub fn on_question(&mut self, question: Question, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| InputState::new(window, cx).masked(true));
         cx.subscribe_in(&input, window, |this: &mut Workspace, _, event: &InputEvent, window, cx| {
@@ -374,11 +346,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Take down the questions of a sign-in that ended (`remote::SignIn`), or
-    /// those it asked `before` a try of it ended: their ssh is gone, so nothing
-    /// waits for their answers. True if one was on screen or waiting.
     pub fn drop_asks(&mut self, source: u64, before: Option<Instant>, cx: &mut Context<Self>) -> bool {
-        // ponytail: another sign-in's question left in front isn't focused (no window here); a click focuses it.
         let count = self.asks.len();
         self.asks.retain(|ask| !ask.question.belongs_to(source, before));
         if self.asks.len() == count {
@@ -473,7 +441,6 @@ impl Workspace {
                     }))
                 });
             let rows: Vec<_> = rows.collect();
-            // Above the dialog: at the dialog's own layer or below, the dialog would cover it.
             div().absolute().top(px(32.)).right_0().child(
                 crate::layer::place(
                     crate::layer::Layer::ServerDialogMenu,
@@ -565,7 +532,6 @@ impl Workspace {
             .child(
                 div()
                     .id("server-dialog-body")
-                    // The title and the buttons stay put; only this scrolls, when the window is short.
                     .max_h((window.viewport_size().height - px(150.)).max(px(160.)))
                     .overflow_y_scroll()
                     .child(
@@ -634,8 +600,6 @@ impl Workspace {
         Some(modal_backdrop("server-dialog-backdrop").child(card).into_any_element())
     }
 
-    /// Starting a session on a plain server where Slurm is installed: probably
-    /// a cluster's login node, which stops long-running programs.
     pub fn render_login_node_warning(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let id = self.login_node_warning.as_ref()?;
         let name = self.hosts.server(id).map(|s| s.name.clone()).unwrap_or_default();
@@ -734,7 +698,6 @@ impl Workspace {
 }
 
 impl Workspace {
-    /// A cluster's Scheduler and Default resources sections.
     fn cluster_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(dialog) = &self.server_dialog else { return Vec::new() };
         let Some(c) = &dialog.cluster else { return Vec::new() };
@@ -793,8 +756,6 @@ fn idle_name(value: IdleStop) -> &'static str {
     IdleStop::ALL.iter().find(|(v, _)| *v == value).map_or("", |(_, label)| label)
 }
 
-/// A dimmed cover over the window, centering its child; clicks stay in it.
-/// Only the cover occludes: an occluding card keeps clicks from its text fields.
 fn modal_backdrop(id: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -825,15 +786,12 @@ fn field_frame(mono: bool) -> Div {
         .when(mono, |d| d.font_family(theme::MONO))
 }
 
-/// A button whose presses go in the click log (`click_log`), as `name`: GPUI calls these only
-/// while the pointer is over it, so a press missing here was taken for somewhere else.
 fn noted(button: Stateful<Div>, name: &'static str) -> Stateful<Div> {
     button
         .on_mouse_down(MouseButton::Left, move |_, _, _| crate::click_log::note(|| format!("{name} down")))
         .on_mouse_up(MouseButton::Left, move |_, _, _| crate::click_log::note(|| format!("{name} up")))
 }
 
-/// `on`: the dialog's colour, for the gap inside the focus ring.
 pub(crate) fn button(id: &'static str, label: &'static str, primary: bool, focus: &FocusHandle, on: Rgba) -> Stateful<Div> {
     div()
         .id(id)
@@ -845,8 +803,6 @@ pub(crate) fn button(id: &'static str, label: &'static str, primary: bool, focus
         .items_center()
         .rounded(px(6.))
         .cursor_pointer()
-        // A 2px border is always reserved: dark's secondary button is outlined
-        // and focus recolours the outline; the others get the ring outside.
         .border_2()
         .border_color(gpui::transparent_black())
         .track_focus(focus)

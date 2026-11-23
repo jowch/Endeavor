@@ -1,4 +1,3 @@
-// The feedback sheet sends through Pluto's own form and reports what Pluto says (src/actions.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
@@ -12,7 +11,6 @@ const { outputFiles } = buildSync({
   write: false,
 });
 
-/** A page with Pluto's footer form, whose submit handler does what Pluto's Feedback.js does. */
 function page(answer) {
   const dom = new JSDOM(`<body><form id="feedback"><input id="opinion"></form></body>`, { runScripts: "outside-only" });
   const { window } = dom;

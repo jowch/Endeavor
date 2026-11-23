@@ -1,7 +1,3 @@
-//! Quotes (attach::Quote) on screen: Reply on text selected in one of Claude's
-//! replies (a pill by the selection, then a small prompt), the cards waiting
-//! above the composer, and the quotes in a sent message.
-
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
@@ -16,9 +12,6 @@ use crate::session::Entry;
 use crate::{ReplyToSelection, Workspace, theme};
 use crate::theme::TabStop as _;
 
-/// Text selected in one of Claude's replies, and where the pointer let go of
-/// it, from the reply's top left, so the pill and prompt open under that spot
-/// and move with the reply as the transcript scrolls.
 #[derive(Clone)]
 pub struct Selected {
     key: u64,
@@ -33,31 +26,23 @@ impl Selected {
     }
 }
 
-/// The chat's Reply: the pill offered for a selection, or the prompt it opened.
 pub enum Reply {
     Pill(Selected),
     Prompt { selected: Selected, input: Entity<TextareaState>, menu: bool },
 }
 
-/// Words typed in Reply's prompt and left there, by the selection they reply
-/// to (session, reply, text): reopening it on that selection brings them back.
 pub type Drafts = std::collections::HashMap<(u64, usize, String), String>;
 
-/// The prompt's keys as this platform writes them.
 const SEND_KEY: &str = if cfg!(target_os = "macos") { "↩" } else { "Enter" };
 const ADD_KEY: &str = if cfg!(target_os = "macos") { "⌘↩" } else { "Ctrl+Enter" };
 
-/// How far under the pointer the pill and the prompt open: past the rest of
-/// the selection's last line.
 const BELOW_POINTER: f32 = 16.;
 const PROMPT_WIDTH: f32 = 380.;
 
-/// A quote's excerpt on one line, as the prompt shows it.
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// A row of the prompt's menu: what it does, and its key.
 fn menu_row(id: &'static str, label: &'static str, key: &'static str, icon: Glyph) -> Stateful<Div> {
     div()
         .id(id)
@@ -78,8 +63,6 @@ fn menu_row(id: &'static str, label: &'static str, key: &'static str, icon: Glyp
 }
 
 impl Workspace {
-    /// The pointer let go in the transcript: offer Reply if it left text
-    /// selected in a reply, else take the offer away.
     pub fn check_reply_selection(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         if matches!(self.reply, Some(Reply::Prompt { .. })) {
             return;
@@ -97,8 +80,6 @@ impl Workspace {
         }
     }
 
-    /// ⌘E (or ⌘J), or a click on the pill: open the prompt for the offered
-    /// selection, with its draft selected if it has one. ⌘E again closes it.
     pub fn reply_to_selection(&mut self, _: &ReplyToSelection, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.reply, Some(Reply::Prompt { .. })) {
             self.close_reply(cx);
@@ -109,7 +90,6 @@ impl Workspace {
         }
         let Some(Reply::Pill(selected)) = self.reply.take() else { return };
         let agent = self.sessions.iter().find(|s| s.key == selected.key).map_or_else(crate::agent::Agent::default, |s| s.agent);
-        // ↩ sends, ⌘↩ adds to the message, ⇧↩ is a new line; six lines, then it scrolls.
         let input = cx.new(|cx| TextareaState::new(window, cx).placeholder(format!("Reply to {}", agent.name())).submit_on_enter(true).auto_grow(1, 6).scroll_bounce(false));
         cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
             match event {
@@ -131,8 +111,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⏎ sends the quote and the reply now; ⌘⏎ (`add`) adds them to the
-    /// composer's message instead.
     pub fn finish_reply(&mut self, add: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Reply::Prompt { selected, input, .. }) = self.reply.take() else { return };
         let comment = input.read(cx).value().trim().to_string();
@@ -148,8 +126,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Esc, or a click elsewhere: close the prompt, keeping its words as the
-    /// selection's draft (or take the pill away).
     pub fn close_reply(&mut self, cx: &mut Context<Self>) -> bool {
         if let Some(Reply::Prompt { selected, input, .. }) = &self.reply {
             let words = input.read(cx).value().to_string();
@@ -166,8 +142,6 @@ impl Workspace {
         open
     }
 
-    /// For the state dump: which of Reply's pieces shows (`pill`, `prompt`,
-    /// `added`), the quoted text, what's typed, and whether the menu is open.
     #[cfg(debug_assertions)]
     pub fn reply_state(&self, cx: &App) -> serde_json::Value {
         match &self.reply {
@@ -179,13 +153,9 @@ impl Workspace {
         }
     }
 
-    /// The pill, the prompt or the confirmation, over the chat where the
-    /// selection was.
     pub fn render_reply(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let reply = self.reply.as_ref()?;
         let (Reply::Pill(selected) | Reply::Prompt { selected, .. }) = reply;
-        // The notebook's web view covers anything drawn over its pane, so
-        // these stay inside the reply's column.
         let agent = self.sessions.iter().find(|s| s.key == selected.key).map_or_else(crate::agent::Agent::default, |s| s.agent);
         let column = self.sessions.iter().find(|s| s.key == selected.key).and_then(|s| s.reply_bounds(selected.entry, cx));
         let prompt_width = column.map_or(px(PROMPT_WIDTH), |c| c.size.width.min(px(PROMPT_WIDTH)));
@@ -237,7 +207,6 @@ impl Workspace {
                 let focused = input.read(cx).focus_handle(cx).is_focused(window);
                 let empty = input.read(cx).value().trim().is_empty();
                 let working = self.active_session().is_some_and(|s| s.outbox.busy && !s.agent_waiting);
-                // Inside the prompt's frame, so a click on it isn't a click outside.
                 let menu = menu.then(|| {
                     div()
                         .self_end()
@@ -343,10 +312,6 @@ impl Workspace {
                                 .border_color(if focused { theme::focus_ring() } else { theme::control_edge() })
                                 .bg(theme::bg_page())
                                 .child(
-                                    // The Textarea's multi-line editor pads 8 px above and
-                                    // below and 10 px at the sides, and takes no size: no
-                                    // left padding here, and pulling it in by 2.5 px makes
-                                    // one line 34 px, as designed.
                                     div()
                                         .flex_1()
                                         .min_w_0()
@@ -368,11 +333,8 @@ impl Workspace {
     }
 }
 
-/// From this many quotes on, the cards above the composer take one line each.
 const COMPACT_FROM: usize = 4;
 
-/// A quote's text with a rule on its left: code as numbered lines (at most
-/// `max_lines`, each cut to fit), other text as `max_lines` wrapped lines.
 fn excerpt(quote: &Quote, max_lines: usize) -> Option<Div> {
     let text = quote.excerpt()?;
     let ruled = div().border_l_2().border_color(theme::composer_edge()).pl(px(8.)).min_w_0().overflow_hidden().text_color(theme::text_secondary());
@@ -424,9 +386,6 @@ fn icon_button(id: ElementId, label: &'static str, icon: impl IntoElement) -> St
 }
 
 impl Workspace {
-    /// The quotes waiting to go with the next message, above the composer: a
-    /// heading with Clear, then a card each in the order added (its source,
-    /// the excerpt or picture, the comment), one line each from four on.
     pub fn render_quote_cards(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let quotes: Vec<(usize, &Quote)> = self
             .composer
@@ -529,9 +488,6 @@ impl Workspace {
         Some(div().flex().flex_col().gap(px(6.)).child(heading).children(cards).into_any_element())
     }
 
-    /// A sent message's quotes, in its bubble before its words: a reply's as
-    /// a blockquote, the notebook's as a chip that shows the cell, then the
-    /// lines or the picture; each followed by its comment.
     pub fn render_sent_quotes(&self, key: u64, entry: usize, attachments: &[Attachment], cx: &mut Context<Self>) -> Vec<AnyElement> {
         let quotes = attachments.iter().enumerate().filter_map(|(i, a)| match a {
             Attachment::Quote(q) => Some((i, q)),

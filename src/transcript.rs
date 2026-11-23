@@ -1,5 +1,3 @@
-//! The transcript: messages, tool-call rows and runs, and the working line.
-
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -26,24 +24,20 @@ use crate::theme;
 use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
 use crate::theme::TabStop as _;
+use crate::theme::KeepsKeyboard as _;
 
-/// A run-state warning as the transcript shows it.
 pub(crate) fn run_state_line(warning: &pluto::RunWarning) -> String {
     format!("⚠ {warning}")
 }
 
-/// The space above the transcript's first entry.
 const LIST_TOP: Pixels = px(12.);
 
-/// `margin`: the chat column's side margin (main.rs's `chat_margin`), so the
-/// transcript lines up with the composer area in one centred column.
 pub fn render_transcript(session: &Session, margin: Pixels, window: &Window, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     session.sync_list();
     if motion::quiet() {
         session.settle_arrivals();
     }
     motion::follow(&session.glide, &session.list, LIST_TOP, window, cx);
-    // Every reply starts parsing now, so it has its height before it is first measured.
     for (ix, entry) in session.entries.iter().enumerate() {
         if let Entry::Agent { text, .. } = entry {
             session.reply_text(ix, text, cx);
@@ -58,13 +52,11 @@ pub fn render_transcript(session: &Session, margin: Pixels, window: &Window, cx:
                 let Some(entry) = session.entries.get(ix).filter(|_| session.pinned_plan() != Some(ix)) else {
                     return div().into_any_element();
                 };
-                // A run of tool calls is drawn whole at its first entry.
                 let element = match runs::run_at(&session.entries, ix) {
                     Some(run) if run.start == ix => render_run(session, run, window, cx),
                     Some(_) => None,
                     None => render_entry(this, session, ix, entry, window, cx),
                 };
-                // A message's own row of actions (Copy, its time) makes most of the gap below it.
                 let message = matches!(entry, Entry::User { .. } | Entry::Agent { .. });
                 let fade = session.arrival(ix).map(|at| motion::eased(at, theme::motion_fast(), window));
                 match element {
@@ -84,9 +76,6 @@ pub fn render_transcript(session: &Session, margin: Pixels, window: &Window, cx:
     .pt(LIST_TOP)
 }
 
-/// The floating button above the composer while the view has left the end
-/// of the transcript: "3 new messages ↓" after a replay added some below,
-/// else "Jump to latest ↓". It scrolls to the end, which follows again.
 pub fn render_jump(session: &Session, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let at_end = session.list.is_scrolled_to_end();
     if session.below.get().is_some() && crate::transcript_copy::clears_below(session.reached_end.take(), session.list.is_following_tail(), at_end) {
@@ -133,10 +122,6 @@ pub fn render_jump(session: &Session, cx: &mut Context<Workspace>) -> Option<Any
     )
 }
 
-/// The working line: an orbit, then what the agent is doing and for how long
-/// ("Adding `residuals` · 12s"), or nothing while it waits on the user.
-/// `offline_since`: the network went away then; a turn that has heard nothing
-/// since is waiting for it. `margin`: the chat column's side margin.
 pub fn render_activity(session: &Session, offline_since: Option<Instant>, margin: Pixels, cx: &App) -> Option<impl IntoElement + use<>> {
     let activity = activity(session, offline_since)?;
     let id = ElementId::NamedInteger("orbit".into(), session.key);
@@ -158,20 +143,15 @@ pub fn render_activity(session: &Session, offline_since: Option<Instant>, margin
     )
 }
 
-/// The working line's words.
 pub(crate) struct Activity {
-    /// Waiting for the network, not working.
     pub waiting: bool,
     pub verb: String,
-    /// A cell or file name.
     pub object: Option<String>,
-    /// "· 12s".
     pub took: Option<String>,
 }
 
 pub(crate) fn activity(session: &Session, offline_since: Option<Instant>) -> Option<Activity> {
     let since = session.busy_since?;
-    // The approval card above the composer says it all.
     if session.needs_approval() {
         return None;
     }
@@ -184,26 +164,20 @@ pub(crate) fn activity(session: &Session, offline_since: Option<Instant>) -> Opt
     Some(Activity { waiting: false, verb, object, took: Some(format!("· {}", elapsed(since.elapsed().as_secs()))) })
 }
 
-/// "12s", "1m 05s".
 pub(crate) fn elapsed(secs: u64) -> String {
     if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) }
 }
 
 const ORBIT: f32 = 14.;
 
-/// User messages taller than this many wrapped lines fold to their first
-/// `FOLD_TO` lines, so the transcript shows mostly the agent's replies.
 const FOLD_AFTER: usize = 12;
 const FOLD_TO: usize = 10;
 const USER_BUBBLE_PAD_X: f32 = 12.;
 
-/// A user bubble's widest: most of the chat column, as in Claude's apps.
 fn bubble_width(chat_width: f32) -> f32 {
     ((chat_width - 2. * crate::chat_margin(chat_width)).min(crate::CHAT_CONTENT_MAX) * 0.85).max(200.)
 }
 
-/// How many lines `text` wraps to inside a user bubble. The bubble sets its
-/// font itself: list items don't see the ancestors' text style here.
 fn bubble_lines(text: &SharedString, width: f32, window: &Window) -> usize {
     let style = TextStyle { font_family: theme::SANS.into(), ..window.text_style() };
     let wrap = px(width - 2. * USER_BUBBLE_PAD_X);
@@ -213,16 +187,11 @@ fn bubble_lines(text: &SharedString, width: f32, window: &Window) -> usize {
         .map_or(0, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum())
 }
 
-/// How long the slash command starting a sent message is ("/compact"), when
-/// it is one Claude Code knows.
 fn sent_command(session: &Session, text: &str) -> Option<usize> {
     let name = text.strip_prefix('/')?.split(char::is_whitespace).next()?;
     (session.commands.iter().any(|c| c.name == name) || crate::slash::hidden(name)).then(|| name.len() + 1)
 }
 
-/// A sent message's words, as written; a command at the start in the code
-/// font, tinted as it was in the box.
-/// A sent message's words, as a node a screen reader reads (#81); `id` is the entry's.
 fn user_text(session: &Session, id: ElementId, text: &SharedString) -> AnyElement {
     let Some(len) = sent_command(session, text) else { return gpui::Text::new(id, text.clone()).into_any_element() };
     let color: Hsla = theme::text_primary().into();
@@ -302,12 +271,8 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .flex()
             .flex_col()
             .gap(px(2.))
-            // The markdown takes the ambient text style: without this it was the
-            // window's 13 px, so it didn't follow the chat's text size.
             .text_size(theme::chat_body())
             .line_height(theme::chat_line_body())
-            // The markdown view makes no accessibility node of its own, so a
-            // screen reader reads the reply from here (#81).
             .child(div().id(id("agent-text")).role(Role::Article).aria_label(text.clone()).child(markdown(&session.reply_text(ix, text, cx), this.settings.layout.chat_width, cx)))
             .child(message_actions(session, ix, text.clone(), *at, cx))
             .into_any_element(),
@@ -366,14 +331,11 @@ fn render_entry(this: &Workspace, session: &Session, ix: usize, entry: &Entry, w
             .child(div().text_size(theme::chat_meta()).text_color(muted).child(crate::approval::progress(entries)))
             .children(crate::approval::plan_rows(entries))
             .into_any_element(),
-        // Pending: shown as the approval card above the composer (render_approval).
         Entry::Permission { .. } => return None,
         Entry::Failed(failed) => return render_failed(key, ix, failed, session.agent, cx),
     })
 }
 
-/// A turn that didn't finish: its card (Try again, Continue, Details), or
-/// the quiet note after a restart. A card whose Try again was pressed goes.
 fn render_failed(key: u64, ix: usize, failed: &Failed, agent: crate::agent::Agent, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     let run = move |this: &mut Workspace, cx: &mut Context<Workspace>| {
@@ -413,7 +375,6 @@ fn render_failed(key: u64, ix: usize, failed: &Failed, agent: crate::agent::Agen
     }
 }
 
-/// The line under a message sent with Cmd+Enter while the agent worked.
 pub(crate) fn delivery_note(delivery: Delivery, agent: crate::agent::Agent) -> Option<&'static str> {
     match delivery {
         Delivery::Turn => None,
@@ -422,12 +383,8 @@ pub(crate) fn delivery_note(delivery: Delivery, agent: crate::agent::Agent) -> O
     }
 }
 
-/// A message, for its actions (and a reply's code blocks' Copy) to show on hover.
 const MESSAGE: &str = "message";
 
-/// Under a message, shown while it's hovered: Copy, and how long ago it was
-/// sent ("just now", "5 min ago"; the clock time on hover). Replayed history
-/// has no times.
 fn message_actions(session: &Session, ix: usize, text: String, at: Option<SystemTime>, cx: &mut Context<Workspace>) -> AnyElement {
     let key = session.key;
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
@@ -449,6 +406,7 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
             .hover(|s| s.bg(theme::bg_raised()))
             .track_focus(&session.row_focus(ix, cx))
             .tab_stop(true)
+            .keeps_keyboard_on_click()
             .focus_visible(|s| s.opacity(1.).shadow(theme::ring(theme::bg_page())))
             .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
             .child(crate::new_session::glyph(if copied { crate::new_session::Glyph::Check } else { crate::new_session::Glyph::Copy }, theme::text_faint()))
@@ -476,14 +434,9 @@ fn message_actions(session: &Session, ix: usize, text: String, at: Option<System
     div().flex().items_center().gap(px(4.)).h(theme::chat_px(20.)).children(copy).children(time).into_any_element()
 }
 
-/// An agent reply's markdown, with a copy button on each code block. A link
-/// to a cell (`notebook://…/cell/<id>`) is a pill that shows that cell in the
-/// notebook (`CellLinks`). A finished `mermaid` block is drawn as a diagram
-/// (diagram.rs).
 fn markdown(state: &Entity<TextViewState>, chat_width: f32, cx: &mut Context<Workspace>) -> TextView {
     let workspace = cx.entity().downgrade();
     let link = move |url: &SharedString, event: &ClickEvent, _: &mut Window, cx: &mut App| match crate::annotate::linked_cell(url) {
-        // Setting a handler skips the library's own check of which button clicked.
         _ if !activates(event) => {}
         Some(cell) => {
             let cell = cell.to_owned();
@@ -492,7 +445,6 @@ fn markdown(state: &Entity<TextViewState>, chat_width: f32, cx: &mut Context<Wor
         None => crate::platform::open_url(url, cx),
     };
     let cell_links = CellLinks(cx.entity().downgrade());
-    // The diagram's card pads it by 10 px on each side.
     let width = (chat_width - 2. * crate::chat_margin(chat_width)).min(crate::CHAT_CONTENT_MAX) - 20.;
     TextView::new(state)
         .style(markdown_style())
@@ -503,7 +455,6 @@ fn markdown(state: &Entity<TextViewState>, chat_width: f32, cx: &mut Context<Wor
         .markdown_block_parser(diagram::parse_block)
         .markdown_block_renderer(diagram::NODE, move |node, _, _| {
             let Some(block) = node.data::<diagram::Block>() else { return div().into_any_element() };
-            // The parser drew it, so this holds; if it ever doesn't, show the source.
             let Ok(d) = diagram::fitted(&block.source, width) else {
                 return div().font_family(theme::MONO).text_size(theme::chat_code()).whitespace_normal().child(block.source.clone()).into_any_element();
             };
@@ -520,15 +471,11 @@ fn markdown(state: &Entity<TextViewState>, chat_width: f32, cx: &mut Context<Wor
                         .aspect_ratio(d.width / d.height)
                         .aria_label(node.accessibility_name().to_owned()),
                 )
-                // Its own id: the library gives a custom block no id of its own, so
-                // two diagrams' buttons named alike were one to GPUI, and a
-                // click on the second never reached its handler.
                 .child(copy_button(("copy-diagram", node.source_range().map_or(0, |r| r.start)).into(), block.source.clone(), "Copy diagram source"))
                 .into_any_element()
         })
 }
 
-/// The Copy button in a code block's or a diagram's corner, shown on hover.
 fn copy_button(id: ElementId, text: String, label: &'static str) -> impl IntoElement {
     div()
         .id(id)
@@ -540,9 +487,6 @@ fn copy_button(id: ElementId, text: String, label: &'static str) -> impl IntoEle
         .font_family(theme::SANS)
         .text_size(theme::chat_meta_small())
         .text_color(theme::text_faint())
-        // Out of the flow so the library's opaque holder for it stays empty and
-        // doesn't hide the code's top-right corner while the button is invisible.
-        // Changing display on hover instead panics when hover flips mid-frame.
         .absolute()
         .top_0()
         .right_0()
@@ -550,9 +494,9 @@ fn copy_button(id: ElementId, text: String, label: &'static str) -> impl IntoEle
         .bg(theme::bg_card())
         .opacity(0.)
         .group_hover(MESSAGE, |s| s.opacity(1.))
-        // Shown while it has the keyboard, like on hover.
         .focusable()
         .tab_stop(true)
+        .keeps_keyboard_on_click()
         .focus_visible(|s| s.opacity(1.).shadow(theme::ring(theme::bg_page())))
         .hover(|s| s.text_color(theme::text_primary()).bg(theme::bg_raised()))
         .button_text("Copy")
@@ -560,19 +504,13 @@ fn copy_button(id: ElementId, text: String, label: &'static str) -> impl IntoEle
         .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone())))
 }
 
-/// The name of a reply's cell-link nodes.
 const CELL_LINK: &str = "cell-link";
 
-/// A cell link's cell id and the agent's words for it.
 struct CellLink {
     cell: String,
     words: SharedString,
 }
 
-/// Draws a reply's links to cells as pills: the agent's words after a cell
-/// glyph, in the accent colour. Clicking one shows the cell in the notebook.
-/// A cell the shown notebook doesn't have is a faded, struck-through pill
-/// that doesn't click.
 struct CellLinks(WeakEntity<Workspace>);
 
 impl MarkdownPlugin for CellLinks {
@@ -604,10 +542,8 @@ impl MarkdownPlugin for CellLinks {
             .child(crate::new_session::glyph(crate::new_session::Glyph::Code, color))
             .child(div().when(gone, |d| d.line_through()).child(link.words.clone()));
         if gone {
-            // Also a link to another notebook's cell, or a made-up id.
             return pill.tooltip(|window, cx| Tooltip::new("This cell isn't in this notebook").build(window, cx)).into_any_element();
         }
-        // Tab reaches it and Enter or Space presses it, as with any button.
         let focus = window.use_keyed_state(SharedString::from(format!("cell-link-focus-{}-{}", link.cell, node.source_range().map_or(0, |r| r.start))), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
         let workspace = self.0.clone();
         let cell = link.cell.clone();
@@ -624,16 +560,12 @@ impl MarkdownPlugin for CellLinks {
     }
 }
 
-/// Whether the shown session's notebook has this cell, as its runtime last
-/// said: `None` when the app doesn't know that notebook's cells yet.
 fn cell_here(workspace: &Workspace, cell: &str) -> Option<bool> {
     let notebook = workspace.active_session()?.notebook.as_deref()?;
     let cells = workspace.connections.values().find_map(|c| c.cells.get(notebook)?.as_array())?;
     Some(cells.iter().any(|c| c["cell_id"] == cell))
 }
 
-/// Whether a click opens a link, as the text view decides without a handler:
-/// the left or middle button, a key, or a touch that isn't a long press.
 fn activates(event: &ClickEvent) -> bool {
     match event {
         ClickEvent::Mouse(click) => matches!(click.up.button, MouseButton::Left | MouseButton::Middle),
@@ -642,10 +574,6 @@ fn activates(event: &ClickEvent) -> bool {
     }
 }
 
-/// Markdown on the chat type scale: headings at 16 px (h1, h2) and 14 px (h3
-/// on), code in JuliaMono 13 on the card colour, tag-coloured inline code,
-/// compact tables with a muted 13 px header row. Borders, links and
-/// backgrounds come from the component theme (set in main).
 pub(crate) fn markdown_style() -> TextViewStyle {
     let code_block = StyleRefinement::default()
         .p(px(10.))
@@ -666,20 +594,13 @@ pub(crate) fn markdown_style() -> TextViewStyle {
         .inline_code(HighlightStyle { background_color: Some(theme::bg_tag().into()), ..Default::default() })
 }
 
-/// Inline code's box reaches 2 px past its text, as it did before gpui-base 0.9: its default of
-/// 4 px a side put a gap before the punctuation after a span ("`84` ." for "`84`."), and none
-/// left the box hugging the glyphs, too tight to see.
 pub(crate) fn inline_code_style() -> StyleRefinement {
     StyleRefinement::default().px(px(2.))
 }
 
-/// A thought's text scrolls past this height.
 const DETAIL_MAX_H: f32 = 160.;
 const DETAIL_LINE: f32 = 16.;
 
-/// A run of tool calls: one line summing it up ("Read 2 files, ran a command ›")
-/// that opens into a bordered list with a row per call. While the run is still
-/// going, its latest call shows under the line. A lone call is just its row.
 fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Window, cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let key = session.key;
     let rows: Vec<usize> = run
@@ -691,7 +612,6 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
         })
         .collect();
     match rows[..] {
-        // Only hidden calls: no row, and no gap for one.
         [] => return None,
         [only] => return Some(render_row(session, only, true, window, cx)),
         _ => {}
@@ -701,11 +621,9 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
     let live = session.busy_since.is_some() && run.end == session.entries.len();
     let start = run.start;
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | start as u64);
-    // One run of text, so a long summary wraps with the failures and the chevron in line.
     let (mut text, counts) = run_summary(session, run.clone());
     let aria_label = format!("{text}, {}", if open { "expanded" } else { "collapsed" });
     text.push_str(if open { " ⌄" } else { " ›" });
-    // As calls arrive the summary is rewritten: the old words fade out over the new.
     let words = |(text, counts): (String, Vec<std::ops::Range<usize>>)| {
         let highlights: Vec<_> = counts.into_iter().map(|range| (range, HighlightStyle { color: Some(theme::danger().into()), ..Default::default() })).collect();
         StyledText::new(text).with_highlights(highlights)
@@ -733,7 +651,6 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
         (false, true) => calls.last().copied().into_iter().collect(),
         (false, false) => Vec::new(),
     };
-    // Folded while it runs, the run shows its latest call: the one it replaces fades out over it.
     let latest = (!open && live).then(|| shown.first().copied()).flatten();
     let replaced = latest.and_then(|ix| motion::changed(id("run-latest"), &ix, window, cx)).filter(|(was, _)| *was < session.entries.len());
     let opened = motion::changed(id("run-open"), &open, window, cx).filter(|(was, _)| !was).map(|(_, p)| p);
@@ -743,21 +660,16 @@ fn render_run(session: &Session, run: std::ops::Range<usize>, window: &mut Windo
             match replaced {
                 Some((was, p)) => row
                     .relative()
-                    // Under the new row, which takes the clicks.
                     .child(div().absolute().top(px(4.)).left(px(8.)).right(px(8.)).opacity(1. - p).child(render_row(session, was, true, window, cx)))
                     .child(div().opacity(p).child(render_row(session, i, true, window, cx))),
                 None => row.child(render_row(session, i, true, window, cx)),
             }
         }))
     });
-    // The header appears when a second call joins the first.
     let header = if live { motion::arriving(header, id("run-header"), false).into_any_element() } else { header.into_any_element() };
     Some(div().flex().flex_col().gap(px(6.)).child(header).children(list).into_any_element())
 }
 
-/// The end-of-turn card: a row per cell the turn changed (icon, name, a
-/// `new` or `deleted` tag, ± lines), which shows the cell in the notebook. A
-/// deleted cell has nothing to show.
 fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::ChangedCell], cx: &mut Context<Workspace>) -> AnyElement {
     use celldiff::CellChange;
     let mono = |text: String, color: Rgba| div().flex_none().font_family(theme::MONO).text_size(theme::chat_meta_small()).text_color(color).child(text);
@@ -769,8 +681,6 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
             CellChange::Edited => "",
             CellChange::Deleted => ", deleted",
         };
-        // A deleted row has nothing to show, so its label stays descriptive
-        // instead of naming an action it can't do.
         let label = if deleted { format!("{}{tag_text}, {} added, {} removed", cell.name, cell.added, cell.removed) } else { format!("Show {} in the notebook", cell.name) };
         let id = cell.cell.clone();
         div()
@@ -805,7 +715,6 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
             })
     });
     let card = div().flex().flex_col().rounded(px(6.)).border_1().border_color(theme::border()).overflow_hidden().children(rows);
-    // Restore: what it does, or where it got to, and the button while it can be pressed.
     let Some((line, pressable)) = session.restore_footer(ix) else {
         return card.into_any_element();
     };
@@ -824,7 +733,6 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
         .when(pressable, |d| {
             d.child(
                 crate::signin::button(ElementId::NamedInteger("restore-turn".into(), key << 32 | ix as u64), "Restore", crate::signin::Look::Secondary)
-                    // On the chat's scale, as the card around it is.
                     .h(theme::chat_px(26.))
                     .px(theme::chat_px(10.))
                     .rounded(theme::chat_px(6.))
@@ -838,10 +746,8 @@ fn render_changes(session: &Session, key: u64, ix: usize, cells: &[celldiff::Cha
     card.child(footer).into_any_element()
 }
 
-/// A tool call's folded row: its line, its edits' ± counts, and its state at the end.
 pub(crate) struct ToolRow {
     pub line: ToolLine,
-    /// A file edit's diff (a notebook call's edits are its `diffs`).
     pub file_diff: Option<celldiff::CellDiff>,
     pub added: usize,
     pub removed: usize,
@@ -854,7 +760,6 @@ pub(crate) enum RowState {
     Running,
     Denied,
     Failed,
-    /// The call went through, and a cell it ran or read has an error.
     CellError,
 }
 
@@ -883,8 +788,6 @@ pub(crate) fn tool_row(session: &Session, entry: &Entry) -> Option<ToolRow> {
     let running = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
     let line = if pluto { pluto_line(title, diffs, args, output.as_ref(), running, &name) } else { running_line(tool_line(title, *kind, path.as_deref(), args), title, *kind, args, running) };
     let failed = runs::failed(*status, title, output.as_ref());
-    // A live denial is known from the approval card's answer; a replayed one
-    // only from the call's raw result, which carries no such answer.
     let state = if *approval == Some(Approval::Denied) || runs::denied(output.as_ref()) {
         Some(RowState::Denied)
     } else if failed {
@@ -899,9 +802,6 @@ pub(crate) fn tool_row(session: &Session, entry: &Entry) -> Option<ToolRow> {
     Some(ToolRow { line, file_diff, added, removed, failed, state })
 }
 
-/// A run of tool calls' folded header: what the calls did, then how many
-/// failed or were denied ("Added 2 cells, ran 1 cell, 1 failed"), and the
-/// ranges of the counts to show in red.
 pub(crate) fn run_summary(session: &Session, run: std::ops::Range<usize>) -> (String, Vec<std::ops::Range<usize>>) {
     let mut failed = 0;
     let mut denied = 0;
@@ -934,18 +834,14 @@ pub(crate) fn run_summary(session: &Session, run: std::ops::Range<usize>) -> (St
     (text, counts)
 }
 
-/// Whether a run of tool calls is open, by its first call.
 pub(crate) fn run_open(session: &Session, run: &std::ops::Range<usize>) -> bool {
     session.entries[run.clone()].iter().find_map(|e| if let Entry::Tool { id, .. } = e { Some(id) } else { None }).is_some_and(|id| session.open_runs.contains(id))
 }
 
-/// One call's line (grey verb, what it acted on, ± counts, `›`), opening in
-/// place to its edits or input, then its output; or a stretch of thinking.
 fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, cx: &mut Context<Workspace>) -> AnyElement {
     let (key, entry) = (session.key, &session.entries[ix]);
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key << 32 | ix as u64);
     let toggle = cx.listener(move |this: &mut Workspace, _: &ClickEvent, _: &mut Window, cx: &mut Context<Workspace>| this.with_session(key, cx, |s| s.toggle(ix)));
-    // Opened, its details fade in; closing is at once.
     let expanded_now = matches!(entry, Entry::Thought { expanded: true, .. } | Entry::Tool { expanded: true, .. });
     let opening = motion::changed(id("open"), &expanded_now, window, cx).filter(|(was, _)| !was).map(|(_, p)| p);
     let line = |name: &'static str| {
@@ -994,7 +890,6 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
         Entry::Tool { title, status, output, .. } if runs::hidden(title, *status, output.as_ref()) => div().into_any_element(),
         Entry::Tool { id: call, title, kind, path, input, output, diffs, expanded, approval, .. } => {
             let args = input.as_ref().unwrap_or(&serde_json::Value::Null);
-            // An opened row that was asked about ends with the answer and its time.
             let answered = (*approval).zip(session.asks.answered_at.get(call)).filter(|_| *expanded).map(|(approval, at)| {
                 let secs = at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
                 div().text_size(theme::chat_meta()).text_color(theme::text_muted()).child(answered_line(approval, &crate::when::clock(secs)))
@@ -1023,7 +918,6 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
             });
             let call_box = (*expanded).then(|| {
                 let details = details::details(title, *kind, path.as_deref(), args, output.as_ref(), failed, !all_diffs.is_empty(), &name);
-                // The list's item that holds this row: its run's first entry.
                 let item = runs::run_at(&session.entries, ix).map_or(ix, |run| run.start);
                 render_call_box(details, &all_diffs, call_key(key, &call.0), (session.list.clone(), item), window, cx)
             }).flatten();
@@ -1066,9 +960,6 @@ fn render_row(session: &Session, ix: usize, in_run: bool, window: &mut Window, c
     }
 }
 
-/// A stretch of thinking's line: "Thought for 8s" once it's over, "Thinking"
-/// while it goes on and inside a folded run of calls, "Thought" when replayed
-/// history doesn't say how long.
 pub(crate) fn thought_label(in_run: bool, started: Option<Instant>, took: Option<Duration>) -> String {
     match (in_run, started, took) {
         (true, _, _) | (false, Some(_), None) => "Thinking".into(),
@@ -1077,18 +968,10 @@ pub(crate) fn thought_label(in_run: bool, started: Option<Instant>, took: Option
     }
 }
 
-/// An opened call's output stops at this many lines, unless Show all.
 const DETAIL_LINES: f32 = 12.;
-/// …and never takes more than this share of the window's height.
 const DETAIL_MAX_SHARE: f32 = 0.4;
-/// The width of the fades at a box's cut edges.
 const FADE: f32 = 32.;
 
-/// An opened call box's state (Show all, where each part is scrolled to), by
-/// element id. Unlike `use_keyed_state`, it isn't dropped when the list stops
-/// drawing a box scrolled far off screen, so the box comes back as it was
-/// (#191). The ids hold the session's key and the entry's index, and a box
-/// holds a few small values, so the map only grows with boxes opened.
 #[derive(Default)]
 struct KeptStates(std::collections::HashMap<ElementId, AnyEntity>);
 
@@ -1104,8 +987,6 @@ fn kept_state<T: 'static>(id: ElementId, cx: &mut App, init: impl FnOnce(&mut Ap
     kept
 }
 
-/// The ids of session `key`'s box for tool call `call`, by the call's id rather than its entry's
-/// index: a replay or a copy renumbers the entries, and another box would get this one's kept state.
 fn call_key(key: u64, call: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1113,30 +994,21 @@ fn call_key(key: u64, call: &str) -> u64 {
     hasher.finish()
 }
 
-/// An opened call as one box: what it was asked (the command, the file) on a
-/// strip at the top; its edits and output below, up to `DETAIL_LINES` lines
-/// unless shown in full, each line on one line, scrolling sideways; and a
-/// footer with how it ended, how long the output is, Show all and Copy.
 fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key: u64, (list, item): (ListState, usize), window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     use details::Part;
     let id = |name: &'static str| ElementId::NamedInteger(name.into(), key);
     let details::Details { input, output, status, cut } = details;
     let (strip, code_in): (Vec<Part>, Vec<Part>) = input.into_iter().partition(|p| !matches!(p, Part::Code(_)));
-    // Errors are sentences: they wrap, under the output.
     let (errors, output): (Vec<Part>, Vec<Part>) = output.into_iter().partition(|p| matches!(p, Part::Error(_)));
     let body: Vec<Part> = code_in.into_iter().chain(output).collect();
     if strip.is_empty() && body.is_empty() && errors.is_empty() && diffs.is_empty() && status.is_none() {
         return None;
     }
-    // Copy takes what the box shows; when the output was cut, the footer says so.
     let copy_text = body.iter().chain(&errors).map(details::Part::text).collect::<Vec<_>>().join("\n");
     let shown_text = body.iter().map(details::Part::text).collect::<Vec<_>>().join("\n");
     let show_all = kept_state(id("call-all"), cx, |_| false);
     let all = *show_all.read(cx);
     let line = theme::chat_px(DETAIL_LINE);
-    // The whole box keeps within its share of the window (#191): the output's cap leaves room
-    // for the strip above and the footer below, as near as their rows can be counted before
-    // layout. Never below three lines.
     let strip_rows: usize = strip.iter().map(|p| if let Part::Fields(rows) = p { rows.len() } else { 1 }).sum();
     let strip_height = if strip_rows == 0 { px(0.) } else { (line + px(2.)) * strip_rows as f32 + px(13.) };
     let footer_height = if !copy_text.is_empty() || status.is_some() { line + px(9.) } else { px(0.) };
@@ -1155,9 +1027,6 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .children(strip.into_iter().enumerate().map(|(n, part)| strip_part(part, ElementId::NamedInteger(format!("call-strip-{n}").into(), key), cx)))
     });
 
-    // Diffs, output and errors share the cap, so the box stays within it (#308): what one
-    // doesn't need (a one-line output) goes to the others. Errors wrap, so they can't be
-    // measured before layout and take a full share.
     let diffs_need = (!diffs.is_empty()).then(|| {
         let rows: usize = diffs.iter().map(|d| d.lines.len().min(DIFF_LINES) + 1 + (d.lines.len() > DIFF_LINES) as usize).sum();
         line * rows as f32 + px(6.) * diffs.len() as f32 + px(6.)
@@ -1166,7 +1035,6 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     let caps = share_cap(cap.into(), &[diffs_need.map(f32::from), output_need.map(f32::from), (!errors.is_empty()).then_some(f32::INFINITY)]);
     let [diffs_cap, output_cap, errors_cap] = caps.map(px);
 
-    // The diffs scroll within their share; Show all opens them, past the lines a closed box draws.
     let diffs_handle = kept_state(id("call-diffs-scroll"), cx, |_| ScrollHandle::new()).read(cx).clone();
     let (diffs_offset, diffs_max) = (diffs_handle.offset(), diffs_handle.max_offset());
     let diffs_cut = !all && (diffs_max.y > px(0.5) || diffs.iter().any(|d| d.lines.len() > DIFF_LINES));
@@ -1187,13 +1055,11 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .when(!all && diffs_max.y > px(0.5) && diffs_offset.y > -diffs_max.y + px(1.), |d| d.child(fade(FadeEdge::Bottom, theme::bg_sunken())))
     });
 
-    // The output: one area that scrolls both ways, faded where it's cut.
     let handle = kept_state(id("call-out-scroll"), cx, |_| ScrollHandle::new()).read(cx).clone();
     let (offset, max) = (handle.offset(), handle.max_offset());
     let cut_below = !all && max.y > px(0.5);
     let more_below = cut_below && offset.y > -max.y + px(1.);
     let more_right = max.x > px(0.5) && offset.x > -max.x + px(1.);
-    // The marker `details` adds where it cut ("…") isn't a line of the output.
     let lines = shown_text.lines().count() - (cut && shown_text.ends_with("\n…")) as usize;
     let output_area = (!body.is_empty()).then(|| {
         let parts = div().flex().flex_col().items_start().gap(px(4.)).px(px(10.)).py(px(6.)).children(body.into_iter().map(output_part));
@@ -1206,7 +1072,6 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .when(more_right, |d| d.child(fade(FadeEdge::Right, theme::bg_sunken())))
     });
 
-    // Errors wrap, under the output, within their share of the cap. Show all opens them too.
     let errors_handle = kept_state(id("call-errors-scroll"), cx, |_| ScrollHandle::new()).read(cx).clone();
     let (err_offset, err_max) = (errors_handle.offset(), errors_handle.max_offset());
     let errors_cut = !all && !errors.is_empty() && err_max.y > px(0.5);
@@ -1247,7 +1112,6 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
             .text_size(theme::chat_meta_small())
             .text_color(theme::text_faint())
             .children(status.map(|s| div().flex_none().text_color(theme::danger()).child(s)))
-            // The output's length, when the output is what's cut or opened, not only a diff.
             .when(cut || (lines > 0 && (cut_below || errors_cut || (all && output_long))), |d| {
                 let count = match (cut, lines) {
                     (true, n) => format!("first {n} {}", if n == 1 { "line" } else { "lines" }),
@@ -1268,10 +1132,6 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
                         .hover(|s| s.text_color(theme::text_primary()))
                         .child(if all { "Show less" } else { "Show all" })
                         .on_click(move |_, _, cx| toggle.update(cx, |all, cx| {
-                            // Show less with the box's top scrolled away: the
-                            // view moves up by what the box loses, so its
-                            // footer stays where it was, under the pointer.
-                            // While following the turn's end, the list stays there.
                             let top = list.logical_scroll_top();
                             if *all && !list.is_following_tail() && top.item_ix == item {
                                 let over = |handle: &ScrollHandle, cap: Pixels| (handle.bounds().size.height - cap).max(px(0.));
@@ -1321,9 +1181,6 @@ fn render_call_box(details: details::Details, diffs: &[&celldiff::CellDiff], key
     )
 }
 
-/// Splits `cap` among a box's parts by what each needs (`None`: not there; infinity: as much
-/// as it can get): a part that needs less than an even share gets just that, and the rest
-/// share what's left evenly.
 fn share_cap(cap: f32, needs: &[Option<f32>; 3]) -> [f32; 3] {
     let mut caps = [0.0; 3];
     let mut open: Vec<usize> = (0..3).filter(|&i| needs[i].is_some()).collect();
@@ -1352,7 +1209,6 @@ enum FadeEdge {
     Right,
 }
 
-/// A gradient over a scrolling area's cut edge, to its background colour.
 fn fade(edge: FadeEdge, bg: Rgba) -> Div {
     let d = div().absolute();
     match edge {
@@ -1361,9 +1217,6 @@ fn fade(edge: FadeEdge, bg: Rgba) -> Div {
     }
 }
 
-/// One thing on a call's top strip: the command after a `$`, or label and
-/// value rows (a path shortened to its folder and name, the whole path on
-/// hover), or a sentence. Each stays on one line and scrolls sideways.
 fn strip_part(part: details::Part, id: ElementId, cx: &mut App) -> AnyElement {
     use details::Part;
     let one_line = |content: AnyElement, id: ElementId, cx: &mut App| {
@@ -1409,7 +1262,6 @@ fn strip_part(part: details::Part, id: ElementId, cx: &mut App) -> AnyElement {
     }
 }
 
-/// A long path as its last folder and name: `…/growth/growth.csv`.
 fn short_path(value: &str) -> Option<String> {
     if !(value.starts_with('/') || value.starts_with('~') || value.contains(":\\")) {
         return None;
@@ -1418,7 +1270,6 @@ fn short_path(value: &str) -> Option<String> {
     (parts.len() > 2).then(|| format!("…/{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]))
 }
 
-/// One piece of a call's output, never wrapped: the box scrolls sideways.
 fn output_part(part: details::Part) -> AnyElement {
     use details::Part;
     let mono = |text: String, color: Rgba| div().whitespace_nowrap().text_color(color).child(text);
@@ -1436,7 +1287,6 @@ fn output_part(part: details::Part) -> AnyElement {
             }))
             .into_any_element(),
         Part::Line(text) => div().flex().whitespace_nowrap().font_family(theme::SANS).text_color(theme::text_muted()).children(text.split('`').enumerate().map(|(i, piece)| {
-            // Flex drops a piece's edge spaces; non-breaking ones survive.
             let piece = piece.replace(' ', "\u{a0}");
             if i % 2 == 1 { div().font_family(theme::MONO).text_color(theme::text_secondary()).child(piece) } else { div().child(piece) }
         }))
@@ -1455,10 +1305,6 @@ fn output_part(part: details::Part) -> AnyElement {
     }
 }
 
-/// Draws nothing; goes after the area it watches, so it sees its new extent.
-/// A scroll area learns how far it can scroll only as it's
-/// laid out, after the render that chose its fades and Show all; when that
-/// changed (opened, Show less, a resize or zoom), this draws the box once more.
 fn remeasure(handle: &ScrollHandle, used: Point<Pixels>) -> impl IntoElement {
     let handle = handle.clone();
     canvas(|_, _, _| {}, move |_, _, window, _| {
@@ -1471,31 +1317,22 @@ fn remeasure(handle: &ScrollHandle, used: Point<Pixels>) -> impl IntoElement {
     .size_0()
 }
 
-/// A panel that scrolls up to its max height, and hands the wheel on to the
-/// transcript only once it can't scroll further that way.
 fn scroll_y(mut panel: Stateful<Div>, window: &mut Window, cx: &mut App) -> Stateful<Div> {
     let key = panel.interactivity().element_id.clone().expect("scroll panels have an id");
     let handle = window.use_keyed_state(key, cx, |_, _| ScrollHandle::new()).read(cx).clone();
     hand_on(panel.overflow_y_scroll().track_scroll(&handle), handle)
 }
 
-/// A panel that scrolls both ways, one axis per gesture, so a swipe down
-/// over it scrolls it (then the transcript), and a sideways one scrolls it
-/// sideways and never the transcript.
 fn scroll_xy(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
     hand_on(panel.overflow_scroll().restrict_scroll_to_axis().track_scroll(&handle), handle)
 }
 
-/// A line that scrolls sideways; the wheel's up and down go to the transcript.
 fn scroll_x(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
     hand_on(panel.overflow_x_scroll().restrict_scroll_to_axis().track_scroll(&handle), handle)
 }
 
-/// A closed call box draws a diff's first lines only; Show all draws the rest.
 const DIFF_LINES: usize = 60;
 
-/// A cell edit as coloured lines: its +/− signs stay put while the code
-/// scrolls sideways under a long line. Only its first `DIFF_LINES` unless `all`.
 fn render_diff(diff: &celldiff::CellDiff, all: bool, id: ElementId, cx: &mut App) -> AnyElement {
     use celldiff::Change;
     let max_lines = if all { usize::MAX } else { DIFF_LINES };
@@ -1550,7 +1387,6 @@ fn render_diff(diff: &celldiff::CellDiff, all: bool, id: ElementId, cx: &mut App
         .into_any_element()
 }
 
-/// An opened row's answer: "Allowed at 14:02", "Denied at 14:06".
 pub(crate) fn answered_line(approval: Approval, clock: &str) -> String {
     let label = approval.label();
     let mut chars = label.chars();
@@ -1558,7 +1394,6 @@ pub(crate) fn answered_line(approval: Approval, clock: &str) -> String {
     format!("{capital} at {clock}")
 }
 
-/// A tool call as a verb: "Edited", "Ran", …; other tools keep their own title.
 fn tool_verb(title: &str) -> String {
     let Some(tool) = celldiff::notebook_tool(title) else { return title.to_string() };
     match tool {
@@ -1585,10 +1420,6 @@ fn tool_verb(title: &str) -> String {
     .to_string()
 }
 
-/// A notebook call's line: its verb, then the cells it changed or acted on, the
-/// command it ran, the file it read or the notebook it read. A running call's
-/// verb is in the present ("Adding `x`", or "Adding a cell" before its input
-/// arrives); a bare verb with nothing to name says what it acted on ("Read a cell").
 fn pluto_line(
     title: &str,
     diffs: &[celldiff::CellDiff],
@@ -1640,7 +1471,6 @@ fn pluto_object(
     }
 }
 
-/// A cell's name for the transcript, from its code after the edit (before, if deleted).
 fn cell_name(diff: &celldiff::CellDiff) -> String {
     match &diff.edit {
         Some(edit) => cell_label(edit.after.as_deref().or(edit.before.as_deref()).unwrap_or("")),
@@ -1648,27 +1478,19 @@ fn cell_name(diff: &celldiff::CellDiff) -> String {
     }
 }
 
-/// A tool call's collapsed line.
 pub(crate) struct ToolLine {
     pub verb: String,
-    /// What it acted on: a file name, pattern or command line (mono), or the
-    /// agent's own description of a command (not mono). One line.
     pub object: Option<String>,
     mono: bool,
-    /// The full path, shown on hover.
     full: Option<String>,
 }
 
-/// A non-notebook call's line: "Ran" + the agent's description or the command's
-/// first line; "Read" + a file name; "Searched" + the pattern; "Fetched" + the
-/// host; else the agent's title.
 fn tool_line(title: &str, kind: ToolKind, path: Option<&Path>, input: &serde_json::Value) -> ToolLine {
     let field = |name: &str| input[name].as_str().map(str::trim).filter(|s| !s.is_empty());
     let line = |verb: &str, object: Option<&str>, mono: bool| ToolLine { verb: verb.into(), object: object.map(first_line), mono, full: None };
     match kind {
         ToolKind::Execute => match field("description") {
             Some(description) => {
-                // "List files" → "Ran list files"; acronyms ("JSON …") keep their case.
                 let mut chars = description.chars();
                 let lower = match (chars.next(), chars.next()) {
                     (Some(first), Some(second)) if !second.is_uppercase() => format!("{}{}", first.to_lowercase(), &description[first.len_utf8()..]),
@@ -1692,7 +1514,6 @@ fn tool_line(title: &str, kind: ToolKind, path: Option<&Path>, input: &serde_jso
             }
         }
         ToolKind::Search => line("Searched", field("pattern").or(field("query")).or(Some(title)), true),
-        // Plan mode's end: the plan, by its title.
         ToolKind::SwitchMode if input["plan"].is_string() => {
             let plan = crate::approval::plan_title(input["plan"].as_str().unwrap_or(""));
             ToolLine { verb: "Plan".into(), object: plan, mono: false, full: None }
@@ -1708,8 +1529,6 @@ fn tool_line(title: &str, kind: ToolKind, path: Option<&Path>, input: &serde_jso
     }
 }
 
-/// A running call that names nothing yet (its input still on the way) says
-/// what it's doing ("Running a command"), not a bare past tense.
 fn running_line(mut line: ToolLine, title: &str, kind: ToolKind, input: &serde_json::Value, running: bool) -> ToolLine {
     if running
         && line.object.is_none()
@@ -1725,14 +1544,12 @@ fn url_host(url: &str) -> &str {
     rest.split(['/', '?', '#']).next().unwrap_or(rest)
 }
 
-/// The first non-blank line, with "…" when more follow.
 fn first_line(text: &str) -> String {
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     let first = lines.next().unwrap_or("").to_string();
     if lines.next().is_some() { format!("{first} …") } else { first }
 }
 
-/// A file edit's old and new text as a diff; a written file is all new.
 fn file_diff(kind: ToolKind, title: &str, path: Option<&Path>, input: &serde_json::Value) -> Option<celldiff::CellDiff> {
     if kind != ToolKind::Edit {
         return None;
@@ -1756,7 +1573,6 @@ mod tests {
         assert_eq!(super::share_cap(300., &[None, Some(1000.), None]), [0., 300., 0.], "one part takes the whole cap");
     }
 
-    // Not `super::*`: that brings in gpui's own `#[test]` macro.
     use super::{RowState, delivery_note, run_summary, tool_row};
     use crate::agent::Agent;
     use crate::hosts::Place;
@@ -1782,9 +1598,6 @@ mod tests {
     #[test]
     fn a_replayed_denial_is_told_apart_from_a_failure() {
         use agent_client_protocol::schema::v1::{ToolCallId, ToolCallStatus, ToolKind};
-        // The exact shape a reopened session replays: `status` failed and the
-        // call's raw output is Claude Code's denial text, with no approval
-        // answer to check (that's only ever known live).
         let mut s = Session::new(1, Place::local("/tmp"), None);
         s.entries.push(Entry::Tool {
             id: ToolCallId::new("t1"),

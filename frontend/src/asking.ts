@@ -1,10 +1,3 @@
-// The chat's card asks to run cells (docs/ui-spec.md, "Approval card"): the
-// asked-about cells get an orange line "Claude asks to run this." (their bar
-// is cells.ts's); the cells that would re-run after them "Re-runs after it"
-// in grey; and the cells it needs that never ran "Runs first: it hasn't run
-// yet", also in grey. The page tells the app whether an asked-about cell is
-// on screen, so the card offers "Show in notebook" only when it isn't.
-
 import { on, send } from "./bridge";
 import { onRedraw } from "./redraw";
 import { context } from "./state";

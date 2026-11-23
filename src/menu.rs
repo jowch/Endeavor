@@ -319,7 +319,7 @@ impl Workspace {
     /// "Allowed in this folder": the agent's rules for the session's folder in
     /// plain words, each with Remove. Endeavor keeps no copy; it reads the file.
     fn folder_rules_body(&self, key: u64, menu: &PopupMenu, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let heading = div().px(px(8.)).pt(px(4.)).pb(px(6.)).text_size(theme::size_meta()).font_weight(FontWeight::MEDIUM).child(theme::words("Allowed in this folder"));
+        let heading = div().px(px(8.)).pt(px(4.)).pb(px(6.)).text_size(theme::size_meta()).font_weight(FontWeight::MEDIUM).child(theme::words("allowed-in-this-folder", "Allowed in this folder"));
         let rows: Vec<AnyElement> = menu
             .rules
             .iter()
@@ -359,7 +359,7 @@ impl Workspace {
             })
             .collect();
         let empty = rows.is_empty().then(|| {
-            div().px(px(8.)).pb(px(6.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(theme::words("Nothing yet. Choosing “In this folder” on a prompt adds a rule here.")).into_any_element()
+            div().px(px(8.)).pb(px(6.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(theme::words("nothing-yet-choosing-in-this", "Nothing yet. Choosing “In this folder” on a prompt adds a rule here.")).into_any_element()
         });
         [heading.into_any_element()].into_iter().chain(rows).chain(empty).collect()
     }

@@ -1,10 +1,3 @@
-//! Signing in to Claude. First launch asks under the splash: the assistant
-//! (any one Endeavor can run here), then, for Claude, the kind of account,
-//! then the browser sign-in (`claude auth login`),
-//! which can be cancelled and reopened, and why one didn't finish. Later a
-//! sign-in that ran out shows as a card above the composer; the messages
-//! Claude couldn't answer wait and go once it's back.
-
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,13 +15,10 @@ use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
 use crate::theme::TabStop as _;
 
-/// The two kinds of Claude account the CLI signs in with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Method {
-    /// A Claude plan (Pro, Max, Team, Enterprise), at claude.ai.
     ClaudeAi,
-    /// An Anthropic Console account, paid by use.
     Console,
 }
 
@@ -40,7 +30,6 @@ impl Method {
         }
     }
 
-    /// "Signing in with a Claude plan".
     fn choice(self) -> &'static str {
         match self {
             Method::ClaudeAi => "a Claude plan",
@@ -48,7 +37,6 @@ impl Method {
         }
     }
 
-    /// Where the browser page is.
     fn site(self) -> &'static str {
         match self {
             Method::ClaudeAi => "claude.ai",
@@ -57,16 +45,11 @@ impl Method {
     }
 }
 
-/// Why a sign-in didn't finish, as far as the CLI's last line tells.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Reason {
-    /// The browser page closed, or nobody answered in time.
     BrowserClosed,
-    /// A Claude account without a plan that includes Claude Code.
     FreePlan,
-    /// A Console account without credit or access.
     ConsoleNoAccess,
-    /// No network: the offline state takes over and sign-in waits.
     Offline,
     Other,
 }
@@ -89,7 +72,6 @@ impl Reason {
         Reason::Other
     }
 
-    /// What happened, then what to do about it.
     pub fn says(self) -> (&'static str, Option<&'static str>) {
         match self {
             Reason::BrowserClosed => ("The browser page closed before sign-in finished.", None),
@@ -103,22 +85,18 @@ impl Reason {
     }
 }
 
-/// Claude Code's sign-in on this computer: how it signed in, or None when signed out.
 pub fn status() -> Result<Option<Method>, String> {
     Ok(profile()?.map(|p| p.method))
 }
 
-/// Who is signed in, as `claude auth status` tells it (Settings' Claude page).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     pub method: Method,
     pub email: Option<String>,
-    /// The plan's name, as people call it ("Claude Max").
     pub plan: String,
     pub org: Option<String>,
 }
 
-/// Claude Code's sign-in on this computer, with the account's details; None when signed out.
 pub fn profile() -> Result<Option<Profile>, String> {
     let out = crate::agent::claude_cli(&["auth", "status"])?.output().map_err(|e| e.to_string())?;
     let status: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("Couldn't read Claude's sign-in status: {e}"))?;
@@ -135,7 +113,6 @@ fn profile_of(status: &serde_json::Value) -> Result<Option<Profile>, String> {
     Ok(Some(Profile { method, email: text("email"), plan: plan_name(method, text("subscriptionType").as_deref()), org: text("orgName") }))
 }
 
-/// `subscriptionType` as the plan's name.
 pub fn plan_name(method: Method, subscription: Option<&str>) -> String {
     match (method, subscription) {
         (Method::Console, _) => "Anthropic Console, paid by use".into(),
@@ -148,31 +125,25 @@ pub fn plan_name(method: Method, subscription: Option<&str>) -> String {
     }
 }
 
-/// `claude auth logout` (blocking).
 fn log_out() -> Result<(), String> {
     let out = crate::agent::claude_cli(&["auth", "logout"])?.output().map_err(|e| e.to_string())?;
     if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()) }
 }
 
-/// Set on `claude auth login`: the CLI opens its sign-in page through `$BROWSER`,
-/// which is this app, so it can keep the page's address for "Open it again".
 const URL_FILE_ENV: &str = "ENDEAVOR_LOGIN_URL_FILE";
 
-/// Run as the CLI's `$BROWSER`: keep the address, then open it as usual.
 pub fn browser_shim() {
     let (Some(file), Some(url)) = (std::env::var_os(URL_FILE_ENV), std::env::args().nth(1)) else { return };
     let _ = std::fs::write(file, &url);
     std::process::exit(if open_in_browser(&url) { 0 } else { 1 });
 }
 
-/// The system's own opener, as the CLI would use without us.
 #[cfg(unix)]
 fn open_in_browser(url: &str) -> bool {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     crate::platform::opener(opener).arg(url).status().is_ok_and(|s| s.success())
 }
 
-/// The default browser, through the shell, as Explorer opens a link.
 #[cfg(windows)]
 fn open_in_browser(url: &str) -> bool {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
@@ -181,11 +152,9 @@ fn open_in_browser(url: &str) -> bool {
     let (open, url) = (wide("open"), wide(url));
     // SAFETY: both strings are NUL-terminated and outlive the call.
     let result = unsafe { ShellExecuteW(std::ptr::null_mut(), open.as_ptr(), url.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
-    // Above 32 means it opened.
     result as usize > 32
 }
 
-/// A browser sign-in under way.
 pub struct Login {
     pub method: Method,
     id: u64,
@@ -202,7 +171,6 @@ impl Login {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let mut command = crate::agent::claude_cli(&["auth", "login", method.flag()])?;
         command.env("BROWSER", exe).env(URL_FILE_ENV, &url_file).stdout(Stdio::piped()).stderr(Stdio::piped());
-        // Its own process group, so Cancel stops the CLI and whatever it started.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let child = command.spawn().map_err(|e| format!("Couldn't start the sign-in: {e}"))?;
@@ -214,19 +182,14 @@ impl Login {
         let _ = std::fs::remove_file(&self.url_file);
     }
 
-    /// The sign-in page's address, once the CLI has opened it.
     fn url(&self) -> Option<String> {
         std::fs::read_to_string(&self.url_file).ok().filter(|u| u.starts_with("https://"))
     }
 }
 
-/// Stop a browser sign-in's command (started as its own process group on
-/// Unix) and what it started, so its callback port is free for the next try.
 fn end_sign_in(pid: u32) {
     #[cfg(unix)]
     unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
-    // Windows has no process groups to signal: taskkill ends the command and
-    // what it started (/T).
     #[cfg(windows)]
     {
         let mut taskkill = std::process::Command::new("taskkill");
@@ -235,13 +198,11 @@ fn end_sign_in(pid: u32) {
     }
 }
 
-/// How a browser sign-in ended.
 pub enum Outcome {
     SignedIn(Method),
     Failed(Reason, String),
 }
 
-/// Wait for `claude auth login` to end (blocking), then check it took.
 fn finish(child: Child, method: Method, url_file: &Path) -> Outcome {
     let out = child.wait_with_output();
     let _ = std::fs::remove_file(url_file);
@@ -261,11 +222,8 @@ fn finish(child: Child, method: Method, url_file: &Path) -> Outcome {
     }
 }
 
-/// Where signing in is, while signed out.
 pub enum Stage {
-    /// Which kind of account (a Claude plan or a Console account).
     Account,
-    /// Mid-use: the sign-in ran out; sign in again the way it was done last.
     Expired,
     Waiting(Login),
     Failed { method: Method, reason: Reason, detail: String, at: Instant, details: bool },
@@ -283,14 +241,10 @@ impl Account {
     }
 }
 
-/// A button as the boards draw them: 26px, 12px medium text.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Look {
-    /// Filled orange.
     Primary,
-    /// Outlined grey (Try now, Cancel).
     Secondary,
-    /// Text only, a fill on hover.
     Plain,
 }
 
@@ -298,8 +252,6 @@ pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, look: Lo
     button_frame(id, look).button_text(label)
 }
 
-/// A button to put an icon and a label in. It has the button role but no
-/// name: give it one with `button_text` or `aria_label`.
 pub fn button_frame(id: impl Into<ElementId>, look: Look) -> Stateful<Div> {
     div()
         .id(id)
@@ -328,7 +280,6 @@ pub fn button_frame(id: impl Into<ElementId>, look: Look) -> Stateful<Div> {
         })
 }
 
-/// Orange text that acts ("Open it again", "See Claude's plans").
 fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -348,15 +299,14 @@ fn title(text: impl IntoElement) -> Div {
     div().flex().items_center().gap(px(8.)).text_size(theme::size_subhead()).line_height(px(22.)).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(text)
 }
 
-fn body(text: impl Into<SharedString>) -> Div {
-    div().mt(px(-6.)).text_size(theme::size_body()).line_height(theme::line_body()).text_color(theme::text_secondary()).child(theme::words(text))
+fn body(id: &'static str, text: impl Into<SharedString>) -> Div {
+    div().mt(px(-6.)).text_size(theme::size_body()).line_height(theme::line_body()).text_color(theme::text_secondary()).child(theme::words(id, text))
 }
 
-fn meta(text: impl Into<SharedString>, color: Rgba) -> Div {
-    div().text_size(theme::size_meta()).line_height(px(17.)).text_color(color).child(theme::words(text))
+fn meta(id: &'static str, text: impl Into<SharedString>, color: Rgba) -> Div {
+    div().text_size(theme::size_meta()).line_height(px(17.)).text_color(color).child(theme::words(id, text))
 }
 
-/// One choice with its own button: the first is the one to pick when unsure.
 fn choice(name: impl IntoElement, detail: &'static str, first: bool, action: Stateful<Div>) -> Div {
     div()
         .flex()
@@ -377,12 +327,11 @@ fn choice(name: impl IntoElement, detail: &'static str, first: bool, action: Sta
                 .flex_col()
                 .gap(px(2.))
                 .child(div().font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(name))
-                .child(meta(detail, theme::text_new())),
+                .child(meta("detail", detail, theme::text_new())),
         )
         .child(action)
 }
 
-/// A listed assistant that can't be chosen here: why, in a few words.
 fn unavailable(name: &'static str, by: &'static str, why: &'static str) -> Div {
     div()
         .flex()
@@ -399,7 +348,6 @@ fn unavailable(name: &'static str, by: &'static str, why: &'static str) -> Div {
 }
 
 impl Workspace {
-    /// Signed out, and where to start signing in.
     fn first_stage(&self) -> Stage {
         if self.setup.is_none() && self.settings.sign_in_method.is_some() {
             Stage::Expired
@@ -408,7 +356,6 @@ impl Workspace {
         }
     }
 
-    /// What the startup check found.
     pub fn on_signed_in(&mut self, method: Option<crate::signin::Method>, cx: &mut Context<Self>) {
         match method {
             Some(method) => {
@@ -421,7 +368,6 @@ impl Workspace {
         self.finish_setup(cx);
     }
 
-    /// Claude said the sign-in ran out (a failed turn), or the check found it gone.
     pub fn signed_out(&mut self, cx: &mut Context<Self>) {
         if !self.account.signed_out() {
             self.account = Account::SignedOut(self.first_stage());
@@ -437,12 +383,8 @@ impl Workspace {
         }
     }
 
-    /// The window came to the front: Claude's sign-in may have run out
-    /// meanwhile (only a sign-out is taken from this check; signing in again
-    /// is the card's), or Codex's may have been made in a terminal.
     pub fn recheck_sign_in(&mut self, cx: &mut Context<Self>) {
         const MIN_GAP: Duration = Duration::from_secs(10);
-        // Back from signing in to Codex in a terminal: its card goes by itself.
         if matches!(self.codex_account, crate::agent::Account::SignedOut | crate::agent::Account::Failed) {
             self.recheck_codex(cx);
         }
@@ -487,7 +429,6 @@ impl Workspace {
     }
 
     fn sign_in_ended(&mut self, id: u64, outcome: Outcome, cx: &mut Context<Self>) {
-        // A cancelled or replaced sign-in's end is old news.
         let Account::SignedOut(Stage::Waiting(login)) = &self.account else { return };
         if login.id != id {
             return;
@@ -502,14 +443,12 @@ impl Workspace {
                 self.sync_holds(cx);
                 self.refresh_profile(cx);
             }
-            // Not a sign-in failure: the offline state says what's going on.
             Outcome::Failed(Reason::Offline, _) => self.account = Account::SignedOut(self.back_stage()),
             Outcome::Failed(reason, detail) => self.account = Account::SignedOut(Stage::Failed { method, reason, detail, at: Instant::now(), details: false }),
         }
         cx.notify();
     }
 
-    /// Where Cancel and Back go.
     fn back_stage(&self) -> Stage {
         if self.setup.is_none() && self.settings.sign_in_method.is_some() { Stage::Expired } else { Stage::Account }
     }
@@ -529,19 +468,16 @@ impl Workspace {
             Some(url) => {
                 cx.background_executor().spawn(async move { open_in_browser(&url) }).detach();
             }
-            // The CLI hasn't said where yet: start over, which opens a new page.
             None => self.begin_sign_in(login.method, cx),
         }
     }
 
-    /// Settings' Sign out: asks first, then signs Claude Code out on this computer.
     pub fn sign_out_of_claude(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_confirm("Sign out of Claude?", "Claude stops answering in every session until you sign in again. This also signs out the claude command in your terminal.", "Sign out", window, cx, |this, _, cx| {
             this.sign_out_now(cx);
         });
     }
 
-    /// Sign Claude Code out on this computer, asked already.
     pub fn sign_out_now(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let done = cx.background_executor().spawn(async { log_out() }).await;
@@ -563,7 +499,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The expired card's Enter: sign in the way it was done last.
     pub fn sign_in_again(&mut self, cx: &mut Context<Self>) -> bool {
         if !matches!(self.account, Account::SignedOut(Stage::Expired)) || self.setup.is_some() {
             return false;
@@ -572,9 +507,6 @@ impl Workspace {
         true
     }
 
-    /// The setup screen's pick: new sessions start with it, and setup goes on
-    /// to install and start it. Signing in to Codex or Antigravity waits for
-    /// its card on the new-session screen; Claude's comes next, here.
     fn choose_assistant(&mut self, agent: Agent, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         if setup.agent != Some(agent) {
@@ -583,7 +515,6 @@ impl Workspace {
         setup.agent = Some(agent);
         self.update_settings(cx, |s| s.agent = agent);
         self.draft.agent = agent;
-        // Started now if Julia is up; otherwise once it is (`on_ready`).
         if self.links.get(agent).failed {
             self.restart_agent(agent, cx);
         } else if self.bridge(&crate::hosts::HostId::ThisMac).is_some() {
@@ -593,7 +524,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The setup screen's "Choose another assistant", after the one picked failed.
     pub fn change_assistant(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
@@ -601,7 +531,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The setup screen's choice of assistant.
     fn assistant_choice(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let pick = |agent: Agent, detail: &'static str| {
             let facts = agent.facts();
@@ -627,8 +556,8 @@ impl Workspace {
         let not_yet = Agent::ALL.into_iter().filter(|a| !a.available()).map(|a| (a.name(), a.facts().maker));
         let not_yet: Vec<_> = not_yet.chain([("Cursor", "by Anysphere")]).map(|(name, by)| unavailable(name, by, "Not available yet")).collect();
         let mut panel = vec![
-            title(theme::words("Choose your assistant")).into_any_element(),
-            body("Endeavor works with an AI assistant that writes and runs code in your notebook. Pick the one you have an account with.").into_any_element(),
+            title(theme::words("choose-your-assistant", "Choose your assistant")).into_any_element(),
+            body("assistant-intro", "Endeavor works with an AI assistant that writes and runs code in your notebook. Pick the one you have an account with.").into_any_element(),
         ];
         panel.extend(ready);
         panel.push(div().flex().flex_col().gap(px(6.)).children(not_yet).into_any_element());
@@ -636,7 +565,7 @@ impl Workspace {
             div()
                 .flex()
                 .gap(px(4.))
-                .child(meta("You can change this later in", theme::text_muted()))
+                .child(meta("change-later", "You can change this later in", theme::text_muted()))
                 .child(
                     div()
                         .flex()
@@ -649,16 +578,13 @@ impl Workspace {
                                 .focus_ring()
                                 .on_click(cx.listener(|this, _, window, cx| this.open_settings_at(crate::settings_panel::Page::Section(crate::settings_panel::Section::Assistants), window, cx))),
                         )
-                        .child(meta(".", theme::text_muted())),
+                        .child(meta("change-later-end", ".", theme::text_muted())),
                 )
                 .into_any_element(),
         );
         panel
     }
 
-    /// The splash's panel: the progress line's words, whether its bar shows,
-    /// the panel, and when the turtle tucked in (a failure). First the choice
-    /// of assistant, then Claude's sign-in if Claude was picked.
     pub fn render_sign_in_panel(&self, cx: &mut Context<Self>) -> Option<(&'static str, AnyElement, bool, Option<Instant>)> {
         let panel = div().flex().flex_col().gap(px(12.)).p(px(16.)).rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::dialog_bg());
         match self.setup.as_ref().map(|s| s.agent) {
@@ -675,8 +601,8 @@ impl Workspace {
             Stage::Account => panel.children(self.account_choice(cx)),
             Stage::Expired => return None,
             Stage::Waiting(login) => panel
-                .child(title(div().flex().items_center().gap(px(8.)).child(crate::orbit::orbit("sign-in-orbit".into(), 14., cx)).child(theme::words("Finish signing in in your browser"))))
-                .child(body(format!("We opened {} in your browser. Sign in there, then come back. This screen moves on by itself.", login.method.site())))
+                .child(title(div().flex().items_center().gap(px(8.)).child(crate::orbit::orbit("sign-in-orbit".into(), 14., cx)).child(theme::words("finish-signing-in-in-your", "Finish signing in in your browser"))))
+                .child(body("browser-opened", format!("We opened {} in your browser. Sign in there, then come back. This screen moves on by itself.", login.method.site())))
                 .child(
                     div()
                         .flex()
@@ -692,7 +618,7 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(10.))
-                        .child(meta("Page didn't open?", theme::text_muted()))
+                        .child(meta("page-didnt-open", "Page didn't open?", theme::text_muted()))
                         .child(link("sign-in-reopen", "Open it again").on_click(cx.listener(|this, _, _, cx| this.open_sign_in_again(cx))))
                         .child(div().flex_1())
                         .child(button("sign-in-cancel", "Cancel", Look::Secondary).on_click(cx.listener(|this, _, _, cx| {
@@ -704,7 +630,6 @@ impl Workspace {
         Some(("Sign in to finish setting up", panel.into_any_element(), !matches!(stage, Stage::Failed { .. }), tucked))
     }
 
-    /// "Sign in to Claude": the two kinds of account, each with its Sign in.
     fn account_choice(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let back = div().mt(px(-6.)).mb(px(-6.)).child(
             div()
@@ -726,7 +651,6 @@ impl Workspace {
                 .child(glyph(Glyph::Back, theme::text_new()))
                 .button_text("Back")
                 .on_click(cx.listener(|this, _, _, cx| {
-                    // On the setup screen, back to the choice of assistant.
                     match &mut this.setup {
                         Some(setup) => {
                             setup.agent = None;
@@ -736,12 +660,11 @@ impl Workspace {
                     }
                 })),
         );
-        // Mid-use with no earlier sign-in, the card has nowhere to go back to.
         let has_back = self.setup.is_some() || self.settings.sign_in_method.is_some();
         vec![
             has_back.then(|| back.into_any_element()),
-            Some(title(theme::words("Sign in to Claude")).into_any_element()),
-            Some(body("Endeavor uses your own Claude account to answer you. Which kind do you have?").into_any_element()),
+            Some(title(theme::words("sign-in-to-claude", "Sign in to Claude")).into_any_element()),
+            Some(body("claude-account-kind", "Endeavor uses your own Claude account to answer you. Which kind do you have?").into_any_element()),
             Some(
                 choice(
                     "A Claude plan",
@@ -760,7 +683,7 @@ impl Workspace {
                 )
                 .into_any_element(),
             ),
-            Some(meta("Not sure? If you chat with Claude at claude.ai, choose the first.", theme::text_new()).into_any_element()),
+            Some(meta("not-sure", "Not sure? If you chat with Claude at claude.ai, choose the first.", theme::text_new()).into_any_element()),
             Some(div().h(px(1.)).mx(px(-16.)).bg(theme::border()).into_any_element()),
             Some(
                 div()
@@ -769,7 +692,7 @@ impl Workspace {
                     .items_center()
                     .gap(px(8.))
                     .child(glyph(Glyph::Lock, theme::text_muted()))
-                    .child(meta("Sign-in opens in your browser. Your password stays there.", theme::text_muted()))
+                    .child(meta("password-stays", "Sign-in opens in your browser. Your password stays there.", theme::text_muted()))
                     .into_any_element(),
             ),
             Some(
@@ -789,7 +712,6 @@ impl Workspace {
         .collect()
     }
 
-    /// "Sign-in didn't finish": why, and what to do.
     fn failure(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Account::SignedOut(Stage::Failed { method, reason, detail, details, .. }) = &self.account else { return Vec::new() };
         let (method, reason, details) = (*method, *reason, *details);
@@ -820,9 +742,9 @@ impl Workspace {
                 }))
         });
         vec![
-            Some(title(div().flex().items_center().gap(px(8.)).child(glyph_at(Glyph::Warning, theme::danger(), 1.2)).child(theme::words("Sign-in didn't finish"))).into_any_element()),
+            Some(title(div().flex().items_center().gap(px(8.)).child(glyph_at(Glyph::Warning, theme::danger(), 1.2)).child(theme::words("sign-in-didn-t-finish", "Sign-in didn't finish"))).into_any_element()),
             Some(div().mt(px(-6.)).text_color(theme::text_primary()).child(says).into_any_element()),
-            advice.map(|a| meta(a, theme::text_new()).into_any_element()),
+            advice.map(|a| meta("advice", a, theme::text_new()).into_any_element()),
             Some(
                 div()
                     .mt(px(2.))
@@ -857,10 +779,8 @@ impl Workspace {
         .collect()
     }
 
-    /// Mid-use, above the composer: sign in again, waiting for the browser, or why it didn't finish.
     pub fn render_sign_in_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let Account::SignedOut(stage) = &self.account else { return None };
-        // Offline isn't a sign-in problem: that line says what's going on, and sign-in waits.
         if self.setup.is_some() || self.offline_since().is_some() {
             return None;
         }
@@ -900,7 +820,7 @@ impl Workspace {
                         "Your sign-in has run out, so Claude can't answer."
                     };
                     card(true)
-                        .child(heading().child(theme::words("Sign in to Claude again")))
+                        .child(heading().child(theme::words("sign-in-to-claude-again", "Sign in to Claude again")))
                         .child(lines(vec![why.into(), format!("The notebook still works. Last time you used {}.", last.choice())]))
                         .child(
                             row()
@@ -909,7 +829,7 @@ impl Workspace {
                         )
                 }
                 Stage::Waiting(login) => card(false)
-                    .child(heading().child(crate::orbit::orbit("sign-in-card-orbit".into(), 14., cx)).child(theme::words("Finish signing in in your browser")))
+                    .child(heading().child(crate::orbit::orbit("sign-in-card-orbit".into(), 14., cx)).child(theme::words("finish-signing-in-in-your", "Finish signing in in your browser")))
                     .child(lines(vec![format!("We opened {}. Sign in there; this card goes away by itself and your message sends.", login.method.site())]))
                     .child(
                         row()
@@ -931,7 +851,6 @@ impl Workspace {
         )
     }
 
-    /// The sign-in card for `agent`, above the composer while signed out.
     pub fn render_agent_sign_in(&self, agent: Agent, cx: &mut Context<Self>) -> Option<AnyElement> {
         match agent.facts().sign_in {
             SignIn::ClaudeAuth => self.render_sign_in_card(cx),
@@ -940,8 +859,6 @@ impl Workspace {
         }
     }
 
-    /// Antigravity's sign-in card: its server signs in with a Google account
-    /// in the browser, and keeps the sign-in for itself.
     fn render_antigravity_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::agent::Account as Google;
         if !self.antigravity_account.signed_out() || self.offline_since().is_some() {
@@ -958,15 +875,15 @@ impl Workspace {
         };
         let body = match self.antigravity_account {
             Google::SigningIn => div()
-                .child(heading.child(crate::orbit::orbit("antigravity-sign-in-orbit".into(), 14., cx)).child(theme::words("Finish signing in in your browser")))
+                .child(heading.child(crate::orbit::orbit("antigravity-sign-in-orbit".into(), 14., cx)).child(theme::words("finish-signing-in-in-your", "Finish signing in in your browser")))
                 .child(lines(&[waiting, "Closed the page, or want another account? Cancel, then sign in again."]))
                 .child(row.child(cancel)),
             Google::Failed => div()
-                .child(heading.child(theme::words("Antigravity sign-in didn't finish")))
+                .child(heading.child(theme::words("antigravity-sign-in-didn-t", "Antigravity sign-in didn't finish")))
                 .child(lines(&["The sign-in page closed or took more than 5 minutes. Try again."]))
                 .child(row.child(sign_in("Try again"))),
             _ => div()
-                .child(heading.child(theme::words("Sign in to Antigravity")))
+                .child(heading.child(theme::words("sign-in-to-antigravity", "Sign in to Antigravity")))
                 .child(lines(&["Antigravity uses your Google account. Sign in opens Google in your browser."]))
                 .child(row.child(sign_in("Sign in"))),
         };
@@ -984,8 +901,6 @@ impl Workspace {
         )
     }
 
-    /// Codex's sign-in card: Codex uses the ChatGPT sign-in its own command
-    /// keeps, so signing in from a terminal (`codex login`) works too.
     fn render_codex_sign_in(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::agent::Account as Codex;
         if !self.codex_account.signed_out() || self.offline_since().is_some() {
@@ -1003,15 +918,15 @@ impl Workspace {
         };
         let body = match self.codex_account {
             Codex::SigningIn => div()
-                .child(heading.child(crate::orbit::orbit("codex-sign-in-orbit".into(), 14., cx)).child(theme::words("Finish signing in in your browser")))
+                .child(heading.child(crate::orbit::orbit("codex-sign-in-orbit".into(), 14., cx)).child(theme::words("finish-signing-in-in-your", "Finish signing in in your browser")))
                 .child(lines(&[waiting, "Closed the page, or want another account? Cancel, then sign in again."]))
                 .child(row.child(cancel)),
             Codex::Failed => div()
-                .child(heading.child(theme::words("Codex sign-in didn't finish")))
+                .child(heading.child(theme::words("codex-sign-in-didn-t", "Codex sign-in didn't finish")))
                 .child(lines(&["Try again, or run codex login in a terminal and then check again."]))
                 .child(row.child(check).child(sign_in("Try again"))),
             _ => div()
-                .child(heading.child(theme::words("Sign in to Codex")))
+                .child(heading.child(theme::words("sign-in-to-codex", "Sign in to Codex")))
                 .child(lines(&[
                     "Codex uses your ChatGPT account. Sign in opens ChatGPT in your browser.",
                     "Already use the codex command? Run codex login in a terminal, then check again.",
@@ -1032,7 +947,6 @@ impl Workspace {
         )
     }
 
-    /// Under a message the agent couldn't answer.
     pub fn render_unanswered(&self, agent: Agent) -> AnyElement {
         div()
             .flex()
@@ -1058,7 +972,6 @@ impl Workspace {
         }
     }
 
-    /// Whether the user is signed out of `agent`.
     pub fn signed_out_of_agent(&self, agent: Agent) -> bool {
         match agent.facts().sign_in {
             SignIn::ClaudeAuth => self.account.signed_out(),
@@ -1067,8 +980,6 @@ impl Workspace {
         }
     }
 
-    /// The status line once `agent` is connected. Signed out, it can't answer
-    /// yet, so the line says what's missing rather than "connected".
     pub fn connected_status(&self, agent: Agent) -> String {
         match self.signed_out_of_agent(agent) {
             true => needs_sign_in(agent),
@@ -1076,25 +987,20 @@ impl Workspace {
         }
     }
 
-    /// Signed in: the status line stops asking for it.
     fn signed_in_status(&mut self, agent: Agent) {
         if self.status.as_ref() == needs_sign_in(agent).as_str() {
             self.status = format!("{} connected.", agent.name()).into();
         }
     }
 
-    /// `agent` can't answer now: messages wait.
     pub fn out_of_reach(&self, agent: Agent) -> bool {
         self.signed_out_of_agent(agent) || self.offline_since().is_some() || self.usage_limits.holds(agent) || !self.links.get(agent).process.up()
     }
 
-    /// A session's messages wait: its agent can't be reached, or its server
-    /// is reconnecting (its tools would fail).
     pub fn holds(&self, session: &crate::session::Session) -> bool {
         self.out_of_reach(session.agent) || self.read_only(session)
     }
 
-    /// A turn failed for want of sign-in.
     pub fn signed_out_of(&mut self, agent: Agent, cx: &mut Context<Self>) {
         match agent.facts().sign_in {
             SignIn::ClaudeAuth => self.signed_out(cx),
@@ -1113,8 +1019,6 @@ impl Workspace {
         }
     }
 
-    /// What a check of Antigravity's sign-in found. Signed in, its sessions
-    /// waiting for that open.
     pub fn on_antigravity_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
         if signed_in {
             self.antigravity_account = crate::agent::Account::SignedIn;
@@ -1126,25 +1030,16 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Antigravity's browser sign-in, from its card: ACP's `authenticate`
-    /// over its connection, which ends once the browser page is done or its
-    /// server stops waiting (5 minutes).
     pub fn sign_in_to_antigravity(&mut self, cx: &mut Context<Self>) {
         let SignIn::Authenticate(method) = Agent::Antigravity.facts().sign_in else { return };
         if self.antigravity_account == crate::agent::Account::SigningIn {
             return;
         }
-        // A link that is down drops the command; then the card offers it again.
         let sent = self.links.get(Agent::Antigravity).tx.unbounded_send(crate::agent::Command::Authenticate(method)).is_ok();
         self.antigravity_account = if sent { crate::agent::Account::SigningIn } else { crate::agent::Account::Failed };
         cx.notify();
     }
 
-    /// The waiting card's Cancel: the card goes back to Sign in at once, and
-    /// Antigravity's server starts again. Only stopping it ends its wait for
-    /// the browser, which holds the sign-in's port, so a second Sign in would
-    /// fail. A session open when the sign-in ran out reopens on the new server
-    /// once it's up, as after a crash (`agent_stopped`), without counting as one.
     pub fn cancel_antigravity_sign_in(&mut self, cx: &mut Context<Self>) {
         if self.antigravity_account != crate::agent::Account::SigningIn {
             return;
@@ -1158,12 +1053,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A message waits for `agent`: one typed while it can't answer.
     fn message_waits_for(&self, agent: Agent) -> bool {
         self.sessions.iter().any(|s| s.agent == agent && (!s.outbox.items.is_empty() || s.outbox.has_unanswered()))
     }
 
-    /// Antigravity's sign-in ended.
     pub fn on_antigravity_sign_in_ended(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
         match result {
             Ok(()) => self.on_antigravity_signed_in(true, cx),
@@ -1176,8 +1069,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// What a check of Codex's sign-in found. Signed in, its sessions
-    /// waiting for that open.
     pub fn on_codex_signed_in(&mut self, signed_in: bool, cx: &mut Context<Self>) {
         self.codex_account = if signed_in { crate::agent::Account::SignedIn } else { crate::agent::Account::SignedOut };
         if signed_in {
@@ -1187,8 +1078,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Codex's browser sign-in (`codex-acp login`), from its card. It ends
-    /// by itself once the browser page is done; then the sign-in is checked.
     pub fn sign_in_to_codex(&mut self, cx: &mut Context<Self>) {
         if self.codex_account == crate::agent::Account::SigningIn {
             return;
@@ -1210,8 +1099,6 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let signed_in = done.await;
             let _ = this.update(cx, |this, cx| {
-                // Cancelled (and maybe started again): this attempt's end says nothing,
-                // unless it signed in after all.
                 let current = this.codex_login.is_some_and(|(current, _)| current == attempt);
                 if !current && !matches!(signed_in, Ok(true)) {
                     return;
@@ -1221,7 +1108,6 @@ impl Workspace {
                 }
                 match signed_in {
                     Ok(true) => this.on_codex_signed_in(true, cx),
-                    // Not over a sign-in an earlier, cancelled attempt finished meanwhile.
                     Ok(false) | Err(_) if this.codex_account == crate::agent::Account::SigningIn => this.codex_account = crate::agent::Account::Failed,
                     Ok(false) | Err(_) => {}
                 }
@@ -1234,8 +1120,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The waiting card's Cancel: stop `codex-acp login`, and the card goes
-    /// back to Sign in.
     pub fn cancel_codex_sign_in(&mut self, cx: &mut Context<Self>) {
         let Some((_, pid)) = self.codex_login.take() else { return };
         end_sign_in(pid);
@@ -1243,7 +1127,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Check Codex's sign-in again (signed in from a terminal meanwhile).
     pub fn recheck_codex(&mut self, cx: &mut Context<Self>) {
         let check = cx.background_executor().spawn(async { crate::codex::signed_in() });
         cx.spawn(async move |this, cx| {
@@ -1258,8 +1141,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Hold each session's messages while they can't go; send what waited once
-    /// they can.
     pub fn sync_holds(&mut self, cx: &mut Context<Self>) {
         let holds: Vec<bool> = self.sessions.iter().map(|s| self.holds(s)).collect();
         let mut sends = Vec::new();
@@ -1278,7 +1159,6 @@ impl Workspace {
 
 const PLANS: &str = "https://claude.com/pricing";
 
-/// The status line for an agent that's connected but signed out.
 fn needs_sign_in(agent: Agent) -> String {
     format!("{} needs you to sign in.", agent.name())
 }

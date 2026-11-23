@@ -1,4 +1,3 @@
-// While a server is out of reach its notebook page is readable but takes no edits or reconnects.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

@@ -1,5 +1,3 @@
-// A debug build's state dump asks the page what it shows: Point and the cells
-// it picked, the drawer, the safe-preview callout, and the alerts it showed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
