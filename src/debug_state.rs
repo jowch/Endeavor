@@ -184,6 +184,7 @@ impl Workspace {
                 "account": format!("{:?}", self.antigravity_account),
                 "usage_limit": self.usage_limit_state(Agent::Antigravity),
             },
+            "hosts": self.hosts_debug(),
             "app_update": self.app_update_debug(),
             "sign_in": self.sign_in_state(),
             "sidebar": self.sidebar_state(cx),
@@ -214,6 +215,42 @@ impl Workspace {
             "cell_shot": self.second.last,
             "cell_shot_view": self.second.view(),
         })
+    }
+
+    /// Each host the app has connected to: its state as the Where chip shows it, and while it
+    /// starts, the start's steps (on a cluster: job submitted, waiting for a node, got a node) (#46).
+    fn hosts_debug(&self) -> Value {
+        use crate::host_list::HostState;
+        let mut hosts: Vec<(&crate::hosts::HostId, &crate::connection::Connection)> = self.connections.iter().collect();
+        hosts.sort_by_key(|(host, _)| self.hosts.name(host));
+        Value::Array(
+            hosts
+                .into_iter()
+                .map(|(host, c)| {
+                    let state = match self.host_state(host) {
+                        HostState::Unknown => json!({ "state": "unknown" }),
+                        HostState::Connecting => json!({ "state": "connecting" }),
+                        HostState::Checking => json!({ "state": "checking" }),
+                        HostState::Connected => json!({ "state": "connected" }),
+                        HostState::Starting => json!({ "state": "starting" }),
+                        HostState::Stopping => json!({ "state": "stopping" }),
+                        HostState::Running { notebooks, job } => json!({ "state": "running", "notebooks": notebooks, "job": job.map(|(id, ends_at)| json!({ "id": id, "ends_at": ends_at })) }),
+                        HostState::Queued { job, starting, reason } => json!({ "state": if starting { "job_starting" } else { "queued" }, "job": job, "reason": reason }),
+                        HostState::NotRunning => json!({ "state": "not_running" }),
+                        HostState::Lost => json!({ "state": "lost" }),
+                        HostState::SigningIn => json!({ "state": "signing_in" }),
+                        HostState::Failed(e) => json!({ "state": "failed", "error": e }),
+                    };
+                    let starting = matches!(c.status, crate::connection::Status::Starting);
+                    json!({
+                        "host": host,
+                        "name": self.hosts.name(host),
+                        "status": state,
+                        "steps": starting.then(|| json!({ "done": c.steps.done, "current": c.steps.current, "detail": c.steps.detail })),
+                    })
+                })
+                .collect(),
+        )
     }
 
     fn app_update_debug(&self) -> Value {
