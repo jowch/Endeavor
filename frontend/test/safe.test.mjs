@@ -1,5 +1,3 @@
-// The safe-preview callout at the top of the notebook (src/safe.ts): its own
-// words, or, for a notebook Julia stopped under twice, why it opened that way.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -13,7 +11,6 @@ test("after a second stop the callout says why the notebook is open without runn
   const { window } = dom;
   const sent = [];
   window.ipc = { postMessage: (body) => sent.push(JSON.parse(body)) };
-  // Frames run when the test says, so nothing is left running after it.
   let frames = [];
   window.requestAnimationFrame = (callback) => frames.push(callback);
   const frame = async () => {

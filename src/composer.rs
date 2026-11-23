@@ -288,7 +288,8 @@ fn preview_body(attachment: &Attachment, agent: crate::agent::Agent) -> Div {
         Attachment::Error { text, .. } => text_panel(text, 8, theme::danger()),
         Attachment::Quote(quote) => match (quote.picture(), quote.excerpt()) {
             (Some(png), _) => thumbnail("image/png", png),
-            (None, excerpt) => text_panel(excerpt.unwrap_or_default(), 8, theme::text_secondary()),
+            (None, Some(excerpt)) => text_panel(excerpt, 8, theme::text_secondary()),
+            (None, None) => note(format!("{} reads what's there now.", agent.name())),
         },
         Attachment::Image { mime, bytes, .. } => thumbnail(mime, bytes),
         Attachment::Text { text, .. } => text_panel(text, 8, theme::text_secondary()),

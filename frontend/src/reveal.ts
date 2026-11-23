@@ -1,8 +1,3 @@
-// Chips in the chat point back into the notebook: clicking a cell chip scrolls
-// to its cells and outlines them briefly, and a chip's popover asks for a
-// cell's code now, to say whether it changed since the message was sent. A
-// link in an agent's reply to a cell that isn't here says so instead.
-
 import { on, send } from "./bridge";
 
 const css = `
@@ -16,7 +11,6 @@ const css = `
   .endeavor-gone.fading { opacity: 0; }
 `;
 
-/** Says briefly, at the top of the page, that a linked cell isn't in this notebook. */
 function sayGone() {
   document.querySelector(".endeavor-gone")?.remove();
   const note = document.createElement("div");
@@ -28,7 +22,6 @@ function sayGone() {
   setTimeout(() => note.remove(), 2600);
 }
 
-/** A cell's code: from its editor when there is one (exact line breaks). */
 export function cellCode(cell: Element | null): string {
   const content = cell?.querySelector("pluto-input .cm-content") as any;
   const view = content?.cmTile?.root?.view;

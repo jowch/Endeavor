@@ -1,23 +1,6 @@
-// The notebook's look (Settings, and the notebook's ⋮ menu). The app sets the
-// webview's light/dark appearance, which Pluto's own themes follow
-// (prefers-color-scheme) and which the page follows live, with no reload. The
-// Endeavor look maps Pluto's colour variables to Endeavor's tokens
-// (docs/ui-spec.md) in both dark and light mode, and hides Pluto's header,
-// footer, floating panel and per-cell safe-preview labels: the app's header,
-// the drawer and the safe-preview callout stand in for them. Pluto classic is
-// Pluto's own page minus its file box (the app's header shows the file), in
-// Pluto's own dark/light colours. Both hide Pluto's Instant feedback; the ⋮
-// menu offers it.
-
 import { on } from "./bridge";
 import { onEmber } from "./engine";
 
-// Endeavor's own design tokens (--e-*), used by every module that draws its
-// own UI (drawer.ts, rail.ts, prompt.ts, etc.) in both notebook looks and
-// both colour schemes. Injected once as its own stylesheet, before any other
-// module's styles, so the variables exist no matter what order modules init
-// in -- CSS variables resolve at use time, not declaration time, so the
-// order of <style> elements doesn't matter.
 const tokens = `
 :root {
   --e-bg-sidebar: #111113;
@@ -51,8 +34,6 @@ const tokens = `
   --e-dialog-edge: #2A2A2E;
   --e-dialog-shadow: rgba(0, 0, 0, 0.5);
 
-  /* Colours used by one or a few modules that don't match one of the tokens
-     above closely enough to reuse it without shifting the dark look. */
   --e-text-dim: #7A7978;
   --e-text-waiting: #5E5E5E;
   --e-text-code: #D4D4D4;
@@ -133,9 +114,6 @@ const tokens = `
 }
 `;
 
-// The Endeavor look, dark and light: Pluto's own CSS variables mapped to
-// Endeavor's tokens (docs/ui-spec.md), plus the handful of rules Pluto has no
-// variable for (.pluto-modal, the presentation slide controls).
 const endeavorLook = `
 @media (prefers-color-scheme: dark) {
   :root {
@@ -167,7 +145,6 @@ const endeavorLook = `
     --cm-color-builtin: #9AB6E6;
     --cm-color-comment: #858585;
     --cm-color-line-numbers: #555555;
-    /* Live docs */
     --helpbox-bg-color: #1C1C1F;
     --helpbox-header-bg-color: #26262A;
     --helpbox-header-tab-bg-color: #26262A;
@@ -177,13 +154,11 @@ const endeavorLook = `
     --helpbox-search-border-color: #3A3A40;
     --helpbox-box-shadow-color: rgba(0, 0, 0, 0.3);
     --docs-binding-bg: #26262A;
-    /* Frontmatter and Pluto's other dialogs */
     --export-bg-color: #1C1C1F;
     --export-color: #D4D4D4;
     --frontmatter-button-bg-color: #26262A;
     --frontmatter-input-bg-color: #151517;
     --frontmatter-input-border-color: #3A3A40;
-    /* A cell's run time: faint text, no chip */
     --pluto-runarea-bg-color: transparent;
     --pluto-runarea-span-color: #858483;
   }
@@ -224,7 +199,6 @@ const endeavorLook = `
     --cm-color-builtin: #2F5FA6;
     --cm-color-comment: #6B6B73;
     --cm-color-line-numbers: #6E6E76;
-    /* Live docs */
     --helpbox-bg-color: #F4F4F6;
     --helpbox-header-bg-color: #EAEAED;
     --helpbox-header-tab-bg-color: #EAEAED;
@@ -234,13 +208,11 @@ const endeavorLook = `
     --helpbox-search-border-color: #8A8A92;
     --helpbox-box-shadow-color: rgba(20, 20, 30, 0.12);
     --docs-binding-bg: #EAEAED;
-    /* Frontmatter and Pluto's other dialogs */
     --export-bg-color: #FFFFFF;
     --export-color: #26262B;
     --frontmatter-button-bg-color: #EAEAED;
     --frontmatter-input-bg-color: #FCFCFD;
     --frontmatter-input-border-color: #8A8A92;
-    /* A cell's run time: faint text, no chip */
     --pluto-runarea-bg-color: transparent;
     --pluto-runarea-span-color: #6B6B73;
   }
@@ -253,48 +225,22 @@ const endeavorLook = `
 }
 `;
 
-// The cells' layout in the Endeavor look, in the app and in Claude's notebook view.
 const layout = `
-/* The cells' side gap is the chat column's margin (main.rs, chat_margin): 50px,
-   shrinking with the pane's width (50 per 860) at narrow widths, but never under
-   28px, which Pluto's shoulder (the show/hide-code eye, the status bar) needs
-   left of a cell. main's own padding (25px left, 6px right) is part of that gap,
-   less the 5px a cell's box reaches left of its edge.
-   Left-aligned, not centred (Pluto classic stays centred): a floated PlutoUI
-   TableOfContents sits at the right, and centring put it over the notebook
-   rather than beside it. 731px keeps the reading width Pluto centred at; while
-   the pane is narrower than that, the gaps on both sides are equal. Pluto's own
-   rule sizes main at width: 100%, so the margins come out of that width.
-   The overview rail (rail.ts) is fixed to the right of the viewport, not the
-   notebook, so it isn't affected either way. */
 pluto-editor { --e-side: clamp(28px, calc(100vw * 50 / 860), 50px); }
 pluto-editor main { margin-left: calc(var(--e-side) - 20px) !important; margin-right: auto !important;
   width: calc(100% - 2 * var(--e-side) + 20px + 6px) !important; max-width: 731px !important; }
-/* The preamble only holds Pluto's sticky "Save all changes" button; its 25px
-   strip above the first cell is gone, and the button floats over the top. */
 pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; overflow: visible; }
 pluto-runarea > span { font-size: 10px; }
 `;
 
-// What the app's own header, drawer and safe-preview callout stand in for (not
-// in Claude's notebook view, which has none of them), and the fade under the header.
 const appChrome = `
 header#pluto-nav, footer { display: none !important; }
-/* Not display: none — Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
-/* Pluto shows the panel only from 500px wide; a narrower notebook pane would alert on every panel it opens. */
 #helpbox-wrapper { display: block !important; }
 html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
   position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
 pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
 pluto-editor > main { padding-top: 16px; }
-/* The web view draws over native views, so the notebook header can't blur
-   what's under it (docs/ui-spec.md, "Fades, not blur").
-   Instead, the top of the page fades into the page background, so a cell
-   scrolled toward the top softens instead of cutting off hard. Fixed to the
-   viewport, not the scroller, and never over the first cell at rest: the
-   16px top padding above leaves exactly this fade's height clear.
-   pointer-events: none keeps clicks and selection reaching the page under it. */
 body::before {
   content: "";
   position: fixed;
@@ -308,23 +254,15 @@ body::before {
 }
 `;
 
-// Pluto classic: Pluto's page, without the file box (the app's header shows the file).
-// Ember's header has a file-name button instead, which opens its Rename or move dialog;
-// the ⋮ menu has Rename and Move.
 const classic = `
 nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group, #ember-file-name { display: none !important; }
 `;
 
-// On Ember's page in the Endeavor look: its Theme setting would turn Ember's
-// colours against the overrides above, which follow the system's, so it's hidden
-// and the page follows the system (syncTheme). Its safe-preview banner is
-// hidden as Pluto's labels are: the safe-preview callout stands in for it.
 const emberLook = `
 .ember-settings-section:has(#ember-setting-theme) { display: none !important; }
 #ember-safe-preview { display: none !important; }
 `;
 
-/** Keep Ember's `<html data-theme>` on the system's light or dark while the Endeavor look is on. */
 function syncTheme(): void {
   const dark = window.matchMedia("(prefers-color-scheme: dark)");
   const root = document.documentElement;
@@ -338,21 +276,13 @@ function syncTheme(): void {
   sync();
 }
 
-// Instant feedback goes to Pluto's developers, not Endeavor's: the ⋮ menu offers it.
 const both = `
 footer form#feedback { display: none !important; }
 `;
 
-// JuliaMono, declared after Pluto's CDN faces of the same family, so these win
-// for every character. Pluto declares only a regular-weight italic. In the app
-// it's the bundled copy (served by the app's endeavor: protocol), so code renders
-// offline. Claude's desktop app can't reach endeavor:, and its frame loads fonts
-// only from the hosts EndeavorMCP's view names (cdn.jsdelivr.net), so the view
-// takes the same release from there.
-// The tag is fonts/build.py's JULIAMONO_TAG, the release the app bundles: move them together.
-// wry serves the app's endeavor: protocol as http://endeavor.localhost/ on Windows.
 const APP_FONTS = /Win/.test(navigator.platform) ? "http://endeavor.localhost/fonts" : "endeavor://localhost/fonts";
-const JULIA_MONO_WEB = "https://cdn.jsdelivr.net/gh/cormullion/juliamono@v0.63.2/webfonts";
+export const JULIA_MONO_TAG = "v0.63.2";
+const JULIA_MONO_WEB = `https://cdn.jsdelivr.net/gh/cormullion/juliamono@${JULIA_MONO_TAG}/webfonts`;
 export function juliaMonoFaces(from: "app" | "web"): string {
   return [
     { file: "Regular", weight: 400, style: "normal" },
@@ -377,10 +307,6 @@ export function juliaMonoFaces(from: "app" | "web"): string {
 }
 
 export function initTheme(fontsFrom: "app" | "web" = "app"): void {
-  // Before anything else: other modules' <style> elements reference --e-*
-  // variables, and CSS variables resolve at use time, so this only needs to
-  // exist somewhere in the document by the time they're used, not first in
-  // the cascade -- but giving it a fixed, early spot keeps that obviously true.
   const tokenSheet = document.createElement("style");
   tokenSheet.id = "endeavor-tokens";
   tokenSheet.textContent = tokens;
@@ -393,7 +319,6 @@ export function initTheme(fontsFrom: "app" | "web" = "app"): void {
 
   const style = document.createElement("style");
   style.id = "endeavor-theme";
-  // After Pluto's stylesheets, so equal-specificity rules win.
   document.head.append(style);
   on("theme", (msg) => {
     const endeavor = msg.name === "endeavor";
