@@ -545,7 +545,7 @@ pub fn render_approval(session: &Session, notebook_shown: bool, window: &Window,
             .overflow_y_scroll()
             .text_size(theme::chat_body())
             .text_color(theme::text_row_active())
-            .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), shown).style(plan_style()));
+            .child(TextView::markdown(ElementId::NamedInteger("plan-text".into(), key), shown).style(plan_style()).inline_code_style(crate::transcript::inline_code_style()));
         let toggle = plan.steps.is_some().then(|| {
             let label = if plan.open { "Show only the steps" } else { "Show the whole plan" };
             toggle_link(ElementId::NamedInteger("plan-toggle".into(), key), label, plan.open, &session.plan_card_focus(cx))
