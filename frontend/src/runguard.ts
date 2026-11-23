@@ -1,24 +1,13 @@
-// Claude's edits land on the runtime's side, so Pluto doesn't count them as
-// changed: the user's ⌘S, ⇧Enter, ⌘Enter or run button re-runs their
-// dependents, including cells a chat card is still asking to run. So those
-// runs are caught here, before Pluto, and when one would reach such a cell
-// the page asks first (docs/ui-spec.md, "Your run reaches a cell Claude asks
-// to run"). Run anyway answers those cards as their Run button does, then
-// does what the user did, through Pluto's own handlers.
-
 import { byUser, on, send } from "./bridge";
 import { modHeld } from "./keys";
 import { cellCode } from "./reveal";
 import { context, notebookId } from "./state";
 import { definedNames } from "./status";
 
-/** A cell a waiting card asks to run, and what it defines (from the app). */
 export type Waiting = { id: string; name?: string | null };
 
-/** Pluto's `cell_dependencies`: per cell, the cells using each name it defines. */
 export type Dependencies = Record<string, { downstream_cells_map?: Record<string, string[]> } | undefined>;
 
-/** The cells a run of `start` reaches: those cells and every cell downstream of them. */
 export function reach(start: string[], deps: Dependencies): string[] {
   const seen = new Set<string>();
   const todo = [...start];
@@ -50,7 +39,6 @@ const css = `
 `;
 
 let waiting: Waiting[] = [];
-/** Set while Run anyway does the user's action again, so it isn't caught twice. */
 let replaying = false;
 let shown: { el: HTMLElement; hit: Waiting[]; replay: () => void } | null = null;
 
@@ -70,20 +58,17 @@ type EditorState = {
 
 const editor = (): EditorState | undefined => (window as any).editor_state;
 
-/** The cells ⌘S submits: those whose editor text differs from the notebook's (Pluto's own test). */
 export function changedCells(st: EditorState): string[] {
   const local = st.cell_inputs_local ?? {};
   const remote = st.notebook?.cell_inputs ?? {};
   return (st.notebook?.cell_order ?? []).filter((id) => local[id] != null && remote[id]?.code !== local[id]?.code);
 }
 
-/** A cell's editor text differs from the notebook's. */
 function differs(st: EditorState, cell: HTMLElement): boolean {
   const text = st.cell_inputs_local?.[cell.id]?.code ?? cellCode(cell);
   return text !== st.notebook?.cell_inputs?.[cell.id]?.code;
 }
 
-/** The cells a user's key or click would run (before their dependents), or null if it isn't a run. */
 export function runStart(e: Event, st: EditorState): { start: string[]; changes: boolean } | null {
   const target = e.target instanceof Element ? e.target : null;
   const selected = st.selected_cells ?? [];
@@ -102,18 +87,15 @@ export function runStart(e: Event, st: EditorState): { start: string[]; changes:
   }
   if (k.key !== "Enter") return null;
   if (k.shiftKey && !k.metaKey && !k.ctrlKey && !k.altKey) {
-    // The cell's own ⇧Enter, and Pluto's for the selected cells.
     const start = [...new Set([...(inEditor ? [inEditor.id] : []), ...selected])];
     return start.length ? { start, changes: false } : null;
   }
   if ((k.metaKey || k.ctrlKey) && !k.shiftKey && !k.altKey && inEditor) {
-    // ⌘Enter runs the cell only if its code changed, then adds one below.
     return differs(st, inEditor) ? { start: [inEditor.id], changes: true } : null;
   }
   return null;
 }
 
-/** Does `e` again, as the user did it, for Pluto's own handlers. */
 function replayOf(e: Event): () => void {
   const target = e.target as HTMLElement;
   if (e.type === "click") return () => target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -146,15 +128,10 @@ function close() {
   shown = null;
 }
 
-/** Cancel: nothing runs, and the user's edits stay as they are. */
 function cancel() {
   close();
 }
 
-/** Run anyway: the user's action, then, once the asked-about cells are under
- * way, the cards answered. In that order, so Claude's approved call finds them
- * already running and doesn't run them again; each cell's last run from
- * before tells the runtime which run is the user's. */
 function runAnyway() {
   if (!shown) return;
   const { hit, replay } = shown;
@@ -202,11 +179,12 @@ function show(hit: Waiting[], changes: boolean, replay: () => void, deps: Depend
   el.querySelector<HTMLButtonElement>(".run")!.focus();
 }
 
+const inSafePreviewWhereSavingRunsNothing = (st: EditorState) => st.notebook?.process_status === "waiting_for_permission";
+
 function guard(e: Event) {
   if (replaying || !waiting.length || !byUser(e)) return;
   const st = editor();
-  // Safe preview: ⌘S saves without running anything.
-  if (!st?.notebook || st.notebook.process_status === "waiting_for_permission") return;
+  if (!st?.notebook || inSafePreviewWhereSavingRunsNothing(st)) return;
   const run = runStart(e, st);
   if (!run) return;
   const deps = st.notebook.cell_dependencies ?? {};

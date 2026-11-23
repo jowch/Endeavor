@@ -1,5 +1,3 @@
-// Point in a fake Pluto page: what the pointer picks, lines dragged over code,
-// boxes, and the quote message the app gets.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

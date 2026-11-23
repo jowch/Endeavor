@@ -1,13 +1,3 @@
-// Point ("annotation mode" in the code). While it's on, the
-// pointer picks the smallest thing under it instead of editing: a figure or
-// an output, a code block, a Markdown paragraph, or the whole cell from its
-// edge. A drag that starts on code picks whole lines, a drag anywhere else
-// (or any ⌥-drag) draws a box, and Shift adds to the pick. Pluto's own
-// selected cells are picked on entry. The comment bar opens by the pick
-// (place.ts) and is the same prompt as ⌘E's and Reply's (askbox.ts): ↩ sends the picks and
-// the comment now, ⌘↩ adds them to the chat's message, and Point stays on for
-// the next pick. Only ⌘⇧E toggles Point (⌘E alone asks about a cell).
-
 import { byUser, on, send } from "./bridge";
 import { barPlace } from "./place";
 import { askBox } from "./askbox";
@@ -17,15 +7,11 @@ import { cellCode } from "./reveal";
 import { context } from "./state";
 
 const css = `
-  /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
   body.annotating pluto-cell:hover, body.annotating pluto-cell :hover { cursor: crosshair !important; }
-  /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
-     pill, dashed hover and solid picked outlines, dashed box for a drawn region. */
   body.annotating .annotate-hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 3px; }
   body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
   body.annotating.annotate-drawing .annotate-hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
-  /* Pluto's own gutter numbers, which it shows as dots until hovered. */
   body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
   body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
   body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
@@ -37,7 +23,6 @@ const css = `
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
     border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
-  /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
     display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
     box-sizing: border-box; max-width: calc(100% - 16px); width: max-content; text-align: center;
@@ -56,25 +41,23 @@ const css = `
     #annotate-hint, #annotate-bar { border-color: var(--e-popover-edge); }
     #annotate-hint { box-shadow: 0 12px 32px var(--e-shadow-popover); }
   }
-  /* While the app takes a picture, the notebook shows as it is. */
   body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box, body.annotating.${SHOOTING} #annotate-tag,
   body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
   body.annotating.${SHOOTING} .annotate-picked, body.annotating.${SHOOTING} .annotate-hover { outline: none; }
   body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
 `;
 
-/** A drag shorter than this (in CSS pixels) is a click. */
+const pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor = "pointerdown";
+const aFrameAfterPointShowsSinceNumberingRestylesEveryLine = (fn: () => void) => requestAnimationFrame(() => setTimeout(fn));
+
 const DRAG = 4;
 
-/** What the pointer is over: which part of which cell, and the element that shows it. */
 export type Target = { part: "cell" | "code" | "output" | "figure"; cell: HTMLElement; el: HTMLElement };
 
 const FIGURE = "img, svg, canvas, video";
 const PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
 const TREE = "pluto-tree, table.pluto-table";
 
-/** The smallest thing Point can pick under `el`: a figure, a Markdown
- * paragraph or an output; the code block; else (the cell's edge) the cell. */
 export function targetAt(el: Element | null): Target | null {
   const cell = el?.closest<HTMLElement>("pluto-cell");
   if (!el || !cell) return null;
@@ -82,12 +65,9 @@ export function targetAt(el: Element | null): Target | null {
   if (input) return { part: "code", cell, el: input };
   const output = el.closest<HTMLElement>("pluto-output");
   if (!output) return { part: "cell", cell, el: cell };
-  // The outermost figure element, not a shape inside an SVG.
   let figure = el.closest<HTMLElement>(FIGURE);
   while (figure?.parentElement?.closest(FIGURE) && output.contains(figure.parentElement.closest(FIGURE))) figure = figure.parentElement.closest<HTMLElement>(FIGURE);
   if (figure && output.contains(figure)) return { part: "figure", cell, el: figure };
-  // Pluto's list and table views (`collect(1:100000)`, a DataFrame) are one
-  // output, not their items: a click on one value would quote just "11".
   let tree = el.closest<HTMLElement>(TREE);
   while (tree?.parentElement?.closest(TREE) && output.contains(tree.parentElement.closest(TREE))) tree = tree.parentElement.closest<HTMLElement>(TREE);
   if (tree && output.contains(tree)) return { part: "output", cell, el: tree };
@@ -96,11 +76,8 @@ export function targetAt(el: Element | null): Target | null {
   return { part: output.querySelector(FIGURE) ? "figure" : "output", cell, el: output };
 }
 
-/** The values a widget output shows (a slider's position, a box's text), for
- * the quote when the output has no text of its own. */
 export function widgetValues(el: Element): string {
   return [...el.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea")]
-    // Never a password's, which the quote would put in Claude's message box.
     .filter((i) => !(i instanceof HTMLInputElement) || !["hidden", "password", "file", "button", "submit", "reset", "image"].includes(i.type))
     .map((i) => {
       const kind = i instanceof HTMLInputElement ? i.type : i.tagName.toLowerCase();
@@ -110,8 +87,6 @@ export function widgetValues(el: Element): string {
     .join("\n");
 }
 
-/** A picked thing: the quote it becomes, and what shows it (to outline it
- * and place the bar by it). A figure or box takes its picture on sending. */
 type Picked = { pick: Pick; el?: HTMLElement; lines?: HTMLElement[]; box?: Box };
 
 const pageBox = (r: DOMRect): Box => ({
@@ -121,10 +96,8 @@ const pageBox = (r: DOMRect): Box => ({
   bottom: r.bottom + window.scrollY,
 });
 
-/** A cell's code lines as the page shows them. */
 const cmLines = (cell: Element) => [...cell.querySelectorAll<HTMLElement>("pluto-input .cm-line")];
 
-/** What the bar says is picked: "Figure in plot_fit", "Lines 4–7 of plot_fit", "3 picks". */
 export function pickStatus(picks: Pick[]): string {
   if (picks.length > 1) return `${picks.length} picks`;
   const pick = picks[0];
@@ -143,7 +116,6 @@ export function pickStatus(picks: Pick[]): string {
   }
 }
 
-/** The same picks: the same element, the same lines of one cell, or boxes. */
 function samePick(a: Picked, b: Picked): boolean {
   if (a.box || b.box) return a === b;
   if (a.pick.part === "lines" && b.pick.part === "lines") return a.pick.cell === b.pick.cell && a.pick.lines.join() === b.pick.lines.join();
@@ -152,7 +124,6 @@ function samePick(a: Picked, b: Picked): boolean {
 
 let state: { picks: Picked[]; status: () => string; comment: () => string } | null = null;
 
-/** Point's state for the state dump (debug.ts). */
 export function pointState(): { picked: string[]; picks: string[]; box: boolean; status: string; comment: string } {
   const picks = state?.picks ?? [];
   const cells = picks.flatMap((p) => (p.pick.part === "box" ? p.pick.cells : [p.pick.cell]));
@@ -165,10 +136,7 @@ export function pointState(): { picked: string[]; picks: string[]; box: boolean;
   };
 }
 
-/** `answered`: the host answers each ↩ with `quote_sent`, and takes no pictures (Claude's notebook view):
- * a figure or box goes at once, without the wait for a picture, which held the message back for
- * seconds there (no "shot" ever came), past the moment the host takes it. */
-export function initAnnotate(answered = false): void {
+export function initAnnotate(hostAnswersEachSendAndTakesNoPictures = false): void {
   const picks: Picked[] = [];
   let hover: Target | null = null;
   const active = () => document.body.classList.contains("annotating");
@@ -193,8 +161,6 @@ export function initAnnotate(answered = false): void {
   document.head.append(style);
   document.body.append(frame, box, tag, hint, bar);
   state = { picks, status: () => (active() ? field.what.textContent ?? "" : ""), comment: () => text.value };
-  // The field is built once, before the session's actual agent reaches the
-  // page, so its label and placeholder need redoing once it does.
   on("context", () => {
     const label = `Comment for ${context.agent}`;
     field.root.setAttribute("aria-label", label);
@@ -208,7 +174,6 @@ export function initAnnotate(answered = false): void {
     Object.assign(box.style, { left: `${b.left}px`, top: `${b.top}px`, width: `${b.right - b.left}px`, height: `${b.bottom - b.top}px` });
   }
 
-  /** Where the last pick is in the viewport: a box, the picked lines, or its element. */
   function lastRect(): { left: number; top: number; right: number; bottom: number } | null {
     const last = picks.at(-1);
     if (!last) return null;
@@ -222,7 +187,6 @@ export function initAnnotate(answered = false): void {
     return { left: first.left, top: first.top, right: Math.max(first.right, end.right), bottom: end.bottom };
   }
 
-  // The bar opens by the pick (place.ts) and follows it as the notebook scrolls.
   function place() {
     const rect = lastRect();
     bar.classList.toggle("placed", !!rect);
@@ -257,7 +221,6 @@ export function initAnnotate(answered = false): void {
     place();
   }
 
-  /** Pick `next`: with Shift, add it (or take it back out); else it's the only pick. */
   function choose(next: Picked, add: boolean) {
     const at = picks.findIndex((p) => samePick(p, next));
     if (add) at >= 0 ? picks.splice(at, 1) : picks.push(next);
@@ -272,7 +235,6 @@ export function initAnnotate(answered = false): void {
     switch (target.part) {
       case "cell":
         return { pick: { part: "cell", cell: cell.id, code }, el };
-      // A click on the code picks the cell; a drag over its lines picks those lines.
       case "code":
         return { pick: { part: "cell", cell: cell.id, code }, el };
       case "output":
@@ -302,38 +264,31 @@ export function initAnnotate(answered = false): void {
     }
     refresh();
     send({ type: "mode", on: enable });
-    // Numbering restyles every code line, so it follows a frame after Point shows or hides.
-    requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
+    aFrameAfterPointShowsSinceNumberingRestylesEveryLine(() => document.body.classList.toggle("annotate-numbers", active()));
   }
 
-  // The picks and comment of each ↩ under way, by its ref, until the chat answers (`quote_sent`):
-  // answers can come in any order (a refusal is tried again, a picture takes time).
   const underWay = new Map<number, { picks: Picked[]; comment: string }>();
   let nextRef = 1;
-  // Stays in Point afterwards, ready for the next pick. Pictures are taken
-  // one at a time, each brought into view.
   async function sendComment(add: boolean) {
     if (!picks.length) return;
     const sending = picks.splice(0, picks.length);
     const comment = text.value.trim();
-    const ref = !add && answered ? nextRef++ : undefined;
+    const ref = !add && hostAnswersEachSendAndTakesNoPictures ? nextRef++ : undefined;
     if (ref !== undefined) underWay.set(ref, { picks: sending, comment });
     text.value = "";
     text.dispatchEvent(new Event("input"));
     refresh();
     const out: Pick[] = [];
     for (const p of sending) {
-      if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
+      if (!hostAnswersEachSendAndTakesNoPictures && (p.pick.part === "box" || p.pick.part === "figure")) {
         const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
         out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
-      } else if (answered && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
+      } else if (hostAnswersEachSendAndTakesNoPictures && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
       else out.push(p.pick);
     }
     sendQuote(out, comment, add, ref);
   }
 
-  // A press starts a drag: over lines when it starts on code (and ⌥ isn't
-  // held), else a box, once it moves DRAG pixels.
   let drag: { x: number; y: number; moved: boolean; lines?: { cell: HTMLElement; from: number; to: number }; add: boolean } | null = null;
   let justDragged = false;
   const dragBox = (e: MouseEvent): Box => {
@@ -344,15 +299,12 @@ export function initAnnotate(answered = false): void {
     const line = el?.closest<HTMLElement>(".cm-line");
     return line && cell.contains(line) ? cmLines(cell).indexOf(line) + 1 : 0;
   };
-  // The view's toolbar (view.ts) too: its Point button ends Point, and Docs opens the docs.
   const ours = (target: Element) => bar.contains(target) || hint.contains(target) || !!target.closest?.("#endeavor-bar");
 
-  // Capture phase so Pluto/CodeMirror never see presses meant for picking.
   const swallow = (e: Event) => {
     const target = e.target as Element;
     if (!active() || ours(target)) return;
-    // Cancelling pointerdown would also cancel the mousedown/mousemove/mouseup drags listen for.
-    if (e.type !== "pointerdown") e.preventDefault();
+    if (e.type !== pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor) e.preventDefault();
     e.stopPropagation();
     const m = e as MouseEvent;
     if (e.type === "mousedown" && m.button === 0) {
@@ -415,7 +367,6 @@ export function initAnnotate(answered = false): void {
   window.addEventListener("scroll", () => active() && place(), true);
   window.addEventListener("resize", () => active() && place());
 
-  // Window capture runs before Pluto's own Escape. ⌘⇧E is the app's alone: a menu item, it never reaches the page.
   window.addEventListener(
     "keydown",
     (e) => {
@@ -430,8 +381,6 @@ export function initAnnotate(answered = false): void {
   hint.querySelector<HTMLElement>(".done")!.onclick = () => set(false);
 
   on("annotate", (msg) => set(msg.on));
-  // Refused: back as they were, ahead of anything picked or typed since, so the next ↩ sends them again.
-  // Point turned off since: it comes back on, with them.
   on("quote_sent", (msg) => {
     const sent = underWay.get(msg.ref);
     underWay.delete(msg.ref);

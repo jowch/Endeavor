@@ -1,9 +1,3 @@
-// Safe preview in the Endeavor look: one callout at the top of the notebook
-// instead of Pluto's per-cell "Code not executed" labels and its header pill.
-// Its Run notebook is the only one: it asks the app, which answers the agent's
-// pending "Let this notebook run?" card if there is one (the same state), or
-// lets the notebook run itself. Editing stays allowed, as in Pluto.
-
 import { byUser, send } from "./bridge";
 import { onRedraw } from "./redraw";
 import { context, current, notebookId, onNotebook } from "./state";
@@ -30,15 +24,11 @@ const css = `
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
-/** Escaped, with `backticked` names as code. */
 const withCode = (s: string) => escape(s).replace(/`([^`]*)`/g, "<code>$1</code>");
 
 const shield = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 1.2 12 3v3.6c0 3-2.2 5.2-5 6.2-2.8-1-5-3.2-5-6.2V3z"/></svg>`;
 const play = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="stroke: var(--e-accent-text)" stroke-width="1.3"><path d="M2.5 1.5v7l6-3.5z"/></svg>`;
 
-/** What running would do on Ember's page, as Ember's own banner says it (its
- * `plan_text`, from `notebook.ember.plan`); "" when running installs and
- * restarts nothing, and on Pluto's page, which has no plan. */
 export function planText(plan: { install?: number; restart?: string[] } | null | undefined): string {
   if (!plan) return "";
   const install = plan.install ?? 0;
@@ -70,7 +60,6 @@ function render() {
   }
 }
 
-/** At the top of the notebook, above the first cell; Pluto redraws main, so it's put back. */
 function place() {
   const notebook = document.querySelector("main pluto-notebook");
   if (notebook && callout.nextElementSibling !== notebook) notebook.before(callout);

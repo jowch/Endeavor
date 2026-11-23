@@ -2,24 +2,25 @@
 (() => {
   // src/bridge.ts
   var handlers = {};
-  var nonce = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
-  var handler = window.webkit?.messageHandlers?.ipc;
-  var post = handler ? handler.postMessage.bind(handler) : (body) => window.ipc?.postMessage(body);
-  var host = null;
-  function setHost(handler2) {
-    host = handler2;
+  var launchSecret = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
+  var webkitIpcBeforePageScripts = window.webkit?.messageHandlers?.ipc;
+  var post = webkitIpcBeforePageScripts ? webkitIpcBeforePageScripts.postMessage.bind(webkitIpcBeforePageScripts) : (body) => window.ipc?.postMessage(body);
+  var hostOutsideTheApp = null;
+  function setHost(handler) {
+    hostOutsideTheApp = handler;
   }
   function send(msg) {
-    if (host) return host(msg);
-    post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
+    if (hostOutsideTheApp) return hostOutsideTheApp(msg);
+    post(JSON.stringify(launchSecret ? { ...msg, nonce: launchSecret } : msg));
   }
-  var byUser = (e) => e.isTrusted || !nonce && !host;
-  function on(type, handler2) {
-    (handlers[type] ??= []).push(handler2);
+  var inTestsWithoutApp = () => !launchSecret && !hostOutsideTheApp;
+  var byUser = (e) => e.isTrusted || inTestsWithoutApp();
+  function on(type, handler) {
+    (handlers[type] ??= []).push(handler);
   }
   window.__endeavor = {
     receive(msg) {
-      handlers[msg.type]?.forEach((handler2) => handler2(msg));
+      handlers[msg.type]?.forEach((handler) => handler(msg));
     }
   };
 
@@ -265,7 +266,6 @@
     lines: svg(`<path d="M2 4.5h6M2 8h5M2 11.5h6"></path><path d="M11.5 3v10M10 3h3M10 13h3"></path>`),
     text: svg(`<path d="M3 4.5h10M3 8h10M3 11.5h6"></path>`),
     add: svg(`<path d="M8 3.5v9M3.5 8h9"></path>`),
-    // Point's own glyph (the board's Pointer icon, Glyph::Pointer in new_session.rs).
     point: svg(`<path d="M3.3 2 3.3 13.3 6.4 10.4 8.8 14.7 10.7 13.7 8.4 9.5 12.7 9.5Z"></path>`),
     none: ""
   };
@@ -274,6 +274,9 @@
   var QUOTE = svg(`<path d="M3 4.5h3.75v3.75H5c0 1.6-.6 2.6-2 3.25"></path><path d="M9.25 4.5H13v3.75h-1.75c0 1.6-.6 2.6-2 3.25"></path>`, 14);
   var KEYS = mac ? { send: "\u21A9", add: "\u2318\u21A9" } : { send: "Enter", add: "Ctrl+Enter" };
   var WORKING = "endeavorWorking";
+  var LINE_PX = 21;
+  var LINES_BEFORE_IT_SCROLLS = 6;
+  var keepTheKeyboardInTheField = (e) => e.preventDefault();
   var css = `
   .endeavor-prompt { box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; font: 13px/18px system-ui, sans-serif;
     color: var(--e-text-primary); text-align: left; }
@@ -281,7 +284,6 @@
     background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); }
   .endeavor-prompt .head { display: flex; align-items: center; gap: 8px; padding: 0 2px 0 4px; font-size: 12px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; }
-  /* In a narrow bar (Claude's side panel goes down to about 320 px) the key hints give way first, so what was picked still reads. */
   .endeavor-prompt .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .what svg { flex: none; }
   .endeavor-prompt .what .name { font-family: JuliaMono, ui-monospace, monospace; font-size: 11.5px; color: var(--e-text-secondary); }
@@ -340,8 +342,8 @@
     };
     const fit = () => {
       sendButton.classList.toggle("ready", !!text.value.trim());
-      text.style.height = "21px";
-      text.style.height = `${Math.min(text.scrollHeight, 126)}px`;
+      text.style.height = `${LINE_PX}px`;
+      text.style.height = `${Math.min(text.scrollHeight, LINE_PX * LINES_BEFORE_IT_SCROLLS)}px`;
     };
     text.addEventListener("input", fit);
     text.addEventListener(
@@ -356,7 +358,7 @@
       },
       true
     );
-    for (const button of root.querySelectorAll("button")) button.onmousedown = (e) => e.preventDefault();
+    for (const button of root.querySelectorAll("button")) button.onmousedown = keepTheKeyboardInTheField;
     options.onclick = () => showMenu(menu.hidden);
     sendButton.onclick = (e) => o.done(false, e);
     for (const item of menu.querySelectorAll("[role=menuitem]")) {
@@ -429,15 +431,11 @@
 
   // src/annotate.ts
   var css2 = `
-  /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
   body.annotating pluto-cell:hover, body.annotating pluto-cell :hover { cursor: crosshair !important; }
-  /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
-     pill, dashed hover and solid picked outlines, dashed box for a drawn region. */
   body.annotating .annotate-hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 3px; }
   body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
   body.annotating.annotate-drawing .annotate-hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
-  /* Pluto's own gutter numbers, which it shows as dots until hovered. */
   body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
   body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
   body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
@@ -449,7 +447,6 @@
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
     border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
-  /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
     display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
     box-sizing: border-box; max-width: calc(100% - 16px); width: max-content; text-align: center;
@@ -468,12 +465,13 @@
     #annotate-hint, #annotate-bar { border-color: var(--e-popover-edge); }
     #annotate-hint { box-shadow: 0 12px 32px var(--e-shadow-popover); }
   }
-  /* While the app takes a picture, the notebook shows as it is. */
   body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box, body.annotating.${SHOOTING} #annotate-tag,
   body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
   body.annotating.${SHOOTING} .annotate-picked, body.annotating.${SHOOTING} .annotate-hover { outline: none; }
   body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
 `;
+  var pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor = "pointerdown";
+  var aFrameAfterPointShowsSinceNumberingRestylesEveryLine = (fn) => requestAnimationFrame(() => setTimeout(fn));
   var DRAG = 4;
   var FIGURE = "img, svg, canvas, video";
   var PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
@@ -543,7 +541,7 @@
       comment: state?.comment() ?? ""
     };
   }
-  function initAnnotate(answered = false) {
+  function initAnnotate(hostAnswersEachSendAndTakesNoPictures = false) {
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
@@ -634,7 +632,6 @@
       switch (target.part) {
         case "cell":
           return { pick: { part: "cell", cell: cell.id, code }, el };
-        // A click on the code picks the cell; a drag over its lines picks those lines.
         case "code":
           return { pick: { part: "cell", cell: cell.id, code }, el };
         case "output":
@@ -662,7 +659,7 @@
       }
       refresh();
       send({ type: "mode", on: enable });
-      requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
+      aFrameAfterPointShowsSinceNumberingRestylesEveryLine(() => document.body.classList.toggle("annotate-numbers", active()));
     }
     const underWay = /* @__PURE__ */ new Map();
     let nextRef = 1;
@@ -670,17 +667,17 @@
       if (!picks.length) return;
       const sending = picks.splice(0, picks.length);
       const comment = text.value.trim();
-      const ref = !add && answered ? nextRef++ : void 0;
+      const ref = !add && hostAnswersEachSendAndTakesNoPictures ? nextRef++ : void 0;
       if (ref !== void 0) underWay.set(ref, { picks: sending, comment });
       text.value = "";
       text.dispatchEvent(new Event("input"));
       refresh();
       const out = [];
       for (const p of sending) {
-        if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
+        if (!hostAnswersEachSendAndTakesNoPictures && (p.pick.part === "box" || p.pick.part === "figure")) {
           const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
-        } else if (answered && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
+        } else if (hostAnswersEachSendAndTakesNoPictures && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
         else out.push(p.pick);
       }
       sendQuote(out, comment, add, ref);
@@ -699,7 +696,7 @@
     const swallow = (e) => {
       const target = e.target;
       if (!active() || ours(target)) return;
-      if (e.type !== "pointerdown") e.preventDefault();
+      if (e.type !== pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor) e.preventDefault();
       e.stopPropagation();
       const m = e;
       if (e.type === "mousedown" && m.button === 0) {
@@ -859,9 +856,6 @@ ${text.value}` : sent.comment;
   #endeavor-find button { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: none; border-radius: 6px;
     background: none; color: var(--e-text-secondary); font: inherit; cursor: pointer; }
   #endeavor-find button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
-  /* Matches in Endeavor's orange (Jonathan, 2026-11-18: the old pale yellow looked grey on dark code):
-     the current one solid, with white text, so it stands out; the others a light tint, so the code
-     under them stays readable. Keep the dark tint at 40% or less, or it looks like the current one. */
   ::highlight(endeavor-find) { background-color: rgba(204, 63, 0, 0.2); }
   ::highlight(endeavor-find-current) { background-color: #CC3F00; color: white; }
   @media (prefers-color-scheme: dark) {
@@ -870,6 +864,7 @@ ${text.value}` : sent.comment;
 `;
   var highlights = () => globalThis.CSS?.highlights;
   var Highlight = () => globalThis.Highlight;
+  var keepPlutosKeysForTheCells = (e) => e.stopPropagation();
   function initFind(button) {
     const style = document.createElement("style");
     style.id = "endeavor-find-style";
@@ -959,7 +954,7 @@ ${text.value}` : sent.comment;
         e.preventDefault();
         close();
       }
-      e.stopPropagation();
+      keepPlutosKeysForTheCells(e);
     });
     box.querySelector(".previous").addEventListener("click", () => step(-1));
     box.querySelector(".next").addEventListener("click", () => step(1));
@@ -1074,10 +1069,8 @@ ${text.value}` : sent.comment;
 
   // src/narrow.ts
   var css4 = `
-  /* Long words and links in Markdown wrap at the cell's edge, rather than run past it. */
   pluto-editor pluto-output :is(p, li, blockquote, h1, h2, h3, h4, h5, h6, dt, dd) { overflow-wrap: break-word; }
   @media (max-width: 600px) {
-    /* Pluto's are 2.2, 1.8, 1.6, 1.4 and 1.2rem. The pluto-editor in front outweighs Pluto's own rules, whichever loads last. */
     pluto-editor pluto-output h1 { font-size: 1.6rem; }
     pluto-editor pluto-output h2 { font-size: 1.4rem; }
     pluto-editor pluto-output h3 { font-size: 1.25rem; }
@@ -1096,43 +1089,24 @@ ${text.value}` : sent.comment;
   var EMBER = "pluto-editor:has(> #ember-run-status)";
   var PLUTO = "pluto-editor:not(:has(> #ember-run-status))";
   var css5 = `
-  /* Left of a cell: Pluto's eye (16 px icon), or Ember's eye and run button (46 px, Ember's own
-     measure). Right: 10 px, for an overlay scrollbar's thumb. */
   pluto-editor { --e-left: 26px; --e-right: 10px; }
   ${EMBER} { --e-left: 46px; }
-  /* Ember keeps 52 px at the top for its own header, which the view hides. */
   pluto-editor { padding-top: 0 !important; }
-  /* Under the toolbar, only the room the first cell's add-cell button needs (the cell's own margin). */
   pluto-editor > main { padding-top: 4px !important; }
-  /* Under the last cell: enough to bring it up off the bottom edge and clear Point's bar, not Pluto's
-     16rem, which in a 721 px panel was a third of it empty. */
   pluto-editor:not(.disable_ui) > main { padding-bottom: 96px !important; }
-  /* The page is the panel's height under the toolbar, so a short notebook doesn't scroll by the toolbar's height. */
   body > div:has(> pluto-editor) { min-height: calc(100vh - var(--endeavor-bar)) !important; }
-  /* 760 px is where the panel ends and full screen begins, here and for Docs and Status (view.ts):
-     below it they open as a drawer along the bottom, from it as a sheet down the right. */
   @media (max-width: 759px) {
-    /* The panel: cells from the eye to the scrollbar, whatever the width. */
     pluto-editor main { margin-left: 0 !important; margin-right: 0 !important; width: 100% !important; max-width: none !important;
       box-sizing: border-box; padding-left: var(--e-left) !important; padding-right: var(--e-right) !important; }
   }
   @media (min-width: 760px) {
-    /* Full screen: a wider column, centred, for long code lines and wide tables. Prose keeps a
-       readable measure (the cap holds a Markdown cell's own images and tables to it too). Not beside
-       PlutoUI's table of contents, which floats at the right. */
     ${PLUTO}:not(:has(.plutoui-toc.aside)) main, ${EMBER} main { max-width: 1031px !important; margin-left: auto !important; margin-right: auto !important; }
     pluto-output .markdown { max-width: 720px; }
-    /* With Docs or Status open as a sheet down the right (view.ts), the column moves out from under it,
-       to the left edge. The selector must outweigh the column rule above (1,2,2: its :has(.plutoui-toc.aside)
-       counts two classes); this one is (1,2,4). */
     body:has(pluto-helpbox:not(.hidden)) :is(${PLUTO}, ${EMBER}):not(.disable_ui) main { margin-left: 0 !important; margin-right: 392px !important;
       padding-left: var(--e-left) !important; max-width: min(1031px, calc(100% - 392px)) !important; }
   }
-  /* A Markdown cell's first heading starts at the top of its output, not a line below it. */
   pluto-editor pluto-output .markdown > :first-child { margin-top: 0 !important; }
-  /* The eye sits right against the cell, without Pluto's 10 px of padding to its left. */
   ${PLUTO} pluto-shoulder > button { padding-left: 4px !important; }
-  /* Inside a cell, the line numbers (dots until hovered) take two digits' room, not 31 px (Pluto) or 34 px (Ember). */
   ${PLUTO} pluto-input .cm-editor .cm-gutter { min-width: 0 !important; }
   ${PLUTO} pluto-input .cm-editor .cm-lineNumbers .cm-gutterElement { min-width: 16px; padding: 0 2px 0 3px !important; }
   ${PLUTO} pluto-input .cm-editor .cm-line { padding-left: 4px !important; }
@@ -1184,8 +1158,6 @@ ${text.value}` : sent.comment;
   --e-dialog-edge: #2A2A2E;
   --e-dialog-shadow: rgba(0, 0, 0, 0.5);
 
-  /* Colours used by one or a few modules that don't match one of the tokens
-     above closely enough to reuse it without shifting the dark look. */
   --e-text-dim: #7A7978;
   --e-text-waiting: #5E5E5E;
   --e-text-code: #D4D4D4;
@@ -1296,7 +1268,6 @@ ${text.value}` : sent.comment;
     --cm-color-builtin: #9AB6E6;
     --cm-color-comment: #858585;
     --cm-color-line-numbers: #555555;
-    /* Live docs */
     --helpbox-bg-color: #1C1C1F;
     --helpbox-header-bg-color: #26262A;
     --helpbox-header-tab-bg-color: #26262A;
@@ -1306,13 +1277,11 @@ ${text.value}` : sent.comment;
     --helpbox-search-border-color: #3A3A40;
     --helpbox-box-shadow-color: rgba(0, 0, 0, 0.3);
     --docs-binding-bg: #26262A;
-    /* Frontmatter and Pluto's other dialogs */
     --export-bg-color: #1C1C1F;
     --export-color: #D4D4D4;
     --frontmatter-button-bg-color: #26262A;
     --frontmatter-input-bg-color: #151517;
     --frontmatter-input-border-color: #3A3A40;
-    /* A cell's run time: faint text, no chip */
     --pluto-runarea-bg-color: transparent;
     --pluto-runarea-span-color: #858483;
   }
@@ -1353,7 +1322,6 @@ ${text.value}` : sent.comment;
     --cm-color-builtin: #2F5FA6;
     --cm-color-comment: #6B6B73;
     --cm-color-line-numbers: #6E6E76;
-    /* Live docs */
     --helpbox-bg-color: #F4F4F6;
     --helpbox-header-bg-color: #EAEAED;
     --helpbox-header-tab-bg-color: #EAEAED;
@@ -1363,13 +1331,11 @@ ${text.value}` : sent.comment;
     --helpbox-search-border-color: #8A8A92;
     --helpbox-box-shadow-color: rgba(20, 20, 30, 0.12);
     --docs-binding-bg: #EAEAED;
-    /* Frontmatter and Pluto's other dialogs */
     --export-bg-color: #FFFFFF;
     --export-color: #26262B;
     --frontmatter-button-bg-color: #EAEAED;
     --frontmatter-input-bg-color: #FCFCFD;
     --frontmatter-input-border-color: #8A8A92;
-    /* A cell's run time: faint text, no chip */
     --pluto-runarea-bg-color: transparent;
     --pluto-runarea-span-color: #6B6B73;
   }
@@ -1382,43 +1348,21 @@ ${text.value}` : sent.comment;
 }
 `;
   var layout = `
-/* The cells' side gap is the chat column's margin (main.rs, chat_margin): 50px,
-   shrinking with the pane's width (50 per 860) at narrow widths, but never under
-   28px, which Pluto's shoulder (the show/hide-code eye, the status bar) needs
-   left of a cell. main's own padding (25px left, 6px right) is part of that gap,
-   less the 5px a cell's box reaches left of its edge.
-   Left-aligned, not centred (Pluto classic stays centred): a floated PlutoUI
-   TableOfContents sits at the right, and centring put it over the notebook
-   rather than beside it. 731px keeps the reading width Pluto centred at; while
-   the pane is narrower than that, the gaps on both sides are equal. Pluto's own
-   rule sizes main at width: 100%, so the margins come out of that width.
-   The overview rail (rail.ts) is fixed to the right of the viewport, not the
-   notebook, so it isn't affected either way. */
 pluto-editor { --e-side: clamp(28px, calc(100vw * 50 / 860), 50px); }
 pluto-editor main { margin-left: calc(var(--e-side) - 20px) !important; margin-right: auto !important;
   width: calc(100% - 2 * var(--e-side) + 20px + 6px) !important; max-width: 731px !important; }
-/* The preamble only holds Pluto's sticky "Save all changes" button; its 25px
-   strip above the first cell is gone, and the button floats over the top. */
 pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; overflow: visible; }
 pluto-runarea > span { font-size: 10px; }
 `;
+  var keepLiveDocsDisplayedSoPlutoNeverAlertsWindowTooSmall = `#helpbox-wrapper { display: block !important; }`;
   var appChrome = `
 header#pluto-nav, footer { display: none !important; }
-/* Not display: none \u2014 Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
-/* Pluto shows the panel only from 500px wide; a narrower notebook pane would alert on every panel it opens. */
-#helpbox-wrapper { display: block !important; }
+${keepLiveDocsDisplayedSoPlutoNeverAlertsWindowTooSmall}
 html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
   position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
 pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
 pluto-editor > main { padding-top: 16px; }
-/* The web view draws over native views, so the notebook header can't blur
-   what's under it (docs/ui-spec.md, "Fades, not blur").
-   Instead, the top of the page fades into the page background, so a cell
-   scrolled toward the top softens instead of cutting off hard. Fixed to the
-   viewport, not the scroller, and never over the first cell at rest: the
-   16px top padding above leaves exactly this fade's height clear.
-   pointer-events: none keeps clicks and selection reaching the page under it. */
 body::before {
   content: "";
   position: fixed;
@@ -1453,8 +1397,10 @@ nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group, #e
   var both = `
 footer form#feedback { display: none !important; }
 `;
-  var APP_FONTS = /Win/.test(navigator.platform) ? "http://endeavor.localhost/fonts" : "endeavor://localhost/fonts";
-  var JULIA_MONO_WEB = "https://cdn.jsdelivr.net/gh/cormullion/juliamono@v0.63.2/webfonts";
+  var wryWindowsFormOfEndeavorProtocol = "http://endeavor.localhost";
+  var APP_FONTS = `${/Win/.test(navigator.platform) ? wryWindowsFormOfEndeavorProtocol : "endeavor://localhost"}/fonts`;
+  var JULIA_MONO_TAG_BUNDLED_BY_FONTS_BUILD_PY = "v0.63.2";
+  var JULIA_MONO_WEB = `https://cdn.jsdelivr.net/gh/cormullion/juliamono@${JULIA_MONO_TAG_BUNDLED_BY_FONTS_BUILD_PY}/webfonts`;
   function juliaMonoFaces(from) {
     return [
       { file: "Regular", weight: 400, style: "normal" },
@@ -1473,17 +1419,18 @@ footer form#feedback { display: none !important; }
     }).join("");
   }
   function initTheme(fontsFrom = "app") {
-    const tokenSheet = document.createElement("style");
-    tokenSheet.id = "endeavor-tokens";
-    tokenSheet.textContent = tokens;
-    document.head.append(tokenSheet);
+    const tokenSheetBeforeEveryModulesStyles = document.createElement("style");
+    tokenSheetBeforeEveryModulesStyles.id = "endeavor-tokens";
+    tokenSheetBeforeEveryModulesStyles.textContent = tokens;
+    document.head.append(tokenSheetBeforeEveryModulesStyles);
     const fonts = document.createElement("style");
     fonts.id = "endeavor-fonts";
     fonts.textContent = juliaMonoFaces(fontsFrom);
     document.head.append(fonts);
     const style = document.createElement("style");
+    const afterPlutosSheetsSoEqualSpecificityWins = () => document.head.append(style);
     style.id = "endeavor-theme";
-    document.head.append(style);
+    afterPlutosSheetsSoEqualSpecificityWins();
     on("theme", (msg) => {
       const endeavor = msg.name === "endeavor";
       style.textContent = both + (endeavor ? endeavorLook + layout + appChrome + (onEmber() ? emberLook : "") : msg.name === "view" ? endeavorLook + layout : classic);
@@ -1495,7 +1442,7 @@ footer form#feedback { display: none !important; }
   // src/view.ts
   var format = (engine) => "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). A `lines` quote holds the lines the user picked, as they were then; the others hold no code or output. Read what the cells hold now with the notebook MCP tools (read_cell, view_cell_output). A box's `crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells. Only what could be drawn is in it, and when nothing could be, there's none.";
   var quoteNote = (engine = "pluto") => "[Endeavor] The user picked parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
-  var LEAD = "\u2193";
+  var LEAD_MARK_SO_DESKTOP_KEEPS_THE_NEWLINES = "\u2193";
   var LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
   var uri = (notebook, cell, engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
   var MESSAGE_MAX = 8e3;
@@ -1508,7 +1455,7 @@ footer form#feedback { display: none !important; }
     );
     const note = shortened ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.` : quoteNote(engine);
     const message = chatSafe(
-      `${LEAD}
+      `${LEAD_MARK_SO_DESKTOP_KEEPS_THE_NEWLINES}
 
 ${note}${LEAD_NOTE}
 
@@ -1539,6 +1486,7 @@ ${pick.text}
 ${comment}` : blocks.join("\n\n");
   }
   var DRAWER = 40;
+  var AFTER_PLUTOS_NEXT_RENDER_DRAWS_THE_PANEL_MS = 50;
   var BAR = 32;
   var chrome = `
   :root { --endeavor-bar: ${BAR}px; }
@@ -1549,8 +1497,6 @@ ${comment}` : blocks.join("\n\n");
     display: block !important; position: sticky; top: var(--endeavor-bar); z-index: 60; }
   pluto-editor > header#pluto-nav nav#at_the_top > :not(#process_status) { display: none !important; }
   pluto-editor > header#pluto-nav nav#at_the_top { justify-content: center; }
-  /* What Pluto keeps at the top as the page scrolls (its "Save all changes" button) and where a jump
-     to a cell lands go under the toolbar, not behind it. */
   pluto-editor main > preamble { top: calc(var(--endeavor-bar) + 5px) !important; }
   html { scroll-padding-top: calc(var(--endeavor-bar) + 8px); }
   #endeavor-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 9997; box-sizing: border-box; height: var(--endeavor-bar);
@@ -1565,13 +1511,6 @@ ${comment}` : blocks.join("\n\n");
   #endeavor-bar button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
   #endeavor-bar button.on { color: var(--e-text-primary); background: var(--e-bg-raised); }
   #endeavor-bar .key { color: var(--e-text-faint); }
-  /* Live docs and Status: Pluto's own panel, opened from Docs or Status, as a sheet down the right side under the toolbar,
-     or in a panel too narrow to keep the code beside it, a drawer along the bottom (#211), with room
-     under the last cell to scroll it above the drawer. Not display: none when shut: Pluto alerts
-     "window too small to show docs" whenever it opens a panel it finds undisplayed, and it hides the
-     panel below 500px wide. Ember's (R) panel is its own wrapper
-     round the help, with a scrim below 640 px: the wrapper takes the sheet's place, and no scrim
-     covers the code. */
   #helpbox-wrapper { display: block !important; }
   pluto-helpbox.hidden { display: none !important; }
   ${PLUTO} pluto-helpbox, ${EMBER} #helpbox-wrapper.open { position: fixed !important; top: var(--endeavor-bar) !important; bottom: 0 !important;
@@ -1580,21 +1519,16 @@ ${comment}` : blocks.join("\n\n");
     box-shadow: -8px 0 24px var(--e-shadow-popover) !important; }
   ${EMBER} pluto-helpbox { position: static !important; width: auto !important; height: 100% !important; border: none !important; box-shadow: none !important; }
   ${EMBER} .ember-scrim { display: none !important; }
-  /* Its own tabs and close button: Docs and Status in the toolbar open and close it. */
   pluto-helpbox > header { display: none !important; }
   @media (max-width: 759px) {
     ${PLUTO} pluto-helpbox, ${EMBER} #helpbox-wrapper.open { top: auto !important; left: 0 !important; width: auto !important; height: ${DRAWER}vh !important;
       border-left: none !important; border-top: 1px solid var(--e-divider) !important; box-shadow: 0 -8px 24px var(--e-shadow-popover) !important; }
-    /* Ember's sheet slides in from the right below 1240 px; as a drawer it comes up from the bottom. */
     ${EMBER} #helpbox-wrapper.open { animation-name: ember-slide-up !important; }
     body:has(pluto-helpbox:not(.hidden)) pluto-editor:not(.disable_ui) > main { padding-bottom: calc(${DRAWER}vh + 24px) !important; }
   }
-  /* A narrow panel: the file's name before the shortcut and the panel buttons' words (their icons stay). */
   @media (max-width: 420px) {
     #endeavor-bar .key, #endeavor-bar .panel .word, #endeavor-find-button .word { display: none; }
   }
-  /* Pluto's floating safe-preview badge is hidden, as in the app: its band and each cell's
-     "Code not executed in Safe preview" already say it. */
   .outline-frame-actions-container.safe-preview { display: none !important; }
 `;
   var css6 = `
@@ -1637,7 +1571,7 @@ ${comment}` : blocks.join("\n\n");
         if (!e.isTrusted) return;
         const open = panelOpen(tab);
         window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: open ? null : tab }));
-        if (!open && tab === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), 50);
+        if (!open && tab === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), AFTER_PLUTOS_NEXT_RENDER_DRAWS_THE_PANEL_MS);
       });
     pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
     initFind(bar.querySelector("#endeavor-find-button"));
@@ -1676,11 +1610,11 @@ ${comment}` : blocks.join("\n\n");
       });
     });
   }
-  var started = false;
-  function start(notebook, host2) {
-    if (started) return;
-    started = true;
-    const engine = host2.engine === "ember" ? "ember" : "pluto";
+  var startedSoNoLaterScriptCanTakePointsWayToTheChat = false;
+  function start(notebook, host) {
+    if (startedSoNoLaterScriptCanTakePointsWayToTheChat) return;
+    startedSoNoLaterScriptCanTakePointsWayToTheChat = true;
+    const engine = host.engine === "ember" ? "ember" : "pluto";
     const receive = (msg) => window.__endeavor?.receive(msg);
     const sent = document.createElement("div");
     sent.id = "endeavor-sent";
@@ -1693,7 +1627,7 @@ ${comment}` : blocks.join("\n\n");
     };
     const point = (on2) => receive({ type: "annotate", on: on2 });
     const ids = (picks) => picks.map(
-      (p) => p.part === "box" && p.rect && host2.crop && mayDraw(p.rect) ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("") : void 0
+      (p) => p.part === "box" && p.rect && host.crop && mayDraw(p.rect) ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("") : void 0
     );
     const draw = (q) => ({
       ...q,
@@ -1701,7 +1635,7 @@ ${comment}` : blocks.join("\n\n");
     });
     const keep = (q) => q.pngs.forEach((png, i) => {
       const id = q.crops?.[i];
-      if (id) png.then((png2) => png2 ? host2.crop?.(png2, id) : void 0).catch(() => {
+      if (id) png.then((png2) => png2 ? host.crop?.(png2, id) : void 0).catch(() => {
       });
     });
     const added = [];
@@ -1732,7 +1666,7 @@ ${comment}` : blocks.join("\n\n");
       }
       const earlier = added.splice(0);
       say("Sending to Claude's chat\u2026", 0);
-      const sending = host2.send(message);
+      const sending = host.send(message);
       const going = held ? earlier : [...earlier, draw(now)];
       sending.then(
         () => {
@@ -1758,12 +1692,12 @@ ${comment}` : blocks.join("\n\n");
     initNarrow();
     initSpace();
     closeStrayCompletions();
-    initLinks(host2.openLink);
+    initLinks(host.openLink);
     followNewCells();
     receive({ type: "theme", name: "view" });
-    initBar(host2.canSend, point);
+    initBar(host.canSend, point);
     followClaudesPalette();
-    if (!host2.canSend) return;
+    if (!host.canSend) return;
     initAskBox();
     initAnnotate(true);
     const style = document.createElement("style");
@@ -1804,7 +1738,6 @@ ${comment}` : blocks.join("\n\n");
   }
   var claudePalette = `
 html.claude-palette {
-  /* Pages, cards, raised controls */
   --e-bg-page: var(--color-background-primary);
   --e-bg-sidebar: var(--color-background-secondary);
   --e-bg-card: var(--color-background-secondary);
@@ -1815,7 +1748,6 @@ html.claude-palette {
   --e-menu-hover: var(--color-background-tertiary);
   --e-popover-bg: var(--color-background-primary);
   --e-dialog-bg: var(--color-background-primary);
-  /* Text */
   --e-text-primary: var(--color-text-primary);
   --e-text-secondary: var(--color-text-secondary);
   --e-text-muted: var(--color-text-secondary);
@@ -1824,13 +1756,11 @@ html.claude-palette {
   --e-text-faint: var(--color-text-tertiary);
   --e-text-dim: var(--color-text-tertiary);
   --e-hint-text: var(--color-text-secondary);
-  /* Edges */
   --e-border: var(--color-border-tertiary);
   --e-divider: var(--color-border-tertiary);
   --e-popover-edge: var(--color-border-secondary);
   --e-dialog-edge: var(--color-border-secondary);
   --e-control-edge: var(--color-border-primary);
-  /* Pluto's own colours that the Endeavor look sets */
   --main-bg-color: var(--color-background-primary);
   --header-bg-color: var(--color-background-primary);
   --footer-bg-color: var(--color-background-primary);

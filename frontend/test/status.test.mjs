@@ -1,4 +1,3 @@
-// The Status tab's rows (src/status.ts) from literal Pluto states and a real Pkg log.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -15,7 +14,6 @@ const colorsLog = readFileSync(new URL("./fixtures/pkg-colors.log", import.meta.
 
 const entry = (started, finished, subtasks = {}, success = null) => ({ started_at: started, finished_at: finished, success, subtasks });
 
-/** A notebook `using Colors, Statistics` whose first run is precompiling Colors. */
 function installing() {
   return {
     process_status: "starting",

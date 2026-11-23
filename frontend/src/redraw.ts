@@ -1,8 +1,3 @@
-// Pluto redraws cells and outputs freely; features that decorate them re-run
-// on each redraw (batched to one pass per microtask). Our own changes don't
-// count, so decorating never loops: data-* attributes, and anything inside an
-// element marked data-endeavor-ui (e.g. the rail, which redraws its marks).
-
 const hooks: Array<() => void> = [];
 let queued = false;
 

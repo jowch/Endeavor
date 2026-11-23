@@ -1,23 +1,12 @@
-// Find in the notebook, for the view in Claude's desktop app. Desktop's own ⌘F searches Desktop's page
-// and not the view's frame (Mac audit, 2026-11-12: 0/0 for text on screen), so the view has its own: a
-// Find button in the toolbar, and ⌘F (Ctrl+F) with the cursor in the view, which the view takes before
-// Desktop's bar opens (Mac, 2026-11-13). It searches the text on the page: the cells' code and their
-// outputs, as shown. A folded cell's code and the lines of a long cell that CodeMirror hasn't drawn are
-// left out, as a browser's find leaves them.
-
 import { mac, modHeld } from "./keys";
 
-/** Where a search looks: the notebook's cells (Pluto's and Ember's page), not the view's own chrome. */
 const ROOT = "pluto-notebook";
-/** A match never runs across two of these: a code line, a paragraph, a table cell, a cell. */
 const BLOCK = ".cm-line, p, li, td, th, h1, h2, h3, h4, h5, h6, pre, div, pluto-output, pluto-cell";
 
-/** The matches of `query` in the text under `root`, case-insensitive, in page order. */
 export function findMatches(root: Element, query: string): Range[] {
   const needle = query.toLowerCase();
   if (!needle) return [];
   const doc = root.ownerDocument;
-  // What isn't drawn (a folded cell's code, a closed details, display: none) isn't found. Asked once per element.
   const shown = new Map<Element, boolean>();
   const isShown = (el: Element) => {
     let yes = shown.get(el);
@@ -33,7 +22,6 @@ export function findMatches(root: Element, query: string): Range[] {
       return NodeFilter.FILTER_ACCEPT;
     },
   });
-  // The text, with a line break wherever the block changes or a <br> breaks the line, and which node each stretch came from.
   const pieces: { node: Text; at: number }[] = [];
   let text = "";
   let block: Element | null = null;
@@ -53,7 +41,6 @@ export function findMatches(root: Element, query: string): Range[] {
   }
   const haystack = text.toLowerCase();
   const point = (offset: number, end: boolean): [Text, number] => {
-    // The last piece starting at or before `offset` (for an end, before it).
     let lo = 0;
     let hi = pieces.length - 1;
     while (lo < hi) {
@@ -75,7 +62,6 @@ export function findMatches(root: Element, query: string): Range[] {
 
 const glass = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>`;
 
-/** The toolbar's Find button. */
 export const findButton = () =>
   `<button type="button" id="endeavor-find-button" title="Find in the notebook (${mac ? "⌘F" : "Ctrl+F"})" aria-label="Find">${glass}<span class="word">Find</span></button>`;
 
@@ -89,9 +75,6 @@ const css = `
   #endeavor-find button { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: none; border-radius: 6px;
     background: none; color: var(--e-text-secondary); font: inherit; cursor: pointer; }
   #endeavor-find button:hover { color: var(--e-text-primary); background: var(--e-button-hover); }
-  /* Matches in Endeavor's orange (Jonathan, 2026-11-18: the old pale yellow looked grey on dark code):
-     the current one solid, with white text, so it stands out; the others a light tint, so the code
-     under them stays readable. Keep the dark tint at 40% or less, or it looks like the current one. */
   ::highlight(endeavor-find) { background-color: rgba(204, 63, 0, 0.2); }
   ::highlight(endeavor-find-current) { background-color: #CC3F00; color: white; }
   @media (prefers-color-scheme: dark) {
@@ -103,7 +86,8 @@ type Highlights = { set(name: string, value: unknown): void; delete(name: string
 const highlights = (): Highlights | undefined => (globalThis as any).CSS?.highlights;
 const Highlight = (): (new (...ranges: Range[]) => unknown) | undefined => (globalThis as any).Highlight;
 
-/** The Find box under the toolbar, opened by `button` and by ⌘F (Ctrl+F). */
+const keepPlutosKeysForTheCells = (e: Event) => e.stopPropagation();
+
 export function initFind(button: HTMLButtonElement): { open(): void } {
   const style = document.createElement("style");
   style.id = "endeavor-find-style";
@@ -137,8 +121,6 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
     count.textContent = !input.value ? "" : matches.length ? `${current + 1} of ${matches.length}` : "No matches";
     paint();
     if (!range) return;
-    // Into sight: first inside any scrolling box around it (a long output, a wide table), then in the
-    // page, below the toolbar and this box.
     for (let el = range.startContainer.parentElement; el && el !== document.body; el = el.parentElement) {
       const style = getComputedStyle(el);
       const r = range.getBoundingClientRect();
@@ -156,7 +138,6 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
     const root = document.querySelector(ROOT);
     const before = matches[current];
     matches = root ? findMatches(root, input.value) : [];
-    // After the notebook changes, stay on the same match if it's still there; else the first.
     current = matches.length ? 0 : -1;
     if (keep && before) {
       const same = matches.findIndex((m) => m.compareBoundaryPoints(Range.START_TO_START, before) >= 0);
@@ -194,7 +175,6 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      // ↩ straight after typing goes to the first match of what was typed, not the next of the old search.
       if (typing) {
         clearTimeout(typing);
         typing = 0;
@@ -204,14 +184,12 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
       e.preventDefault();
       close();
     }
-    // Pluto's own keys (⌘S, Shift+Enter in a cell) are for the cells, not the box.
-    e.stopPropagation();
+    keepPlutosKeysForTheCells(e);
   });
   box.querySelector(".previous")!.addEventListener("click", () => step(-1));
   box.querySelector(".next")!.addEventListener("click", () => step(1));
   box.querySelector(".close")!.addEventListener("click", close);
   button.addEventListener("click", (e) => e.isTrusted && (isOpen() ? close() : open()));
-  // ⌘F (Ctrl+F) and ⌘G, with the cursor in the view. Before CodeMirror's own keys, and before Desktop's find.
   window.addEventListener(
     "keydown",
     (e) => {
@@ -229,7 +207,6 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
     },
     true,
   );
-  // The notebook changes under an open box (a cell runs, Claude adds one): search again, at most every 300 ms.
   let soon = 0;
   new MutationObserver((records) => {
     if (!isOpen() || !input.value || records.every((r) => box.contains(r.target))) return;

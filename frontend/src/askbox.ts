@@ -1,12 +1,3 @@
-// The one prompt for asking Claude from the notebook (docs/ui-spec.md, "The
-// prompt"): ⌘E on a cell, the ✦ Claude button between cells, Reply on a
-// selection, and Point's bar all build it here. A top line says what goes with
-// the message and the keys; under it an optional faint quote, then the field
-// with a send button (grey while empty, orange with words) and a ⌄ menu with
-// the same two ways to send. ↩ sends now (queued while Claude works), ⌘↩
-// (Ctrl+Enter off macOS) adds to the composer's message, ⇧↩ is a new line.
-// Typing here never reaches the notebook's shortcuts.
-
 import { on } from "./bridge";
 import { mac, modHeld } from "./keys";
 import { context } from "./state";
@@ -14,13 +5,11 @@ import { context } from "./state";
 const svg = (body: string, size = 12) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 
-/** What goes with the message, as the top line's icon shows it. */
 export const ICONS = {
   cell: svg(`<rect x="2.5" y="3" width="11" height="10" rx="1.5"></rect><path d="M5 6.5h6M5 9.5h4"></path>`),
   lines: svg(`<path d="M2 4.5h6M2 8h5M2 11.5h6"></path><path d="M11.5 3v10M10 3h3M10 13h3"></path>`),
   text: svg(`<path d="M3 4.5h10M3 8h10M3 11.5h6"></path>`),
   add: svg(`<path d="M8 3.5v9M3.5 8h9"></path>`),
-  // Point's own glyph (the board's Pointer icon, Glyph::Pointer in new_session.rs).
   point: svg(`<path d="M3.3 2 3.3 13.3 6.4 10.4 8.8 14.7 10.7 13.7 8.4 9.5 12.7 9.5Z"></path>`),
   none: "",
 } as const;
@@ -30,11 +19,12 @@ const UP = svg(`<path d="M8 13V3.5M4 7.5l4-4 4 4"></path>`, 14);
 const DOWN = svg(`<path d="M4.5 6.25 8 9.75l3.5-3.5"></path>`);
 const QUOTE = svg(`<path d="M3 4.5h3.75v3.75H5c0 1.6-.6 2.6-2 3.25"></path><path d="M9.25 4.5H13v3.75h-1.75c0 1.6-.6 2.6-2 3.25"></path>`, 14);
 
-/** The keys as this platform writes them: "↩" and "⌘↩", or "Enter" and "Ctrl+Enter". */
 export const KEYS = mac ? { send: "↩", add: "⌘↩" } : { send: "Enter", add: "Ctrl+Enter" };
 
-/** While Claude works, ↩ queues: the root element carries this flag (from the app's "context"). */
 const WORKING = "endeavorWorking";
+const LINE_PX = 21;
+const LINES_BEFORE_IT_SCROLLS = 6;
+const keepTheKeyboardInTheField = (e: MouseEvent) => e.preventDefault();
 
 const css = `
   .endeavor-prompt { box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; font: 13px/18px system-ui, sans-serif;
@@ -43,7 +33,6 @@ const css = `
     background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); }
   .endeavor-prompt .head { display: flex; align-items: center; gap: 8px; padding: 0 2px 0 4px; font-size: 12px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; }
-  /* In a narrow bar (Claude's side panel goes down to about 320 px) the key hints give way first, so what was picked still reads. */
   .endeavor-prompt .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .what svg { flex: none; }
   .endeavor-prompt .what .name { font-family: JuliaMono, ui-monospace, monospace; font-size: 11.5px; color: var(--e-text-secondary); }
@@ -79,12 +68,10 @@ const css = `
 export type AskBox = {
   root: HTMLElement;
   text: HTMLTextAreaElement;
-  /** The top line's "what goes with the message" part. */
   what: HTMLElement;
   setWhat(icon: Icon, name: string, detail: string): void;
 };
 
-/** Build a prompt. `done(add, e)` is ↩ or Send now (`add` false), ⌘↩ or Add to message (true). */
 export function askBox(o: { label: string; placeholder: string; quote?: { text: string; code: boolean }; done: (add: boolean, e: Event) => void }): AskBox {
   const root = document.createElement("div");
   root.className = "endeavor-prompt";
@@ -117,11 +104,10 @@ export function askBox(o: { label: string; placeholder: string; quote?: { text: 
     menu.hidden = !shown;
     options.setAttribute("aria-expanded", String(shown));
   };
-  // Up to six lines, then it scrolls; the buttons stay at the bottom right.
   const fit = () => {
     sendButton.classList.toggle("ready", !!text.value.trim());
-    text.style.height = "21px";
-    text.style.height = `${Math.min(text.scrollHeight, 126)}px`;
+    text.style.height = `${LINE_PX}px`;
+    text.style.height = `${Math.min(text.scrollHeight, LINE_PX * LINES_BEFORE_IT_SCROLLS)}px`;
   };
   text.addEventListener("input", fit);
   text.addEventListener(
@@ -136,8 +122,7 @@ export function askBox(o: { label: string; placeholder: string; quote?: { text: 
     },
     true,
   );
-  // Keep the keyboard in the field.
-  for (const button of root.querySelectorAll<HTMLButtonElement>("button")) button.onmousedown = (e) => e.preventDefault();
+  for (const button of root.querySelectorAll<HTMLButtonElement>("button")) button.onmousedown = keepTheKeyboardInTheField;
   options.onclick = () => showMenu(menu.hidden);
   sendButton.onclick = (e) => o.done(false, e);
   for (const item of menu.querySelectorAll<HTMLButtonElement>("[role=menuitem]")) {

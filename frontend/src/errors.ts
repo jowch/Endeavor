@@ -1,14 +1,4 @@
-// Pluto's error boxes (docs/ui-spec.md, "Errors"); Pluto's own "Fix with AI" is
-// off in the runtime. Under the message, above the trace: "✦ Fix with Claude"
-// and "Explain", which ask the agent about that cell's error through the same
-// queue as the chat box, and a hint that ⌘E asks something else. After a
-// click the buttons become one line until Claude's turn ends: "Claude is
-// fixing this · Show in chat", or "Fix queued · … · Cancel" while it waits;
-// the app says which (the context's `error_asks`). A cell that fails only
-// because a cell above failed (Pluto's own test: an UndefVarError for a name
-// a failed cell defines) gets no buttons, only "Fails because `fit` failed ·
-// Show". The trace is folded to one line with its length.
-
+import { oneMoreNotThanPlutosTrafficLight } from "./cells";
 import { byUser, on, send, type ErrorAsk } from "./bridge";
 import { onEmber } from "./engine";
 import { shortcut } from "./keys";
@@ -16,15 +6,11 @@ import { onRedraw } from "./redraw";
 import { cellCode } from "./reveal";
 import { context } from "./state";
 
-/** At most this much of the error goes with the message. */
 const MAX_ERROR = 2000;
-/** A click shows its status line at once; the app's word replaces it, or it goes after this long. */
 const PENDING = 3000;
 
 const look = `html[data-endeavor-look="endeavor"]`;
-// The grey edge is the only bar such a cell gets: Pluto's red one goes back to
-// its normal look. The extra :not() outranks Pluto's `pluto-editor:not(.___)`.
-const upstreamBar = `${look} pluto-editor:not(.___):not(.____) pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
+const upstreamBar = `${look} ${oneMoreNotThanPlutosTrafficLight} pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
 const css = `
   ${upstreamBar} > pluto-trafficlight { background: var(--normal-cell-color); border-left-color: var(--normal-cell-color); }
   ${upstreamBar}.selected > pluto-trafficlight { background: var(--selected-cell-color); border-left-color: var(--selected-cell-color); }
@@ -86,7 +72,6 @@ function body(nb: Notebook | undefined, id: string): { msg?: string; stacktrace?
   return b && typeof b === "object" ? (b as { msg?: string; stacktrace?: Frame[] }) : undefined;
 }
 
-/** The failed cells this one fails because of, by the name it uses from each (Pluto's get_erred_upstreams). */
 export function failedUpstreams(nb: Notebook | undefined, id: string, seen: string[] = []): Record<string, string> {
   let found: Record<string, string> = {};
   if (!nb?.cell_results?.[id]?.errored) return found;
@@ -103,7 +88,6 @@ export function failedUpstreams(nb: Notebook | undefined, id: string, seen: stri
   return found;
 }
 
-/** The cells a cell fails because of, if it fails only because they did; else null. */
 function upstreamCause(nb: Notebook | undefined, id: string): Record<string, string> | null {
   const msg = body(nb, id)?.msg ?? "";
   const sym = msg.match(/^UndefVarError: (.*?) not defined/)?.[1]?.replaceAll("`", "");
@@ -115,7 +99,6 @@ function upstreamCause(nb: Notebook | undefined, id: string): Record<string, str
 
 const plainMessage = (msg: string) => msg.split("\n")[0].replaceAll("`", "").replace(/Main\.var"workspace#\d+"/g, "Main");
 
-/** The error as the agent gets it: the message and the whole trace, folded or not. */
 function errorText(error: HTMLElement, id: string): string {
   const b = body(notebook(), id);
   if (!b?.msg) return (error.querySelector("header")?.textContent ?? error.textContent ?? "").trim().slice(0, MAX_ERROR);
@@ -162,7 +145,6 @@ function link(text: string, cls: string, act: () => void): HTMLAnchorElement {
   return a;
 }
 
-/** The actions row: the two buttons, or what became of a click. */
 function fillActions(row: HTMLElement, cell: HTMLElement, error: HTMLElement) {
   const status = statusOf(cell.id);
   const key = status ? `${status.kind}:${status.queued}` : "buttons";
@@ -225,7 +207,6 @@ function decorateOwn(error: HTMLElement, cell: HTMLElement, nb: Notebook | undef
   const frames = body(nb, cell.id)?.stacktrace;
   const plutoTrace = error.querySelector(":scope > section");
   let toggle = error.querySelector<HTMLElement>(":scope > .endeavor-trace");
-  // Ember's error box has its own traceback toggle.
   if (!plutoTrace || (frames && frames.length === 0) || onEmber()) {
     toggle?.remove();
     return;

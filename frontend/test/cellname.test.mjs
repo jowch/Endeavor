@@ -1,4 +1,3 @@
-// A cell's name on the page (src/cellname.ts), the same as the app's `cell_label`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
@@ -31,6 +30,7 @@ test("a cell is named by what it defines, its heading, or its first line", () =>
     ["let\n  a = sum(xs)\n  a / 2\nend", "let"],
     ["splot(x)", "splot(x)"],
     ["x == 1", "x == 1"],
+    ["fit(x, k=1)", "fit(x, k=1)"],
     ["using Plots", "using Plots"],
     ["# just a note", "just a note"],
     ["# Growth curves (by strain)\nlet\n  p = plot(t, y)\nend", "Growth curves (by strain)"],

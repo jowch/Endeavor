@@ -1,11 +1,3 @@
-// Share and ⋮ items that act in the page, through Pluto's own functions:
-// Present (window.present), Record (the Editor's recording state), Frontmatter
-// (Pluto's own dialog). Also two sheets of our own: Pluto shows its keyboard
-// shortcuts in a plain alert() and takes feedback in a small form in its
-// footer, so the list and a feedback box are drawn here (both looks). Ember's
-// page has a shortcut sheet of its own, with F1 for R help at the cursor, so
-// there the ⋮ item opens Ember's and F1 and ⌘? reach Ember.
-
 import { on } from "./bridge";
 import { onEmber } from "./engine";
 import { mac } from "./keys";
@@ -84,14 +76,9 @@ export function showShortcuts(): void {
   done.focus();
 }
 
-/** How long to wait for Pluto's feedback form to say how sending went (it gives up after 5 s once loaded). */
 const FEEDBACK_WAIT_MS = 20_000;
+const PLUTO_FEEDBACK_FORM_SHORTEST = 4;
 
-/**
- * Hand `opinion` to Pluto's own (hidden) feedback form and resolve with what
- * Pluto says: the message it would alert(), or null if it says nothing in
- * `waitMs`. Its form asks for an email with prompt(), answered here with `email`.
- */
 export function submitFeedback(opinion: string, email: string, waitMs = FEEDBACK_WAIT_MS): Promise<string | null> {
   const form = document.querySelector<HTMLFormElement>("form#feedback");
   const field = form?.querySelector<HTMLInputElement>("#opinion");
@@ -116,7 +103,6 @@ export function submitFeedback(opinion: string, email: string, waitMs = FEEDBACK
   });
 }
 
-/** What the sheet says about Pluto's answer: its own words, under a heading that says whether it went. */
 export function feedbackOutcome(message: string | null): { sent: boolean; title: string; body: string } {
   if (message === null) {
     return { sent: false, title: "No answer from Pluto's feedback form", body: "It may not have been sent. Check your internet connection and try again." };
@@ -125,7 +111,6 @@ export function feedbackOutcome(message: string | null): { sent: boolean; title:
   return { sent, title: sent ? "Sent to Pluto's developers" : "Pluto couldn't send it", body: message.trim() };
 }
 
-/** Pluto's Instant feedback, sent through its own form, which sends it to Pluto's developers. */
 function showFeedback(): void {
   const el = sheet(
     `<h2>Feedback for Pluto's developers</h2><textarea placeholder="What would you tell the people who make Pluto?"></textarea>` +
@@ -136,8 +121,7 @@ function showFeedback(): void {
   const email = el.querySelector<HTMLInputElement>("input.email")!;
   const send = el.querySelector<HTMLButtonElement>(".send")!;
   text.focus();
-  // Pluto's form drops anything shorter.
-  text.oninput = () => (send.disabled = text.value.trim().length < 4);
+  text.oninput = () => (send.disabled = text.value.trim().length < PLUTO_FEEDBACK_FORM_SHORTEST);
   el.querySelector<HTMLButtonElement>(".cancel")!.onclick = () => el.remove();
   send.onclick = async () => {
     const card = el.querySelector(".card")!;
@@ -162,7 +146,6 @@ export function initActions(): void {
     else if (msg.name === "shortcuts") onEmber() ? window.dispatchEvent(new CustomEvent("ember open shortcuts")) : showShortcuts();
     else if (msg.name === "feedback") showFeedback();
   });
-  // Pluto's own F1 / ⌘? list is a plain alert(); this one is laid out.
   window.addEventListener(
     "keydown",
     (e) => {

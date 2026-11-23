@@ -108,6 +108,59 @@ text, so it doesn't fit edits that already landed.
   runtime refuses edits and runs. Same for Ask to run vs Auto, and for
   Manual's edits: the runtime's policy decides, not the agent's settings.
 
+## The notebook view in Claude's desktop app
+
+`frontend/src/view.ts` and the files it uses are EndeavorMCP's notebook view
+in Claude's desktop app. What the desktop app does, as probed on a Mac in
+November 2026, decides how the view works:
+
+- **Messages.** The view's message goes into Claude's message box for the
+  user to send, after anything they typed, with its leading whitespace
+  trimmed. So a visible mark (an arrow) starts it and keeps its newlines; a
+  dash read to Claude as the user's own text. Claude takes at most 8,000
+  characters, at most 3 line breaks or 64 spaces and tabs in a row, and no
+  invisible characters, and turns away anything else every time. The app only
+  takes a view's message just after the user's press, and shows it after 2 to
+  7 seconds, so the view says "Sending to Claude's chat…". Context for later
+  turns (`ui/update-model-context`) never reached Claude in the Code tab, so
+  it isn't used.
+- **Quotes.** Unlike the app's, the view's quotes name what was picked and
+  carry no code or output, except lines the user picked: a long cell's code
+  went over 8,000 characters (#328), and Claude reads the rest with its tools.
+- **Pictures.** The frame can't take a screenshot, so `crop.ts` draws a box's
+  images, SVGs and canvases itself. Text, HTML, WebGL drawn without
+  `preserveDrawingBuffer` (Makie's and plotly's 3D views) and images from
+  another site don't come out. An SVG is drawn from a copy on its own, so the
+  page's CSS and web fonts don't reach it. The picture's id goes in the
+  message at once and the picture follows, since Claude reads it only after
+  the user sends.
+- **Point** ends once the message is on its way and the view has lost the
+  keyboard: the user sends from Claude's box, where the view's keys don't
+  reach.
+- **Find.** Desktop's ⌘F searches Desktop's page, not the view's frame, so
+  the view has its own Find.
+- **Links.** The frame may not open windows, so links go through the host
+  (`ui/open-link`). Any other link that loads a page would replace the view
+  with a blank one, since the frame's page has no address of its own.
+- **Space.** Claude's side panel is about 513 by 721 px, down to 320 wide,
+  and reports no safe-area insets. Measured at 320 px, Pluto's own margins
+  left 226 px of code (Ember's 170). So the view keeps only what the cells
+  need: the room for the eye (and Ember's run button) left of a cell, the run
+  time and add-cell buttons between cells, two digits of line numbers (Point
+  shows them), and room under the last cell for Point's bar. From 760 px wide
+  it is full screen: a wider centred column, with Docs and Status as a sheet
+  down the right. Markdown headings are smaller and long words wrap.
+- **Palette.** While the host sends its style variables, the page takes
+  Claude's backgrounds, greys and borders, keeping Endeavor's accent, code and
+  diff colours.
+- **Completions and new cells.** Claude's edits land while a cursor sits in a
+  cell, and Pluto's completion list stayed up over the notebook for as long
+  as Claude worked, so the view closes a list nobody is using. A cell Claude
+  adds is brought into view while the user follows along.
+- **CodeMirror** scrolls the cursor into view by the window's top edge and
+  ignores `scroll-padding`, so the view keeps the cursor below its toolbar
+  itself.
+
 ## Frontend tech
 
 - `frontend/` is TypeScript, built with esbuild into one bundle,

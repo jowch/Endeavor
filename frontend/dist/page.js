@@ -2,21 +2,22 @@
 (() => {
   // src/bridge.ts
   var handlers = {};
-  var nonce = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
-  var handler = window.webkit?.messageHandlers?.ipc;
-  var post = handler ? handler.postMessage.bind(handler) : (body3) => window.ipc?.postMessage(body3);
-  var host = null;
+  var launchSecret = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
+  var webkitIpcBeforePageScripts = window.webkit?.messageHandlers?.ipc;
+  var post = webkitIpcBeforePageScripts ? webkitIpcBeforePageScripts.postMessage.bind(webkitIpcBeforePageScripts) : (body3) => window.ipc?.postMessage(body3);
+  var hostOutsideTheApp = null;
   function send(msg) {
-    if (host) return host(msg);
-    post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
+    if (hostOutsideTheApp) return hostOutsideTheApp(msg);
+    post(JSON.stringify(launchSecret ? { ...msg, nonce: launchSecret } : msg));
   }
-  var byUser = (e) => e.isTrusted || !nonce && !host;
-  function on(type, handler2) {
-    (handlers[type] ??= []).push(handler2);
+  var inTestsWithoutApp = () => !launchSecret && !hostOutsideTheApp;
+  var byUser = (e) => e.isTrusted || inTestsWithoutApp();
+  function on(type, handler) {
+    (handlers[type] ??= []).push(handler);
   }
   window.__endeavor = {
     receive(msg) {
-      handlers[msg.type]?.forEach((handler2) => handler2(msg));
+      handlers[msg.type]?.forEach((handler) => handler(msg));
     }
   };
 
@@ -423,10 +424,11 @@
     shown = { el: el2, hit, replay };
     el2.querySelector(".run").focus();
   }
+  var inSafePreviewWhereSavingRunsNothing = (st) => st.notebook?.process_status === "waiting_for_permission";
   function guard(e) {
     if (replaying || !waiting.length || !byUser(e)) return;
     const st = editor();
-    if (!st?.notebook || st.notebook.process_status === "waiting_for_permission") return;
+    if (!st?.notebook || inSafePreviewWhereSavingRunsNothing(st)) return;
     const run = runStart(e, st);
     if (!run) return;
     const deps = st.notebook.cell_dependencies ?? {};
@@ -602,6 +604,7 @@
     done.focus();
   }
   var FEEDBACK_WAIT_MS = 2e4;
+  var PLUTO_FEEDBACK_FORM_SHORTEST = 4;
   function submitFeedback(opinion, email, waitMs = FEEDBACK_WAIT_MS) {
     const form = document.querySelector("form#feedback");
     const field = form?.querySelector("#opinion");
@@ -640,7 +643,7 @@
     const email = el2.querySelector("input.email");
     const send2 = el2.querySelector(".send");
     text.focus();
-    text.oninput = () => send2.disabled = text.value.trim().length < 4;
+    text.oninput = () => send2.disabled = text.value.trim().length < PLUTO_FEEDBACK_FORM_SHORTEST;
     el2.querySelector(".cancel").onclick = () => el2.remove();
     send2.onclick = async () => {
       const card2 = el2.querySelector(".card");
@@ -707,7 +710,6 @@
     lines: svg(`<path d="M2 4.5h6M2 8h5M2 11.5h6"></path><path d="M11.5 3v10M10 3h3M10 13h3"></path>`),
     text: svg(`<path d="M3 4.5h10M3 8h10M3 11.5h6"></path>`),
     add: svg(`<path d="M8 3.5v9M3.5 8h9"></path>`),
-    // Point's own glyph (the board's Pointer icon, Glyph::Pointer in new_session.rs).
     point: svg(`<path d="M3.3 2 3.3 13.3 6.4 10.4 8.8 14.7 10.7 13.7 8.4 9.5 12.7 9.5Z"></path>`),
     none: ""
   };
@@ -716,6 +718,9 @@
   var QUOTE = svg(`<path d="M3 4.5h3.75v3.75H5c0 1.6-.6 2.6-2 3.25"></path><path d="M9.25 4.5H13v3.75h-1.75c0 1.6-.6 2.6-2 3.25"></path>`, 14);
   var KEYS = mac ? { send: "\u21A9", add: "\u2318\u21A9" } : { send: "Enter", add: "Ctrl+Enter" };
   var WORKING = "endeavorWorking";
+  var LINE_PX = 21;
+  var LINES_BEFORE_IT_SCROLLS = 6;
+  var keepTheKeyboardInTheField = (e) => e.preventDefault();
   var css4 = `
   .endeavor-prompt { box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; font: 13px/18px system-ui, sans-serif;
     color: var(--e-text-primary); text-align: left; }
@@ -723,7 +728,6 @@
     background: var(--e-popover-bg); box-shadow: 0 12px 32px var(--e-shadow-popover); }
   .endeavor-prompt .head { display: flex; align-items: center; gap: 8px; padding: 0 2px 0 4px; font-size: 12px; line-height: 17px;
     color: var(--e-text-faint); white-space: nowrap; }
-  /* In a narrow bar (Claude's side panel goes down to about 320 px) the key hints give way first, so what was picked still reads. */
   .endeavor-prompt .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
   .endeavor-prompt .what svg { flex: none; }
   .endeavor-prompt .what .name { font-family: JuliaMono, ui-monospace, monospace; font-size: 11.5px; color: var(--e-text-secondary); }
@@ -782,8 +786,8 @@
     };
     const fit = () => {
       sendButton.classList.toggle("ready", !!text.value.trim());
-      text.style.height = "21px";
-      text.style.height = `${Math.min(text.scrollHeight, 126)}px`;
+      text.style.height = `${LINE_PX}px`;
+      text.style.height = `${Math.min(text.scrollHeight, LINE_PX * LINES_BEFORE_IT_SCROLLS)}px`;
     };
     text.addEventListener("input", fit);
     text.addEventListener(
@@ -798,7 +802,7 @@
       },
       true
     );
-    for (const button of root.querySelectorAll("button")) button.onmousedown = (e) => e.preventDefault();
+    for (const button of root.querySelectorAll("button")) button.onmousedown = keepTheKeyboardInTheField;
     options.onclick = () => showMenu(menu.hidden);
     sendButton.onclick = (e) => o.done(false, e);
     for (const item of menu.querySelectorAll("[role=menuitem]")) {
@@ -874,15 +878,11 @@
 
   // src/annotate.ts
   var css5 = `
-  /* Only the hovered elements: a rule over every element in every cell restyles the whole notebook on entry. */
   body.annotating pluto-cell:hover, body.annotating pluto-cell :hover { cursor: crosshair !important; }
-  /* docs/ui-spec.md, "Pointing overlay": 25% dim, 1px accent edge, plain-text hint
-     pill, dashed hover and solid picked outlines, dashed box for a drawn region. */
   body.annotating .annotate-hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 3px; }
   body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
   body.annotating.annotate-drawing .annotate-hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
-  /* Pluto's own gutter numbers, which it shows as dots until hovered. */
   body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
   body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
   body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
@@ -894,7 +894,6 @@
   #annotate-box { position: absolute; z-index: 9999; pointer-events: none; display: none;
     border: 1.5px dashed var(--e-accent); border-radius: 2px; }
   body.annotating #annotate-box.shown { display: block; }
-  /* One line where it fits; in a narrower pane (Claude's side panel goes down to about 320 px) it wraps, inside the pane. */
   #annotate-hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 10000;
     display: none; align-items: center; justify-content: center; gap: 6px; padding: 4px 12px; border-radius: 13px; border: 1px solid transparent;
     box-sizing: border-box; max-width: calc(100% - 16px); width: max-content; text-align: center;
@@ -913,12 +912,13 @@
     #annotate-hint, #annotate-bar { border-color: var(--e-popover-edge); }
     #annotate-hint { box-shadow: 0 12px 32px var(--e-shadow-popover); }
   }
-  /* While the app takes a picture, the notebook shows as it is. */
   body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box, body.annotating.${SHOOTING} #annotate-tag,
   body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
   body.annotating.${SHOOTING} .annotate-picked, body.annotating.${SHOOTING} .annotate-hover { outline: none; }
   body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
 `;
+  var pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor = "pointerdown";
+  var aFrameAfterPointShowsSinceNumberingRestylesEveryLine = (fn) => requestAnimationFrame(() => setTimeout(fn));
   var DRAG = 4;
   var FIGURE = "img, svg, canvas, video";
   var PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
@@ -988,7 +988,7 @@
       comment: state?.comment() ?? ""
     };
   }
-  function initAnnotate(answered = false) {
+  function initAnnotate(hostAnswersEachSendAndTakesNoPictures = false) {
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
@@ -1079,7 +1079,6 @@
       switch (target.part) {
         case "cell":
           return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
-        // A click on the code picks the cell; a drag over its lines picks those lines.
         case "code":
           return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
         case "output":
@@ -1107,7 +1106,7 @@
       }
       refresh2();
       send({ type: "mode", on: enable });
-      requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
+      aFrameAfterPointShowsSinceNumberingRestylesEveryLine(() => document.body.classList.toggle("annotate-numbers", active()));
     }
     const underWay = /* @__PURE__ */ new Map();
     let nextRef = 1;
@@ -1115,17 +1114,17 @@
       if (!picks.length) return;
       const sending = picks.splice(0, picks.length);
       const comment = text.value.trim();
-      const ref = !add && answered ? nextRef++ : void 0;
+      const ref = !add && hostAnswersEachSendAndTakesNoPictures ? nextRef++ : void 0;
       if (ref !== void 0) underWay.set(ref, { picks: sending, comment });
       text.value = "";
       text.dispatchEvent(new Event("input"));
       refresh2();
       const out = [];
       for (const p of sending) {
-        if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
+        if (!hostAnswersEachSendAndTakesNoPictures && (p.pick.part === "box" || p.pick.part === "figure")) {
           const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
-        } else if (answered && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
+        } else if (hostAnswersEachSendAndTakesNoPictures && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
         else out.push(p.pick);
       }
       sendQuote(out, comment, add, ref);
@@ -1144,7 +1143,7 @@
     const swallow = (e) => {
       const target = e.target;
       if (!active() || ours(target)) return;
-      if (e.type !== "pointerdown") e.preventDefault();
+      if (e.type !== pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor) e.preventDefault();
       e.stopPropagation();
       const m = e;
       if (e.type === "mousedown" && m.button === 0) {
@@ -1345,12 +1344,12 @@ ${text.value}` : sent.comment;
   #endeavor-rail a.user { background: var(--code-differs-cell-color, var(--e-you-stripe)); }
 `;
   var rail;
+  function clearWithoutMeasuringTheNotebook() {
+    if (rail.firstChild) rail.replaceChildren();
+  }
   function draw() {
     const marked = [...document.querySelectorAll('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
-    if (!marked.length) {
-      if (rail.firstChild) rail.replaceChildren();
-      return;
-    }
+    if (!marked.length) return clearWithoutMeasuringTheNotebook();
     const total = Math.max(document.documentElement.scrollHeight, 1);
     rail.replaceChildren(
       ...marked.map((cell) => {
@@ -1382,7 +1381,8 @@ ${text.value}` : sent.comment;
   var redrawRail = () => rail && draw();
 
   // src/cells.ts
-  var bar = "pluto-editor:not(.___):not(.____) pluto-cell[data-endeavor-bar]";
+  var oneMoreNotThanPlutosTrafficLight = "pluto-editor:not(.___):not(.____)";
+  var bar = `${oneMoreNotThanPlutosTrafficLight} pluto-cell[data-endeavor-bar]`;
   var css8 = `
   pluto-cell { position: relative; }
   pluto-cell[data-endeavor="unrun"] > pluto-output { opacity: 0.4; }
@@ -1479,6 +1479,11 @@ ${text.value}` : sent.comment;
     const line = (node instanceof Element ? node : node.parentElement)?.closest(".cm-line");
     return [...content.querySelectorAll(".cm-line")].indexOf(line) + 1;
   }
+  function linesSelected(doc, selection) {
+    const endsAtALineStartAsATripleClickDoes = Math.max(selection.from, selection.to - 1);
+    return [doc.lineAt(selection.from).number, doc.lineAt(endsAtALineStartAsATripleClickDoes).number];
+  }
+  var wholeLinesSinceThePageTextHasNoBreaks = (code, first, last2) => code.split("\n").slice(first - 1, last2).join("\n");
   function selectedInCell() {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
@@ -1493,9 +1498,9 @@ ${text.value}` : sent.comment;
       const view = content.cmTile?.root?.view;
       const main = view?.state.selection.main;
       let [first, last2] = [lineOf(range.startContainer, content), lineOf(range.endContainer, content)];
-      if (main && !main.empty) [first, last2] = [view.state.doc.lineAt(main.from).number, view.state.doc.lineAt(Math.max(main.from, main.to - 1)).number];
+      if (main && !main.empty) [first, last2] = linesSelected(view.state.doc, main);
       if (first < 1 || last2 < first) return null;
-      const quote2 = main && !main.empty ? view.state.sliceDoc(main.from, main.to) : code.split("\n").slice(first - 1, last2).join("\n");
+      const quote2 = main && !main.empty ? view.state.sliceDoc(main.from, main.to) : wholeLinesSinceThePageTextHasNoBreaks(code, first, last2);
       if (!quote2.trim()) return null;
       return { cell, pick: { part: "lines", cell: cell.id, code, lines: [first, last2], text: quote2 }, quote: quote2, range: range.cloneRange() };
     }
@@ -1504,6 +1509,8 @@ ${text.value}` : sent.comment;
     return quote ? { cell, pick: { part: "output", cell: cell.id, code, text: quote }, quote, range: range.cloneRange() } : null;
   }
   var pill = null;
+  var afterTheBrowserSettlesTheSelection = (fn) => setTimeout(fn);
+  var keepTheSelectionThatPressingWouldClear = (event) => event.preventDefault();
   function hidePill() {
     pill?.remove();
     pill = null;
@@ -1519,7 +1526,7 @@ ${text.value}` : sent.comment;
     document.addEventListener("mouseup", (e) => {
       const target = e.target;
       if (pill?.contains(target) || target.closest?.("[data-endeavor-ui]") || document.body.classList.contains("annotating")) return;
-      setTimeout(() => {
+      afterTheBrowserSettlesTheSelection(() => {
         hidePill();
         const found = selectedInCell();
         if (!found) return;
@@ -1530,7 +1537,7 @@ ${text.value}` : sent.comment;
         const at = pillPlace(rangeRects(found.range), window.innerHeight);
         pill.style.left = `${at.left + window.scrollX}px`;
         pill.style.top = `${at.top + window.scrollY}px`;
-        pill.onmousedown = (event) => event.preventDefault();
+        pill.onmousedown = keepTheSelectionThatPressingWouldClear;
         pill.querySelector("button").onclick = (event) => byUser(event) && open3(found);
         document.body.append(pill);
       });
@@ -1541,8 +1548,6 @@ ${text.value}` : sent.comment;
   // src/prompt.ts
   var GAP = 8;
   var css10 = () => `
-  /* Beside Pluto's "+" in the gap above a cell (and below the last one): faint
-     while the cell is hovered, like Pluto's own buttons, and full on the "+". */
   pluto-cell > .endeavor-add-agent {
     position: absolute; left: 14px; z-index: 20;
     height: 18px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--e-pill-edge);
@@ -1554,11 +1559,8 @@ ${text.value}` : sent.comment;
   pluto-cell:hover > .endeavor-add-agent { opacity: 0.35; }
   pluto-cell > button.add_cell:hover + .endeavor-add-agent, pluto-cell > .endeavor-add-agent:hover { opacity: 1; }
   pluto-cell > .endeavor-add-agent:hover { color: var(--e-prompt-hover); border-color: var(--e-accent); }
-  /* What the prompt asks about: the cell's code (or the output a selection is in). */
   .endeavor-asked { outline: 1.5px solid var(--e-focus-ring) !important; outline-offset: 0; }
-  /* Where a new cell will go. */
   #endeavor-ask-line { position: fixed; z-index: 999; height: 2px; border-radius: 1px; background: var(--e-focus-ring); pointer-events: none; }
-  /* The empty-cell hint names the shortcut. */
   pluto-input .cm-placeholder { font-size: 0; }
   pluto-input .cm-placeholder::after { content: "Type code, or ${shortcut("E")} to ask ${context.agent}"; font-size: 13px; }
 `;
@@ -1650,6 +1652,8 @@ ${text.value}` : sent.comment;
     closeAsk(t.kind === "cell");
     if (t.kind === "selection" && add) window.getSelection()?.removeAllRanges();
   }
+  var afterTheKeyEventThatOpenedItSinceFocusDuringItDoesntStick = (fn) => requestAnimationFrame(fn);
+  var beforeCodeMirrorAndPlutoHandleTheKey = true;
   function openAsk(t) {
     closeAsk(false);
     hidePill();
@@ -1692,7 +1696,7 @@ ${text.value}` : sent.comment;
     place(o);
     open = o;
     box.text.addEventListener("input", () => open === o && place(o));
-    requestAnimationFrame(() => {
+    afterTheKeyEventThatOpenedItSinceFocusDuringItDoesntStick(() => {
       box.text.focus();
       if (draft) box.text.select();
     });
@@ -1721,9 +1725,10 @@ ${text.value}` : sent.comment;
     const style2 = document.createElement("style");
     style2.textContent = css10();
     document.head.append(style2);
-    on("context", () => style2.textContent = css10());
+    const rebuildTheEmptyCellHintWithTheSessionsAgent = () => style2.textContent = css10();
+    on("context", rebuildTheEmptyCellHintWithTheSessionsAgent);
     initReply((found) => openAsk({ kind: "selection", found }));
-    window.addEventListener("keydown", onKey3, true);
+    window.addEventListener("keydown", onKey3, { capture: beforeCodeMirrorAndPlutoHandleTheKey });
     document.addEventListener("mousedown", (e) => {
       if (open && !open.box.root.contains(e.target)) closeAsk(false);
     });
@@ -1771,9 +1776,7 @@ ${text.value}` : sent.comment;
         callout: !!document.querySelector("#endeavor-safe.shown"),
         reply: askState()?.kind === "selection" ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
         prompt: askState(),
-        // Recorded by the debug build's own script, which wraps `alert`.
         alerts: window.__endeavorAlerts ?? null,
-        // Ember's messages are dialogs in the page, not alerts: the open ones' text.
         dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => (d.textContent ?? "").trim().replace(/\s+/g, " "))
       });
     });
@@ -1796,11 +1799,12 @@ ${text.value}` : sent.comment;
   .endeavor-del::before { content: "\u2212"; position: absolute; left: -13px; }
   .endeavor-del-ch { background: var(--e-diff-del-ch); border-radius: 2px; }
 `;
+  var LARGEST_LCS_TABLE = 25e4;
   function lineDiff(before, after) {
     const a = before === "" ? [] : before.split("\n");
     const b = after.split("\n");
     const n = a.length, m = b.length;
-    if (n * m > 25e4) return [];
+    if (n * m > LARGEST_LCS_TABLE) return [];
     const lcs = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
     for (let i2 = n - 1; i2 >= 0; i2--)
       for (let j2 = m - 1; j2 >= 0; j2--)
@@ -1828,11 +1832,13 @@ ${text.value}` : sent.comment;
     return [start, endA, endB];
   }
   var cm = null;
+  var stateEffectClassFromAStaticHelper = (EditorView) => EditorView.scrollIntoView(0).constructor;
+  var compartmentClassFromPlutosOwnCompartments = (view) => [...view.state.config?.compartments?.keys() ?? []][0]?.constructor;
   function classes(view) {
     if (cm) return cm;
     const EditorView = view.constructor;
-    const StateEffect = EditorView.scrollIntoView(0).constructor;
-    const Compartment = [...view.state.config?.compartments?.keys() ?? []][0]?.constructor;
+    const StateEffect = stateEffectClassFromAStaticHelper(EditorView);
+    const Compartment = compartmentClassFromPlutosOwnCompartments(view);
     if (!Compartment) return null;
     for (const source of view.state.facet(EditorView.decorations)) {
       const set = typeof source === "function" ? source(view) : source;
@@ -1912,7 +1918,7 @@ ${text.value}` : sent.comment;
   }
   var befores = /* @__PURE__ */ new Map();
   var installed = /* @__PURE__ */ new WeakMap();
-  var extension = (doc, before) => before === void 0 ? [] : cm.decorations.of(decorate(doc, before));
+  var staticSetSinceBlockWidgetsCantComeFromAFunction = (doc, before) => before === void 0 ? [] : cm.decorations.of(decorate(doc, before));
   function refresh() {
     for (const cell of document.querySelectorAll("pluto-cell")) {
       const view = viewOf(cell);
@@ -1926,12 +1932,12 @@ ${text.value}` : sent.comment;
         installed.set(view, entry);
         const { compartment } = entry;
         const follow2 = cm.extender.of(
-          (tr) => tr.docChanged && befores.has(id) ? { effects: compartment.reconfigure(extension(tr.newDoc, befores.get(id))) } : null
+          (tr) => tr.docChanged && befores.has(id) ? { effects: compartment.reconfigure(staticSetSinceBlockWidgetsCantComeFromAFunction(tr.newDoc, befores.get(id))) } : null
         );
-        view.dispatch({ effects: cm.appendConfig.of([compartment.of(extension(view.state.doc, before)), follow2]) });
+        view.dispatch({ effects: cm.appendConfig.of([compartment.of(staticSetSinceBlockWidgetsCantComeFromAFunction(view.state.doc, before)), follow2]) });
       } else if (entry.shown !== before) {
         entry.shown = before;
-        view.dispatch({ effects: entry.compartment.reconfigure(extension(view.state.doc, before)) });
+        view.dispatch({ effects: entry.compartment.reconfigure(staticSetSinceBlockWidgetsCantComeFromAFunction(view.state.doc, before)) });
       }
     }
   }
@@ -1952,11 +1958,6 @@ ${text.value}` : sent.comment;
   var css12 = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
-  /* Separate from --endeavor-drawer-h (the drawer's own height, which also
-     sizes Pluto's Live docs panel): while dragging the grip, only the
-     drawer's height changes every frame; the body's padding -- and so the
-     whole notebook's layout -- only catches up once the drag ends (see
-     setHeight's settle parameter below). */
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
@@ -2014,7 +2015,6 @@ ${text.value}` : sent.comment;
   #endeavor-drawer .foot { display: flex; justify-content: flex-end; margin-top: 10px; }
   #endeavor-drawer pre.log { margin: 6px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto; border-radius: 6px;
     background: var(--e-bg-card); color: var(--e-text-secondary); font: 11px/1.45 JuliaMono, ui-monospace, monospace; white-space: pre-wrap; }
-  /* Live docs: Pluto's panel, filling the drawer under its tabs. */
   html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"] #helpbox-wrapper {
     display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
     height: calc(var(--endeavor-drawer-h) - ${HEADER}px); z-index: 71; }
@@ -2049,11 +2049,11 @@ ${text.value}` : sent.comment;
     }
     return Math.round(window.innerHeight * 0.42);
   }
-  function setHeight(h, settle = true) {
+  function setHeight(h, alsoPadTheBodyAndRelayoutTheNotebook = true) {
     const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
     const root = document.documentElement.style;
     root.setProperty("--endeavor-drawer-h", `${clamped}px`);
-    if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+    if (alsoPadTheBodyAndRelayoutTheNotebook) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
     return clamped;
   }
   var echoing = false;
@@ -2083,7 +2083,7 @@ ${text.value}` : sent.comment;
     const steps = m.steps.map((s, i) => `${i ? `<span class="line"></span>` : ""}<span class="step ${s.phase}">${markFor(s.phase)}${s.name}</span>`).join("");
     const version = String(nb.julia_version ?? "").replace(/^v/, "");
     const julia = version ? `Julia ${escape3(version)} \xB7 ` : "";
-    const host2 = `<div class="host">${julia}${escape3(hostName)}</div>`;
+    const host = `<div class="host">${julia}${escape3(hostName)}</div>`;
     const pkgBusy = m.steps[1].phase === "busy";
     const readyCount = m.packages.filter((p) => p.state === "ready").length;
     const stateText = { waiting: "waiting", installing: "installing", precompiling: "precompiling", ready: "", failed: "failed" };
@@ -2115,7 +2115,7 @@ ${text.value}` : sent.comment;
     const log = (nb.nbpkg?.terminal_outputs?.nbpkg_sync ?? "").replace(/\x1b\[[0-9;]*m/g, "");
     const logBlock = showLog ? `<pre class="log">${escape3(log || "Nothing from Pkg yet.")}</pre>` : "";
     const foot = `<div class="foot"><button class="showlog">\u2261 ${showLog ? "Hide log" : "Show log"}</button></div>${logBlock}`;
-    return `<div class="headline${m.failure ? " failed" : ""}">${escape3(m.headline)}</div><div class="steps">${steps}</div>${host2}${packages}${cells}${foot}`;
+    return `<div class="headline${m.failure ? " failed" : ""}">${escape3(m.headline)}</div><div class="steps">${steps}</div>${host}${packages}${cells}${foot}`;
   }
   var hostName = "This Mac";
   var lastHtml = "";
@@ -2171,20 +2171,20 @@ ${text.value}` : sent.comment;
     const grip = drawer.querySelector(".grip");
     grip.onpointerdown = (e) => {
       grip.setPointerCapture(e.pointerId);
-      let pending2 = null;
+      let latestDuringThisFrame = null;
       let frame2 = 0;
       const move = (m) => {
-        pending2 = window.innerHeight - m.clientY;
+        latestDuringThisFrame = window.innerHeight - m.clientY;
         if (frame2) return;
         frame2 = requestAnimationFrame(() => {
           frame2 = 0;
-          if (pending2 !== null) setHeight(pending2, false);
+          if (latestDuringThisFrame !== null) setHeight(latestDuringThisFrame, false);
         });
       };
       const up = () => {
         grip.removeEventListener("pointermove", move);
         if (frame2) cancelAnimationFrame(frame2);
-        const h = setHeight(pending2 ?? drawer.offsetHeight);
+        const h = setHeight(latestDuringThisFrame ?? drawer.offsetHeight);
         try {
           localStorage.setItem("endeavor-drawer-h", String(h));
         } catch {
@@ -2254,7 +2254,7 @@ ${text.value}` : sent.comment;
   var MAX_ERROR = 2e3;
   var PENDING = 3e3;
   var look = `html[data-endeavor-look="endeavor"]`;
-  var upstreamBar = `${look} pluto-editor:not(.___):not(.____) pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
+  var upstreamBar = `${look} ${oneMoreNotThanPlutosTrafficLight} pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
   var css13 = `
   ${upstreamBar} > pluto-trafficlight { background: var(--normal-cell-color); border-left-color: var(--normal-cell-color); }
   ${upstreamBar}.selected > pluto-trafficlight { background: var(--selected-cell-color); border-left-color: var(--selected-cell-color); }
@@ -2528,6 +2528,7 @@ ${text.value}` : sent.comment;
   .endeavor-fold-tag:hover .now { display: inline; }
 `;
   var EYE_OFF = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 2l12 12"/><path d="M6.6 3.6A6.6 6.6 0 0 1 8 3.5c3.5 0 6 4.5 6 4.5a11 11 0 0 1-1.7 2.2M10.4 11.6A5.4 5.4 0 0 1 8 12.5C4.5 12.5 2 8 2 8a11 11 0 0 1 2.5-2.9"/><path d="M6.6 6.6a2 2 0 0 0 2.8 2.8"/></svg>`;
+  var notAButtonSincePlutoHidesThoseInTheEditorUntilHover = "div";
   var open2 = /* @__PURE__ */ new Map();
   var dismissed = /* @__PURE__ */ new Map();
   var states2 = /* @__PURE__ */ new Map();
@@ -2571,7 +2572,7 @@ ${text.value}` : sent.comment;
     if (!input) return;
     const label = kept.failed ? "Folded \xB7 shows until it runs without error" : "Folded \xB7 shows until it runs";
     if (!tag) {
-      tag = document.createElement("div");
+      tag = document.createElement(notAButtonSincePlutoHidesThoseInTheEditorUntilHover);
       tag.setAttribute("role", "button");
       tag.tabIndex = 0;
       tag.className = "endeavor-fold-tag";
@@ -2736,8 +2737,6 @@ ${text.value}` : sent.comment;
   --e-dialog-edge: #2A2A2E;
   --e-dialog-shadow: rgba(0, 0, 0, 0.5);
 
-  /* Colours used by one or a few modules that don't match one of the tokens
-     above closely enough to reuse it without shifting the dark look. */
   --e-text-dim: #7A7978;
   --e-text-waiting: #5E5E5E;
   --e-text-code: #D4D4D4;
@@ -2848,7 +2847,6 @@ ${text.value}` : sent.comment;
     --cm-color-builtin: #9AB6E6;
     --cm-color-comment: #858585;
     --cm-color-line-numbers: #555555;
-    /* Live docs */
     --helpbox-bg-color: #1C1C1F;
     --helpbox-header-bg-color: #26262A;
     --helpbox-header-tab-bg-color: #26262A;
@@ -2858,13 +2856,11 @@ ${text.value}` : sent.comment;
     --helpbox-search-border-color: #3A3A40;
     --helpbox-box-shadow-color: rgba(0, 0, 0, 0.3);
     --docs-binding-bg: #26262A;
-    /* Frontmatter and Pluto's other dialogs */
     --export-bg-color: #1C1C1F;
     --export-color: #D4D4D4;
     --frontmatter-button-bg-color: #26262A;
     --frontmatter-input-bg-color: #151517;
     --frontmatter-input-border-color: #3A3A40;
-    /* A cell's run time: faint text, no chip */
     --pluto-runarea-bg-color: transparent;
     --pluto-runarea-span-color: #858483;
   }
@@ -2905,7 +2901,6 @@ ${text.value}` : sent.comment;
     --cm-color-builtin: #2F5FA6;
     --cm-color-comment: #6B6B73;
     --cm-color-line-numbers: #6E6E76;
-    /* Live docs */
     --helpbox-bg-color: #F4F4F6;
     --helpbox-header-bg-color: #EAEAED;
     --helpbox-header-tab-bg-color: #EAEAED;
@@ -2915,13 +2910,11 @@ ${text.value}` : sent.comment;
     --helpbox-search-border-color: #8A8A92;
     --helpbox-box-shadow-color: rgba(20, 20, 30, 0.12);
     --docs-binding-bg: #EAEAED;
-    /* Frontmatter and Pluto's other dialogs */
     --export-bg-color: #FFFFFF;
     --export-color: #26262B;
     --frontmatter-button-bg-color: #EAEAED;
     --frontmatter-input-bg-color: #FCFCFD;
     --frontmatter-input-border-color: #8A8A92;
-    /* A cell's run time: faint text, no chip */
     --pluto-runarea-bg-color: transparent;
     --pluto-runarea-span-color: #6B6B73;
   }
@@ -2934,43 +2927,21 @@ ${text.value}` : sent.comment;
 }
 `;
   var layout = `
-/* The cells' side gap is the chat column's margin (main.rs, chat_margin): 50px,
-   shrinking with the pane's width (50 per 860) at narrow widths, but never under
-   28px, which Pluto's shoulder (the show/hide-code eye, the status bar) needs
-   left of a cell. main's own padding (25px left, 6px right) is part of that gap,
-   less the 5px a cell's box reaches left of its edge.
-   Left-aligned, not centred (Pluto classic stays centred): a floated PlutoUI
-   TableOfContents sits at the right, and centring put it over the notebook
-   rather than beside it. 731px keeps the reading width Pluto centred at; while
-   the pane is narrower than that, the gaps on both sides are equal. Pluto's own
-   rule sizes main at width: 100%, so the margins come out of that width.
-   The overview rail (rail.ts) is fixed to the right of the viewport, not the
-   notebook, so it isn't affected either way. */
 pluto-editor { --e-side: clamp(28px, calc(100vw * 50 / 860), 50px); }
 pluto-editor main { margin-left: calc(var(--e-side) - 20px) !important; margin-right: auto !important;
   width: calc(100% - 2 * var(--e-side) + 20px + 6px) !important; max-width: 731px !important; }
-/* The preamble only holds Pluto's sticky "Save all changes" button; its 25px
-   strip above the first cell is gone, and the button floats over the top. */
 pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; overflow: visible; }
 pluto-runarea > span { font-size: 10px; }
 `;
+  var keepLiveDocsDisplayedSoPlutoNeverAlertsWindowTooSmall = `#helpbox-wrapper { display: block !important; }`;
   var appChrome = `
 header#pluto-nav, footer { display: none !important; }
-/* Not display: none \u2014 Pluto alerts "window too small to show docs" whenever it opens a panel it finds undisplayed. */
-/* Pluto shows the panel only from 500px wide; a narrower notebook pane would alert on every panel it opens. */
-#helpbox-wrapper { display: block !important; }
+${keepLiveDocsDisplayedSoPlutoNeverAlertsWindowTooSmall}
 html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
   position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
 pluto-output.rich_output:has(> .safe-preview-output) { display: none !important; }
 pluto-editor > main { padding-top: 16px; }
-/* The web view draws over native views, so the notebook header can't blur
-   what's under it (docs/ui-spec.md, "Fades, not blur").
-   Instead, the top of the page fades into the page background, so a cell
-   scrolled toward the top softens instead of cutting off hard. Fixed to the
-   viewport, not the scroller, and never over the first cell at rest: the
-   16px top padding above leaves exactly this fade's height clear.
-   pointer-events: none keeps clicks and selection reaching the page under it. */
 body::before {
   content: "";
   position: fixed;
@@ -3005,8 +2976,10 @@ nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group, #e
   var both = `
 footer form#feedback { display: none !important; }
 `;
-  var APP_FONTS = /Win/.test(navigator.platform) ? "http://endeavor.localhost/fonts" : "endeavor://localhost/fonts";
-  var JULIA_MONO_WEB = "https://cdn.jsdelivr.net/gh/cormullion/juliamono@v0.63.2/webfonts";
+  var wryWindowsFormOfEndeavorProtocol = "http://endeavor.localhost";
+  var APP_FONTS = `${/Win/.test(navigator.platform) ? wryWindowsFormOfEndeavorProtocol : "endeavor://localhost"}/fonts`;
+  var JULIA_MONO_TAG_BUNDLED_BY_FONTS_BUILD_PY = "v0.63.2";
+  var JULIA_MONO_WEB = `https://cdn.jsdelivr.net/gh/cormullion/juliamono@${JULIA_MONO_TAG_BUNDLED_BY_FONTS_BUILD_PY}/webfonts`;
   function juliaMonoFaces(from) {
     return [
       { file: "Regular", weight: 400, style: "normal" },
@@ -3025,17 +2998,18 @@ footer form#feedback { display: none !important; }
     }).join("");
   }
   function initTheme(fontsFrom = "app") {
-    const tokenSheet = document.createElement("style");
-    tokenSheet.id = "endeavor-tokens";
-    tokenSheet.textContent = tokens;
-    document.head.append(tokenSheet);
+    const tokenSheetBeforeEveryModulesStyles = document.createElement("style");
+    tokenSheetBeforeEveryModulesStyles.id = "endeavor-tokens";
+    tokenSheetBeforeEveryModulesStyles.textContent = tokens;
+    document.head.append(tokenSheetBeforeEveryModulesStyles);
     const fonts = document.createElement("style");
     fonts.id = "endeavor-fonts";
     fonts.textContent = juliaMonoFaces(fontsFrom);
     document.head.append(fonts);
     const style2 = document.createElement("style");
+    const afterPlutosSheetsSoEqualSpecificityWins = () => document.head.append(style2);
     style2.id = "endeavor-theme";
-    document.head.append(style2);
+    afterPlutosSheetsSoEqualSpecificityWins();
     on("theme", (msg) => {
       const endeavor = msg.name === "endeavor";
       style2.textContent = both + (endeavor ? endeavorLook + layout + appChrome + (onEmber() ? emberLook : "") : msg.name === "view" ? endeavorLook + layout : classic);

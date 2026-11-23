@@ -1,11 +1,3 @@
-// Folded cells Claude changes (docs/ui-spec.md, "Folded cells"): a cell whose
-// code is folded and that Claude added or changed shows its code until it has
-// run once without an error, with a tag at the code's top-right, "Folded ·
-// shows until it runs" ("… runs without error" after a failed run). A clean
-// run folds it again over 200 ms (at once with Reduce motion). The user's
-// choice wins: the tag's "Fold now" (on hover) or Pluto's eye in the margin
-// folds it at once and it stays folded until Claude edits it again.
-
 import { on, type CellState } from "./bridge";
 import { onRedraw } from "./redraw";
 
@@ -31,9 +23,8 @@ const css = `
 
 const EYE_OFF = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 2l12 12"/><path d="M6.6 3.6A6.6 6.6 0 0 1 8 3.5c3.5 0 6 4.5 6 4.5a11 11 0 0 1-1.7 2.2M10.4 11.6A5.4 5.4 0 0 1 8 12.5C4.5 12.5 2 8 2 8a11 11 0 0 1 2.5-2.9"/><path d="M6.6 6.6a2 2 0 0 0 2.8 2.8"/></svg>`;
 
-/** Shown open: a run that failed since Claude's edit says so in the tag. */
+const notAButtonSincePlutoHidesThoseInTheEditorUntilHover = "div";
 const open = new Map<string, { failed: boolean }>();
-/** Folded by the user while still unrun: the code version they folded. */
 const dismissed = new Map<string, string | undefined>();
 let states = new Map<string, CellState>();
 
@@ -79,8 +70,7 @@ function show(cell: HTMLElement) {
   if (!input) return;
   const label = kept.failed ? "Folded · shows until it runs without error" : "Folded · shows until it runs";
   if (!tag) {
-    // Not a <button>: Pluto hides its own buttons in the editor until hover.
-    tag = document.createElement("div");
+    tag = document.createElement(notAButtonSincePlutoHidesThoseInTheEditorUntilHover);
     tag.setAttribute("role", "button");
     tag.tabIndex = 0;
     tag.className = "endeavor-fold-tag";
@@ -98,7 +88,6 @@ function show(cell: HTMLElement) {
     };
     cell.append(tag);
   }
-  // On the cell, not in Pluto's editor element: at the code's top-right.
   const top = `${input.offsetTop + 5}px`;
   if (tag.style.top !== top) tag.style.top = top;
   const span = tag.querySelector<HTMLElement>(".label")!;
@@ -106,7 +95,6 @@ function show(cell: HTMLElement) {
   tag.title = label;
 }
 
-/** Fold a clean-run cell: its code closes over 200 ms, and the cells below move up. */
 function close(cell: HTMLElement) {
   const input = cell.querySelector<HTMLElement>(":scope > pluto-input");
   if (!input || reduced()) return show(cell);
@@ -137,7 +125,6 @@ export function initFolded(): void {
     states = new Map(msg.cells.map((c) => [c.cell_id, c]));
     update();
   });
-  // Pluto's eye on a cell shown open folds it, as "Fold now" does.
   document.addEventListener(
     "click",
     (e) => {
