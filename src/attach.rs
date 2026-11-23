@@ -145,8 +145,8 @@ impl Quote {
     /// The quoted text; none for a picture.
     pub fn excerpt(&self) -> Option<&str> {
         match &self.from {
-            Quoted::Reply { text, .. } => Some(text),
-            Quoted::Cell { part: Part::Whole(text) | Part::Lines { text, .. } | Part::Output(text) | Part::WholeOutput(text), .. } => Some(text),
+            Quoted::Reply { text, .. } => Some(text.as_str()),
+            Quoted::Cell { part: Part::Whole(text) | Part::Lines { text, .. } | Part::Output(text) | Part::WholeOutput(text), .. } => Some(text.as_str()).filter(|t| !t.is_empty()),
             Quoted::Cell { part: Part::Figure(_), .. } | Quoted::Box { .. } => None,
         }
     }
@@ -1226,6 +1226,16 @@ mod tests {
         assert_eq!(replayed_quote(&old), Some(Attachment::Quote(quote(in_rates(Part::Whole("rates = 1".into())), ""))));
         assert_eq!(replayed_quote("> just a blockquote the user typed"), None);
         assert_eq!(replayed_quote("plain words"), None);
+    }
+
+    #[test]
+    fn a_reopened_quote_that_names_a_cell_or_output_has_no_excerpt_to_draw() {
+        for part in [Part::Whole(String::new()), Part::WholeOutput(String::new())] {
+            let q = quote(in_rates(part), "hm");
+            let Some(Attachment::Quote(back)) = replayed_quote(&quote_block(&q, Backend::Pluto)) else { panic!("didn't parse") };
+            assert_eq!(back.excerpt(), None);
+        }
+        assert_eq!(quote(in_rates(Part::Output("0.42".into())), "").excerpt(), Some("0.42"));
     }
 
     #[test]
