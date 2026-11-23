@@ -16,7 +16,8 @@ export type Pick =
   | { part: "lines"; cell: string; code: string; lines: [number, number]; text: string }
   | { part: "output"; cell: string; code: string; text: string }
   | { part: "figure"; cell: string; code: string; shot?: number }
-  | { part: "box"; cells: string[]; shot?: number };
+  // `rect`: where the box is on the page (page coordinates), for a host that draws its picture itself (Claude's notebook view).
+  | { part: "box"; cells: string[]; shot?: number; rect?: Box };
 
 /** While the app takes a picture, the notebook shows as it is. */
 export const SHOOTING = "endeavor-shooting";

@@ -6,9 +6,10 @@
 // the view, so they don't depend on what the host does with a second message.
 // Claude's desktop app puts the message in its message box for the user to send
 // (checked 2026-11-11). Context for later turns (ui/update-model-context) isn't
-// used: the desktop app's Code tab gave it to Claude on no turn at all. Pictures of
-// figures and boxes aren't taken here (the app takes them natively), so
-// those picks name their cells and Claude reads the output with its tools.
+// used: the desktop app's Code tab gave it to Claude on no turn at all. Unlike the app's,
+// the quotes hold no code or output, only what was picked: Claude reads it with its
+// tools. A box's picture is drawn here (crop.ts: the frame can't take a screenshot) and
+// kept by the host for Claude's view_cell_output; a figure names its cell.
 // Unlike the app, Point ends once ↩'s message is on its way: the user sends it from Claude's
 // box, where the view's keys don't reach. The view fills Claude's panel: Pluto's header, footer and
 // floating tabs give way to one slim toolbar (the file, what Pluto is doing, Find, Docs, Status, Point). It also
@@ -19,6 +20,7 @@ import { initAskBox } from "./askbox";
 import { findButton, initFind } from "./find";
 import { setHost, type ToApp } from "./bridge";
 import { cellName } from "./cellname";
+import { drawBox } from "./crop";
 import { mac, modHeld } from "./keys";
 import type { Pick } from "./quote";
 import { initNarrow } from "./narrow";
@@ -36,21 +38,28 @@ export type Host = {
   send(text: string): Promise<void>;
   /** Open `url` in the user's browser (MCP Apps' ui/open-link; Claude's desktop app asks the user first). Without it, links stay as they are. */
   openLink?(url: string): Promise<void>;
+  /** Keep a box pick's picture (a PNG, base64) for Claude by the id `crop`, 16 hex digits (EndeavorMCP's `notebook_crop`). Without it, boxes go without one. */
+  crop?(png: string, crop: string): Promise<void>;
 };
 
 /** A notebook engine, by the name the app's quote uris use (wire's `Backend::name`). */
 export type Engine = "pluto" | "ember";
 
-/** How the quotes read. Keep in step with the app's attach::quote_note and quote_block (src/attach.rs). */
+/**
+ * How the quotes read. The app's quotes (attach::quote_note and quote_block, src/attach.rs) carry the quoted code and
+ * output text; the view's name what was picked and no more: Claude reads it with its tools, as it is now. Claude's
+ * desktop app takes at most 8,000 characters in a message from a view, and a long cell's code went over (#328).
+ */
 const format = (engine: Engine) =>
   "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are " +
-  "line numbers in the cell's code, counting from 1. `part` says what was quoted when it isn't code: `output` (text from " +
-  "the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists " +
-  "the cells under it). No picture comes with a figure or box here: read current code and outputs with the notebook MCP tools.";
+  "line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's " +
+  "output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells " +
+  "under it). The quotes hold no code or output: read them with the notebook MCP tools (read_cell, view_cell_output). A box's " +
+  "`crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells.";
 
 /** What Claude is told once in a message that quotes the notebook. */
 export const quoteNote = (engine: Engine = "pluto") =>
-  "[Endeavor] The user quoted parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
+  "[Endeavor] The user picked parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
 
 // Claude's desktop app adds the message at the end of its box, straight after anything the user typed,
 // and trims its leading whitespace (probed 2026-11-12), so a visible mark starts it and its newlines
@@ -62,34 +71,9 @@ const LEAD_NOTE = " A \u2193 just before this note only marks where the quotes s
 const uri = (notebook: string, cell: string, engine: Engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
 
 /**
- * How much of a picked output's text goes in a quote. Text goes to Claude's message box, and an output can be
- * megabytes (a 200,000-line `Text` sent 1.3 MB, headless 2026-11-12): past this, its start and end with a note.
- */
-export const OUTPUT_MAX = 4000;
-const OUTPUT_END = 500;
-
-/** `text` cut to `max` characters, its start and end kept, with a note in between saying how much (`why`). */
-function cutMiddle(text: string, max: number, keepEnd: number, why: string): string {
-  if (text.length <= max) return text;
-  // Not between the two halves of a surrogate pair (an emoji, say).
-  const low = (i: number) => (text.charCodeAt(i) & 0xfc00) === 0xdc00;
-  let end = max - keepEnd;
-  if (end > 0 && low(end)) end--;
-  let start = text.length - keepEnd;
-  if (low(start)) start++;
-  return `${text.slice(0, end)}\n[${(start - end).toLocaleString("en-US")} characters ${why}]\n${text.slice(start)}`;
-}
-
-/** `text` cut to OUTPUT_MAX characters, its start and end kept, saying how much was left out. */
-export function outputText(text: string): string {
-  return cutMiddle(text, OUTPUT_MAX, OUTPUT_END, "of this output left out here.");
-}
-
-/**
  * What Claude takes in one message from a view (claude.com/docs/connectors/building/mcp-apps/send-messages,
  * read 2026-11-23): at most 8,000 characters, no more than 3 line breaks or 64 spaces and tabs in a row, and no
- * invisible characters. It turns away anything else with an isError answer, every time, so a long cell or a few
- * picks that ⌘↩ added never reached the chat, and the user was told to try again.
+ * invisible characters. It turns away anything else with an isError answer, every time.
  */
 export const MESSAGE_MAX = 8000;
 
@@ -106,77 +90,41 @@ export function chatSafe(text: string): string {
     .replace(/[ \t]{65,}/g, (run) => run.slice(0, 64));
 }
 
-/** What a pick quotes as text, if anything: a cell's code, its lines, or its output's text (cut to OUTPUT_MAX). */
-const bodyOf = (pick: Pick): string | undefined =>
-  pick.part === "cell" ? pick.code : pick.part === "lines" ? pick.text : pick.part === "output" ? outputText(pick.text) : undefined;
-
-/** One ↩ or ⌘↩: its picks and the user's comment. */
-export type Quoted = { picks: Pick[]; comment: string };
+/** One ↩ or ⌘↩: its picks, the user's comment, and the id of each box pick's picture (`notebook_crop`), by place. */
+export type Quoted = { picks: Pick[]; comment: string; crops?: (string | undefined)[] };
 
 /**
- * The message ↩ passes to the chat: the lead and the note, then each ⌘↩'s and this ↩'s quotes, within Claude's
- * rules (chatSafe, MESSAGE_MAX). When it's too long, the longest quoted texts are cut (start and end kept) to the
- * same length, as little as fits; the user's comments never are. Null when even that can't fit: the comments are
- * too long.
+ * The message ↩ passes to the chat: the lead and the note, then each ⌘↩'s and this ↩'s quotes and comments, within
+ * Claude's rules (chatSafe). Null when it's longer than MESSAGE_MAX: the comments (never cut) or the picks are too many.
  */
 export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
-  const head = `${LEAD}\n\n${quoteNote(engine)}${LEAD_NOTE}\n\n`;
-  const cut = "left out here to fit Claude's message box; read the cell with the notebook tools.";
-  // chatSafe shortens runs of blank lines and spaces in quoted code too: say so, as for a cut.
-  const shortened = quoted.some((q) => q.picks.some((p) => {
-    const body = bodyOf(p);
-    return body !== undefined && chatSafe(body) !== body.replace(/\r\n?/g, "\n");
-  }));
-  const note = shortened ? `${head.slice(0, -2)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.\n\n` : head;
-  const build = (cap: number) =>
-    chatSafe(
-      note +
-        quoted
-          .map(({ picks, comment }) => {
-            const blocks = picks.map((p) => {
-              const body = bodyOf(p);
-              return quoteBlock(notebook, p, engine, body === undefined ? undefined : cutMiddle(chatSafe(body), cap, Math.min(OUTPUT_END, Math.floor(cap / 4)), cut));
-            });
-            return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
-          })
-          .join("\n\n"),
-    );
-  const whole = build(Infinity);
-  if (whole.length <= MESSAGE_MAX) return whole;
-  // The longest a quoted text may stay: the most that fits.
-  let fits = -1;
-  let over = Math.max(...quoted.flatMap((q) => q.picks.map((p) => bodyOf(p)?.length ?? 0)));
-  while (over - fits > 1) {
-    const cap = Math.floor((fits + over) / 2);
-    if (build(cap).length <= MESSAGE_MAX) fits = cap;
-    else over = cap;
-  }
-  return fits < 0 ? null : build(fits);
+  const message = chatSafe(
+    `${LEAD}\n\n${quoteNote(engine)}${LEAD_NOTE}\n\n` +
+      quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops)).join("\n\n"),
+  );
+  return message.length <= MESSAGE_MAX ? message : null;
 }
 
-/**
- * One pick as a `<quote>` (the app's attach::quote_block), except that the view cuts a long output (OUTPUT_MAX) and the
- * app doesn't. `body`: the quoted text in its place (chatMessage's, cut to fit).
- */
-export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", body = bodyOf(pick)): string {
-  if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
+/** One pick as a `<quote>`: what was picked, by name, with a box's picture by its id (`crop`). */
+export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string): string {
+  if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
   const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
   const where = uri(notebook, pick.cell, engine);
   switch (pick.part) {
     case "cell":
-      return `<quote ${at} uri="${where}">\n${body}\n</quote>`;
+      return `<quote ${at} uri="${where}"/>`;
     case "lines":
-      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${body}\n</quote>`;
+      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}"/>`;
     case "output":
-      return `<quote ${at} part="output" uri="${where}">\n${body}\n</quote>`;
+      return `<quote ${at} part="output" uri="${where}"/>`;
     case "figure":
       return `<quote ${at} part="figure" uri="${where}"/>`;
   }
 }
 
 /** The quotes of one ↩ or ⌘↩: each pick, then the comment after the last. */
-export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto"): string {
-  const blocks = picks.map((p) => quoteBlock(notebook, p, engine));
+export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto", crops: (string | undefined)[] = []): string {
+  const blocks = picks.map((p, i) => quoteBlock(notebook, p, engine, crops[i]));
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
@@ -378,23 +326,43 @@ export function start(notebook: string, host: Host): void {
     if (ms) hide = window.setTimeout(() => sent.classList.remove("shown"), ms);
   };
   const point = (on: boolean) => receive({ type: "annotate", on });
+  // Each box pick's picture's id, by the pick's place; none for a box nothing in can be drawn. The picture is drawn
+  // here and goes to the host without waiting: Claude's desktop app takes a view's message only just after the
+  // user's press (2026-11-12), and Claude reads the picture after the user sends it.
+  const crops = (picks: Pick[]) =>
+    Promise.all(
+      picks.map(async (p) => {
+        if (p.part !== "box" || !p.rect || !host.crop) return undefined;
+        const png = await drawBox(p.rect).catch(() => null);
+        if (!png) return undefined;
+        const id = [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
+        host.crop(png, id).catch(() => {});
+        return id;
+      }),
+    );
+  // One ↩ or ⌘↩ at a time, in order: a picture takes a moment, and a ↩ goes after the ⌘↩ before it.
+  let queue = Promise.resolve();
   setHost((msg: ToApp) => {
+    queue = queue.then(() => quote(msg)).catch(() => {});
+  });
+  const quote = async (msg: ToApp) => {
     if (msg.type !== "quote" || !msg.picks.length) return;
     // ⌘↩ adds to the message the next ↩ passes, kept here.
     if (msg.add) {
-      added.push({ picks: msg.picks, comment: msg.comment });
+      added.push({ picks: msg.picks, comment: msg.comment, crops: await crops(msg.picks) });
       return say(`${added.length} added. ${mac ? "↩" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
     }
     const enter = mac ? "↩" : "Enter";
     const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
-    const now = { picks: msg.picks, comment: msg.comment };
+    if (msg.picks.some((p) => p.part === "box")) say("Sending to Claude's chat…", 0);
+    const now: Quoted = { picks: msg.picks, comment: msg.comment, crops: await crops(msg.picks) };
     // This ↩'s picks and comment back in Point, at once (the ↩ didn't send them).
     const giveBack = () => msg.ref !== undefined && receive({ type: "quote_sent", ref: msg.ref, ok: false });
     let message = chatMessage(notebook, [...added, now], engine);
     // Whether this ↩'s picks wait in Point for the next ↩ while what ⌘↩ added goes alone.
     let held = false;
     if (message === null) {
-      // Too long even with the quoted texts cut: the comments (never cut) or the number of picks.
+      // Too long: the comments (never cut) or the number of picks.
       if (!added.length || chatMessage(notebook, [now], engine) === null) {
         giveBack();
         return say(`Too long for Claude's message box (${max}). Shorten your comment or pick less, then press ${enter}.`, 8000);
@@ -420,8 +388,8 @@ export function start(notebook: string, host: Host): void {
         // ends once the view has lost the keyboard, unless something was picked or typed since.
         // While the keyboard stays here, Point stays on for the next pick, and Escape ends it.
         const end = () => {
-          const now = pointState();
-          if (!now.picks.length && !now.comment.trim()) point(false);
+          const left = pointState();
+          if (!left.picks.length && !left.comment.trim()) point(false);
         };
         if (!document.hasFocus()) end();
         else window.addEventListener("blur", end, { once: true });
@@ -433,7 +401,7 @@ export function start(notebook: string, host: Host): void {
         say(`Couldn't reach Claude's chat${e instanceof Error && e.message ? `: ${e.message}` : ""}. Your ${msg.picks.length === 1 ? "pick is" : "picks are"} back: ${mac ? "↩" : "Enter"} sends again.`);
       },
     );
-  });
+  };
   initTheme("web");
   initNarrow();
   initSpace();

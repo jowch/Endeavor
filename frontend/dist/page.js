@@ -1126,7 +1126,8 @@
         if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
           const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
-        } else out.push(p.pick);
+        } else if (answered && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
+        else out.push(p.pick);
       }
       sendQuote(out, comment, add, ref);
     }
