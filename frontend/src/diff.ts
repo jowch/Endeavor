@@ -1,19 +1,6 @@
-// Unified diffs inside Pluto's own cell editors (docs/ui-spec.md, "Changed
-// lines"): an unrun cell the agent edited shows what changed since its code
-// before the edit (the runtime's `before`): added lines tinted, the changed
-// characters highlighted, removed lines as blocks above what replaced them.
-// Cleared once the cell runs. Live: the user's own edits update the diff.
-//
-// Pluto's CodeMirror is bundled, so we can't import it; extensions built from a
-// second copy wouldn't compose. The classes come from the live editor instead
-// (docs/design-notes.md, "Diffs in the CodeMirror gutter").
-
 import { on } from "./bridge";
 import { onRedraw } from "./redraw";
 
-// Pluto indents wrapped lines with margin-left: var(--indented), which a line's
-// own background doesn't cover; the tint is a layer behind the text that
-// reaches back over the indent. The ± signs sit just left of the text column.
 const css = `
   .cm-line.endeavor-add { position: relative; z-index: 0; }
   .cm-line.endeavor-add::before {
@@ -32,19 +19,18 @@ const css = `
 `;
 
 export type Hunk = {
-  /** Where the hunk starts in the new text (0-based line). */
   at: number;
   removed: string[];
   added: string[];
 };
 
-/** Line diff by longest common subsequence; hunks in order. */
+const LARGEST_LCS_TABLE = 250_000;
+
 export function lineDiff(before: string, after: string): Hunk[] {
   const a = before === "" ? [] : before.split("\n");
   const b = after.split("\n");
   const n = a.length, m = b.length;
-  // ponytail: O(n·m) table; cells are small. Past this, no diff is shown.
-  if (n * m > 250_000) return [];
+  if (n * m > LARGEST_LCS_TABLE) return [];
   const lcs = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
   for (let i = n - 1; i >= 0; i--)
     for (let j = m - 1; j >= 0; j--)
@@ -65,7 +51,6 @@ export function lineDiff(before: string, after: string): Hunk[] {
   return hunks;
 }
 
-/** The differing middle of two lines: [start, endInA, endInB). */
 export function changedSpan(a: string, b: string): [number, number, number] {
   let start = 0;
   while (start < a.length && start < b.length && a[start] === b[start]) start++;
@@ -74,19 +59,15 @@ export function changedSpan(a: string, b: string): [number, number, number] {
   return [start, endA, endB];
 }
 
-// CodeMirror's classes, taken from the first live editor.
 type View = any;
 let cm: { Decoration: any; Compartment: any; appendConfig: any; decorations: any; extender: any } | null = null;
 
 function classes(view: View) {
   if (cm) return cm;
   const EditorView = view.constructor;
-  // A static helper that returns a StateEffect; its class has appendConfig.
   const StateEffect = EditorView.scrollIntoView(0).constructor;
-  // Pluto configures its editors with compartments.
   const Compartment = [...(view.state.config?.compartments?.keys() ?? [])][0]?.constructor;
   if (!Compartment) return null;
-  // Any existing decoration's class descends from Decoration.
   for (const source of view.state.facet(EditorView.decorations)) {
     const set = typeof source === "function" ? source(view) : source;
     let c = set?.iter?.().value?.constructor;
@@ -104,11 +85,9 @@ function classes(view: View) {
 }
 
 function viewOf(cell: Element): View | null {
-  // CodeMirror keeps its view on the content node (what findFromDOM reads).
   return (cell.querySelector("pluto-input .cm-content") as any)?.cmTile?.root?.view ?? null;
 }
 
-/** A removed line, as a block widget (duck-typed: WidgetType isn't reachable). */
 function removedLine(text: string, span: [number, number] | null) {
   return {
     text,
@@ -159,16 +138,10 @@ function decorate(doc: any, before: string) {
 }
 
 const befores = new Map<string, string>();
-// Per editor: its compartment and the before-text it last showed.
 const installed = new WeakMap<object, { compartment: any; shown: string | undefined }>();
 
-// Block widgets (removed lines) can't come from a function source, so each
-// editor gets a static set in its own compartment, swapped when the before-text
-// changes; the user's typing re-diffs in the same transaction.
 const extension = (doc: any, before: string | undefined) => (before === undefined ? [] : cm!.decorations.of(decorate(doc, before)));
 
-/** Install on editors that need it and swap in changed before-texts. Idempotent,
- * so redraws may call it: it only dispatches when something changed. */
 function refresh() {
   for (const cell of document.querySelectorAll("pluto-cell")) {
     const view = viewOf(cell);

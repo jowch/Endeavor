@@ -1,8 +1,3 @@
-//! Endeavor's side of the agent's prompts: the "Always this session" rules it
-//! keeps for a session, the count of prompts that queued up together, when
-//! each was answered, and the agent's own folder rules, read from (and removed
-//! from) its settings file. See docs/other-agents.md, "Permission rules".
-
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -13,25 +8,18 @@ use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, 
 use gpui::Pixels;
 use serde_json::Value;
 
-/// What a prompt asks about, as far as a rule can tell.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Subject {
-    /// An edit, a new file, a delete: the file's path.
     File(String),
-    /// A web page: its host.
     Site(String),
-    /// A shell command, as written.
     Command(String),
-    /// Anything else: the call's title (a notebook tool, a skill).
     Tool(String),
 }
 
-/// One prompt's call: its title, kind and input.
 pub struct Asked<'a> {
     pub title: &'a str,
     pub kind: Option<ToolKind>,
     pub input: &'a Value,
-    /// The first file the agent says the call touches.
     pub path: Option<&'a Path>,
 }
 
@@ -55,19 +43,13 @@ impl Asked<'_> {
     }
 }
 
-/// A rule "Always this session" remembers.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Rule {
-    /// The same file, site or tool.
     Same(Subject),
-    /// Commands that start with one of these (the agent's own suggested rule).
     CommandsStarting(Vec<String>),
 }
 
 impl Rule {
-    /// The rule for "Always this session" on this prompt: for a command, the
-    /// prefix the agent's own "don't ask again" option names, else the
-    /// command itself; otherwise the same file, site or tool.
     pub fn for_prompt(asked: &Asked, options: &[PermissionOption]) -> Rule {
         match asked.subject() {
             Subject::Command(command) => {
@@ -82,7 +64,6 @@ impl Rule {
         match (self, asked.subject()) {
             (Rule::Same(rule), subject) => *rule == subject,
             (Rule::CommandsStarting(prefixes), Subject::Command(command)) => {
-                // A prefix says nothing about what follows `&&`, a pipe or a redirect.
                 let chained = ["&&", "||", ";", "|", "`", "$(", ">", "<", "\n", "&"].iter().any(|s| command.contains(s));
                 !chained && prefixes.iter().any(|p| command == *p || command.strip_prefix(p.as_str()).is_some_and(|rest| rest.starts_with(' ')))
             }
@@ -91,9 +72,6 @@ impl Rule {
     }
 }
 
-/// The command prefixes in Claude Code's "Yes, and don't ask again for `npm
-/// test` and `git status` commands" option (the adapter's label for its
-/// suggested Bash rule). "similar" names none.
 pub fn suggested_prefixes(label: &str) -> Option<Vec<String>> {
     let list = label.strip_prefix("Yes, and don't ask again for ")?.strip_suffix(" commands")?;
     if list == "similar" {
@@ -107,10 +85,6 @@ pub fn suggested_prefixes(label: &str) -> Option<Vec<String>> {
     (!parts.is_empty()).then_some(parts)
 }
 
-/// The agent's allow-always option when it writes a rule into the folder's
-/// settings. Claude Code's "don't ask again for …" options do (commands, a
-/// site); its "Yes, allow all edits during this session" instead switches the
-/// session's mode, so it isn't "In this folder".
 pub fn folder_rule_option(options: &[PermissionOption]) -> Option<&PermissionOption> {
     options.iter().find(|o| o.kind == PermissionOptionKind::AllowAlways && o.name.starts_with("Yes, and don't ask again for "))
 }
@@ -121,31 +95,19 @@ pub fn host_of(url: &str) -> &str {
     host.rsplit_once('@').map_or(host, |(_, h)| h)
 }
 
-/// A session's prompts as Endeavor answers them.
 #[derive(Default)]
 pub struct Asks {
-    /// "Always this session" rules, newest last.
     pub rules: Vec<Rule>,
-    /// Prompts that queued up together: how many, and how many are answered.
-    /// It counts the batch, so "2 of 3" never goes back to "1 of 2".
     pub total: usize,
     pub answered: usize,
-    /// When each prompt was answered, for the opened row ("Allowed at 14:02").
     pub answered_at: HashMap<ToolCallId, SystemTime>,
-    /// The card's height as the batch's first prompt drew it: later prompts
-    /// keep it, so the chat above doesn't move.
     pub card_height: Rc<Cell<Option<Pixels>>>,
-    /// The card shows all of its code, not just the first lines.
     pub code_open: bool,
-    /// The ⌄ on "Always this session" is open (This session / In this folder).
     pub always_menu: bool,
-    /// The asked-about cells are on screen in the notebook, as the page last
-    /// said (None: it hasn't said for this prompt).
     pub cells_visible: Option<bool>,
 }
 
 impl Asks {
-    /// A prompt arrived; `waiting` other prompts already wait for an answer.
     pub fn asked(&mut self, waiting: usize) {
         if waiting == 0 {
             self.total = 0;
@@ -164,12 +126,10 @@ impl Asks {
         self.cells_visible = None;
     }
 
-    /// "1 of 3" while several prompts wait; nothing for one alone.
     pub fn count(&self) -> Option<String> {
         (self.total > 1).then(|| format!("{} of {}", (self.answered + 1).min(self.total), self.total))
     }
 
-    /// Prompts can't be answered any more (the agent stopped): the batch is over.
     pub fn forget_batch(&mut self) {
         self.total = 0;
         self.answered = 0;
@@ -183,16 +143,12 @@ impl Asks {
     }
 }
 
-/// After one "Claude is waiting for you" notification, none for this long, from any session.
 pub const NOTIFY_QUIET: Duration = Duration::from_secs(10 * 60);
 
-/// Whether a prompt arriving now may send a notification, given the last one sent.
 pub fn may_notify(last: Option<Instant>, now: Instant) -> bool {
     last.is_none_or(|last| now.duration_since(last) >= NOTIFY_QUIET)
 }
 
-/// The agent's lasting rules for a folder, from its settings file's
-/// `permissions.allow` (Claude Code writes them there for "don't ask again").
 pub fn folder_rules(folder: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(settings_file(folder)) else { return Vec::new() };
     let Ok(json) = serde_json::from_str::<Value>(&text) else { return Vec::new() };
@@ -203,8 +159,6 @@ pub fn settings_file(folder: &Path) -> std::path::PathBuf {
     folder.join(crate::agent::CLAUDE_CODE.folder_rules.unwrap_or(".claude/settings.local.json"))
 }
 
-/// Remove one rule from the folder's settings file, leaving the rest of the
-/// file as it was written.
 pub fn remove_folder_rule(folder: &Path, rule: &str) -> Result<(), String> {
     let file = settings_file(folder);
     let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
@@ -212,9 +166,6 @@ pub fn remove_folder_rule(folder: &Path, rule: &str) -> Result<(), String> {
     std::fs::write(&file, new).map_err(|e| e.to_string())
 }
 
-/// `text` (a settings file) without `rule` in `permissions.allow`: the entry
-/// and its comma cut from the text, so the file keeps its order and layout;
-/// rewritten whole only if that cut can't be made cleanly.
 pub fn without_rule(text: &str, rule: &str) -> Option<String> {
     let mut json: Value = serde_json::from_str(text).ok()?;
     let allow = json["permissions"]["allow"].as_array_mut()?;
@@ -226,11 +177,9 @@ pub fn without_rule(text: &str, rule: &str) -> Option<String> {
         let after = &text[end..];
         let after_ws = after.len() - after.trim_start().len();
         let cut = if after.trim_start().starts_with(',') {
-            // `"rule",` and the space up to the next entry.
             let rest = &after[after_ws + 1..];
             start..end + after_ws + 1 + (rest.len() - rest.trim_start().len())
         } else {
-            // The last entry: the comma before it goes.
             let before = text[..start].trim_end();
             match before.strip_suffix(',') {
                 Some(b) => b.len()..end,
@@ -245,8 +194,6 @@ pub fn without_rule(text: &str, rule: &str) -> Option<String> {
     serde_json::to_string_pretty(&json).ok().map(|s| s + "\n")
 }
 
-/// A Claude Code permission rule in plain words, with `names` in backticks:
-/// `Bash(npm test:*)` → "Run commands starting with `npm test`".
 pub fn rule_words(rule: &str) -> String {
     let (tool, content) = match rule.split_once('(') {
         Some((tool, rest)) => (tool, rest.strip_suffix(')').map(str::trim)),
@@ -324,13 +271,11 @@ mod tests {
         assert!(!run("npm test && rm -rf build"), "a prefix doesn't cover what's chained after it");
         assert!(!run("npm run build"));
 
-        // No suggested rule: the exact command.
         let exact = json!({ "command": "uname -a" });
         let rule = Rule::for_prompt(&asked("uname -a", ToolKind::Execute, &exact), &options[..1]);
         assert_eq!(rule, Rule::Same(Subject::Command("uname -a".into())));
         assert!(!rule.allows(&asked("uname -m", ToolKind::Execute, &json!({ "command": "uname -m" }))));
 
-        // A notebook tool that doesn't run code (Manual): the same tool.
         let cell = json!({ "cell_id": "a", "code": "x = 1" });
         let rule = Rule::for_prompt(&asked("mcp__notebook__edit_cell", ToolKind::Other, &cell), &[]);
         assert!(rule.allows(&asked("mcp__notebook__edit_cell", ToolKind::Other, &json!({ "cell_id": "b", "code": "y = 2" }))));
@@ -395,7 +340,6 @@ mod tests {
             without_rule(text, "WebFetch(domain:juliastats.org)").as_deref(),
             Some("{\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(npm test:*)\"\n    ],\n    \"deny\": []\n  },\n  \"zeta\": 1,\n  \"alpha\": 2\n}\n")
         );
-        // The same words elsewhere in the file are left alone.
         let twice = r#"{"note": "Bash(ls)", "permissions": {"allow": ["Bash(ls)"]}}"#;
         assert_eq!(without_rule(twice, "Bash(ls)").as_deref(), Some(r#"{"note": "Bash(ls)", "permissions": {"allow": []}}"#));
         assert_eq!(without_rule(text, "Bash(rm:*)"), None);

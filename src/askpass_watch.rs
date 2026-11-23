@@ -1,23 +1,9 @@
-//! ssh's askpass, run as this app (`main`). While the askpass waits for the
-//! user's answer, ssh waits on it and reads nothing from the server, so it can't
-//! see the server give up on the sign-in (sshd's LoginGraceTime, two minutes by
-//! default): the prompt would stay up for an answer that can no longer work. So
-//! the askpass watches ssh's connection itself, and once the server has closed
-//! it, or ssh is gone, it ends without an answer. ssh then fails at once, the
-//! connect ends, and the app takes the prompt down (`Workspace::drop_asks`).
-//!
-//! It knows ssh's connection only when ssh holds the TCP socket itself: through
-//! a ProxyJump or ProxyCommand nothing is watched, and the prompt waits as before.
-
 use std::time::Duration;
 
-/// Said on ssh's stderr, which the connect's error shows ("The connection to lab ended: …").
 const GAVE_UP: &str = "the server stopped waiting for the sign-in.";
 
-/// How often ssh's connection is looked at.
 const EVERY: Duration = if cfg!(target_os = "linux") { Duration::from_secs(1) } else { Duration::from_secs(2) };
 
-/// Watch the ssh that runs this askpass, in a thread of its own, until the process ends.
 pub fn start() {
     let Some(ssh) = os::Parent::of_this_process() else { return };
     std::thread::spawn(move || {
@@ -35,16 +21,11 @@ pub fn start() {
     });
 }
 
-/// What ssh's connection looks like.
 #[derive(Debug, PartialEq)]
 enum Seen {
-    /// Still connected.
     Open,
-    /// The server closed it.
     Closed,
-    /// ssh itself is gone.
     Gone,
-    /// No TCP connection of ssh's own was found (a ProxyJump, say), or it couldn't be looked at.
     Unknown,
 }
 
@@ -52,13 +33,10 @@ enum Seen {
 enum Tcp {
     Listen,
     Established,
-    /// The other side has closed its end: the server is gone from this connection.
     CloseWait,
     Other,
 }
 
-/// ssh's connection from the states of its TCP sockets: a socket that only
-/// listens (a forwarded port) isn't it.
 fn judge(states: &[Tcp]) -> Seen {
     if states.contains(&Tcp::Established) {
         Seen::Open
@@ -81,7 +59,6 @@ mod os {
         }
 
         pub fn connection(&self) -> Seen {
-            // An orphan's parent is init (or a subreaper) now.
             if unsafe { libc::getppid() } != self.0 {
                 return Seen::Gone;
             }
@@ -101,7 +78,6 @@ mod os {
         }
     }
 
-    /// The states of the sockets (by inode) in a /proc/net/tcp table.
     pub(super) fn tcp_states(table: &str, sockets: &[String]) -> Vec<Tcp> {
         table
             .lines()
@@ -135,14 +111,12 @@ mod os {
             if unsafe { libc::getppid() } != self.0 {
                 return Seen::Gone;
             }
-            // lsof is on every Mac; its TCP states are those of netstat.
             let output = std::process::Command::new("/usr/sbin/lsof").args(["-nP", "-a", "-p", &self.0.to_string(), "-iTCP", "-FT"]).stderr(std::process::Stdio::null()).output();
             let Ok(output) = output else { return Seen::Unknown };
             judge(&lsof_states(&String::from_utf8_lossy(&output.stdout)))
         }
     }
 
-    /// The `TST=` fields of `lsof -FT`.
     pub(super) fn lsof_states(text: &str) -> Vec<Tcp> {
         text.lines()
             .filter_map(|line| line.strip_prefix("TST="))
@@ -167,13 +141,11 @@ mod os {
     const AF_INET: u32 = 2;
     const AF_INET6: u32 = 23;
 
-    /// ssh's pid, and a handle that says when it has ended (a pid can be reused).
     pub struct Parent {
         pid: u32,
         handle: HANDLE,
     }
 
-    // The handle is only waited on.
     unsafe impl Send for Parent {}
 
     impl Drop for Parent {
@@ -200,7 +172,6 @@ mod os {
     }
 
     fn state(state: u32) -> Tcp {
-        // MIB_TCP_STATE: LISTEN 2, ESTAB 5, CLOSE_WAIT 8.
         match state {
             2 => Tcp::Listen,
             5 => Tcp::Established,
@@ -209,11 +180,9 @@ mod os {
         }
     }
 
-    /// Every row of the TCP table for `family`: a count, then the rows.
     fn rows<Row: Copy>(family: u32) -> Vec<Row> {
         let mut size = 0u32;
         unsafe { GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, family, TCP_TABLE_OWNER_PID_ALL, 0) };
-        // u32s, for the count's alignment; with room for rows added since the size was asked.
         let mut buffer = vec![0u32; (size as usize + 4096) / 4];
         let mut size = (buffer.len() * 4) as u32;
         if unsafe { GetExtendedTcpTable(buffer.as_mut_ptr().cast(), &mut size, 0, family, TCP_TABLE_OWNER_PID_ALL, 0) } != NO_ERROR {
@@ -221,7 +190,6 @@ mod os {
         }
         let count = buffer[0] as usize;
         let first = unsafe { buffer.as_ptr().add(1).cast::<Row>() };
-        // The rows start after the count, aligned for a u32 (every field of a row is one).
         (0..count).map(|i| unsafe { first.add(i).read_unaligned() }).collect()
     }
 
@@ -289,8 +257,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn reads_lsofs_states() {
-        // As captured on a Mac (ssh waiting on a passphrase prompt). The CLOSE_WAIT one wasn't captured:
-        // the app polls every 2 s, and the askpass exits as soon as it sees it.
         assert_eq!(os::lsof_states("p35580\nf3\nTST=ESTABLISHED\nTQR=0\nTQS=0\n"), vec![Tcp::Established]);
         assert_eq!(os::lsof_states("p35580\nf3\nTST=CLOSE_WAIT\nTQR=1\nTQS=0\n"), vec![Tcp::CloseWait]);
     }

@@ -1,5 +1,3 @@
-// A folded cell Claude changed shows open, with a tag, until it runs without an
-// error; then it folds. The user can fold it at once.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -16,7 +14,6 @@ async function page({ reduceMotion = true } = {}) {
   );
   const { window } = dom;
   window.ipc = { postMessage: () => {} };
-  // With a pluto-editor, state.ts reads Pluto's state every frame; no frames here.
   window.requestAnimationFrame = () => 0;
   window.matchMedia = (q) => ({ matches: reduceMotion && q.includes("reduce"), addEventListener() {} });
   window.eval(readFileSync(new URL("../dist/page.js", import.meta.url), "utf8"));
@@ -34,18 +31,14 @@ test("Claude's change to a folded cell shows until it runs cleanly, then folds",
   assert.equal(tag().querySelector(".label").textContent, "Folded · shows until it runs");
   assert.equal(tag().querySelector(".now").textContent, "Fold now");
 
-  // Running keeps it open.
   cells({ unrun: true, running: true });
   assert.equal(open(), "open");
-  // A failed run keeps it open and says so.
   cells({ errored: true });
   assert.equal(open(), "open");
   assert.equal(tag().querySelector(".label").textContent, "Folded · shows until it runs without error");
-  // A clean run folds it (at once with Reduce motion).
   cells({});
   assert.equal(open(), null);
   assert.equal(tag(), null);
-  // A cell that isn't folded gets nothing.
   cell.classList.remove("code_folded");
   cells({ unrun: true, version: "v2" });
   assert.equal(open(), null);
@@ -67,12 +60,10 @@ test("Fold now, or Pluto's eye, folds it at once until Claude edits it again", a
   cells({ unrun: true });
   tag().click();
   assert.equal(open(), null);
-  // Redraws and the same state don't bring it back.
   cells({ unrun: true });
   window.document.body.append(window.document.createElement("div"));
   await tick();
   assert.equal(open(), null);
-  // Claude edits it again: open again; the eye folds it, and Pluto doesn't see the click.
   cells({ unrun: true, version: "v2" });
   assert.equal(open(), "open");
   let pluto = false;
@@ -80,7 +71,6 @@ test("Fold now, or Pluto's eye, folds it at once until Claude edits it again", a
   cell.querySelector("button.foldcode").click();
   assert.equal(open(), null);
   assert.equal(pluto, false);
-  // Once folded, the eye is Pluto's again.
   cell.querySelector("button.foldcode").click();
   assert.equal(pluto, true);
 });

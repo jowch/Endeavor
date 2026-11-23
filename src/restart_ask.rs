@@ -1,10 +1,3 @@
-//! A restart of a session's runtime that the agent asks for (EndeavorMCP's
-//! `request_restart`): for a runtime an older Endeavor started that keeps
-//! running, or for Julia or R that stopped or stopped answering. The host's
-//! listener asks the app (`hook`), the session shows a card with the agent's
-//! reason and Restart, and only the user's press restarts anything, in every
-//! mode. The older-runtime note's own Restart asks the same in a dialog.
-
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -15,33 +8,22 @@ use crate::Workspace;
 use crate::connection::Status;
 use crate::hosts::HostId;
 
-/// One agent's request, as the listener hands it to the app.
 pub struct Ask {
     pub host: HostId,
-    /// The session's key, as the agent's MCP config carries it.
     pub session: String,
     pub reason: String,
-    /// Where the user's answer goes; dropped unanswered when a later request of the session replaces it.
     pub reply: mpsc::Sender<RestartAnswer>,
 }
 
-/// A request whose card is up, by the card's id (`Workspace::restart_replies`).
 pub struct Pending {
-    /// The session it was asked in.
     pub key: u64,
-    /// Where the user's answer goes.
     pub reply: mpsc::Sender<RestartAnswer>,
-    /// The runtime it was asked about, if one ran: a press after another one started does nothing.
     pid: Option<u32>,
-    /// Only the session's notebook crashed: a press after it runs again does nothing.
     only_notebook: bool,
 }
 
-/// How often a waiting request checks whether the agent hung up.
 const CHECK: Duration = Duration::from_millis(250);
 
-/// The listener's side: each request is handed to the app on `asks`, and its answer waited for
-/// until the deadline.
 pub fn hook(host: HostId, asks: futures::channel::mpsc::UnboundedSender<Ask>) -> Box<endeavor_mcp::AskRestart> {
     let asks = Mutex::new(asks);
     Box::new(move |session, reason, gone, deadline| {
@@ -54,8 +36,6 @@ pub fn hook(host: HostId, asks: futures::channel::mpsc::UnboundedSender<Ask>) ->
     })
 }
 
-/// The answer on `answer`, or Unanswered at `deadline`, once the agent hung up (`gone`), or once
-/// the app let the request go.
 fn wait(answer: &mpsc::Receiver<RestartAnswer>, gone: &dyn Fn() -> bool, deadline: Instant) -> RestartAnswer {
     loop {
         match answer.recv_timeout(CHECK.min(deadline.saturating_duration_since(Instant::now()))) {
@@ -69,17 +49,14 @@ fn wait(answer: &mpsc::Receiver<RestartAnswer>, gone: &dyn Fn() -> bool, deadlin
     }
 }
 
-/// The agent's reason when the host is already stopping or starting.
 fn already(name: &str) -> String {
     format!("ArgumentError: restarting::Endeavor on {name} is already stopping or starting, so nothing was asked. Wait a moment, then make your call again.")
 }
 
-/// The agent's reason when the user pressed Restart after its runtime had started again.
 fn already_restarted(name: &str) -> String {
     format!("ArgumentError: restarted::Endeavor on {name} started again since you asked, so nothing was restarted. Check whether the problem is still there.")
 }
 
-/// What the restart confirmations say stops: every notebook open on the host, by file name.
 pub fn stops_text(notebooks: &serde_json::Value) -> String {
     let names: Vec<String> = notebooks
         .as_array()
@@ -96,8 +73,6 @@ pub fn stops_text(notebooks: &serde_json::Value) -> String {
 }
 
 impl Workspace {
-    /// An agent asks for a restart: its session gets the card, unless there's no such session
-    /// on that host, or the host is already stopping or starting.
     pub fn restart_asked(&mut self, ask: Ask, cx: &mut Context<Self>) {
         let Ask { host, session, reason, reply } = ask;
         let key = session.parse::<u64>().ok().filter(|key| self.sessions.iter().any(|s| s.key == *key && s.place.host == host));
@@ -114,15 +89,11 @@ impl Workspace {
         let stops = stops_text(&self.connection(&host).map(|c| c.notebooks.clone()).unwrap_or_default());
         let Some(session) = self.session_mut(key) else { return };
         let (id, effects) = session.ask_restart(&reason, &stops, only.as_deref());
-        // A request already up for the session is this one now; the call that waited on it stops waiting.
         self.restart_replies.insert(id, Pending { key, reply, pid, only_notebook: only.is_some() });
         self.apply_effects(key, effects, cx);
         cx.notify();
     }
 
-    /// The user answered the card of request `id` in session `key`: Restart restarts its runtime.
-    /// A card left up from an earlier turn whose runtime has restarted since, or whose crashed
-    /// notebook runs again, restarts nothing: it would stop what runs well now.
     pub fn restart_answered(&mut self, key: u64, id: u64, restart: bool, cx: &mut Context<Self>) {
         let Some(pending) = self.restart_replies.remove(&id) else { return };
         if restart && self.restart_outdated(&pending) {
@@ -135,19 +106,16 @@ impl Workspace {
             }
             return cx.notify();
         }
-        // The call may have stopped waiting: the restart goes ahead all the same.
         let _ = pending.reply.send(if restart { RestartAnswer::Restarting } else { RestartAnswer::Declined });
         if restart {
             self.restart_session_runtime(key, cx);
         }
     }
 
-    /// A session closed: its requests are let go (their calls hear no answer).
     pub fn restart_session_closed(&mut self, key: u64) {
         self.restart_replies.retain(|_, pending| pending.key != key);
     }
 
-    /// Another runtime runs on the host than the one asked about, or the crashed notebook runs again.
     fn restart_outdated(&self, pending: &Pending) -> bool {
         let Some(host) = self.sessions.iter().find(|s| s.key == pending.key).map(|s| s.place.host.clone()) else { return true };
         let now = self.runtime_pid(&host);
@@ -158,8 +126,6 @@ impl Workspace {
         self.connection(host).and_then(|c| c.runtime.as_ref()).map(|r| r.pid)
     }
 
-    /// The file name of session `key`'s notebook when only it crashed, not its host's runtime:
-    /// a restart then restarts only that notebook (`restart_after_crash`).
     fn only_notebook_crashed(&self, key: u64) -> Option<String> {
         let at = self.notebook_at(key)?;
         self.crashes.stopped_at(&at)?;
@@ -169,8 +135,6 @@ impl Workspace {
         Some(std::path::Path::new(&at.1).file_name().map_or(at.1.clone(), |n| n.to_string_lossy().into_owned()))
     }
 
-    /// Restart what session `key`'s notebook runs on: after a crash, as the crash page's Restart
-    /// does; a runtime that runs, stopped and started again; one that doesn't, started.
     fn restart_session_runtime(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
         let crashed = self.notebook_at(key).is_some_and(|at| self.crashes.stopped_at(&at).is_some());
@@ -185,7 +149,6 @@ impl Workspace {
         }
     }
 
-    /// The Restart beside the older-runtime note: the same dialog as the notebook pane's.
     pub fn confirm_restart(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
         let body = self.restart_body(host);
         self.restart_dialog(host, body, window, cx);
@@ -198,7 +161,6 @@ impl Workspace {
         self.open_confirm(format!("Restart Julia{on}?"), body, "Restart", window, cx, move |this, _, cx| this.restart_host(&host, cx));
     }
 
-    /// A notice's Restart Julia, after the Julia `host`'s runtime runs on was removed (#230).
     pub fn confirm_restart_julia(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
         let mut body = stops_text(&self.connection(host).map(|c| c.notebooks.clone()).unwrap_or_default());
         if let Some(lost) = self.unrun_edit_warning(host) {
@@ -207,7 +169,6 @@ impl Workspace {
         self.restart_dialog(host, body, window, cx);
     }
 
-    /// A restart dialog's text for `host`'s runtime that an older Endeavor started.
     pub fn restart_body(&self, host: &HostId) -> String {
         let stops = stops_text(&self.connection(host).map(|c| c.notebooks.clone()).unwrap_or_default());
         let mut body = format!("An older version of Endeavor started it. {stops}");
@@ -220,7 +181,6 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: that brings in gpui's own `#[test]`.
     use super::{RestartAnswer, stops_text, wait};
     use serde_json::json;
     use std::sync::mpsc;
