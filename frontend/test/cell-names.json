@@ -1,0 +1,134 @@
+[
+  {
+    "code": "flips = rand(Bool, 100)",
+    "name": "flips"
+  },
+  {
+    "code": "# true = heads, false = tails\n\nflips = rand(Bool, 100)",
+    "name": "flips"
+  },
+  {
+    "code": "#= Draws\n  x = 1 =#\nn_heads = count(flips)",
+    "name": "n_heads"
+  },
+  {
+    "code": "model(S, p) = p[1] * S",
+    "name": "model"
+  },
+  {
+    "code": "function fit!(p)\n  p\nend",
+    "name": "fit!"
+  },
+  {
+    "code": "const K = 3",
+    "name": "K"
+  },
+  {
+    "code": "struct Fit\n  k::Float64\nend",
+    "name": "Fit"
+  },
+  {
+    "code": "begin\n  x = 1\n  y = 2\nend",
+    "name": "x"
+  },
+  {
+    "code": "md\"\"\"\n# Coin flips\nWe flip a coin.\n\"\"\"",
+    "name": "Coin flips"
+  },
+  {
+    "code": "md\"\"\"\nWe flip a fair coin a hundred times.\n\"\"\"",
+    "name": "We flip a fair coin a hundr…"
+  },
+  {
+    "code": "md\"## Results\"",
+    "name": "Results"
+  },
+  {
+    "code": "scatter(t, counts, label = \"data\")",
+    "name": "scatter(t, counts, label = …"
+  },
+  {
+    "code": "let\n  n = 1:length(flips)\n  p = plot(n, share)\n  hline!(p, [0.5])\n  p\nend",
+    "name": "plot"
+  },
+  {
+    "code": "let\n  A, k = coef(fit)\n  Markdown.parse(\"k = $k\")\nend",
+    "name": "text"
+  },
+  {
+    "code": "let\n  a = sum(xs)\n  b = length(xs)\n  a, b\nend",
+    "name": "a, b"
+  },
+  {
+    "code": "let\n  a = sum(xs)\n  a / 2\nend",
+    "name": "let"
+  },
+  {
+    "code": "begin\n  for x in xs\n    println(x)\n  end\nend",
+    "name": "begin"
+  },
+  {
+    "code": "splot(x)",
+    "name": "splot(x)"
+  },
+  {
+    "code": "x == 1",
+    "name": "x == 1"
+  },
+  {
+    "code": "fit(x, k=1)",
+    "name": "fit(x, k=1)"
+  },
+  {
+    "code": "using Plots",
+    "name": "using Plots"
+  },
+  {
+    "code": "# just a note",
+    "name": "just a note"
+  },
+  {
+    "code": "# Growth curves (by strain)\nlet\n  p = plot(t, y)\nend",
+    "name": "Growth curves (by strain)"
+  },
+  {
+    "code": "\n  # Outliers removed\nclean = filter(ok, data)",
+    "name": "Outliers removed"
+  },
+  {
+    "code": "# plot(t, y)\nscatter(t, y)",
+    "name": "scatter(t, y)"
+  },
+  {
+    "code": "# Plot of sin(x)\nplot(sin, 0, 2π)",
+    "name": "Plot of sin(x)"
+  },
+  {
+    "code": "# Base.show(io, x)\nshow(x)",
+    "name": "show(x)"
+  },
+  {
+    "code": "# using CSV\ndata = 1",
+    "name": "data"
+  },
+  {
+    "code": "# data <- read.csv(f)\ndata <- 1",
+    "name": "data <- 1"
+  },
+  {
+    "code": "x = 1\n# Not a name",
+    "name": "x"
+  },
+  {
+    "code": "#= Draws =#\nn = 1",
+    "name": "n"
+  },
+  {
+    "code": "#' Roxygen\nf <- function(x) x",
+    "name": "f <- function(x) x"
+  },
+  {
+    "code": "a_rather_long_variable_name_for_tests = 1",
+    "name": "a_rather_long_variable_name…"
+  }
+]

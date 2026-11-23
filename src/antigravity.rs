@@ -1,18 +1,3 @@
-//! What Antigravity needs that Claude doesn't (docs/antigravity-agent.md):
-//! its sign-in, and the dialect that turns its server's sessions into the
-//! shape the app knows from Claude's.
-//!
-//! Antigravity's modes are permission presets (`default`, `auto_edit`,
-//! `yolo`), the same as its `mode` option. Endeavor keeps every session in
-//! `default`, where it asks before every tool call, and makes its own modes
-//! out of the runtime's gate, as for Codex: Manual and Ask to run differ only
-//! in what the runtime holds. It has no plan mode.
-//!
-//! Its notebook calls are titled `notebook_<tool>` with the arguments under
-//! `rawInput.arguments`, and say which MCP tool they are in `_meta.mcp`. Their
-//! live output is only a label ("New notebook"), so the app asks the runtime
-//! for the result (`Effect::FetchResult`).
-
 use agent_client_protocol::schema::v1::{
     ConfigOptionUpdate, CurrentModeUpdate, Meta, PermissionOptionKind, RequestPermissionRequest, SessionConfigKind, SessionConfigOption, SessionConfigValueId, SessionMode,
     SessionModeId, SessionModeState, SessionUpdate,
@@ -20,27 +5,19 @@ use agent_client_protocol::schema::v1::{
 
 use crate::agent::{ModeSwitch, Started};
 
-/// The sign-in Endeavor offers: a Google account, in the browser.
 pub const SIGN_IN_METHOD: &str = "oauth-personal";
 
-/// Antigravity's preset for every Endeavor session.
 const PRESET: &str = "default";
 const MODE_OPTION: &str = "mode";
 
-/// Signed in on this computer: its server keeps the sign-in in
-/// `~/.gemini/antigravity-acp/acp_token.json`, which a sign-out or a sign-in
-/// that times out removes. Changes nothing.
 pub fn signed_in() -> bool {
     wire::files::home().join(".gemini").join("antigravity-acp").join("acp_token.json").is_file()
 }
 
-/// Translates each Antigravity session at the ACP boundary.
 #[derive(Default)]
 pub struct Dialect;
 
 impl Dialect {
-    /// A session is up: Endeavor's modes in place of Antigravity's, its
-    /// options without the mode, and the mode to set if it isn't `default`.
     pub fn started(&mut self, started: Started) -> (Started, Option<(String, SessionConfigValueId)>) {
         let preset = current(&started.config, MODE_OPTION).or_else(|| started.modes.as_ref().map(|m| m.current_mode_id.to_string()));
         let fix = preset.is_some_and(|p| p != PRESET).then(|| (MODE_OPTION.to_owned(), PRESET.into()));
@@ -48,9 +25,6 @@ impl Dialect {
         (Started { id: started.id, modes: Some(modes), config: app_options(started.config) }, fix)
     }
 
-    /// An update from Antigravity, as the app takes it. Its own mode updates
-    /// name presets, which the app never shows. A notebook call gets the name
-    /// and input Claude's adapter gives it.
     pub fn update(&mut self, update: SessionUpdate) -> Vec<SessionUpdate> {
         match update {
             SessionUpdate::CurrentModeUpdate(_) => Vec::new(),
@@ -83,10 +57,6 @@ impl Dialect {
         }
     }
 
-    /// A permission request as the app takes it: a notebook call named as
-    /// its updates are, anything else never named like one, and without
-    /// "Allow Always". Antigravity keeps that answer as a rule of its own,
-    /// which the app can't show or remove and which would hold in Manual too.
     pub fn permission(&self, request: &mut RequestPermissionRequest) {
         let call = &mut request.tool_call;
         if let Some(tool) = notebook_tool(call.meta.as_ref()) {
@@ -101,43 +71,30 @@ impl Dialect {
         request.options.retain(|o| o.kind != PermissionOptionKind::AllowAlways);
     }
 
-    /// Antigravity's reply to an option change: its options, as the app shows them.
     pub fn options(&self, options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
         app_options(options)
     }
 
-    /// The app switches a session to one of Endeavor's modes: nothing changes
-    /// in Antigravity, which stays in `default`.
     pub fn set_mode(&mut self, mode: &SessionModeId) -> ModeSwitch {
         let mode = if mode.to_string() == "auto" { "auto" } else { "default" };
         ModeSwitch { mode: None, set: None, confirm: Some(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(mode))) }
     }
 }
 
-/// The notebook tool a call's `_meta` names, when its server is Endeavor's.
 fn notebook_tool(meta: Option<&Meta>) -> Option<String> {
     let mcp = meta?.get("mcp")?;
     let tool = mcp.get("tool")?.as_str()?;
     (mcp.get("server")?.as_str()? == crate::celldiff::MCP_SERVER && endeavor_mcp::is_tool(tool)).then(|| tool.to_owned())
 }
 
-/// A call that isn't a notebook call by its `_meta` keeps its title unless
-/// the app would take that title for a notebook call's. A shell command's
-/// title is its command line, which the model writes, so
-/// `mcp__notebook__read_cell; Remove-Item …` would otherwise pass for a read.
 fn not_a_notebook_call(title: &mut String, input: &Option<serde_json::Value>) {
     let (mut named, mut input) = (title.clone(), input.clone());
     crate::celldiff::name_notebook_call(&mut named, &mut input);
     if crate::celldiff::notebook_tool(&named).is_some() {
-        // A word of its own, so neither the prefix nor a title naming only
-        // the server and a tool matches any more.
         *title = format!("Antigravity: {title}");
     }
 }
 
-/// A shell call's command where the app looks for it: Antigravity gives it
-/// as `CommandLine`, so without `command` its line says only "Ran" and an
-/// "Always this session" rule is kept for its title, not its command.
 fn shell_command(input: &mut Option<serde_json::Value>) {
     if let Some(serde_json::Value::Object(fields)) = input
         && !fields.contains_key("command")
@@ -147,8 +104,6 @@ fn shell_command(input: &mut Option<serde_json::Value>) {
     }
 }
 
-/// A notebook call's arguments: Antigravity's `rawInput` wraps them as
-/// `arguments`, beside copies of some of them.
 fn arguments(input: serde_json::Value) -> serde_json::Value {
     match input.get("arguments") {
         Some(args) if args.is_object() => args.clone(),
@@ -156,8 +111,6 @@ fn arguments(input: serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// Antigravity's options as the app shows them: no mode (Endeavor's modes
-/// stand in for it).
 fn app_options(options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
     options.into_iter().filter(|o| o.id.to_string() != MODE_OPTION).collect()
 }
@@ -174,7 +127,6 @@ mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::SessionId;
 
-    /// Antigravity's `session/new` reply (agy_acp_server 1.3.0), trimmed of most of its models.
     fn new_session(mode: &str) -> Started {
         let reply: serde_json::Value = serde_json::from_str(&include_str!("fixtures/antigravity/session-new.json").replace("\"currentValue\": \"default\"", &format!("\"currentValue\": \"{mode}\""))).unwrap();
         let config: Vec<SessionConfigOption> = serde_json::from_value(reply["configOptions"].clone()).unwrap();
@@ -216,8 +168,6 @@ mod tests {
         assert_eq!(call.raw_input, Some(serde_json::json!({"path": "C:\\Users\\me\\notebooks\\sum.jl"})));
         assert_eq!(crate::celldiff::notebook_tool(&call.title), Some("new_notebook"));
 
-        // The completed update has no _meta: passed on as it is, its label
-        // isn't a result, so the session asks the runtime.
         let done = update(include_str!("fixtures/antigravity/tool-call-done.json"));
         let updates: [SessionUpdate; 1] = Dialect.update(done).try_into().ok().unwrap();
         let [SessionUpdate::ToolCallUpdate(done)] = updates else { panic!() };
@@ -236,12 +186,10 @@ mod tests {
         let mut shell: RequestPermissionRequest = serde_json::from_value(serde_json::from_str::<serde_json::Value>(include_str!("fixtures/antigravity/permission-shell.json")).unwrap()["params"].clone()).unwrap();
         let mut before = serde_json::to_value(&shell.tool_call).unwrap();
         Dialect.permission(&mut shell);
-        // Only its command is added where the app looks for it.
         before["rawInput"]["command"] = before["rawInput"]["CommandLine"].clone();
         assert_eq!(serde_json::to_value(&shell.tool_call).unwrap(), before);
     }
 
-    /// A shell command whose command line reads as a notebook call.
     fn disguised_shell(command: &str) -> RequestPermissionRequest {
         let mut message: serde_json::Value = serde_json::from_str(include_str!("fixtures/antigravity/permission-shell.json")).unwrap();
         message["params"]["toolCall"]["title"] = command.into();
@@ -260,7 +208,6 @@ mod tests {
             assert_eq!(crate::celldiff::notebook_tool(&title), None, "{command} was taken for a notebook call");
             assert_eq!(ask.tool_call.fields.raw_input.as_ref().unwrap()["CommandLine"], command, "the card still shows the command");
         }
-        // An ordinary command keeps its title.
         let mut ask = disguised_shell("Test-Path C:\\Users\\me");
         Dialect.permission(&mut ask);
         assert_eq!(ask.tool_call.fields.title.as_deref(), Some("Test-Path C:\\Users\\me"));

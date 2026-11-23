@@ -1,10 +1,9 @@
-// The line diff behind the in-editor diffs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
 
 const { outputFiles } = buildSync({ entryPoints: [new URL("../src/diff.ts", import.meta.url).pathname], bundle: true, format: "esm", write: false });
-globalThis.window = {}; // the bridge registers itself on load
+globalThis.window = {};
 const { lineDiff, changedSpan } = await import("data:text/javascript," + encodeURIComponent(outputFiles[0].text));
 
 test("a changed line is a hunk of one removed and one added line", () => {

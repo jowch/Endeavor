@@ -1,7 +1,3 @@
-//! Cell edits as diffs. The runtime enforces read-before-edit, so every edit follows
-//! a read of that cell in the same tool stream: remember each cell's code from
-//! the agent's reads (and its own edits), and diff the next edit against it.
-
 use std::collections::HashMap;
 
 use serde_json::Value;
@@ -9,7 +5,6 @@ use serde_json::Value;
 use crate::session::cell_label;
 
 const MARKER: &str = "# ╔═╡ ";
-/// Unchanged lines kept around each change when a diff is long.
 const CONTEXT: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -19,8 +14,6 @@ pub enum Change {
     Removed,
 }
 
-/// One edited cell or file: a short label and its line diff, and for a
-/// notebook cell the edit itself.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CellDiff {
     pub label: String,
@@ -28,18 +21,13 @@ pub struct CellDiff {
     pub edit: Option<CellEdit>,
 }
 
-/// A notebook cell's code before and after one tool call: no `before` for a
-/// cell the call added, no `after` for one it deleted.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CellEdit {
     pub cell: String,
     pub before: Option<String>,
     pub after: Option<String>,
-    /// The notebook the call changed (its `notebook_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notebook: Option<String>,
-    /// The app never saw the cell's code before this edit (a read it missed, or
-    /// one from before a reopen), so `before` is a guess: empty.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unseen: bool,
 }
@@ -56,7 +44,6 @@ impl CellEdit {
     }
 }
 
-/// What a turn did to a cell, all its edits taken together.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CellChange {
     New,
@@ -64,37 +51,24 @@ pub enum CellChange {
     Deleted,
 }
 
-/// A row of the end-of-turn card: a cell the turn changed, by its net change.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChangedCell {
     pub cell: String,
-    /// The cell's label (`cell_label`).
     pub name: String,
     pub change: CellChange,
     pub added: usize,
     pub removed: usize,
-    /// Its code before the turn (none for a cell the turn added, or one whose
-    /// code the app never saw) and after it (none for one it deleted), for
-    /// Restore. A card saved before Restore has neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
-    /// The notebook the turn changed it in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notebook: Option<String>,
-    /// An edited cell whose code before the turn the app never saw, so Restore
-    /// can't put it back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unseen: bool,
 }
 
 impl ChangedCell {
-    /// What `endeavor/restore_cells` takes to put this cell back: the code the
-    /// turn left as `expected`, and its code before the turn, or null to delete
-    /// a cell the turn added. None for a deleted cell (it can't come back yet),
-    /// one whose code before the turn the app never saw, or a card that doesn't
-    /// know the code or the notebook.
     pub fn restore(&self) -> Option<Value> {
         let after = self.after.as_ref()?;
         self.notebook.as_ref()?;
@@ -107,9 +81,6 @@ impl ChangedCell {
     }
 }
 
-/// The cells a turn's edits changed, in the order first touched, each by its
-/// net change: a cell edited twice is one row, and one put back as it was, or
-/// added and then deleted, is none.
 pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>) -> Vec<ChangedCell> {
     let mut cells: Vec<CellEdit> = Vec::new();
     for edit in edits {
@@ -135,40 +106,25 @@ pub fn net_changes<'a>(edits: impl IntoIterator<Item = &'a CellEdit>) -> Vec<Cha
                 Change::Same => (a, r),
             });
             let name = cell_label(after.as_deref().unwrap_or(old));
-            // A guessed before is drawn (as all added) but never put back.
             let before = before.filter(|_| !unseen);
             Some(ChangedCell { cell, name, change, added, removed, before, after, notebook, unseen })
         })
         .collect()
 }
 
-/// The JSON a runtime tool returned, from an ACP `rawOutput`: the MCP content
-/// array (`[{type: "text", text}]`) or, for some results, the text itself.
 pub fn tool_json(raw: &Value) -> Option<Value> {
     let text = raw.get(0).and_then(|c| c["text"].as_str()).or_else(|| raw.as_str())?;
     serde_json::from_str(text).ok()
 }
 
-/// The runtime bridge's name in each session's MCP config.
 pub const MCP_SERVER: &str = "notebook";
-/// Claude Code's name for a bridge tool is this prefix plus the tool's name.
 pub const TOOL_PREFIX: &str = "mcp__notebook__";
-/// The prefix before the server was named `notebook`: past sessions replay with it.
 const OLD_TOOL_PREFIX: &str = "mcp__pluto__";
 
-/// `mcp__notebook__edit_cell` (or, in a past session, `mcp__pluto__edit_cell`) -> `edit_cell`.
-/// Every tool call reaches the session through [`name_notebook_call`], so this
-/// recognises other agents' notebook calls too.
 pub fn notebook_tool(title: &str) -> Option<&str> {
     title.strip_prefix(TOOL_PREFIX).or_else(|| title.strip_prefix(OLD_TOOL_PREFIX))
 }
 
-/// Give a notebook call that an agent names its own way Claude Code's title for
-/// it, `mcp__notebook__<tool>`, and its arguments as its input, so the rest of
-/// the app knows it by one name. An agent may name the tool in its `rawInput`
-/// (Cursor: `{providerIdentifier: "notebook", toolName, args}`) or in its title
-/// ("notebook: edit_cell", "notebook-read_cell: read_cell", "edit_cell (notebook
-/// MCP Server)"). Calls already named Claude's way are left as they are.
 pub fn name_notebook_call(title: &mut String, input: &mut Option<Value>) {
     if notebook_tool(title).is_some() {
         return;
@@ -185,10 +141,6 @@ pub fn name_notebook_call(title: &mut String, input: &mut Option<Value>) {
     }
 }
 
-/// The notebook server's name in any form: `notebook`, an older `pluto`, or
-/// either joined to more (`notebook-read_cell`). The server name must end the
-/// word there: `_` keeps it going, so `notebook_guide`
-/// (a tool name that happens to start with the server's name) isn't it.
 fn is_server(name: &str) -> bool {
     let name = name.trim().to_ascii_lowercase();
     [MCP_SERVER, "pluto"].iter().any(|server| {
@@ -196,9 +148,6 @@ fn is_server(name: &str) -> bool {
     })
 }
 
-/// A notebook tool named in a `rawInput` that wraps the call: its name, and its
-/// arguments when the wrapper carries them. The server must be named, there or
-/// in the title.
 fn wrapped_call(input: &Value, title: &str) -> Option<(String, Option<Value>)> {
     let field = |keys: &[&str]| keys.iter().find_map(|k| input.get(*k)).filter(|v| !v.is_null());
     let tool = field(&["toolName", "tool_name", "tool", "name"])?.as_str().filter(|t| endeavor_mcp::is_tool(t))?;
@@ -210,15 +159,12 @@ fn wrapped_call(input: &Value, title: &str) -> Option<(String, Option<Value>)> {
     named.then(|| (tool.to_owned(), args))
 }
 
-/// The notebook tool a title names along with the server's name, when it names
-/// nothing else, so a sentence such as a subagent's task never matches.
 fn tool_in_title(title: &str) -> Option<String> {
     let tool = words(title).find(|w| !is_server(w) && endeavor_mcp::is_tool(w))?;
     let other = |w: &str| !(w == tool || is_server(w) || ["mcp", "server", "tool"].contains(&w.to_ascii_lowercase().as_str()));
     (words(title).any(is_server) && !words(title).any(other)).then(|| tool.to_owned())
 }
 
-/// A title's words: runs of letters, digits and `_`, split again at `__`.
 fn words(title: &str) -> impl Iterator<Item = &str> {
     title.split(|c: char| !(c.is_alphanumeric() || c == '_')).flat_map(|w| w.split("__")).filter(|w| !w.is_empty())
 }
@@ -227,32 +173,21 @@ fn words(title: &str) -> impl Iterator<Item = &str> {
 pub struct CellCodes(HashMap<String, String>);
 
 impl CellCodes {
-    /// The code last seen for a cell.
     pub fn get(&self, cell_id: &str) -> Option<&str> {
         self.0.get(cell_id).map(String::as_str)
     }
 
-    /// Learn cells' current code from a completed read, from `new_notebook`'s
-    /// reply (its cells are empty), or from `add_cell`'s
-    /// reply: it's the only one whose diff (built from its input, since the
-    /// input has no cell id yet) doesn't already become the next baseline, so
-    /// an edit right after it would otherwise diff against nothing and show
-    /// the whole cell as added.
     pub fn observe(&mut self, tool: &str, output: &Value) {
         match tool {
             "read_cell" | "add_cell" => {
                 if let (Some(id), Some(code)) = (output["cell_id"].as_str(), output["code"].as_str()) {
                     self.0.insert(id.to_owned(), code.to_owned());
-                } else if let (Some(id), true) = (output["cell_id"].as_str(), output["code_unchanged"] == true) {
-                    // A read that leaves the code out, as what the agent last saw: the copy here is
-                    // kept only if it is that code. An edit the app never saw complete (a stopped
-                    // turn) would otherwise stay as a wrong "before" in every later diff.
-                    if self.0.get(id).is_none_or(|code| Some(code_sha(code).as_str()) != output["code_sha"].as_str()) {
-                        self.0.remove(id);
-                    }
+                } else if let (Some(id), true) = (output["cell_id"].as_str(), output["code_unchanged"] == true)
+                    && self.0.get(id).is_none_or(|code| Some(code_sha(code).as_str()) != output["code_sha"].as_str())
+                {
+                    self.0.remove(id);
                 }
             }
-            // A notebook just made: its cells are empty, as the runtime counts them read.
             "new_notebook" if output["created"] == true => {
                 for id in output["cell_ids"].as_array().into_iter().flatten().filter_map(Value::as_str) {
                     self.0.insert(id.to_owned(), String::new());
@@ -267,8 +202,6 @@ impl CellCodes {
         }
     }
 
-    /// Diffs for a completed edit tool call, from its input (and its result,
-    /// which has a new cell's id), recording the new code.
     pub fn diff(&mut self, tool: &str, input: &Value, result: &Value) -> Vec<CellDiff> {
         let notebook = input["notebook_id"].as_str().map(str::to_owned);
         let mut edit = |id: &str, new: &str| {
@@ -288,8 +221,6 @@ impl CellCodes {
                 .filter_map(|c| Some(edit(c["cell_id"].as_str()?, c["code"].as_str()?)))
                 .collect(),
             "add_cell" => match (input["code"].as_str(), result["cell_id"].as_str()) {
-                // The new cell's code comes from the call, so a reply that doesn't send it back still
-                // records it; a reply that does has the engine's copy, which wins.
                 (Some(code), Some(id)) => {
                     let code = result["code"].as_str().unwrap_or(code);
                     self.0.insert(id.to_owned(), code.to_owned());
@@ -310,14 +241,11 @@ impl CellCodes {
     }
 }
 
-/// The first 12 hex digits of the code's SHA-256: what the runtime sends as `code_sha` with
-/// `code_unchanged`, to say which code it means.
 pub fn code_sha(code: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(code.as_bytes()).iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
-/// Per-cell code from `read_notebook_code`, undoing its markdown/empty markers.
 pub fn split_notebook_code(code: &str) -> Vec<(String, String)> {
     code.split(MARKER)
         .filter_map(|block| {
@@ -330,8 +258,6 @@ pub fn split_notebook_code(code: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Line diff via longest common subsequence (cells are small, so O(n·m) is fine),
-/// trimmed to `CONTEXT` unchanged lines around each change.
 pub fn line_diff(old: &str, new: &str) -> Vec<(Change, String)> {
     let a: Vec<&str> = if old.is_empty() { vec![] } else { old.lines().collect() };
     let b: Vec<&str> = if new.is_empty() { vec![] } else { new.lines().collect() };
@@ -347,7 +273,6 @@ pub fn line_diff(old: &str, new: &str) -> Vec<(Change, String)> {
             out.push((Change::Same, a[i].to_owned()));
             (i, j) = (i + 1, j + 1);
         } else if i < a.len() && (j == b.len() || lcs[i + 1][j] >= lcs[i][j + 1]) {
-            // On ties, removals first: `- old` above `+ new`.
             out.push((Change::Removed, a[i].to_owned()));
             i += 1;
         } else {
@@ -389,7 +314,6 @@ mod tests {
         codes.observe("read_cell", &json!({ "cell_id": C1, "code": "x = 1" }));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
         assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())]);
-        // The edit becomes the new baseline.
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 3" }), &json!({}));
         assert_eq!(d[0].lines[0], (Removed, "x = 2".into()));
     }
@@ -411,7 +335,6 @@ mod tests {
         let reply = json!({ "cell_id": C1 });
         codes.observe("add_cell", &reply);
         codes.diff("add_cell", &json!({ "code": "x = 1" }), &reply);
-        // A read that leaves the code out, as it does for code the session already has, keeps it.
         codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true, "code_sha": code_sha("x = 1") }));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 2" }), &json!({}));
         assert_eq!(d[0].lines, vec![(Removed, "x = 1".into()), (Added, "x = 2".into())]);
@@ -422,11 +345,9 @@ mod tests {
     fn a_read_without_code_drops_a_copy_that_isnt_the_code_it_names() {
         let mut codes = CellCodes::default();
         codes.observe("read_cell", &json!({ "cell_id": C1, "code": "x = 1" }));
-        // The agent's edit to x = 2 was stopped after the runtime applied it, so the app never saw it.
         codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true, "code_sha": code_sha("x = 2") }));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 3" }), &json!({}));
         assert!(d[0].edit.as_ref().unwrap().unseen, "the whole cell, not a wrong diff");
-        // Without a hash, the copy isn't trusted either.
         codes.observe("read_cell", &json!({ "cell_id": C1, "code": "x = 3" }));
         codes.observe("read_cell", &json!({ "cell_id": C1, "code_unchanged": true }));
         let d = codes.diff("edit_cell", &json!({ "cell_id": C1, "code": "x = 4" }), &json!({}));
@@ -490,11 +411,9 @@ mod tests {
         call("delete_cell", json!({ "cell_id": C3 }), json!({}));
         call("add_cell", json!({ "code": "tmp = 0" }), json!({ "cell_id": C5, "code": "tmp = 0" }));
         call("delete_cell", json!({ "cell_id": C5 }), json!({}));
-        // An edit to a cell the app never saw the code of: a read it missed.
         call("edit_cell", json!({ "cell_id": C6, "code": "y = 2" }), json!({}));
         let cells = net_changes(diffs.iter().filter_map(|d| d.edit.as_ref()));
         let row = |cell: &str, name: &str, change, added, removed| ChangedCell { cell: cell.into(), name: name.into(), change, added, removed, before: None, after: None, notebook: Some("nb1".into()), unseen: false };
-        // Restore puts each back as it was before the turn: an edit's first before-text, an added cell deleted.
         let restores: Vec<Option<Value>> = cells.iter().map(ChangedCell::restore).collect();
         assert_eq!(
             restores,
@@ -541,8 +460,6 @@ mod tests {
         for title in ["notebook-read_cell: read_cell", "notebook: read_cell", "read_cell (notebook MCP Server)", "Tool: notebook/read_cell", "pluto: read_cell"] {
             assert_eq!(named(title, Some(args.clone())), ("mcp__notebook__read_cell".into(), Some(args.clone())), "{title}");
         }
-        // A tool name starting with the server's own name ("notebook_guide")
-        // must not be mistaken for the server itself.
         for (title, tool) in [
             ("notebook-notebook_guide: notebook_guide", "notebook_guide"),
             ("notebook: notebook_guide", "notebook_guide"),
@@ -552,7 +469,6 @@ mod tests {
             assert_eq!(named(title, Some(args.clone())), (format!("{TOOL_PREFIX}{tool}"), Some(args.clone())), "{title}");
         }
 
-        // Claude's own names, and anything that isn't a notebook call, stay as they are.
         for (title, input) in [
             ("mcp__notebook__edit_cell", Some(args.clone())),
             ("mcp__pluto__edit_cell", None),

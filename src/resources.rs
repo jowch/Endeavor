@@ -1,8 +1,3 @@
-//! A cluster job's resources as the app edits them: in the cluster dialog
-//! (its defaults) and in the new-session screen's resources chip (one
-//! session's). Presets, a partition, and steppers for CPUs, memory and the
-//! time limit, kept within the partition's limits.
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use wire::slurm::{PRESETS, Partition, Resources, duration_text};
@@ -15,19 +10,14 @@ const CPUS: [u32; 12] = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128];
 const MEM_GB: [u32; 14] = [1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512];
 const MINUTES: [u32; 12] = [15, 30, 60, 120, 240, 480, 720, 1440, 2880, 4320, 7200, 10080];
 
-/// Which resources an editor changes.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Target {
-    /// The cluster dialog's defaults.
     Dialog,
-    /// The new-session screen's.
     Draft,
-    /// A session's own, from the gear by Start when Julia isn't running on its cluster.
     Session(u64),
 }
 
 impl Target {
-    /// Keeps element ids apart when two editors are on screen.
     fn index(self) -> usize {
         match self {
             Target::Dialog => 0,
@@ -52,7 +42,6 @@ pub enum Change {
     TogglePartitions,
 }
 
-/// The next value up or down `ladder` from `value`, at most `max`.
 fn step_on(ladder: &[u32], value: u32, up: bool, max: Option<u32>) -> u32 {
     let next = if up {
         ladder.iter().copied().find(|&v| v > value).unwrap_or(value)
@@ -65,7 +54,6 @@ fn step_on(ladder: &[u32], value: u32, up: bool, max: Option<u32>) -> u32 {
     }
 }
 
-/// Apply `change` to `r`, keeping within `partitions`' limits.
 pub fn apply(r: &mut Resources, change: &Change, partitions: &[Partition]) {
     let find = |name: Option<&str>| match name {
         Some(name) => partitions.iter().find(|p| p.name == name),
@@ -87,17 +75,12 @@ pub fn apply(r: &mut Resources, change: &Change, partitions: &[Partition]) {
     r.clip(find(r.partition.as_deref()));
 }
 
-/// Whether `r` is what picking preset `i` would give now: its size, capped to
-/// the partition's limits.
 fn is_preset(r: &Resources, i: usize, partitions: &[Partition]) -> bool {
     let mut picked = r.clone();
     apply(&mut picked, &Change::Preset(i), partitions);
     (picked.cpus, picked.mem_gb, picked.minutes) == (r.cpus, r.mem_gb, r.minutes)
 }
 
-/// Which of `r`'s CPUs, memory and time limit sit at what `p` allows, in
-/// words, so a size cut down to fit the cluster (or stepped up to its top)
-/// says why it goes no higher. None when nothing is at a limit.
 fn limit_note(r: &Resources, p: &Partition) -> Option<String> {
     let mut node = Vec::new();
     if p.cpus > 0 && r.cpus >= p.cpus {
@@ -157,7 +140,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Presets (for a session's own), partition, CPUs, memory and time limit.
     pub fn resource_rows(&self, target: Target, r: &Resources, partitions: &[Partition], menu_open: bool, presets: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let on = move |change: Change| move |this: &mut Workspace, _: &ClickEvent, _: &mut Window, cx: &mut Context<Workspace>| this.change_resources(target, change.clone(), cx);
         let mut rows = Vec::new();
@@ -243,7 +225,6 @@ impl Workspace {
         ];
         let steppers = steppers.map(|(name, noun, field, value)| (name, stepper(field as usize + 10 * target.index(), noun, value, cx.listener(on(Change::Step(field, false))), cx.listener(on(Change::Step(field, true))))));
         match target {
-            // The dialog has more to fit, so its three share one row.
             Target::Dialog => rows.push(
                 div()
                     .pt(px(4.))
@@ -275,9 +256,6 @@ fn row(name: &'static str, control: impl IntoElement) -> Div {
 
 type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// − value +. `noun` names the buttons: "Decrease memory". GPUI has no live
-/// region, so each button's description carries the value ("Now 16 GB"), and
-/// the value is a node of its own for a screen reader to read.
 fn stepper(id: usize, noun: &'static str, value: String, minus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, plus: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
     let now: SharedString = format!("Now {value}").into();
     let button = |id: (&'static str, usize), text: &'static str, name: String, handler: OnClick| {
