@@ -97,29 +97,34 @@ export type Quoted = { picks: Pick[]; comment: string; crops?: (string | undefin
 
 /**
  * The message ↩ passes to the chat: the lead and the note, then each ⌘↩'s and this ↩'s quotes and comments, within
- * Claude's rules (chatSafe). Picked lines too long to fit go by their line numbers only (BARE_NOTE says so). Null
+ * Claude's rules (chatSafe). When it doesn't fit, the longest picked lines go by their line numbers only, one pick at a
+ * time until it does (BARE_NOTE says so). Null
  * when it's still longer than MESSAGE_MAX: the comments (never cut) or the picks are too many.
  */
 export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
-  const whole = compose(notebook, quoted, engine, false);
-  if (whole.length <= MESSAGE_MAX) return whole;
-  if (!quoted.some((q) => q.picks.some((p) => p.part === "lines"))) return null;
-  const bare = compose(notebook, quoted, engine, true);
-  return bare.length <= MESSAGE_MAX ? bare : null;
+  const bare = new Set<Pick>();
+  const longest = quoted.flatMap((q) => q.picks).filter((p) => p.part === "lines").sort((a, b) => b.text.length - a.text.length);
+  for (;;) {
+    const message = compose(notebook, quoted, engine, bare);
+    if (message.length <= MESSAGE_MAX) return message;
+    const next = longest.shift();
+    if (!next) return null;
+    bare.add(next);
+  }
 }
 
-export const BARE_NOTE = " The picked lines were too long for Claude's message box, so they go by their line numbers only: read them with read_cell.";
+export const BARE_NOTE = " Some picked lines were too long for Claude's message box, so they go by their line numbers only (a quote with lines and no body): read them with read_cell.";
 
-function compose(notebook: string, quoted: Quoted[], engine: Engine, bare: boolean): string {
+function compose(notebook: string, quoted: Quoted[], engine: Engine, bare: Set<Pick>): string {
   // chatSafe shortens runs of blank lines and spaces in the picked lines too: say so, since they go as they were.
-  const shortened = !bare && quoted.some((q) =>
-    q.picks.some((p) => p.part === "lines" && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
+  const shortened = quoted.some((q) =>
+    q.picks.some((p) => p.part === "lines" && !bare.has(p) && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
   );
   const note = shortened
     ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.`
     : quoteNote(engine);
   return chatSafe(
-    `${LEAD}\n\n${note}${bare ? BARE_NOTE : ""}${LEAD_NOTE}\n\n` +
+    `${LEAD}\n\n${note}${bare.size ? BARE_NOTE : ""}${LEAD_NOTE}\n\n` +
       quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops, bare)).join("\n\n"),
   );
 }
@@ -144,8 +149,8 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
 }
 
 /** The quotes of one ↩ or ⌘↩: each pick, then the comment after the last. */
-export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto", crops: (string | undefined)[] = [], bare = false): string {
-  const blocks = picks.map((p, i) => quoteBlock(notebook, p, engine, crops[i], bare));
+export function quoteText(notebook: string, picks: Pick[], comment: string, engine: Engine = "pluto", crops: (string | undefined)[] = [], bare: Set<Pick> = new Set()): string {
+  const blocks = picks.map((p, i) => quoteBlock(notebook, p, engine, crops[i], bare.has(p)));
   return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
 }
 
