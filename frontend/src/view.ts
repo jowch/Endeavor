@@ -32,7 +32,7 @@ const format = (engine: Engine) =>
 export const quoteNote = (engine: Engine = "pluto") =>
   "[Endeavor] The user picked parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
 
-const LEAD_MARK_SO_DESKTOP_KEEPS_THE_NEWLINES = "\u2193";
+const LEAD = "\u2193";
 const LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
 
 const uri = (notebook: string, cell: string, engine: Engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
@@ -57,7 +57,7 @@ export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine =
     ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.`
     : quoteNote(engine);
   const message = chatSafe(
-    `${LEAD_MARK_SO_DESKTOP_KEEPS_THE_NEWLINES}\n\n${note}${LEAD_NOTE}\n\n` +
+    `${LEAD}\n\n${note}${LEAD_NOTE}\n\n` +
       quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops)).join("\n\n"),
   );
   return message.length <= MESSAGE_MAX ? message : null;
@@ -86,7 +86,6 @@ export function quoteText(notebook: string, picks: Pick[], comment: string, engi
 
 const DRAWER = 40;
 
-const AFTER_PLUTOS_NEXT_RENDER_DRAWS_THE_PANEL_MS = 50;
 
 const BAR = 32;
 
@@ -186,7 +185,7 @@ function initBar(withPoint: boolean, point: (on: boolean) => void): void {
       if (!e.isTrusted) return;
       const open = panelOpen(tab);
       window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: open ? null : tab }));
-      if (!open && tab === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), AFTER_PLUTOS_NEXT_RENDER_DRAWS_THE_PANEL_MS);
+      if (!open && tab === "docs") setTimeout(() => document.querySelector<HTMLInputElement>("#live-docs-search")?.focus(), 50);
     });
   pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
   initFind(bar.querySelector<HTMLButtonElement>("#endeavor-find-button")!);
@@ -227,11 +226,11 @@ function keepCursorBelowBar(): void {
   });
 }
 
-let startedSoNoLaterScriptCanTakePointsWayToTheChat = false;
+let started = false;
 
 export function start(notebook: string, host: Host): void {
-  if (startedSoNoLaterScriptCanTakePointsWayToTheChat) return;
-  startedSoNoLaterScriptCanTakePointsWayToTheChat = true;
+  if (started) return;
+  started = true;
   const engine: Engine = host.engine === "ember" ? "ember" : "pluto";
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
   const sent = document.createElement("div");

@@ -62,14 +62,12 @@ export function changedSpan(a: string, b: string): [number, number, number] {
 type View = any;
 let cm: { Decoration: any; Compartment: any; appendConfig: any; decorations: any; extender: any } | null = null;
 
-const stateEffectClassFromAStaticHelper = (EditorView: any) => EditorView.scrollIntoView(0).constructor;
-const compartmentClassFromPlutosOwnCompartments = (view: View) => [...(view.state.config?.compartments?.keys() ?? [])][0]?.constructor;
 
 function classes(view: View) {
   if (cm) return cm;
   const EditorView = view.constructor;
-  const StateEffect = stateEffectClassFromAStaticHelper(EditorView);
-  const Compartment = compartmentClassFromPlutosOwnCompartments(view);
+  const StateEffect = EditorView.scrollIntoView(0).constructor;
+  const Compartment = [...(view.state.config?.compartments?.keys() ?? [])][0]?.constructor;
   if (!Compartment) return null;
   for (const source of view.state.facet(EditorView.decorations)) {
     const set = typeof source === "function" ? source(view) : source;
@@ -143,7 +141,7 @@ function decorate(doc: any, before: string) {
 const befores = new Map<string, string>();
 const installed = new WeakMap<object, { compartment: any; shown: string | undefined }>();
 
-const staticSetSinceBlockWidgetsCantComeFromAFunction = (doc: any, before: string | undefined) => (before === undefined ? [] : cm!.decorations.of(decorate(doc, before)));
+const extension = (doc: any, before: string | undefined) => (before === undefined ? [] : cm!.decorations.of(decorate(doc, before)));
 
 function refresh() {
   for (const cell of document.querySelectorAll("pluto-cell")) {
@@ -158,12 +156,12 @@ function refresh() {
       installed.set(view, entry);
       const { compartment } = entry;
       const follow = cm!.extender.of((tr: any) =>
-        tr.docChanged && befores.has(id) ? { effects: compartment.reconfigure(staticSetSinceBlockWidgetsCantComeFromAFunction(tr.newDoc, befores.get(id))) } : null,
+        tr.docChanged && befores.has(id) ? { effects: compartment.reconfigure(extension(tr.newDoc, befores.get(id))) } : null,
       );
-      view.dispatch({ effects: cm!.appendConfig.of([compartment.of(staticSetSinceBlockWidgetsCantComeFromAFunction(view.state.doc, before)), follow]) });
+      view.dispatch({ effects: cm!.appendConfig.of([compartment.of(extension(view.state.doc, before)), follow]) });
     } else if (entry.shown !== before) {
       entry.shown = before;
-      view.dispatch({ effects: entry.compartment.reconfigure(staticSetSinceBlockWidgetsCantComeFromAFunction(view.state.doc, before)) });
+      view.dispatch({ effects: entry.compartment.reconfigure(extension(view.state.doc, before)) });
     }
   }
 }

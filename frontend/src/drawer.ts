@@ -102,11 +102,11 @@ function height(): number {
   return Math.round(window.innerHeight * 0.42);
 }
 
-function setHeight(h: number, alsoPadTheBodyAndRelayoutTheNotebook = true) {
+function setHeight(h: number, settle = true) {
   const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
   const root = document.documentElement.style;
   root.setProperty("--endeavor-drawer-h", `${clamped}px`);
-  if (alsoPadTheBodyAndRelayoutTheNotebook) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+  if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
   return clamped;
 }
 
@@ -260,20 +260,20 @@ export function initDrawer(): void {
   const grip = drawer.querySelector<HTMLElement>(".grip")!;
   grip.onpointerdown = (e) => {
     grip.setPointerCapture(e.pointerId);
-    let latestDuringThisFrame: number | null = null;
+    let pending: number | null = null;
     let frame = 0;
     const move = (m: PointerEvent) => {
-      latestDuringThisFrame = window.innerHeight - m.clientY;
+      pending = window.innerHeight - m.clientY;
       if (frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
-        if (latestDuringThisFrame !== null) setHeight(latestDuringThisFrame, false);
+        if (pending !== null) setHeight(pending, false);
       });
     };
     const up = () => {
       grip.removeEventListener("pointermove", move);
       if (frame) cancelAnimationFrame(frame);
-      const h = setHeight(latestDuringThisFrame ?? drawer.offsetHeight);
+      const h = setHeight(pending ?? drawer.offsetHeight);
       try {
         localStorage.setItem("endeavor-drawer-h", String(h));
       } catch {}

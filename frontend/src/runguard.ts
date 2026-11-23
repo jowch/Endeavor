@@ -179,12 +179,11 @@ function show(hit: Waiting[], changes: boolean, replay: () => void, deps: Depend
   el.querySelector<HTMLButtonElement>(".run")!.focus();
 }
 
-const inSafePreviewWhereSavingRunsNothing = (st: EditorState) => st.notebook?.process_status === "waiting_for_permission";
 
 function guard(e: Event) {
   if (replaying || !waiting.length || !byUser(e)) return;
   const st = editor();
-  if (!st?.notebook || inSafePreviewWhereSavingRunsNothing(st)) return;
+  if (!st?.notebook || st.notebook.process_status === "waiting_for_permission") return;
   const run = runStart(e, st);
   if (!run) return;
   const deps = st.notebook.cell_dependencies ?? {};

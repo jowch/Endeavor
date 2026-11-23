@@ -26,11 +26,10 @@ function lineOf(node: Node, content: Element): number {
 type EditorDoc = { lineAt(pos: number): { number: number } };
 
 export function linesSelected(doc: EditorDoc, selection: { from: number; to: number }): [number, number] {
-  const endsAtALineStartAsATripleClickDoes = Math.max(selection.from, selection.to - 1);
-  return [doc.lineAt(selection.from).number, doc.lineAt(endsAtALineStartAsATripleClickDoes).number];
+  const lastChar = Math.max(selection.from, selection.to - 1);
+  return [doc.lineAt(selection.from).number, doc.lineAt(lastChar).number];
 }
 
-const wholeLinesSinceThePageTextHasNoBreaks = (code: string, first: number, last: number): string => code.split("\n").slice(first - 1, last).join("\n");
 
 export function selectedInCell(): Found | null {
   const selection = window.getSelection();
@@ -48,7 +47,7 @@ export function selectedInCell(): Found | null {
     let [first, last] = [lineOf(range.startContainer, content), lineOf(range.endContainer, content)];
     if (main && !main.empty) [first, last] = linesSelected(view.state.doc, main);
     if (first < 1 || last < first) return null;
-    const quote = main && !main.empty ? view.state.sliceDoc(main.from, main.to) : wholeLinesSinceThePageTextHasNoBreaks(code, first, last);
+    const quote = main && !main.empty ? view.state.sliceDoc(main.from, main.to) : code.split("\n").slice(first - 1, last).join("\n");
     if (!quote.trim()) return null;
     return { cell, pick: { part: "lines", cell: cell.id, code, lines: [first, last], text: quote }, quote, range: range.cloneRange() };
   }
@@ -59,8 +58,6 @@ export function selectedInCell(): Found | null {
 
 let pill: HTMLElement | null = null;
 
-const afterTheBrowserSettlesTheSelection = (fn: () => void) => setTimeout(fn);
-const keepTheSelectionThatPressingWouldClear = (event: MouseEvent) => event.preventDefault();
 
 export function hidePill(): void {
   pill?.remove();
@@ -79,7 +76,7 @@ export function initReply(open: (found: Found) => void): void {
   document.addEventListener("mouseup", (e) => {
     const target = e.target as Element;
     if (pill?.contains(target) || target.closest?.("[data-endeavor-ui]") || document.body.classList.contains("annotating")) return;
-    afterTheBrowserSettlesTheSelection(() => {
+    setTimeout(() => {
       hidePill();
       const found = selectedInCell();
       if (!found) return;
@@ -90,7 +87,7 @@ export function initReply(open: (found: Found) => void): void {
       const at = pillPlace(rangeRects(found.range), window.innerHeight);
       pill.style.left = `${at.left + window.scrollX}px`;
       pill.style.top = `${at.top + window.scrollY}px`;
-      pill.onmousedown = keepTheSelectionThatPressingWouldClear;
+      pill.onmousedown = (event) => event.preventDefault();
       pill.querySelector("button")!.onclick = (event) => byUser(event) && open(found);
       document.body.append(pill);
     });

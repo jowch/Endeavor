@@ -23,8 +23,7 @@ export const KEYS = mac ? { send: "↩", add: "⌘↩" } : { send: "Enter", add:
 
 const WORKING = "endeavorWorking";
 const LINE_PX = 21;
-const LINES_BEFORE_IT_SCROLLS = 6;
-const keepTheKeyboardInTheField = (e: MouseEvent) => e.preventDefault();
+const MAX_LINES = 6;
 
 const css = `
   .endeavor-prompt { box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; font: 13px/18px system-ui, sans-serif;
@@ -107,7 +106,7 @@ export function askBox(o: { label: string; placeholder: string; quote?: { text: 
   const fit = () => {
     sendButton.classList.toggle("ready", !!text.value.trim());
     text.style.height = `${LINE_PX}px`;
-    text.style.height = `${Math.min(text.scrollHeight, LINE_PX * LINES_BEFORE_IT_SCROLLS)}px`;
+    text.style.height = `${Math.min(text.scrollHeight, LINE_PX * MAX_LINES)}px`;
   };
   text.addEventListener("input", fit);
   text.addEventListener(
@@ -122,7 +121,7 @@ export function askBox(o: { label: string; placeholder: string; quote?: { text: 
     },
     true,
   );
-  for (const button of root.querySelectorAll<HTMLButtonElement>("button")) button.onmousedown = keepTheKeyboardInTheField;
+  for (const button of root.querySelectorAll<HTMLButtonElement>("button")) button.onmousedown = (e) => e.preventDefault();
   options.onclick = () => showMenu(menu.hidden);
   sendButton.onclick = (e) => o.done(false, e);
   for (const item of menu.querySelectorAll<HTMLButtonElement>("[role=menuitem]")) {

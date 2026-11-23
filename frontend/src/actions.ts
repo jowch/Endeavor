@@ -77,7 +77,7 @@ export function showShortcuts(): void {
 }
 
 const FEEDBACK_WAIT_MS = 20_000;
-const PLUTO_FEEDBACK_FORM_SHORTEST = 4;
+const FEEDBACK_MIN_LENGTH = 4;
 
 export function submitFeedback(opinion: string, email: string, waitMs = FEEDBACK_WAIT_MS): Promise<string | null> {
   const form = document.querySelector<HTMLFormElement>("form#feedback");
@@ -121,7 +121,7 @@ function showFeedback(): void {
   const email = el.querySelector<HTMLInputElement>("input.email")!;
   const send = el.querySelector<HTMLButtonElement>(".send")!;
   text.focus();
-  text.oninput = () => (send.disabled = text.value.trim().length < PLUTO_FEEDBACK_FORM_SHORTEST);
+  text.oninput = () => (send.disabled = text.value.trim().length < FEEDBACK_MIN_LENGTH);
   el.querySelector<HTMLButtonElement>(".cancel")!.onclick = () => el.remove();
   send.onclick = async () => {
     const card = el.querySelector(".card")!;

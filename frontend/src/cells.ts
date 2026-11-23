@@ -2,8 +2,8 @@ import { on, type CellState } from "./bridge";
 import { redrawRail } from "./rail";
 import { onRedraw } from "./redraw";
 
-export const oneMoreNotThanPlutosTrafficLight = "pluto-editor:not(.___):not(.____)";
-const bar = `${oneMoreNotThanPlutosTrafficLight} pluto-cell[data-endeavor-bar]`;
+export const outranksTrafficLight = "pluto-editor:not(.___):not(.____)";
+const bar = `${outranksTrafficLight} pluto-cell[data-endeavor-bar]`;
 const css = `
   pluto-cell { position: relative; }
   pluto-cell[data-endeavor="unrun"] > pluto-output { opacity: 0.4; }

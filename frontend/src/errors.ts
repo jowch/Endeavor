@@ -1,4 +1,4 @@
-import { oneMoreNotThanPlutosTrafficLight } from "./cells";
+import { outranksTrafficLight } from "./cells";
 import { byUser, on, send, type ErrorAsk } from "./bridge";
 import { onEmber } from "./engine";
 import { shortcut } from "./keys";
@@ -10,7 +10,7 @@ const MAX_ERROR = 2000;
 const PENDING = 3000;
 
 const look = `html[data-endeavor-look="endeavor"]`;
-const upstreamBar = `${look} ${oneMoreNotThanPlutosTrafficLight} pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
+const upstreamBar = `${look} ${outranksTrafficLight} pluto-cell.errored[data-endeavor-error="upstream"]:not([data-endeavor-bar])`;
 const css = `
   ${upstreamBar} > pluto-trafficlight { background: var(--normal-cell-color); border-left-color: var(--normal-cell-color); }
   ${upstreamBar}.selected > pluto-trafficlight { background: var(--selected-cell-color); border-left-color: var(--selected-cell-color); }

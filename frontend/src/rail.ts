@@ -9,13 +9,13 @@ const css = `
 
 let rail: HTMLElement;
 
-function clearWithoutMeasuringTheNotebook(): void {
-  if (rail.firstChild) rail.replaceChildren();
-}
 
 function draw() {
   const marked = [...document.querySelectorAll<HTMLElement>('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
-  if (!marked.length) return clearWithoutMeasuringTheNotebook();
+  if (!marked.length) {
+    if (rail.firstChild) rail.replaceChildren();
+    return;
+  }
   const total = Math.max(document.documentElement.scrollHeight, 1);
   rail.replaceChildren(
     ...marked.map((cell) => {

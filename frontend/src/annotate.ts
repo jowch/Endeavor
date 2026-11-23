@@ -47,8 +47,6 @@ const css = `
   body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
 `;
 
-const pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor = "pointerdown";
-const aFrameAfterPointShowsSinceNumberingRestylesEveryLine = (fn: () => void) => requestAnimationFrame(() => setTimeout(fn));
 
 const DRAG = 4;
 
@@ -136,7 +134,7 @@ export function pointState(): { picked: string[]; picks: string[]; box: boolean;
   };
 }
 
-export function initAnnotate(hostAnswersEachSendAndTakesNoPictures = false): void {
+export function initAnnotate(answered = false): void {
   const picks: Picked[] = [];
   let hover: Target | null = null;
   const active = () => document.body.classList.contains("annotating");
@@ -264,7 +262,7 @@ export function initAnnotate(hostAnswersEachSendAndTakesNoPictures = false): voi
     }
     refresh();
     send({ type: "mode", on: enable });
-    aFrameAfterPointShowsSinceNumberingRestylesEveryLine(() => document.body.classList.toggle("annotate-numbers", active()));
+    requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
   }
 
   const underWay = new Map<number, { picks: Picked[]; comment: string }>();
@@ -273,17 +271,17 @@ export function initAnnotate(hostAnswersEachSendAndTakesNoPictures = false): voi
     if (!picks.length) return;
     const sending = picks.splice(0, picks.length);
     const comment = text.value.trim();
-    const ref = !add && hostAnswersEachSendAndTakesNoPictures ? nextRef++ : undefined;
+    const ref = !add && answered ? nextRef++ : undefined;
     if (ref !== undefined) underWay.set(ref, { picks: sending, comment });
     text.value = "";
     text.dispatchEvent(new Event("input"));
     refresh();
     const out: Pick[] = [];
     for (const p of sending) {
-      if (!hostAnswersEachSendAndTakesNoPictures && (p.pick.part === "box" || p.pick.part === "figure")) {
+      if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
         const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
         out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
-      } else if (hostAnswersEachSendAndTakesNoPictures && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
+      } else if (answered && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
       else out.push(p.pick);
     }
     sendQuote(out, comment, add, ref);
@@ -304,7 +302,7 @@ export function initAnnotate(hostAnswersEachSendAndTakesNoPictures = false): voi
   const swallow = (e: Event) => {
     const target = e.target as Element;
     if (!active() || ours(target)) return;
-    if (e.type !== pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor) e.preventDefault();
+    if (e.type !== "pointerdown") e.preventDefault();
     e.stopPropagation();
     const m = e as MouseEvent;
     if (e.type === "mousedown" && m.button === 0) {

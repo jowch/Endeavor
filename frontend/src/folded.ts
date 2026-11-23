@@ -23,7 +23,6 @@ const css = `
 
 const EYE_OFF = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 2l12 12"/><path d="M6.6 3.6A6.6 6.6 0 0 1 8 3.5c3.5 0 6 4.5 6 4.5a11 11 0 0 1-1.7 2.2M10.4 11.6A5.4 5.4 0 0 1 8 12.5C4.5 12.5 2 8 2 8a11 11 0 0 1 2.5-2.9"/><path d="M6.6 6.6a2 2 0 0 0 2.8 2.8"/></svg>`;
 
-const notAButtonSincePlutoHidesThoseInTheEditorUntilHover = "div";
 const open = new Map<string, { failed: boolean }>();
 const dismissed = new Map<string, string | undefined>();
 let states = new Map<string, CellState>();
@@ -70,7 +69,7 @@ function show(cell: HTMLElement) {
   if (!input) return;
   const label = kept.failed ? "Folded · shows until it runs without error" : "Folded · shows until it runs";
   if (!tag) {
-    tag = document.createElement(notAButtonSincePlutoHidesThoseInTheEditorUntilHover);
+    tag = document.createElement("div");
     tag.setAttribute("role", "button");
     tag.tabIndex = 0;
     tag.className = "endeavor-fold-tag";

@@ -233,11 +233,10 @@ pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; o
 pluto-runarea > span { font-size: 10px; }
 `;
 
-const keepLiveDocsDisplayedSoPlutoNeverAlertsWindowTooSmall = `#helpbox-wrapper { display: block !important; }`;
 
 const appChrome = `
 header#pluto-nav, footer { display: none !important; }
-${keepLiveDocsDisplayedSoPlutoNeverAlertsWindowTooSmall}
+#helpbox-wrapper { display: block !important; }
 html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
   position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
@@ -282,10 +281,9 @@ const both = `
 footer form#feedback { display: none !important; }
 `;
 
-const wryWindowsFormOfEndeavorProtocol = "http://endeavor.localhost";
-const APP_FONTS = `${/Win/.test(navigator.platform) ? wryWindowsFormOfEndeavorProtocol : "endeavor://localhost"}/fonts`;
-export const JULIA_MONO_TAG_BUNDLED_BY_FONTS_BUILD_PY = "v0.63.2";
-const JULIA_MONO_WEB = `https://cdn.jsdelivr.net/gh/cormullion/juliamono@${JULIA_MONO_TAG_BUNDLED_BY_FONTS_BUILD_PY}/webfonts`;
+const APP_FONTS = /Win/.test(navigator.platform) ? "http://endeavor.localhost/fonts" : "endeavor://localhost/fonts";
+export const JULIA_MONO_TAG = "v0.63.2";
+const JULIA_MONO_WEB = `https://cdn.jsdelivr.net/gh/cormullion/juliamono@${JULIA_MONO_TAG}/webfonts`;
 export function juliaMonoFaces(from: "app" | "web"): string {
   return [
     { file: "Regular", weight: 400, style: "normal" },
@@ -310,10 +308,10 @@ export function juliaMonoFaces(from: "app" | "web"): string {
 }
 
 export function initTheme(fontsFrom: "app" | "web" = "app"): void {
-  const tokenSheetBeforeEveryModulesStyles = document.createElement("style");
-  tokenSheetBeforeEveryModulesStyles.id = "endeavor-tokens";
-  tokenSheetBeforeEveryModulesStyles.textContent = tokens;
-  document.head.append(tokenSheetBeforeEveryModulesStyles);
+  const tokenSheet = document.createElement("style");
+  tokenSheet.id = "endeavor-tokens";
+  tokenSheet.textContent = tokens;
+  document.head.append(tokenSheet);
 
   const fonts = document.createElement("style");
   fonts.id = "endeavor-fonts";
@@ -321,9 +319,8 @@ export function initTheme(fontsFrom: "app" | "web" = "app"): void {
   document.head.append(fonts);
 
   const style = document.createElement("style");
-  const afterPlutosSheetsSoEqualSpecificityWins = () => document.head.append(style);
   style.id = "endeavor-theme";
-  afterPlutosSheetsSoEqualSpecificityWins();
+  document.head.append(style);
   on("theme", (msg) => {
     const endeavor = msg.name === "endeavor";
     style.textContent = both + (endeavor ? endeavorLook + layout + appChrome + (onEmber() ? emberLook : "") : msg.name === "view" ? endeavorLook + layout : classic);

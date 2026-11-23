@@ -2,25 +2,24 @@
 (() => {
   // src/bridge.ts
   var handlers = {};
-  var launchSecret = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
-  var webkitIpcBeforePageScripts = window.webkit?.messageHandlers?.ipc;
-  var post = webkitIpcBeforePageScripts ? webkitIpcBeforePageScripts.postMessage.bind(webkitIpcBeforePageScripts) : (body) => window.ipc?.postMessage(body);
-  var hostOutsideTheApp = null;
-  function setHost(handler) {
-    hostOutsideTheApp = handler;
+  var nonce = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
+  var handler = window.webkit?.messageHandlers?.ipc;
+  var post = handler ? handler.postMessage.bind(handler) : (body) => window.ipc?.postMessage(body);
+  var host = null;
+  function setHost(handler2) {
+    host = handler2;
   }
   function send(msg) {
-    if (hostOutsideTheApp) return hostOutsideTheApp(msg);
-    post(JSON.stringify(launchSecret ? { ...msg, nonce: launchSecret } : msg));
+    if (host) return host(msg);
+    post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
   }
-  var inTestsWithoutApp = () => !launchSecret && !hostOutsideTheApp;
-  var byUser = (e) => e.isTrusted || inTestsWithoutApp();
-  function on(type, handler) {
-    (handlers[type] ??= []).push(handler);
+  var byUser = (e) => e.isTrusted || !nonce && !host;
+  function on(type, handler2) {
+    (handlers[type] ??= []).push(handler2);
   }
   window.__endeavor = {
     receive(msg) {
-      handlers[msg.type]?.forEach((handler) => handler(msg));
+      handlers[msg.type]?.forEach((handler2) => handler2(msg));
     }
   };
 
@@ -98,7 +97,8 @@
     if (lines.some((l) => l.includes("Markdown.parse(") || l.includes('md"'))) return "text";
     if (!["let", "begin"].includes(lines[0]) || lines[lines.length - 1] !== "end" || lines.length < 3) return null;
     const last = lines[lines.length - 2];
-    return last.split(",").every((n) => /^[\p{L}\p{N}_]+$/u.test(n.trim())) ? last : null;
+    const keywords = ["end", "nothing", "true", "false", "missing"];
+    return last.split(",").every((n) => /^[\p{L}\p{N}_]+$/u.test(n.trim()) && !keywords.includes(n.trim())) ? last : null;
   }
   function codeLines(code) {
     let inBlock = false;
@@ -275,8 +275,7 @@
   var KEYS = mac ? { send: "\u21A9", add: "\u2318\u21A9" } : { send: "Enter", add: "Ctrl+Enter" };
   var WORKING = "endeavorWorking";
   var LINE_PX = 21;
-  var LINES_BEFORE_IT_SCROLLS = 6;
-  var keepTheKeyboardInTheField = (e) => e.preventDefault();
+  var MAX_LINES = 6;
   var css = `
   .endeavor-prompt { box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; font: 13px/18px system-ui, sans-serif;
     color: var(--e-text-primary); text-align: left; }
@@ -343,7 +342,7 @@
     const fit = () => {
       sendButton.classList.toggle("ready", !!text.value.trim());
       text.style.height = `${LINE_PX}px`;
-      text.style.height = `${Math.min(text.scrollHeight, LINE_PX * LINES_BEFORE_IT_SCROLLS)}px`;
+      text.style.height = `${Math.min(text.scrollHeight, LINE_PX * MAX_LINES)}px`;
     };
     text.addEventListener("input", fit);
     text.addEventListener(
@@ -358,7 +357,7 @@
       },
       true
     );
-    for (const button of root.querySelectorAll("button")) button.onmousedown = keepTheKeyboardInTheField;
+    for (const button of root.querySelectorAll("button")) button.onmousedown = (e) => e.preventDefault();
     options.onclick = () => showMenu(menu.hidden);
     sendButton.onclick = (e) => o.done(false, e);
     for (const item of menu.querySelectorAll("[role=menuitem]")) {
@@ -470,8 +469,6 @@
   body.annotating.${SHOOTING} .annotate-picked, body.annotating.${SHOOTING} .annotate-hover { outline: none; }
   body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
 `;
-  var pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor = "pointerdown";
-  var aFrameAfterPointShowsSinceNumberingRestylesEveryLine = (fn) => requestAnimationFrame(() => setTimeout(fn));
   var DRAG = 4;
   var FIGURE = "img, svg, canvas, video";
   var PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
@@ -541,7 +538,7 @@
       comment: state?.comment() ?? ""
     };
   }
-  function initAnnotate(hostAnswersEachSendAndTakesNoPictures = false) {
+  function initAnnotate(answered = false) {
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
@@ -659,7 +656,7 @@
       }
       refresh();
       send({ type: "mode", on: enable });
-      aFrameAfterPointShowsSinceNumberingRestylesEveryLine(() => document.body.classList.toggle("annotate-numbers", active()));
+      requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
     }
     const underWay = /* @__PURE__ */ new Map();
     let nextRef = 1;
@@ -667,17 +664,17 @@
       if (!picks.length) return;
       const sending = picks.splice(0, picks.length);
       const comment = text.value.trim();
-      const ref = !add && hostAnswersEachSendAndTakesNoPictures ? nextRef++ : void 0;
+      const ref = !add && answered ? nextRef++ : void 0;
       if (ref !== void 0) underWay.set(ref, { picks: sending, comment });
       text.value = "";
       text.dispatchEvent(new Event("input"));
       refresh();
       const out = [];
       for (const p of sending) {
-        if (!hostAnswersEachSendAndTakesNoPictures && (p.pick.part === "box" || p.pick.part === "figure")) {
+        if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
           const b = p.box ?? (p.el ? pageBox(p.el.getBoundingClientRect()) : null);
           out.push(b ? { ...p.pick, shot: await shoot(b) } : p.pick);
-        } else if (hostAnswersEachSendAndTakesNoPictures && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
+        } else if (answered && p.pick.part === "box" && p.box) out.push({ ...p.pick, rect: p.box });
         else out.push(p.pick);
       }
       sendQuote(out, comment, add, ref);
@@ -696,7 +693,7 @@
     const swallow = (e) => {
       const target = e.target;
       if (!active() || ours(target)) return;
-      if (e.type !== pointerdownSinceCancellingItCancelsTheMouseEventsDragsListenFor) e.preventDefault();
+      if (e.type !== "pointerdown") e.preventDefault();
       e.stopPropagation();
       const m = e;
       if (e.type === "mousedown" && m.button === 0) {
@@ -864,7 +861,6 @@ ${text.value}` : sent.comment;
 `;
   var highlights = () => globalThis.CSS?.highlights;
   var Highlight = () => globalThis.Highlight;
-  var keepPlutosKeysForTheCells = (e) => e.stopPropagation();
   function initFind(button) {
     const style = document.createElement("style");
     style.id = "endeavor-find-style";
@@ -954,7 +950,7 @@ ${text.value}` : sent.comment;
         e.preventDefault();
         close();
       }
-      keepPlutosKeysForTheCells(e);
+      e.stopPropagation();
     });
     box.querySelector(".previous").addEventListener("click", () => step(-1));
     box.querySelector(".next").addEventListener("click", () => step(1));
@@ -1354,10 +1350,9 @@ pluto-editor main { margin-left: calc(var(--e-side) - 20px) !important; margin-r
 pluto-editor main > preamble { height: 0 !important; margin-top: 0 !important; overflow: visible; }
 pluto-runarea > span { font-size: 10px; }
 `;
-  var keepLiveDocsDisplayedSoPlutoNeverAlertsWindowTooSmall = `#helpbox-wrapper { display: block !important; }`;
   var appChrome = `
 header#pluto-nav, footer { display: none !important; }
-${keepLiveDocsDisplayedSoPlutoNeverAlertsWindowTooSmall}
+#helpbox-wrapper { display: block !important; }
 html:not([data-endeavor-drawer="docs"]) #helpbox-wrapper { visibility: hidden !important; pointer-events: none !important;
   position: fixed !important; width: 0 !important; height: 0 !important; overflow: hidden !important; }
 .outline-frame.safe-preview, .outline-frame-actions-container.safe-preview { display: none !important; }
@@ -1397,10 +1392,9 @@ nav#at_the_top > pluto-filepicker, nav#at_the_top > div.desktop_picker_group, #e
   var both = `
 footer form#feedback { display: none !important; }
 `;
-  var wryWindowsFormOfEndeavorProtocol = "http://endeavor.localhost";
-  var APP_FONTS = `${/Win/.test(navigator.platform) ? wryWindowsFormOfEndeavorProtocol : "endeavor://localhost"}/fonts`;
-  var JULIA_MONO_TAG_BUNDLED_BY_FONTS_BUILD_PY = "v0.63.2";
-  var JULIA_MONO_WEB = `https://cdn.jsdelivr.net/gh/cormullion/juliamono@${JULIA_MONO_TAG_BUNDLED_BY_FONTS_BUILD_PY}/webfonts`;
+  var APP_FONTS = /Win/.test(navigator.platform) ? "http://endeavor.localhost/fonts" : "endeavor://localhost/fonts";
+  var JULIA_MONO_TAG = "v0.63.2";
+  var JULIA_MONO_WEB = `https://cdn.jsdelivr.net/gh/cormullion/juliamono@${JULIA_MONO_TAG}/webfonts`;
   function juliaMonoFaces(from) {
     return [
       { file: "Regular", weight: 400, style: "normal" },
@@ -1419,18 +1413,17 @@ footer form#feedback { display: none !important; }
     }).join("");
   }
   function initTheme(fontsFrom = "app") {
-    const tokenSheetBeforeEveryModulesStyles = document.createElement("style");
-    tokenSheetBeforeEveryModulesStyles.id = "endeavor-tokens";
-    tokenSheetBeforeEveryModulesStyles.textContent = tokens;
-    document.head.append(tokenSheetBeforeEveryModulesStyles);
+    const tokenSheet = document.createElement("style");
+    tokenSheet.id = "endeavor-tokens";
+    tokenSheet.textContent = tokens;
+    document.head.append(tokenSheet);
     const fonts = document.createElement("style");
     fonts.id = "endeavor-fonts";
     fonts.textContent = juliaMonoFaces(fontsFrom);
     document.head.append(fonts);
     const style = document.createElement("style");
-    const afterPlutosSheetsSoEqualSpecificityWins = () => document.head.append(style);
     style.id = "endeavor-theme";
-    afterPlutosSheetsSoEqualSpecificityWins();
+    document.head.append(style);
     on("theme", (msg) => {
       const endeavor = msg.name === "endeavor";
       style.textContent = both + (endeavor ? endeavorLook + layout + appChrome + (onEmber() ? emberLook : "") : msg.name === "view" ? endeavorLook + layout : classic);
@@ -1442,7 +1435,7 @@ footer form#feedback { display: none !important; }
   // src/view.ts
   var format = (engine) => "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). A `lines` quote holds the lines the user picked, as they were then; the others hold no code or output. Read what the cells hold now with the notebook MCP tools (read_cell, view_cell_output). A box's `crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells. Only what could be drawn is in it, and when nothing could be, there's none.";
   var quoteNote = (engine = "pluto") => "[Endeavor] The user picked parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
-  var LEAD_MARK_SO_DESKTOP_KEEPS_THE_NEWLINES = "\u2193";
+  var LEAD = "\u2193";
   var LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
   var uri = (notebook, cell, engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
   var MESSAGE_MAX = 8e3;
@@ -1455,7 +1448,7 @@ footer form#feedback { display: none !important; }
     );
     const note = shortened ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.` : quoteNote(engine);
     const message = chatSafe(
-      `${LEAD_MARK_SO_DESKTOP_KEEPS_THE_NEWLINES}
+      `${LEAD}
 
 ${note}${LEAD_NOTE}
 
@@ -1486,7 +1479,6 @@ ${pick.text}
 ${comment}` : blocks.join("\n\n");
   }
   var DRAWER = 40;
-  var AFTER_PLUTOS_NEXT_RENDER_DRAWS_THE_PANEL_MS = 50;
   var BAR = 32;
   var chrome = `
   :root { --endeavor-bar: ${BAR}px; }
@@ -1571,7 +1563,7 @@ ${comment}` : blocks.join("\n\n");
         if (!e.isTrusted) return;
         const open = panelOpen(tab);
         window.dispatchEvent(new CustomEvent("open_bottom_right_panel", { detail: open ? null : tab }));
-        if (!open && tab === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), AFTER_PLUTOS_NEXT_RENDER_DRAWS_THE_PANEL_MS);
+        if (!open && tab === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), 50);
       });
     pointButton?.addEventListener("click", (e) => e.isTrusted && point(!document.body.classList.contains("annotating")));
     initFind(bar.querySelector("#endeavor-find-button"));
@@ -1610,11 +1602,11 @@ ${comment}` : blocks.join("\n\n");
       });
     });
   }
-  var startedSoNoLaterScriptCanTakePointsWayToTheChat = false;
-  function start(notebook, host) {
-    if (startedSoNoLaterScriptCanTakePointsWayToTheChat) return;
-    startedSoNoLaterScriptCanTakePointsWayToTheChat = true;
-    const engine = host.engine === "ember" ? "ember" : "pluto";
+  var started = false;
+  function start(notebook, host2) {
+    if (started) return;
+    started = true;
+    const engine = host2.engine === "ember" ? "ember" : "pluto";
     const receive = (msg) => window.__endeavor?.receive(msg);
     const sent = document.createElement("div");
     sent.id = "endeavor-sent";
@@ -1627,7 +1619,7 @@ ${comment}` : blocks.join("\n\n");
     };
     const point = (on2) => receive({ type: "annotate", on: on2 });
     const ids = (picks) => picks.map(
-      (p) => p.part === "box" && p.rect && host.crop && mayDraw(p.rect) ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("") : void 0
+      (p) => p.part === "box" && p.rect && host2.crop && mayDraw(p.rect) ? [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("") : void 0
     );
     const draw = (q) => ({
       ...q,
@@ -1635,7 +1627,7 @@ ${comment}` : blocks.join("\n\n");
     });
     const keep = (q) => q.pngs.forEach((png, i) => {
       const id = q.crops?.[i];
-      if (id) png.then((png2) => png2 ? host.crop?.(png2, id) : void 0).catch(() => {
+      if (id) png.then((png2) => png2 ? host2.crop?.(png2, id) : void 0).catch(() => {
       });
     });
     const added = [];
@@ -1666,7 +1658,7 @@ ${comment}` : blocks.join("\n\n");
       }
       const earlier = added.splice(0);
       say("Sending to Claude's chat\u2026", 0);
-      const sending = host.send(message);
+      const sending = host2.send(message);
       const going = held ? earlier : [...earlier, draw(now)];
       sending.then(
         () => {
@@ -1692,12 +1684,12 @@ ${comment}` : blocks.join("\n\n");
     initNarrow();
     initSpace();
     closeStrayCompletions();
-    initLinks(host.openLink);
+    initLinks(host2.openLink);
     followNewCells();
     receive({ type: "theme", name: "view" });
-    initBar(host.canSend, point);
+    initBar(host2.canSend, point);
     followClaudesPalette();
-    if (!host.canSend) return;
+    if (!host2.canSend) return;
     initAskBox();
     initAnnotate(true);
     const style = document.createElement("style");

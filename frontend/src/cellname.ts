@@ -44,7 +44,8 @@ function inferredName(code: string): string | null {
   if (lines.some((l) => l.includes("Markdown.parse(") || l.includes('md"'))) return "text";
   if (!["let", "begin"].includes(lines[0]) || lines[lines.length - 1] !== "end" || lines.length < 3) return null;
   const last = lines[lines.length - 2];
-  return last.split(",").every((n) => /^[\p{L}\p{N}_]+$/u.test(n.trim())) ? last : null;
+  const keywords = ["end", "nothing", "true", "false", "missing"];
+  return last.split(",").every((n) => /^[\p{L}\p{N}_]+$/u.test(n.trim()) && !keywords.includes(n.trim())) ? last : null;
 }
 
 function codeLines(code: string): string[] {

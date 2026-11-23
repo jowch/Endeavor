@@ -93,26 +93,23 @@ declare global {
 const handlers: Record<string, Array<(msg: ToPage) => void>> = {};
 
 declare const __ENDEAVOR_NONCE__: string;
-const launchSecret = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
-const webkitIpcBeforePageScripts = (window as any).webkit?.messageHandlers?.ipc;
-const post: (body: string) => void = webkitIpcBeforePageScripts
-  ? webkitIpcBeforePageScripts.postMessage.bind(webkitIpcBeforePageScripts)
-  : (body) => window.ipc?.postMessage(body);
+const nonce = typeof __ENDEAVOR_NONCE__ === "string" ? __ENDEAVOR_NONCE__ : "";
+const handler = (window as any).webkit?.messageHandlers?.ipc;
+const post: (body: string) => void = handler ? handler.postMessage.bind(handler) : (body) => window.ipc?.postMessage(body);
 
-let hostOutsideTheApp: ((msg: ToApp) => void) | null = null;
+let host: ((msg: ToApp) => void) | null = null;
 
 export function setHost(handler: (msg: ToApp) => void): void {
-  hostOutsideTheApp = handler;
+  host = handler;
 }
 
 export function send(msg: ToApp): void {
-  if (hostOutsideTheApp) return hostOutsideTheApp(msg);
-  post(JSON.stringify(launchSecret ? { ...msg, nonce: launchSecret } : msg));
+  if (host) return host(msg);
+  post(JSON.stringify(nonce ? { ...msg, nonce } : msg));
 }
 
-const inTestsWithoutApp = (): boolean => !launchSecret && !hostOutsideTheApp;
 
-export const byUser = (e: Event): boolean => e.isTrusted || inTestsWithoutApp();
+export const byUser = (e: Event): boolean => e.isTrusted || (!nonce && !host);
 
 export function on<T extends ToPage["type"]>(type: T, handler: (msg: Extract<ToPage, { type: T }>) => void): void {
   (handlers[type] ??= []).push(handler as (msg: ToPage) => void);

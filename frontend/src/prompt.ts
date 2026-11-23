@@ -136,8 +136,6 @@ function sendAsk(o: Open, add: boolean, e: Event) {
   if (t.kind === "selection" && add) window.getSelection()?.removeAllRanges();
 }
 
-const afterTheKeyEventThatOpenedItSinceFocusDuringItDoesntStick = (fn: FrameRequestCallback) => requestAnimationFrame(fn);
-const beforeCodeMirrorAndPlutoHandleTheKey = true;
 
 export function openAsk(t: Target): void {
   closeAsk(false);
@@ -181,7 +179,7 @@ export function openAsk(t: Target): void {
   place(o);
   open = o;
   box.text.addEventListener("input", () => open === o && place(o));
-  afterTheKeyEventThatOpenedItSinceFocusDuringItDoesntStick(() => {
+  requestAnimationFrame(() => {
     box.text.focus();
     if (draft) box.text.select();
   });
@@ -213,11 +211,10 @@ export function initPrompt(): void {
   const style = document.createElement("style");
   style.textContent = css();
   document.head.append(style);
-  const rebuildTheEmptyCellHintWithTheSessionsAgent = () => (style.textContent = css());
-  on("context", rebuildTheEmptyCellHintWithTheSessionsAgent);
+  on("context", () => (style.textContent = css()));
   initReply((found) => openAsk({ kind: "selection", found }));
 
-  window.addEventListener("keydown", onKey, { capture: beforeCodeMirrorAndPlutoHandleTheKey });
+  window.addEventListener("keydown", onKey, true);
   document.addEventListener("mousedown", (e) => {
     if (open && !open.box.root.contains(e.target as Node)) closeAsk(false);
   });

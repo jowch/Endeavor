@@ -110,7 +110,11 @@ test("a run reaching a cell Claude asks to run asks first: Show, Cancel, Run any
   assert.equal(p.dialog(), null);
   assert.deepEqual(p.pluto, []);
   assert.deepEqual(p.sent.filter((m) => m.type === "run_anyway"), []);
+});
 
+test("Run anyway answers the cards only once the cells run, so Claude's approved call doesn't run them twice", async () => {
+  const p = await page();
+  p.waiting([{ id: B, name: "b" }]);
   p.save();
   p.key(p.window.document.body, { key: "Enter" });
   assert.equal(p.dialog(), null);

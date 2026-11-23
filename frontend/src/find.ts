@@ -86,7 +86,6 @@ type Highlights = { set(name: string, value: unknown): void; delete(name: string
 const highlights = (): Highlights | undefined => (globalThis as any).CSS?.highlights;
 const Highlight = (): (new (...ranges: Range[]) => unknown) | undefined => (globalThis as any).Highlight;
 
-const keepPlutosKeysForTheCells = (e: Event) => e.stopPropagation();
 
 export function initFind(button: HTMLButtonElement): { open(): void } {
   const style = document.createElement("style");
@@ -184,7 +183,7 @@ export function initFind(button: HTMLButtonElement): { open(): void } {
       e.preventDefault();
       close();
     }
-    keepPlutosKeysForTheCells(e);
+    e.stopPropagation();
   });
   box.querySelector(".previous")!.addEventListener("click", () => step(-1));
   box.querySelector(".next")!.addEventListener("click", () => step(1));
