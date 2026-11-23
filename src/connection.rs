@@ -1630,6 +1630,8 @@ impl Workspace {
         let steps = [self.julia_steps(host, Backend::Pluto, cx), self.julia_steps(host, Backend::Ember, cx)];
         let reopen = cx.background_executor().spawn(async move {
             let failed = std::cell::RefCell::new([None, None]);
+            // Failures the pane doesn't explain, by path: the session showing one says why (#244).
+            let unexplained = std::cell::RefCell::new(Vec::new());
             let list = || pluto::call_tool(&bridge, "list_notebooks", serde_json::json!({})).ok();
             let find = |listed: &Option<serde_json::Value>, path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
             let listed = list();
@@ -1646,8 +1648,10 @@ impl Workspace {
                                 // Opened meanwhile (the session's own open, or Claude's).
                                 Err(e) => find(&list(), &path).or_else(|| {
                                     eprintln!("Couldn't reopen {path}: {e}");
-                                    if pluto::julia_failed(&e).or_else(|| pluto::r_failed(&e)).or_else(|| pluto::open_stuck(&e)).is_some() {
+                                    if pane_failure(crate::new_session::kind_of_path(&path), &e).is_some() {
                                         failed.borrow_mut()[r as usize].get_or_insert(e);
+                                    } else {
+                                        unexplained.borrow_mut().push((path.clone(), e));
                                     }
                                     None
                                 })?,
@@ -1658,11 +1662,11 @@ impl Workspace {
                     Some((result["notebook_id"].as_str()?.to_owned(), path, previewed))
                 })
                 .collect::<Vec<_>>();
-            (reopened, failed.into_inner())
+            (reopened, failed.into_inner(), unexplained.into_inner())
         });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
-            let (reopened, [julia_failed, r_failed]) = reopen.await;
+            let (reopened, [julia_failed, r_failed], unexplained) = reopen.await;
             let _ = this.update(cx, |this, cx| {
                 this.julia_answer(&host, Backend::Pluto, julia_failed.as_deref(), cx);
                 this.julia_answer(&host, Backend::Ember, r_failed.as_deref(), cx);
@@ -1681,13 +1685,24 @@ impl Workspace {
                 for session in this.sessions.iter_mut().filter(|s| s.place.host == host) {
                     let own = session.notebook_path.as_deref().filter(|_| session.stopped.is_none() && !session.missing);
                     session.notebook = own.and_then(by_path).or_else(|| session.notebook.as_deref().and_then(new_id));
-                    if own.is_some() && session.notebook.is_none() {
-                        lost.push(session.key);
+                    // Each pass says why afresh: an earlier pass's error mustn't show over this one's Julia or R pane.
+                    if own.is_some() {
+                        session.open_failed = None;
+                    }
+                    if let Some(path) = own.filter(|_| session.notebook.is_none()) {
+                        let failed = unexplained.iter().find(|(p, _)| p == path).cloned();
+                        session.open_failed = failed.clone();
+                        lost.push((session.key, failed));
                     }
                 }
-                // A file that's gone shows File not found.
-                for key in lost {
-                    this.check_missing(key, None, cx);
+                // A notice from an earlier pass goes once its session has no failed open to show.
+                if this.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(crate::notice::Retry::OpenNotebook(k, _)) if this.sessions.iter().any(|s| s.key == *k && s.place.host == host && s.open_failed.is_none()))) {
+                    this.notice = None;
+                }
+                // A file that's gone shows File not found; an open that failed for another reason
+                // says why over the pane, with Try again, as the session's own open does.
+                for (key, failed) in lost {
+                    this.check_missing(key, failed, cx);
                 }
                 if let Some((host, id)) = this.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
                     this.load_notebook(&host, &id, cx);

@@ -1452,6 +1452,10 @@ impl Workspace {
     /// Julia starts first if it isn't running: the pane shows its steps meanwhile, or why it couldn't.
     fn open_for_session(&mut self, key: u64, path: String, run: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
+        // Tried again: a new failure says itself.
+        if let Some(session) = self.session_mut(key) {
+            session.open_failed = None;
+        }
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
         let kind = new_session::kind_of_path(&path);
         let steps = self.julia_steps(&host, kind, cx);
@@ -1612,6 +1616,11 @@ impl Workspace {
         if let Some((host, notebook)) = self.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
             self.load_notebook(&host, &notebook, cx);
         }
+        // Another session's failed open isn't this one's; this one's, kept while it was off screen, shows now (#244).
+        if self.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(notice::Retry::OpenNotebook(k, _)) if *k != key)) {
+            self.notice = None;
+        }
+        self.show_open_failed(key, cx);
         cx.notify();
     }
 
@@ -1660,6 +1669,7 @@ impl Workspace {
                     session.notebook = Some(id.clone());
                     session.stopped = None;
                     session.missing = false;
+                    session.open_failed = None;
                     let host = session.place.host.clone();
                     if let Some(path) = path {
                         self.bind_notebook(key, path, cx);
