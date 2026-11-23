@@ -758,7 +758,7 @@ impl Workspace {
             .child(div().flex_1())
             .children(self.job_ends(&session.place.host))
             .children(busy)
-            .when(shown && our_tools_in_page, |d| d.child(point))
+            .when(shown, |d| d.child(point))
             .children(tools.into_iter().flatten())
             .when(session.notebook_path.is_some(), |d| d.child(self.notebook_more(key, cx)))
             .into_any_element()
