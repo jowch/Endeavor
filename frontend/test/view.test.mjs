@@ -35,13 +35,15 @@ function viewModule() {
 }
 const breaksClaudesRules = (text) => text.length > 8000 || /\n\n\n\n/.test(text) || /[ \t]{65}/.test(text) || /[\u00ad\u200b\u2060\ufeff]/.test(text);
 
-test("picks become quotes that name what was picked, with no code or output, and a box's picture by its id", () => {
+test("picks become quotes that name what was picked, with no code or output but the lines the user picked, and a box's picture by its id", () => {
   const { quoteText, chatMessage } = viewModule();
   const uri = `notebook://pluto/${NB}/cell/${A}`;
   assert.equal(
     quoteText(NB, [{ part: "lines", cell: A, code: CODE, lines: [2, 2], text: "  fit(rows)" }, { part: "figure", cell: A, code: CODE, shot: 1 }], "Why fit here?"),
-    `<quote cell="rates" lines="2-2" uri="${uri}"/>\n\n<quote cell="rates" part="figure" uri="${uri}"/>\nWhy fit here?`,
+    `<quote cell="rates" lines="2-2" uri="${uri}">\n  fit(rows)\n</quote>\n\n<quote cell="rates" part="figure" uri="${uri}"/>\nWhy fit here?`,
   );
+  // A click on the code picks all its lines, which names the cell, with no code.
+  assert.equal(quoteText(NB, [{ part: "lines", cell: A, code: CODE, lines: [1, 3], text: CODE }], ""), `<quote cell="rates" uri="${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "cell", cell: A, code: CODE }, { part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], ""), `<quote cell="rates" uri="${uri}"/>\n\n<quote cell="rates" part="output" uri="${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A, A] }], ""), `<quote part="box" uri="${uri} ${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A] }], "", "pluto", ["0123456789abcdef"]), `<quote part="box" uri="${uri}" crop="0123456789abcdef"/>`);
@@ -50,7 +52,7 @@ test("picks become quotes that name what was picked, with no code or output, and
   // However long the cell, the message is short: Claude reads the code with its tools.
   const long = Array.from({ length: 3000 }, (_, i) => `y${i} = ${i}`).join("\n");
   const msg = chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: long }], comment: "Is this slow?" }]);
-  assert.ok(msg.startsWith("\u2193\n\n[Endeavor] The user picked parts of the notebook") && msg.includes("read them with the notebook MCP tools"));
+  assert.ok(msg.startsWith("\u2193\n\n[Endeavor] The user picked parts of the notebook") && msg.includes("with the notebook MCP tools (read_cell, view_cell_output)"));
   assert.ok(msg.endsWith(`<quote cell="y0" uri="${uri}"/>\nIs this slow?`) && msg.length < 1500, `${msg.length} characters`);
 });
 

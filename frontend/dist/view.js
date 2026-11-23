@@ -1481,7 +1481,7 @@ footer form#feedback { display: none !important; }
   }
 
   // src/view.ts
-  var format = (engine) => "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). The quotes hold no code or output: read them with the notebook MCP tools (read_cell, view_cell_output). A box's `crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells. Only what could be drawn is in it, and when nothing could be, there's none.";
+  var format = (engine) => "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells under it). A `lines` quote holds the lines the user picked, as they were then; the others hold no code or output. Read what the cells hold now with the notebook MCP tools (read_cell, view_cell_output). A box's `crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells. Only what could be drawn is in it, and when nothing could be, there's none.";
   var quoteNote = (engine = "pluto") => "[Endeavor] The user picked parts of the notebook in this message, each as a <quote> followed by their comment on it. " + format(engine);
   var LEAD = "\u2193";
   var LEAD_NOTE = " A \u2193 just before this note only marks where the quotes start; it isn't part of the user's words.";
@@ -1508,7 +1508,10 @@ ${quoteNote(engine)}${LEAD_NOTE}
       case "cell":
         return `<quote ${at} uri="${where}"/>`;
       case "lines":
-        return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}"/>`;
+        if (pick.lines[0] === 1 && pick.lines[1] >= pick.code.split("\n").length) return `<quote ${at} uri="${where}"/>`;
+        return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">
+${pick.text}
+</quote>`;
       case "output":
         return `<quote ${at} part="output" uri="${where}"/>`;
       case "figure":

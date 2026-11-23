@@ -47,14 +47,16 @@ export type Engine = "pluto" | "ember";
 
 /**
  * How the quotes read. The app's quotes (attach::quote_note and quote_block, src/attach.rs) carry the quoted code and
- * output text; the view's name what was picked and no more: Claude reads it with its tools, as it is now. Claude's
+ * output text; the view's name what was picked and no more, except the lines the user picked: Claude reads it with its
+ * tools, as it is now. Claude's
  * desktop app takes at most 8,000 characters in a message from a view, and a long cell's code went over (#328).
  */
 const format = (engine: Engine) =>
   "A quote's uri, notebook://" + engine + "/{notebook_id}/cell/{cell_id}, names its cell (it is not a fetchable URL); `lines` are " +
   "line numbers in the cell's code, counting from 1. `part` says what was picked when it isn't code: `output` (the cell's " +
   "output), `figure` (the cell's output, a picture) or `box` (a box the user drew over the notebook; `uri` lists the cells " +
-  "under it). The quotes hold no code or output: read them with the notebook MCP tools (read_cell, view_cell_output). A box's " +
+  "under it). A `lines` quote holds the lines the user picked, as they were then; the others hold no code or output. Read " +
+  "what the cells hold now with the notebook MCP tools (read_cell, view_cell_output). A box's " +
   "`crop` names a picture of what was in it: see it with view_cell_output, with that `crop` and one of the box's cells. Only what could be drawn is in it, and when nothing could be, there's none.";
 
 /** What Claude is told once in a message that quotes the notebook. */
@@ -114,7 +116,9 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
     case "cell":
       return `<quote ${at} uri="${where}"/>`;
     case "lines":
-      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}"/>`;
+      // A click on the code picks all its lines: that names the cell. Lines the user picked go with their text.
+      if (pick.lines[0] === 1 && pick.lines[1] >= pick.code.split("\n").length) return `<quote ${at} uri="${where}"/>`;
+      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
     case "output":
       return `<quote ${at} part="output" uri="${where}"/>`;
     case "figure":
