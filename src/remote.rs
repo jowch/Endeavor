@@ -199,8 +199,8 @@ pub fn open(server: &Server, auth: Auth, socket: Option<std::net::TcpListener>, 
 pub fn test(server: &Server, auth: Auth, cancel: &Cancel, on: &dyn Fn(Event)) -> Result<(), String> {
     let [_, state] = server.launcher();
     let helper = |os: &str, arch: &str| helper_for(os, arch);
-    // A runtime the test starts starts Julia at once, so the test shows Julia starts there. One already running
-    // is only pinged, and with lazy Julia it may not have started Julia yet.
+    // The test shows Julia starts there: a runtime the test starts starts Julia at once, and one found running
+    // is asked to start it, with the test waiting for it (#169).
     let options = client::Options { auth, root: String::new(), state, depot: String::new(), exit_idle: false, julia_when_needed: false, allow_install: true, launcher: None, helper: &helper };
     client::test(&client_server(server)?, &transport(server), &options, cancel, on)
 }
