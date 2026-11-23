@@ -68,30 +68,101 @@ const uri = (notebook: string, cell: string, engine: Engine) => `notebook://${en
 export const OUTPUT_MAX = 4000;
 const OUTPUT_END = 500;
 
-/** `text` cut to OUTPUT_MAX characters, its start and end kept, saying how much was left out. */
-export function outputText(text: string): string {
-  if (text.length <= OUTPUT_MAX) return text;
+/** `text` cut to `max` characters, its start and end kept, with a note in between saying how much (`why`). */
+function cutMiddle(text: string, max: number, keepEnd: number, why: string): string {
+  if (text.length <= max) return text;
   // Not between the two halves of a surrogate pair (an emoji, say).
   const low = (i: number) => (text.charCodeAt(i) & 0xfc00) === 0xdc00;
-  let end = OUTPUT_MAX - OUTPUT_END;
-  if (low(end)) end--;
-  let start = text.length - OUTPUT_END;
+  let end = max - keepEnd;
+  if (end > 0 && low(end)) end--;
+  let start = text.length - keepEnd;
   if (low(start)) start++;
-  return `${text.slice(0, end)}\n[${(start - end).toLocaleString("en-US")} characters of this output left out here.]\n${text.slice(start)}`;
+  return `${text.slice(0, end)}\n[${(start - end).toLocaleString("en-US")} characters ${why}]\n${text.slice(start)}`;
 }
 
-/** One pick as a `<quote>` (the app's attach::quote_block), except that the view cuts a long output (OUTPUT_MAX) and the app doesn't. */
-export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto"): string {
+/** `text` cut to OUTPUT_MAX characters, its start and end kept, saying how much was left out. */
+export function outputText(text: string): string {
+  return cutMiddle(text, OUTPUT_MAX, OUTPUT_END, "of this output left out here.");
+}
+
+/**
+ * What Claude takes in one message from a view (claude.com/docs/connectors/building/mcp-apps/send-messages,
+ * read 2026-11-23): at most 8,000 characters, no more than 3 line breaks or 64 spaces and tabs in a row, and no
+ * invisible characters. It turns away anything else with an isError answer, every time, so a long cell or a few
+ * picks that ⌘↩ added never reached the chat, and the user was told to try again.
+ */
+export const MESSAGE_MAX = 8000;
+
+/**
+ * `text` within Claude's rules for a message, but its length: no soft hyphens, zero-width spaces, word joiners or
+ * byte-order marks (zero-width joiners stay: emoji and some scripts need them), at most 3 line breaks and 64
+ * spaces or tabs in a row.
+ */
+export function chatSafe(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u00ad\u180e\u200b\u2060\ufeff]/g, "")
+    .replace(/(?:[ \t]*\n){4,}/g, "\n\n\n")
+    .replace(/[ \t]{65,}/g, (run) => run.slice(0, 64));
+}
+
+/** What a pick quotes as text, if anything: a cell's code, its lines, or its output's text (cut to OUTPUT_MAX). */
+const bodyOf = (pick: Pick): string | undefined =>
+  pick.part === "cell" ? pick.code : pick.part === "lines" ? pick.text : pick.part === "output" ? outputText(pick.text) : undefined;
+
+/** One ↩ or ⌘↩: its picks and the user's comment. */
+export type Quoted = { picks: Pick[]; comment: string };
+
+/**
+ * The message ↩ passes to the chat: the lead and the note, then each ⌘↩'s and this ↩'s quotes, within Claude's
+ * rules (chatSafe, MESSAGE_MAX). When it's too long, the longest quoted texts are cut (start and end kept) to the
+ * same length, as little as fits; the user's comments never are. Null when even that can't fit: the comments are
+ * too long.
+ */
+export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
+  const head = `${LEAD}\n\n${quoteNote(engine)}${LEAD_NOTE}\n\n`;
+  const cut = "left out here to fit Claude's message box; read the cell with the notebook tools.";
+  const build = (cap: number) =>
+    chatSafe(
+      head +
+        quoted
+          .map(({ picks, comment }) => {
+            const blocks = picks.map((p) => {
+              const body = bodyOf(p);
+              return quoteBlock(notebook, p, engine, body === undefined ? undefined : cutMiddle(chatSafe(body), cap, Math.min(OUTPUT_END, Math.floor(cap / 4)), cut));
+            });
+            return comment ? `${blocks.join("\n\n")}\n${comment}` : blocks.join("\n\n");
+          })
+          .join("\n\n"),
+    );
+  const whole = build(Infinity);
+  if (whole.length <= MESSAGE_MAX) return whole;
+  // The longest a quoted text may stay: the most that fits.
+  let fits = -1;
+  let over = Math.max(...quoted.flatMap((q) => q.picks.map((p) => bodyOf(p)?.length ?? 0)));
+  while (over - fits > 1) {
+    const cap = Math.floor((fits + over) / 2);
+    if (build(cap).length <= MESSAGE_MAX) fits = cap;
+    else over = cap;
+  }
+  return fits < 0 ? null : build(fits);
+}
+
+/**
+ * One pick as a `<quote>` (the app's attach::quote_block), except that the view cuts a long output (OUTPUT_MAX) and the
+ * app doesn't. `body`: the quoted text in its place (chatMessage's, cut to fit).
+ */
+export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", body = bodyOf(pick)): string {
   if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
   const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
   const where = uri(notebook, pick.cell, engine);
   switch (pick.part) {
     case "cell":
-      return `<quote ${at} uri="${where}">\n${pick.code}\n</quote>`;
+      return `<quote ${at} uri="${where}">\n${body}\n</quote>`;
     case "lines":
-      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
+      return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${body}\n</quote>`;
     case "output":
-      return `<quote ${at} part="output" uri="${where}">\n${outputText(pick.text)}\n</quote>`;
+      return `<quote ${at} part="output" uri="${where}">\n${body}\n</quote>`;
     case "figure":
       return `<quote ${at} part="figure" uri="${where}"/>`;
   }
@@ -288,7 +359,7 @@ export function start(notebook: string, host: Host): void {
   started = true;
   const engine: Engine = host.engine === "ember" ? "ember" : "pluto";
   // What ⌘↩ added since the last ↩.
-  const added: string[] = [];
+  const added: Quoted[] = [];
   const receive = (msg: object) => window.__endeavor?.receive(msg as never);
   const sent = document.createElement("div");
   sent.id = "endeavor-sent";
@@ -303,16 +374,28 @@ export function start(notebook: string, host: Host): void {
   const point = (on: boolean) => receive({ type: "annotate", on });
   setHost((msg: ToApp) => {
     if (msg.type !== "quote" || !msg.picks.length) return;
-    const text = quoteText(notebook, msg.picks, msg.comment, engine);
     // ⌘↩ adds to the message the next ↩ passes, kept here.
     if (msg.add) {
-      added.push(text);
+      added.push({ picks: msg.picks, comment: msg.comment });
       return say(`${added.length} added. ${mac ? "↩" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
+    }
+    const message = chatMessage(notebook, [...added, { picks: msg.picks, comment: msg.comment }], engine);
+    if (message === null) {
+      // Too long even with the quoted texts cut: the comments (never cut) or the number of picks. Point gets this
+      // ↩'s picks and comment back. When what ⌘↩ added is the cause, it goes: Point can't give it back to edit.
+      if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: false });
+      const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
+      const enter = mac ? "↩" : "Enter";
+      if (added.length && chatMessage(notebook, [{ picks: msg.picks, comment: msg.comment }], engine) !== null) {
+        added.length = 0;
+        return say(`Too long for Claude's message box (${max}) with what ${mac ? "⌘↩" : "Ctrl+Enter"} added, so those picks were let go. ${enter} sends this one.`, 8000);
+      }
+      return say(`Too long for Claude's message box (${max}). Shorten your comment or pick less, then press ${enter}.`, 8000);
     }
     const earlier = added.splice(0);
     // Claude's desktop app takes a few seconds to show it in its box (2–7 s, 2026-11-12): say it's on its way.
     say("Sending to Claude's chat…", 0);
-    host.send(`${LEAD}\n\n${quoteNote(engine)}${LEAD_NOTE}\n\n${[...earlier, text].join("\n\n")}`).then(
+    host.send(message).then(
       () => {
         if (msg.ref !== undefined) receive({ type: "quote_sent", ref: msg.ref, ok: true });
         say("On its way to Claude's message box. Send it from there.", 8000);

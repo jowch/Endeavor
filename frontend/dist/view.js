@@ -1418,33 +1418,69 @@ footer form#feedback { display: none !important; }
   var uri = (notebook, cell, engine) => `notebook://${engine}/${notebook}/cell/${cell}`;
   var OUTPUT_MAX = 4e3;
   var OUTPUT_END = 500;
-  function outputText(text) {
-    if (text.length <= OUTPUT_MAX) return text;
+  function cutMiddle(text, max, keepEnd, why) {
+    if (text.length <= max) return text;
     const low = (i) => (text.charCodeAt(i) & 64512) === 56320;
-    let end = OUTPUT_MAX - OUTPUT_END;
-    if (low(end)) end--;
-    let start2 = text.length - OUTPUT_END;
+    let end = max - keepEnd;
+    if (end > 0 && low(end)) end--;
+    let start2 = text.length - keepEnd;
     if (low(start2)) start2++;
     return `${text.slice(0, end)}
-[${(start2 - end).toLocaleString("en-US")} characters of this output left out here.]
+[${(start2 - end).toLocaleString("en-US")} characters ${why}]
 ${text.slice(start2)}`;
   }
-  function quoteBlock(notebook, pick, engine = "pluto") {
+  function outputText(text) {
+    return cutMiddle(text, OUTPUT_MAX, OUTPUT_END, "of this output left out here.");
+  }
+  var MESSAGE_MAX = 8e3;
+  function chatSafe(text) {
+    return text.replace(/\r\n?/g, "\n").replace(/[\u00ad\u180e\u200b\u2060\ufeff]/g, "").replace(/(?:[ \t]*\n){4,}/g, "\n\n\n").replace(/[ \t]{65,}/g, (run) => run.slice(0, 64));
+  }
+  var bodyOf = (pick) => pick.part === "cell" ? pick.code : pick.part === "lines" ? pick.text : pick.part === "output" ? outputText(pick.text) : void 0;
+  function chatMessage(notebook, quoted, engine = "pluto") {
+    const head = `${LEAD}
+
+${quoteNote(engine)}${LEAD_NOTE}
+
+`;
+    const cut = "left out here to fit Claude's message box; read the cell with the notebook tools.";
+    const build = (cap) => chatSafe(
+      head + quoted.map(({ picks, comment }) => {
+        const blocks = picks.map((p) => {
+          const body = bodyOf(p);
+          return quoteBlock(notebook, p, engine, body === void 0 ? void 0 : cutMiddle(chatSafe(body), cap, Math.min(OUTPUT_END, Math.floor(cap / 4)), cut));
+        });
+        return comment ? `${blocks.join("\n\n")}
+${comment}` : blocks.join("\n\n");
+      }).join("\n\n")
+    );
+    const whole = build(Infinity);
+    if (whole.length <= MESSAGE_MAX) return whole;
+    let fits = -1;
+    let over = Math.max(...quoted.flatMap((q) => q.picks.map((p) => bodyOf(p)?.length ?? 0)));
+    while (over - fits > 1) {
+      const cap = Math.floor((fits + over) / 2);
+      if (build(cap).length <= MESSAGE_MAX) fits = cap;
+      else over = cap;
+    }
+    return fits < 0 ? null : build(fits);
+  }
+  function quoteBlock(notebook, pick, engine = "pluto", body = bodyOf(pick)) {
     if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"/>`;
     const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
     const where = uri(notebook, pick.cell, engine);
     switch (pick.part) {
       case "cell":
         return `<quote ${at} uri="${where}">
-${pick.code}
+${body}
 </quote>`;
       case "lines":
         return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">
-${pick.text}
+${body}
 </quote>`;
       case "output":
         return `<quote ${at} part="output" uri="${where}">
-${outputText(pick.text)}
+${body}
 </quote>`;
       case "figure":
         return `<quote ${at} part="figure" uri="${where}"/>`;
@@ -1612,18 +1648,24 @@ ${comment}` : blocks.join("\n\n");
     const point = (on2) => receive({ type: "annotate", on: on2 });
     setHost((msg) => {
       if (msg.type !== "quote" || !msg.picks.length) return;
-      const text = quoteText(notebook, msg.picks, msg.comment, engine);
       if (msg.add) {
-        added.push(text);
+        added.push({ picks: msg.picks, comment: msg.comment });
         return say(`${added.length} added. ${mac ? "\u21A9" : "Enter"} passes ${added.length === 1 ? "it" : "them"} to the chat with the next pick.`);
+      }
+      const message = chatMessage(notebook, [...added, { picks: msg.picks, comment: msg.comment }], engine);
+      if (message === null) {
+        if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: false });
+        const max = `${MESSAGE_MAX.toLocaleString("en-US")} characters`;
+        const enter = mac ? "\u21A9" : "Enter";
+        if (added.length && chatMessage(notebook, [{ picks: msg.picks, comment: msg.comment }], engine) !== null) {
+          added.length = 0;
+          return say(`Too long for Claude's message box (${max}) with what ${mac ? "\u2318\u21A9" : "Ctrl+Enter"} added, so those picks were let go. ${enter} sends this one.`, 8e3);
+        }
+        return say(`Too long for Claude's message box (${max}). Shorten your comment or pick less, then press ${enter}.`, 8e3);
       }
       const earlier = added.splice(0);
       say("Sending to Claude's chat\u2026", 0);
-      host2.send(`${LEAD}
-
-${quoteNote(engine)}${LEAD_NOTE}
-
-${[...earlier, text].join("\n\n")}`).then(
+      host2.send(message).then(
         () => {
           if (msg.ref !== void 0) receive({ type: "quote_sent", ref: msg.ref, ok: true });
           say("On its way to Claude's message box. Send it from there.", 8e3);
