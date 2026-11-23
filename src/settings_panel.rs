@@ -980,23 +980,15 @@ impl Workspace {
         let mut items = vec![Item::Row(yours), Item::Row(ours), Item::Row(theirs)];
         let restart = self.julia_needs_restart();
         if restart {
-            let n = self.open_notebook_files(&HostId::ThisMac).len();
-            let mut r = row("julia-restart", "Restart Julia to use it");
+            let mut r = row("julia-restart", "Restart notebooks to use it");
             r.search = None;
             r.lead = Lead::Icon { glyph: Glyph::Info, dot: false, faint: false, tone: Some(Tone::Attention) };
-            r.desc = Some(
-                match n {
-                    0 => "Julia stops and starts again with the one you chose.".to_owned(),
-                    1 => "Your open notebook stops and starts again with the new Julia. Its file is already saved.".to_owned(),
-                    n => format!("Your {n} open notebooks stop and start again with the new Julia. Their files are already saved."),
-                }
-                .into(),
-            );
-            r.controls.push(Control::Button { label: "Restart Julia", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartNotebooks), aria: "Restart Julia".into() });
+            r.desc = Some("Notebooks stop and start again, Julia notebooks with the Julia you chose. Their files are already saved.".into());
+            r.controls.push(Control::Button { label: "Restart", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartNotebooks), aria: "Restart notebooks".into() });
             items.push(Item::Row(r));
         }
         let g = group(Some("Which Julia to use"), items);
-        vec![if restart { g } else { g.foot("Changing it takes effect when Julia restarts.") }]
+        vec![if restart { g } else { g.foot("Changing it takes effect when notebooks restart.") }]
     }
 
     /// Endeavor's Julia's row: installed or not, with Install or Remove, or how either is going.
