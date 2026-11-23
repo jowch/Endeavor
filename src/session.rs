@@ -1,8 +1,3 @@
-//! One chat session: its transcript, message queue, cell-code memory, execution
-//! "stop asking" state, and the notebook it was last looking at. Agent events are
-//! applied here; anything that needs the workspace (sending to the agent, driving
-//! the notebook pane, checking run state) comes back as an [`Effect`].
-
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -33,99 +28,62 @@ use crate::transcript_copy::{self, Below, Swap};
 use crate::outbox::{Copying, Delivery, Dispatch, Outbox, Paused, Queued, Shown};
 
 pub enum Entry {
-    /// The user's words and, above them, their chips. `sent`: when, not known
-    /// for replayed history.
     User { text: SharedString, expanded: bool, attachments: Vec<Attachment>, delivery: Delivery, sent: Option<SystemTime> },
-    /// A reply, and when it started (not known for replayed history).
     Agent { text: String, at: Option<SystemTime> },
     Tool {
         id: ToolCallId,
         title: String,
         kind: ToolKind,
-        /// The first file the call touches, when the agent says.
         path: Option<PathBuf>,
         status: ToolCallStatus,
         input: Option<serde_json::Value>,
         output: Option<serde_json::Value>,
-        /// Cell edits made by this call, shown inline.
         diffs: Vec<celldiff::CellDiff>,
         expanded: bool,
-        /// How the user answered its prompt, if it asked.
         approval: Option<Approval>,
     },
-    /// A stretch of thinking: when it started (not known for replayed history)
-    /// and, once something follows it, how long it took.
     Thought { text: String, expanded: bool, started: Option<Instant>, took: Option<Duration> },
     Plan(Vec<PlanEntry>),
-    /// A prompt for the call `call`. Once answered it stays, unseen, so it
-    /// doesn't split the run it belongs to; the call's row shows the answer.
     Permission {
         call: ToolCallId,
         title: String,
-        /// Code the call would run, when known; for a write over an existing
-        /// file on This Mac, the file's text when the prompt came (its card shows the change).
         code: Option<String>,
         options: Vec<PermissionOption>,
-        /// Who waits for the answer, until it's given.
         responder: Option<Asker>,
-        /// A notebook call that runs code (a run card).
         runs_code: bool,
-        /// The notebook tool and its input, for the run card.
         tool: Option<String>,
         input: serde_json::Value,
-        /// The call's kind and the first file it touches, as the agent says.
         kind: Option<ToolKind>,
         path: Option<PathBuf>,
-        /// What the run would run, once the runtime answers.
         preview: Option<pluto::RunPreview>,
-        /// Plan mode's end: the plan to approve (markdown).
         plan: Option<String>,
     },
     Note(SharedString),
-    /// What a turn left unrun or still running, cut back as the runtime reports
-    /// progress: it shows only what is still true, and nothing once all is.
     RunState(Vec<pluto::RunWarning>),
-    /// The end-of-turn card: the cells the turn changed.
     Changes(Vec<celldiff::ChangedCell>),
-    /// A turn that didn't finish: a card where the reply would be, or the
-    /// quiet note after Claude restarted under it.
     Failed(Failed),
-    /// After a reopened session's history: the faint "Reopened today at 9:14" line.
     Reopened(SystemTime),
 }
 
-/// Who asked, and so who hears the answer: the agent's own permission
-/// request, or the runtime holding a call (its ask's id): a run in Ask to
-/// run, a run or edit in Manual.
 pub enum Asker {
     Agent(Responder<RequestPermissionResponse>),
     Runtime(u64),
-    /// The agent's request to restart the runtime (`restart_ask`), by its card's id.
     Restart(u64),
 }
 
-/// The option ids of the cards the app makes for the runtime's asks.
 pub const RUN_ALLOW: &str = "allow";
 pub const RUN_DENY: &str = "deny";
 
-/// A turn that didn't finish, and the one thing to do about it.
 pub struct Failed {
     pub kind: FailedKind,
-    /// The error as Claude Code gave it, under Details.
     pub raw: Option<String>,
     pub details_open: bool,
-    /// Its Try again or Continue was pressed: a Try again card goes (the
-    /// message is answered under it), a Continue button goes.
     pub used: bool,
 }
 
 pub enum FailedKind {
-    /// No reply came. Try again sends the kept message again: its blocks, and
-    /// its bubble, to mark while it waits.
     NoAnswer { reason: &'static str, message: Option<(Option<usize>, Vec<ContentBlock>)> },
-    /// The reply stopped partway; what came stays, and Continue picks it up.
     Partway { reason: &'static str },
-    /// Claude's process stopped under this reply and was restarted.
     CutOff,
 }
 
@@ -146,7 +104,6 @@ impl FailedKind {
         }
     }
 
-    /// Its button: Try again, or Continue.
     pub fn action(&self) -> &'static str {
         match self {
             FailedKind::NoAnswer { .. } => "Try again",
@@ -155,22 +112,16 @@ impl FailedKind {
     }
 }
 
-/// What Continue sends, as a message of its own.
 pub const CONTINUE: &str = "Continue from where you stopped.";
 
-/// What the transcript shows for the message Allow sends on a card kept past the turn.
 pub const GO_AHEAD: &str = "Go ahead";
 
-/// The note when Allow on a card kept past the turn finds a message of the user's already waiting.
 pub const ALLOWED_FOR_NEXT: &str = "Allowed. Claude goes ahead when your next message is sent";
 
-/// The message Allow sends on a card kept past the turn: the agent stopped waiting on its call, and
-/// the runtime holds the approval for the same call made again.
 fn go_ahead(tool: &str) -> String {
     format!("[Endeavor] The user allowed your request to call `{tool}`. Call `{tool}` again with the same arguments now: it goes ahead without asking again.")
 }
 
-/// Why a reply stopped partway, for a turn that ended at one of the agent's limits.
 fn partway_reason(reason: StopReason, agent: Agent) -> Option<&'static str> {
     match reason {
         StopReason::MaxTokens => Some("The reply reached its length limit."),
@@ -179,19 +130,13 @@ fn partway_reason(reason: StopReason, agent: Agent) -> Option<&'static str> {
     }
 }
 
-/// The answer to a call's prompt, shown on its row.
 #[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Approval {
     Allowed,
-    /// "Always this session": allowed, and later matching prompts in this
-    /// session are answered without a card (or, for runs, the session went to Auto).
     ForSession,
-    /// "Always in this folder": the agent keeps the rule in the folder's settings.
     InFolder,
     Denied,
-    /// The session runs without asking (Auto), so it didn't ask.
     WithoutAsking,
-    /// A plan approved with Start, Start in Auto, or sent back with Keep planning.
     Started,
     StartedInAuto,
     KeptPlanning,
@@ -212,64 +157,36 @@ impl Approval {
     }
 }
 
-/// How far an answer that allows reaches.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Scope {
     Once,
-    /// "Always this session": Endeavor remembers it (for runs: the session goes to Auto).
     Session,
-    /// "Always in this folder": the agent's own lasting rule.
     Folder,
 }
 
-/// Work a session hands back to the workspace.
 pub enum Effect {
-    /// A prompt waits for the user (its entry): a notification if Endeavor is in the background.
     Asked(usize),
     Send(Turn),
-    /// The agent opened or created this notebook (its id, and its file).
     ShowNotebook { id: String, path: Option<String> },
-    /// The agent closed this notebook (its id, and its file): the sessions on it show it stopped, with Start.
     NotebookClosed { id: String, path: Option<String> },
-    /// A reopened session last worked in this notebook file: open it in the
-    /// current Pluto (its old id died with the previous Julia) and show it.
     ReopenNotebook(String),
-    /// The session went idle: check for unrun edits.
     CheckRunState,
-    /// Set one of the agent's config options (model, effort).
     SetConfig(String, SessionConfigValueId),
-    /// Ask the agent to switch mode.
     SetMode(SessionModeId),
-    /// Ask the runtime what the pending run at this entry would run.
     PreviewRun { ix: usize, tool: String, input: serde_json::Value },
-    /// Ask the runtime for a notebook call's result, which the agent didn't
-    /// pass on (`Session::result_fetched` takes it).
     FetchResult { call: ToolCallId, tool: String, input: serde_json::Value },
-    /// Answer a call the runtime holds (`ask`), with the cells the user's own
-    /// run reached meanwhile (each with its `last_run` before that run).
-    /// `packages`: for `approve_install`, the packages its card named, so the yes covers those only
-    /// (EndeavorMCP #418); none where the card named none.
     AnswerRun { ask: u64, allow: bool, user_ran: Vec<(String, f64)>, packages: Option<Vec<String>> },
-    /// The user answered the agent's request to restart the runtime (card `id`): Restart restarts it.
     AnswerRestart { id: u64, restart: bool },
-    /// Tell the runtime this session's policy changed ("plan" | "ask" |
-    /// "auto"), and whether its edits ask too (Manual).
     SetPolicy(&'static str, bool),
-    /// A turn failed for want of sign-in: Claude is signed out.
     SignedOut,
-    /// A turn hit the account's usage limit: messages wait until it resets.
     UsageLimit(Option<crate::trouble::Reset>),
 }
 
-/// What a finished notebook call did to the notebook the pane shows.
 enum Arrived {
-    /// It opened or created this notebook (its id, and its file).
     Opened(String, Option<String>),
-    /// It closed this notebook (its id, and its file).
     Closed(String, Option<String>),
 }
 
-/// A select config option's current value and its choices.
 pub fn config_choices(config: &[SessionConfigOption], id: &str) -> Option<(SessionConfigValueId, Vec<SessionConfigSelectOption>)> {
     let option = config.iter().find(|c| c.id.to_string() == id)?;
     let SessionConfigKind::Select(select) = &option.kind else { return None };
@@ -281,9 +198,6 @@ pub fn config_choices(config: &[SessionConfigOption], id: &str) -> Option<(Sessi
     Some((select.current_value.clone(), options))
 }
 
-/// A mode in the composer's mode menu: the agent mode it switches to, and
-/// whether the app's run gate stops asking (Ask to run and Auto are both the
-/// agent's auto mode).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModeChoice {
     pub mode: String,
@@ -298,20 +212,14 @@ impl ModeChoice {
     }
 }
 
-/// A session's mode: the agent's mode, and whether the run gate lets runs through
-/// without asking. The label, the agent's mode, the runtime policy and the gate
-/// all follow from it, and it is saved per session so a reopened one starts in it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Mode {
     pub agent: String,
     pub run_without_asking: bool,
 }
 
-/// Where Manual sits in `app_modes()`.
 pub const MANUAL: usize = 0;
 
-/// The app's modes (docs/ui-spec.md, Composer), in the menu's order, plus the
-/// agent's own Manual mode that sessions start in.
 pub fn app_modes() -> Vec<ModeChoice> {
     let choice = |mode: &str, run_without_asking, name: &str, description: &str| ModeChoice {
         mode: mode.into(),
@@ -328,192 +236,85 @@ pub fn app_modes() -> Vec<ModeChoice> {
 }
 
 pub struct Session {
-    /// App-local identity, stable before and after the agent assigns `id`.
     pub key: u64,
     pub id: Option<SessionId>,
-    /// The agent it runs on, for good.
     pub agent: Agent,
-    /// The host it runs on, and its working folder there.
     pub place: Place,
-    /// The server's name, for a session on a server.
     pub server: Option<String>,
-    /// Its agent session opens once its host's runtime is ready (it needs the bridge).
     pub agent_waiting: bool,
-    /// What the app tells Claude about how the session started (its server,
-    /// its notebook), sent ahead of the first message whenever that comes.
     pub start_context: Option<ContentBlock>,
     pub title: String,
-    /// The user named it; the agent's titles no longer replace it.
     pub named: bool,
-    /// The title stands in for one ("New session", the notebook's name): the
-    /// user's first message, sent or replayed, replaces it.
     pub untitled: bool,
     pub entries: Vec<Entry>,
     pub outbox: Outbox,
-    /// Each cell's code as last seen in the agent's reads and edits, for diffs.
     pub cell_codes: CellCodes,
-    /// "Always this session": approve this session's runs from now on.
     pub run_without_asking: bool,
-    /// The notebook this session was last looking at.
     pub notebook: Option<String>,
-    /// The session's one notebook file, once it has one.
     pub notebook_path: Option<String>,
-    /// Its notebook's kind, which the core is told with its folder: a new
-    /// notebook without a path is made in it.
     pub kind: Backend,
-    /// Its notebook was stopped from the notebook's ⋯ menu, or for being idle.
     pub stopped: Option<Stopped>,
-    /// Its notebook file isn't there (moved, renamed or deleted outside Endeavor).
     pub missing: bool,
-    /// Its notebook's open failed for a reason the pane doesn't show: the path and the error,
-    /// shown as a notice with Try again whenever the session is on screen (#244).
     pub open_failed: Option<(String, String)>,
-    /// Cells the user changed since the agent last heard (cell id, name); told
-    /// with the next prompt.
     pub user_edits: Vec<(String, Option<String>)>,
-    /// Restore on each changed-cells card, by `Session::card_key`, once
-    /// pressed. Keyed by what the card holds and how many cards like it come
-    /// before, so a replay that re-indexes the entries keeps each state on its
-    /// own card, and a turn that redoes a restored one gets its own.
     pub restores: HashMap<u64, Restore>,
-    /// What the user's restores put back since the agent last heard; told with the next prompt.
     pub restored: Vec<String>,
-    /// Cells a restore is putting back, and when it started or finished: the
-    /// runtime reports each as the user's edit, which the restore's own note
-    /// already says. Only for a while, so a report that never comes doesn't
-    /// hide a later edit of the user's.
     restoring_cells: Vec<(String, Instant)>,
-    /// The transcript as a virtualized list: only visible entries are laid out,
-    /// and it follows new content unless the user has scrolled up to read.
     pub list: ListState,
-    /// Entries the list knows about, and the lowest index changed since (see `sync_list`).
     list_len: Cell<usize>,
     dirty_from: Cell<Option<usize>>,
-    /// When the current turn started, for the "Working · 12s" indicator.
     pub busy_since: Option<Instant>,
-    /// The user message the running turn answers.
     turn_entry: Option<usize>,
-    /// When the agent last said anything about this session.
     pub(crate) heard: Option<Instant>,
-    /// A user message Claude couldn't answer (signed out, offline); it goes
-    /// again by itself once Claude can be reached.
     pub unanswered: Option<usize>,
-    /// The pinned plan (above the composer) is folded.
     pub plan_folded: bool,
-    /// The queued message opened in place (by its id).
     pub queue_open: Option<u64>,
-    /// The queue shows all its rows, not the first three.
     pub queue_all: bool,
-    /// The last turn stopped with an error (the sidebar's warning mark);
-    /// cleared when a new turn starts.
     pub errored: bool,
-    /// A turn ended while the user was in another session (the sidebar's
-    /// new-reply dot); cleared when the session is opened.
     pub unseen: bool,
-    /// The last /compact: when, and how full the context was before it.
     pub summarized: Option<(SystemTime, Option<u64>)>,
-    /// The message just copied from its Copy button, which shows a tick for a moment.
     pub copied: Option<usize>,
-    /// The plan card shows the whole plan, not just its steps.
     pub plan_open: bool,
-    /// Runs of tool calls the user opened, by their first call.
     pub(crate) open_runs: HashSet<ToolCallId>,
-    /// Reopening a past session: its history is replaying.
     replaying: bool,
-    /// Reopening from Endeavor's copy of the transcript: `entries` shows the
-    /// copy, and the agent's replay gathers here until it has all arrived.
     replay: Option<Vec<Entry>>,
-    /// What the replay left below a view it kept in place, for the floating
-    /// button. While it's set the list doesn't follow its end, until the
-    /// button is pressed or the user scrolls to the end (`reached_end`).
     pub below: Cell<Option<transcript_copy::Below>>,
-    /// The user has scrolled the list's last entry into view.
     pub reached_end: Rc<Cell<bool>>,
-    /// Eases the list to its end as content arrives (`motion::Glide`).
     pub glide: RefCell<motion::Glide>,
-    /// Entries that arrived live in the last moments, by index, so they fade
-    /// in; replayed history shows at once.
     arrivals: RefCell<Vec<(usize, Instant)>>,
-    /// When reopening began, for the wait line's time.
     pub opening_since: Option<Instant>,
-    /// Loading the session again after Claude's process restarted: its history
-    /// replays, and the transcript already has it.
     reloading: bool,
-    /// Claude's process stopped while this session's reply came: once it's
-    /// back, the transcript says the reply was cut off.
     cut_off: bool,
-    /// Notebook file to open once the agent session is up: the one the replayed
-    /// history last opened, or the one picked on the new-session screen.
     replayed_path: Option<String>,
-    /// Starting or reopening failed; the session can't take messages.
     pub failed: Option<Failure>,
-    /// The agent's modes (e.g. plan / default / auto) and which is current.
     pub modes: Option<SessionModeState>,
-    /// The agent's session config options (e.g. model, effort).
     pub config: Vec<SessionConfigOption>,
-    /// Context used / size, in tokens, from the agent's usage updates.
     pub usage: Option<(u64, u64)>,
-    /// Slash commands the agent offers.
     pub commands: Vec<AvailableCommand>,
-    /// A /compact is running: the context used before it, for the note after.
     compacting: Option<Option<(u64, u64)>>,
-    /// The policy last sent to the runtime, and whether edits ask.
     policy_sent: (&'static str, bool),
-    /// Whether its host's runtime is one another Endeavor started that the
-    /// app can't use as it is (`older_runtime`); none until it is known.
     pub runtime_older: Option<bool>,
-    /// How the app can use its host's runtime (`older_runtime::Version`);
-    /// none until it is known.
     runtime_version: Option<crate::older_runtime::Version>,
-    /// The runtime's note still to show (after the history, for a reopened session).
     older_note: Option<String>,
-    /// The entry of the note shown for a runtime the app can't use as it is, with its text: it
-    /// gets a Restart while that runtime lasts.
     pub older_note_at: Option<(usize, SharedString)>,
-    /// The runtime's asks this session has shown or answered, so none shows twice.
     seen_asks: HashSet<u64>,
-    /// This session's asks no call waits on now (the agent stopped waiting
-    /// and was told to make the same call again later): their cards outlast the turn.
     left_up: HashSet<u64>,
-    /// Work for the workspace from an answer given outside `apply` (a click,
-    /// a key, the user's own run): taken with `take_later`.
     later: Vec<Effect>,
-    /// On a cluster: what its job asks for (from the resources chip).
     pub resources: Option<wire::slurm::Resources>,
-    /// The mode to put the agent in once it is up: the new-session screen's pick,
-    /// or the mode a reopened session was last in. The agent itself starts every
-    /// session, new or reopened, in its settings' default mode.
     pub start_mode: Option<Mode>,
-    /// The sidebar row's Tab-stop handle. Lazily created (no `App` is available
-    /// in `Session::new`'s many test call sites) and cached, so it stays stable.
     pub focus: RefCell<Option<FocusHandle>>,
-    /// The agent's prompts as Endeavor answers them: "Always this session"
-    /// rules, the queued prompts' count, when each was answered.
     pub asks: Asks,
-    /// Of each waiting run card's cells (by its call), those that went from
-    /// unrun to run some other way while it waited.
     ran_while_asked: HashMap<String, HashSet<String>>,
-    /// The open approval card's button handles, resized to match its button count.
     approval_focus: RefCell<Vec<FocusHandle>>,
-    /// The pinned plan's fold toggle's Tab-stop handle.
     pinned_plan_focus: RefCell<Option<FocusHandle>>,
-    /// The plan card's "Show the whole plan" toggle's Tab-stop handle.
     plan_card_focus: RefCell<Option<FocusHandle>>,
-    /// A folded run's header toggle, by the run's first entry index.
     run_focus: RefCell<HashMap<usize, FocusHandle>>,
-    /// An entry's own control (a tool or thought row's toggle, a message's
-    /// Copy), by its entry index.
     row_focus: RefCell<HashMap<usize, FocusHandle>>,
-    /// A changed-cells card's row, by its entry index and row number.
     changed_cell_focus: RefCell<HashMap<(usize, usize), FocusHandle>>,
-    /// A queued message's buttons (↑ ✎ ✕ ⌃, and Undo once removed), by the message's id and the button.
     queue_focus: RefCell<HashMap<(u64, &'static str), FocusHandle>>,
-    /// Each reply's parsed markdown, by its entry index (see `reply_text`).
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
 }
 
-/// A card's key in `Session::restores`: what it holds, and how many cards
-/// holding the same come before it.
 fn key_of(hash: u64, same: usize) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -521,7 +322,6 @@ fn key_of(hash: u64, same: usize) -> u64 {
     hasher.finish()
 }
 
-/// What a changed-cells card holds, as a hash (see `Session::card_key`).
 fn card_hash(cells: &[celldiff::ChangedCell]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -531,55 +331,39 @@ fn card_hash(cells: &[celldiff::ChangedCell]) -> u64 {
     hasher.finish()
 }
 
-/// Why a changed-cells card's Restore can't be pressed.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RestoreBlocked {
-    /// A later turn changed these cells (by name), and it isn't restored.
     Later(Vec<String>),
-    /// The turn changed more than one notebook.
     Notebooks,
 }
 
-/// Where a changed-cells card's Restore is.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Restore {
     Restoring,
     Restored,
-    /// Nothing was restored: these cells (by name) changed since the turn.
     Changed(Vec<String>),
-    /// Nothing was restored: the runtime's error.
     Failed(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stopped {
-    /// It was in safe preview, so Start reopens it without running.
     pub safe_preview: bool,
-    /// The runtime stopped it after this many hours idle.
     pub idle_hours: Option<u64>,
-    /// The file's modification time when it stopped: if it changed by Start, the
-    /// notebook opens in safe preview even if it was running.
     pub modified: Option<f64>,
 }
 
-/// Starting or reopening a session failed: the page in place of its transcript.
 pub struct Failure {
     pub kind: OpenFailure,
-    /// The agent's error, under Details.
     pub raw: String,
     pub details_open: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OpenFailure {
-    /// It's open in Claude Code in a terminal: open a copy here, or close it there and try again.
     InCli,
-    /// Anything else, with a plain reason when Endeavor can tell.
     Other(Option<&'static str>),
 }
 
-/// Why a session couldn't open, from the agent's error (which may wrap the
-/// CLI's stderr in JSON).
 pub fn open_failure(error: &str, agent: Agent) -> OpenFailure {
     if error.contains("running as a background session") || error.contains("claude attach") {
         return OpenFailure::InCli;
@@ -612,7 +396,6 @@ impl Failure {
         }
     }
 
-    /// The page's words, which say where the session's notebook stands.
     pub fn body(&self, notebook: Beside, agent: Agent) -> String {
         match self.kind {
             OpenFailure::InCli => "It's running in a terminal. Close it there, then Try again. Or open a copy here: it has the \
@@ -635,20 +418,14 @@ impl Failure {
     }
 }
 
-/// Where a session that couldn't open stands with its notebook.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Beside {
-    /// It's open in the pane.
     Open,
-    /// Its file is there, though it isn't open.
     Fine,
-    /// A past session with no notebook in Endeavor's record: only its history knows it.
     Unknown,
-    /// None, or its file is gone.
     Nothing,
 }
 
-/// A session title from its first message: cut at a word boundary, with "…".
 fn short_title(text: &str) -> String {
     const MAX: usize = 50;
     if text.chars().count() <= MAX {
@@ -659,16 +436,11 @@ fn short_title(text: &str) -> String {
     format!("{}…", cut.trim_end_matches([',', '.', ':', ';']))
 }
 
-/// A title from the agent, unless it is really the app's context note: without a
-/// generated title, Claude Code falls back to the prompt's text, which starts
-/// with the "[Endeavor] …" note the app sends ahead of the user's words.
 pub fn agent_title(title: &str) -> Option<&str> {
     let title = title.trim();
     (!title.is_empty() && !title.starts_with("[Endeavor]")).then_some(title)
 }
 
-/// A title an agent lists for a session it hasn't named, made from its id
-/// (Antigravity's "Session 747ec55a"): it would replace the app's own.
 pub fn placeholder_title(title: &str, id: &str) -> bool {
     title.strip_prefix("Session ").is_some_and(|rest| rest.len() >= 4 && id.starts_with(rest))
 }
@@ -769,12 +541,10 @@ impl Session {
         }
     }
 
-    /// The sidebar row's Tab-stop handle, created on first use.
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.focus.borrow_mut().get_or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// The approval card's Tab-stop handle for button `i`, growing the pool if needed.
     pub fn approval_focus(&self, i: usize, cx: &App) -> FocusHandle {
         let mut pool = self.approval_focus.borrow_mut();
         while pool.len() <= i {
@@ -783,48 +553,35 @@ impl Session {
         pool[i].clone()
     }
 
-    /// The pinned plan's fold toggle's Tab-stop handle, created on first use.
     pub fn pinned_plan_focus(&self, cx: &App) -> FocusHandle {
         self.pinned_plan_focus.borrow_mut().get_or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// The plan card's toggle's Tab-stop handle, created on first use.
     pub fn plan_card_focus(&self, cx: &App) -> FocusHandle {
         self.plan_card_focus.borrow_mut().get_or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// A folded run header's Tab-stop handle, by the run's first entry index.
     pub fn run_focus(&self, start: usize, cx: &App) -> FocusHandle {
         self.run_focus.borrow_mut().entry(start).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// An entry's own control's Tab-stop handle, by its entry index.
     pub fn row_focus(&self, ix: usize, cx: &App) -> FocusHandle {
         self.row_focus.borrow_mut().entry(ix).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// A changed-cells card's row's Tab-stop handle, by the card's entry index and row number.
     pub fn changed_cell_focus(&self, ix: usize, row: usize, cx: &App) -> FocusHandle {
         self.changed_cell_focus.borrow_mut().entry((ix, row)).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// A queued message's button's Tab-stop handle, by the message's id and the button's name.
     pub fn queue_focus(&self, id: u64, button: &'static str, cx: &App) -> FocusHandle {
         self.queue_focus.borrow_mut().entry((id, button)).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// The parsed markdown of the reply at entry `ix`, kept for as long as the
-    /// session. A `TextView`'s own state lasts only while it is drawn, and a
-    /// reply over 4 KB parses in the background, so a reply drawn from new
-    /// state is measured empty and then grows by its whole height, moving the
-    /// transcript under the reader. When a parse lands, the reply's list item
-    /// is measured again, even while it is off screen.
     pub fn reply_text(&self, ix: usize, text: &str, cx: &mut App) -> Entity<TextViewState> {
         let existing = self.replies.borrow().get(&ix).map(|(state, ..)| state.clone());
         let state = existing.unwrap_or_else(|| {
             let state = cx.new(|cx| TextViewState::markdown(text, cx));
             let list = self.list.clone();
-            // Its entry can move when a replay replaces Endeavor's copy (`keep_replies`).
             let at = Rc::new(Cell::new(ix));
             let entry = at.clone();
             let remeasure = cx.observe(&state, move |_, _| list.remeasure_items(entry.get()..entry.get() + 1));
@@ -835,12 +592,10 @@ impl Session {
         state
     }
 
-    /// Where the reply at entry `ix` was last drawn, if it has been.
     pub fn reply_bounds(&self, ix: usize, cx: &App) -> Option<Bounds<Pixels>> {
         self.replies.borrow().get(&ix).map(|(state, ..)| state.read(cx).bounds())
     }
 
-    /// The first reply with text selected in it: its entry, and the text.
     pub fn selected_reply(&self, cx: &App) -> Option<(usize, String)> {
         let replies = self.replies.borrow();
         let mut selected: Vec<(usize, String)> = replies.iter().map(|(ix, (state, ..))| (*ix, state.read(cx).selected_text())).filter(|(_, text)| !text.trim().is_empty()).collect();
@@ -848,7 +603,6 @@ impl Session {
         selected.into_iter().next().map(|(ix, text)| (ix, text.trim().to_string()))
     }
 
-    /// Starting or reopening failed: stop looking busy and say why.
     pub fn fail(&mut self, error: &str) {
         self.failed = Some(Failure { kind: open_failure(error, self.agent), raw: error.trim().to_owned(), details_open: false });
         self.outbox.busy = false;
@@ -858,9 +612,6 @@ impl Session {
         self.reloading = false;
     }
 
-    /// Open a session that couldn't be reopened (e.g. open in the CLI) as a
-    /// copy: the transcript refills from the copy's replay, and messages sent
-    /// meanwhile go once it's open.
     pub fn reopen_as_copy(&mut self) -> Option<SessionId> {
         self.failed.take()?;
         self.clear_for_replay();
@@ -868,8 +619,6 @@ impl Session {
         self.id.take()
     }
 
-    /// Try again on a session that couldn't open: it starts, or loads its
-    /// history, again. Messages sent meanwhile wait for it.
     pub fn retry_open(&mut self) {
         if self.failed.take().is_none() {
             return;
@@ -881,7 +630,6 @@ impl Session {
         self.agent_waiting = true;
     }
 
-    /// The history starts loading over: the replay so far goes (Endeavor's copy stays on show).
     fn clear_history(&mut self) {
         match &mut self.replay {
             Some(replay) => replay.clear(),
@@ -907,8 +655,6 @@ impl Session {
         }
     }
 
-    /// A past session being reopened: its id is known up front so the replayed
-    /// history (which arrives before the load completes) lands here.
     pub fn loading(key: u64, id: SessionId, place: Place, server: Option<String>, title: String) -> Self {
         let mut session = Self::new(key, place, server);
         session.id = Some(id);
@@ -918,11 +664,8 @@ impl Session {
         session
     }
 
-    /// Show Endeavor's copy of this session's transcript while its history
-    /// loads: read-only, at its end. The replay replaces it once it's all in.
     pub fn show_copy(&mut self, copy: crate::transcript_copy::Copy) {
         self.entries = copy.entries;
-        // Restores the agent hadn't heard of when the app last saved: told with the next message.
         self.restored = copy.untold;
         let keys: Vec<(usize, u64)> = self.card_keys().filter(|(ix, _)| copy.restored.contains(ix)).collect();
         for (_, key) in keys {
@@ -933,24 +676,19 @@ impl Session {
         self.list.set_follow_mode(FollowMode::Tail);
     }
 
-    /// Reopening, with Endeavor's copy of the transcript showing meanwhile.
     pub fn showing_copy(&self) -> bool {
         self.opening() && self.replay.is_some()
     }
 
-    /// The current choice of a select config option, by its display name (e.g.
-    /// "model" → "Opus 5.5").
     pub fn config_label(&self, id: &str) -> Option<String> {
         let (current, options) = self.config_choices(id)?;
         options.iter().find(|o| o.value == current).map(|o| o.name.clone())
     }
 
-    /// A select config option's current value and its choices.
     pub fn config_choices(&self, id: &str) -> Option<(SessionConfigValueId, Vec<SessionConfigSelectOption>)> {
         config_choices(&self.config, id)
     }
 
-    /// Pick a config value, showing it at once; the agent's reply confirms it.
     pub fn set_config(&mut self, id: &str, value: SessionConfigValueId) -> Vec<Effect> {
         let Some(option) = self.config.iter_mut().find(|c| c.id.to_string() == id) else { return Vec::new() };
         if let SessionConfigKind::Select(select) = &mut option.kind {
@@ -959,10 +697,6 @@ impl Session {
         vec![Effect::SetConfig(id.to_string(), value)]
     }
 
-    /// The agent's name for the current mode.
-    /// The spec's modes (docs/ui-spec.md, Composer): Plan is the agent's plan mode;
-    /// Ask to run and Auto are its auto mode with our run gate asking or not. Any
-    /// other agent mode shows under the agent's own name.
     pub fn mode_name(&self) -> Option<String> {
         let modes = self.modes.as_ref()?;
         Some(match modes.current_mode_id.to_string().as_str() {
@@ -973,8 +707,6 @@ impl Session {
         })
     }
 
-    /// The mode menu's choices: the app's modes the agent offers (see
-    /// `app_modes`), or, for an agent without plan and auto modes, its own.
     pub fn mode_choices(&self) -> Vec<ModeChoice> {
         let Some(modes) = &self.modes else { return Vec::new() };
         let has = |id: &str| modes.available_modes.iter().any(|m| m.id.to_string() == id);
@@ -988,25 +720,20 @@ impl Session {
             .collect()
     }
 
-    /// Which of `mode_choices` is current.
     pub fn current_mode(&self) -> Option<usize> {
         let current = self.modes.as_ref()?.current_mode_id.to_string();
         self.mode_choices().iter().position(|c| c.mode == current && (c.mode != "auto" || c.run_without_asking == self.run_without_asking))
     }
 
-    /// The session's mode, once the agent is up.
     pub fn mode(&self) -> Option<Mode> {
         let modes = self.modes.as_ref()?;
         Some(Mode { agent: modes.current_mode_id.to_string(), run_without_asking: self.run_without_asking })
     }
 
-    /// Switch to a mode from the menu, showing it at once.
     pub fn choose_mode(&mut self, choice: &ModeChoice) -> Vec<Effect> {
         self.set_mode(&choice.mode())
     }
 
-    /// Switch to a mode the agent offers, showing it at once; the agent confirms
-    /// with a mode update.
     fn set_mode(&mut self, target: &Mode) -> Vec<Effect> {
         let Some(modes) = self.modes.as_mut() else { return Vec::new() };
         if !modes.available_modes.iter().any(|m| m.id.to_string() == target.agent) {
@@ -1023,9 +750,6 @@ impl Session {
         effects
     }
 
-    /// ⇧⇥: Ask to run → Auto → Plan → Ask to run, showing it at once; the agent
-    /// confirms mode switches with a mode update. Agents without plan and auto
-    /// modes cycle through their own.
     pub fn cycle_mode(&mut self) -> Vec<Effect> {
         let Some(modes) = self.modes.as_mut() else { return Vec::new() };
         let has = |id: &str| modes.available_modes.iter().any(|m| m.id.to_string() == id);
@@ -1051,9 +775,6 @@ impl Session {
         effects
     }
 
-    /// The runtime policy for the current mode: plan mode is read-only there too
-    /// (Claude's plan mode only restricts its own tools, not ours); otherwise
-    /// runs ask first unless the session runs without asking.
     pub fn policy(&self) -> &'static str {
         match &self.modes {
             Some(m) if m.current_mode_id.to_string() == "plan" => "plan",
@@ -1062,22 +783,14 @@ impl Session {
         }
     }
 
-    /// Whether every change to the notebook asks first (Manual, Claude's own
-    /// default mode), whatever the agent's own settings allow: the runtime
-    /// holds those calls too.
     pub fn edits_ask(&self) -> bool {
         self.modes.as_ref().is_some_and(|m| m.current_mode_id.to_string() == "default")
     }
 
-    /// Whether the runtime holds a call to notebook tool `tool` with `input`
-    /// for the user's answer, by the session's mode.
     fn runtime_holds(&self, tool: &str, input: &serde_json::Value) -> bool {
         endeavor_mcp::asks_first(tool, input, self.policy(), self.edits_ask())
     }
 
-    /// Its host's runtime is known, and how the app can use it. One the app
-    /// can't use as it is gets a note, once; when a runtime it can use
-    /// replaces one whose note was shown, a note says so.
     pub fn runtime_build(&mut self, version: crate::older_runtime::Version) {
         if self.runtime_version == Some(version) {
             return;
@@ -1101,16 +814,11 @@ impl Session {
         }
     }
 
-    /// Whether entry `ix` is the note about a runtime the app can't use as it is, while it lasts:
-    /// it gets a Restart.
     pub fn restart_offered_at(&self, ix: usize) -> bool {
         self.runtime_older == Some(true)
             && matches!((&self.older_note_at, self.entries.get(ix)), (Some((at, text)), Some(Entry::Note(shown))) if *at == ix && text == shown)
     }
 
-    /// The agent asks the user to restart the runtime, for `reason`; `stops` says which notebooks
-    /// stop. A card asks, whatever the mode: none of the session's rules or Auto answers it. A
-    /// request already up gets the new reason and stays the one card. Its id, and the effects.
     pub fn ask_restart(&mut self, reason: &str, stops: &str, only: Option<&str>) -> (u64, Vec<Effect>) {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut input = serde_json::json!({ "reason": reason, "stops": stops });
@@ -1169,12 +877,10 @@ impl Session {
         }
     }
 
-    /// Waiting on the user to approve something.
     pub fn needs_approval(&self) -> bool {
         self.entries.iter().any(|e| matches!(e, Entry::Permission { responder: Some(_), .. }))
     }
 
-    /// The user changed a cell in this session's notebook.
     pub fn note_user_edit(&mut self, cell: String, name: Option<String>) {
         self.restoring_cells.retain(|(_, at)| at.elapsed() < Duration::from_secs(10));
         if let Some(at) = self.restoring_cells.iter().position(|(c, _)| *c == cell) {
@@ -1190,7 +896,6 @@ impl Session {
         }
     }
 
-    /// The changed-cells card at entry `ix`.
     fn card(&self, ix: usize) -> Option<&[celldiff::ChangedCell]> {
         match self.entries.get(ix) {
             Some(Entry::Changes(cells)) => Some(cells),
@@ -1198,22 +903,17 @@ impl Session {
         }
     }
 
-    /// Where the Restore of the card at entry `ix` is, once pressed.
     pub fn restore_state(&self, ix: usize) -> Option<&Restore> {
         self.restores.get(&self.card_key(ix)?)
     }
 
-    /// The changed-cells cards the user restored, by entry, for Endeavor's
-    /// copy of the transcript.
     pub fn restored_cards(&self) -> Vec<usize> {
-        // This runs at every save, so it skips the walk when nothing is restored.
         if !self.restores.values().any(|r| *r == Restore::Restored) {
             return Vec::new();
         }
         self.card_keys().filter(|(_, key)| self.restores.get(key) == Some(&Restore::Restored)).map(|(ix, _)| ix).collect()
     }
 
-    /// Every changed-cells card's entry and `card_key`, in one pass.
     fn card_keys(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
         let mut seen: HashMap<u64, usize> = HashMap::new();
         self.entries.iter().enumerate().filter_map(move |(ix, e)| match e {
@@ -1228,18 +928,12 @@ impl Session {
         })
     }
 
-    /// The changed-cells card at `ix`, for `restores`: what it holds, and how
-    /// many cards holding the same come before it (a turn can redo exactly
-    /// what an earlier, restored turn did).
     fn card_key(&self, ix: usize) -> Option<u64> {
         let hash = card_hash(self.card(ix)?);
         let same = self.entries[..ix].iter().filter(|e| matches!(e, Entry::Changes(cells) if card_hash(cells) == hash)).count();
         Some(key_of(hash, same))
     }
 
-    /// Why the card at `ix` can't be restored now, when it can't: a later
-    /// card, not yet restored, changed the same cells (restoring this one
-    /// would only meet its changes), or the turn changed more than one notebook.
     pub fn restore_blocked(&self, ix: usize) -> Option<RestoreBlocked> {
         let cells = self.card(ix)?;
         let mut notebooks = cells.iter().filter(|c| c.restore().is_some()).filter_map(|c| c.notebook.as_deref());
@@ -1261,8 +955,6 @@ impl Session {
         (!later.is_empty()).then_some(RestoreBlocked::Later(later))
     }
 
-    /// The footer of the changed-cells card at `ix`: its line, and whether
-    /// Restore can be pressed. None when the card has nothing to put back.
     pub fn restore_footer(&self, ix: usize) -> Option<(String, bool)> {
         let cells = self.card(ix)?;
         if !cells.iter().any(|c| c.restore().is_some()) {
@@ -1299,11 +991,6 @@ impl Session {
         Some((line, !matches!(self.restore_state(ix), Some(Restore::Restoring | Restore::Restored))))
     }
 
-    /// Restore on the changed-cells card at entry `ix`: the card's key, the
-    /// notebook the turn changed and what to send the runtime
-    /// (`ChangedCell::restore`), marking it under way; none if the card has
-    /// nothing to put back, can't be restored now, or a restore is under way
-    /// or done.
     pub fn start_restore(&mut self, ix: usize) -> Option<(u64, String, Vec<serde_json::Value>)> {
         let cells = self.card(ix)?;
         let key = self.card_key(ix)?;
@@ -1320,9 +1007,6 @@ impl Session {
         Some((key, notebook, restore))
     }
 
-    /// The runtime's answer to the restore of the card `key`: the cells (by
-    /// id) that changed since the turn, so nothing was restored, or its error.
-    /// A restore is noted, and the agent hears of it with the next prompt.
     pub fn finish_restore(&mut self, key: u64, answer: Result<Vec<String>, String>) {
         let Some(ix) = self.card_keys().find(|&(_, k)| k == key).map(|(ix, _)| ix) else {
             self.restores.remove(&key);
@@ -1344,7 +1028,6 @@ impl Session {
                     said.push(format!("removed {}", added.join(", ")));
                 }
                 let said = said.join(" and ");
-                // The runtime's report of each cell as the user's edit may still be on its way.
                 for (id, at) in &mut self.restoring_cells {
                     if cells.iter().any(|c| c.cell == *id) {
                         *at = Instant::now();
@@ -1357,7 +1040,6 @@ impl Session {
                 return;
             }
         };
-        // Nothing was put back, so no edit of the user's is coming from it.
         self.restoring_cells.retain(|(id, _)| !cells.iter().any(|c| c.cell == *id));
         self.restores.insert(key, state);
         self.mark(ix);
@@ -1373,8 +1055,6 @@ impl Session {
         }
     }
 
-    /// Cut each run-state note back to what `notebooks` (`list_notebooks`
-    /// shape) says is still true; whether any changed.
     pub fn refresh_run_state(&mut self, notebooks: &serde_json::Value) -> bool {
         let mut changed = Vec::new();
         for (ix, entry) in self.entries.iter_mut().enumerate() {
@@ -1399,7 +1079,6 @@ impl Session {
         self.entries.push(entry);
     }
 
-    /// When entry `ix` arrived, while it is still fading in.
     pub fn arrival(&self, ix: usize) -> Option<Instant> {
         let mut arrivals = self.arrivals.borrow_mut();
         let fade = crate::theme::motion_fast();
@@ -1407,17 +1086,14 @@ impl Session {
         arrivals.iter().find(|(i, _)| *i == ix).map(|(_, at)| *at)
     }
 
-    /// Show what has arrived in place, as when the session is shown again.
     pub fn settle_arrivals(&self) {
         self.arrivals.borrow_mut().clear();
     }
 
-    /// The list follows its end: by itself, or held by its glide.
     pub fn following(&self) -> bool {
         self.list.is_following_tail() || self.glide.borrow().holding()
     }
 
-    /// Thinking ends when anything follows it, or the turn ends.
     fn end_thought(&mut self) {
         if let Some(Entry::Thought { started: Some(started), took: took @ None, .. }) = self.entries.last_mut() {
             *took = Some(started.elapsed());
@@ -1425,8 +1101,6 @@ impl Session {
         }
     }
 
-    /// Entry `ix` (and anything after it) changed; the list re-measures it. A run
-    /// of tool calls is drawn at its first entry, so that is re-measured too.
     fn mark(&self, ix: usize) {
         let ix = ix.min(self.entries.len());
         let ix = self.entries[..ix].iter().rposition(|e| !runs::is_member(e)).map_or(0, |i| i + 1).min(ix);
@@ -1434,10 +1108,6 @@ impl Session {
         self.dirty_from.set(Some(from));
     }
 
-    /// Bring the virtual list up to date with `entries` (called before rendering).
-    /// Entries that changed in place are measured again, which keeps the
-    /// view's place in them; a splice over the view's first entry would put
-    /// the view back to that entry's top.
     pub fn sync_list(&self) {
         let Some(from) = self.dirty_from.take() else { return };
         let (old, new) = (self.list_len.get(), self.entries.len());
@@ -1453,7 +1123,6 @@ impl Session {
         self.list_len.set(new);
     }
 
-    /// Where the session stands with its notebook, for the page when it couldn't open.
     pub fn notebook_beside(&self) -> Beside {
         match (&self.notebook_path, self.missing) {
             (Some(_), false) if self.notebook.is_some() => Beside::Open,
@@ -1463,13 +1132,10 @@ impl Session {
         }
     }
 
-    /// A past session whose history hasn't loaded yet: the chat shows its
-    /// summary, and messages wait for it.
     pub fn opening(&self) -> bool {
         self.replaying && self.failed.is_none()
     }
 
-    /// The agent created this session: send whatever was queued meanwhile.
     pub fn started(&mut self, started: Started) -> Vec<Effect> {
         self.id = Some(started.id);
         self.modes = started.modes;
@@ -1478,7 +1144,6 @@ impl Session {
             self.take_replay(replay);
         } else if self.replaying {
             self.push_changes();
-            // The history shows whole, at its end, with a line between it and what comes now.
             if !self.entries.is_empty() {
                 self.push(Entry::Reopened(SystemTime::now()));
             }
@@ -1502,11 +1167,8 @@ impl Session {
         effects
     }
 
-    /// The replay has all arrived: it replaces the copy on show, and the view
-    /// keeps its place (see `transcript_copy::merge`).
     fn take_replay(&mut self, replay: Vec<Entry>) {
         self.replay = Some(replay);
-        // The last turn's card, as a reopen without a copy gets.
         self.in_replay(Session::push_changes);
         let replay = self.replay.take().unwrap_or_default();
         let top = self.list.logical_scroll_top();
@@ -1517,7 +1179,6 @@ impl Session {
         match merged.swap {
             Swap::Same => {}
             Swap::Added { messages } => {
-                // Not even at the end: a reply measures short until its text is laid out.
                 self.list.set_follow_mode(FollowMode::Normal);
                 self.list.scroll_to(top);
                 self.mark(len);
@@ -1534,7 +1195,6 @@ impl Session {
                 self.below.set(Some(Below::Changed));
             }
         }
-        // One line between the history and what comes now: a reopen with no turn since moves it.
         match self.entries.last_mut() {
             Some(Entry::Reopened(at)) => {
                 *at = SystemTime::now();
@@ -1544,9 +1204,6 @@ impl Session {
         }
     }
 
-    /// The replies laid out from the copy (`old`: their entries and texts)
-    /// keep their laid-out text where the same reply is now, so they keep
-    /// their height and the view its place.
     fn keep_replies(&mut self, old: &[(usize, String)]) {
         let mut laid_out = std::mem::take(self.replies.get_mut());
         let mut taken = HashSet::new();
@@ -1561,10 +1218,8 @@ impl Session {
         }
     }
 
-    /// Run `f` on the replay's entries while the copy shows, else on the transcript.
     fn in_replay<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         let Some(mut replay) = self.replay.take() else { return f(self) };
-        // The list shows the copy: what the replay changes isn't on screen.
         let dirty = self.dirty_from.get();
         std::mem::swap(&mut self.entries, &mut replay);
         let result = f(self);
@@ -1574,13 +1229,11 @@ impl Session {
         result
     }
 
-    /// Send or queue a message. Before the session exists everything queues.
     pub fn submit(&mut self, mut message: Queued, now: bool) -> Vec<Effect> {
         if self.failed.is_some() {
             self.note("This session isn't open, so nothing was sent");
             return Vec::new();
         }
-        // A command goes alone; the context waits for the next message.
         if !crate::slash::is_command(&message.text)
             && let Some(context) = self.start_context.take()
         {
@@ -1588,20 +1241,17 @@ impl Session {
         }
         self.title_from(&message.text);
         let mut effects = Vec::new();
-        // A reopened session has its id while its history loads, but nothing goes until it's open.
         let dispatch = self.outbox.submit(message, now && self.id.is_some() && !self.replaying);
         self.dispatch(dispatch, &mut effects);
         effects
     }
 
-    /// ✎ on queued message `ix`: its words and chips, for the composer.
     pub fn begin_edit(&mut self, ix: usize) -> Option<(String, Vec<Attachment>)> {
         let edit = self.outbox.begin_edit(ix);
         self.queue_open = None;
         edit
     }
 
-    /// Run one of the outbox's queue actions and send what it starts.
     pub fn queue_action(&mut self, act: impl FnOnce(&mut Outbox) -> Option<Dispatch>) -> Vec<Effect> {
         let mut effects = Vec::new();
         let dispatch = act(&mut self.outbox);
@@ -1609,12 +1259,10 @@ impl Session {
         effects
     }
 
-    /// Whether queued message `ix` can be sent now (its ↑): only once the session is open.
     pub fn can_send_now(&self, ix: usize) -> bool {
         self.id.is_some() && !self.replaying && !self.agent_waiting && self.outbox.can_send_now(ix)
     }
 
-    /// A queued message's files are copied (see `Outbox::copied`).
     pub fn copied(&mut self, ticket: Copying, done: Option<(Vec<Attachment>, Vec<ContentBlock>)>) -> Vec<Effect> {
         let mut effects = Vec::new();
         let dispatch = self.outbox.copied(ticket, done);
@@ -1648,13 +1296,10 @@ impl Session {
             self.push(Entry::User { text: text.into(), expanded: false, attachments, delivery, sent: Some(SystemTime::now()) });
             self.turn_entry = Some(self.entries.len() - 1);
             self.busy_since.get_or_insert_with(Instant::now);
-            // Sending jumps back to the bottom even if the user had scrolled up;
-            // while following, the view eases there.
             if !self.following() {
                 self.list.set_follow_mode(FollowMode::Tail);
             }
         } else if again {
-            // The unanswered message went again: its bubble is already there.
             self.turn_entry = self.unanswered.take();
             if let Some(ix) = self.turn_entry {
                 self.mark(ix);
@@ -1663,12 +1308,10 @@ impl Session {
         }
     }
 
-    /// Claude can't be reached: messages queue until `release`.
     pub fn hold(&mut self) {
         self.outbox.hold();
     }
 
-    /// Claude can be reached again: the unanswered message goes first, then the queue.
     pub fn release(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
         if self.outbox.held && self.id.is_some() {
@@ -1680,8 +1323,6 @@ impl Session {
         effects
     }
 
-    /// The turn got no answer because Claude couldn't be reached: its message
-    /// stays, marked, and goes again on `release`.
     fn turn_unanswered(&mut self) {
         self.outbox.turn_unanswered();
         self.unanswered = self.turn_entry.take().or(self.unanswered);
@@ -1702,7 +1343,6 @@ impl Session {
 
     fn apply_now(&mut self, event: SessionEvent) -> Vec<Effect> {
         let mut effects = Vec::new();
-        // The transcript already has what a reload replays.
         if self.reloading && matches!(event, SessionEvent::Update(_)) {
             return effects;
         }
@@ -1715,7 +1355,6 @@ impl Session {
                     self.outbox.pause(Paused::Error);
                     self.errored = true;
                 } else if let Some(note) = turn_ended_note(reason, self.agent).filter(|_| !stopped_for_next) {
-                    // Stopped to send the next message: its bubble says so.
                     self.note(note);
                 }
                 if reason == StopReason::Cancelled && !stopped_for_next {
@@ -1754,8 +1393,6 @@ impl Session {
             SessionEvent::Permission(request, responder) => {
                 let fields = &request.tool_call.fields;
                 let (title, input) = self.permission_input(&request);
-                // Only runs get the run card ("Always this session"); other notebook
-                // prompts (e.g. Manual asking before an edit) get the agent's options.
                 let input = input.unwrap_or_default();
                 let kind = fields.kind;
                 let path = fields.locations.as_ref().and_then(|l| l.first()).map(|l| l.path.clone());
@@ -1801,10 +1438,6 @@ impl Session {
         effects
     }
 
-    /// The turn failed. The reply that only repeats the error goes. Held
-    /// because Claude is out of reach, signed out or at its usage limit, the
-    /// message waits to go again; otherwise a card says why, where the reply
-    /// would have been, with Try again, or Continue for a reply that had begun.
     pub fn turn_failed(&mut self, trouble: crate::trouble::Trouble, error: &str) -> Vec<Effect> {
         use crate::trouble::Trouble;
         let said = error.trim().strip_prefix("Internal error: ").unwrap_or(error.trim());
@@ -1848,13 +1481,10 @@ impl Session {
         effects
     }
 
-    /// Claude said or did something in this turn.
     fn replied(&self) -> bool {
         self.entries.iter().skip(self.turn_start() + 1).any(|e| matches!(e, Entry::Agent { .. } | Entry::Tool { .. }))
     }
 
-    /// Try again on the card at `ix`: its message goes again, first, without a
-    /// second bubble, and the card goes.
     pub fn try_again(&mut self, ix: usize) -> Vec<Effect> {
         let mut effects = Vec::new();
         let Some(Entry::Failed(failed)) = self.entries.get_mut(ix) else { return effects };
@@ -1871,7 +1501,6 @@ impl Session {
         effects
     }
 
-    /// Continue on the card or note at `ix`: a new message asks Claude to pick up where it stopped.
     pub fn continue_reply(&mut self, ix: usize) -> Vec<Effect> {
         let Some(Entry::Failed(failed)) = self.entries.get_mut(ix) else { return Vec::new() };
         if failed.used || matches!(failed.kind, FailedKind::NoAnswer { .. }) {
@@ -1890,10 +1519,6 @@ impl Session {
         }
     }
 
-    /// Claude's process stopped. A reply under way is cut off (said so once
-    /// it's back), the agent's open prompts can't be answered any more, and
-    /// the session opens again, in its mode, once Claude is back; until then
-    /// messages queue.
     pub fn agent_stopped(&mut self) {
         if self.failed.is_some() {
             return;
@@ -1910,7 +1535,6 @@ impl Session {
         self.end_thought();
         self.outbox.restart();
         self.agent_waiting = true;
-        // A load cut short starts over; a loaded transcript stays and its replay is skipped.
         if self.replaying {
             self.clear_history();
         } else {
@@ -1921,8 +1545,6 @@ impl Session {
         }
     }
 
-    /// The end-of-turn card for the turn's edits since it began (or since its
-    /// last card), when they changed any cell.
     fn push_changes(&mut self) {
         let last_card = self.entries.iter().rposition(|e| matches!(e, Entry::Changes(_))).map_or(0, |ix| ix + 1);
         let from = last_card.max(self.turn_start());
@@ -1944,13 +1566,11 @@ impl Session {
         let next = self.outbox.turn_ended();
         let idle = next.is_none();
         if idle {
-            // The pinned plan folds back into the transcript.
             if let Some(ix) = self.pinned_plan() {
                 self.mark(ix);
             }
             self.busy_since = None;
             self.end_thought();
-            // A run still going folds away its live row.
             self.mark(self.entries.len());
         }
         self.dispatch(next, effects);
@@ -1961,10 +1581,7 @@ impl Session {
 
     fn apply_update(&mut self, update: SessionUpdate, effects: &mut Vec<Effect>) {
         match update {
-            // Only while replaying history: live messages are already in the transcript.
             SessionUpdate::UserMessageChunk(chunk) if self.replaying => {
-                // What the app added comes back as chips where it can (images and
-                // text files carry their contents), else not at all.
                 let (text, attachment) = match chunk.content {
                     ContentBlock::Text(t) => match attach::replayed_text_file(&t.text)
                         .or_else(|| attach::replayed_notebook(&t.text))
@@ -1974,8 +1591,6 @@ impl Session {
                         Some(attachment) => (None, Some(attachment)),
                         None => match attach::without_agent_blocks(&t.text) {
                             text if text.is_empty() || attach::is_app_text(&text) => return,
-                            // Claude Code's own marker for a turn it stopped mid-flight: not
-                            // the user's words, so replay shows the same note a live stop does.
                             text if attach::is_stopped_marker(&text) => {
                                 self.push_changes();
                                 return self.note(turn_ended_note(StopReason::Cancelled, self.agent).unwrap_or_default());
@@ -1984,7 +1599,6 @@ impl Session {
                         },
                     },
                     ContentBlock::Image(image) => {
-                        // A figure's or box's picture follows its quote.
                         if let Some(Entry::User { attachments, .. }) = self.entries.last_mut()
                             && let Some(Attachment::Quote(Quote { from: Quoted::Cell { part: Part::Figure(png), .. } | Quoted::Box { png, .. }, .. })) = attachments.last_mut()
                             && png.is_empty()
@@ -2009,7 +1623,6 @@ impl Session {
                         attachments.extend(attachment);
                     }
                     _ => {
-                        // Replayed history has no turn ends: the next message marks one.
                         self.push_changes();
                         self.push(Entry::User { text: text.unwrap_or_default().into(), expanded: false, attachments: attachment.into_iter().collect(), delivery: Delivery::Turn, sent: None })
                     }
@@ -2040,7 +1653,6 @@ impl Session {
                     self.mark(self.entries.len() - 1);
                 }
             }
-            // One plan per turn, updated in place.
             SessionUpdate::Plan(plan) => match self.turn_plan() {
                 Some(ix) => {
                     self.entries[ix] = Entry::Plan(plan.entries);
@@ -2065,13 +1677,9 @@ impl Session {
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 match self.on_tool_update(update, effects) {
-                    // History, not a live close: the notebook it closed died with an earlier Julia.
                     Some(Arrived::Closed(id, path)) if !self.replaying => effects.push(Effect::NotebookClosed { id, path }),
                     Some(Arrived::Closed(..)) | None => {}
                     Some(Arrived::Opened(id, path)) => if self.replaying {
-                        // History, not a live open: that id belongs to an earlier Julia.
-                        // The notebook Endeavor recorded wins over the history's: the
-                        // user may have located the file since Claude last opened it.
                         if self.notebook_path.is_none() {
                             self.replayed_path = path.or(self.replayed_path.take());
                         }
@@ -2088,7 +1696,6 @@ impl Session {
             }
             SessionUpdate::ConfigOptionUpdate(update) => {
                 self.config = update.config_options;
-                // The agent confirms a mode switch through its "mode" config option.
                 if let (Some(modes), Some(mode)) = (&mut self.modes, config_value(&self.config, "mode")) {
                     modes.current_mode_id = mode.to_string().into();
                 }
@@ -2112,13 +1719,6 @@ impl Session {
         }
     }
 
-    /// The title and input a permission request names. Cursor's request
-    /// carries no `rawInput`, only the arguments as a fenced json block in
-    /// `content`, and Codex's carries only the call's id; the call itself
-    /// arrived first (Cursor's tool_call_update, Codex's tool_call), named
-    /// by [`celldiff::name_notebook_call`] onto its recorded [`Entry::Tool`],
-    /// so a request that doesn't name a notebook tool, or has no input,
-    /// takes those.
     fn permission_input(&self, request: &RequestPermissionRequest) -> (String, Option<serde_json::Value>) {
         let fields = &request.tool_call.fields;
         let (mut title, mut input) = (fields.title.clone().unwrap_or_else(|| "Tool call".into()), fields.raw_input.clone());
@@ -2136,10 +1736,6 @@ impl Session {
         (title, input)
     }
 
-    /// Apply a tool-call update; on a completed notebook call, learn cell code
-    /// and diff edits. Returns the notebook the agent just opened, created or closed. A finished notebook call whose output isn't the
-    /// tool's result (Cursor sends only `{"success": true}`) asks the runtime
-    /// for it instead. The guide's result is text, not JSON.
     fn on_tool_update(&mut self, update: ToolCallUpdate, effects: &mut Vec<Effect>) -> Option<Arrived> {
         let ix = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if *id == update.tool_call_id))?;
         self.mark(ix);
@@ -2176,8 +1772,6 @@ impl Session {
         self.result_arrived(ix)
     }
 
-    /// The result of the notebook call at `ix` is in its output: learn cell
-    /// code, diff its edits, and say which notebook it opened, created or closed.
     fn result_arrived(&mut self, ix: usize) -> Option<Arrived> {
         let Some(Entry::Tool { title, status, input, output, diffs, .. }) = self.entries.get_mut(ix) else { return None };
         let tool = celldiff::notebook_tool(title).filter(|_| *status == ToolCallStatus::Completed)?;
@@ -2197,8 +1791,6 @@ impl Session {
         }
     }
 
-    /// The runtime's copy of call `call`'s result (`{content, isError}`), which
-    /// the agent didn't pass on: it becomes the call's output, as if it had.
     pub fn result_fetched(&mut self, call: &ToolCallId, result: serde_json::Value) -> Vec<Effect> {
         let Some(ix) = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if id == call)) else { return Vec::new() };
         if let Entry::Tool { status, output, .. } = &mut self.entries[ix] {
@@ -2215,7 +1807,6 @@ impl Session {
         }
     }
 
-    /// Open or fold the run of tool calls starting at `ix`.
     pub fn toggle_run(&mut self, ix: usize) {
         let first = runs::run_at(&self.entries, ix)
             .and_then(|run| self.entries[run].iter().find_map(|e| if let Entry::Tool { id, .. } = e { Some(id.clone()) } else { None }));
@@ -2234,9 +1825,6 @@ impl Session {
         }
     }
 
-    /// What the agent is doing, for the working line: this turn's latest running tool
-    /// call in the folded runs' words, else thinking or working. The second part
-    /// (a cell or file name) is code-like.
     pub(crate) fn activity(&self) -> (String, Option<String>) {
         let turn_start = self.turn_start();
         let running = self.entries[turn_start..].iter().rev().find_map(|e| match e {
@@ -2262,41 +1850,27 @@ impl Session {
         }
     }
 
-    /// Where the current turn starts: its user message. A message that joined
-    /// the turn is part of it.
     fn turn_start(&self) -> usize {
         self.entries.iter().rposition(|e| matches!(e, Entry::User { delivery, .. } if *delivery != Delivery::Joined)).unwrap_or(0)
     }
 
-    /// This turn's plan entry: the agent updates it in place.
     fn turn_plan(&self) -> Option<usize> {
         let turn_start = self.turn_start();
         self.entries[turn_start..].iter().position(|e| matches!(e, Entry::Plan(_))).map(|offset| turn_start + offset)
     }
 
-    /// While a turn runs, its plan is pinned above the composer instead of in the transcript.
     pub fn pinned_plan(&self) -> Option<usize> {
         self.busy_since.and(self.turn_plan())
     }
 
-    /// The permission request waiting for an answer, if any: the first of
-    /// those waiting, which the card shows.
     pub fn pending_permission(&self) -> Option<usize> {
         self.waiting_prompts().first().copied()
     }
 
-    /// Every prompt waiting for an answer, in the order they came.
     pub fn waiting_prompts(&self) -> Vec<usize> {
         self.entries.iter().enumerate().filter(|(_, e)| matches!(e, Entry::Permission { responder: Some(_), .. })).map(|(ix, _)| ix).collect()
     }
 
-    /// Prompts the agent no longer waits on (its turn ended, its process
-    /// stopped): their cards go, and a note says which went unanswered. A
-    /// run the runtime still holds is denied, so it can't happen after the
-    /// turn: an agent that gives up waiting and ends its turn (Codex, after
-    /// about two minutes) never cancels the call itself. A runtime ask no
-    /// call waits on stays up (`keep_left_up`, unless the user stopped the
-    /// turn): the runtime keeps the answer for the agent's same call later.
     fn drop_prompts(&mut self, keep_left_up: bool) {
         let agent = self.agent.name();
         let mut notes = Vec::new();
@@ -2316,7 +1890,6 @@ impl Session {
                         self.later.push(Effect::AnswerRun { ask, allow: false, user_ran: Vec::new(), packages: None });
                         notes.extend(heading.map(|h| format!("{agent} stopped waiting for your answer to “{h}”")));
                     }
-                    // Its Restart still restarts after the turn: the user's press is what restarts.
                     Some(Asker::Restart(id)) if keep_left_up => {
                         *responder = Some(Asker::Restart(id));
                         continue;
@@ -2336,9 +1909,6 @@ impl Session {
         self.asks.forget_batch();
     }
 
-    /// Fix with Claude / Explain asks from the notebook's error boxes that are
-    /// under way: (cell, "fix" | "explain", queued). The running turn's, if it
-    /// is one, then those waiting in the queue.
     pub fn error_asks(&self) -> Vec<(String, &'static str, bool)> {
         let ask = |text: &str, attachments: &[Attachment], queued: bool| {
             let kind = if text == crate::annotate::EXPLAIN_ERROR { "explain" } else { "fix" };
@@ -2357,8 +1927,6 @@ impl Session {
         asks
     }
 
-    /// Scroll the transcript to the running turn's message, when it is the
-    /// error ask about `cell`.
     pub fn show_error_ask(&mut self, cell: &str) {
         if self.error_asks().iter().any(|(id, _, queued)| id == cell && !queued) {
             self.list.set_follow_mode(FollowMode::Normal);
@@ -2366,7 +1934,6 @@ impl Session {
         }
     }
 
-    /// Take the queued error ask about `cell` out of the queue.
     pub fn cancel_error_ask(&mut self, cell: &str) {
         let about = |q: &crate::outbox::Queued| q.attachments.iter().any(|a| matches!(a, Attachment::Error { cell: c, .. } if c.id == cell));
         if let Some(ix) = self.outbox.items.iter().position(|q| !q.in_flight() && about(q)) {
@@ -2374,13 +1941,10 @@ impl Session {
         }
     }
 
-    /// The agent is asking to let the notebook run ("Let this notebook run?").
     pub fn asking_to_run(&self) -> bool {
         self.pending_permission().is_some_and(|ix| matches!(&self.entries[ix], Entry::Permission { tool: Some(tool), .. } if tool == "allow_execution"))
     }
 
-    /// Answer the pending request by kind (keys: ⏎ allow, ⌘⏎ always this
-    /// session, Esc deny). For a plan: ⏎ starts (asking before runs), ⌘⏎ starts in Auto.
     pub fn answer_pending(&mut self, kind: PermissionOptionKind, scope: Scope) -> bool {
         let Some(ix) = self.pending_permission() else { return false };
         let Entry::Permission { options, plan, .. } = &self.entries[ix] else { return false };
@@ -2393,12 +1957,6 @@ impl Session {
         true
     }
 
-    /// Run anyway, in the page, when the user's own run reaches `cells` (each
-    /// with its `last_run` before that run) that cards ask to run: allow each
-    /// waiting card asking about any of them, as its Run button does. The
-    /// runtime's cards carry the cells in their answer, so the runtime doesn't
-    /// run them again; the agent's own (on an older runtime) only with
-    /// `agent`, once the app told the runtime itself. How many it answered.
     pub fn allow_runs_of(&mut self, cells: &[(String, f64)], agent: bool) -> usize {
         let ids: Vec<String> = cells.iter().map(|(id, _)| id.clone()).collect();
         let asking = self.prompts_running(&self.waiting_prompts(), &ids);
@@ -2416,21 +1974,15 @@ impl Session {
         answered
     }
 
-    /// Whether an agent's own card (on an older runtime) asks to run any of `cells`.
     pub fn agent_asks_to_run(&self, cells: &[String]) -> bool {
         let agents: Vec<usize> = self.waiting_prompts().into_iter().filter(|ix| matches!(&self.entries[*ix], Entry::Permission { responder: Some(Asker::Agent(_)), .. })).collect();
         !self.prompts_running(&agents, cells).is_empty()
     }
 
-    /// Of `prompts`, those asking to run any of `cells`.
     fn prompts_running(&self, prompts: &[usize], cells: &[String]) -> Vec<usize> {
         prompts.iter().copied().filter(|ix| crate::approval::run_cells_at(self, *ix).iter().any(|c| cells.contains(c))).collect()
     }
 
-    /// `ran`: cells that were unrun and have run since, some way other than
-    /// the agent's call (the user's run reached them without asking first).
-    /// A card asking to run cells that have all run while it waited is
-    /// answered as allowed, with a note; the runtime doesn't run them again.
     pub fn cells_ran(&mut self, ran: &[String]) {
         for ix in self.ran_cards(&self.waiting_prompts(), ran) {
             let names = crate::approval::heading_names_at(self, ix);
@@ -2442,9 +1994,6 @@ impl Session {
         }
     }
 
-    /// Of `prompts`, the run cards (an `execute_cell` or `submit_changes` of
-    /// cells the agent had already changed) whose cells have all run while
-    /// they waited, counting `ran` now.
     fn ran_cards(&mut self, prompts: &[usize], ran: &[String]) -> Vec<usize> {
         let mut done = Vec::new();
         let mut waiting = HashSet::new();
@@ -2476,16 +2025,10 @@ impl Session {
         }
     }
 
-    /// Answer a permission request with `option`. `Scope::Session` remembers a
-    /// rule for this session (for runs and plans: runs stop asking). It answers
-    /// only this prompt: those already waiting stay questions of their own, and
-    /// only prompts that arrive later are answered by the rule.
     pub fn answer(&mut self, ix: usize, option: &PermissionOption, scope: Scope) {
         self.answer_with(ix, option, scope, Vec::new());
     }
 
-    /// `answer`, telling the runtime which cells the user's own run reached
-    /// meanwhile (`user_ran`), for a run it holds.
     fn answer_with(&mut self, ix: usize, option: &PermissionOption, scope: Scope, user_ran: Vec<(String, f64)>) {
         let Some(Entry::Permission { responder, tool, preview, .. }) = self.entries.get_mut(ix) else { return };
         let Some(asker) = responder.take() else { return };
@@ -2499,9 +2042,6 @@ impl Session {
             Asker::Runtime(ask) => {
                 let allow = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
                 self.later.push(Effect::AnswerRun { ask, allow, user_ran, packages: allow.then_some(shown).flatten() });
-                // A card kept past the turn: nothing runs until the agent makes the call again, so
-                // "Go ahead" asks it to (queued while Claude restarts). A message of the user's
-                // already waiting goes instead, and may wait on Send next, so a note says so.
                 if allow && self.left_up.contains(&ask) && self.busy_since.is_none() {
                     self.record_answer(ix, option, scope);
                     if self.outbox.items.is_empty() {
@@ -2517,29 +2057,17 @@ impl Session {
             Asker::Restart(id) => {
                 let restart = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
                 self.later.push(Effect::AnswerRestart { id, restart });
-                // Once, whatever the button: a restart is never a rule for the session.
                 return self.record_answer(ix, option, Scope::Once);
             }
         }
         self.record_answer(ix, option, scope);
     }
 
-    /// What answers given outside `apply` left for the workspace to do.
     pub fn take_later(&mut self) -> Vec<Effect> {
         std::mem::take(&mut self.later)
     }
 
-    /// The option that lets the agent's own prompt for notebook call `title`
-    /// through at once, with no card and no mark on its row, when the runtime
-    /// (from the app's build) decides instead. A call it holds by the
-    /// session's mode (`runtime_holds`) gets the runtime's card. For an agent
-    /// that asks before every notebook write (Codex), a call the runtime
-    /// doesn't hold goes through too: the mode doesn't ask about it.
-    /// Only a title that names a notebook tool exactly is let through: a
-    /// shell command's title is its command line, which the model writes.
-    /// (Its kind can't decide it: Codex marks its notebook calls `execute`.)
     fn runtime_asks_instead<'a>(&self, title: &str, input: &serde_json::Value, plan: bool, options: &'a [PermissionOption]) -> Option<&'a PermissionOption> {
-        // The app's own card asks about a restart (`ask_restart`), whatever the runtime and the mode.
         if celldiff::notebook_tool(title) == Some(endeavor_mcp::REQUEST_RESTART) {
             return option_of_kind(options, PermissionOptionKind::AllowOnce);
         }
@@ -2548,15 +2076,10 @@ impl Session {
         option_of_kind(options, PermissionOptionKind::AllowOnce).filter(|_| decides)
     }
 
-    /// The runtime's calls waiting for an answer (its event's `asks`): each
-    /// new one of this session's gets a run card, or an edit card for an edit
-    /// held in Manual. A card whose ask has gone (the agent gave up on the
-    /// call) goes too, with a note.
     pub fn runtime_asks_now(&mut self, asks: &[serde_json::Value]) -> Vec<Effect> {
         let key = self.key.to_string();
         let mine: Vec<&serde_json::Value> = asks.iter().filter(|a| a["owner"] == key.as_str()).collect();
         let waiting: HashSet<u64> = mine.iter().filter_map(|a| a["id"].as_u64()).collect();
-        // An older runtime doesn't say, and its asks always have a call waiting.
         self.left_up = mine.iter().filter(|a| a["waiting"] == false).filter_map(|a| a["id"].as_u64()).collect();
         let gone: Vec<usize> = self
             .entries
@@ -2583,10 +2106,6 @@ impl Session {
         effects
     }
 
-    /// A card for the runtime's ask `id`: a run card for a call that runs
-    /// code, else the edit card the agent's own prompt would get. Answered at
-    /// once as the agent's prompt would be: a run once runs stop asking, an
-    /// edit by an "Always this session" rule.
     fn runtime_ask(&mut self, id: u64, ask: &serde_json::Value) -> Vec<Effect> {
         let tool = ask["tool"].as_str().unwrap_or_default().to_owned();
         let input = ask["arguments"].clone();
@@ -2626,9 +2145,6 @@ impl Session {
         effects
     }
 
-    /// The tool call an ask is about: the id the agent's client gave it, else
-    /// the latest call under way to the same tool with the same arguments,
-    /// else one made up (its answer then shows as a note).
     fn asked_call(&self, id: u64, ask: &serde_json::Value, tool: &str, input: &serde_json::Value) -> ToolCallId {
         if let Some(call) = ask["call_id"].as_str() {
             return ToolCallId::new(call);
@@ -2644,9 +2160,6 @@ impl Session {
             .unwrap_or_else(|| ToolCallId::new(format!("ask-{id}")))
     }
 
-    /// How a prompt arriving now is answered without a card: in Auto for
-    /// runs, by an "Always this session" rule for the agent's own prompts.
-    /// A large download (`approve_install`) always gets its card.
     fn answer_on_arrival(&self, asked: &Asked, runs_code: bool, plan: bool) -> Option<Approval> {
         match () {
             _ if plan || celldiff::notebook_tool(asked.title) == Some("approve_install") => None,
@@ -2655,8 +2168,6 @@ impl Session {
         }
     }
 
-    /// An answer given to prompt `ix`, once its responder has it: its row, the
-    /// batch count, and the rule or mode "Always this session" sets.
     fn record_answer(&mut self, ix: usize, option: &PermissionOption, scope: Scope) {
         let Some(Entry::Permission { call, title, input, runs_code, plan, options, kind, path, .. }) = self.entries.get(ix) else { return };
         let allowed = matches!(option.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways);
@@ -2678,8 +2189,6 @@ impl Session {
         }
     }
 
-    /// Show an answer on its call's row; a prompt with no call in the
-    /// transcript gets a note instead.
     fn approve(&mut self, call: &ToolCallId, approval: Approval, title: &str, input: &serde_json::Value) {
         let found = self.entries.iter().rposition(|e| matches!(e, Entry::Tool { id, .. } if id == call));
         match found {
@@ -2694,9 +2203,6 @@ impl Session {
     }
 }
 
-/// The note for a turn that ended before Claude finished, in plain words.
-/// Notes read as labels: one clause, no full stop.
-/// The quiet line after a /compact: "Conversation summarized. Context 62% → 11%."
 fn compacted_note(before: Option<(u64, u64)>, after: Option<(u64, u64)>) -> String {
     let percent = |(used, size): (u64, u64)| (size > 0).then(|| used * 100 / size);
     match (before.and_then(percent), after.and_then(percent)) {
@@ -2716,8 +2222,6 @@ pub(crate) fn turn_ended_note(reason: StopReason, agent: Agent) -> Option<&'stat
     })
 }
 
-/// The note for an answer to a prompt whose call isn't in the transcript:
-/// "Allowed: edit a cell", "Denied: run 2 cells".
 pub(crate) fn answer_note(approval: Approval, what: &str) -> String {
     let answer = match approval {
         Approval::Allowed | Approval::Started | Approval::StartedInAuto => "Allowed",
@@ -2729,7 +2233,6 @@ pub(crate) fn answer_note(approval: Approval, what: &str) -> String {
     format!("{answer}: {what}")
 }
 
-/// The answer a prompt's row shows, from what the user picked.
 pub(crate) fn answer_approval(allowed: bool, plan: bool, scope: Scope) -> Approval {
     match (allowed, plan, scope) {
         (false, true, _) => Approval::KeptPlanning,
@@ -2742,7 +2245,6 @@ pub(crate) fn answer_approval(allowed: bool, plan: bool, scope: Scope) -> Approv
     }
 }
 
-/// The current value of a select config option, by id.
 fn config_value<'a>(config: &'a [SessionConfigOption], id: &str) -> Option<&'a SessionConfigValueId> {
     config.iter().find(|c| c.id.to_string() == id).and_then(|c| match &c.kind {
         SessionConfigKind::Select(select) => Some(&select.current_value),
@@ -2750,13 +2252,8 @@ fn config_value<'a>(config: &'a [SessionConfigOption], id: &str) -> Option<&'a S
     })
 }
 
-/// The adapters' plan-approval option ids, best first: claude-agent-acp's
-/// (permissions/options), then codex-acp's. Starting means the agent's auto
-/// mode (Codex: out of its plan collaboration mode); whether runs ask is ours
-/// (Start: Ask to run; Start in Auto: runs without asking).
 const PLAN_START: [&str; 4] = ["exit-plan-auto", "exit-plan-accept-edits", "exit-plan-default", "implement_plan"];
 
-/// Plan mode's end, by its options.
 fn is_plan_approval(options: &[PermissionOption]) -> bool {
     options.iter().any(|o| o.option_id.to_string().starts_with("exit-plan-")) || plan_option(options).is_some()
 }
@@ -2769,11 +2266,6 @@ pub(crate) fn option_of_kind(options: &[PermissionOption], kind: PermissionOptio
     options.iter().find(|o| o.kind == kind)
 }
 
-/// A cell's name wherever the user sees one: its first line's comment
-/// (`comment_name`), else what it defines (`model(S, p) = …`
-/// → `model`), a markdown cell's first heading or words, "plot" for a cell that
-/// draws one, "text" for one that builds Markdown, a `let` or `begin` block's last value, else its first line of
-/// code; cut to `LABEL_MAX` characters.
 pub(crate) fn cell_label(code: &str) -> String {
     let label = match markdown_text(code) {
         Some(text) => {
@@ -2796,25 +2288,17 @@ pub(crate) fn cell_label(code: &str) -> String {
 
 const LABEL_MAX: usize = 28;
 
-/// A name the cell gives itself: its first line, when that is a `# ` comment
-/// in words (`# Growth curves by strain`), not code commented out.
 fn comment_name(code: &str) -> Option<&str> {
     let text = code.lines().map(str::trim).find(|l| !l.is_empty())?.strip_prefix("# ")?.trim();
     (!text.is_empty() && !looks_like_code(text)).then_some(text)
 }
 
-/// Whether text reads as code rather than words: it starts with a call
-/// (`plot(t, y)`, `Base.show(x)`), or has `=` or `<-`, or starts with
-/// `using`, `import` or `library(`. A call later on, as in "Plot of sin(x)",
-/// is words.
 pub(crate) fn looks_like_code(text: &str) -> bool {
     let callee = text.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '!');
     let call = callee.len() < text.len() && callee.starts_with('(');
     call || text.contains('=') || text.contains("<-") || ["using ", "import ", "library("].iter().any(|k| text.starts_with(k))
 }
 
-/// What code defines, from its first line of code: `x = …` → `x`. A Pluto
-/// `begin` block is named by its first line inside.
 fn defined_name(code: &str) -> Option<String> {
     let mut lines = code_lines(code);
     let line = lines.next().filter(|l| *l != "begin").or_else(|| lines.next())?;
@@ -2823,7 +2307,6 @@ fn defined_name(code: &str) -> Option<String> {
         return (!name.is_empty()).then_some(name);
     }
     let (lhs, rhs) = line.split_once('=')?;
-    // `f(x, k=1)` and `a == b` assign nothing.
     if rhs.starts_with('=') || lhs.matches('(').count() != lhs.matches(')').count() {
         return None;
     }
@@ -2832,10 +2315,6 @@ fn defined_name(code: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// A name for code of more than one line that defines nothing (a single line
-/// names itself): "plot" when it calls a plotting
-/// function, "text" when it builds Markdown, else a `let` or `begin` block's
-/// last value when that's a name or a tuple of names (`t, y`).
 fn inferred_name(code: &str) -> Option<String> {
     if code_lines(code).nth(1).is_none() {
         return None;
@@ -2861,13 +2340,11 @@ fn inferred_name(code: &str) -> Option<String> {
         return None;
     }
     let last = lines[lines.len() - 2];
-    // `end` closes an inner block; it names nothing.
     const KEYWORDS: [&str; 5] = ["end", "nothing", "true", "false", "missing"];
     let names = last.split(',').map(str::trim).all(|n| !n.is_empty() && !KEYWORDS.contains(&n) && n.chars().all(|c| c.is_alphanumeric() || c == '_'));
     names.then(|| last.to_owned())
 }
 
-/// Code's lines, trimmed, without blank lines, `#` comments and `#= … =#` blocks.
 fn code_lines(code: &str) -> impl Iterator<Item = &str> {
     let mut in_block = false;
     code.lines().map(str::trim).filter(move |line| {
@@ -2879,7 +2356,6 @@ fn code_lines(code: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// A markdown cell's text: `md"""…"""` or `md"…"` without its quotes.
 fn markdown_text(code: &str) -> Option<&str> {
     let first = code_lines(code).next()?;
     let rest = &code[first.as_ptr() as usize - code.as_ptr() as usize..];
@@ -2887,7 +2363,6 @@ fn markdown_text(code: &str) -> Option<&str> {
     Some(text.trim_end().trim_end_matches('"'))
 }
 
-/// The file a call touches: its first location, else a path in its input.
 pub(crate) fn file_path(path: Option<&Path>, input: &serde_json::Value) -> Option<String> {
     path.map(|p| p.display().to_string())
         .or_else(|| ["file_path", "notebook_path", "path"].iter().find_map(|f| input[*f].as_str()).map(str::to_owned))
@@ -2899,7 +2374,6 @@ pub(crate) fn file_name(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: that brings in gpui's own `#[test]` macro.
     use super::{Agent, Approval, Effect, Entry, Mode, Scope, Session, SessionEvent, Started, Turn, app_modes, is_plan_approval, plan_option};
     use wire::backend::Backend;
     use crate::celldiff;
@@ -2958,12 +2432,10 @@ mod tests {
         };
         let at = |s: &Session, id: &str| s.entries.iter().position(|e| matches!(e, Entry::Permission { call, .. } if call.to_string() == id)).unwrap();
 
-        // Always this session on the first edit: the second, already waiting, stays unanswered.
         s.record_answer(at(&s, "t1"), &allow, Scope::Session);
         assert_eq!(row(&s, "t1"), Some(Some(Approval::ForSession)));
         assert_eq!(row(&s, "t2"), Some(None), "a prompt already waiting is its own question");
         assert_eq!(s.asks.answered, 1);
-        // A prompt arriving now for the same file is answered by the rule; another file isn't.
         let input = edit("/p/notes.md");
         let same = Asked { title: "Edit", kind: Some(ToolKind::Edit), input: &input, path: None };
         assert_eq!(s.answer_on_arrival(&same, false, false), Some(Approval::ForSession));
@@ -2972,7 +2444,6 @@ mod tests {
         assert_eq!(s.answer_on_arrival(&other, false, false), None);
         assert_eq!(s.answer_on_arrival(&same, false, true), None, "a plan always asks");
 
-        // Always on a run card: the session goes to Auto, and the run already waiting still asks.
         s.record_answer(at(&s, "r1"), &allow, Scope::Session);
         assert!(s.run_without_asking);
         assert_eq!(row(&s, "r1"), Some(Some(Approval::ForSession)));
@@ -3007,21 +2478,16 @@ mod tests {
         s.push(asked("r3", "edit_cell", serde_json::json!({ "cell_id": "c", "code": "c = 2", "run_after": true })));
         let prompts = [0, 1, 2];
 
-        // Run anyway answers the cards asking about any cell the user's run reaches.
         assert_eq!(s.prompts_running(&prompts, &["a".into(), "b".into()]), vec![0]);
         assert_eq!(s.prompts_running(&prompts, &["c".into()]), vec![1, 2]);
         assert_eq!(s.prompts_running(&prompts, &["z".into()]), Vec::<usize>::new());
 
-        // Cells that ran without asking close a card once all of its cells have,
-        // and never a card that would change the code first.
         assert_eq!(s.ran_cards(&prompts, &["b".into(), "c".into()]), vec![0]);
         assert_eq!(s.ran_cards(&[1, 2], &[]), Vec::<usize>::new(), "d hasn't run");
         assert_eq!(s.ran_cards(&[1, 2], &["d".into()]), vec![1], "c ran earlier, while it waited");
         assert!(s.ran_while_asked.is_empty(), "nothing kept for cards no longer waiting");
     }
 
-    /// A session in Ask to run on a runtime from the app's build, with a
-    /// notebook call `t1` to execute cell `a` under way.
     fn asking_session() -> Session {
         use agent_client_protocol::schema::v1::{SessionMode, ToolCall};
         let modes = SessionModeState::new("auto", vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
@@ -3037,7 +2503,6 @@ mod tests {
         serde_json::json!({ "id": id, "owner": "7", "call_id": call_id, "tool": "execute_cell", "arguments": { "cell_id": "a" }, "since": 1.0 })
     }
 
-    /// A run answered: its ask, whether allowed, and the cells the user ran.
     type Answered<'a> = (u64, bool, &'a [(String, f64)]);
 
     fn answers(effects: &[Effect]) -> Vec<Answered<'_>> {
@@ -3052,10 +2517,8 @@ mod tests {
         assert_eq!(answers(&run), [(40, true, &[][..])], "a run in Auto is let through");
         let download = serde_json::json!({ "id": 41, "owner": "7", "tool": "approve_install", "arguments": { "notebook_id": "n" }, "since": 1.0 });
         let effects = s.runtime_asks_now(&[download]);
-        // The card also asks the runtime what would install, to name the packages (#264).
         assert!(answers(&effects).is_empty() && matches!(effects.as_slice(), [Effect::PreviewRun { .. }, Effect::Asked(_)]), "the download waits for the user");
         let card = s.pending_permission().expect("the install card");
-        // The yes names the packages the card did, so it covers those only (EndeavorMCP #418).
         s.set_preview(card, crate::pluto::RunPreview { asking: Some(crate::pluto::Asking { new: true, packages: vec!["Example".into()], close_to: vec![], bytes: None }), ..Default::default() });
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
         let later = s.take_later();
@@ -3077,7 +2540,6 @@ mod tests {
         assert!(matches!(&s.entries[0], Entry::Tool { approval: Some(Approval::Allowed), .. }));
         assert!(s.runtime_asks_now(&[ask(41, None)]).is_empty() && s.pending_permission().is_none(), "answered: no card again while the runtime catches up");
 
-        // Denied, then Always this session: runs stop asking, and the runtime hears it.
         s.runtime_asks_now(&[ask(42, Some("t1"))]);
         assert!(s.answer_pending(PermissionOptionKind::RejectOnce, Scope::Once));
         assert_eq!(answers(&s.take_later()), [(42, false, &[][..])]);
@@ -3086,7 +2548,6 @@ mod tests {
         let later = s.take_later();
         assert_eq!(answers(&later), [(43, true, &[][..])]);
         assert!(later.iter().any(|e| matches!(e, Effect::SetPolicy("auto", _))) && s.mode_name().as_deref() == Some("Auto"));
-        // An ask already on its way when runs stopped asking: allowed with no card.
         assert_eq!(answers(&s.runtime_asks_now(&[ask(44, Some("t1"))])), [(44, true, &[][..])]);
         assert!(s.pending_permission().is_none());
     }
@@ -3114,7 +2575,6 @@ mod tests {
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(s.pending_permission().is_some() && s.take_later().is_empty(), "kept, not refused");
         assert!(!matches!(s.entries.last(), Some(Entry::Note(n)) if n.contains("stopped")));
-        // Allowed after the turn: the runtime keeps it for the agent's same call, and "Go ahead" starts a turn for it.
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Once));
         let later = s.take_later();
         assert_eq!(answers(&later), [(41, true, &[][..])]);
@@ -3126,7 +2586,6 @@ mod tests {
         assert_eq!(answers(&s.take_later()), [(42, false, &[][..])], "stopping the turn denies it");
     }
 
-    /// The text of each prompt in `effects` that goes to Claude.
     fn prompts_sent(effects: &[Effect]) -> Vec<String> {
         effects.iter().filter_map(|e| match e {
             Effect::Send(Turn::Prompt(blocks)) => Some(blocks.iter().filter_map(|b| if let agent_client_protocol::schema::v1::ContentBlock::Text(t) = b { Some(t.text.clone()) } else { None }).collect::<String>()),
@@ -3142,7 +2601,6 @@ mod tests {
         s.runtime_asks_now(&[ask(41, Some("t1"))]);
         s.submit(text("and then this"), false);
         s.runtime_asks_now(&[left_up]);
-        // The turn ends partway: the queue pauses with the user's message in it, and the card stays.
         s.apply(SessionEvent::TurnEnded(StopReason::MaxTokens));
         assert!(s.outbox.paused().is_some());
         s.take_later();
@@ -3188,14 +2646,11 @@ mod tests {
             let (title, input) = if run { ("mcp__notebook__execute_cell", serde_json::json!({ "cell_id": "a" })) } else { ("mcp__notebook__edit_cell", serde_json::json!({ "cell_id": "a", "code": "b" })) };
             s.runtime_asks_instead(title, &input, false, &options).map(|o| o.option_id.to_string())
         };
-        // The runtime holds the run and asks: the agent's own prompt is let through.
         let mut s = asking_session();
         assert_eq!(allowed(&s, true).as_deref(), Some("allow"));
         assert_eq!(allowed(&s, false), None, "an edit that doesn't run is still the agent's card");
-        // A runtime from an older build, or one that hasn't said, doesn't ask: the agent's prompt is the card.
         s.runtime_build(crate::older_runtime::Version::Other(None));
         assert_eq!(allowed(&s, true), None);
-        // Restart Julia brings one the app uses as it is: the runtime asks again.
         s.runtime_build(crate::older_runtime::Version::Usable);
         assert_eq!(s.runtime_older, Some(false));
         assert_eq!(allowed(&s, true).as_deref(), Some("allow"));
@@ -3222,8 +2677,6 @@ mod tests {
         assert!(s.runtime_asks_instead("mcp__notebook__read_cell", &serde_json::json!({ "cell_id": "a" }), false, &options).is_some());
     }
 
-    /// A Codex session from the study's real `session/new` reply, through
-    /// the dialect, in `mode`, on a runtime from the app's build.
     fn codex_session(mode: &str, dialect: &mut crate::codex::Dialect) -> Session {
         let reply: serde_json::Value = serde_json::from_str(include_str!("fixtures/codex/session-new.json")).unwrap();
         let config = serde_json::from_value(reply["configOptions"].clone()).unwrap();
@@ -3237,10 +2690,6 @@ mod tests {
         s
     }
 
-    /// Plays the study's Codex turn (new_notebook, read_cell, add_cell, then
-    /// execute_cell left waiting) into `s`: each prompt's tool and the option
-    /// it is let through with, and how many results were fetched.
-    /// A prompt's tool, and the option it was let through with.
     type Prompted = (Option<String>, Option<String>);
 
     fn play_codex_turn(s: &mut Session, dialect: &mut crate::codex::Dialect) -> (Vec<Prompted>, usize) {
@@ -3279,7 +2728,6 @@ mod tests {
             assert_eq!(held, Some(ToolCallStatus::InProgress), "the run waits in the runtime");
         }
 
-        // A runtime from an older build can't hold anything: Codex's own prompts are the cards.
         let mut dialect = crate::codex::Dialect::default();
         let mut s = codex_session("auto", &mut dialect);
         s.runtime_build(crate::older_runtime::Version::Other(None));
@@ -3308,8 +2756,6 @@ mod tests {
         assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with("Codex stopped waiting for your answer to")));
     }
 
-    /// A session in Manual on a runtime from the app's build, with a notebook
-    /// call `e1` to edit cell `a` under way.
     fn manual_session() -> Session {
         use agent_client_protocol::schema::v1::{SessionMode, ToolCall};
         let modes = SessionModeState::new("default", vec![SessionMode::new("default", "Manual"), SessionMode::new("plan", "Plan"), SessionMode::new("auto", "Auto")]);
@@ -3335,7 +2781,6 @@ mod tests {
     fn in_manual_an_edit_the_runtime_holds_is_one_edit_card() {
         use agent_client_protocol::schema::v1::PermissionOption;
         let mut s = manual_session();
-        // The agent's own prompt before the edit is let through: the runtime asks instead.
         let options = [
             PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce),
             PermissionOption::new("always", "Yes, and don't ask again for mcp__notebook__edit_cell commands", PermissionOptionKind::AllowAlways),
@@ -3345,7 +2790,6 @@ mod tests {
         assert!(!s.runtime_holds("read_cell", &serde_json::json!({ "cell_id": "a" })), "reads never wait");
         assert_eq!(s.runtime_asks_instead("mcp__notebook__edit_cell", &edit_input("a = 2"), false, &options).map(|o| o.option_id.to_string()).as_deref(), Some("allow"));
 
-        // The runtime's ask is the one card: the edit card, with the change as a diff.
         let effects = s.runtime_asks_now(&[held(41, "edit_cell", edit_input("a = 2"))]);
         assert!(matches!(effects.as_slice(), [Effect::Asked(_)]), "nothing to preview: it runs nothing");
         assert_eq!(s.waiting_prompts().len(), 1);
@@ -3359,12 +2803,10 @@ mod tests {
         assert_eq!(buttons, ["Deny", "Always this session", "Edit"]);
         assert!(card.folder.is_none(), "no In this folder: the agent's folder rule wouldn't reach the runtime");
 
-        // Denied: the runtime hears it, and the row says so.
         assert!(s.answer_pending(PermissionOptionKind::RejectOnce, Scope::Once));
         assert_eq!(answers(&s.take_later()), [(41, false, &[][..])]);
         assert!(matches!(&s.entries[0], Entry::Tool { approval: Some(Approval::Denied), .. }));
 
-        // Always this session: later edits with the same tool are allowed with no card; other changes still ask.
         s.runtime_asks_now(&[held(42, "edit_cell", edit_input("a = 3"))]);
         assert!(s.answer_pending(PermissionOptionKind::AllowOnce, Scope::Session));
         let later = s.take_later();
@@ -3398,7 +2840,6 @@ mod tests {
     fn a_restart_the_agent_asks_for_always_gets_a_card_and_only_restart_restarts() {
         use agent_client_protocol::schema::v1::PermissionOption;
         let restarts = |effects: Vec<Effect>| effects.into_iter().filter_map(|e| if let Effect::AnswerRestart { id, restart } = e { Some((id, restart)) } else { None }).collect::<Vec<_>>();
-        // Auto: runs don't ask, a restart does.
         let mut s = asking_session();
         s.run_without_asking = true;
         let (id, effects) = s.ask_restart("Julia stopped answering.", "fit.jl stops; its file is saved.", None);
@@ -3406,14 +2847,11 @@ mod tests {
         assert_eq!(s.waiting_prompts().len(), 1);
         let ix = s.pending_permission().unwrap();
         assert_eq!(crate::approval::heading_at(&s, ix).unwrap(), format!("Restart Endeavor on {}?", crate::platform::this_computer!()));
-        // The agent's own prompt for the call goes through: the card is the question, even on an older runtime.
         s.runtime_build(crate::older_runtime::Version::Other(None));
         let options = [PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce)];
         assert!(s.runtime_asks_instead("mcp__notebook__request_restart", &serde_json::json!({ "reason": "x" }), false, &options).is_some());
-        // Asked again while it's up: the same card, with the new reason.
         let (again, effects) = s.ask_restart("Still stuck.", "", None);
         assert_eq!((again, effects.len(), s.waiting_prompts().len()), (id, 0, 1));
-        // The turn ends: the card stays, and its Restart still restarts.
         s.drop_prompts(true);
         assert_eq!(s.waiting_prompts().len(), 1);
         assert!(restarts(s.take_later()).is_empty());
@@ -3421,7 +2859,6 @@ mod tests {
         assert_eq!(restarts(s.take_later()), [(id, true)]);
         assert!(!s.asks.allowed(&crate::permits::Asked { title: "mcp__notebook__request_restart", kind: None, input: &serde_json::json!({}), path: None }), "never a rule for the session");
 
-        // Not now declines; a stopped turn takes the card down unanswered.
         let (id, _) = s.ask_restart("Older version.", "", None);
         assert!(s.answer_pending(PermissionOptionKind::RejectOnce, Scope::Once));
         assert_eq!(restarts(s.take_later()), [(id, false)]);
@@ -3430,7 +2867,6 @@ mod tests {
         assert_eq!(restarts(s.take_later()), [(id, false)]);
         assert!(s.waiting_prompts().is_empty());
 
-        // Only the session's notebook crashed: the card says only it starts again.
         s.ask_restart("The notebook's process ended.", "fit.jl stops; its file is saved.", Some("fit.jl"));
         let ix = s.pending_permission().unwrap();
         assert_eq!(crate::approval::heading_at(&s, ix).unwrap(), "Restart fit.jl?");
@@ -3450,10 +2886,8 @@ mod tests {
 
     #[test]
     fn ask_to_run_and_an_older_runtime_leave_edits_to_the_agent() {
-        // Ask to run: the runtime doesn't hold an edit, so the agent's prompt (if any) is the card.
         let s = asking_session();
         assert!(!s.edits_ask() && !s.runtime_holds("edit_cell", &edit_input("a = 2")));
-        // An older runtime in Manual can't hold edits: the agent's own prompt asks.
         let mut s = manual_session();
         s.runtime_build(crate::older_runtime::Version::Other(None));
         let options = [agent_client_protocol::schema::v1::PermissionOption::new("allow", "Yes", PermissionOptionKind::AllowOnce)];
@@ -3498,7 +2932,6 @@ mod tests {
         assert_eq!(approval(&s, 2), Some(Approval::WithoutAsking));
         assert_eq!(approval(&s, 3), Some(Approval::Denied));
 
-        // A prompt whose call isn't in the transcript is still recorded, as a note.
         s.approve(&"gone".to_string().into(), Approval::Denied, "mcp__notebook__edit_cell", &serde_json::Value::Null);
         assert!(matches!(s.entries.last(), Some(Entry::Note(text)) if text.as_ref() == "Denied: edit a cell"));
     }
@@ -3518,7 +2951,6 @@ mod tests {
         assert_eq!(answer_note(Approval::WithoutAsking, "run a cell"), "Allowed without asking: run a cell");
         assert_eq!(answer_note(Approval::Denied, "delete a cell"), "Denied: delete a cell");
         use super::{Scope, answer_approval};
-        // What each answer reads as on its row.
         assert_eq!(answer_approval(true, false, Scope::Once).label(), "allowed");
         assert_eq!(answer_approval(true, false, Scope::Session).label(), "allowed for this session");
         assert_eq!(answer_approval(true, false, Scope::Folder).label(), "allowed in this folder");
@@ -3558,19 +2990,15 @@ mod tests {
         s.started(Started::new(SessionId::new("s1"), Some(modes), None));
         assert_eq!(s.mode_name().as_deref(), Some("Manual"), "another agent mode: its own name");
 
-        // ⇧⇥ moves on at once and asks the agent: Plan → Ask to run → Auto → Plan.
         assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan", _)] if m.to_string() == "plan"));
         assert_eq!(s.mode_name().as_deref(), Some("Plan"));
-        // Leaving plan tells the runtime too.
         assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("ask", _)] if m.to_string() == "auto"));
         assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
-        // Auto is the same agent mode, with runs no longer asking: only the runtime hears.
         assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetPolicy("auto", _)]) && s.run_without_asking);
         assert_eq!(s.mode_name().as_deref(), Some("Auto"));
         assert!(matches!(s.cycle_mode().as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan", _)] if m.to_string() == "plan"));
         assert!(!s.run_without_asking);
 
-        // The agent's own updates win.
         s.apply(SessionEvent::Update(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("auto"))));
         assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
         s.apply(SessionEvent::Update(SessionUpdate::UsageUpdate(UsageUpdate::new(12_000, 200_000))));
@@ -3579,7 +3007,6 @@ mod tests {
         s.apply(SessionEvent::Update(SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(commands))));
         assert_eq!(s.commands.len(), 1);
 
-        // No modes offered: nothing to cycle.
         let mut plain = Session::new(2, Place::local("/tmp/project"), None);
         assert!(plain.cycle_mode().is_empty() && plain.mode_name().is_none());
         assert!(plain.mode_choices().is_empty());
@@ -3602,33 +3029,26 @@ mod tests {
             (s, effects)
         };
 
-        // Auto picked on the new-session screen: the agent is asked, and the runtime told runs stop asking.
         let (mut s, effects) = start("default", 2);
         assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("auto", _)] if m.to_string() == "auto"));
         assert_eq!((s.mode_name().as_deref(), s.policy()), (Some("Auto"), "auto"));
         assert_eq!(s.mode(), Some(Mode { agent: "auto".into(), run_without_asking: true }));
 
-        // A config change's reply, sent before the switch, comes back after the
-        // agent confirmed it: the mode stays.
         s.apply(SessionEvent::Update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(vec![mode_option("auto")]))));
         s.apply(SessionEvent::Config(vec![mode_option("default")]));
         assert_eq!(s.mode_name().as_deref(), Some("Auto"));
-        // The agent's own switch (a plan approved, a fallback) still counts.
         s.apply(SessionEvent::Update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(vec![mode_option("plan")]))));
         assert_eq!((s.mode_name().as_deref(), s.policy()), (Some("Plan"), "plan"));
 
-        // Manual is applied too, when the agent starts in another mode.
         let (s, effects) = start("auto", 0);
         assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("ask", true)] if m.to_string() == "default"), "edits ask too");
         assert_eq!(s.mode_name().as_deref(), Some("Manual"));
         assert_eq!(s.policy(), "ask", "the runtime asks before runs");
 
-        // A reopened session in Plan: the agent is asked and the runtime told.
         let (s, effects) = start("default", 3);
         assert!(matches!(effects.as_slice(), [Effect::SetMode(m), Effect::SetPolicy("plan", _)] if m.to_string() == "plan"));
         assert_eq!(s.mode_name().as_deref(), Some("Plan"));
 
-        // Already in the mode: nothing to ask.
         let (s, effects) = start("auto", 1);
         assert!(effects.is_empty());
         assert_eq!(s.mode_name().as_deref(), Some("Ask to run"));
@@ -3649,21 +3069,17 @@ mod tests {
             ["Julia on gpu-box was started by an older version of Endeavor. Restart Julia to use this one. Until then, some of Claude's notebook tools may not work as described."]
         );
 
-        // Restart Julia: a note says the runtime is this version now.
         s.runtime_build(crate::older_runtime::Version::Usable);
         assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if *n == "Julia on gpu-box now runs this version of Endeavor. Ask to run asks before each run again."));
-        // One too old to ask before a run says it runs no code.
         s.runtime_build(crate::older_runtime::Version::NoRunGate);
         assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.to_string().contains("too old to ask before a run. Restart Julia to run code.")));
 
-        // A reopened session says so after its history.
         let mut s = Session::loading(2, SessionId::new("old"), Place::local("/tmp"), None, "Fit".into());
         s.runtime_build(crate::older_runtime::Version::Other(None));
         assert!(s.entries.is_empty(), "not while the history loads");
         s.started(Started::new(SessionId::new("old"), None, None));
         assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.starts_with(&format!("Julia on {} was started by an older version of Endeavor.", crate::platform::this_computer!()))));
 
-        // A note never shown isn't followed by one saying it no longer holds.
         let mut s = Session::loading(3, SessionId::new("old"), Place::local("/tmp"), None, "Fit".into());
         s.runtime_build(crate::older_runtime::Version::Other(None));
         s.runtime_build(crate::older_runtime::Version::Usable);
@@ -3689,7 +3105,6 @@ mod tests {
         assert!(matches!(s.choose_mode(&plan).as_slice(), [Effect::SetMode(_), Effect::SetPolicy("plan", _)]));
         assert!(!s.run_without_asking);
 
-        // An agent without plan and auto: its own modes and descriptions.
         let mut other = Session::new(2, Place::local("/tmp/project"), None);
         let modes = SessionModeState::new("a", vec![SessionMode::new("a", "Careful").description("Asks a lot"), SessionMode::new("b", "Bold")]);
         other.started(Started::new(SessionId::new("s2"), Some(modes), None));
@@ -3744,7 +3159,6 @@ mod tests {
         let sent = words(&s.submit(Queued::new("/compact keep the fits".into(), vec![], blocks), false));
         assert_eq!(sent[0], "/compact keep the fits");
         assert_eq!(sent.len(), 2, "the command, then the note on @ mentions");
-        // The moved-notebook note waits for a message it can go with.
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         let sent = words(&s.submit(Queued::new("plot it".into(), vec![], crate::attach::prompt_blocks("plot it", &[], &[], Backend::Pluto)), false));
         assert_eq!(sent, ["[Endeavor] The notebook moved.", "plot it"]);
@@ -3761,7 +3175,6 @@ mod tests {
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         let Some(Entry::Note(note)) = s.entries.last() else { panic!("a note last") };
         assert_eq!(note.as_ref(), "Conversation summarized. Context 62% → 11%.");
-        // Other messages get no such note.
         s.submit(text("/context"), false);
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert!(matches!(s.entries.last(), Some(Entry::User { .. })));
@@ -3870,7 +3283,6 @@ mod tests {
 
         s.apply(SessionEvent::TurnEnded(StopReason::MaxTurnRequests));
         assert_eq!(card(&s, 4).1, "Claude took too many steps in one go.");
-        // Stopped by the user: still a quiet note.
         s.submit(text("again"), false);
         s.apply(SessionEvent::TurnEnded(StopReason::Cancelled));
         assert!(matches!(s.entries.last(), Some(Entry::Note(note)) if note.as_ref() == "You stopped Claude"));
@@ -3936,7 +3348,6 @@ mod tests {
             assert!(s.agent_waiting && s.busy_since.is_none());
             assert!(s.submit(text("meanwhile"), false).is_empty(), "messages queue while Claude is down");
         }
-        // The reload replays the history the transcript already has.
         working.apply(SessionEvent::Update(SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new("replayed"))))));
         let effects = working.started(Started::new(SessionId::new("a"), None, None));
         assert!(matches!(effects.as_slice(), [Effect::Send(Turn::Prompt(_))]), "the queued message goes once it's back");
@@ -4048,8 +3459,6 @@ mod tests {
         use agent_client_protocol::schema::v1::{ContentChunk, SessionUpdate, TextContent};
         use agent_client_protocol::schema::v1::ContentBlock;
         let chunk = |s: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(s)))));
-        // The exact shape Claude Code replays for a stop mid-tool-call: the
-        // real prompt, then its own synthetic marker as a separate user turn.
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
         s.apply(chunk("run the slow thing"));
         s.apply(chunk("[Request interrupted by user for tool use]"));
@@ -4057,7 +3466,6 @@ mod tests {
         assert_eq!(text.as_ref(), "run the slow thing");
         assert_eq!(note.as_ref(), "You stopped Claude");
 
-        // A stop outside a tool call carries the shorter marker.
         let mut s2 = Session::loading(2, SessionId::new("def"), Place::local("/tmp"), None, "Old chat".into());
         s2.apply(chunk("[Request interrupted by user]"));
         assert!(matches!(s2.entries.as_slice(), [Entry::Note(note)] if note.as_ref() == "You stopped Claude"));
@@ -4077,9 +3485,6 @@ mod tests {
         assert_eq!(text.as_ref(), "now plot it");
     }
 
-    /// The blocks of a sent prompt as a reopened session replays them: the
-    /// adapter stores links and text files as text, and a text file's contents
-    /// after the rest (claude-agent-acp's `promptToClaude`).
     fn as_replayed(blocks: Vec<agent_client_protocol::schema::v1::ContentBlock>) -> Vec<SessionEvent> {
         use agent_client_protocol::schema::v1::{ContentChunk, SessionUpdate};
         crate::transcript_copy::as_replayed(blocks).into_iter().map(|b| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(b)))).collect()
@@ -4102,7 +3507,6 @@ mod tests {
             Attachment::Quote(Quote { from: Quoted::Box { notebook: NB.into(), cells: vec!["c3".into(), "c4".into()], png: Arc::new(vec![0x89, b'P', b'N', b'G', 1, 2, 3]) }, comment: String::new() }),
             Attachment::Image { name: "image.png".into(), mime: "image/png", bytes: Arc::new(b"gel".to_vec()) },
             Attachment::Saved { path: "data/decay (2).csv".into() },
-            // The adapter echoes a text file's contents after everything else.
             Attachment::Text { name: "notes.txt".into(), text: "t,y\n1,2".into() },
         ];
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old chat".into());
@@ -4156,7 +3560,6 @@ more" }"#);
     #[test]
     fn replayed_notebook_opens_are_reopened_by_path_not_shown_by_stale_id() {
         use agent_client_protocol::schema::v1::{SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
-        // Sessions from before the bridge was named `notebook` replay `mcp__pluto__` names.
         for title in ["mcp__notebook__open_notebook", "mcp__pluto__open_notebook"] {
             let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
             s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", title))));
@@ -4176,7 +3579,6 @@ more" }"#);
         const A: &str = "11111111-2222-4333-8444-555555555555";
         let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
-        // Cursor's shape: a placeholder title, then the real one with a wrapped input.
         let mut call = |id: &str, tool: &str, args: serde_json::Value, result: serde_json::Value| {
             s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), "MCP: tool"))));
             let input = json!({ "providerIdentifier": "notebook", "toolName": tool, "args": args });
@@ -4207,7 +3609,6 @@ more" }"#);
         const A: &str = "11111111-2222-4333-8444-555555555555";
         let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
-        // Cursor's shape: the call completes with only `{"success": true}`.
         let call = |s: &mut Session, id: &str, tool: &str, args: serde_json::Value| {
             s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(id.to_string(), "MCP: tool"))));
             let named = ToolCallUpdateFields::new().title(format!("notebook: {tool}")).raw_input(json!({ "providerIdentifier": "notebook", "toolName": tool, "args": args }));
@@ -4248,9 +3649,6 @@ more" }"#);
         s.started(Started::new(SessionId::new("abc"), None, None));
         const ID: &str = "tool_7c68647e-18a7-4dfb-aa68-b8e51f67e08";
         let args = json!({ "notebook_id": "a63586b4", "cell_id": "b010b8f2", "code": "using Statistics\ns = mean(x)" });
-        // The real Cursor sequence: a placeholder tool_call, then the update that
-        // carries the wrapped rawInput, then a permission request for the same id
-        // with no rawInput at all (only a json text block in its content).
         s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new(ID, "MCP: tool"))));
         let wrapped = json!({ "providerIdentifier": "notebook", "toolName": "edit_cell", "args": args });
         let update = ToolCallUpdateFields::new().title("notebook: edit_cell").raw_input(wrapped);
@@ -4271,7 +3669,6 @@ more" }"#);
     #[test]
     fn a_located_notebook_wins_over_the_one_the_history_last_opened() {
         use agent_client_protocol::schema::v1::{SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
-        // The user located the file at its new path, which Endeavor recorded; Claude's history still opens the old one.
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
         s.notebook_path = Some("/tmp/archive/a.jl".into());
         s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__notebook__open_notebook"))));
@@ -4346,7 +3743,6 @@ more" }"#);
         let effects = s.apply(tool_update("{\"notebook_id\":\"n1\",\"path\":\"/tmp/fit.jl\",\"created\":true}"));
         assert!(matches!(effects.as_slice(), [Effect::ShowNotebook { id, path: Some(p) }] if id == "n1" && p == "/tmp/fit.jl"));
 
-        // A refused open (one notebook per session) shows nothing.
         s.apply(SessionEvent::Update(SessionUpdate::ToolCall(ToolCall::new("t1", "mcp__notebook__open_notebook"))));
         let effects = s.apply(tool_update("{\"error\":\"one_notebook\",\"message\":\"This session works on one notebook\"}"));
         assert!(effects.is_empty());
@@ -4365,7 +3761,6 @@ more" }"#);
         s.apply(info("Growth curve plots"));
         assert_eq!(s.title, "Growth curve plots");
 
-        // Reopened with only a stand-in title: the first replayed message names it.
         let chunk = |t: &str| SessionEvent::Update(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(t)))));
         let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "a.jl".into());
         s.untitled = true;
@@ -4392,12 +3787,12 @@ more" }"#);
         s.note("b");
         s.sync_list();
         assert_eq!(s.list.item_count(), 2);
-        s.toggle(0); // in-place edit: count unchanged
+        s.toggle(0);
         s.note("c");
         s.sync_list();
         assert_eq!(s.list.item_count(), 3);
         s.fail("Error: is running as a background session");
-        s.reopen_as_copy(); // clears the transcript
+        s.reopen_as_copy();
         s.sync_list();
         assert_eq!(s.list.item_count(), 0);
     }
@@ -4413,7 +3808,6 @@ more" }"#);
         assert!(s.busy_since.is_none());
     }
 
-    /// A completed notebook tool call, as Claude Code reports it live and replays it.
     fn notebook_call(id: &str, tool: &str, input: serde_json::Value, result: serde_json::Value) -> [SessionEvent; 2] {
         use agent_client_protocol::schema::v1::{ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields};
         let output = serde_json::json!([{ "type": "text", "text": result.to_string() }]);
@@ -4456,8 +3850,6 @@ more" }"#);
         s.apply(SessionEvent::TurnEnded(StopReason::EndTurn));
         assert_eq!(changes(&s).len(), 1, "a turn that changed no cell has no card");
 
-        // Restore sends each cell's code from before the turn, and the code the turn left as expected,
-        // to the notebook the turn changed.
         let card = s.entries.iter().position(|e| matches!(e, Entry::Changes(_))).unwrap();
         let (key, notebook, sent) = s.start_restore(card).expect("the card has cells to put back");
         assert_eq!(notebook, "nb");
@@ -4473,7 +3865,6 @@ more" }"#);
         s.finish_restore(key, Err("no notebook".into()));
         assert_eq!(s.restore_state(card), Some(&super::Restore::Failed("no notebook".into())));
 
-        // A later turn changes `rate` again: the older card waits for the later one to be restored first.
         s.submit(text("again"), false);
         for event in notebook_call("t5", "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.4" }), json!({ "ok": true })) {
             s.apply(event);
@@ -4487,7 +3878,6 @@ more" }"#);
         s.finish_restore(later_key, Ok(Vec::new()));
         assert_eq!(s.restore_blocked(card), None, "the later turn is restored");
 
-        // A state follows its card when the entries move, as a replay's merge moves them.
         let (key, _, _) = s.start_restore(card).unwrap();
         s.entries.insert(0, Entry::Note("before everything".into()));
         s.finish_restore(key, Ok(Vec::new()));
@@ -4526,7 +3916,6 @@ more" }"#);
         s.finish_restore(key, Ok(Vec::new()));
         assert_eq!(s.restored_cards(), [card]);
 
-        // The app quits and opens the session again: its copy shows, then the agent's replay arrives.
         let copy = crate::transcript_copy::from_json(&crate::transcript_copy::to_json(&s.entries, &s.restored_cards(), &s.restored).unwrap()).unwrap();
         let mut again = Session::loading(2, SessionId::new("abc"), Place::local("/tmp"), None, "Rate".into());
         again.show_copy(copy);
@@ -4566,13 +3955,11 @@ more" }"#);
         let first = turn(&mut s, 1);
         let (key, _, _) = s.start_restore(first).unwrap();
         s.finish_restore(key, Ok(Vec::new()));
-        // The agent redoes the same edit: the same card, but a turn of its own.
         let redo = turn(&mut s, 2);
         assert_eq!(s.restore_state(redo), None, "not restored just because the first one was");
         let (redo_key, _, sent) = s.start_restore(redo).expect("the redo can be restored");
         assert_ne!(redo_key, key);
         assert_eq!(sent, [json!({ "cell_id": A, "expected": "rate = 0.2", "code": "rate = 0.1" })]);
-        // The runtime reports the restored cell as the user's edit; the restore's own note says it.
         s.note_user_edit(A.to_string(), Some("rate".into()));
         s.finish_restore(redo_key, Ok(Vec::new()));
         assert!(!s.entries.iter().any(|e| matches!(e, Entry::Note(n) if n.starts_with("You edited"))), "no second note for the restore");
@@ -4580,7 +3967,6 @@ more" }"#);
         s.note_user_edit(A.to_string(), Some("rate".into()));
         assert!(matches!(s.entries.last(), Some(Entry::Note(n)) if n.as_ref() == "You edited `rate`"), "a later edit of the user's is noted");
         assert_eq!((s.restore_state(first), s.restore_state(redo)), (Some(&super::Restore::Restored), Some(&super::Restore::Restored)));
-        // A third redo, not restored: the one-pass keys match each card's own.
         let again = turn(&mut s, 3);
         assert_eq!(s.restored_cards(), [first, redo]);
         assert!(s.card_keys().all(|(ix, key)| s.card_key(ix) == Some(key)));
@@ -4595,7 +3981,6 @@ more" }"#);
         let mut s = Session::new(1, Place::local("/tmp"), None);
         s.started(Started::new(SessionId::new("abc"), None, None));
         s.submit(text("edit"), false);
-        // No read of A in this transcript (it came before a reopen): its before-text is unknown.
         for event in notebook_call("t1", "edit_cell", json!({ "notebook_id": "nb", "cell_id": A, "code": "rate = 0.2" }), json!({ "ok": true })) {
             s.apply(event);
         }
