@@ -280,14 +280,66 @@ mod platform {
     }
 }
 
-/// Not ported: Windows needs NotifyIpInterfaceChange. Until then the app
-/// takes the network to be up.
+/// Windows: after each interface or route change, look for a default route on
+/// an interface that is up (#11).
 #[cfg(windows)]
 mod platform {
     use futures::channel::mpsc::UnboundedSender;
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::{HANDLE, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfEntry2, GetIpForwardTable2, MIB_IF_ROW2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW, MIB_NOTIFICATION_TYPE, NotifyIpInterfaceChange, NotifyRouteChange2};
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
 
     pub fn monitor(tx: UnboundedSender<bool>) {
-        let _ = tx.unbounded_send(true);
+        let _ = tx.unbounded_send(online());
+        // Lives for the app's life, as the notifications do: they are never cancelled.
+        let context = Box::into_raw(Box::new(tx)) as *const c_void;
+        let mut interfaces: HANDLE = std::ptr::null_mut();
+        let mut routes: HANDLE = std::ptr::null_mut();
+        unsafe {
+            let a = NotifyIpInterfaceChange(AF_UNSPEC, Some(interface_changed), context, false, &mut interfaces);
+            let b = NotifyRouteChange2(AF_UNSPEC, Some(route_changed), context, false, &mut routes);
+            if a != NO_ERROR || b != NO_ERROR {
+                eprintln!("Couldn't watch network changes ({a}, {b}); the network is taken to be as it was at launch");
+            }
+        }
+    }
+
+    unsafe extern "system" fn interface_changed(context: *const c_void, _: *const MIB_IPINTERFACE_ROW, _: MIB_NOTIFICATION_TYPE) {
+        changed(context);
+    }
+
+    unsafe extern "system" fn route_changed(context: *const c_void, _: *const MIB_IPFORWARD_ROW2, _: MIB_NOTIFICATION_TYPE) {
+        changed(context);
+    }
+
+    /// From a system thread, once per change; `combine` drops repeats.
+    fn changed(context: *const c_void) {
+        let tx = unsafe { &*(context as *const UnboundedSender<bool>) };
+        let _ = tx.unbounded_send(online());
+    }
+
+    /// A default route (prefix length 0) that isn't loopback, on an interface that is up.
+    fn online() -> bool {
+        unsafe {
+            let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+            if GetIpForwardTable2(AF_UNSPEC, &mut table) != NO_ERROR || table.is_null() {
+                // Can't tell: the probe still catches a network that is down.
+                return true;
+            }
+            let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
+            let up = rows.iter().any(|row| {
+                if row.DestinationPrefix.PrefixLength != 0 || row.Loopback {
+                    return false;
+                }
+                let mut interface: MIB_IF_ROW2 = std::mem::zeroed();
+                interface.InterfaceLuid = row.InterfaceLuid;
+                GetIfEntry2(&mut interface) == NO_ERROR && interface.OperStatus == IfOperStatusUp
+            });
+            FreeMibTable(table as *const c_void);
+            up
+        }
     }
 }
 

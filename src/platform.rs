@@ -155,10 +155,13 @@ pub fn reduces_motion() -> bool {
     gtk::Settings::default().is_some_and(|s| !s.is_gtk_enable_animations())
 }
 
-/// Not ported: Windows needs SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION).
+/// Windows' "Animation effects" (Accessibility, Visual effects), turned off.
 #[cfg(windows)]
 pub fn reduces_motion() -> bool {
-    false
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
+    let mut animate: windows_sys::core::BOOL = 1;
+    let read = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&mut animate as *mut windows_sys::core::BOOL).cast(), 0) };
+    read != 0 && animate == 0
 }
 
 /// `reduces_motion` again each time the setting changes, for the life of the app.
@@ -197,10 +200,58 @@ pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> 
     rx
 }
 
-/// Not ported: Windows needs WM_SETTINGCHANGE for SPI_SETCLIENTAREAANIMATION.
+/// Windows broadcasts WM_SETTINGCHANGE to top-level windows (not to message-only
+/// ones) when a setting changes, so a hidden window on its own thread listens.
 #[cfg(windows)]
 pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> {
-    futures::channel::mpsc::unbounded().1
+    use std::cell::RefCell;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG, RegisterClassW, WM_SETTINGCHANGE, WNDCLASSW, WS_OVERLAPPED};
+    thread_local! {
+        /// Where changes go, and the value last sent.
+        static WATCH: RefCell<Option<(futures::channel::mpsc::UnboundedSender<bool>, bool)>> = const { RefCell::new(None) };
+    }
+    unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        // Any setting: some changes come without SPI_SETCLIENTAREAANIMATION in wparam.
+        if message == WM_SETTINGCHANGE {
+            let now = reduces_motion();
+            WATCH.with(|watch| {
+                if let Some((tx, sent)) = watch.borrow_mut().as_mut()
+                    && *sent != now
+                {
+                    *sent = now;
+                    let _ = tx.unbounded_send(now);
+                }
+            });
+        }
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let started = std::thread::Builder::new().name("reduce-motion".into()).spawn(move || unsafe {
+        WATCH.with(|watch| *watch.borrow_mut() = Some((tx, reduces_motion())));
+        let instance = GetModuleHandleW(std::ptr::null());
+        let class = windows_sys::w!("EndeavorSettingsWatch");
+        let wc = WNDCLASSW { lpfnWndProc: Some(window_proc), hInstance: instance, lpszClassName: class, ..std::mem::zeroed() };
+        if RegisterClassW(&wc) == 0 {
+            eprintln!("Couldn't watch the Animation effects setting: RegisterClassW failed");
+            return;
+        }
+        // Never shown.
+        let hwnd = CreateWindowExW(0, class, std::ptr::null(), WS_OVERLAPPED, 0, 0, 0, 0, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null());
+        if hwnd.is_null() {
+            eprintln!("Couldn't watch the Animation effects setting: CreateWindowExW failed");
+            return;
+        }
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            DispatchMessageW(&msg);
+        }
+    });
+    if let Err(e) = started {
+        eprintln!("Couldn't watch the Animation effects setting: {e}");
+    }
+    rx
 }
 
 /// Run from source (`cargo run`), the app has no bundle to take its Dock icon
