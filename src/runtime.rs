@@ -63,10 +63,11 @@ impl Known {
     }
 
     fn refusal(&self, session: &str, tool: &str, arguments: &serde_json::Value) -> Option<String> {
-        if !endeavor_mcp::runs_code(tool, arguments) && tool != "new_notebook" {
+        let kind = self.kinds.lock().unwrap().get(session).copied().unwrap_or(Backend::Pluto);
+        // Only a code run, or an R or Python session's new notebook, waits for the version.
+        if !endeavor_mcp::runs_code(tool, arguments) && (tool != "new_notebook" || kind == Backend::Pluto) {
             return None;
         }
-        let kind = self.kinds.lock().unwrap().get(session).copied().unwrap_or(Backend::Pluto);
         let version = self.version.lock().unwrap();
         let (version, _) = self.changed.wait_timeout_while(version, VERSION_WAIT, |v| v.is_none()).unwrap();
         crate::older_runtime::refusal((*version)?, &self.host, kind, tool, arguments)

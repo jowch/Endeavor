@@ -1218,8 +1218,8 @@ impl Workspace {
         // A runtime too old to know session kinds would make an R or Python session's notebook in Julia.
         if kind != wire::backend::Backend::Pluto && self.connections.get(&host).and_then(|c| c.older).is_some_and(|v| !v.has_session_kinds()) {
             let language = if kind == wire::backend::Backend::Marimo { "Python" } else { "R" };
-            let why = format!("Julia on {} was started by an older version of Endeavor, which can't make {language} notebooks this way. Restart Julia to use this one.", self.hosts.name(&host));
-            return self.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &why, None), cx);
+            let why = format!("Julia on {} was started by an older version of Endeavor, which can't make a new {language} notebook here. Restart Julia to use this one.", self.hosts.name(&host));
+            return self.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &why, Some(Retry::RestartJulia(host))), cx);
         }
         eprintln!("New notebook for session {key}");
         self.note_session_kind(&host, key, kind);
