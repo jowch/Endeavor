@@ -626,6 +626,9 @@ pub struct Workspace {
     /// keyboard since). A flag, not a focus handle: a tracked element takes
     /// focus when clicked.
     zoom_chat: bool,
+    /// `zoom_chat` before the last click: the app menu's button is outside the chat, so its
+    /// click clears `zoom_chat`, but the menu's Zoom items size what was used before it.
+    zoom_chat_before_click: bool,
     /// The open confirm dialog (Stop a host, Cancel a job, Repair Julia, Sign
     /// out, Delete session), if any.
     confirm: Option<confirm::Confirm>,
@@ -984,6 +987,7 @@ impl Workspace {
             keyboard_home: cx.focus_handle(),
             sidebar_focus: cx.focus_handle(),
             zoom_chat: false,
+            zoom_chat_before_click: false,
             confirm: None,
             find: None,
             queue_edit: None,
@@ -1448,6 +1452,10 @@ impl Workspace {
     /// Julia starts first if it isn't running: the pane shows its steps meanwhile, or why it couldn't.
     fn open_for_session(&mut self, key: u64, path: String, run: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
+        // Tried again: a new failure says itself.
+        if let Some(session) = self.session_mut(key) {
+            session.open_failed = None;
+        }
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
         let kind = new_session::kind_of_path(&path);
         let steps = self.julia_steps(&host, kind, cx);
@@ -1608,6 +1616,11 @@ impl Workspace {
         if let Some((host, notebook)) = self.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
             self.load_notebook(&host, &notebook, cx);
         }
+        // Another session's failed open isn't this one's; this one's, kept while it was off screen, shows now (#244).
+        if self.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(notice::Retry::OpenNotebook(k, _)) if *k != key)) {
+            self.notice = None;
+        }
+        self.show_open_failed(key, cx);
         cx.notify();
     }
 
@@ -1656,6 +1669,7 @@ impl Workspace {
                     session.notebook = Some(id.clone());
                     session.stopped = None;
                     session.missing = false;
+                    session.open_failed = None;
                     let host = session.place.host.clone();
                     if let Some(path) = path {
                         self.bind_notebook(key, path, cx);
@@ -1938,8 +1952,10 @@ impl Workspace {
     /// ⌘= / ⌘− / ⌘0: zoom by `step` (or back to 100%) whichever pane was used
     /// last: the notebook while it has the keyboard, else the chat after a
     /// click in it, else the notebook. Both sizes are kept in settings.
-    fn zoom(&mut self, step: f64, reset: bool, cx: &mut Context<Self>) {
-        if self.zooms_chat(cx) {
+    /// `menu`: from the app menu's Zoom items, where the keyboard was when the menu opened
+    /// (`menu::Before`), since the menu took it.
+    pub(crate) fn zoom(&mut self, step: f64, reset: bool, menu: Option<menu::Before>, cx: &mut Context<Self>) {
+        if self.zooms_chat(menu, cx) {
             let current = if self.settings.chat_zoom > 0. { self.settings.chat_zoom } else { 1. };
             self.settings.chat_zoom = if reset { 1. } else { theme::chat_scale_step(current as f32, step > 1.) as f64 };
             self.settings.save();
@@ -1960,13 +1976,19 @@ impl Workspace {
     }
 
     /// Whether ⌘= / ⌘− / ⌘0 size the chat's text now (see `zoom`).
-    pub(crate) fn zooms_chat(&self, cx: &App) -> bool {
+    /// The notebook's keyboard as it is now, not as it was at the last click (#237): a click
+    /// from the notebook into the chat moves the text size to the chat at once. While the
+    /// app menu is open, or for its Zoom items, the keyboard as it was when the menu opened.
+    pub(crate) fn zooms_chat(&self, menu: Option<menu::Before>, cx: &App) -> bool {
         // Settings covers the chat: sizing it there would happen out of sight.
         if self.settings_panel.is_some() {
             return false;
         }
         let webview = self.webview.read(cx);
-        self.zoom_chat && !(webview.visible() && webcontent::had_keyboard(webview.raw()))
+        if let Some(before) = menu.or(self.menu.as_ref().map(|m| m.before)) {
+            return before.chat && !(webview.visible() && before.notebook);
+        }
+        self.zoom_chat && !(webview.visible() && webcontent::has_keyboard(webview.raw()))
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
@@ -2676,8 +2698,12 @@ impl Workspace {
             .when(menu.is_some(), |d| d.bg(theme::row_active()))
             .hover(|s| s.bg(theme::row_active()))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, _, window, cx| {
+            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
+                // Opened from the keyboard, no click cleared `zoom_chat`.
+                if event.is_keyboard() {
+                    this.zoom_chat_before_click = this.zoom_chat;
+                }
                 if this.menu.as_ref().is_some_and(|m| m.target == MenuTarget::App) {
                     this.close_menu(window, cx);
                 } else {
@@ -3010,6 +3036,7 @@ impl Render for Workspace {
             // Outside the chat column, ⌘= zooms the notebook again (the chat
             // column's own capture runs after this one and sets it back).
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+                this.zoom_chat_before_click = this.zoom_chat;
                 this.zoom_chat = false;
                 click_log::note(|| format!("gpui down {:?} at {:.0},{:.0}", event.button, f32::from(event.position.x), f32::from(event.position.y)));
             }))
@@ -3289,11 +3316,11 @@ fn main() {
                 });
                 // The notebook's zoom, from anywhere (the notebook usually has the keyboard).
                 let ws = workspace.downgrade();
-                cx.on_action(move |_: &ZoomIn, cx| drop(ws.update(cx, |this, cx| this.zoom(1.1, false, cx))));
+                cx.on_action(move |_: &ZoomIn, cx| drop(ws.update(cx, |this, cx| this.zoom(1.1, false, None, cx))));
                 let ws = workspace.downgrade();
-                cx.on_action(move |_: &ZoomOut, cx| drop(ws.update(cx, |this, cx| this.zoom(1. / 1.1, false, cx))));
+                cx.on_action(move |_: &ZoomOut, cx| drop(ws.update(cx, |this, cx| this.zoom(1. / 1.1, false, None, cx))));
                 let ws = workspace.downgrade();
-                cx.on_action(move |_: &ZoomReset, cx| drop(ws.update(cx, |this, cx| this.zoom(1., true, cx))));
+                cx.on_action(move |_: &ZoomReset, cx| drop(ws.update(cx, |this, cx| this.zoom(1., true, None, cx))));
                 let ws = workspace.downgrade();
                 cx.on_action(move |_: &ToggleSidebar, cx| {
                     ws.update(cx, |this, cx| {
