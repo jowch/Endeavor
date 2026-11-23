@@ -1,10 +1,3 @@
-// The Status tab's rows, from Pluto's own state (window.editor_state.notebook):
-// its status tree gives the steps (Start Julia, Packages, Run cells) and each
-// run's progress; its package state gives the notebook's packages. Pkg's log is
-// read only for which packages it precompiled (✓) or failed to (✗), and for the
-// dependency count (the manifest's added packages). Pure: tested with literal
-// fixtures (test/status.test.mjs).
-
 import { cellName as cellLabel, commentName } from "./cellname";
 
 export type Phase = "waiting" | "busy" | "done" | "failed";
@@ -37,7 +30,6 @@ export interface NotebookLike {
 export interface PkgRow {
   name: string;
   state: PkgState;
-  /** The installed version, or "standard library". */
   detail: string;
 }
 
@@ -45,20 +37,16 @@ export interface CellRow {
   id: string;
   name: string;
   state: CellState;
-  /** The last run's time, e.g. "0.4 s". */
   time: string | null;
 }
 
 export interface StatusModel {
-  /** The bold line at the top: what's happening now. */
   headline: string;
   steps: Array<{ name: "Start Julia" | "Packages" | "Run cells"; phase: Phase }>;
   packages: PkgRow[];
-  /** Packages the notebook's packages brought in, when Pkg added any this time. */
   deps: { count: number; precompiled: number; failed: number } | null;
   cells: CellRow[];
   failure: { name: string; cells: string[] } | null;
-  /** Busy work, for the app's header while the drawer is shut. */
   busy: string | null;
   saveFailed: boolean;
   restart: "required" | "recommended" | null;
@@ -74,7 +62,6 @@ export function phaseOf(entry: StatusEntry | null | undefined): Phase {
 
 const ansi = /\x1b\[[0-9;]*m/g;
 
-/** What Pkg's log says: packages precompiled (✓) or failed (✗), and the manifest's additions. */
 export function parsePkgLog(log: string): { precompiled: string[]; failed: string[]; added: string[] } {
   const precompiled: string[] = [];
   const failed: string[] = [];
@@ -88,7 +75,6 @@ export function parsePkgLog(log: string): { precompiled: string[]; failed: strin
       inManifest = true;
       continue;
     }
-    // The manifest's lines each name a package by its UUID prefix, "[5ae59095] + Colors v0.13.2".
     const entry = line.match(/\[[0-9a-f]{8}\]\s+(\+)?\s*([\w.]+)/);
     if (!entry) inManifest = false;
     else if (inManifest && entry[1]) added.push(entry[2]);
@@ -96,7 +82,6 @@ export function parsePkgLog(log: string): { precompiled: string[]; failed: strin
   return { precompiled, failed, added };
 }
 
-/** Packages in the order the notebook imports them (`using A, B`, `import C: f`). */
 export function importedPackages(codes: string[]): string[] {
   const names: string[] = [];
   for (const code of codes) {
@@ -122,7 +107,6 @@ export function prettyTime(ns: number): string {
   return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
 }
 
-/** The names a cell defines, without the ones Pluto makes up for anonymous functions. */
 export function definedNames(map: Record<string, unknown> | undefined): string[] {
   return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
 }
@@ -168,7 +152,6 @@ export function statusModel(nb: NotebookLike): StatusModel {
     if (pkgPhase === "failed" && (failedSet.has(name) || (failedSet.size === 0 && busy.has(name)))) state = "failed";
     else if (busy.has(name) && pkgPhase === "busy") state = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
     else if (version != null) state = "ready";
-    // Pluto manages the environment but couldn't add this one: Pkg can't find it.
     else if (pkgPhase === "done") state = Object.keys(installed).length ? "failed" : "ready";
     else state = "waiting";
     const notFound = state === "failed" && version == null && pkgPhase === "done";
@@ -188,7 +171,6 @@ export function statusModel(nb: NotebookLike): StatusModel {
   });
 
   const failedPkg = packages.find((p) => p.state === "failed");
-  // Without the package, the cells that use it error; those are the ones to name.
   const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
 
   if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";

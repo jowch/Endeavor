@@ -1,9 +1,3 @@
-// The overview rail (docs/ui-spec.md): a 3px strip on the notebook's right edge
-// with a mark per cell Claude touched and that hasn't run (orange, as its bar)
-// and per cell with the user's own unrun edits (grey, as Pluto's code_differs
-// bar), placed by the cell's position in the notebook, so off-screen changes
-// show too. Clicking a mark scrolls to its cell. Reads the marks cells.ts sets.
-
 import { onRedraw } from "./redraw";
 
 const css = `
@@ -17,8 +11,6 @@ let rail: HTMLElement;
 
 function draw() {
   const marked = [...document.querySelectorAll<HTMLElement>('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
-  // Nothing to mark: don't measure the page. Pluto redraws often, and each
-  // measurement makes the browser lay the whole notebook out again.
   if (!marked.length) {
     if (rail.firstChild) rail.replaceChildren();
     return;

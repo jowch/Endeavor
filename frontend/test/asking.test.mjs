@@ -1,4 +1,3 @@
-// The chat's card asking to run cells marks them in the notebook, and the marks survive redraws.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -25,14 +24,12 @@ test("asked-about cells, the cells that re-run after them, and the cells it need
   window.__endeavor.receive({ type: "context", host: "This Mac", asking: false, readonly: false, ask_cells: [A], rerun_cells: [B], needed_ids: [D] });
   assert.deepEqual([mark(A), mark(B), mark(C), mark(D)], ["asks", "reruns", null, "needed"]);
 
-  // Pluto redraws a cell: the mark comes back.
   const fresh = window.document.createElement("pluto-cell");
   fresh.id = A;
   window.document.getElementById(A).replaceWith(fresh);
   await new Promise((done) => setTimeout(done, 0));
   assert.equal(mark(A), "asks");
 
-  // The card is answered: the marks go.
   window.__endeavor.receive({ type: "context", host: "This Mac", asking: false, readonly: false, ask_cells: [], rerun_cells: [], needed_ids: [] });
   assert.deepEqual([mark(A), mark(B), mark(C), mark(D)], [null, null, null, null]);
 });

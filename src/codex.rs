@@ -1,16 +1,3 @@
-//! What Codex needs that Claude doesn't (docs/codex-agent.md): its sign-in,
-//! and the dialect that turns its adapter's sessions into the shape the app
-//! knows from Claude's, so the rest of the app needs no Codex branches.
-//!
-//! Codex's modes are sandbox presets (`read-only`, `workspace-write`,
-//! `agent`, `agent-full-access`), and planning is a separate option,
-//! `collaboration_mode`. Endeavor keeps every session in `workspace-write`
-//! (`INITIAL_AGENT_MODE`), where Codex asks before each notebook write, and
-//! makes its own modes out of the runtime's gate: Manual and Ask to run differ
-//! only in what the runtime holds, and Plan is the plan collaboration mode.
-//! The app sees the three as the mode ids it knows: `default` (Manual),
-//! `auto` (Ask to run and Auto), `plan`.
-
 use std::collections::HashMap;
 
 use agent_client_protocol::schema::v1::{
@@ -20,29 +7,19 @@ use agent_client_protocol::schema::v1::{
 
 use crate::agent::{ModeSwitch, Started};
 
-/// Codex's sandbox preset for every Endeavor session.
 const SANDBOX: &str = "workspace-write";
 const SANDBOX_OPTION: &str = "mode";
 const PLANNING_OPTION: &str = "collaboration_mode";
-/// Codex's effort option, `effort` in the app (Claude's id).
 const EFFORT_OPTION: &str = "reasoning_effort";
 const FAST_OPTION: &str = "fast-mode";
 
-/// Codex's sign-in on this computer, as `codex login status` tells it (exit 0
-/// when signed in). It reads the user's own Codex login (`CODEX_HOME`, else
-/// `~/.codex`) and changes nothing.
 pub fn signed_in() -> Result<bool, String> {
     let out = crate::agent::codex_adapter(&["cli", "login", "status"])?.output().map_err(|e| format!("Couldn't check Codex's sign-in: {e}"))?;
     Ok(out.status.success())
 }
 
-/// Start Codex's browser sign-in (`codex-acp login`): it opens the ChatGPT
-/// sign-in page and ends once the sign-in is done or fails (`finish_login`).
-/// It runs the `codex` the adapter bundles, as the server does.
-/// In its own process group, so Cancel stops it and what it started.
 pub fn start_login() -> Result<std::process::Child, String> {
     let mut command = crate::agent::codex_adapter(&["login", "--client-name=endeavor", "--client-title=Endeavor"])?;
-    // The adapter's login runs `CODEX_PATH`, else a `codex` on PATH.
     if let Some(codex) = crate::agent::bundled_codex() {
         command.env("CODEX_PATH", codex);
     }
@@ -52,18 +29,14 @@ pub fn start_login() -> Result<std::process::Child, String> {
     command.spawn().map_err(|e| format!("Couldn't start Codex's sign-in: {e}"))
 }
 
-/// Wait for a sign-in `start_login` started to end (blocking).
 pub fn finish_login(child: std::process::Child) -> Result<(), String> {
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()) }
 }
 
-/// One session's mode, as Endeavor's ids name it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct View {
-    /// Codex's plan collaboration mode is on.
     planning: bool,
-    /// The mode outside planning: `default` (Manual) or `auto`.
     working: &'static str,
 }
 
@@ -73,17 +46,12 @@ impl View {
     }
 }
 
-/// Translates each Codex session at the ACP boundary.
 #[derive(Default)]
 pub struct Dialect {
     sessions: HashMap<SessionId, View>,
 }
 
 impl Dialect {
-    /// A session is up: Endeavor's modes in place of Codex's, its options as
-    /// the app names them, and the option to set if Codex didn't start it in
-    /// `workspace-write`. Every session starts in Manual, as Claude's do;
-    /// the app then puts it in its start mode.
     pub fn started(&mut self, started: Started) -> (Started, Option<(String, SessionConfigValueId)>) {
         let view = View { planning: current(&started.config, PLANNING_OPTION).as_deref() == Some("plan"), working: "default" };
         self.sessions.insert(started.id.clone(), view);
@@ -99,11 +67,6 @@ impl Dialect {
         (Started { id: started.id, modes: Some(modes), config: app_options(started.config) }, fix)
     }
 
-    /// An update from Codex, as the app takes it. Its own mode updates name
-    /// sandbox presets, which the app never shows; a change of collaboration
-    /// mode is a mode update. Leaving plan by approving the plan goes on in
-    /// Ask to run, as Claude's Start does. A tool's result is the MCP content,
-    /// as Claude's adapter gives it.
     pub fn update(&mut self, session: &SessionId, update: SessionUpdate) -> Vec<SessionUpdate> {
         match update {
             SessionUpdate::CurrentModeUpdate(_) => Vec::new(),
@@ -133,12 +96,10 @@ impl Dialect {
         }
     }
 
-    /// Codex's reply to an option change: its options, as the app names them.
     pub fn options(&self, options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
         app_options(options)
     }
 
-    /// The app switches a session to one of Endeavor's modes.
     pub fn set_mode(&mut self, session: &SessionId, mode: &SessionModeId) -> ModeSwitch {
         let view = self.sessions.entry(session.clone()).or_insert(View { planning: false, working: "default" });
         let (planning, working) = match mode.to_string().as_str() {
@@ -151,7 +112,6 @@ impl Dialect {
         ModeSwitch { mode: None, set, confirm: Some(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(view.mode()))) }
     }
 
-    /// Codex's id for an option the app names (`effort` → `reasoning_effort`).
     pub fn option_id(&self, id: &str) -> String {
         if id == "effort" { EFFORT_OPTION.to_owned() } else { id.to_owned() }
     }
@@ -161,9 +121,6 @@ impl Dialect {
     }
 }
 
-/// Codex's options as the app shows them: no sandbox or collaboration mode
-/// (Endeavor's modes stand in for them), effort under Claude's id, and fast
-/// mode named as a speed ("Standard" or "Fast").
 fn app_options(options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
     options
         .into_iter()
@@ -191,10 +148,6 @@ fn app_options(options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
         .collect()
 }
 
-/// Codex puts an MCP tool's reply in `rawOutput` as `{result: {content,
-/// …}, error}`. The app reads the content (`celldiff::tool_json`), or, for a
-/// call that failed before the tool replied, the error's text. Any other
-/// output (a shell command's) stays as it is.
 fn tool_output(raw: serde_json::Value) -> serde_json::Value {
     match (raw.pointer("/result/content"), raw.get("error")) {
         (Some(content), _) => content.clone(),
@@ -215,7 +168,6 @@ fn current(options: &[SessionConfigOption], id: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Codex's `session/new` reply (adapter 2.1.1), trimmed of its model list.
     fn new_session() -> Started {
         let reply: serde_json::Value = serde_json::from_str(include_str!("fixtures/codex/session-new.json")).unwrap();
         let config: Vec<SessionConfigOption> = serde_json::from_value(reply["configOptions"].clone()).unwrap();
@@ -256,7 +208,6 @@ mod tests {
         assert_eq!(effort.1.iter().map(|o| o.value.to_string()).collect::<Vec<_>>(), ["low", "medium", "high", "xhigh", "max", "ultra"]);
         let speed = crate::session::config_choices(&started.config, "fast-mode").unwrap();
         assert_eq!(speed.1.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["Standard", "Fast"]);
-        // The capture's session was in Codex's default `agent` mode: Endeavor moves it.
         assert_eq!(fix, Some(("mode".to_owned(), "workspace-write".into())));
     }
 
@@ -296,13 +247,11 @@ mod tests {
         let config = new_session().config;
         dialect.set_mode(&id, &"plan".into());
 
-        // Codex's own confirmation of plan changes nothing more.
         let planning = dialect.update(&id, SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(with(config.clone(), "collaboration_mode", "plan"))));
         assert_eq!(mode_of(&planning), None);
         let SessionUpdate::ConfigOptionUpdate(shown) = &planning[0] else { panic!() };
         assert_eq!(ids(&shown.config_options), ["model", "effort", "fast-mode"]);
 
-        // implement_plan: the adapter leaves plan and says so in its options.
         let approved = dialect.update(&id, SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(with(config, "collaboration_mode", "default"))));
         assert_eq!(mode_of(&approved).as_deref(), Some("auto"));
     }

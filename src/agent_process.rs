@@ -1,7 +1,3 @@
-//! Each agent's adapter process, as the chat sees it. When it stops by itself
-//! Endeavor starts it again, unless it also stopped in the minute before: a
-//! process that keeps stopping is left stopped, with a card that says so.
-
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -13,23 +9,18 @@ use crate::failure::{self, Lead};
 use crate::new_session::Glyph;
 use crate::signin::Look;
 
-/// Two stops this close together: it stops restarting.
 pub const CRASH_LOOP: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
-    /// Starting or running.
     Up,
-    /// It stopped by itself and is starting again.
     Restarting,
-    /// It stopped twice in a minute; it starts again from the card's Restart button.
     Down,
 }
 
 #[derive(Debug)]
 pub struct Process {
     pub state: State,
-    /// Why it last stopped, and the log's last lines then, for Details.
     pub error: String,
     last_stop: Option<Instant>,
 }
@@ -45,7 +36,6 @@ impl Process {
         self.state == State::Up
     }
 
-    /// It stopped by itself at `now`: true to start it again.
     pub fn stopped(&mut self, now: Instant, error: String) -> bool {
         let again = self.last_stop.is_some_and(|last| now.duration_since(last) < CRASH_LOOP);
         self.last_stop = Some(now);
@@ -54,34 +44,23 @@ impl Process {
         !again
     }
 
-    /// Restart on the card: a fresh start, with no earlier stop counted.
     pub fn restart_by_hand(&mut self) {
         self.last_stop = None;
         self.state = State::Restarting;
     }
 
-    /// It's connected.
     pub fn ready(&mut self) {
         self.state = State::Up;
     }
 }
 
-/// One agent's connection, as the app keeps it.
 pub struct Link {
     pub tx: UnboundedSender<Command>,
-    /// Its commands until its thread starts: Claude's at launch (on first
-    /// launch, once This Mac's Julia is up), another agent's when one of its
-    /// sessions first needs it.
     pub rx: Option<UnboundedReceiver<Command>>,
     pub process: Process,
-    /// Connected.
     pub ready: bool,
-    /// It stopped with an error (often a failed adapter install); About offers Update.
     pub failed: bool,
-    /// The "isn't running" card's Details are open.
     pub details_open: bool,
-    /// Which command channel is current (`renew`). Events from a start on an
-    /// earlier one, ended on purpose (`restart_agent`), are dropped.
     pub generation: u64,
 }
 
@@ -93,8 +72,6 @@ impl Default for Link {
 }
 
 impl Link {
-    /// A fresh command channel for a new thread (the failed one dropped its own;
-    /// a running one ends). The old start's events are ignored from here.
     pub fn renew(&mut self) -> UnboundedReceiver<Command> {
         let (tx, rx) = futures::channel::mpsc::unbounded();
         self.tx = tx;
@@ -103,7 +80,6 @@ impl Link {
     }
 }
 
-/// Every agent's link.
 #[derive(Default)]
 pub struct Links {
     claude: Link,
@@ -134,15 +110,11 @@ impl Links {
 }
 
 impl Workspace {
-    /// An agent's process stopped by itself: start it again, unless that's
-    /// the second time in a minute. Either way, its sessions keep what they
-    /// have and open again once it's back; messages queue meanwhile.
     pub fn agent_stopped(&mut self, agent: Agent, error: String, cx: &mut Context<Self>) {
         eprintln!("{}'s process stopped: {error}", agent.name());
         let mut details = vec![error];
         details.extend(log_tail(8));
         let restart = self.links.get_mut(agent).process.stopped(Instant::now(), details.join("\n"));
-        // A sign-in made over the connection went with it: the card offers it again.
         if agent == Agent::Antigravity && self.antigravity_account == crate::agent::Account::SigningIn {
             self.antigravity_account = crate::agent::Account::Failed;
         }
@@ -153,13 +125,11 @@ impl Workspace {
         if restart {
             self.restart_agent(agent, cx);
         } else {
-            // About offers Update, in case a newer adapter helps.
             self.links.get_mut(agent).failed = true;
         }
         cx.notify();
     }
 
-    /// The card's Restart button.
     pub fn restart_by_hand(&mut self, agent: Agent, cx: &mut Context<Self>) {
         let link = self.links.get_mut(agent);
         link.process.restart_by_hand();
@@ -168,13 +138,11 @@ impl Workspace {
         self.restart_agent(agent, cx);
     }
 
-    /// An agent is connected: its sessions waiting for it open where they were.
     pub fn agent_ready(&mut self, agent: Agent, cx: &mut Context<Self>) {
         self.links.get_mut(agent).process.ready();
         self.open_waiting(agent, cx);
     }
 
-    /// Open the sessions waiting for `agent`, where it can now.
     pub fn open_waiting(&mut self, agent: Agent, cx: &mut Context<Self>) {
         let waiting: Vec<u64> = self.sessions.iter().filter(|s| s.agent == agent && s.agent_waiting && s.failed.is_none()).map(|s| s.key).collect();
         for key in waiting {
@@ -183,8 +151,6 @@ impl Workspace {
         self.sync_holds(cx);
     }
 
-    /// Above the composer while the session's agent is restarting (waiting),
-    /// or left stopped (failed: it needs the user).
     pub fn render_agent_trouble(&self, agent: Agent, cx: &mut Context<Self>) -> Option<AnyElement> {
         let link = self.links.get(agent);
         match link.process.state {
@@ -211,19 +177,16 @@ impl Workspace {
     }
 }
 
-/// "Claude stopped unexpectedly. Restarting it…"
 pub fn restarting(agent: Agent) -> String {
     format!("{} stopped unexpectedly. Restarting it…", agent.name())
 }
 
-/// "Claude isn't running"
 pub fn down_title(agent: Agent) -> String {
     format!("{} isn't running", agent.name())
 }
 
 pub const DOWN_BODY: &str = "It stopped twice in a minute, so Endeavor stopped restarting it. The notebook still works.";
 
-/// The last `n` lines of the app's log, where the adapter's own output goes.
 pub fn log_tail(n: usize) -> Vec<String> {
     let Some(text) = crate::logs::path().and_then(|p| std::fs::read_to_string(p).ok()) else { return Vec::new() };
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -232,7 +195,6 @@ pub fn log_tail(n: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: that brings in gpui's own `#[test]`.
     use super::{Process, State};
     use std::time::{Duration, Instant};
 

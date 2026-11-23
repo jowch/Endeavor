@@ -1,5 +1,3 @@
-// The ⌘E prompt in a fake Pluto page: which prompt the key opens, what the app
-// gets for ↩ and ⌘↩, drafts, and where the prompt sits.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -27,7 +25,6 @@ async function page(platform = "MacIntel") {
   Object.defineProperty(window.navigator, "platform", { value: platform });
   Object.defineProperty(window, "innerWidth", { value: 900 });
   Object.defineProperty(window, "innerHeight", { value: 700 });
-  // jsdom lays nothing out: each cell's code box is 80 px tall at its data-top, the prompt is 70 px.
   window.HTMLElement.prototype.getBoundingClientRect = function () {
     const top = Number(this.closest("pluto-cell")?.dataset.top ?? 0);
     return { left: 100, top, right: 700, bottom: top + 80, width: 600, height: 80 };
@@ -132,7 +129,6 @@ test("an empty cell asks what to write; ✦ Claude asks for a new cell", async (
   key("Enter");
   assert.equal(sent.at(-1).where, "fill");
 
-  // Pluto's own "+" buttons, which the ✦ Claude button sits beside.
   for (const id of [A, B]) {
     const plus = window.document.createElement("button");
     plus.className = "add_cell before";
