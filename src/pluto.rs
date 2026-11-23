@@ -116,14 +116,28 @@ pub fn idle_stopped(event: &serde_json::Value) -> Vec<(String, u64, bool)> {
 }
 
 /// Notebooks the runtime closed because their engine (R) ended, from its event stream:
-/// (path, the engine's language, why it ended). Listed until each opens again.
-pub fn engine_ended(event: &serde_json::Value) -> Vec<(String, String, String)> {
+/// (path, the engine's language, why it ended, when in ms). Listed until each opens again.
+/// A runtime from before `ended_at` gives 0.
+pub fn engine_ended(event: &serde_json::Value) -> Vec<(String, String, String, u64)> {
     event["engine_ended"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|e| Some((e["path"].as_str()?.to_owned(), e["language"].as_str().unwrap_or("R").to_owned(), e["why"].as_str().unwrap_or_default().to_owned())))
+        .filter_map(|e| Some((e["path"].as_str()?.to_owned(), e["language"].as_str().unwrap_or("R").to_owned(), e["why"].as_str().unwrap_or_default().to_owned(), e["ended_at"].as_u64().unwrap_or(0))))
         .collect()
+}
+
+/// R endings by path and when (`engine_ended`'s `ended_at`).
+pub type Endings = std::collections::HashSet<(String, u64)>;
+
+/// The endings in `event` that `last` (the endings of the last push, by path and time) didn't
+/// have, as (path, language, why), and the endings to keep for the next push. Keyed on the time
+/// too, so a notebook that opened again and whose R ended again between two pushes shows its
+/// second ending (#122).
+pub fn new_endings(last: &Endings, event: &serde_json::Value) -> (Vec<(String, String, String)>, Endings) {
+    let ended = engine_ended(event);
+    let new = ended.iter().filter(|(path, _, _, at)| !last.contains(&(path.clone(), *at))).map(|(path, language, why, _)| (path.clone(), language.clone(), why.clone())).collect();
+    (new, ended.into_iter().map(|(path, _, _, at)| (path, at)).collect())
 }
 
 /// The user pressed Stop in session `owner`: the runtime interrupts the runs that session
@@ -710,7 +724,7 @@ mod tests {
         assert_eq!(crate::notice::reason(&connection_error(Error::from(ErrorKind::WouldBlock))), "The notebook didn't answer.");
     }
 
-    use super::{RunWarning, Started, cells_that_ran, engine_ended, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
+    use super::{RunWarning, Started, cells_that_ran, engine_ended, new_endings, julia_failed, julia_starting, run_warnings, still_true, until_julia, user_edits};
 
     #[test]
     fn a_notebooks_asking_packages_are_read_from_list_notebooks() {
@@ -744,8 +758,14 @@ mod tests {
     fn the_events_list_the_notebooks_r_took_with_it() {
         // As the core sends it (EndeavorMCP notebooks.rs `compose`).
         let event = serde_json::json!({ "engine_ended": [{ "path": "/lab/growth.R", "language": "R", "why": "exit status: 1; R's last output: Error: boom" }] });
-        assert_eq!(engine_ended(&event), [("/lab/growth.R".to_owned(), "R".to_owned(), "exit status: 1; R's last output: Error: boom".to_owned())]);
+        assert_eq!(engine_ended(&event), [("/lab/growth.R".to_owned(), "R".to_owned(), "exit status: 1; R's last output: Error: boom".to_owned(), 0)]);
         assert!(engine_ended(&serde_json::json!({})).is_empty(), "an older runtime sends none");
+        let push = |at: u64| serde_json::json!({ "engine_ended": [{ "path": "/lab/growth.R", "language": "R", "why": "signal: 9", "ended_at": at }] });
+        let (new, last) = new_endings(&Default::default(), &push(5));
+        assert_eq!(new, [("/lab/growth.R".to_owned(), "R".to_owned(), "signal: 9".to_owned())]);
+        assert!(new_endings(&last, &push(5)).0.is_empty(), "the same ending, pushed again");
+        assert_eq!(new_endings(&last, &push(9)).0.len(), 1, "opened again and ended again between two pushes");
+        assert!(new_endings(&last, &serde_json::json!({})).1.is_empty(), "opened again");
     }
 
     #[test]

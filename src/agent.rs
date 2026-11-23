@@ -1,8 +1,3 @@
-//! ACP connection to Claude Code, run on its own thread: one connection hosting
-//! any number of sessions, each with at most one running turn. The UI talks to it
-//! over two channels: [`Command`]s in, [`AgentEvent`]s out. Message queues live in
-//! the UI (so they're editable and agent-agnostic); this side only runs turns.
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -25,7 +20,6 @@ use futures::{FutureExt, StreamExt};
 use crate::pluto::Bridge;
 use crate::splash::{Progress, Step};
 
-/// The agents Endeavor can run. Each has one ACP connection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
@@ -46,13 +40,10 @@ impl Agent {
         }
     }
 
-    /// The agent's name in the app ("Claude", "Codex").
     pub fn name(self) -> &'static str {
         self.facts().name
     }
 
-    /// It can run on this computer: an agent whose program is pinned for
-    /// some platforms only shows as "Not available yet" on the others.
     pub fn available(self) -> bool {
         match &self.facts().install {
             Install::Npm { .. } => true,
@@ -61,8 +52,6 @@ impl Agent {
     }
 }
 
-/// A fixed sentence naming the agent, as a `&'static str`:
-/// `agent_text!(agent, "You stopped ", "")` is "You stopped Claude" or "You stopped Codex".
 #[macro_export]
 macro_rules! agent_text {
     ($agent:expr, $before:literal, $after:literal) => {
@@ -74,59 +63,28 @@ macro_rules! agent_text {
     };
 }
 
-/// What Endeavor relies on about an agent, so each can differ.
 pub struct AgentFacts {
     pub name: &'static str,
-    /// Who makes it, as the agent choice says ("by Anthropic").
     pub maker: &'static str,
-    /// How its ACP adapter is installed and started.
     pub install: Install,
-    /// Set on the adapter's process.
     env: &'static [(&'static str, &'static str)],
-    /// Its process gets a temp folder of its own in the app's folder, emptied
-    /// before each start: a server that unpacks itself into the temp folder
-    /// on every start and leaves that behind when it's ended (Antigravity's).
     private_temp: bool,
-    /// It loads Endeavor's skills as a Claude Code plugin (`session_options`),
-    /// so the runtime leaves out its own guide to them.
     plugin: bool,
-    /// Where the agent keeps "don't ask again" rules inside the session
-    /// folder, if it does: Endeavor then offers "Always in this folder" and
-    /// lists the rules. None for an agent whose lasting rules live elsewhere
-    /// (Cursor's and Codex's change the user's own config).
     pub folder_rules: Option<&'static str>,
-    /// Its sessions can run on a server. The agent always runs on this
-    /// computer; on a server its own file and shell tools must be off.
     pub on_servers: bool,
-    /// It asks before every notebook write, whatever Endeavor's mode, and has
-    /// no mode that leaves that to Endeavor. Endeavor answers those prompts
-    /// allow-once and leaves the decision to the runtime, which holds what
-    /// the session's mode asks about.
     pub asks_every_write: bool,
-    /// The config options the composer shows, by id, with their names.
     pub config: &'static [(&'static str, &'static str)],
-    /// How its sign-in is checked.
     pub sign_in: SignIn,
-    /// Sent ahead of a new session's first message, for an agent that doesn't
-    /// load Endeavor's skills: what the notebook is and where its tools are.
     pub session_intro: Option<&'static str>,
-    /// It starts when one of its sessions first needs it, not with the app,
-    /// so its sessions say when they wait for it to install, connect or be
-    /// signed in to. (Claude starts at launch, and its sign-in has its own screens.)
     pub on_demand: bool,
 }
 
-/// An agent's sign-in, as the app knows it, for an agent other than Claude
-/// (whose sign-in has screens of its own: signin.rs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Account {
-    /// Not checked yet: the agent hasn't started.
     Unknown,
     SignedIn,
     SignedOut,
-    /// Its browser sign-in is under way.
     SigningIn,
-    /// The browser sign-in didn't finish.
     Failed,
 }
 
@@ -136,38 +94,22 @@ impl Account {
     }
 }
 
-/// How an agent's sign-in is checked and made.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SignIn {
-    /// `claude auth status` / `claude auth login` (signin.rs).
     ClaudeAuth,
-    /// `codex login status`, and `codex-acp login` for the browser sign-in (codex.rs).
     CodexLogin,
-    /// ACP's own `authenticate` with this method, over the agent's
-    /// connection; checked by the agent's sign-in file (antigravity.rs).
     Authenticate(&'static str),
 }
 
-/// How an agent's ACP adapter is installed and started.
 pub enum Install {
-    /// An npm package run on the app's Node. The app's resources folder
-    /// `pins` holds package.json + package-lock.json pinning it and its
-    /// dependencies, which install into `<installed>-<version>` in the app's
-    /// folder.
     Npm { package: &'static str, pins: &'static str, installed: &'static str },
-    /// A program in a pinned zip, unpacked into `folder` in the app's folder;
-    /// `program` is its path inside. `zip` is None on a platform it isn't
-    /// pinned for.
     Program { what: &'static str, zip: Option<(&'static str, &'static str, u64)>, folder: &'static str, program: &'static str },
 }
 
-/// Claude Code writes its rules to the folder's `.claude/settings.local.json`
-/// (Endeavor's session options load `local` settings).
 pub const CLAUDE_CODE: AgentFacts = AgentFacts {
     name: "Claude",
     maker: "by Anthropic",
     install: Install::Npm { package: "@agentclientprotocol/claude-agent-acp", pins: "adapter", installed: "adapter" },
-    // A run waits in the runtime for the user's answer, for as long as that takes.
     env: &[("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT", "0")],
     private_temp: false,
     plugin: true,
@@ -180,28 +122,18 @@ pub const CLAUDE_CODE: AgentFacts = AgentFacts {
     on_demand: false,
 };
 
-/// Codex through `@agentclientprotocol/codex-acp`, with the `codex` it bundles
-/// (docs/codex-agent.md). Its sessions start in `workspace-write`, where it
-/// asks before each notebook write; Endeavor's modes come from the runtime's
-/// gate and Codex's plan collaboration mode (`codex::Dialect`).
 pub const CODEX: AgentFacts = AgentFacts {
     name: "Codex",
     maker: "by OpenAI",
     install: Install::Npm { package: "@agentclientprotocol/codex-acp", pins: "adapter-codex", installed: "codex-adapter" },
-    // Codex always loads the user's own setup (`CODEX_HOME`, else `~/.codex`).
-    // `CODEX_CONFIG` overrides it for every session of the adapter: the user's
-    // own install of Endeavor's plugin is off, as in Claude's sessions
-    // (`session_options`); its notebook tools would bypass the app's cards.
     env: &[("INITIAL_AGENT_MODE", "workspace-write"), ("CODEX_CONFIG", r#"{"plugins":{"endeavor@endeavor":{"enabled":false}}}"#)],
     private_temp: false,
     plugin: false,
     folder_rules: None,
-    // Its shell and file tools can't be turned off per session, and would act on this computer.
     on_servers: false,
     asks_every_write: true,
     config: &[("model", "Model"), ("effort", "Effort"), ("fast-mode", "Speed")],
     sign_in: SignIn::CodexLogin,
-    // Without it Codex made a Jupyter notebook with its shell for "make a new notebook".
     session_intro: Some(
         "[Endeavor] This session works in Endeavor, where the user's notebook is a Pluto.jl notebook (Julia), \
          shown beside this chat. Do all notebook work with the notebook MCP server's tools, and call its \
@@ -211,12 +143,6 @@ pub const CODEX: AgentFacts = AgentFacts {
     on_demand: true,
 };
 
-/// Antigravity through Google's own ACP server, `agy_acp_server`
-/// (docs/antigravity-agent.md), pinned for Windows x64 only so far. It is a
-/// launcher that unpacks itself into the temp folder on every start and runs
-/// a second process; on Windows the agent's job ends both (agent_job.rs). It
-/// asks before every notebook call, reads included, and Endeavor leaves the
-/// decision to the runtime's gate; its own shell commands get the usual cards.
 pub const ANTIGRAVITY: AgentFacts = AgentFacts {
     name: "Antigravity",
     maker: "by Google",
@@ -225,7 +151,6 @@ pub const ANTIGRAVITY: AgentFacts = AgentFacts {
     private_temp: true,
     plugin: false,
     folder_rules: None,
-    // Its shell and file tools act on this computer.
     on_servers: false,
     asks_every_write: true,
     config: &[("model", "Model")],
@@ -269,11 +194,8 @@ const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = Some((
     all(any(target_os = "macos", target_os = "linux"), any(target_arch = "aarch64", target_arch = "x86_64"))
 )))]
 const ANTIGRAVITY_ZIP: Option<(&str, &str, u64)> = None;
-// The Mac and Linux zips hold `agy_acp_server.par` (a native program despite
-// the name) with its helper `localharness_external` beside it, no folder.
 const ANTIGRAVITY_PROGRAM: &str = if cfg!(windows) { "agy_acp_server.exe" } else { "agy_acp_server.par" };
 
-/// The Node.js the adapter runs on, installed on first launch like Julia.
 const NODE_VERSION: &str = "24.21.0";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const NODE_TARBALL: (&str, &str, u64, &str) = (
@@ -318,7 +240,6 @@ const NODE_TARBALL: (&str, &str, u64, &str) = (
     "node-v24.21.0-win-arm64",
 );
 
-/// The adapter version this build of the app pins (`<pins>/package.json`).
 fn pinned_adapter_version(agent: Agent) -> Result<String, String> {
     let Install::Npm { package, pins, .. } = agent.facts().install else { return Err(format!("{} has no npm adapter", agent.name())) };
     let manifest = std::fs::read_to_string(crate::install::resources().join(pins).join("package.json")).map_err(|e| e.to_string())?;
@@ -326,26 +247,20 @@ fn pinned_adapter_version(agent: Agent) -> Result<String, String> {
     manifest["dependencies"][package].as_str().map(str::to_owned).ok_or_else(|| format!("{pins}/package.json has no adapter version"))
 }
 
-/// The pinned adapter version, and whether it is installed yet. A new app
-/// version can pin a new adapter, which the app installs when the agent starts.
 pub fn adapter_status(agent: Agent) -> Result<(String, bool), String> {
     let (_, entry) = adapter_paths(agent)?;
     Ok((pinned_adapter_version(agent)?, entry.exists()))
 }
 
-/// Where the app's Node and the pinned adapter's entry point live (installed or not).
 fn adapter_paths(agent: Agent) -> Result<(PathBuf, PathBuf), String> {
     let app = crate::install::app_dir()?;
     let Install::Npm { package, installed, .. } = agent.facts().install else { return Err(format!("{} has no npm adapter", agent.name())) };
     let version = pinned_adapter_version(agent)?;
-    // Windows' Node keeps node.exe at the top of its folder, not in bin/.
     let node = if cfg!(windows) { app.join(format!("node-v{NODE_VERSION}")).join("node.exe") } else { app.join(format!("node-v{NODE_VERSION}/bin/node")) };
     let entry = app.join(format!("{installed}-{version}/node_modules/{package}/dist/index.js"));
     Ok((node, entry))
 }
 
-/// The Claude Code CLI bundled with the adapter (`claude <args>`). Debug builds
-/// run `ENDEAVOR_CLAUDE_CLI` instead when it is set, to test sign-in without an account.
 pub(crate) fn claude_cli(args: &[&str]) -> Result<std::process::Command, String> {
     #[cfg(debug_assertions)]
     if let Some(fake) = std::env::var_os("ENDEAVOR_CLAUDE_CLI") {
@@ -357,14 +272,10 @@ pub(crate) fn claude_cli(args: &[&str]) -> Result<std::process::Command, String>
     let (node, entry) = adapter_paths(Agent::Claude)?;
     let mut command = std::process::Command::new(node);
     command.arg(entry).arg("--cli").args(args).stdin(std::process::Stdio::null());
-    // Node is a console program, and the app on Windows has no console to share.
     endeavor_mcp::client::no_window(&mut command);
     Ok(command)
 }
 
-/// The Codex adapter run with `args`: `cli <codex args>` runs the `codex` it
-/// bundles, `login` its browser sign-in. Debug builds run `ENDEAVOR_CODEX_CLI`
-/// instead when it is set, to test sign-in without touching the account.
 pub(crate) fn codex_adapter(args: &[&str]) -> Result<std::process::Command, String> {
     #[cfg(debug_assertions)]
     if let Some(fake) = std::env::var_os("ENDEAVOR_CODEX_CLI") {
@@ -380,20 +291,14 @@ pub(crate) fn codex_adapter(args: &[&str]) -> Result<std::process::Command, Stri
     Ok(command)
 }
 
-/// The native `codex` the Codex adapter bundles (in `@openai/codex`'s
-/// platform package), for `codex-acp login`: unlike the server, the adapter's
-/// login runs `CODEX_PATH`, else a `codex` on PATH, which a new user hasn't
-/// got. None if it isn't installed.
 pub(crate) fn bundled_codex() -> Option<PathBuf> {
     let (_, entry) = adapter_paths(Agent::Codex).ok()?;
-    // .../node_modules/@agentclientprotocol/codex-acp/dist/index.js
     let modules = entry.ancestors().nth(4)?;
     let (os, exe) = match std::env::consts::OS {
         "macos" => ("darwin", "codex"),
         "windows" => ("win32", "codex.exe"),
         _ => ("linux", "codex"),
     };
-    // The app's own architecture first; Node may run under emulation.
     let mut arches = ["x64", "arm64"];
     if std::env::consts::ARCH == "aarch64" { arches.reverse(); }
     arches.into_iter().find_map(|arch| {
@@ -402,8 +307,6 @@ pub(crate) fn bundled_codex() -> Option<PathBuf> {
     })
 }
 
-/// Debug builds only: while the file `ENDEAVOR_TEST_NO_STEERING` names exists,
-/// Cmd+Enter takes the path for an agent that can't steer (stop, then send).
 fn test_no_steering() -> bool {
     #[cfg(debug_assertions)]
     if let Some(file) = std::env::var_os("ENDEAVOR_TEST_NO_STEERING") {
@@ -412,8 +315,6 @@ fn test_no_steering() -> bool {
     false
 }
 
-/// Debug builds only: while the file `ENDEAVOR_FAKE_AUTH_ERROR` names exists,
-/// turns fail as an expired sign-in makes them fail, without reaching Claude.
 fn fake_auth_error() -> bool {
     #[cfg(debug_assertions)]
     if let Some(file) = std::env::var_os("ENDEAVOR_FAKE_AUTH_ERROR") {
@@ -422,11 +323,6 @@ fn fake_auth_error() -> bool {
     false
 }
 
-/// Debug builds only: while the file `ENDEAVOR_TEST_TURN_ERROR` names exists,
-/// turns end as the file says, without reaching Claude. Its first line is the
-/// adapter's error kind (`-` for none), or `max_tokens` / `max_turn_requests`
-/// for a turn that stops at a limit; the rest is the error's message. A
-/// limit, and `transport_lost`, come after a short made-up reply.
 fn fake_turn_error() -> Option<Vec<SessionEvent>> {
     #[cfg(debug_assertions)]
     if let Some(file) = std::env::var_os("ENDEAVOR_TEST_TURN_ERROR")
@@ -449,9 +345,12 @@ fn fake_turn_error() -> Option<Vec<SessionEvent>> {
     None
 }
 
-/// The command that runs the agent's ACP adapter, installed first if it
-/// isn't yet, with the variables it is started with in front.
 fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
+    #[cfg(debug_assertions)]
+    if let Some(stand_in) = std::env::var_os("ENDEAVOR_TEST_AGENT").filter(|v| !v.is_empty()) {
+        let _ = progress;
+        return Ok(vec![stand_in.to_string_lossy().into_owned()]);
+    }
     let facts = agent.facts();
     let mut env: Vec<String> = facts.env.iter().map(|(name, value)| format!("{name}={}", with_inherited(name, value, std::env::var(name).ok()))).collect();
     let program = match facts.install {
@@ -464,7 +363,6 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
             if !exe.exists() {
                 progress(Progress::new(Step::Agent, format!("Installing the {} agent…", facts.name)));
                 crate::install::tarball(&dir, what, "", zip, &|detail, fraction| progress(Progress { fraction, ..Progress::new(Step::Agent, detail) }))?;
-                // `antigravity-acp-1.3.0`: what an older pin left beside it.
                 if let Some((name, version)) = folder.rsplit_once('-') {
                     crate::install::remove_other_versions(&format!("{name}-"), version, &[]);
                 }
@@ -474,7 +372,6 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
     };
     if facts.private_temp {
         let temp = crate::install::app_dir()?.join(format!("{}-temp", agent_slug(agent)));
-        // What an earlier start left: a killed server can't clean up after itself.
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp).map_err(|e| format!("Couldn't make {}'s temp folder: {e}", facts.name))?;
         env.extend(["TEMP", "TMP", "TMPDIR"].map(|name| format!("{name}={}", temp.display())));
@@ -484,9 +381,6 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
     Ok(env.into_iter().chain(program).collect())
 }
 
-/// An adapter variable's value. The user's own `CODEX_CONFIG` (a gateway's
-/// `model_provider`, say) stays, with Endeavor's keys merged over it; any
-/// other variable is Endeavor's alone.
 fn with_inherited(name: &str, ours: &str, theirs: Option<String>) -> String {
     fn merge(base: &mut serde_json::Value, over: serde_json::Value) {
         match (base, over) {
@@ -508,13 +402,10 @@ fn with_inherited(name: &str, ours: &str, theirs: Option<String>) -> String {
     }
 }
 
-/// The agent's name as a file name ("antigravity").
 fn agent_slug(agent: Agent) -> String {
     agent.name().to_lowercase()
 }
 
-/// An npm adapter's command: the app's own Node and a `npm ci` of the pinned
-/// lockfile (integrity-checked), both installed on first start.
 fn npm_adapter(agent: Agent, pins: &str, installed: &str, progress: &dyn Fn(Progress)) -> Result<Vec<String>, String> {
     let app = crate::install::app_dir()?;
     let facts = agent.facts();
@@ -530,11 +421,9 @@ fn npm_adapter(agent: Agent, pins: &str, installed: &str, progress: &dyn Fn(Prog
     }
 
     let pinned = crate::install::resources().join(pins);
-    // entry = <adapter>/node_modules/<scope>/<package>/dist/index.js
     let adapter = entry.ancestors().nth(5).ok_or("bad adapter path")?.to_path_buf();
     if !entry.exists() {
         progress(Progress::new(Step::Agent, format!("Installing the {} agent…", facts.name)));
-        // Install beside the target, then rename, so a partial install is never used.
         let staging = app.join(format!("{installed}.installing"));
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
@@ -565,15 +454,8 @@ fn npm_adapter(agent: Agent, pins: &str, installed: &str, progress: &dyn Fn(Prog
     Ok(vec![node.display().to_string(), entry.display().to_string()])
 }
 
-/// Claude Code's own tools that read, write or run things on this Mac: off in
-/// sessions on a server, whose files they can't reach (the runtime's host tools
-/// stand in for them).
 const LOCAL_TOOLS: [&str; 8] = ["Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "NotebookEdit"];
 
-/// The runtime's tools that only read: they run without asking in every mode, as
-/// Claude Code's own reads do in its default mode. Claude Code prompts for any
-/// MCP tool without an allow rule, `readOnlyHint` or not (2.1.280). Every other
-/// notebook and host tool (edits, runs, `run_shell`) still asks in Manual.
 const READ_ONLY_TOOLS: [&str; 16] = [
     "mcp__notebook__list_notebooks",
     "mcp__notebook__session_status",
@@ -593,31 +475,8 @@ const READ_ONLY_TOOLS: [&str; 16] = [
     "mcp__notebook__read_file",
 ];
 
-/// Tools the app asks the user about itself, in every mode (`restart_ask`): Claude Code's own
-/// prompt would be a second question.
 const ASKS_ITSELF: [&str; 1] = ["mcp__notebook__request_restart"];
 
-/// Claude Code options for a session, in layers: Endeavor's own plugin (Pluto
-/// skills and guards) always; the project's settings and CLAUDE.md (from the
-/// working directory) always; the user's own setup (user settings and
-/// CLAUDE.md, skills, plugins, hooks, their MCP servers) unless they turned it
-/// off (Settings). Off, strict MCP config also leaves out the project's
-/// `.mcp.json`. On a server, no local file tools; the agent itself, and so
-/// the user's MCP servers, run on this computer, as with the plugin in
-/// Claude's desktop app.
-/// The skills point the agent at reference files beside them, outside the
-/// working folder, which Claude Code would ask about (it doesn't allow reading
-/// a plugin's own files by itself), so they get a Read rule.
-/// The user's own install of Endeavor's plugin (`endeavor@endeavor`, from the
-/// EndeavorMCP marketplace) is off: it would add a second set of notebook
-/// tools, outside the app's cards. The app's own plugin is `endeavor@inline`.
-/// `settings` is Claude Code's flag settings, which outrank user and project
-/// settings. Sending it replaces what the adapter would have put there from a
-/// `CLAUDE_MODEL_CONFIG` variable (a gateway's model list), which the app's
-/// sessions don't use.
-/// Endeavor added by hand as an MCP server named `endeavor` (`claude mcp add
-/// endeavor`, as EndeavorMCP's docs show, or a folder's `.mcp.json`) is off
-/// for the same reason, by the permission rule for the whole server.
 fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
     let disallowed: Vec<&str> = std::iter::once(USERS_ENDEAVOR_SERVER).chain(if on_server { LOCAL_TOOLS.as_slice() } else { &[] }.iter().copied()).collect();
@@ -634,17 +493,10 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_j
     })
 }
 
-/// Endeavor's plugin as a user installs it from EndeavorMCP's marketplace,
-/// for Claude Code and Codex alike.
 const USERS_ENDEAVOR_PLUGIN: &str = "endeavor@endeavor";
 
-/// Every tool of an MCP server the user named `endeavor`, as a Claude Code rule.
 const USERS_ENDEAVOR_SERVER: &str = "mcp__endeavor";
 
-/// The Read rules for the plugin folder. When its path goes through a symlink
-/// (a symlinked home, XDG folder or AppData), Claude Code only reads without
-/// asking with a rule for the path as given and one for the resolved path, so
-/// both go in.
 fn plugin_rules(plugin_dir: &str) -> Vec<String> {
     let mut rules = vec![format!("Read({}/**)", rule_path(plugin_dir))];
     if let Some(real) = std::fs::canonicalize(plugin_dir).ok().and_then(|p| p.to_str().map(rule_path))
@@ -655,12 +507,6 @@ fn plugin_rules(plugin_dir: &str) -> Vec<String> {
     rules
 }
 
-/// An absolute path as a Claude Code permission rule writes it: `//` and the
-/// path with forward slashes. Claude Code compares a Windows path in POSIX
-/// form, `C:\Users\me` as `/c/Users/me`, so its rule is `//c/Users/me`.
-/// The rule is a gitignore-style pattern, so a folder name with `[`, `*` or
-/// `?` in it would still ask; and a UNC path (`\\server\share`) isn't
-/// handled, since the app's folder is never on one in practice.
 fn rule_path(path: &str) -> String {
     let path = path.strip_prefix(r"\\?\").unwrap_or(path).replace('\\', "/");
     let path = path.trim_end_matches('/');
@@ -670,8 +516,6 @@ fn rule_path(path: &str) -> String {
     }
 }
 
-/// Where a session's notebook tools are: its host's runtime bridge, and the
-/// server's name when that host is a server (which also gives it the host tools).
 #[derive(Clone, Debug)]
 pub struct Tools {
     pub bridge: Bridge,
@@ -679,10 +523,6 @@ pub struct Tools {
 }
 
 impl Tools {
-    /// Each session's tool calls carry its key, so the runtime applies its policy.
-    /// An agent that loads the skills from Endeavor's plugin (`session_options`)
-    /// says so, and the runtime leaves out its own guide to them. Each says it is
-    /// the app's, so a runtime the plugin started and shares answers it as the app's.
     fn mcp_server(&self, key: u64, agent: Agent) -> McpServer {
         let mut headers = vec![
             HttpHeader::new("Authorization", format!("Bearer {}", self.bridge.token)),
@@ -699,73 +539,38 @@ impl Tools {
     }
 }
 
-
-/// What to do with a session's turn. Produced by the UI's outbox.
 pub enum Turn {
-    /// Start a turn. The UI sends this only when the session is idle.
     Prompt(Vec<ContentBlock>),
-    /// Fold into the running turn (ACP `_session/steering`), or start a turn if idle.
     SendNow(Vec<ContentBlock>),
-    /// Stop the running turn (`session/cancel`).
     Cancel,
 }
 
 pub enum Command {
-    /// Create a session in `cwd`; answered by [`AgentEvent::Started`] with the same `key`.
     NewSession { key: u64, cwd: PathBuf, tools: Tools },
-    /// Reopen a past session. Its history replays as session updates for `id`,
-    /// then [`AgentEvent::Started`] with the same `key`.
     LoadSession { key: u64, id: SessionId, cwd: PathBuf, tools: Tools },
-    /// Open a copy of a past session (e.g. one still live in the Claude Code CLI):
-    /// [`AgentEvent::Forked`] with the copy's id, its history replays, then
-    /// [`AgentEvent::Started`] with the same `key`.
     ForkSession { key: u64, source: SessionId, cwd: PathBuf, tools: Tools },
-    /// Past sessions in `cwd`; answered by [`AgentEvent::Listed`].
     ListSessions { cwd: PathBuf },
-    /// Switch a session's mode (e.g. plan); fire and forget.
     SetMode(SessionId, SessionModeId),
-    /// Set a session's config option (model, effort); the reply's options come
-    /// back as a config update.
     SetConfig(SessionId, String, SessionConfigValueId),
-    /// Stop a session (cancelling its turn); it stays in the folder's history.
     CloseSession(SessionId),
-    /// Stop a session and delete its history.
     DeleteSession(SessionId),
     Turn(SessionId, Turn),
-    /// ACP's sign-in with this method (Antigravity's opens the browser and
-    /// waits for it); answered by [`AgentEvent::SignInEnded`].
     Authenticate(&'static str),
 }
 
 pub enum SessionEvent {
     Update(SessionUpdate),
-    /// The agent's reply to a config change: its options as they were then. Its
-    /// mode can be older than a mode update already applied (a reply can reach
-    /// the app after a notification the agent sent later), so only updates
-    /// change the mode.
     Config(Vec<SessionConfigOption>),
-    /// Answer by calling `respond` on the responder; the agent waits until then.
     Permission(RequestPermissionRequest, Responder<RequestPermissionResponse>),
     TurnEnded(StopReason),
-    /// The turn failed (the session stays usable): the adapter's kind for it
-    /// (`errorKind`, such as `server_error`, `overloaded`, `rate_limit`), when
-    /// it gave one, and the error. For an API failure the agent also wrote the
-    /// error as its reply.
     TurnFailed { kind: Option<String>, error: String },
-    /// A model or effort change was refused.
     ConfigFailed(String),
-    /// The turn failed because Claude's sign-in ran out.
     AuthRequired,
-    /// A `SendNow` joined the running turn.
     Steered,
-    /// A `SendNow` couldn't join the running turn; it goes back to the queue.
     Unsent,
-    /// The agent can't take a `SendNow` mid-turn, so the running turn is being
-    /// stopped; the message goes as soon as it ends.
     Stopping,
 }
 
-/// A session is up: its id, and the modes and config options the agent offers.
 #[derive(Debug)]
 pub struct Started {
     pub id: SessionId,
@@ -782,29 +587,17 @@ impl Started {
 pub enum AgentEvent {
     Ready,
     Started { key: u64, result: Result<Started, String> },
-    /// A failed listing is an error, not an empty folder.
-    /// `complete`: the agent had no further page, so a session left out isn't there.
     Listed { cwd: PathBuf, sessions: Result<Vec<SessionInfo>, String>, complete: bool },
-    /// The copy made by `ForkSession` exists; its history replays next.
     Forked { key: u64, id: SessionId },
     Session(SessionId, SessionEvent),
-    /// Setup progress (installing Node and the adapter, then connecting).
     Setup(Progress),
-    /// Claude Code's sign-in, checked before connecting: how, or None when signed out.
     SignedIn(Option<crate::signin::Method>),
-    /// Codex's sign-in, checked before connecting.
     CodexSignedIn(bool),
-    /// Antigravity's sign-in, checked before connecting, or found missing
-    /// when a session wouldn't open without it.
     AntigravitySignedIn(bool),
-    /// A [`Command::Authenticate`] ended: signed in, or why not.
     SignInEnded(Result<(), String>),
-    /// The connection is gone; no session works any more.
     Failed(String),
 }
 
-/// A mode change as the agent takes it: its own mode (ACP `session/set_mode`),
-/// an option to set, and the update that tells the app at once.
 #[derive(Debug, PartialEq)]
 pub struct ModeSwitch {
     pub mode: Option<SessionModeId>,
@@ -812,8 +605,6 @@ pub struct ModeSwitch {
     pub confirm: Option<SessionUpdate>,
 }
 
-/// How an agent's sessions read at the ACP boundary. Claude's are the shape
-/// the app is written for; another agent's are translated here.
 enum Dialect {
     Claude,
     Codex(crate::codex::Dialect),
@@ -829,7 +620,6 @@ impl Dialect {
         }
     }
 
-    /// The session as the app takes it, and an option to set before anything else.
     fn started(&mut self, started: Started) -> (Started, Option<(String, SessionConfigValueId)>) {
         match self {
             Dialect::Claude => (started, None),
@@ -846,7 +636,6 @@ impl Dialect {
         }
     }
 
-    /// A permission request as the app takes it.
     fn permission(&self, request: &mut RequestPermissionRequest) {
         if let Dialect::Antigravity(antigravity) = self {
             antigravity.permission(request);
@@ -884,10 +673,6 @@ impl Dialect {
     }
 }
 
-/// Start the agent. Each session gets its host's runtime bridge (MCP over
-/// Streamable HTTP, or SSE for a runtime from before that switch)
-/// from the command that opens it. Commands sent before the connection is up
-/// wait in `commands`.
 pub fn start(agent: Agent, commands: UnboundedReceiver<Command>) -> UnboundedReceiver<AgentEvent> {
     let (event_tx, event_rx) = unbounded();
     std::thread::spawn(move || {
@@ -895,11 +680,9 @@ pub fn start(agent: Agent, commands: UnboundedReceiver<Command>) -> UnboundedRec
         let command = adapter_command(agent, &|p| {
             let _ = events.unbounded_send(AgentEvent::Setup(p));
         });
-        // A failed install stays the agent's step, not connecting's.
         if command.is_ok() {
             let _ = events.unbounded_send(AgentEvent::Setup(Progress::new(Step::Claude, "Connecting…")));
         }
-        // Checked again when the window comes back to the front, and a turn that fails for want of sign-in says so.
         if command.is_ok() {
             let signed_in = match agent.facts().sign_in {
                 SignIn::ClaudeAuth => crate::signin::status().map(AgentEvent::SignedIn),
@@ -922,7 +705,6 @@ pub fn start(agent: Agent, commands: UnboundedReceiver<Command>) -> UnboundedRec
     event_rx
 }
 
-/// Work in flight on the connection, awaited alongside incoming commands.
 enum Done {
     Turn(SessionId, Result<PromptResponse, agent_client_protocol::Error>),
     Started(u64, Result<Started, agent_client_protocol::Error>),
@@ -930,6 +712,11 @@ enum Done {
     Forked(u64, PathBuf, Tools, Result<SessionId, agent_client_protocol::Error>),
     Config(SessionId, Result<SetSessionConfigOptionResponse, agent_client_protocol::Error>),
     SignedIn(Result<AuthenticateResponse, agent_client_protocol::Error>),
+}
+
+fn hand_off_permission(events: &UnboundedSender<AgentEvent>, request: RequestPermissionRequest, responder: Responder<RequestPermissionResponse>) {
+    let session = request.session_id.clone();
+    let _ = events.unbounded_send(AgentEvent::Session(session, SessionEvent::Permission(request, responder)));
 }
 
 async fn run(
@@ -959,24 +746,19 @@ async fn run(
             agent_client_protocol::on_receive_notification!(),
         )
         .on_receive_request(
-            // Hand the responder to the UI and return at once: awaiting the user's
-            // click here would stall the connection's dispatch loop.
             async move |mut request: RequestPermissionRequest, responder, _cx| {
                 if let Ok(dialect) = name_asks.lock() {
                     dialect.permission(&mut request);
                 }
-                let session = request.session_id.clone();
-                let _ = permit.unbounded_send(AgentEvent::Session(session, SessionEvent::Permission(request, responder)));
+                hand_off_permission(&permit, request, responder);
                 Ok(())
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // Without this the loop below only notices the adapter is gone at its next command.
         .on_close(async move |_| Err(agent_client_protocol::Error::internal_error().data(format!("{}'s process exited", agent.name()))))
         .connect_with(adapter, async move |connection: ConnectionTo<agent_client_protocol::Agent>| {
             let init = connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(ClientCapabilities::new().session(
-                    // Without it the agent writes notices ("Auto mode unavailable: …") into its reply.
                     ClientSessionCapabilities::new().notices(NoticeCapabilities::new()),
                 )))
                 .block_task()
@@ -986,7 +768,6 @@ async fn run(
                 .as_ref()
                 .and_then(|m| m.get("steering")?.get("supported")?.as_bool())
                 .unwrap_or(false);
-            // Read per session, so a Settings change applies to the next one.
             let plugin = match agent.facts().plugin {
                 true => Some(crate::install::plugin().map_err(|e| agent_client_protocol::Error::internal_error().data(e))?.display().to_string()),
                 false => None,
@@ -1003,7 +784,6 @@ async fn run(
                 let _ = events.unbounded_send(AgentEvent::Session(session.clone(), event));
             };
             loop {
-                // Keep taking commands while turns run, so Cancel/SendNow can act on them.
                 let next = if pending.is_empty() {
                     Either::Right(commands.next().await)
                 } else {
@@ -1018,11 +798,7 @@ async fn run(
                         match result {
                             Ok(response) => emit(&session, SessionEvent::TurnEnded(response.stop_reason)),
                             Err(e) if e.code == ErrorCode::AuthRequired => emit(&session, SessionEvent::AuthRequired),
-                            // The adapter went: `AgentEvent::Failed` follows, and the reply is cut off.
                             Err(e) if agent_client_protocol::is_incoming_transport_closed(&e) => {}
-                            // claude-agent-acp marks the failures it can tell apart (Claude's
-                            // API failing after Claude Code's retries, a usage limit) with an
-                            // `errorKind`, and gives the error's text as the message.
                             Err(e) => {
                                 let kind = e.data.as_ref().and_then(|d| d.get("errorKind")?.as_str()).map(str::to_owned);
                                 let error = if kind.is_some() { e.message.clone() } else { e.to_string() };
@@ -1032,7 +808,6 @@ async fn run(
                         continue;
                     }
                     Either::Left(Some(Done::Started(key, result))) => {
-                        // Antigravity's sign-in ran out since it was checked: its card shows.
                         if let Err(e) = &result
                             && e.code == ErrorCode::AuthRequired
                             && matches!(agent.facts().sign_in, SignIn::Authenticate(_))
@@ -1067,7 +842,6 @@ async fn run(
                         match result {
                             Ok(id) => {
                                 let _ = events.unbounded_send(AgentEvent::Forked { key, id: id.clone() });
-                                // Load the copy so its history replays into the new session.
                                 let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![tools.mcp_server(key, agent)]).meta(options(&tools));
                                 let loaded = connection.send_request(request).block_task();
                                 pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
@@ -1103,12 +877,9 @@ async fn run(
                         pending.push(async move { Done::Forked(key, cwd, tools, forked.await.map(|r| r.session_id)) }.boxed_local());
                     }
                     Command::ListSessions { cwd } => {
-                        // ponytail: first page only; a folder with a long history shows its newest
-                        // sessions, and a listing with more pages marks nothing missing.
                         let listed = connection.send_request(ListSessionsRequest::new().cwd(cwd.clone())).block_task();
                         pending.push(async move { Done::Listed(cwd, listed.await.map(|r| (r.sessions, r.next_cursor.is_none()))) }.boxed_local());
                     }
-                    // ponytail: fire and forget; the agent confirms with a mode/config update.
                     Command::SetMode(session, mode) => {
                         let switch = dialect.lock().expect("dialect").set_mode(&session, mode);
                         if let Some(mode) = switch.mode {
@@ -1128,7 +899,6 @@ async fn run(
                         let reply = connection.send_request(SetSessionConfigOptionRequest::new(session.clone(), id, value)).block_task();
                         pending.push(async move { Done::Config(session, reply.await) }.boxed_local());
                     }
-                    // ponytail: fire and forget; a failed close or delete only leaves the file behind.
                     Command::CloseSession(session) => {
                         running.remove(&session);
                         dialect.lock().expect("dialect").closed(&session);
@@ -1152,11 +922,8 @@ async fn run(
                         let turn = connection.send_request(PromptRequest::new(session.clone(), prompt)).block_task();
                         pending.push(async move { Done::Turn(session, turn.await) }.boxed_local());
                     }
-                    // The UI never sends Prompt mid-turn; hand it back rather than drop it.
                     Command::Turn(session, Turn::Prompt(_)) => emit(&session, SessionEvent::Unsent),
                     Command::Turn(session, Turn::SendNow(prompt)) if steering && !test_no_steering() => {
-                        // promptRequired: if the turn already ended, the adapter hands the
-                        // message back instead of starting a turn we don't track.
                         let params = serde_json::json!({
                             "sessionId": session,
                             "prompt": prompt,
@@ -1172,7 +939,6 @@ async fn run(
                                 Ok(())
                             })?;
                     }
-                    // No steering: stop the turn; the message leads the queue after it ends.
                     Command::Turn(session, Turn::SendNow(_)) => {
                         connection.send_notification(CancelNotification::new(session.clone()))?;
                         emit(&session, SessionEvent::Stopping);
@@ -1197,15 +963,12 @@ async fn run(
 mod tests {
     use super::session_options;
 
-    /// A bridge from the environment, for the live tests that bring their own
-    /// runtime: `ENDEAVOR_TEST_MCP_URL` (its `/mcp` endpoint) and `ENDEAVOR_TEST_TOKEN`.
     fn test_tools() -> super::Tools {
         let url = std::env::var("ENDEAVOR_TEST_MCP_URL").expect("ENDEAVOR_TEST_MCP_URL");
         let token = std::env::var("ENDEAVOR_TEST_TOKEN").unwrap_or_default();
         super::Tools { bridge: crate::pluto::Bridge { url, page_token: token.clone(), token }, server: None }
     }
 
-    /// This Mac's runtime, started for a live test.
     fn local_tools() -> (crate::runtime::Channel, super::Tools) {
         let listener = crate::runtime::Listener::start("This Mac").unwrap();
         let (channel, _) = crate::runtime::connect().expect("helper");
@@ -1213,8 +976,6 @@ mod tests {
         (channel, super::Tools { bridge: runtime.bridge, server: None })
     }
 
-    /// A finished session is listed for its folder and reloads with its history:
-    /// `ENDEAVOR_TEST_MCP_URL=… ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_list_and_load`.
     #[test]
     #[ignore]
     fn live_list_and_load() {
@@ -1272,8 +1033,6 @@ mod tests {
         });
     }
 
-    /// Forking a session gives a new id whose load replays the original's history:
-    /// `ENDEAVOR_TEST_MCP_URL=… ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_fork`.
     #[test]
     #[ignore]
     fn live_fork() {
@@ -1320,8 +1079,6 @@ mod tests {
         });
     }
 
-    /// The agent reaches the runtime's tools through the token-protected bridge (the
-    /// real runtime, the real agent): `cargo test -- --ignored live_tools_through_authenticated_bridge`.
     #[test]
     #[ignore]
     fn live_tools_through_authenticated_bridge() {
@@ -1364,8 +1121,6 @@ mod tests {
         });
     }
 
-    /// What the agent offers as modes and config, and that a mode switch is confirmed:
-    /// `cargo test -- --ignored live_modes -- --nocapture`.
     #[test]
     #[ignore]
     fn live_modes() {
@@ -1390,8 +1145,6 @@ mod tests {
                         let plan = modes.available_modes.iter().find(|m| m.id.to_string() == "plan").expect("plan mode").id.clone();
                         tx.unbounded_send(Command::SetMode(started.id, plan)).unwrap();
                     }
-                    // The adapter confirms through the "mode" config option (a mode update
-                    // only when it falls back to another mode).
                     AgentEvent::Session(_, SessionEvent::Update(SessionUpdate::ConfigOptionUpdate(u))) => {
                         let mode = u.config_options.iter().find(|c| c.id.to_string() == "mode").expect("mode option");
                         println!("confirmed {:?}", mode.kind);
@@ -1405,8 +1158,6 @@ mod tests {
         });
     }
 
-    /// Two sessions on one connection with overlapping turns, each reply routed to its
-    /// own session: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/mcp ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_two_sessions`.
     #[test]
     #[ignore]
     fn live_two_sessions() {
@@ -1430,7 +1181,6 @@ mod tests {
                         let id = result.expect("session started").id;
                         ids.insert(key, id.clone());
                         if ids.len() == 2 {
-                            // Both turns in flight at once.
                             for (key, word) in [(1, "ALPHA"), (2, "BRAVO")] {
                                 let prompt = vec![ContentBlock::Text(TextContent::new(format!("Reply with exactly the word {word} and nothing else. Use no tools.")))];
                                 tx.unbounded_send(Command::Turn(ids[&key].clone(), Turn::Prompt(prompt))).unwrap();
@@ -1458,11 +1208,6 @@ mod tests {
         });
     }
 
-    /// Codex's session through the dialect, with no model turn: Endeavor's
-    /// modes and Codex's options, and Plan as its collaboration mode. Run in a
-    /// private HOME (the adapter installs into the app's folder there) with
-    /// `CODEX_HOME` at a signed-in Codex: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:9/mcp
-    /// cargo test -- --ignored live_codex_session_and_plan_mode --nocapture`.
     #[test]
     #[ignore]
     fn live_codex_session_and_plan_mode() {
@@ -1518,8 +1263,6 @@ mod tests {
         assert_eq!(own["plugins"][0]["path"], "/p");
     }
 
-    /// A user who installed Endeavor's plugin themselves would otherwise get its
-    /// notebook tools beside the app's, in Claude's sessions and in Codex's.
     #[test]
     fn the_users_own_endeavor_plugin_is_off_in_every_session() {
         for own in [false, true] {
@@ -1531,14 +1274,12 @@ mod tests {
         let codex = super::CODEX.env.iter().find(|(name, _)| *name == "CODEX_CONFIG").expect("Codex's adapter gets CODEX_CONFIG").1;
         let codex: serde_json::Value = serde_json::from_str(codex).unwrap();
         assert_eq!(codex, serde_json::json!({ "plugins": { super::USERS_ENDEAVOR_PLUGIN: { "enabled": false } } }));
-        // Added by hand as a server named `endeavor`: every one of its tools is off in Claude's.
         for on_server in [false, true] {
             let off = &session_options(true, "/p", on_server)["claudeCode"]["options"]["disallowedTools"];
             assert_eq!(off[0], "mcp__endeavor");
         }
     }
 
-    /// The user's own CODEX_CONFIG keeps its keys; Endeavor's win where they meet.
     #[test]
     fn a_users_codex_config_is_merged_not_replaced() {
         let ours = r#"{"plugins":{"endeavor@endeavor":{"enabled":false}}}"#;
@@ -1550,8 +1291,6 @@ mod tests {
         assert_eq!(super::with_inherited("INITIAL_AGENT_MODE", "workspace-write", Some("agent".into())), "workspace-write");
     }
 
-    /// The plugin's reference files are read without asking, wherever the app's
-    /// folder is: a rule Claude Code matches, in its own form of the path.
     #[test]
     fn the_plugins_own_files_are_read_without_asking() {
         let allowed = |dir: &str| session_options(false, dir, false)["claudeCode"]["options"]["allowedTools"].clone();
@@ -1561,7 +1300,6 @@ mod tests {
         assert_eq!(rule(r"\\?\D:\Endeavor\plugin\").as_deref(), Some("Read(//d/Endeavor/plugin/**)"));
     }
 
-    /// Through a symlink, the plugin folder gets a rule for each form of its path.
     #[cfg(unix)]
     #[test]
     fn a_plugin_folder_through_a_symlink_gets_both_rules() {
@@ -1578,8 +1316,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Reads run without asking; edits, runs and commands still ask. Every tool
-    /// the runtime offers is on one side or the other, so a new tool needs a decision here.
     #[test]
     fn reads_run_without_asking_and_everything_else_asks() {
         let tools: Vec<String> = serde_json::from_str::<Vec<serde_json::Value>>(endeavor_mcp::NOTEBOOK_TOOLS_JSON)
