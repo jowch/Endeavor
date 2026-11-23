@@ -1491,15 +1491,20 @@ footer form#feedback { display: none !important; }
     return text.replace(/\r\n?/g, "\n").replace(/[\u00ad\u180e\u200b\u2060\ufeff]/g, "").replace(/(?:[ \t]*\n){4,}/g, "\n\n\n").replace(/[ \t]{65,}/g, (run) => run.slice(0, 64));
   }
   function chatMessage(notebook, quoted, engine = "pluto") {
+    const shortened = quoted.some(
+      (q) => q.picks.some((p) => p.part === "lines" && !wholeCell(p) && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n"))
+    );
+    const note = shortened ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.` : quoteNote(engine);
     const message = chatSafe(
       `${LEAD}
 
-${quoteNote(engine)}${LEAD_NOTE}
+${note}${LEAD_NOTE}
 
 ` + quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops)).join("\n\n")
     );
     return message.length <= MESSAGE_MAX ? message : null;
   }
+  var wholeCell = (pick) => pick.lines[0] === 1 && pick.lines[1] >= pick.code.replace(/\r?\n$/, "").split(/\r?\n/).length;
   function quoteBlock(notebook, pick, engine = "pluto", crop) {
     if (pick.part === "box") return `<quote part="box" uri="${pick.cells.map((c) => uri(notebook, c, engine)).join(" ")}"${crop ? ` crop="${crop}"` : ""}/>`;
     const at = `cell="${cellName(pick.code).replace(/"/g, "'")}"`;
@@ -1508,7 +1513,7 @@ ${quoteNote(engine)}${LEAD_NOTE}
       case "cell":
         return `<quote ${at} uri="${where}"/>`;
       case "lines":
-        if (pick.lines[0] === 1 && pick.lines[1] >= pick.code.split("\n").length) return `<quote ${at} uri="${where}"/>`;
+        if (wholeCell(pick)) return `<quote ${at} uri="${where}"/>`;
         return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">
 ${pick.text}
 </quote>`;

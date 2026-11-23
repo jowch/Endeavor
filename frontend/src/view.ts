@@ -100,12 +100,23 @@ export type Quoted = { picks: Pick[]; comment: string; crops?: (string | undefin
  * Claude's rules (chatSafe). Null when it's longer than MESSAGE_MAX: the comments (never cut) or the picks are too many.
  */
 export function chatMessage(notebook: string, quoted: Quoted[], engine: Engine = "pluto"): string | null {
+  // chatSafe shortens runs of blank lines and spaces in the picked lines too: say so, since they go as they were.
+  const shortened = quoted.some((q) =>
+    q.picks.some((p) => p.part === "lines" && !wholeCell(p) && chatSafe(p.text) !== p.text.replace(/\r\n?/g, "\n")),
+  );
+  const note = shortened
+    ? `${quoteNote(engine)} Runs of more than 3 line breaks or 64 spaces in a quote were shortened to fit Claude's message box, and invisible characters left out.`
+    : quoteNote(engine);
   const message = chatSafe(
-    `${LEAD}\n\n${quoteNote(engine)}${LEAD_NOTE}\n\n` +
+    `${LEAD}\n\n${note}${LEAD_NOTE}\n\n` +
       quoted.map(({ picks, comment, crops }) => quoteText(notebook, picks, comment, engine, crops)).join("\n\n"),
   );
   return message.length <= MESSAGE_MAX ? message : null;
 }
+
+/** Whether a lines pick holds every line of its cell's code (a trailing newline makes no line), as a click on the code does. */
+const wholeCell = (pick: Extract<Pick, { part: "lines" }>) =>
+  pick.lines[0] === 1 && pick.lines[1] >= pick.code.replace(/\r?\n$/, "").split(/\r?\n/).length;
 
 /** One pick as a `<quote>`: what was picked, by name, with a box's picture by its id (`crop`). */
 export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto", crop?: string): string {
@@ -117,7 +128,7 @@ export function quoteBlock(notebook: string, pick: Pick, engine: Engine = "pluto
       return `<quote ${at} uri="${where}"/>`;
     case "lines":
       // A click on the code picks all its lines: that names the cell. Lines the user picked go with their text.
-      if (pick.lines[0] === 1 && pick.lines[1] >= pick.code.split("\n").length) return `<quote ${at} uri="${where}"/>`;
+      if (wholeCell(pick)) return `<quote ${at} uri="${where}"/>`;
       return `<quote ${at} lines="${pick.lines[0]}-${pick.lines[1]}" uri="${where}">\n${pick.text}\n</quote>`;
     case "output":
       return `<quote ${at} part="output" uri="${where}"/>`;

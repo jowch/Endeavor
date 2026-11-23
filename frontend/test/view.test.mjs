@@ -44,6 +44,13 @@ test("picks become quotes that name what was picked, with no code or output but 
   );
   // A click on the code picks all its lines, which names the cell, with no code.
   assert.equal(quoteText(NB, [{ part: "lines", cell: A, code: CODE, lines: [1, 3], text: CODE }], ""), `<quote cell="rates" uri="${uri}"/>`);
+  // A trailing newline makes no line: every line of such a cell names it too.
+  assert.equal(quoteText(NB, [{ part: "lines", cell: A, code: CODE + "\n", lines: [1, 3], text: CODE }], ""), `<quote cell="rates" uri="${uri}"/>`);
+  assert.ok(quoteText(NB, [{ part: "lines", cell: A, code: CODE + "\n", lines: [1, 2], text: "x" }], "").includes(">\nx\n</quote>"));
+  // Picked lines that chatSafe shortens: the note says so; other picks don't add it.
+  const gappy = { part: "lines", cell: A, code: CODE + "\n\n\n\n\nend", lines: [2, 7], text: "a\n\n\n\n\nb" };
+  assert.match(chatMessage(NB, [{ picks: [gappy], comment: "" }]), /were shortened to fit/);
+  assert.doesNotMatch(chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: "a\n\n\n\n\nb" }], comment: "" }]), /were shortened/);
   assert.equal(quoteText(NB, [{ part: "cell", cell: A, code: CODE }, { part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], ""), `<quote cell="rates" uri="${uri}"/>\n\n<quote cell="rates" part="output" uri="${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A, A] }], ""), `<quote part="box" uri="${uri} ${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A] }], "", "pluto", ["0123456789abcdef"]), `<quote part="box" uri="${uri}" crop="0123456789abcdef"/>`);
