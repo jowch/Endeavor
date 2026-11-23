@@ -242,6 +242,62 @@ App to page:
 - `action`: Share and ⋮ items that act in the page with Pluto's functions.
 - `debug`: a debug build's state dump asks what the page shows.
 
+## The agent's picture of an HTML output (`cell_shot.rs`)
+
+When the runtime has no picture of a cell's output for `view_cell_output`
+(an HTML or JS output: a widget, an interactive plot), the listener asks the
+app for one (`endeavor_mcp::Snapshot`). The app takes it from a second web
+view of the same notebook, behind the user's one, scrolled to the cell, so
+the user's view never moves. A rect off screen in the user's own view comes
+back blank; a second view scrolled to it draws HTML and WebGL alike, even a
+canvas that drew once.
+
+- The second view is another Pluto client of the notebook. It loads the page
+  as a reload would, so what the user did inside a widget (a selection) isn't
+  in the picture. It has none of the user's view's setup (page.js), so Pluto
+  loads JuliaMono from its CDN there: offline, code in a picture is in
+  another monospace font. It hides what floats over the page (Pluto's bars,
+  Live docs), since it is only for pictures (#163).
+- It is placed exactly behind the user's view, with the same holes, and only
+  while the user's view is on screen and not dimmed: anything over the user's
+  view would show the second one through it. It is let go after a while with
+  no picture, so it isn't a Pluto client for the rest of the day.
+- On a Mac it goes directly under the user's view among its siblings: both are
+  built on the same parent, and the one added last starts on top (#259). macOS
+  ends a hidden view's process first when memory is short; that is this
+  view's own, and the user's notebook isn't loaded again.
+- On Linux it is an X child window stacked under the user's: WebKitGTK draws a
+  hidden view's snapshot too, but runs no animation frames there, so a plot
+  drawn from one would be blank. It is shown to GTK from the start and hidden
+  by unmapping its X window, since a view shown again through GTK keeps the
+  size GTK picks, not the pane's.
+- On Windows it is a child window just under the user's, shown without
+  activating (not wry's `set_visible`, whose SW_SHOW may activate), so the
+  keyboard stays in the user's cell. The picture is WebView2's
+  (`snapshot_windows.rs`).
+- The picture waits two frames after the scroll, and on a page just loaded
+  long enough for a widget that draws after it (WebGL).
+
+## Julia or R stopping under a notebook (`crash.rs`)
+
+The pane says so, with Restart Julia, which reopens the notebook and runs it
+again. If Julia stops again during that run, the notebook opens in safe
+preview instead, so a cell that takes Julia down can't do it in a loop. A
+stop heard just after a restart is the restart's own, and a rerun never
+seen running is taken as done after a while (an idle R notebook's list
+doesn't change), so a stop after that is a first one.
+
+A notebook's own Julia (Pluto runs each notebook in a process of its own) is
+seen to stop in the runtime's notebook list (`exited`, with the cells that
+were running) and through its page; the cell is remembered from while Julia
+ran, since the list after a stop can't say. All of a host's Julia stopping is
+heard from its helper, for each notebook that was running there.
+
+R ending works the same way: the runtime closes every R notebook with it and
+says why (`engine_ended`), and Start R again opens the notebook again,
+running it only if it was allowed to run before, so one in safe preview
+doesn't run without the user.
+
 ## Frontend tech
 
 - `frontend/` is TypeScript, built with esbuild into one bundle,
