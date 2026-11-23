@@ -141,11 +141,71 @@ keep working. One that gave up is asked to try again. On quit, servers detach; t
 
 **Local sessions use the same path.** The app can run the helper as a child
 process without SSH, so local and remote share one transport, with local as
-the case that skips SSH. Whether local runtimes should also survive the app
-quitting is a user setting (decided 2026-09-26): by default local notebooks
-quit with the app; with the setting on, the local runtime keeps running and the
-app reconnects to it on the next launch, as with a remote host. Either way,
-notebooks stop after 48 hours idle (a setting), even while the app is open.
+the case that skips SSH. This Mac's runtime outlives the app the same way:
+after a quit, a crash or a kill it stays up until its notebooks are idle,
+then ends once none is open (`--exit-idle-after-client`, #274), and a launch
+before then reattaches. Notebooks stop after the idle limit (48 hours by
+default, a setting), even while the app is open.
+
+## How the app follows a host's runtime
+
+`src/connection.rs` keeps one `Connection` per host. This Mac's connects and
+starts at launch. A server's connects when it's picked in the Where chip, so
+its files can be browsed, and starts Julia when a session there needs it.
+What the code relies on, beyond what its names say:
+
+- **Old news is dropped by generation.** Each connect gets an `id`, each line
+  a `generation`, each check a `check` count, and each runtime the app follows
+  a `watching` number. A thread still reporting on an older one is ignored.
+  This matters most for the notebook list: a runtime that's going still sends
+  its list as it closes, and that list must not replace what the next runtime
+  reopens.
+- **The page goes with its runtime** (`close_page`). Left in the web view,
+  Pluto's page keeps reconnecting to its port, where the host's next runtime
+  listens, without the notebook the page shows.
+- **New connection settings keep the port** (`open_line`, `settings_saved`).
+  The new line opens on the old one's socket, which is handed over before the
+  old line closes, so the port is never free in between and the agents' MCP
+  URLs keep working (EndeavorMCP#47). Anything else about a server (its name,
+  idle stop, a cluster's account, depot or default resources) leaves the line
+  open (`same_connection`), since each job request reads those as they are
+  then.
+- **A failed sign-in try takes its questions with it** (`try_ended`): only the
+  ones asked before the change was seen, since the next try may already be
+  asking.
+- **An attach that finds nothing running isn't a failure** (#56). The line
+  shows it as starting until it has asked, so nothing failed and nothing
+  stopped.
+- **Reopening after a restart** (`reopen_notebooks`). Pluto saves on every
+  change, so the files are current. Notebooks reopen in safe preview, except
+  those in `resume`, the ones the user had let run when they restarted or
+  repaired Julia, whose files are unchanged since. After a crash, Restart Julia
+  fills `resume` with no times, since Julia is gone and can't be asked. Each
+  session's own notebook reopens even if the last runtime's list had lost it,
+  because a restart during an earlier reopen leaves that list empty, and a
+  session left without its notebook would show "Opening" for good. A reopen
+  that a second restart overtook leaves the work to the next one's reopen.
+  Each pass says why afresh, so an earlier pass's error never shows over this
+  one's pane.
+- **Back on the same Julia, the page loads again** (`load_again`), unless a
+  cell has an edit that hasn't been run, which leaving the page would lose;
+  then Pluto's own reconnect keeps it. After a long drop Pluto's page backs
+  off and may not try again for minutes, so a load is needed, and with
+  nothing to reopen it can't race.
+- **Only new idle stops and R endings count.** A stale entry must not stop a
+  notebook the user has started again since.
+- **A Julia failure is news only once** (`new_failure`), and not only after
+  `starting`: a start can fail between two polls (a first Julia notebook
+  opened offline), so the watcher sees `not_started`, then `failed`.
+- **Julia starting ahead keeps an empty session's page** (`starting_ahead`).
+  Covering it hid New notebook for the whole of a first setup, and the page
+  came back at Ready, so a click looked dropped. A click counts as a wait, so
+  the pane then shows the start.
+- **Repair shows after the first failure and two Retries** (`REPAIR_AFTER`),
+  for This Mac only.
+- **Quitting leaves every runtime running.** Each server's helper is let go
+  without waiting long on a slow server, and its idle stop covers forgotten
+  notebooks.
 
 ## Launchers
 
