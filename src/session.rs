@@ -4647,43 +4647,11 @@ more" }"#);
     }
 
     #[test]
-    fn a_cell_is_named_by_its_first_line_comment_what_it_defines_its_heading_or_its_first_line() {
+    fn a_cell_is_named_as_the_page_names_it_from_the_shared_cases() {
         use super::cell_label;
-        let cases = [
-            ("flips = rand(Bool, 100)", "flips"),
-            ("# true = heads, false = tails\n\nflips = rand(Bool, 100)", "flips"),
-            ("#= Draws\n  x = 1 =#\nn_heads = count(flips)", "n_heads"),
-            ("model(S, p) = p[1] * S", "model"),
-            ("function fit!(p)\n  p\nend", "fit!"),
-            ("const K = 3", "K"),
-            ("struct Fit\n  k::Float64\nend", "Fit"),
-            ("begin\n  x = 1\n  y = 2\nend", "x"),
-            ("md\"\"\"\n# Coin flips\nWe flip a coin.\n\"\"\"", "Coin flips"),
-            ("md\"\"\"\nWe flip a fair coin a hundred times.\n\"\"\"", "We flip a fair coin a hundr…"),
-            ("md\"## Results\"", "Results"),
-            ("scatter(t, counts, label = \"data\")", "scatter(t, counts, label = …"),
-            ("let\n  n = 1:length(flips)\n  p = plot(n, share)\n  hline!(p, [0.5])\n  p\nend", "plot"),
-            ("let\n  A, k = coef(fit)\n  Markdown.parse(\"k = $k\")\nend", "text"),
-            ("let\n  a = sum(xs)\n  b = length(xs)\n  a, b\nend", "a, b"),
-            ("let\n  a = sum(xs)\n  a / 2\nend", "let"),
-            ("begin\n  for x in xs\n    println(x)\n  end\nend", "begin"),
-            ("splot(x)", "splot(x)"),
-            ("x == 1", "x == 1"),
-            ("using Plots", "using Plots"),
-            ("# just a note", "just a note"),
-            ("# Growth curves (by strain)\nlet\n  p = plot(t, y)\nend", "Growth curves (by strain)"),
-            ("\n  # Outliers removed\nclean = filter(ok, data)", "Outliers removed"),
-            ("# plot(t, y)\nscatter(t, y)", "scatter(t, y)"),
-            ("# Plot of sin(x)\nplot(sin, 0, 2π)", "Plot of sin(x)"),
-            ("# Base.show(io, x)\nshow(x)", "show(x)"),
-            ("# using CSV\ndata = 1", "data"),
-            ("# data <- read.csv(f)\ndata <- 1", "data <- 1"),
-            ("x = 1\n# Not a name", "x"),
-            ("#= Draws =#\nn = 1", "n"),
-            ("#' Roxygen\nf <- function(x) x", "f <- function(x) x"),
-            ("a_rather_long_variable_name_for_tests = 1", "a_rather_long_variable_name…"),
-        ];
-        for (code, label) in cases {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!("../frontend/test/cell-names.json")).unwrap();
+        for case in &cases {
+            let (code, label) = (case["code"].as_str().unwrap(), case["name"].as_str().unwrap());
             assert_eq!(cell_label(code), label, "{code:?}");
         }
     }
