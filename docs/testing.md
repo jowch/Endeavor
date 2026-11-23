@@ -110,7 +110,7 @@ To wait for something, poll the dump. For example, loop until
   is `record` (from sessions.json, drawn at launch) until the agent has listed
   its folder this launch, then `listed`, or `missing` when that listing left it
   out (the row stays); an open row's is null. Also the "Show N more"
-  line, the Restart Julia row, the status line (`status`) and its mark
+  line, the Restart notebooks row, the status line (`status`) and its mark
   (`status_mark`: `offline`, `signed_out`, `spinner` while Claude restarts,
   `red_dot` when something needs the user, or null).
 - `new_session`, on the new-session screen. The chips (where, resources, folder,
@@ -176,7 +176,7 @@ To wait for something, poll the dump. For example, loop until
     The runtime's notebook list says so (`exited`, with the cells that were
     running), and so does the page.
     (All of a host's Julia stopping shows as `host`, with `host_pane.kind`
-    `julia_crashed`, and the same page.)
+    `julia_crashed`, `r_crashed` in an R session, and the same page.)
 
   `crash` is null unless Julia stopped by itself under the notebook: its
   `state` (`stopped`, `rerunning` after Restart Julia until that run is

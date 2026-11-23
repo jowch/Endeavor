@@ -119,7 +119,7 @@ server…** and **Add cluster…** add new ones. See [Servers](./servers.md) and
 
 ## Troubleshooting
 
-**Restart Julia**, **Repair Julia**, **Log files** and **Report a problem**.
+**Restart notebooks**, **Repair Julia**, **Log files** and **Report a problem**.
 See [Troubleshooting](./troubleshooting.md).
 
 ## About

@@ -372,7 +372,7 @@ pub enum Act {
     /// Install or remove Endeavor's own Julia (`own_julia`).
     InstallJulia,
     RemoveJulia,
-    RestartJulia,
+    RestartNotebooks,
     RepairJulia,
     /// R: found by itself (`Settings::r` none), or one the user chose.
     AutoR,
@@ -828,7 +828,7 @@ impl Workspace {
             r.search = None;
             r.lead = Lead::Icon { glyph: Glyph::Info, dot: false, faint: false, tone: Some(Tone::Attention) };
             r.desc = Some("Notebooks stop and start again, R notebooks with the R you chose. Their files are already saved.".into());
-            r.controls.push(Control::Button { label: "Restart", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartJulia), aria: "Restart notebooks".into() });
+            r.controls.push(Control::Button { label: "Restart", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartNotebooks), aria: "Restart notebooks".into() });
             items.push(Item::Row(r));
         }
         let which = group(Some("Which R to use"), items);
@@ -992,7 +992,7 @@ impl Workspace {
                 }
                 .into(),
             );
-            r.controls.push(Control::Button { label: "Restart Julia", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartJulia), aria: "Restart Julia".into() });
+            r.controls.push(Control::Button { label: "Restart Julia", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartNotebooks), aria: "Restart Julia".into() });
             items.push(Item::Row(r));
         }
         let g = group(Some("Which Julia to use"), items);
@@ -1131,19 +1131,20 @@ impl Workspace {
     fn troubleshooting_groups(&self) -> Vec<Group> {
         let repair = self.repair_progress();
         let ready = self.status(&HostId::ThisMac) == Some(&Status::Ready);
-        let mut restart = row("restart-julia", "Restart Julia");
+        let mut restart = row("restart-notebooks", "Restart notebooks");
         restart.desc = Some(
             if repair.is_some() {
                 "Not available while Julia is being repaired."
             } else if ready {
-                concat!("Stops your Julia notebooks on ", crate::platform::this_computer!(lower), " and starts them again. Their files are already saved.")
+                concat!("Stops your notebooks on ", crate::platform::this_computer!(lower), " and starts them again. Their files are already saved.")
             } else {
-                concat!("Notebooks aren't running on ", crate::platform::this_computer!(lower), " now. Julia starts when you open a Julia notebook.")
+                concat!("Notebooks aren't running on ", crate::platform::this_computer!(lower), " now. They start when you open one.")
             }
             .into(),
         );
-        restart.summary = Some(concat!("Stops your Julia notebooks on ", crate::platform::this_computer!(lower), " and starts them again.").into());
-        restart.controls.push(Control::Button { label: "Restart", look: Look::Secondary, icon: Some(Glyph::Restart), act: (ready && repair.is_none()).then_some(Act::RestartJulia), aria: "Restart Julia".into() });
+        restart.search = Some("Restart Julia R notebooks".into());
+        restart.summary = Some(concat!("Stops your notebooks on ", crate::platform::this_computer!(lower), " and starts them again.").into());
+        restart.controls.push(Control::Button { label: "Restart", look: Look::Secondary, icon: Some(Glyph::Restart), act: (ready && repair.is_none()).then_some(Act::RestartNotebooks), aria: "Restart notebooks".into() });
         let mut fix = row("repair-julia", "Repair Julia");
         fix.summary = Some("If Julia notebooks won't start or keep failing.".into());
         match repair {
@@ -1166,7 +1167,7 @@ impl Workspace {
         report.controls.push(Control::Link { label: "Send Feedback", external: true, act: Act::Feedback });
         report.controls.push(Control::Link { label: "Report on GitHub", external: true, act: Act::Report });
         vec![
-            group(Some(concat!("Julia on ", crate::platform::this_computer!(lower))), vec![Item::Row(restart), Item::Row(fix)]).foot("R and Python get their own group here when they arrive."),
+            group(Some(concat!("Notebooks on ", crate::platform::this_computer!(lower))), vec![Item::Row(restart), Item::Row(fix)]),
             group(Some("Report a problem"), vec![Item::Row(logs), Item::Row(report)]),
         ]
     }
@@ -1612,7 +1613,7 @@ impl Workspace {
             Act::ChooseR => self.choose_r(cx),
             Act::InstallR => self.install_own_r(cx),
             Act::RemoveR => self.confirm_remove_own_r(window, cx),
-            Act::RestartJulia => self.restart_local(cx),
+            Act::RestartNotebooks => self.restart_local(cx),
             Act::RepairJulia => self.confirm_repair(window, cx),
             Act::Stop(host) => self.confirm_host_stop(host, window, cx),
             Act::TryNow(host) => match self.host_state(&host) {
