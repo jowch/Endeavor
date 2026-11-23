@@ -98,7 +98,8 @@ license headers, shebangs, lint and format directives (`#[allow]`,
 MCP tool descriptions and skill text are product strings, not comments. Leave
 vendored and generated files alone (`vendor/`, `frontend/dist/`).
 
-Reviewers flag every new comment that isn't one of these.
+The rule covers every file: Rust, TypeScript, shell, YAML, TOML. Reviewers
+flag every new comment that isn't one of the kept kinds above.
 
 ## Style
 
