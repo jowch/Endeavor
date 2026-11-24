@@ -170,3 +170,23 @@ test("the rail shows every cell as not run yet in safe preview, whatever its sav
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(states(), ["ran", "ran", "failed"]);
 });
+
+test("the rail sits left of a drawer beside the cells, and ends above one below them", async () => {
+  const { window, doc } = await page();
+  const root = doc.documentElement;
+  Object.defineProperty(root, "clientWidth", { value: 1300, configurable: true });
+  Object.defineProperty(window, "innerWidth", { value: 1300, configurable: true });
+  Object.defineProperty(window, "innerHeight", { value: 900, configurable: true });
+  const drawer = doc.getElementById("endeavor-drawer");
+  Object.defineProperty(drawer, "offsetHeight", { value: 1, configurable: true });
+  const rail = doc.getElementById("endeavor-rail");
+  const at = async (rect) => {
+    drawer.getBoundingClientRect = () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top });
+    root.dataset.endeavorDrawer = "packages";
+    window.dispatchEvent(new window.Event("resize"));
+    await new Promise((r) => setTimeout(r, 0));
+    return [rail.style.left, rail.style.top, rail.style.height];
+  };
+  assert.deepEqual(await at({ left: 800, top: 0, width: 500, height: 900 }), [`${800 - 2 - 14}px`, "10px", "880px"], "beside: 2px clear of the drawer's edge, full height");
+  assert.deepEqual(await at({ left: 0, top: 600, width: 1300, height: 300 }), [`${1300 - 12 - 14}px`, "10px", "580px"], "below: at the scroll bar, ending 10px above the drawer");
+});

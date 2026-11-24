@@ -94,15 +94,24 @@ function besideRail(selector: string, left: number): DOMRect[] {
     .filter((r) => r.height > 0 && r.right > left - CLEAR_OF_CONTROLS);
 }
 
+function shownDrawer(): DOMRect | null {
+  const drawer = document.querySelector<HTMLElement>("html[data-endeavor-drawer] #endeavor-drawer, html[data-endeavor-drawer=\"docs\"] [data-testid=helper]");
+  return drawer && drawer.offsetHeight ? drawer.getBoundingClientRect() : null;
+}
+
 function place(): { s: HTMLElement; height: number; total: number } {
   const s = scroller();
   const f = frame(s);
-  const gap = f.classic ? CLASSIC_GAP : OVERLAY_GAP;
-  const left = f.contentRight - gap - (WIDTH + 8);
+  const drawer = shownDrawer();
+  const beside = !!drawer && drawer.left < f.contentRight && drawer.top <= f.top;
+  const right = beside ? drawer!.left : f.contentRight;
+  const gap = beside || f.classic ? CLASSIC_GAP : OVERLAY_GAP;
+  const left = right - gap - (WIDTH + 8);
   const above = besideRail(PAGE_CONTROLS_ABOVE, left);
   const below = besideRail(PAGE_CONTROLS_BELOW, left);
+  const floor = drawer && !beside ? Math.min(drawer.top, f.top + f.height) : f.top + f.height;
   const top = Math.max(f.top + 10, ...above.map((r) => r.bottom + CLEAR_OF_CONTROLS));
-  const bottom = Math.min(f.top + f.height - 10, ...below.map((r) => r.top - CLEAR_OF_CONTROLS));
+  const bottom = Math.min(floor - 10, ...below.map((r) => r.top - CLEAR_OF_CONTROLS));
   const height = Math.max(bottom - top, 0);
   rail.style.left = `${left}px`;
   rail.style.top = `${top}px`;

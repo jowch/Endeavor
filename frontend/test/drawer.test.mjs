@@ -92,6 +92,21 @@ test("each new install opens Packages again, but one the user closed stays close
   assert.equal(drawer(), "packages", "a later install opens it again");
 });
 
+test("the drawer sits at the right in a pane wide enough for the cells and 500px beside them, and at the bottom otherwise", async () => {
+  const p = await page(rNotebook({ status: "ready" }, "installed"));
+  const root = p.window.document.documentElement;
+  const resize = (width) => {
+    Object.defineProperty(p.window, "innerWidth", { value: width, configurable: true });
+    p.window.dispatchEvent(new p.window.Event("resize"));
+  };
+  resize(840);
+  assert.equal("endeavorDrawerSide" in root.dataset, false);
+  resize(1300);
+  assert.equal("endeavorDrawerSide" in root.dataset, true);
+  resize(1299);
+  assert.equal("endeavorDrawerSide" in root.dataset, false);
+});
+
 async function marimoPage() {
   const dom = new JSDOM(`<body><div id="App"></div></body>`, { url: "http://localhost/marimo/?file=growth.py", runScripts: "outside-only" });
   const { window } = dom;
@@ -245,4 +260,14 @@ test("on a Python notebook the drawer's own tab row has no Live docs, which is m
   const p = await marimoPage();
   assert.equal(p.window.document.querySelector('#endeavor-drawer > header [data-tab="docs"]'), null);
   assert.ok(p.window.document.querySelector('#endeavor-drawer > header [data-tab="packages"]'));
+});
+
+test("on marimo Packages stays at the bottom in a wide pane, where marimo's own docs panel is", async () => {
+  const p = await marimoPage();
+  p.window.document.documentElement.dataset.endeavorLook = "endeavor";
+  Object.defineProperty(p.window, "innerWidth", { value: 1600, configurable: true });
+  p.window.dispatchEvent(new p.window.Event("resize"));
+  await p.packages({ step: "installing", packages: ["boto3"] });
+  assert.equal(p.drawer(), "packages");
+  assert.equal("endeavorDrawerSide" in p.window.document.documentElement.dataset, false);
 });
