@@ -1,14 +1,3 @@
-//! Quiet motion (docs/ui-spec.md, Motion): what appears fades in and moves a
-//! few pixels into place, a line whose words change crossfades, and the
-//! transcript eases to its end as content arrives instead of jumping there.
-//! Durations come from `theme` and are zero with Reduce motion.
-//!
-//! GPUI draws every frame from scratch, so whatever moves keeps its start time
-//! somewhere that outlasts a frame: in the model (a transcript entry's
-//! arrival), or in element state under an id, which lasts while the element is
-//! drawn in consecutive frames. Nothing here holds up input: an element is
-//! live from its first frame, and only its look changes.
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,8 +10,6 @@ use crate::theme;
 
 static QUIET: AtomicBool = AtomicBool::new(false);
 
-/// Nothing that first draws in this frame animates: the first frame after
-/// launch, and one that shows another session, show everything in place.
 pub fn hush(window: &Window) {
     QUIET.store(true, Ordering::Relaxed);
     window.on_next_frame(|_, _| QUIET.store(false, Ordering::Relaxed));
@@ -32,31 +19,17 @@ pub fn quiet() -> bool {
     QUIET.load(Ordering::Relaxed)
 }
 
-/// Reduce motion, from the system: the theme's durations and GPUI's own
-/// animations both follow it.
 pub fn set_reduced(reduce: bool, cx: &mut App) {
     theme::set_reduce_motion(reduce);
     cx.set_reduce_motion(reduce);
 }
 
-/// How often something that loops for as long as it shows (the working orbit,
-/// a working row's breathing dot, the notebook pane's turtles) is redrawn: not
-/// every frame. GPUI redraws the whole window for it, and on a Mac the
-/// notebook's web view shares the main thread, so redrawing at the display's
-/// rate starved the notebook while the agent worked.
 const LOOP_FRAME: Duration = Duration::from_millis(50);
 
 thread_local! {
-    /// When each view last drew something looping, and whether a redraw is
-    /// already asked for it.
     static LOOPS: RefCell<HashMap<gpui::EntityId, (Instant, bool)>> = RefCell::new(HashMap::new());
 }
 
-/// Seconds since the app started, for the phase of anything looping (one
-/// clock, so every loop keeps its phase; an `Instant`, so it doesn't jump with
-/// the wall clock). Asks for the next redraw of the view being drawn once
-/// `LOOP_FRAME` has passed since it last drew; a redraw for any other reason in
-/// between (a streaming reply) counts, so loops never add to them.
 pub fn loop_clock(window: &Window, cx: &mut App) -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
     let now = Instant::now();
@@ -83,19 +56,14 @@ pub fn loop_clock(window: &Window, cx: &mut App) -> f32 {
         })
         .detach();
     }
-    // Wrapped hourly, so an f32 keeps millisecond precision.
     (now.duration_since(*START.get_or_init(|| now)).as_millis() % 3_600_000) as f32 / 1000.
 }
 
-/// How far through a loop of `period` the clock is (0 to 1), redrawing as
-/// `loop_clock` does. Call it while drawing.
 pub fn looping(period: Duration, window: &Window, cx: &mut App) -> f32 {
     let period = period.as_secs_f32().max(0.001);
     (loop_clock(window, cx) % period) / period
 }
 
-/// How far `now` is through `duration` from `start`: 0 to 1, and 1 for a zero
-/// duration.
 pub fn progress(start: Instant, now: Instant, duration: Duration) -> f32 {
     if duration.is_zero() {
         return 1.;
@@ -103,7 +71,6 @@ pub fn progress(start: Instant, now: Instant, duration: Duration) -> f32 {
     (now.saturating_duration_since(start).as_secs_f32() / duration.as_secs_f32()).min(1.)
 }
 
-/// `progress` until now, eased out, asking for another frame until it's done.
 pub fn eased(start: Instant, duration: Duration, window: &Window) -> f32 {
     let t = progress(start, Instant::now(), duration);
     if t < 1. {
@@ -117,9 +84,6 @@ struct Change<T> {
     was: Option<(T, Instant)>,
 }
 
-/// While `value`, drawn under `id`, changes: what it was, and how far the
-/// change has gone (eased, 0 to 1). None on its first draw, once the change is
-/// over, and for a change in a quiet frame.
 pub fn changed<T: Clone + PartialEq + 'static>(id: impl Into<ElementId>, value: &T, window: &mut Window, cx: &mut App) -> Option<(T, f32)> {
     let state = window.use_keyed_state(id, cx, |_, _| Change { value: value.clone(), was: None });
     let window = &*window;
@@ -138,9 +102,6 @@ pub fn changed<T: Clone + PartialEq + 'static>(id: impl Into<ElementId>, value: 
     })
 }
 
-/// `e` faded in and moved `theme::motion_rise()` into place, `p` of the way
-/// (0 to 1). `down`: it comes down from above (a menu from its button), else
-/// up from below (a card from the composer).
 pub fn arrive<E: Styled>(e: E, p: f32, down: bool) -> E {
     if p >= 1. {
         return e;
@@ -149,8 +110,6 @@ pub fn arrive<E: Styled>(e: E, p: f32, down: bool) -> E {
     e.opacity(p).relative().top(if down { -off } else { off })
 }
 
-/// `e`, arriving (`arrive`) from the first frame it's drawn in under `id`.
-/// Drawn first in a quiet frame, it is in place at once.
 pub fn arriving<E: IntoElement + Styled + 'static>(e: E, id: impl Into<ElementId>, down: bool) -> Arriving<E> {
     Arriving { id: id.into(), element: Some(e), down }
 }
@@ -201,61 +160,35 @@ impl<E: IntoElement + Styled + 'static> Element for Arriving<E> {
     }
 }
 
-/// What the transcript list shows, read before its layout.
 #[derive(Clone, Copy, Debug)]
 pub struct ListView {
-    /// GPUI's list is following its end: each layout snaps there.
     pub following: bool,
-    /// Its scroll position as the first item shown and the pixels into it.
     pub top: (usize, Pixels),
-    /// How far it's scrolled from the start.
     pub scrolled: Pixels,
-    /// How far it scrolls at its end; None when everything fits.
     pub end: Option<Pixels>,
 }
 
-/// What `Glide::step` does to the list before its layout.
 #[derive(Debug, PartialEq)]
 pub enum Move {
     Nothing,
-    /// Stop the list snapping to its end in this layout, so what arrives lands
-    /// below the view, and the next frame eases to it.
     Hold,
-    /// Snap to the end and follow it, as the list does without motion.
     Snap,
-    /// Scroll by this much, and draw another frame.
     By(Pixels),
 }
 
-/// Keeps the transcript's end in view as content arrives, easing there over
-/// `theme::motion_standard()` instead of jumping. While the list follows its
-/// end, each layout is held where the last one left it, so a growing reply or
-/// a new entry lands below the view; the next frame sees how far the end
-/// moved and eases there, starting again from where it is when more arrives.
-/// The list itself picks following up again once the view reaches the end,
-/// and stops when the user scrolls up, as without motion.
 #[derive(Default)]
 pub struct Glide {
-    /// The list was following when this held it.
     holding: bool,
-    /// Where this left the list; anything else moving it (the user's scroll,
-    /// a jump to a message) hands it back.
     left: Option<(usize, Pixels)>,
-    /// The current ease: where it started, when, and the end it goes to.
     from: Option<(Pixels, Instant, Pixels)>,
-    /// The current ease began before the last one ended: content keeps
-    /// arriving (a streaming reply), so it redraws as loops do.
     chained: bool,
 }
 
 impl Glide {
-    /// Following the end, held or not, for the "Jump to latest" pill.
     pub fn holding(&self) -> bool {
         self.holding
     }
 
-    /// The ease began mid-ease, so `follow` paces it like a loop; one from rest
-    /// (sending a message) runs at the display's rate.
     pub fn chained(&self) -> bool {
         self.chained
     }
@@ -299,17 +232,11 @@ impl Glide {
         Move::By(from + (end - from) * theme::ease_out(t) - view.scrolled)
     }
 
-    /// Where the list is after `step`'s move.
     pub fn left_at(&mut self, top: (usize, Pixels)) {
         self.left = Some(top);
     }
 }
 
-/// Run the transcript's glide before the list lays out. `pad`: the list's top
-/// and bottom padding, which its scroll offsets leave out. A glide from rest
-/// asks for every frame; one that began mid-ease redraws as loops do
-/// (`loop_clock`), since while a reply streams each line starts a new ease and
-/// the glide never stops.
 pub fn follow(glide: &RefCell<Glide>, list: &ListState, pad: Pixels, window: &Window, cx: &mut App) {
     let at = |list: &ListState| {
         let top = list.logical_scroll_top();
@@ -346,7 +273,6 @@ mod tests {
         assert_eq!(progress(start, start, 120 * MS), 0.);
         assert_eq!(progress(start, start + 60 * MS, 120 * MS), 0.5);
         assert_eq!(progress(start, start + 500 * MS, 120 * MS), 1.);
-        // Reduce motion makes every duration zero: already there.
         assert_eq!(progress(start, start, Duration::ZERO), 1.);
     }
 
@@ -367,13 +293,11 @@ mod tests {
         let mut glide = Glide::default();
         let t0 = Instant::now();
         assert_eq!(glide.step(view(true, 3, 400., Some(400.)), t0, 160 * MS, false), Move::Hold);
-        // The reply grew 40 px below the held view.
         let Move::By(by) = glide.step(view(false, 3, 400., Some(440.)), t0, 160 * MS, false) else { panic!() };
         assert_eq!(by, px(0.));
         glide.left_at((3, px(0.)));
         let Move::By(by) = glide.step(view(false, 3, 400., Some(440.)), t0 + 80 * MS, 160 * MS, false) else { panic!() };
         assert_eq!(by, px(35.));
-        // Done: at the end, where the list follows again by itself.
         let Move::By(by) = glide.step(view(false, 3, 435., Some(440.)), t0 + 200 * MS, 160 * MS, false) else { panic!() };
         assert_eq!(by, px(5.));
         assert_eq!(glide.step(view(false, 3, 440., Some(440.)), t0 + 220 * MS, 160 * MS, false), Move::Nothing);
@@ -400,7 +324,6 @@ mod tests {
         glide.step(view(false, 3, 400., Some(440.)), t0, 160 * MS, false);
         assert!(!glide.chained());
         glide.left_at((3, px(0.)));
-        // The ease ends; the next growth starts from rest again.
         assert_eq!(glide.step(view(false, 3, 440., Some(440.)), t0 + 200 * MS, 160 * MS, false), Move::Nothing);
         glide.step(view(false, 3, 440., Some(480.)), t0 + 300 * MS, 160 * MS, false);
         assert!(!glide.chained());
@@ -421,7 +344,6 @@ mod tests {
         let t0 = Instant::now();
         assert_eq!(glide.step(view(true, 3, 400., Some(400.)), t0, Duration::ZERO, false), Move::Nothing);
         glide.step(view(true, 3, 400., Some(400.)), t0, 160 * MS, false);
-        // Reduce motion turned on, or another session shown, mid-hold.
         assert_eq!(glide.step(view(false, 3, 400., Some(440.)), t0, Duration::ZERO, false), Move::Snap);
         assert!(!glide.holding());
         glide.step(view(true, 3, 400., Some(400.)), t0, 160 * MS, false);

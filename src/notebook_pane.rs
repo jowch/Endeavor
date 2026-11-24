@@ -1,10 +1,3 @@
-//! The notebook pane around Pluto's page: its header (the notebook system's
-//! logo, the file, where it runs, what state it's in, then Point, Share, Live
-//! docs, Status and ⋮), the Share and ⋮ menus' actions, and the pages drawn
-//! natively when there's no notebook to show (docs/ui-spec.md, "Notebook
-//! (Pluto)"). In the Pluto classic look the header keeps only the logo, file,
-//! host, Point and ⋮, since Pluto's own page has the rest.
-
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -27,7 +20,6 @@ use crate::notice::{Notice, Retry, Spot};
 use crate::{Workspace, platform, pluto, theme};
 use crate::theme::TextButton as _;
 
-/// An item in the notebook's ⋮ menu or its Share menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NotebookAction {
     CopyPath,
@@ -36,7 +28,6 @@ pub enum NotebookAction {
     MoveTo,
     LookEndeavor,
     LookClassic,
-    /// Ember's page as Ember draws it: an R notebook's LookClassic.
     LookEmber,
     Shortcuts,
     NewSession,
@@ -77,7 +68,6 @@ impl NotebookAction {
         }
     }
 
-    /// (key, what the menu shows) for the item's single-key shortcut.
     pub fn shortcut(self) -> (&'static str, &'static str) {
         match self {
             NotebookAction::CopyPath => ("c", "C"),
@@ -123,7 +113,6 @@ impl NotebookAction {
         })
     }
 
-    /// A second line under the label.
     pub fn detail(self) -> Option<&'static str> {
         match self {
             NotebookAction::NewSession => Some("The same notebook, a new conversation"),
@@ -134,7 +123,6 @@ impl NotebookAction {
         }
     }
 
-    /// Items in one group sit together; a separator comes between groups.
     pub fn group(self) -> u8 {
         match self {
             NotebookAction::CopyPath | NotebookAction::Reveal | NotebookAction::Rename | NotebookAction::MoveTo => 0,
@@ -147,7 +135,6 @@ impl NotebookAction {
         }
     }
 
-    /// A small heading over the group this item starts.
     pub fn section(self) -> Option<&'static str> {
         match self {
             NotebookAction::LookEndeavor => Some("Notebook look"),
@@ -160,12 +147,6 @@ impl NotebookAction {
         self == NotebookAction::Stop
     }
 
-    /// The ⋮ menu. Finder and the folder picker only reach This Mac's files;
-    /// Restart and Stop need a running notebook, and Restart isn't offered in
-    /// safe preview, where Run notebook is the way to start it. A stopped
-    /// notebook offers Start, the pane's own Start button's only other way in.
-    /// An R notebook (`kind`) has Ember's classic look, and no feedback form
-    /// for Pluto's developers.
     pub fn for_notebook(kind: Backend, open: bool, stopped: bool, safe: bool, local: bool) -> Vec<NotebookAction> {
         use NotebookAction::*;
         let mut items = vec![CopyPath];
@@ -195,7 +176,6 @@ impl NotebookAction {
         items
     }
 
-    /// Share and export. Present, Record and Frontmatter are Pluto's own; Ember's page has none.
     pub fn for_share(kind: Backend) -> Vec<NotebookAction> {
         use NotebookAction::*;
         match kind {
@@ -221,52 +201,34 @@ pub fn out_of_step_answer(last_reload: Option<std::time::Instant>, now: std::tim
     }
 }
 
-/// What the notebook pane shows for a session: a page drawn natively, or the
-/// notebook's own page in the web view.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaneShows {
-    /// Its host isn't ready.
     Host(HostPane),
-    /// "Can't find" its file.
     Missing,
-    /// "No notebook in this session yet".
     NoNotebook,
     Stopped(Stopped),
-    /// Its Julia stopped by itself: "Julia stopped unexpectedly", Restart Julia.
     Crashed,
-    /// "Opening <file>…".
     Opening,
     Page,
 }
 
-/// How long the pane may say "Opening" for a notebook its runtime has open
-/// before the app loads the page again. A page starts loading as soon as it's
-/// asked for, so by then it isn't coming.
 pub const OPENING_GRACE: Duration = Duration::from_secs(5);
 
-/// Watches for the pane saying "Opening" for a notebook that's open in its
-/// runtime: it loads the page again once, then offers Reload notebook.
 #[derive(Debug, Default)]
 pub struct OpeningWatch {
-    /// The session whose pane is stuck, and since when (or since the reload).
     since: Option<(u64, Instant)>,
     reloaded: bool,
-    /// A reload didn't help: the pane shows Reload notebook.
     pub stuck: bool,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum OpeningStep {
     Wait,
-    /// Load the page again.
     Reload,
-    /// Still stuck after a reload: show Reload notebook.
     Stuck,
 }
 
 impl OpeningWatch {
-    /// Called every second. `stuck`: the session whose pane shows "Opening"
-    /// while its runtime has its notebook open; None when no pane is.
     pub fn step(&mut self, stuck: Option<u64>, now: Instant) -> OpeningStep {
         let Some(key) = stuck else {
             *self = OpeningWatch::default();
@@ -291,7 +253,6 @@ impl OpeningWatch {
         OpeningStep::Reload
     }
 
-    /// Reload notebook was clicked: it waits again before offering it again.
     pub fn retry(&mut self, now: Instant) {
         if let Some((key, _)) = self.since {
             self.since = Some((key, now));
@@ -299,8 +260,6 @@ impl OpeningWatch {
         self.stuck = false;
     }
 
-    /// For the state dump: how long the pane has said "Opening" (since the
-    /// last reload), whether it was reloaded, and whether the button shows.
     #[cfg(debug_assertions)]
     pub fn state(&self, now: Instant) -> Option<(u64, bool, bool)> {
         let (_, since) = self.since?;
@@ -308,10 +267,6 @@ impl OpeningWatch {
     }
 }
 
-/// `ENDEAVOR_TEST_STUCK_OPENING` (debug builds): a file path. When the file
-/// appears, the page is taken down as a runtime going away does, and the pane
-/// says "Opening". While the file says `keep`, loading a notebook loads a
-/// blank page instead, so it stays stuck. Some(true) for `keep`.
 #[cfg(debug_assertions)]
 pub fn test_stuck_opening() -> Option<bool> {
     let path = std::env::var_os("ENDEAVOR_TEST_STUCK_OPENING")?;
@@ -319,7 +274,6 @@ pub fn test_stuck_opening() -> Option<bool> {
     Some(text.trim() == "keep")
 }
 
-/// The engine that runs a notebook of `kind`, as the panes name it: "Julia" or "R".
 pub fn engine_name(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "Julia",
@@ -328,7 +282,6 @@ pub fn engine_name(kind: Backend) -> &'static str {
     }
 }
 
-/// A stopped notebook's page: why it stopped, and what Start does if the file changed.
 fn stopped_text(stopped: Stopped) -> (String, Option<&'static str>) {
     if stopped.safe_preview {
         return ("The file is saved. It was in safe preview, so Start opens it that way again.".to_string(), None);
@@ -340,16 +293,12 @@ fn stopped_text(stopped: Stopped) -> (String, Option<&'static str>) {
     (why, Some("If the file changed on disk meanwhile, it opens in safe preview instead."))
 }
 
-/// The notebook header's parts that say what state the notebook is in.
 pub struct HeaderInfo {
-    /// Where it runs: "Local", a server's name, or a cluster's with its job.
     pub host: String,
     pub tags: Vec<HeaderTag>,
-    /// Work under way, e.g. "Installing packages · 2 of 5".
     pub busy: Option<String>,
 }
 
-/// A tag after the host in the notebook header.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HeaderTag {
     ReadOnly,
@@ -381,29 +330,24 @@ impl HeaderTag {
     }
 }
 
-/// The Pluto logo: three dots, stacked.
 fn pluto_logo() -> impl IntoElement {
     div().flex().flex_col().gap(px(1.)).flex_shrink_0().children([rgb(0x3b972e), rgb(0x945bb0), rgb(0xc93d39)].map(|c| div().size(px(4.)).rounded_full().bg(c)))
 }
 
-/// Ember's mark, drawn like Pluto's: its flame as a dot, and two sparks off it.
 fn ember_logo() -> impl IntoElement {
     let ember = rgb(0xe8590c);
     let dot = |size: f32, left: f32, top: f32| div().absolute().left(px(left)).top(px(top)).size(px(size)).rounded_full().bg(ember);
     div().relative().size(px(10.)).flex_shrink_0().children([dot(7., 0., 3.), dot(2.5, 6.5, 1.), dot(1.5, 8.5, 0.)])
 }
 
-/// A notebook's engine's logo: Pluto's for Julia notebooks, Ember's for R ones.
 fn engine_logo(kind: Backend) -> AnyElement {
     match kind {
         Backend::Pluto => pluto_logo().into_any_element(),
         Backend::Ember => ember_logo().into_any_element(),
-        // ponytail: no marimo logo yet; Python notebooks don't open in the app.
         Backend::Marimo => div().into_any_element(),
     }
 }
 
-/// A small tag in the header ("Local", "Safe preview", "Not saved").
 fn chip(icon: Option<Glyph>, text: impl Into<SharedString>, color: Rgba) -> Div {
     div()
         .flex_shrink_0()
@@ -420,13 +364,8 @@ fn chip(icon: Option<Glyph>, text: impl Into<SharedString>, color: Rgba) -> Div 
         .child(text.into())
 }
 
-/// A header button's tooltip was laid out in the frame being drawn.
 static TOOLTIP_DRAWN: AtomicBool = AtomicBool::new(false);
 
-/// Closes the tooltips' hole in a frame that draws no tooltip. The hole can't
-/// close when the tooltip's view goes: GPUI hides a tooltip while drawing a
-/// frame and keeps its view until it draws the next one, which may be much later.
-/// The root view draws this in every frame, after every tooltip is laid out.
 pub fn tooltip_hole_keeper(webview: &Entity<gpui_wry::WebView>) -> impl IntoElement {
     let webview = webview.clone();
     canvas(
@@ -441,8 +380,6 @@ pub fn tooltip_hole_keeper(webview: &Entity<gpui_wry::WebView>) -> impl IntoElem
     .size_0()
 }
 
-/// A header button's tooltip. It hangs over the notebook, whose web view (a
-/// native view on top of what GPUI draws) gets a hole there, as for menus.
 struct PaneTooltip {
     text: SharedString,
     webview: Entity<gpui_wry::WebView>,
@@ -488,9 +425,6 @@ impl Render for PaneTooltip {
     }
 }
 
-/// A 24px header button: an icon, maybe a label; lit while its panel or menu is open.
-/// `compact`: icon only (the label stays its accessible name), for a narrow pane.
-/// The notebook pane's width from which its header buttons show their labels.
 const HEADER_LABELS_MIN: f32 = 680.;
 
 fn header_button(id: &'static str, icon: Glyph, label: Option<&'static str>, active: bool, compact: bool) -> Stateful<Div> {
@@ -516,7 +450,6 @@ fn header_button(id: &'static str, icon: Glyph, label: Option<&'static str>, act
         .children(label.filter(|_| !compact))
 }
 
-/// A button on the empty pages: filled orange for the one thing to do, else outlined.
 fn page_button(id: &'static str, icon: Glyph, label: impl Into<SharedString>, primary: bool) -> Stateful<Div> {
     div()
         .id(id)
@@ -548,8 +481,6 @@ fn page_text(text: impl Into<SharedString>) -> Div {
 }
 
 impl Workspace {
-    /// Where a session's notebook runs, for its header: "Local", the server's
-    /// name, or a cluster's with its job ("lab-cluster · job 16").
     pub fn host_label(&self, host: &HostId) -> String {
         match host {
             HostId::ThisMac => "Local".into(),
@@ -564,14 +495,11 @@ impl Workspace {
         }
     }
 
-    /// The page's state for this session's notebook, if it's the one shown.
     fn page_for(&self, session: &Session) -> Option<&PageState> {
         let id = session.notebook.as_deref()?;
         (self.page.notebook == id).then_some(&self.page)
     }
 
-    /// The notebook header's host, tags and work under way for a session's
-    /// notebook. `shown`: its notebook is on screen.
     pub fn header_info(&self, session: &Session, shown: bool) -> HeaderInfo {
         let endeavor = self.settings.notebook_theme == NotebookTheme::Endeavor;
         let page = self.page_for(session).filter(|_| shown);
@@ -611,13 +539,10 @@ impl Workspace {
         HeaderInfo {
             host: if reconnecting { format!("{host} · reconnecting") } else { host },
             tags,
-            // What's under way, while the drawer's Status tab isn't showing it.
             busy: page.filter(|p| p.drawer.as_deref() != Some("status")).and_then(|p| p.busy.clone()),
         }
     }
 
-    /// The notebook pane's header for session `ix`. `shown`: its notebook is on screen (Point works).
-    /// `width`: the notebook pane's; below `HEADER_LABELS_MIN` its buttons show icons only.
     pub fn notebook_header(&self, ix: usize, shown: bool, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let compact = width < HEADER_LABELS_MIN;
         let session = &self.sessions[ix];
@@ -788,8 +713,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Tell the page where its notebook runs and whether the agent is asking to
-    /// run it, when that changes (the callout and Status say so).
     pub fn sync_page_context(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.active_session() else { return };
         let host = match &session.place.host {
@@ -797,17 +720,11 @@ impl Workspace {
             host => self.hosts.name(host),
         };
         let crash = self.notebook_at(session.key).and_then(|at| self.crashes.callout(&at, self.engine_at(&at))).map(|(title, body)| serde_json::json!({ "title": title, "body": body }));
-        // The cells the card asks to run, those that re-run after them, and
-        // those it needs that never ran (they run first), for their lines in the page.
         let card = crate::approval::approval_view(session);
-        // The waiting card, by its entry: ⏎ in the page answers it, and only it.
         let card_ix = card.as_ref().and(session.pending_permission());
         let (ask_cells, rerun_cells, needed_ids) = card.map(|c| (c.cells, c.rerun, c.needed)).unwrap_or_default();
-        // Claude is working: the page's prompts queue what they send.
         let working = session.outbox.busy && !session.agent_waiting;
-        // Error boxes whose Fix or Explain Claude is answering, or that wait in the queue.
         let error_asks: Vec<_> = session.error_asks().into_iter().map(|(cell, kind, queued)| serde_json::json!({ "cell": cell, "kind": kind, "queued": queued })).collect();
-        // Every waiting run card's cells: a run of the user's that reaches one asks first.
         let waiting: Vec<serde_json::Value> = crate::approval::waiting_run_cells(session).into_iter().map(|(id, name)| serde_json::json!({ "id": id, "name": name })).collect();
         let msg = serde_json::json!({ "type": "context", "host": host, "agent": session.agent.name(), "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix });
         let text = msg.to_string();
@@ -817,8 +734,6 @@ impl Workspace {
         }
     }
 
-    /// The page reported its notebook's state. Leaving safe preview some other
-    /// way (Pluto classic's own button) answers a pending "Let this notebook run?".
     pub fn on_page_state(&mut self, state: PageState, cx: &mut Context<Self>) {
         let same = self.page.notebook == state.notebook;
         let left_safe = same && self.page.safe && !state.safe && state.connected;
@@ -831,7 +746,6 @@ impl Workspace {
                         s.answer_pending(agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce, crate::session::Scope::Once);
                     }
                 });
-                // Let run after a second stop: the callout has said its piece.
                 if let Some(at) = self.notebook_at(key) {
                     self.crashes.forget_again(&at);
                 }
@@ -841,13 +755,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The active session, if it shows notebook `id`.
     pub(crate) fn session_showing(&self, id: &str) -> Option<u64> {
         self.active_session().filter(|s| s.notebook.as_deref() == Some(id)).map(|s| s.key)
     }
 
-    /// Run notebook (the callout): answers the agent's pending card if there is
-    /// one, so its call does the running; otherwise the notebook leaves safe preview.
     pub fn run_notebook(&mut self, notebook: String, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
         let mut answered = false;
@@ -875,13 +786,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Run anyway, in the page: the user's run reaches `cells` (each with its
-    /// `last_run` from before), which cards ask to run. Those cards are
-    /// answered as their Run button does, telling the runtime which cells the
-    /// user ran, so the approved calls don't run them again. An older
-    /// runtime's agent cards wait until the runtime has heard it on its own.
-    /// ⏎ in the page with nothing focused: the filled answer to the card the
-    /// page was told about, if it is still the one waiting.
     pub fn answer_card(&mut self, notebook: String, card: usize, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
         self.with_session(key, cx, |s| {
@@ -923,9 +827,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Restore on the changed-cells card at entry `ix`: the runtime puts the
-    /// turn's cells back as they were before it, all or nothing, in the
-    /// notebook the turn changed (not necessarily the one on show).
     pub fn restore_turn(&mut self, key: u64, ix: usize, cx: &mut Context<Self>) {
         let bridge = self.session_bridge(key);
         let Some((card, notebook, cells)) = self.session_mut(key).and_then(|s| s.start_restore(ix)) else { return };
@@ -940,7 +841,6 @@ impl Workspace {
             let answer = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.with_session(key, cx, |s| s.finish_restore(card, answer));
-                // So a restored card stays restored after the app quits.
                 this.keep_transcript(key);
             });
         })
@@ -960,11 +860,9 @@ impl Workspace {
         .detach();
     }
 
-    /// Status's Fix with Claude for a package that failed: a message with its log.
     pub fn fix_package(&mut self, notebook: String, name: String, log: String, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
         let text = format!("The package {name} failed to install or precompile, so the cells that use it can't run. Find out why and fix it.");
-        // "[Endeavor]" marks it as context, so a reopened session's transcript shows only the words.
         let context = format!("[Endeavor] Pkg's log for {name} (its end), from the notebook's Status:\n```\n{log}\n```");
         use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
         let blocks = vec![ContentBlock::Text(TextContent::new(context)), ContentBlock::Text(TextContent::new(text.clone()))];
@@ -972,7 +870,6 @@ impl Workspace {
         self.apply_effects(key, effects, cx);
     }
 
-    /// A ⋮ or Share menu item.
     pub fn notebook_action(&mut self, key: u64, action: NotebookAction, window: &mut Window, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let Some(path) = session.notebook_path.clone() else { return };
@@ -1002,7 +899,6 @@ impl Workspace {
             NotebookAction::ExportFile => self.export(key, "notebookfile", if session.kind == Backend::Ember { "R" } else { "jl" }, cx),
             NotebookAction::ExportHtml => self.export(key, "notebookexport", "html", cx),
             NotebookAction::ExportPdf => {
-                // WebKit's print panel, whose PDF menu saves the file.
                 let _ = self.webview.read(cx).raw().print();
             }
         }
@@ -1011,13 +907,11 @@ impl Workspace {
         }
     }
 
-    /// Save one of Pluto's exports (`kind`: its URL path) where the user picks.
     pub(crate) fn export(&mut self, key: u64, kind: &'static str, extension: &'static str, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let (Some(id), Some(path)) = (session.notebook.clone(), session.notebook_path.clone()) else { return };
         let Some(runtime) = self.connection(&session.place.host).and_then(|c| c.runtime.as_ref()) else { return };
         let offline = if kind == "notebookexport" { "&offline_bundle=true" } else { "" };
-        // Ember's exports are under its pages' prefix.
         let prefix = if session.kind == Backend::Ember { "/ember" } else { "" };
         let (bridge, export) = (runtime.bridge.clone(), format!("{prefix}/{kind}?id={id}{offline}"));
         let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("notebook").to_string();
@@ -1072,12 +966,10 @@ impl Workspace {
         if name.is_empty() || name.contains('/') || separator || name == old.trim_end_matches(".jl") {
             return cx.notify();
         }
-        // In the notebook's own folder, by its host's rules: a server's `/`, whatever this computer uses.
         let target = host.join(&host.parent(&path).unwrap_or_default(), &format!("{name}.jl"));
         self.move_notebook(key, target, true, cx);
     }
 
-    /// Move to…: a folder on This Mac, from the macOS panel.
     pub(crate) fn move_notebook_to(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(path) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook_path.clone()) else { return };
         let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Move here".into()) });
@@ -1091,8 +983,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Rename (`renaming`) or move session `key`'s notebook file (Pluto moves
-    /// it), then point every session on it at the new path and tell the agent.
     fn move_notebook(&mut self, key: u64, target: String, renaming: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some((id, old, host)) = self.sessions.iter().find(|s| s.key == key).and_then(|s| Some((s.notebook.clone()?, s.notebook_path.clone()?, s.place.host.clone()))) else { return };
@@ -1111,7 +1001,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The notebook at `old` is now at `new` (Endeavor moved it, or the user located it).
     fn notebook_moved(&mut self, host: &HostId, old: &str, new: String, cx: &mut Context<Self>) {
         let keys: Vec<u64> = self.sessions.iter().filter(|s| s.place.host == *host && s.notebook_path.as_deref() == Some(old)).map(|s| s.key).collect();
         for key in keys {
@@ -1123,14 +1012,12 @@ impl Workspace {
                 let (old_dir, new_dir) = (Path::new(old).parent(), Path::new(&new).parent());
                 let shown = if old_dir == new_dir { folder_name(Path::new(&new)) } else { new_session::tilde(Path::new(&new)) };
                 session.note(format!("The notebook is now {shown}"));
-                // Goes to the agent with the next message, after anything already waiting.
                 let moved = format!("[Endeavor] The session's notebook file moved from {old} to {new}.");
                 let text = match session.start_context.take() {
                     Some(ContentBlock::Text(t)) => format!("{}\n\n{moved}", t.text),
                     _ => moved,
                 };
                 session.start_context = Some(ContentBlock::Text(TextContent::new(text.clone())));
-                // Kept on disk too, so a quit before the note is sent doesn't lose it.
                 if let Some(id) = session.id.clone() {
                     persist = Some((id.to_string(), text));
                 }
@@ -1142,8 +1029,6 @@ impl Workspace {
         }
     }
 
-    /// Record the file's modification time for a notebook that just stopped, so
-    /// Start can tell whether it changed meanwhile.
     pub fn note_stopped_file(&mut self, host: &HostId, path: String, cx: &mut Context<Self>) {
         let Some(bridge) = self.bridge(host) else { return };
         let host = host.clone();
@@ -1164,8 +1049,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Start a stopped notebook: running if it was, unless its file changed
-    /// meanwhile (then safe preview). A file that's gone shows File not found.
     pub fn start_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some((path, stopped)) = self.session_mut(key).and_then(|s| s.notebook_path.clone().zip(s.stopped)) else { return };
         let Some(bridge) = self.session_bridge(key) else { return };
@@ -1187,9 +1070,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Opening a session's notebook failed: if its file is gone, say so.
-    /// `failed`: the open of this file failed for a reason the pane doesn't
-    /// show; if the file is there, a notice says it, with Try again.
     pub fn check_missing(&mut self, key: u64, failed: Option<(String, String)>, cx: &mut Context<Self>) {
         let Some(path) = self.sessions.iter().find(|s| s.key == key).and_then(|s| s.notebook_path.clone()) else { return };
         let Some(bridge) = self.session_bridge(key) else { return };
@@ -1198,7 +1078,6 @@ impl Workspace {
             let info = task.await;
             let _ = this.update(cx, |this, cx| match (info, failed) {
                 (Ok(None), _) => this.with_session(key, cx, |s| s.missing = true),
-                // Kept on the session, and shown over the pane while it's on screen.
                 (_, Some(failed)) => {
                     this.with_session(key, cx, |s| s.open_failed = Some(failed));
                     this.show_open_failed(key, cx);
@@ -1209,8 +1088,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Session `key`'s failed open (`Session::open_failed`), as a notice over the pane with Try
-    /// again, when the session is on screen and its notebook still isn't open.
     pub fn show_open_failed(&mut self, key: u64, cx: &mut Context<Self>) {
         if self.active != Some(key) {
             return;
@@ -1220,17 +1097,13 @@ impl Workspace {
         self.show_notice(Notice::new(Spot::Pane, title, &e, Some(Retry::OpenNotebook(key, path))), cx);
     }
 
-    /// New notebook, from the empty pages: made in the session's folder and shown.
-    /// Julia starts first if it isn't running: the pane shows its steps meanwhile.
     pub(crate) fn new_notebook_here(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some((host, kind, folder)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.kind, s.place.path.clone())) else { return };
         let Some(bridge) = self.session_bridge(key) else {
             eprintln!("New notebook for session {key}: its runtime isn't up");
-            // Started now, so Try again has a runtime to go to.
             self.ensure_runtime(&host, cx);
             return self.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", "The notebook runtime isn't running yet.", Some(Retry::NewNotebook(key))), cx);
         };
-        // A runtime too old to know session kinds would make an R or Python session's notebook in Julia.
         if kind != wire::backend::Backend::Pluto && self.connections.get(&host).and_then(|c| c.older).is_some_and(|v| !v.has_session_kinds()) {
             let language = if kind == wire::backend::Backend::Marimo { "Python" } else { "R" };
             let why = format!("Julia on {} was started by an older version of Endeavor, which can't make a new {language} notebook here. Restart Julia to use this one.", self.hosts.name(&host));
@@ -1240,9 +1113,6 @@ impl Workspace {
         self.note_session_kind(&host, key, kind);
         let steps = self.julia_steps(&host, kind, cx);
         let task = cx.background_executor().spawn(async move {
-            // The runtime makes it in the session's folder, and of its kind: say them first, since a
-            // session whose agent hasn't opened it yet (just after launch) hasn't said them. This
-            // waits at most `CALL_WAIT` (10 s), and a failure only leaves the notebook in Pluto's folder.
             if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind) {
                 eprintln!("New notebook for session {key}: couldn't give the runtime its folder: {e}");
             }
@@ -1264,7 +1134,6 @@ impl Workspace {
                     }
                     this.apply_effects(key, vec![Effect::ShowNotebook { id, path: Some(path) }], cx);
                 }
-                // The pane says why Julia, or R, couldn't start, with Try again.
                 Err(e) if crate::connection::pane_failure(kind, &e).is_some() => {}
                 Err(e) => this.show_notice(Notice::new(Spot::Pane, "Couldn't make a notebook", &e, Some(Retry::NewNotebook(key))), cx),
             });
@@ -1272,10 +1141,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Pick session `key`'s notebook file: where its missing notebook went
-    /// (Locate file…), or the notebook of a session whose history couldn't
-    /// load (Open the notebook only). This Mac uses the file panel; a server,
-    /// the in-app folder browser, from the session's folder.
     pub(crate) fn pick_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let host = session.place.host.clone();
@@ -1298,9 +1163,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The user picked session `key`'s notebook file at `new`: a missing
-    /// notebook's sessions follow it there (and Claude is told), a session
-    /// without one takes it, and it opens in safe preview.
     pub(crate) fn notebook_located(&mut self, key: u64, new: String, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let host = session.place.host.clone();
@@ -1311,7 +1173,6 @@ impl Workspace {
         self.open_for_session(key, new, false, cx);
     }
 
-    /// The server folder browser picking session `key`'s notebook, as a popover under the button that opened it.
     pub(crate) fn render_notebook_picker(&self, key: u64, cx: &mut Context<Self>) -> Option<AnyElement> {
         let browser = self.locate.as_ref().filter(|b| b.pick_for == Some(key))?;
         let body = div()
@@ -1330,8 +1191,6 @@ impl Workspace {
         Some(div().absolute().top(px(34.)).left_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().child(body))).into_any_element())
     }
 
-    /// Open a notebook in a new session…: This Mac's file panel, else the
-    /// new-session screen on the session's server and folder.
     fn open_in_new_session(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(place) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.clone()) else { return };
         if place.host != HostId::ThisMac {
@@ -1354,9 +1213,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The notebook pane drawn natively while a session has no notebook to show;
-    /// None shows the web view. Our pages, not Pluto's welcome or "Can't find a
-    /// file here": what happened, and at most two things to do.
     pub fn notebook_page(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
         let key = session.key;
         let mono = |text: String| div().font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_primary()).child(text);
@@ -1404,8 +1260,6 @@ impl Workspace {
                         .gap(px(12.))
                         .child(page_button("new-notebook", Glyph::File, "New notebook", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx))))
                         .child(page_button("open-in-new-session", Glyph::Cells, "Open a notebook in a new session…", false).on_click(cx.listener(move |this, _, _, cx| this.open_in_new_session(key, cx))))
-                        // Julia starting ahead: New notebook waits for it. Out of the
-                        // flow, so the buttons don't move when it's done.
                         .children(self.starting_ahead_line(session, cx).map(|line| page_text(line).absolute().top_full().left_0().w_full().max_w_full().mt(px(10.)).text_size(theme::size_meta()))),
                 )
                 .into_any_element(),
@@ -1432,7 +1286,6 @@ impl Workspace {
         })
     }
 
-    /// The empty page's line while Julia, or R's setup, starts ahead for `session`'s host: the step, and its progress.
     pub fn starting_ahead_line(&self, session: &Session, cx: &App) -> Option<String> {
         match self.host_pane_state(&session.place.host, session.kind, cx)? {
             HostPane::JuliaStarting(_) => self.julia_ahead(&session.place.host),
@@ -1441,11 +1294,9 @@ impl Workspace {
         }
     }
 
-    /// What the notebook pane shows for a session.
     pub fn pane_shows(&self, session: &Session, cx: &App) -> PaneShows {
         if let Some(host) = self.host_pane_state(&session.place.host, session.kind, cx) {
             let empty = session.notebook_path.is_none() && session.notebook.is_none();
-            // R's failure is about a session waiting for its notebook; others show their own pane (#128).
             let not_about_it = matches!(host, HostPane::RFailed(_)) && !crate::connection::waits_for_notebook(session);
             if !not_about_it && !(empty && crate::connection::starting_ahead(&host, self.app_waits(&session.place.host, session.kind))) {
                 return PaneShows::Host(host);
@@ -1463,15 +1314,10 @@ impl Workspace {
         if self.notebook_at(session.key).is_some_and(|at| self.crashes.stopped_at(&at).is_some()) {
             return PaneShows::Crashed;
         }
-        // A page taken down with its runtime (`close_page`), or whose web content process
-        // ended (no address), stays covered until the reopened one loads.
         let blank = matches!(crate::webcontent::url(self.webview.read(cx).raw()).as_str(), "about:blank" | "");
         if session.notebook.is_some() && !blank { PaneShows::Page } else { PaneShows::Opening }
     }
 
-    /// Every second: if the active session's pane has said "Opening" for a
-    /// while though its runtime has the notebook open, load the page again,
-    /// once; after that, offer Reload notebook.
     pub fn check_opening(&mut self, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         self.test_blank_page(cx);
@@ -1494,7 +1340,6 @@ impl Workspace {
         }
     }
 
-    /// The session's host's runtime lists its notebook file as open.
     fn runtime_has_open(&self, session: &Session) -> bool {
         let Some(path) = session.notebook_path.as_deref() else { return false };
         let Some(list) = self.connection(&session.place.host).and_then(|c| c.notebooks.as_array()) else { return false };
@@ -1523,8 +1368,6 @@ impl Workspace {
         }
     }
 
-    /// Load session `key`'s notebook page again, the way opening it does: by
-    /// the id its runtime has for the file now.
     pub fn reload_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         match (session.notebook_path.clone(), session.notebook.clone()) {
@@ -1537,8 +1380,6 @@ impl Workspace {
         }
     }
 
-    /// WebKit's web content process for the page ended (it crashed, or the
-    /// system ended it), leaving the web view blank: load the page again.
     pub fn on_web_content_ended(&mut self, cx: &mut Context<Self>) {
         let showing = |s: &&Session| matches!(self.pane_shows(s, cx), PaneShows::Page | PaneShows::Opening);
         let Some((key, id, host)) = self.active_session().filter(showing).and_then(|s| Some((s.key, s.notebook.clone()?, s.place.host.clone()))) else {
@@ -1550,7 +1391,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ENDEAVOR_TEST_STUCK_OPENING: take the page down once when the file appears.
     #[cfg(debug_assertions)]
     fn test_blank_page(&mut self, cx: &mut Context<Self>) {
         let wanted = test_stuck_opening().is_some();
@@ -1562,8 +1402,6 @@ impl Workspace {
         self.test_blanked = wanted;
     }
 
-    /// All of the host's Julia stopped by itself: the crash page for the
-    /// session shown, as for a notebook's own Julia.
     pub fn julia_crashed_page(&self, host: &HostId, kind: Backend, reason: &str, cx: &mut Context<Self>) -> AnyElement {
         match self.active_session().filter(|s| s.place.host == *host && s.notebook_path.is_some()) {
             Some(session) => self.render_crash_page(session.key, cx),
@@ -1571,8 +1409,6 @@ impl Workspace {
         }
     }
 
-    /// Julia (or R) isn't running on the session's host: Start, and on a cluster the
-    /// job's resources behind a gear (the new-session screen's chip).
     pub fn julia_stopped_page(&self, host: &HostId, kind: Backend, reason: &str, cx: &mut Context<Self>) -> AnyElement {
         let name = self.hosts.name(host);
         let cluster = self.is_cluster(host);
@@ -1664,7 +1500,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The gear's popover: the session's job resources, as on the new-session screen.
     fn pane_resources_popover(&self, key: u64, host: &HostId, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let HostId::Server(id) = host else { return div() };
         let Some(cluster) = self.hosts.server(id).and_then(|s| s.cluster.as_ref()) else { return div() };
@@ -1687,7 +1522,6 @@ impl Workspace {
     }
 }
 
-/// Where exports from a server's notebook are suggested: ~/Downloads.
 fn dirs_downloads() -> PathBuf {
     wire::files::home().join("Downloads")
 }

@@ -1,18 +1,10 @@
-//! A PNG of part of the notebook (macOS: `src/snapshot.rs`, Linux:
-//! `src/linux/snapshot.rs`): WebView2's picture of what the view shows
-//! (DevTools' `Page.captureScreenshot`, which draws the page itself, plots and
-//! WebGL included, whatever is in front of the view), cut to a rect.
-
 use futures::channel::oneshot;
 use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
 use windows_core::w;
 use wry::WebViewExtWindows;
 
-/// Wider boxes are scaled down to this many logical pixels, as on the Mac.
 const MAX_WIDTH: f64 = 800.;
 
-/// `rect` is x, y, width, height in the web view's logical pixels, from its
-/// top left. The receiver gets None when WebView2 couldn't draw it.
 pub fn png(webview: &wry::WebView, rect: [f64; 4]) -> oneshot::Receiver<Option<Vec<u8>>> {
     let (tx, rx) = oneshot::channel();
     let scale = crate::overlay::window_of(webview).map_or(1., |hwnd| unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd as _) }.max(96) as f64 / 96.);
@@ -40,8 +32,6 @@ pub fn png(webview: &wry::WebView, rect: [f64; 4]) -> oneshot::Receiver<Option<V
     rx
 }
 
-/// The part of the view's picture `shot` at `rect`, at most `MAX_WIDTH` wide.
-/// The picture is in physical pixels, `scale` to a logical one.
 fn cut(shot: &[u8], [x, y, w, h]: [f64; 4], scale: f64) -> Option<Vec<u8>> {
     let image = image::load_from_memory_with_format(shot, image::ImageFormat::Png).ok()?;
     let px = |v: f64| (v * scale).round().max(0.) as u32;

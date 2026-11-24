@@ -2,7 +2,11 @@
 
 How to build Endeavor from source and work on it. For how to check a change
 from a script, see [testing.md](testing.md). For status and plans, see
-[roadmap.md](roadmap.md) and [pluto-agent-design-doc.md](pluto-agent-design-doc.md).
+[roadmap.md](roadmap.md) and [pluto-agent-design-doc.md](pluto-agent-design-doc.md). How the parts
+fit is in [agent-connection.md](agent-connection.md) (the agent),
+[remote-sessions.md](remote-sessions.md) (runtimes on this computer and on
+servers), [notebook-web-view.md](notebook-web-view.md) (the notebook in the
+window) and [updates.md](updates.md).
 
 ## Run from source
 

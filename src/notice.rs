@@ -1,8 +1,3 @@
-//! One-off failures (an export, a rename, a run, a new notebook, signing
-//! out): a notice under the control that was used, saying what didn't
-//! happen, why, and a way on (board XOpen). It stays until it's closed or
-//! tried again, and they no longer go to the sidebar's status line.
-
 use std::path::Path;
 
 use gpui::*;
@@ -13,10 +8,6 @@ use crate::hosts::HostId;
 use crate::layer::{self, Hole, Layer};
 use crate::signin::Look;
 
-/// Where a notice hangs: under the notebook header's file name (rename),
-/// under its right-hand buttons (Share, ⋮), at the top of the notebook pane
-/// for controls inside it (the safe-preview callout's Run notebook, the
-/// pane's New notebook), or at the top of the window over Settings (Sign out).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Spot {
     NotebookLeft,
@@ -36,25 +27,18 @@ impl Spot {
     }
 }
 
-/// What the notice's button does again.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Retry {
-    /// Export to…: pick where again.
     Export { key: u64, kind: &'static str, extension: &'static str },
-    /// Choose another name: the name box again.
     Rename(u64),
-    /// Move to…: pick a folder again.
     MoveTo(u64),
     RunNotebook(String),
     RestartNotebook(u64),
     StopNotebook(u64, String),
     NewNotebook(u64),
-    /// Session `key`'s notebook at the path, whose open failed.
     OpenNotebook(u64, String),
     ReloadNotebook(u64),
     SignOut,
-    /// The Julia the runtime on this host runs on was removed (`julia_removed`): only a
-    /// restart of Julia helps, so the notice offers that instead of Try again (#230).
     RestartJulia(HostId),
 }
 
@@ -75,7 +59,6 @@ pub struct Notice {
     pub spot: Spot,
     pub title: String,
     pub reason: String,
-    /// The error as it came, under Details when it says more than the reason.
     pub raw: String,
     pub retry: Option<Retry>,
     pub details_open: bool,
@@ -91,8 +74,6 @@ impl Notice {
     }
 }
 
-/// An error in a sentence: the plain reason when it can be told, else its
-/// first line without the error's type ("ArgumentError: kind::").
 pub fn reason(error: &str) -> String {
     let lower = error.to_lowercase();
     if let Some(name) = error.split("file_exists::").nth(1).and_then(|rest| rest.split('\'').nth(1)) {
@@ -115,7 +96,6 @@ pub fn reason(error: &str) -> String {
     if line.ends_with('.') { line.to_owned() } else { format!("{line}.") }
 }
 
-/// An export couldn't be saved in `folder`: the board's words for a folder it can't write.
 pub fn export_reason(error: &str, folder: &Path) -> String {
     let said = reason(error);
     if said == "Endeavor isn't allowed to write there." {
@@ -127,7 +107,6 @@ pub fn export_reason(error: &str, folder: &Path) -> String {
 impl Workspace {
     pub fn show_notice(&mut self, mut notice: Notice, cx: &mut Context<Self>) {
         eprintln!("{}: {}", notice.title, notice.raw);
-        // Trying again can't work while the runtime's Julia is gone: offer Restart Julia for its host.
         if notice.raw.contains("julia_removed::")
             && let Some(host) = notice.retry.as_ref().and_then(|retry| self.retry_host(retry))
         {
@@ -142,11 +121,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The host whose runtime a notice's action went to: its session's.
     fn retry_host(&self, retry: &Retry) -> Option<HostId> {
         let key = match retry {
             Retry::Export { key, .. } | Retry::Rename(key) | Retry::MoveTo(key) | Retry::RestartNotebook(key) | Retry::StopNotebook(key, _) | Retry::NewNotebook(key) | Retry::OpenNotebook(key, _) | Retry::ReloadNotebook(key) => Some(*key),
-            // A notebook no session shows: its host isn't known, so the notice keeps Try again.
             Retry::RunNotebook(notebook) => self.session_showing(notebook),
             Retry::SignOut => return None,
             Retry::RestartJulia(host) => return Some(host.clone()),
@@ -173,8 +150,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The notice over the notebook pane's side (`over_settings` false) or
-    /// over Settings, drawn above everything and cutting a hole in the web view.
     pub fn render_notice(&self, over_settings: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let notice = self.notice.as_ref().filter(|n| (n.spot == Spot::Settings) == over_settings)?;
         let buttons: Vec<AnyElement> = notice
@@ -231,7 +206,6 @@ mod tests {
         assert_eq!(Retry::Rename(1).label(), "Choose another name");
         assert_eq!(Retry::NewNotebook(1).label(), "Try again");
         assert_eq!(Retry::RestartJulia(crate::hosts::HostId::ThisMac).label(), "Restart Julia");
-        // The runtime's own words, without its error's type and kind.
         assert_eq!(reason("ArgumentError: julia_removed::Julia 1.12.6, which this Endeavor runs on, was removed from /x. Restart Julia to start notebooks again."), "Julia 1.12.6, which this Endeavor runs on, was removed from /x. Restart Julia to start notebooks again.");
     }
 }

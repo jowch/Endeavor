@@ -1,17 +1,9 @@
-//! Messages from the page script (frontend/, Point, Reply on a selection and
-//! asking about cells), turned into chat messages with their attachments.
-
 use crate::attach::{Attachment, Cell, CellAsk, Part, Quoted};
 use crate::session::cell_label;
 use wire::backend::Backend;
 
-/// The page script (frontend/, built with `npm run build`; the bundle is committed
-/// so building the app needs no Node).
 const SCRIPT: &str = include_str!("../frontend/dist/page.js");
 
-/// A per-launch secret the page script puts in every message. The page also runs
-/// notebook output JS, which can post to the same channel; it can't read the
-/// secret (it stays in the script's closure, see frontend/src/bridge.ts).
 fn page_nonce() -> &'static str {
     static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NONCE.get_or_init(|| {
@@ -27,7 +19,6 @@ fn page_nonce() -> &'static str {
     })
 }
 
-/// The page script with this launch's secret filled in.
 pub fn script() -> String {
     let script = SCRIPT.replace("__ENDEAVOR_NONCE__", &format!("\"{}\"", page_nonce()));
     #[cfg(debug_assertions)]
@@ -35,99 +26,61 @@ pub fn script() -> String {
     script
 }
 
-/// Upper bounds on page-supplied data. The page also runs notebook output JS,
-/// so any of these messages may be forged; the user sees every annotation in
-/// the tray before it is sent.
 const MAX_CELLS: usize = 64;
 const MAX_COMMENT: usize = 4000;
 const MAX_CODE: usize = 20_000;
-/// Bounds a drawn box's coordinates, in CSS pixels.
 const MAX_SIDE: f64 = 100_000.;
 
-/// The words Fix with Claude and Explain send with a cell's error.
 pub const FIX_ERROR: &str = "Fix the error in this cell.";
 pub const EXPLAIN_ERROR: &str = "Explain this error; don't change anything yet.";
 
-/// A message the user sent from the notebook: their words, and what it's about.
 #[derive(Debug, PartialEq)]
 pub struct Ask {
     pub text: String,
     pub attachment: Attachment,
-    /// Add to the composer's message (the prompt's ⌘↩) instead of sending it.
     pub add: bool,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Message {
-    /// The page script loaded and wants the current cell states.
     Ready,
     OutOfStep,
     Mode(bool),
     Ask(Ask),
-    /// Picks with Point, or Reply on a selected text, with the user's comment.
     Quote(Picks),
-    /// Take a picture of this part of the page's viewport (x, y, width,
-    /// height in CSS pixels) for a quote to come, and say "shot" `id` when done.
     Shoot { id: u32, rect: [f64; 4] },
-    /// A cell's code now (None: the page has no such cell), as the app asked.
     Code { cell: String, code: Option<String> },
-    /// The shown notebook's state, for the notebook header.
     State(PageState),
-    /// Run notebook, in the safe-preview callout.
     RunNotebook { notebook: String },
-    /// Whether the cells the chat's card asks to run are on screen.
     AskedVisible(bool),
-    /// Run anyway, when the user's own run reaches cells a card asks to run:
-    /// allow the cards asking about `cells`, as their Run button does. Each
-    /// cell comes with Pluto's `last_run_timestamp` from before the user's run.
     RunAnyway { notebook: String, cells: Vec<(String, f64)> },
-    /// ⏎ in the page with nothing focused: answer the waiting card `card`
-    /// (the context's id for it) as its filled button does.
     AnswerCard { notebook: String, card: usize },
-    /// Fix with Claude, in Status's box for a package that failed.
     FixPackage { notebook: String, name: String, log: String },
-    /// Restart notebook, in the same box.
     Restart { notebook: String },
-    /// "Show in chat" on an error box whose Fix or Explain Claude is answering.
     ShowErrorAsk { cell: String },
-    /// "Cancel" on an error box whose Fix or Explain waits in the queue.
     CancelErrorAsk { cell: String },
-    /// The page's part of a state dump (debug_state.rs), as it sent it.
     #[cfg(debug_assertions)]
     Debug(serde_json::Value),
 }
 
-/// What the page reads from Pluto's state for the notebook header.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageState {
     pub notebook: String,
-    /// In safe preview: nothing runs until the user says so.
     pub safe: bool,
-    /// Work under way, e.g. "Installing packages · 2 of 5", "Running 4 of 7".
     pub busy: Option<String>,
-    /// Pluto asks for a restart ("required" or "recommended"), e.g. after a package change.
     pub restart: Option<String>,
     pub save_failed: bool,
-    /// A package that failed to install or precompile.
     pub package_failed: Option<String>,
-    /// The notebook's process exited.
     pub dead: bool,
-    /// The page's connection to Pluto is up.
     pub connected: bool,
-    /// A cell's code was edited and not run yet.
     pub unsaved: bool,
-    /// The drawer's open tab ("docs", "status").
     pub drawer: Option<String>,
 }
 
-/// What the user quoted in the notebook, in the order picked: each quote,
-/// and the picture (`Message::Shoot`'s id) that goes in it, for a figure or a
-/// box. The comment belongs to the last quote.
 #[derive(Debug, PartialEq)]
 pub struct Picks {
     pub quotes: Vec<(Quoted, Option<u32>)>,
     pub comment: String,
-    /// ⌘↩: add them to the composer's message instead of sending them now.
     pub add: bool,
 }
 
@@ -135,7 +88,6 @@ pub fn is_uuid(s: &str) -> bool {
     s.len() == 36 && s.matches('-').count() == 4 && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
-/// Parse and validate one IPC message from the page; `None` drops it.
 pub fn parse(body: &str) -> Option<Message> {
     parse_with(body, page_nonce())
 }
@@ -144,7 +96,6 @@ fn capped(value: Option<&serde_json::Value>, max: usize) -> String {
     value.and_then(|v| v.as_str()).unwrap_or("").chars().take(max).collect()
 }
 
-/// `parse`, given the secret messages must carry (a missing one counts as "").
 fn parse_with(body: &str, nonce: &str) -> Option<Message> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     if v.get("nonce").and_then(|n| n.as_str()).unwrap_or("") != nonce {
@@ -154,7 +105,6 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
     match v.get("type")?.as_str()? {
         "ready" => Some(Message::Ready),
         "out_of_step" => Some(Message::OutOfStep),
-        // Fix with Claude / Explain on a cell's error.
         "ask" => {
             let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
             let text = match v.get("kind")?.as_str()? {
@@ -166,8 +116,6 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
             let attachment = Attachment::Error { notebook, cell, text: capped(v.get("error"), MAX_COMMENT) };
             Some(Message::Ask(Ask { text: text.into(), attachment, add: false }))
         }
-        // ⌘E on a cell, or the agent button between cells. Added to the
-        // message, a question about a cell is a quote of the whole cell.
         "prompt" => {
             let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
             let text = capped(v.get("text"), MAX_COMMENT);
@@ -255,10 +203,6 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
     }
 }
 
-/// One pick of a "quote" message: `part` (`cell`, `lines`, `output`, `figure`
-/// or `box`), the cell and its code (a box: `cells`, the ids under it), the
-/// quoted `text` and `lines` ([first, last]) where they apply, and `shot`, the
-/// picture a figure or box takes its image from.
 fn pick_quote(pick: &serde_json::Value, notebook: &str) -> Option<(Quoted, Option<u32>)> {
     let shot = pick.get("shot").and_then(|s| s.as_u64()).and_then(|s| u32::try_from(s).ok());
     let notebook = notebook.to_string();
@@ -298,16 +242,11 @@ pub fn cell_uri(backend: Backend, notebook: &str, cell: &str) -> String {
     format!("notebook://{}/{notebook}/cell/{cell}", backend.name())
 }
 
-/// The cell id in an agent's link to a cell, `cell_uri`'s form for any
-/// notebook: the cell is looked for in the pane's notebook, so a link with a
-/// wrong notebook id still finds it.
 pub fn linked_cell(uri: &str) -> Option<&str> {
     let cell = uri.strip_prefix("notebook://")?.split_once("/cell/")?.1.trim_end_matches('/');
     (!cell.is_empty() && cell.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then_some(cell)
 }
 
-/// The cell id in a link to a cell of `notebook`: `cell_uri`'s form, or
-/// `pluto://notebook/…/cell/…`, which sessions from before it used.
 pub fn uri_cell<'a>(uri: &'a str, notebook: &str) -> Option<&'a str> {
     let rest = match uri.strip_prefix("notebook://") {
         Some(rest) => rest.split_once('/')?.1,
@@ -376,7 +315,6 @@ mod tests {
             Some(Message::Ask(Ask { text: "plot it".into(), attachment: Attachment::Cells { notebook: NB.into(), cells: vec![cell("y = 2")], ask: CellAsk::After }, add: false }))
         );
         assert!(matches!(prompt("fill", true), Some(Message::Ask(Ask { add: true, .. }))));
-        // ⌘↩ on a question about a cell: the cell and the words become one quote card.
         assert_eq!(
             prompt("about", true),
             Some(Message::Quote(Picks {
