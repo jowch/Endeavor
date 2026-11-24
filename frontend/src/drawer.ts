@@ -86,6 +86,7 @@ let body: HTMLElement;
 let tab: Drawer = null;
 let auto = false;
 let autoDone = false;
+let failureSeen: string | null = null;
 let showLog = false;
 let modelOf = (): StatusModel | null => current()?.model ?? null;
 
@@ -200,9 +201,14 @@ function render() {
 
 function follow(_: NotebookLike | null, m: StatusModel) {
   const root = document.documentElement.dataset;
+  const ours = root.endeavorLook === "endeavor" || root.endeavorEngine === "marimo";
   if (!m.install) autoDone = false;
-  if (m.install && !autoDone && tab === null && (root.endeavorLook === "endeavor" || root.endeavorEngine === "marimo")) {
+  const newFailure = root.endeavorEngine === "marimo" && m.failure !== null && m.failure.name !== failureSeen;
+  failureSeen = m.failure?.name ?? null;
+  if (m.install && !autoDone && tab === null && ours) {
     autoDone = true;
+    openDrawer("packages", true);
+  } else if (newFailure && tab === null) {
     openDrawer("packages", true);
   } else if (auto && tab === "packages" && !m.install && !m.failure && !m.busy?.startsWith("Starting")) {
     openDrawer(null);

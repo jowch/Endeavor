@@ -208,6 +208,10 @@ pub enum HeaderTool {
     Packages,
 }
 
+fn install_ended(before: &PageState, after: &PageState) -> bool {
+    before.notebook == after.notebook && before.installing && !after.installing
+}
+
 pub fn header_tools(kind: Backend, endeavor_look: bool, python_packages: bool) -> &'static [HeaderTool] {
     match kind {
         Backend::Marimo if python_packages => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Packages],
@@ -284,6 +288,10 @@ pub struct PackagesFeed {
 impl PackagesFeed {
     pub fn page_reloaded(&mut self) {
         self.page_has_it = false;
+        self.next = None;
+    }
+
+    pub fn ask_now(&mut self) {
         self.next = None;
     }
 
@@ -883,6 +891,9 @@ impl Workspace {
         let same = self.page.notebook == state.notebook;
         let left_safe = same && self.page.safe && !state.safe && state.connected;
         let was_dead = same && self.page.dead;
+        if install_ended(&self.page, &state) {
+            self.packages_feed.ask_now();
+        }
         self.page = state;
         if let Some(key) = self.session_showing(&self.page.notebook) {
             if left_safe {
@@ -1844,6 +1855,22 @@ mod tests {
         assert!(feed.due(now));
         assert_eq!(feed.latest_for(8), Some(&ready), "the header keeps its Packages button while the page reloads");
         assert_eq!(feed.arrived(8, Ok(ready.clone()), now), Some(ready), "a reloaded page is sent them again");
+    }
+
+    #[test]
+    fn the_package_list_is_asked_for_again_as_soon_as_the_page_says_an_install_ended() {
+        use super::{PageState, install_ended};
+        let installing = PageState { notebook: "a".into(), installing: true, ..Default::default() };
+        let done = PageState { installing: false, ..installing.clone() };
+        assert!(install_ended(&installing, &done));
+        assert!(!install_ended(&done, &installing));
+        assert!(!install_ended(&installing, &PageState { notebook: "b".into(), ..done.clone() }), "another notebook's page");
+        let mut feed = super::PackagesFeed::default();
+        let now = Instant::now();
+        feed.arrived(7, Ok(serde_json::json!({ "install": null })), now);
+        assert!(!feed.due(now));
+        feed.ask_now();
+        assert!(feed.due(now));
     }
 
     #[test]

@@ -171,8 +171,8 @@
     const failed = [];
     const added = [];
     let inManifest = false;
-    for (const raw of plain(log).split("\n")) {
-      const line = raw.trimEnd();
+    for (const raw2 of plain(log).split("\n")) {
+      const line = raw2.trimEnd();
       const mark = line.match(/^\s*(?:[\d.]+\s*ms)?\s*([✓✗])\s+([\w.]+)/);
       if (mark) (mark[1] === "\u2713" ? precompiled : failed).push(mark[2]);
       if (/^\s*Updating\s+`.*Manifest\.toml`/.test(line)) {
@@ -416,8 +416,8 @@
     const k = e;
     const inEditor = target?.closest("pluto-input") ? target.closest("pluto-cell") : null;
     if (k.key?.toLowerCase() === "s" && modHeld(k) && !k.shiftKey && !k.altKey) {
-      const changed = changedCells(st);
-      return changed.length ? { start: changed, changes: true } : null;
+      const changed2 = changedCells(st);
+      return changed2.length ? { start: changed2, changes: true } : null;
     }
     if (k.key !== "Enter") return null;
     if (k.shiftKey && !k.metaKey && !k.ctrlKey && !k.altKey) {
@@ -1128,7 +1128,7 @@
       const r = target.el.getBoundingClientRect();
       Object.assign(tag.style, { left: `${r.left + window.scrollX}px`, top: `${r.top + window.scrollY - 22}px` });
     }
-    function refresh2() {
+    function refresh3() {
       for (const el2 of document.querySelectorAll(".annotate-picked")) el2.classList.remove("annotate-picked");
       for (const el2 of document.querySelectorAll(".annotate-line")) el2.classList.remove("annotate-line");
       for (const p of picks) {
@@ -1143,7 +1143,7 @@
       const at = picks.findIndex((p) => samePick(p, next));
       if (add) at >= 0 ? picks.splice(at, 1) : picks.push(next);
       else picks.splice(0, picks.length, ...at >= 0 && picks.length === 1 ? [] : [next]);
-      refresh2();
+      refresh3();
       text.focus();
     }
     function targetPick(target) {
@@ -1177,7 +1177,7 @@
         for (const c of document.querySelectorAll(dom().selected)) picks.push(targetPick({ part: "cell", cell: c, el: c }));
         text.focus();
       }
-      refresh2();
+      refresh3();
       send({ type: "mode", on: enable });
       requestAnimationFrame(() => setTimeout(() => document.body.classList.toggle("annotate-numbers", active())));
     }
@@ -1191,7 +1191,7 @@
       if (ref !== void 0) underWay.set(ref, { picks: sending, comment });
       text.value = "";
       text.dispatchEvent(new Event("input"));
-      refresh2();
+      refresh3();
       const out = [];
       for (const p of sending) {
         if (!answered && (p.pick.part === "box" || p.pick.part === "figure")) {
@@ -1301,7 +1301,7 @@
 ${text.value}` : sent2.comment;
         text.dispatchEvent(new Event("input"));
       }
-      refresh2();
+      refresh3();
     });
   }
 
@@ -1378,12 +1378,12 @@ ${text.value}` : sent2.comment;
     on("context", (msg) => {
       style2.textContent = css6();
       const cells = msg.ask_cells ?? [];
-      const changed = cells.join() !== asked.join();
+      const changed2 = cells.join() !== asked.join();
       asked = cells;
       rerun = (msg.rerun_cells ?? []).filter((id) => !cells.includes(id));
       needed = (msg.needed_ids ?? []).filter((id) => !cells.includes(id) && !rerun.includes(id));
       apply();
-      if (changed) watch();
+      if (changed2) watch();
     });
     onRedraw(apply);
   }
@@ -2100,6 +2100,7 @@ ${text.value}` : sent2.comment;
   var tab = null;
   var auto = false;
   var autoDone = false;
+  var failureSeen = null;
   var showLog = false;
   var modelOf = () => current()?.model ?? null;
   var escape3 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -2193,9 +2194,14 @@ ${text.value}` : sent2.comment;
   }
   function follow(_, m) {
     const root = document.documentElement.dataset;
+    const ours = root.endeavorLook === "endeavor" || root.endeavorEngine === "marimo";
     if (!m.install) autoDone = false;
-    if (m.install && !autoDone && tab === null && (root.endeavorLook === "endeavor" || root.endeavorEngine === "marimo")) {
+    const newFailure = root.endeavorEngine === "marimo" && m.failure !== null && m.failure.name !== failureSeen;
+    failureSeen = m.failure?.name ?? null;
+    if (m.install && !autoDone && tab === null && ours) {
       autoDone = true;
+      openDrawer("packages", true);
+    } else if (newFailure && tab === null) {
       openDrawer("packages", true);
     } else if (auto && tab === "packages" && !m.install && !m.failure && !m.busy?.startsWith("Starting")) {
       openDrawer(null);
@@ -3218,30 +3224,60 @@ footer form#feedback { display: none !important; }
     if (lowest) return `Python ${lowest[1]} or later`;
     return requirement ? `Python ${requirement.trim()}` : "Python";
   }
+  var plainLog = (log) => log.replace(/\x1b\[[0-9;]*m/g, "");
   function lastLogLine(log) {
-    const lines = log.split("\n").map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trim()).filter(Boolean);
+    const lines = plainLog(log).split("\n").map((l) => l.trim()).filter(Boolean);
     const telling = lines.filter((l) => /error|not found|no solution|because/i.test(l));
     return telling[telling.length - 1] ?? lines[lines.length - 1] ?? "";
   }
-  function marimoModel(raw) {
+  function failureReason(log) {
+    const text = plainLog(log);
+    if (/not found in the package registry/.test(text)) return "it isn't on PyPI";
+    const because = text.match(/╰─▶\s*([^]*?)(?:\n\s*\n|\n\S|$)/);
+    if (!because) return lastLogLine(log);
+    const said = because[1].split("\n").map((l) => l.trim()).join(" ");
+    const first = said.split(/, we can conclude|\.\s/)[0].replace(/^because\s+/i, "").replace(/\.$/, "");
+    return first.charAt(0).toLowerCase() + first.slice(1);
+  }
+  function applyOperation(prev, op, mode) {
+    if (op.action !== "install" || op.source === "server") return prev;
+    const logs = prev?.id === op.operation_id ? { ...prev.logs } : {};
+    for (const [stream, text] of Object.entries(op.logs ?? {})) logs[stream] = mode === "replace" ? text : (logs[stream] ?? "") + text;
+    return { id: op.operation_id, packages: op.packages ?? {}, logs, status: op.status?.kind ?? "running", error: op.status?.error ?? "" };
+  }
+  function withLive(raw2, live2) {
+    if (!live2) return raw2;
+    const names2 = Object.keys(live2.packages);
+    if (live2.status === "running") return { ...raw2, install: { step: "installing", packages: names2 }, failed: null };
+    const asking = raw2.install?.step === "asking" ? raw2.install : null;
+    if (live2.status === "failed") {
+      const failed = names2.filter((n) => live2.packages[n] !== "succeeded");
+      const log = [...Object.values(live2.logs), live2.error].filter(Boolean).join("\n");
+      return { ...raw2, install: asking, failed: { packages: failed.length ? failed : names2, log } };
+    }
+    const installed2 = new Set(names2.filter((n) => live2.packages[n] === "succeeded").map(canonical));
+    const stillFailed = raw2.failed?.packages.some((n) => !installed2.has(canonical(n)));
+    return { ...raw2, install: asking, failed: stillFailed ? raw2.failed : null };
+  }
+  function marimoModel(raw2) {
     const named = (list) => new Set((list ?? []).map(canonical));
-    const failed = named(raw.failed?.packages);
-    const installing = named(raw.install?.step === "installing" ? raw.install.packages : []);
-    const asking = named(raw.install?.step === "asking" ? raw.install.packages : []);
+    const failed = named(raw2.failed?.packages);
+    const installing = named(raw2.install?.step === "installing" ? raw2.install.packages : []);
+    const asking = named(raw2.install?.step === "asking" ? raw2.install.packages : []);
     const state2 = (name) => failed.has(name) ? "failed" : installing.has(name) ? "installing" : asking.has(name) ? "waiting" : "ready";
-    const listed = new Set(raw.packages.map((p) => canonical(p.name)));
-    const added = [...raw.failed?.packages ?? [], ...raw.install?.packages ?? []].filter(
+    const listed = new Set(raw2.packages.map((p) => canonical(p.name)));
+    const added = [...raw2.failed?.packages ?? [], ...raw2.install?.packages ?? []].filter(
       (n, i, all) => !listed.has(canonical(n)) && all.findIndex((m) => canonical(m) === canonical(n)) === i
     );
-    const packages = [...raw.packages, ...added.map((name) => ({ name, version: null }))].map((p) => {
+    const packages = [...raw2.packages, ...added.map((name) => ({ name, version: null }))].map((p) => {
       const s = state2(canonical(p.name));
       return { name: p.name, state: s, detail: s === "ready" ? p.version ?? "" : "" };
     });
-    const said = raw.failed ? lastLogLine(raw.failed.log) : "";
-    const failure = raw.failed ? { name: raw.failed.packages.join(", "), why: said ? `couldn't be installed: ${said}` : "couldn't be installed.", cells: [], log: raw.failed.log } : null;
+    const said = raw2.failed ? failureReason(raw2.failed.log) : "";
+    const failure = raw2.failed ? { name: raw2.failed.packages.join(", "), why: said ? `couldn't be installed: ${said}` : "couldn't be installed.", cells: [], log: raw2.failed.log } : null;
     const install = installing.size ? { done: 0, total: 0 } : null;
     const busy = install ? "Installing packages" : null;
-    const runtime = [pythonLine(raw.python, raw.python_version), "uv", raw.package_date ? `PyPI as of ${raw.package_date}` : null].filter(Boolean).join(" \xB7 ");
+    const runtime = [pythonLine(raw2.python, raw2.python_version), "uv", raw2.package_date ? `PyPI as of ${raw2.package_date}` : null].filter(Boolean).join(" \xB7 ");
     return {
       headline: failure ? `Package failed \xB7 ${failure.name}` : busy ?? "Ready",
       runtime,
@@ -3249,13 +3285,16 @@ footer form#feedback { display: none !important; }
       deps: null,
       install,
       failure,
-      log: raw.failed?.log ?? "",
+      log: raw2.failed?.log ?? "",
       busy,
       saveFailed: false,
       restart: null
     };
   }
+  var raw = null;
+  var live = null;
   var model2 = null;
+  var changed = null;
   var notebook2 = "";
   var sent = "";
   function report3() {
@@ -3278,18 +3317,50 @@ footer form#feedback { display: none !important; }
     sent = json;
     send(msg);
   }
+  function refresh2() {
+    if (!raw) return;
+    model2 = marimoModel(withLive(raw, live));
+    changed?.(model2);
+    report3();
+  }
+  function heard(text) {
+    if (!text.startsWith('{"op": "environment-')) return;
+    const { data } = JSON.parse(text);
+    if (data.op === "environment-operation") live = applyOperation(live, data, data.log_mode ?? "append");
+    else if (data.op === "environment-state") for (const op of data.state?.operations ?? []) live = applyOperation(live, op, "replace");
+    refresh2();
+  }
+  function listenToMarimo() {
+    window.WebSocket = new Proxy(window.WebSocket, {
+      construct(Real, args) {
+        const socket = Reflect.construct(Real, args);
+        socket.addEventListener?.("message", (e) => {
+          if (typeof e.data === "string") heard(e.data);
+        });
+        return socket;
+      }
+    });
+  }
+  var marimoInstallTitles = ["Installing packages", "All packages installed!", "Some packages failed to install"];
+  function hideMarimoInstallAlerts() {
+    for (const alert of document.querySelectorAll("div.fixed.top-5.left-12")) {
+      const title = alert.textContent?.trimStart() ?? "";
+      if (marimoInstallTitles.some((t) => title.startsWith(t))) alert.style.display = "none";
+    }
+  }
+  if (onMarimo()) listenToMarimo();
   function initMarimoPackages() {
-    const changed = showModel(() => model2);
+    changed = showModel(() => model2);
     on("context", (msg) => {
       notebook2 = msg.notebook ?? notebook2;
       report3();
     });
     on("packages", (msg) => {
-      model2 = marimoModel(msg.environment);
-      changed(model2);
-      report3();
+      raw = msg.environment;
+      refresh2();
     });
     new MutationObserver(report3).observe(document.documentElement, { attributes: true, attributeFilter: ["data-endeavor-drawer"] });
+    new MutationObserver(hideMarimoInstallAlerts).observe(document.body, { childList: true, subtree: true });
   }
 
   // src/main.ts
