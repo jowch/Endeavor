@@ -89,6 +89,8 @@ impl Lost {
     }
 }
 
+const DOWNLOADING_UV: &str = "Downloading uv";
+
 #[derive(Clone, Debug)]
 pub struct Steps {
     pub done: Vec<String>,
@@ -1876,7 +1878,12 @@ impl Workspace {
                 cx.spawn(async move |this, cx| {
                     let allowed = allowed.await;
                     let _ = this.update(cx, |this, cx| match allowed {
-                        Ok(()) => this.open_again(again, cx),
+                        Ok(()) => {
+                            if let Some(connection) = this.connections.get_mut(&host).filter(|_| kind == Backend::Marimo) {
+                                connection.r.get_or_insert_with(Steps::r).r_step(DOWNLOADING_UV);
+                            }
+                            this.open_again(again, cx)
+                        }
                         Err(e) if kind == Backend::Marimo => this.julia_answer(&host, kind, Some(&format!("python_failed::Couldn't download uv: {e}")), cx),
                         Err(e) => this.julia_answer(&host, kind, Some(&format!("r_failed::Couldn't install R: {e}")), cx),
                     });

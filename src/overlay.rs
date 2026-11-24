@@ -129,6 +129,7 @@ const RIGHT_DOWN: usize = 3;
 const RIGHT_UP: usize = 4;
 const LEFT_DRAGGED: usize = 6;
 const SCROLL_WHEEL: usize = 22;
+const KEY_DOWN: usize = 10;
 
 /// Clicks in the hole go straight to GPUI's view. The web view claims them
 /// otherwise, even when it declines to hit-test there (WebKit's gesture
@@ -170,6 +171,9 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
             let hidden: Bool = msg_send![view, isHiddenOrHasHiddenAncestor];
             let hidden = hidden.as_bool();
             crate::click_log::note(|| format!("window {} at page {:.0},{:.0} in holes {holes:?} dismiss {dismiss} page hidden {hidden} keys in page {in_page} input context {context}", if kind == LEFT_DOWN { "down" } else { "up" }, local.x, y));
+        }
+        if cfg!(debug_assertions) && kind == KEY_DOWN {
+            note_key(window, event);
         }
         // A press that went to GPUI keeps going there until it ends, wherever the pointer is
         // and whatever opened or closed meanwhile: AppKit sends a mouse-up only to the view that
@@ -236,6 +240,21 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
         if let Some(gpui) = GPUI_SEND_EVENT.get() {
             gpui(window, cmd, event);
         }
+    }
+}
+
+unsafe fn note_key(window: *mut AnyObject, event: *mut AnyObject) {
+    unsafe {
+        let chars: *mut AnyObject = msg_send![event, charactersIgnoringModifiers];
+        let chars = if chars.is_null() { String::new() } else { (*(chars as *const objc2_foundation::NSString)).to_string() };
+        let responder: *mut AnyObject = msg_send![window, firstResponder];
+        let responder = if responder.is_null() { "none".to_owned() } else { (*responder).class().name().to_string_lossy().into_owned() };
+        let current: *mut AnyObject = msg_send![class!(NSTextInputContext), currentInputContext];
+        let client = if current.is_null() { "none".to_owned() } else {
+            let client: *mut AnyObject = msg_send![current, client];
+            if client.is_null() { "no client".to_owned() } else { (*client).class().name().to_string_lossy().into_owned() }
+        };
+        crate::click_log::note(|| format!("window key {chars:?} first responder {responder} input context of {client}"));
     }
 }
 

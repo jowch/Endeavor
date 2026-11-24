@@ -3068,6 +3068,10 @@ impl Render for Workspace {
                 this.zoom_chat = false;
                 click_log::note(|| format!("gpui down {:?} at {:.0},{:.0}", event.button, f32::from(event.position.x), f32::from(event.position.y)));
             }))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let composer = this.input.read(cx).focus_handle(cx).is_focused(window);
+                click_log::note(|| format!("gpui key {:?} char {:?} composer focused {composer} anything focused {}", event.keystroke.key, event.keystroke.key_char, window.focused(cx).is_some()));
+            }))
             .capture_any_mouse_up(|event: &MouseUpEvent, _, _| click_log::note(|| format!("gpui up {:?} at {:.0},{:.0}", event.button, f32::from(event.position.x), f32::from(event.position.y))))
             .on_mouse_up(
                 MouseButton::Left,
