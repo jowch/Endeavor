@@ -2533,7 +2533,7 @@ impl Workspace {
             updater::State::UpToDate => about::AppUpdate::UpToDate,
             updater::State::Ready { build, .. } if self.working() => about::AppUpdate::ReadyAfterTurn(build.clone()),
             updater::State::Ready { build, .. } => about::AppUpdate::Ready(build.clone()),
-            updater::State::Manual { build } => about::AppUpdate::Manual(build.clone()),
+            updater::State::Manual { build } => about::AppUpdate::Manual { build: build.clone(), protected: self.app_update.place.as_ref().is_ok_and(|p| p.protected) },
             updater::State::Failed(e) => about::AppUpdate::Failed(e.clone()),
         }
     }
