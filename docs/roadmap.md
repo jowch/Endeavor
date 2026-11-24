@@ -36,8 +36,9 @@ it is announced is tracked in [#156](https://github.com/jowch/Endeavor/issues/15
   [marimo.md](marimo.md)). Python notebooks open, are made and run in the app on
   this computer and on servers and clusters, with Point. Install uv is offered
   where there's no uv on a Mac or Linux computer or a server; on Windows and
-  Slurm clusters the user installs uv. Left: Endeavor's other page tools on
-  marimo's page.
+  Slurm clusters the user installs uv. Share and export works on
+  marimo's page, and Live docs opens marimo's documentation panel in the
+  bottom drawer. Left: Status there.
 - **R notebooks on Windows.** R notebooks (Ember) run in the app on Macs and
   Linux, and on servers and clusters. On Windows the chip offers Julia and
   Python, not R, and lists no `.R` files, until Ember runs there (Ember #48, #49).
@@ -107,7 +108,7 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 |---|---|---|
 | `diagram.rs` `cached` | GPUI keeps each picture it has drawn for the window's life, so each width a diagram is laid out at keeps its pixels (about 1 to 3 MB) | a session with many diagrams, resized often, grows noticeably |
 | `notify.rs` `flash` | on Windows, "Claude is waiting for you" flashes the taskbar button instead of showing a notification, and coming back doesn't open the session that asked | a toast, with the app's AppUserModelID on the installer's Start menu shortcut |
-| `connection.rs` `waits`, `notebook_pane.rs` `notebook_header` | Python notebooks share R's waits and failure slot on a host, and marimo's page has Point but none of Endeavor's other tools (Share and export, Live docs, Packages) or its look | the rest of the app slice ([#1](https://github.com/jowch/Endeavor/issues/1)) |
+| `connection.rs` `waits`, `notebook_pane.rs` `notebook_header` | Python notebooks share R's waits and failure slot on a host, and marimo's page has Point, Share and export and Live docs but not Packages or Endeavor's look; its docs drawer has no resize grip | the rest of the app slice ([#1](https://github.com/jowch/Endeavor/issues/1)) |
 | `cell_shot.rs` `cell_shot_job` | the agent's picture of an HTML output is taken only while the notebook pane is on screen | a picture asked for behind Settings |
 | `frontend/src/diff.ts` | the page's diff is an O(n·m) table; when the two versions' line counts multiply past 250,000, no diff is shown | big cells need a diff |
 | `server_dialog.rs` `drop_asks` | when a sign-in ends while another server's question waits behind it, that question comes to the front without the focus | two servers asking at once happens in practice |

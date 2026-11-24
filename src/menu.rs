@@ -168,7 +168,11 @@ impl Workspace {
                 let kind = session.map_or(Backend::Pluto, |s| s.kind);
                 NotebookAction::for_notebook(kind, open, stopped, safe, local).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
             }
-            MenuTarget::Share(key) => NotebookAction::for_share(self.sessions.iter().find(|s| s.key == *key).map_or(Backend::Pluto, |s| s.kind)).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect(),
+            MenuTarget::Share(key) => {
+                let Some(session) = self.sessions.iter().find(|s| s.key == *key) else { return Vec::new() };
+                let exports_python = self.connection(&session.place.host).and_then(|c| c.runtime.as_ref()).is_some_and(|r| r.version.exports_python());
+                NotebookAction::for_share(session.kind, exports_python).into_iter().map(|action| MenuPick::Notebook(*key, action)).collect()
+            }
         }
     }
 

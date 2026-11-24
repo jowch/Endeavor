@@ -177,12 +177,13 @@ impl NotebookAction {
         items
     }
 
-    pub fn for_share(kind: Backend) -> Vec<NotebookAction> {
+    pub fn for_share(kind: Backend, runtime_exports_python: bool) -> Vec<NotebookAction> {
         use NotebookAction::*;
         match kind {
             Backend::Pluto => vec![ExportFile, ExportHtml, ExportPdf, Present, Record, Frontmatter],
             Backend::Ember => vec![ExportFile, ExportHtml, ExportPdf],
-            Backend::Marimo => vec![ExportFile],
+            Backend::Marimo if runtime_exports_python => vec![ExportFile, ExportHtml, ExportPdf],
+            Backend::Marimo => vec![ExportPdf],
         }
     }
 }
@@ -191,6 +192,51 @@ pub fn header_busy(page: &PageState) -> Option<HeaderBusy> {
     let text = page.busy.clone()?;
     let packages_shown = page.drawer.as_deref() == Some("packages");
     (!(page.installing && packages_shown)).then_some(HeaderBusy { text, opens_packages: page.installing })
+}
+
+pub fn header_drawer(kind: Backend, shown: bool, reported: Option<&PageState>, page: &PageState) -> Option<String> {
+    match kind {
+        Backend::Marimo => page.drawer.clone().filter(|_| shown),
+        _ => reported.and_then(|p| p.drawer.clone()),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum HeaderTool {
+    Share,
+    Docs,
+    Packages,
+}
+
+pub fn header_tools(kind: Backend, endeavor_look: bool) -> &'static [HeaderTool] {
+    match kind {
+        Backend::Marimo => &[HeaderTool::Share, HeaderTool::Docs],
+        Backend::Pluto | Backend::Ember if endeavor_look => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Packages],
+        Backend::Pluto | Backend::Ember => &[],
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ExportFrom {
+    Page(String),
+    Runtime(&'static str),
+}
+
+pub fn export_from(kind: Backend, what: &str, id: &str) -> ExportFrom {
+    let html = what == "notebookexport";
+    match kind {
+        Backend::Marimo => ExportFrom::Runtime(if html { "html" } else { "file" }),
+        Backend::Ember => ExportFrom::Page(format!("/ember/{what}?id={id}{}", if html { "&offline_bundle=true" } else { "" })),
+        Backend::Pluto => ExportFrom::Page(format!("/{what}?id={id}{}", if html { "&offline_bundle=true" } else { "" })),
+    }
+}
+
+pub fn notebook_extension(kind: Backend) -> &'static str {
+    match kind {
+        Backend::Pluto => "jl",
+        Backend::Ember => "R",
+        Backend::Marimo => "py",
+    }
 }
 
 pub const OUT_OF_STEP_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
@@ -221,6 +267,28 @@ pub enum PaneShows {
 }
 
 pub const OPENING_GRACE: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+pub struct DrawerAsk {
+    loading: bool,
+    pending: Option<String>,
+}
+
+impl DrawerAsk {
+    pub fn page_loading(&mut self) {
+        self.loading = true;
+        self.pending = None;
+    }
+
+    fn asked(&mut self, tab: Option<&str>) {
+        self.pending = tab.filter(|_| self.loading).map(str::to_owned);
+    }
+
+    pub fn page_ready(&mut self) -> Option<String> {
+        self.loading = false;
+        self.pending.take()
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct OpeningWatch {
@@ -690,26 +758,28 @@ impl Workspace {
         let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating, compact), point_text.into())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
-        let drawer = page.and_then(|p| p.drawer.clone());
-        let our_tools_in_page = session.kind != Backend::Marimo;
-        let tools = (endeavor && shown && our_tools_in_page).then(|| {
+        let drawer = header_drawer(session.kind, shown, page, &self.page);
+        let tools = if shown { header_tools(session.kind, endeavor) } else { &[] };
+        let share = tools.contains(&HeaderTool::Share).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
-            [
-                header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
-                    .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.open_menu(MenuTarget::Share(key), None, window, cx);
-                    }))
-                    .children(share_menu.map(|menu| self.render_menu(menu, cx)))
-                    .into_any_element(),
-                tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
-                    .into_any_element(),
-                tip(header_button("header-packages", Glyph::Package, Some("Packages"), drawer.as_deref() == Some("packages"), compact), "Packages".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("packages", cx)))
-                    .into_any_element(),
-            ]
+            header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
+                .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(MenuTarget::Share(key), None, window, cx);
+                }))
+                .children(share_menu.map(|menu| self.render_menu(menu, cx)))
+                .into_any_element()
+        });
+        let docs = tools.contains(&HeaderTool::Docs).then(|| {
+            tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
+                .into_any_element()
+        });
+        let packages = tools.contains(&HeaderTool::Packages).then(|| {
+            tip(header_button("header-packages", Glyph::Package, Some("Packages"), drawer.as_deref() == Some("packages"), compact), "Packages".into())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("packages", cx)))
+                .into_any_element()
         });
 
         div()
@@ -726,7 +796,9 @@ impl Workspace {
             .children(self.job_ends(&session.place.host))
             .children(busy)
             .when(shown, |d| d.child(point))
-            .children(tools.into_iter().flatten())
+            .children(share)
+            .children(docs)
+            .children(packages)
             .when(session.notebook_path.is_some(), |d| d.child(self.notebook_more(key, cx)))
             .into_any_element()
     }
@@ -738,6 +810,7 @@ impl Workspace {
 
     pub fn open_drawer(&mut self, tab: Option<&str>, cx: &mut Context<Self>) {
         self.page.drawer = tab.map(str::to_owned);
+        self.drawer_ask.asked(tab);
         self.send_to_page(&serde_json::json!({ "type": "drawer", "tab": tab }), cx);
         cx.notify();
     }
@@ -925,7 +998,7 @@ impl Workspace {
             NotebookAction::Start => self.start_notebook(key, cx),
             NotebookAction::Restart => self.restart_notebook(key, cx),
             NotebookAction::Stop => self.stop_notebook(key, path, cx),
-            NotebookAction::ExportFile => self.export(key, "notebookfile", if session.kind == Backend::Ember { "R" } else { "jl" }, cx),
+            NotebookAction::ExportFile => self.export(key, "notebookfile", notebook_extension(session.kind), cx),
             NotebookAction::ExportHtml => self.export(key, "notebookexport", "html", cx),
             NotebookAction::ExportPdf => {
                 let _ = self.webview.read(cx).raw().print();
@@ -940,9 +1013,7 @@ impl Workspace {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         let (Some(id), Some(path)) = (session.notebook.clone(), session.notebook_path.clone()) else { return };
         let Some(runtime) = self.connection(&session.place.host).and_then(|c| c.runtime.as_ref()) else { return };
-        let offline = if kind == "notebookexport" { "&offline_bundle=true" } else { "" };
-        let prefix = if session.kind == Backend::Ember { "/ember" } else { "" };
-        let (bridge, export) = (runtime.bridge.clone(), format!("{prefix}/{kind}?id={id}{offline}"));
+        let (bridge, from) = (runtime.bridge.clone(), export_from(session.kind, kind, &id));
         let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("notebook").to_string();
         let dir = match &session.place.host {
             HostId::ThisMac => Path::new(&path).parent().map(Path::to_path_buf).unwrap_or_default(),
@@ -953,7 +1024,16 @@ impl Workspace {
             let Ok(Ok(Some(target))) = picked.await else { return };
             let file = target.file_name().map_or_else(|| format!("{stem}.{extension}"), |f| f.to_string_lossy().into_owned());
             let folder = target.parent().map(Path::to_path_buf).unwrap_or_default();
-            let saved = cx.background_executor().spawn(async move { pluto::fetch(&bridge, &export).and_then(|bytes| std::fs::write(&target, bytes).map_err(|e| e.to_string())) }).await;
+            let saved = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = match from {
+                        ExportFrom::Page(page) => pluto::fetch(&bridge, &page)?,
+                        ExportFrom::Runtime(format) => pluto::export_notebook(&bridge, &id, format)?.into_bytes(),
+                    };
+                    std::fs::write(&target, bytes).map_err(|e| e.to_string())
+                })
+                .await;
             if let Err(e) = saved {
                 let _ = this.update(cx, |this, cx| {
                     let mut notice = Notice::new(Spot::NotebookRight, format!("Couldn't export {file}"), &e, Some(Retry::Export { key, kind, extension }));
@@ -1650,8 +1730,10 @@ mod tests {
         );
         assert!(Stop.danger() && !Restart.danger() && !Start.danger());
         assert_eq!(NotebookAction::for_notebook(Backend::Ember, true, false, false, true), [CopyPath, Reveal, Rename, MoveTo, LookEndeavor, LookEmber, Shortcuts, NewSession, Restart, Stop]);
-        assert_eq!(NotebookAction::for_share(Backend::Ember), [ExportFile, ExportHtml, ExportPdf]);
-        let share = NotebookAction::for_share(Backend::Pluto);
+        assert_eq!(NotebookAction::for_share(Backend::Ember, false), [ExportFile, ExportHtml, ExportPdf]);
+        assert_eq!(NotebookAction::for_share(Backend::Marimo, true), [ExportFile, ExportHtml, ExportPdf]);
+        assert_eq!(NotebookAction::for_share(Backend::Marimo, false), [ExportPdf], "an older runtime has no export call, and printing needs none");
+        let share = NotebookAction::for_share(Backend::Pluto, false);
         assert_eq!(share.iter().map(|a| a.label()).collect::<Vec<_>>(), ["Notebook file…", "Static HTML…", "PDF…", "Present", "Record…", "Frontmatter…"]);
         for menu in [NotebookAction::for_notebook(Backend::Pluto, true, false, false, true), NotebookAction::for_notebook(Backend::Pluto, false, true, false, true), share] {
             let mut keys: Vec<_> = menu.iter().map(|a| a.shortcut().0).collect();
@@ -1659,5 +1741,59 @@ mod tests {
             keys.dedup();
             assert_eq!(keys.len(), menu.len(), "one key per item in {menu:?}");
         }
+    }
+
+    #[test]
+    fn julia_and_r_export_from_their_page_and_python_through_the_runtime() {
+        use super::{ExportFrom, export_from, notebook_extension};
+        assert_eq!(export_from(Backend::Pluto, "notebookexport", "n1"), ExportFrom::Page("/notebookexport?id=n1&offline_bundle=true".into()));
+        assert_eq!(export_from(Backend::Pluto, "notebookfile", "n1"), ExportFrom::Page("/notebookfile?id=n1".into()));
+        assert_eq!(export_from(Backend::Ember, "notebookexport", "n1"), ExportFrom::Page("/ember/notebookexport?id=n1&offline_bundle=true".into()));
+        assert_eq!(export_from(Backend::Marimo, "notebookexport", "n1"), ExportFrom::Runtime("html"));
+        assert_eq!(export_from(Backend::Marimo, "notebookfile", "n1"), ExportFrom::Runtime("file"));
+        assert_eq!(Backend::ALL.map(notebook_extension), ["jl", "R", "py"]);
+    }
+
+    #[test]
+    fn a_drawer_asked_for_while_the_page_loads_opens_once_it_is_ready_and_never_on_a_later_page() {
+        use super::DrawerAsk;
+        let mut ask = DrawerAsk::default();
+        ask.asked(Some("docs"));
+        assert_eq!(ask.page_ready(), None, "a ready page took the click itself");
+        ask.page_loading();
+        ask.asked(Some("docs"));
+        assert_eq!(ask.page_ready(), Some("docs".into()));
+        ask.asked(Some("docs"));
+        assert_eq!(ask.page_ready(), None, "replaying it doesn't ask again");
+        ask.page_loading();
+        assert_eq!(ask.page_ready(), None, "the next notebook opens without it");
+        ask.page_loading();
+        ask.asked(Some("docs"));
+        ask.asked(None);
+        assert_eq!(ask.page_ready(), None, "closed again before the page was ready");
+        ask.page_loading();
+        ask.asked(Some("docs"));
+        ask.page_loading();
+        assert_eq!(ask.page_ready(), None, "a click for a page that was replaced before it was ready");
+    }
+
+    #[test]
+    fn the_live_docs_button_shows_open_on_a_python_page_which_never_reports_its_notebook() {
+        use super::{PageState, header_drawer};
+        let open = PageState { drawer: Some("docs".into()), ..Default::default() };
+        assert_eq!(header_drawer(Backend::Marimo, true, None, &open), Some("docs".into()));
+        assert_eq!(header_drawer(Backend::Marimo, false, None, &open), None, "not while another pane shows");
+        assert_eq!(header_drawer(Backend::Pluto, true, None, &open), None, "Julia goes by the page that reported its notebook");
+        assert_eq!(header_drawer(Backend::Pluto, true, Some(&open), &open), Some("docs".into()));
+    }
+
+    #[test]
+    fn python_notebooks_get_share_and_live_docs_whatever_the_look_and_no_packages() {
+        use super::{HeaderTool::*, header_tools};
+        assert_eq!(header_tools(Backend::Pluto, true), [Share, Docs, Packages]);
+        assert_eq!(header_tools(Backend::Ember, true), [Share, Docs, Packages]);
+        assert!(header_tools(Backend::Pluto, false).is_empty(), "the classic look keeps Pluto's own buttons");
+        assert_eq!(header_tools(Backend::Marimo, true), [Share, Docs]);
+        assert_eq!(header_tools(Backend::Marimo, false), [Share, Docs], "marimo has no look of ours to switch off");
     }
 }

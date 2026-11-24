@@ -53,6 +53,7 @@ pub enum Message {
     State(PageState),
     RunNotebook { notebook: String },
     AskedVisible(bool),
+    Docs(bool),
     RunAnyway { notebook: String, cells: Vec<(String, f64)> },
     AnswerCard { notebook: String, card: usize },
     FixPackage { notebook: String, name: String, log: String },
@@ -193,6 +194,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
         }
         "run_notebook" => Some(Message::RunNotebook { notebook: uuid("notebook")? }),
         "asked_visible" => Some(Message::AskedVisible(v.get("visible")?.as_bool()?)),
+        "docs" => Some(Message::Docs(v.get("open")?.as_bool()?)),
         "run_anyway" => {
             let cell = |c: &serde_json::Value| Some((c.get("id")?.as_str().filter(|s| is_uuid(s))?.to_owned(), c.get("last_run").and_then(|t| t.as_f64()).unwrap_or(0.0)));
             let cells: Vec<(String, f64)> = v.get("cells")?.as_array()?.iter().map(cell).collect::<Option<_>>()?;
@@ -416,6 +418,8 @@ mod tests {
         );
         assert_eq!(parse_with(&format!(r#"{{"type":"run_notebook","notebook":"{NB}"}}"#), ""), Some(Message::RunNotebook { notebook: NB.into() }));
         assert_eq!(parse_with(r#"{"type":"asked_visible","visible":false}"#, ""), Some(Message::AskedVisible(false)));
+        assert_eq!(parse_with(r#"{"type":"docs","open":true}"#, ""), Some(Message::Docs(true)));
+        assert_eq!(parse_with(r#"{"type":"docs","open":"yes"}"#, ""), None);
         assert_eq!(
             parse_with(&format!(r#"{{"type":"run_anyway","notebook":"{NB}","cells":[{{"id":"{C1}","last_run":1759400000.5}},{{"id":"{C2}","last_run":null}}]}}"#), ""),
             Some(Message::RunAnyway { notebook: NB.into(), cells: vec![(C1.into(), 1759400000.5), (C2.into(), 0.0)] })

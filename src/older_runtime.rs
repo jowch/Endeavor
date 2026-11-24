@@ -60,6 +60,15 @@ impl Version {
         }
     }
 
+    pub fn exports_python(self) -> bool {
+        const EXPORTS_PYTHON: u32 = 50;
+        match self {
+            Version::Usable => endeavor_mcp::CORE_INTERFACE >= EXPORTS_PYTHON,
+            Version::Other(interface) => interface.is_some_and(|i| i >= EXPORTS_PYTHON),
+            Version::NoRunGate => false,
+        }
+    }
+
     pub fn has_r_status(self) -> bool {
         match self {
             Version::Usable => endeavor_mcp::CORE_INTERFACE >= 9,
