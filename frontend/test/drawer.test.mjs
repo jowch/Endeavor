@@ -106,3 +106,17 @@ test("the drawer sits at the right in a pane wide enough for the cells and 500px
   resize(1299);
   assert.equal("endeavorDrawerSide" in root.dataset, false);
 });
+
+test("on marimo the drawer stays at the bottom in a wide pane, since marimo's own docs panel does", async () => {
+  const dom = new JSDOM(`<body><div id="App"></div></body>`, { url: "http://localhost/marimo/?file=fit.py", runScripts: "outside-only" });
+  const { window } = dom;
+  window.requestAnimationFrame = () => 0;
+  window.ipc = { postMessage() {} };
+  window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+  window.document.documentElement.dataset.endeavorLook = "endeavor";
+  Object.defineProperty(window, "innerWidth", { value: 1600, configurable: true });
+  window.eval(readFileSync(new URL("../dist/page.js", import.meta.url), "utf8"));
+  await new Promise((done) => (window.document.readyState === "loading" ? window.addEventListener("DOMContentLoaded", done) : done()));
+  window.dispatchEvent(new window.Event("resize"));
+  assert.equal("endeavorDrawerSide" in window.document.documentElement.dataset, false);
+});

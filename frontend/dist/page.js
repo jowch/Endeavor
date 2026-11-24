@@ -2246,9 +2246,9 @@ ${text.value}` : sent.comment;
     display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
     height: calc(var(--endeavor-drawer-h) - ${HEADER}px); z-index: 71; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer][data-endeavor-drawer-side] body { padding-bottom: 0; padding-right: ${SIDE_WIDTH}px; }
-  html[data-endeavor-drawer-side] #endeavor-drawer { left: auto; top: 0; width: ${SIDE_WIDTH}px; height: auto;
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer-side] #endeavor-drawer { left: auto; top: 0; width: ${SIDE_WIDTH}px; height: auto;
     border-top: none; border-left: 1px solid var(--e-border); }
-  html[data-endeavor-drawer-side] #endeavor-drawer .grip { display: none; }
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer-side] #endeavor-drawer .grip { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer][data-endeavor-drawer-side] pluto-editor.fullscreen main > preamble #saveall-container { transform: none !important; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"][data-endeavor-drawer-side] #helpbox-wrapper {
     left: auto; top: ${HEADER}px; width: ${SIDE_WIDTH}px; height: auto; }
@@ -2289,7 +2289,7 @@ ${text.value}` : sent.comment;
     if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
     return clamped;
   }
-  var drawerAtSide = (width) => width >= SIDE_FROM;
+  var drawerAtSide = (width) => width >= SIDE_FROM && !onMarimo();
   function placeSide() {
     if (drawerAtSide(window.innerWidth)) document.documentElement.dataset.endeavorDrawerSide = "";
     else delete document.documentElement.dataset.endeavorDrawerSide;
