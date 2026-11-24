@@ -831,7 +831,7 @@ fn host_pane(pane: &HostPane, host: &str, kind: wire::backend::Backend) -> Value
         HostPane::RFailed(reason) => ("r_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => (if kind == wire::backend::Backend::Ember { "r_not_running" } else { "julia_not_running" }, Some(reason)),
-        HostPane::Crashed(reason) => ("julia_crashed", Some(reason)),
+        HostPane::Crashed(reason) => (if kind == wire::backend::Backend::Ember { "r_crashed" } else { "julia_crashed" }, Some(reason)),
         HostPane::NotConnected(reason) => ("not_connected", Some(reason)),
     };
     json!({ "kind": kind, "host": host, "reason": reason.filter(|r| !r.is_empty()) })
@@ -841,4 +841,19 @@ fn write(out: &Path, state: &Value) -> std::io::Result<()> {
     let tmp = out.with_extension("tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(state)?)?;
     std::fs::rename(tmp, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_pane;
+    use crate::connection::HostPane;
+    use wire::backend::Backend;
+
+    #[test]
+    fn a_stopped_or_crashed_host_is_named_by_the_sessions_language() {
+        let kind = |pane: HostPane, backend| host_pane(&pane, "lab", backend)["kind"].as_str().unwrap().to_owned();
+        assert_eq!(kind(HostPane::Crashed("oom".into()), Backend::Pluto), "julia_crashed");
+        assert_eq!(kind(HostPane::Crashed("oom".into()), Backend::Ember), "r_crashed");
+        assert_eq!(kind(HostPane::NotRunning("idle".into()), Backend::Ember), "r_not_running");
+    }
 }

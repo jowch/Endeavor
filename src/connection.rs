@@ -733,10 +733,10 @@ impl Workspace {
         let running = connection.bridge().map(|bridge| (bridge, connection.notebooks.clone()));
         let gone = connection.forget_runtime();
         connection.status = Status::Starting;
-        connection.steps = Steps::new("Stopping Julia");
+        connection.steps = Steps::new("Stopping notebooks");
         let listener = self.listeners.get(&host).cloned();
         self.close_page(gone, cx);
-        self.status = "Restarting Julia…".into();
+        self.status = "Restarting notebooks…".into();
         let stop = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(listener) = listener {
@@ -807,7 +807,7 @@ impl Workspace {
                 c.id = next_connect_id();
                 let gone = c.forget_runtime();
                 c.status = Status::Starting;
-                c.steps = Steps::new(if clear { "Clearing what Julia saved" } else { "Stopping Julia" });
+                c.steps = Steps::new(if clear { "Clearing what Julia saved" } else { "Stopping notebooks" });
                 c.stopping = false;
                 (c.channel.take(), running, gone)
             }
@@ -815,7 +815,7 @@ impl Workspace {
         };
         self.close_page(gone, cx);
         self.settings_checks.repairing = clear;
-        self.status = if clear { "Repairing Julia…" } else { "Restarting Julia…" }.into();
+        self.status = if clear { "Repairing Julia…" } else { "Restarting notebooks…" }.into();
         let work = cx.background_executor().spawn(async move {
             let resume = running.map(|(bridge, notebooks)| running_files(&bridge, &notebooks)).unwrap_or_default();
             if let Some(channel) = channel {
@@ -1600,7 +1600,7 @@ impl Workspace {
         let id = connection.id;
         self.close_page(gone, cx);
         if *host == HostId::ThisMac {
-            self.status = "Stopping Julia…".into();
+            self.status = "Stopping notebooks…".into();
         }
         let listener = self.listeners.get(host).filter(|_| start).cloned();
         let stop = cx.background_executor().spawn(async move {
