@@ -85,8 +85,10 @@ on every connect and Julia is slow to start, and it does not rely on `socat`
 or Python being installed. On the Mac itself the app runs its own binary as
 the helper (`endeavor --helper connect …`; the helper is a library the app
 links), so the local helper can't be missing or from another build; the
-separate `endeavor` binary (on macOS, the app's `endeavor-helper` target) is
-what servers are sent. It:
+separate `endeavor` binary (on macOS, the app's `endeavor-helper` target,
+which `scripts/bundle.sh` puts in the app's `helpers/darwin-<arch>/`) is
+what servers are sent; tests run it too, since a test binary can't be the
+helper. It:
 
 1. Says hello with the machine's name and home folder, and from then on
    answers file requests itself, without Julia: list a folder (folders and
@@ -245,6 +247,47 @@ What the code relies on, beyond what its names say:
 - **Quitting leaves every runtime running.** Each server's helper is let go
   without waiting long on a slow server, and its idle stop covers forgotten
   notebooks.
+
+## The app's own calls to the runtime
+
+`src/pluto.rs` is the app's line to a runtime's tools, for what shouldn't
+depend on the agent: policies, answers to run cards, Restore, Stop, the
+end-of-turn run-state check. Each call is one JSON-RPC request to the
+runtime's loopback `/endeavor/call`, over HTTP/1.0: the bridge sends no
+Content-Length, so the body is read to the end.
+
+- **Two tokens.** The bearer token opens every path but Pluto's pages; the
+  pages' token opens those (EndeavorMCP interface 8), and the bearer token
+  gets a 401 there. An older runtime has no pages' token and takes the bearer
+  token for its pages. Both stay the same across a host's runtimes.
+- **Every `set_session_folder` says the session's kind**, because the core
+  forgets kinds when it restarts.
+- **How long a call waits.** Most wait 10 s (`CALL_WAIT`). One that may start
+  Julia waits 55 s (`JULIA_CALL_WAIT`): the core answers within 45 s that
+  Julia is still starting or the notebook still opening, and this leaves room
+  for that answer to arrive, over ssh too. `until_julia` calls again while the
+  answer says Julia is starting, R's setup is installing, or the notebook is
+  opening. The runtime's open has no limit of its own, so the app stops
+  waiting after 10 minutes (`OPENING_LIMIT`) rather than leave a hung Julia's
+  pane waiting for ever.
+- **A run card's answer carries the user's own run** (`answer_run`): the
+  cells the user ran while it waited, each with its `last_run` from before,
+  so the approved call doesn't run them again. An older runtime hears this
+  separately (`run_anyway`).
+- **Stop goes to the runtime too** (`stop_session`). The runtime doesn't hear
+  the agent's stop when no tool call is under way, so it interrupts the
+  session's runs only when the app says so.
+- **R endings are keyed on their time** (`new_endings`), so a notebook that
+  opened again and whose R ended again between two pushes shows its second
+  ending (#122).
+- **Run-state notes only shrink** (`still_true`): each keeps only the cells
+  still unrun or running, so an old note doesn't take on a later turn's
+  work. A cell queued for a run is pending until it finishes, so it is
+  counted once.
+- **A notebook id is matched ignoring case**: it is a UUID, which only its
+  case may write otherwise.
+- **A read timeout** is WouldBlock on Unix and TimedOut on Windows; both read
+  "The notebook didn't answer."
 
 ## Launchers
 

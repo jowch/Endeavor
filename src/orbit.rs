@@ -1,28 +1,18 @@
-//! The orbiting "working" mark: a dot circling a disc on a tilted ring.
-
 use std::time::Duration;
 
 use gpui::*;
 
 use crate::theme;
 
-/// The working mark: a dot circling a small disc on a tilted ring, one lap a
-/// second. With reduce motion it stands still at the front of the ring.
 pub fn orbit(id: ElementId, size: f32, cx: &App) -> AnyElement {
     orbit_with(id, size, theme::accent(), cx)
 }
 
-/// The orbit with a dot of another colour (grey while waiting for the network).
 pub fn orbit_with(id: ElementId, size: f32, dot: Rgba, cx: &App) -> AnyElement {
     let lap = (!cx.reduce_motion()).then_some(Duration::from_secs(1));
     div().id(id).size(px(size)).child(orbit_at(lap, size, dot)).into_any_element()
 }
 
-/// The orbit going round once a `lap`, by the clock (crate::motion::looping), or
-/// standing still at the front of the disc (0.25 of the way round) with none.
-/// The dot passes behind the disc on the ring's far half, so the ring's back
-/// half, a dot there, the disc, the front half and a dot there are drawn in
-/// that order.
 fn orbit_at(lap: Option<Duration>, size_px: f32, dot_color: Rgba) -> impl IntoElement {
     use std::f32::consts::{PI, TAU};
     canvas(
@@ -51,7 +41,6 @@ fn orbit_at(lap: Option<Duration>, size_px: f32, dot_color: Rgba) -> impl IntoEl
                 window.paint_quad(fill(Bounds::centered_at(at, size(px(2. * r), px(2. * r))), color).corner_radii(px(r)));
             };
             let angle = t * TAU;
-            // sin < 0: the far half, above the disc on screen.
             let behind = angle > PI;
             let dot = |window: &mut Window| disc(on_ring(angle), size_px * 1.7 / 14., dot_color, window);
             half(PI, window);

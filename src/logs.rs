@@ -1,11 +1,3 @@
-//! The app's log file. Launched from Finder, stdout and stderr (our messages,
-//! Julia's log we echo, and child processes that inherit them) go to
-//! ~/Library/Logs/Endeavor/endeavor.log (on Linux, $XDG_STATE_HOME/endeavor/endeavor.log;
-//! on Windows, %LOCALAPPDATA%\Endeavor\Logs\endeavor.log);
-//! the previous run's is kept as endeavor.old.log.
-//! From a terminal, output stays in the terminal, except on Windows, where the
-//! app is a GUI program with no console and its output always goes to the file.
-
 use std::io::IsTerminal;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -26,7 +18,6 @@ pub fn path() -> Option<PathBuf> {
 }
 
 pub fn start() {
-    // GPUI's own warnings and errors, which otherwise go nowhere.
     if log::set_logger(&Stderr).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
     }
@@ -36,8 +27,6 @@ pub fn start() {
     let Some(path) = path() else { return };
     let _ = std::fs::create_dir_all(path.parent().unwrap());
     let _ = std::fs::rename(&path, path.with_file_name("endeavor.old.log"));
-    // ponytail: no rotation within a run; a very long run makes a big file.
-    // On Windows, appending keeps the children's writes from overwriting each other.
     let file = if cfg!(windows) { std::fs::OpenOptions::new().create(true).append(true).open(&path) } else { std::fs::File::create(&path) };
     let Ok(file) = file else { return };
     // SAFETY: dup2 onto the standard fds; `file` stays open until the calls return.
@@ -46,10 +35,6 @@ pub fn start() {
         libc::dup2(file.as_raw_fd(), 1);
         libc::dup2(file.as_raw_fd(), 2);
     }
-    // The app is a GUI program there, with no console: the file becomes its
-    // standard output and error, which Rust looks up on each write and the
-    // children it starts with inherited output receive. The handles stay open
-    // for the app's life.
     #[cfg(windows)]
     {
         use std::os::windows::io::IntoRawHandle;
@@ -64,7 +49,6 @@ pub fn start() {
     eprintln!("Endeavor {} started", env!("CARGO_PKG_VERSION"));
 }
 
-/// Writes log records (GPUI's) to stderr, which is the log file once `start` has run.
 struct Stderr;
 
 impl log::Log for Stderr {
@@ -76,16 +60,12 @@ impl log::Log for Stderr {
         if !self.enabled(record.metadata()) {
             return;
         }
-        // Windows delivers window messages re-entrantly while the app is busy, and GPUI skips
-        // that callback. What that loses depends on the callback (a frame request, an input
-        // event, a resize), so the first from each line is logged with its line, then counted.
         if let Some(count) = count_skip(&SKIPPED, record) {
             if count == 1 {
                 eprintln!("{} {}:{}: GPUI skipped a window callback because the app was busy; later ones from this line are counted, not logged", record.level(), record.file().unwrap_or_default(), record.line().unwrap_or_default());
             }
             return;
         }
-        // GPUI's `log_err` leaves the target empty outside Zed's own tree; its file and line say where.
         match (record.target(), record.file(), record.line()) {
             ("", Some(file), Some(line)) => eprintln!("{} {file}:{line}: {}", record.level(), record.args()),
             (target, ..) => eprintln!("{} {target}: {}", record.level(), record.args()),
@@ -95,15 +75,12 @@ impl log::Log for Stderr {
     fn flush(&self) {}
 }
 
-/// Window callbacks GPUI skipped this run because the app was already borrowed, by line in window.rs.
 static SKIPPED: Mutex<BTreeMap<u32, usize>> = Mutex::new(BTreeMap::new());
 
 pub fn skipped_callbacks() -> BTreeMap<u32, usize> {
     SKIPPED.lock().map(|counts| counts.clone()).unwrap_or_default()
 }
 
-/// Counts a skipped window callback by its line and returns how many from that line so far,
-/// or None for any other record.
 fn count_skip(counts: &Mutex<BTreeMap<u32, usize>>, record: &log::Record) -> Option<usize> {
     if !skipped_callback(record) {
         return None;
@@ -114,11 +91,6 @@ fn count_skip(counts: &Mutex<BTreeMap<u32, usize>>, record: &log::Record) -> Opt
     Some(*count)
 }
 
-/// GPUI's `Window::new` wires each platform callback to `handle.update(..).log_err()`, which
-/// logs the borrow error when the message arrives during an update. Since gpui-pre 0.3.11 the
-/// error names the callback and both borrows ("drawing and presenting frame for window …:
-/// RefCell already borrowed: attempted mutable App borrow at …"). Only that error from GPUI's
-/// window.rs, so a different borrow error or any other GPUI error still shows.
 fn skipped_callback(record: &log::Record) -> bool {
     let from_window = record.file().is_some_and(|f| {
         let f = f.replace('\\', "/");
@@ -129,7 +101,6 @@ fn skipped_callback(record: &log::Record) -> bool {
     record.level() == log::Level::Error && from_window && busy
 }
 
-/// Show the log file in Finder (on Linux, its folder in the file manager).
 pub fn reveal() {
     if let Some(path) = path() {
         crate::platform::reveal(&path);
@@ -150,15 +121,12 @@ mod tests {
         let windows = r"C:\Users\u\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui-pre-0.3.6\src\window.rs";
         assert!(record(unix, 1811, "RefCell already borrowed", skipped_callback));
         assert!(record(windows, 1811, "RefCell already borrowed", skipped_callback));
-        // Any other GPUI error, or the same error from elsewhere, still comes through.
         assert!(!record(unix, 1811, "app is quitting", skipped_callback));
         assert!(!record("/home/u/.cargo/registry/src/x/gpui-pre-0.3.6/src/app.rs", 1811, "RefCell already borrowed", skipped_callback));
         assert!(!record("src/window.rs", 1811, "RefCell already borrowed", skipped_callback));
-        // gpui-pre 0.3.11's form, as a Windows build logged it.
         let windows = r"C:\Users\u\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui-pre-0.3.11\src\window.rs";
         let busy = r"drawing and presenting frame for window WindowId(1v1): RefCell already borrowed: attempted mutable App borrow at C:\x\gpui-pre-0.3.11\src\window.rs:2029:30; existing mutable borrow group began at C:\x\gpui-pre-0.3.11\src\app.rs:319:33";
         assert!(record(windows, 2049, busy, skipped_callback));
-        // A shared borrow that failed is a different problem, so it still shows.
         assert!(!record(windows, 2049, &busy.replace("attempted mutable", "attempted shared"), skipped_callback));
     }
 
@@ -167,7 +135,6 @@ mod tests {
         let unix = "/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gpui-pre-0.3.6/src/window.rs";
         let counts = Mutex::new(BTreeMap::new());
         let skip = |line| record(unix, line, "RefCell already borrowed", |r| count_skip(&counts, r));
-        // A count of 1 is the one that gets written.
         assert_eq!(skip(1811), Some(1));
         assert_eq!(skip(1811), Some(2));
         assert_eq!(skip(1943), Some(1));
