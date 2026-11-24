@@ -3074,6 +3074,7 @@ footer form#feedback { display: none !important; }
   var ICON_COLUMN = "[data-testid=chrome-sidebar]";
   var TRIES = 4;
   var SETTLE_MS = 1200;
+  var MOUNT_MS = 15e3;
   var POLL_MS = 50;
   var css16 = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
@@ -3093,9 +3094,16 @@ footer form#feedback { display: none !important; }
     return !!panel && showsDocs(panel.getAttribute("data-panel-size"), panel.querySelector(".uppercase")?.textContent ?? "");
   }
   async function setDocs(want, shown2, press, wait, tries = TRIES) {
-    for (let i = 0; i < tries && shown2() !== want; i++) {
-      press();
+    const settle = async () => {
       for (let waited = 0; waited < SETTLE_MS && shown2() !== want; waited += POLL_MS) await wait(POLL_MS);
+    };
+    for (let waited = 0; shown2() !== want && !press(); waited += POLL_MS) {
+      if (waited >= MOUNT_MS) return false;
+      await wait(POLL_MS);
+    }
+    for (let i = 1; i <= tries && shown2() !== want; i++) {
+      await settle();
+      if (shown2() !== want && i < tries) press();
     }
     return shown2() === want;
   }
@@ -3121,7 +3129,11 @@ footer form#feedback { display: none !important; }
     const style2 = document.createElement("style");
     style2.textContent = css16;
     document.head.append(style2);
-    const press = () => document.querySelector(DOCS_OPTION)?.click();
+    const press = () => {
+      const option = document.querySelector(DOCS_OPTION);
+      option?.click();
+      return !!option;
+    };
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow2));
     new MutationObserver(follow2).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size"], childList: true, subtree: true, characterData: true });

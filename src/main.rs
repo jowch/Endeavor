@@ -471,6 +471,7 @@ pub struct Workspace {
     login_node_ok: HashSet<String>,
     questions_tx: UnboundedSender<remote::Question>,
     page: annotate::PageState,
+    drawer_ask: notebook_pane::DrawerAsk,
     page_context: String,
     window_active: bool,
     last_ask_notice: Option<std::time::Instant>,
@@ -799,6 +800,7 @@ impl Workspace {
             login_node_ok: HashSet::new(),
             questions_tx,
             page: annotate::PageState::default(),
+            drawer_ask: Default::default(),
             page_context: String::new(),
             window_active: true,
             last_ask_notice: None,
@@ -1997,6 +1999,9 @@ impl Workspace {
                 self.push_cells(cx);
                 self.apply_look(cx);
                 self.sync_page_context(cx);
+                if let Some(tab) = self.drawer_ask.still_wanted(Instant::now()) {
+                    self.open_drawer(Some(&tab), cx);
+                }
             }
             Some(annotate::Message::OutOfStep) => self.on_out_of_step(cx),
             Some(annotate::Message::State(state)) => return self.on_page_state(state, cx),

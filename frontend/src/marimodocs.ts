@@ -5,6 +5,7 @@ const PANEL = "[data-testid=helper]";
 const ICON_COLUMN = "[data-testid=chrome-sidebar]";
 const TRIES = 4;
 const SETTLE_MS = 1200;
+const MOUNT_MS = 15000;
 const POLL_MS = 50;
 
 const css = `
@@ -27,10 +28,17 @@ function docsShown(): boolean {
   return !!panel && showsDocs(panel.getAttribute("data-panel-size"), panel.querySelector(".uppercase")?.textContent ?? "");
 }
 
-export async function setDocs(want: boolean, shown: () => boolean, press: () => void, wait: (ms: number) => Promise<void>, tries = TRIES): Promise<boolean> {
-  for (let i = 0; i < tries && shown() !== want; i++) {
-    press();
+export async function setDocs(want: boolean, shown: () => boolean, press: () => boolean, wait: (ms: number) => Promise<void>, tries = TRIES): Promise<boolean> {
+  const settle = async () => {
     for (let waited = 0; waited < SETTLE_MS && shown() !== want; waited += POLL_MS) await wait(POLL_MS);
+  };
+  for (let waited = 0; shown() !== want && !press(); waited += POLL_MS) {
+    if (waited >= MOUNT_MS) return false;
+    await wait(POLL_MS);
+  }
+  for (let i = 1; i <= tries && shown() !== want; i++) {
+    await settle();
+    if (shown() !== want && i < tries) press();
   }
   return shown() === want;
 }
@@ -61,7 +69,11 @@ export function initMarimoDocs(): void {
   const style = document.createElement("style");
   style.textContent = css;
   document.head.append(style);
-  const press = () => document.querySelector<HTMLElement>(DOCS_OPTION)?.click();
+  const press = () => {
+    const option = document.querySelector<HTMLElement>(DOCS_OPTION);
+    option?.click();
+    return !!option;
+  };
   const wait = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
   on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow));
   new MutationObserver(follow).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size"], childList: true, subtree: true, characterData: true });

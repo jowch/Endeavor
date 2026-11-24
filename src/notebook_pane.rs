@@ -255,6 +255,21 @@ pub enum PaneShows {
 
 pub const OPENING_GRACE: Duration = Duration::from_secs(5);
 
+const DRAWER_ASK_OUTLIVES_LOAD: Duration = Duration::from_secs(10);
+
+#[derive(Default)]
+pub struct DrawerAsk(Option<(String, Instant)>);
+
+impl DrawerAsk {
+    fn asked(&mut self, tab: Option<&str>, now: Instant) {
+        self.0 = tab.map(|tab| (tab.to_owned(), now));
+    }
+
+    pub fn still_wanted(&mut self, now: Instant) -> Option<String> {
+        self.0.take().filter(|(_, at)| now.duration_since(*at) < DRAWER_ASK_OUTLIVES_LOAD).map(|(tab, _)| tab)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct OpeningWatch {
     since: Option<(u64, Instant)>,
@@ -766,6 +781,7 @@ impl Workspace {
 
     pub fn open_drawer(&mut self, tab: Option<&str>, cx: &mut Context<Self>) {
         self.page.drawer = tab.map(str::to_owned);
+        self.drawer_ask.asked(tab, Instant::now());
         self.send_to_page(&serde_json::json!({ "type": "drawer", "tab": tab }), cx);
         cx.notify();
     }
@@ -1695,6 +1711,22 @@ mod tests {
         assert_eq!(export_from(Backend::Marimo, "notebookexport", "n1"), ExportFrom::Runtime("html"));
         assert_eq!(export_from(Backend::Marimo, "notebookfile", "n1"), ExportFrom::Runtime("file"));
         assert_eq!(Backend::ALL.map(notebook_extension), ["jl", "R", "py"]);
+    }
+
+    #[test]
+    fn a_drawer_asked_for_while_the_page_loads_opens_once_it_is_ready_but_not_on_a_later_reload() {
+        use super::{DRAWER_ASK_OUTLIVES_LOAD, DrawerAsk};
+        let now = Instant::now();
+        let mut ask = DrawerAsk::default();
+        assert_eq!(ask.still_wanted(now), None);
+        ask.asked(Some("docs"), now);
+        assert_eq!(ask.still_wanted(now + Duration::from_secs(2)), Some("docs".into()));
+        assert_eq!(ask.still_wanted(now + Duration::from_secs(3)), None, "only the first load after the ask");
+        ask.asked(Some("docs"), now);
+        assert_eq!(ask.still_wanted(now + DRAWER_ASK_OUTLIVES_LOAD), None, "an old ask doesn't open a drawer on a new page");
+        ask.asked(Some("docs"), now);
+        ask.asked(None, now);
+        assert_eq!(ask.still_wanted(now), None, "a closed drawer stays closed");
     }
 
     #[test]
