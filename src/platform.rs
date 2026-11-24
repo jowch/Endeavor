@@ -88,6 +88,11 @@ pub fn reveal(path: &Path) {
 #[cfg(target_os = "linux")]
 pub const WAYLAND_DISPLAY_KEPT: &str = "ENDEAVOR_WAYLAND_DISPLAY";
 
+#[cfg(target_os = "linux")]
+pub fn wayland_display() -> Option<String> {
+    std::env::var(WAYLAND_DISPLAY_KEPT).ok().filter(|display| !display.is_empty())
+}
+
 #[cfg(unix)]
 pub fn opener(program: &str) -> std::process::Command {
     #[allow(unused_mut)]
