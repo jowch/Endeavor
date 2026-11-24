@@ -95,5 +95,6 @@ test("marimo's install operations replace the runtime's install state while they
   const settled = applyOperation(live, op("failed", { polars: "failed" }), "append");
   const later = { ...ready, install: { step: "installing", packages: ["numpy"] } };
   assert.deepEqual(plain(withLive(later, settled)), plain(later), "the runtime's own install beats a settled one");
-  assert.deepEqual(plain(withLive(earlier, settled)), plain(earlier), "and so does its own failure");
+  const both = withLive({ ...ready, failed: { packages: ["Polars"], log: "polars log" } }, applyOperation(null, op("failed", { polars: "failed", humanize: "failed" }, { humanize: "humanize log" }), "replace"));
+  assert.deepEqual(plain(both.failed), { packages: ["Polars", "humanize"], log: "polars log\nhumanize log" }, "the runtime's failure and marimo's both show, the runtime's first");
 });

@@ -223,7 +223,7 @@ test("after marimo's own install has settled, a later install or failure the run
   assert.deepEqual([p.state().installing, p.state().busy, p.state().package_failed], [true, "Installing packages", null]);
   assert.match(p.text(), /polarsinstalling/);
   await p.packages(null, { packages: ["polars"], log: "  ╰─▶ Because polars was not found in the package registry\n" });
-  assert.equal(p.state().package_failed, "polars");
+  assert.equal(p.state().package_failed, "polars, humanize", "the runtime's failure first, and marimo's earlier one still");
   assert.equal(p.drawer(), "packages");
   await p.marimoSays("environment-operation", { ...operation({ kind: "succeeded" }, { six: "succeeded" }), operation_id: "later" });
   await p.packages({ step: "installing", packages: ["boto3"] });

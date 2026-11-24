@@ -64,10 +64,11 @@ export function withLive(raw: MarimoEnvironment, live: LiveInstall | null): Mari
   if (raw.install?.step === "installing") return raw;
   const asking = raw.install?.step === "asking" ? raw.install : null;
   if (live.status === "failed") {
-    if (raw.failed) return raw;
-    const failed = names.filter((n) => live.packages[n] !== "succeeded");
-    const log = [...Object.values(live.logs), live.error].filter(Boolean).join("\n");
-    return { ...raw, install: asking, failed: { packages: failed.length ? failed : names, log } };
+    const failing = names.filter((n) => live.packages[n] !== "succeeded");
+    const ours = raw.failed?.packages ?? [];
+    const theirs = (failing.length ? failing : names).filter((n) => !ours.some((m) => canonical(m) === canonical(n)));
+    const log = [raw.failed?.log, ...Object.values(live.logs), live.error].filter(Boolean).join("\n");
+    return { ...raw, install: asking, failed: { packages: [...ours, ...theirs], log } };
   }
   const installed = new Set(names.filter((n) => live.packages[n] === "succeeded").map(canonical));
   const stillFailed = raw.failed?.packages.some((n) => !installed.has(canonical(n)));

@@ -3252,10 +3252,11 @@ footer form#feedback { display: none !important; }
     if (raw2.install?.step === "installing") return raw2;
     const asking = raw2.install?.step === "asking" ? raw2.install : null;
     if (live2.status === "failed") {
-      if (raw2.failed) return raw2;
-      const failed = names2.filter((n) => live2.packages[n] !== "succeeded");
-      const log = [...Object.values(live2.logs), live2.error].filter(Boolean).join("\n");
-      return { ...raw2, install: asking, failed: { packages: failed.length ? failed : names2, log } };
+      const failing = names2.filter((n) => live2.packages[n] !== "succeeded");
+      const ours = raw2.failed?.packages ?? [];
+      const theirs = (failing.length ? failing : names2).filter((n) => !ours.some((m) => canonical(m) === canonical(n)));
+      const log = [raw2.failed?.log, ...Object.values(live2.logs), live2.error].filter(Boolean).join("\n");
+      return { ...raw2, install: asking, failed: { packages: [...ours, ...theirs], log } };
     }
     const installed2 = new Set(names2.filter((n) => live2.packages[n] === "succeeded").map(canonical));
     const stillFailed = raw2.failed?.packages.some((n) => !installed2.has(canonical(n)));
