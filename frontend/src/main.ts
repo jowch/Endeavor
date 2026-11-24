@@ -23,10 +23,13 @@ import { initTheme, initTokens } from "./theme";
 import { onMarimo } from "./engine";
 import { initDismissResumedBanner } from "./reconnected";
 import { initMarimoDocs } from "./marimodocs";
+import { initMarimoPackages } from "./marimopackages";
 import { watchRedraws } from "./redraw";
 
 function initOnMarimo() {
+  document.documentElement.dataset.endeavorEngine = "marimo";
   initState();
+  initDrawer();
   initTokens();
   initQuote();
   initAskBox();
@@ -34,6 +37,7 @@ function initOnMarimo() {
   initRail();
   initDismissResumedBanner();
   initMarimoDocs();
+  initMarimoPackages();
   initDebug();
   watchRedraws();
   send({ type: "ready" });

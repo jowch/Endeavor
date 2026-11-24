@@ -91,3 +91,158 @@ test("each new install opens Packages again, but one the user closed stays close
   await install("installing", "not_installed");
   assert.equal(drawer(), "packages", "a later install opens it again");
 });
+
+async function marimoPage() {
+  const dom = new JSDOM(`<body><div id="App"></div></body>`, { url: "http://localhost/marimo/?file=growth.py", runScripts: "outside-only" });
+  const { window } = dom;
+  window.requestAnimationFrame = () => 0;
+  const sent = [];
+  window.ipc = { postMessage: (body) => sent.push(JSON.parse(body)) };
+  window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+  window.WebSocket = class extends window.EventTarget {
+    static CLOSING = 2;
+  };
+  window.eval(readFileSync(new URL("../dist/page.js", import.meta.url), "utf8"));
+  await new Promise((done) => (window.document.readyState === "loading" ? window.addEventListener("DOMContentLoaded", done) : done()));
+  window.__endeavor.receive({ type: "context", host: "This Mac", agent: "Claude", asking: false, notebook: "0f381e2e-b8ca-11f1-b549-49cf0ce82801" });
+  const settle = () => new Promise((done) => setTimeout(done, 50));
+  const socket = new window.WebSocket("ws://localhost/marimo/ws?file=growth.py");
+  const marimoSays = async (op, data) => {
+    socket.dispatchEvent(new window.MessageEvent("message", { data: `{"op": "${op}", "data": ${JSON.stringify({ op, ...data })}}` }));
+    await settle();
+  };
+  const environment = (install, failed = null) => ({
+    python: ">=3.10", python_version: "3.12.8", package_date: "2026-10-05", install, failed,
+    packages: [{ name: "boto3", version: install ? null : "1.43.108" }, { name: "marimo", version: "0.25.1" }],
+  });
+  const packages = async (install, failed) => {
+    window.__endeavor.receive({ type: "packages", environment: environment(install, failed) });
+    await settle();
+  };
+  return {
+    window, sent, settle, packages, marimoSays,
+    drawer: () => window.document.documentElement.dataset.endeavorDrawer,
+    text: () => window.document.querySelector("#endeavor-drawer .packages").textContent,
+    state: () => sent.filter((m) => m.type === "state").at(-1),
+  };
+}
+
+test("a Python notebook's first install opens Packages by itself, tells the app, and closes once done", async () => {
+  const p = await marimoPage();
+  await p.packages({ step: "installing", packages: ["boto3"] });
+  assert.equal(p.drawer(), "packages");
+  assert.match(p.text(), /^Installing packages/);
+  assert.match(p.text(), /Python 3\.12\.8 · uv · PyPI as of 2026-10-05 · This Mac/);
+  assert.match(p.text(), /boto3installing/);
+  assert.deepEqual(
+    [p.state().notebook, p.state().busy, p.state().installing, p.state().drawer],
+    ["0f381e2e-b8ca-11f1-b549-49cf0ce82801", "Installing packages", true, "packages"],
+  );
+  await p.packages(null);
+  assert.equal(p.drawer(), undefined);
+  assert.equal(p.state().drawer, null);
+  assert.equal(p.state().installing, false);
+  p.window.__endeavor.receive({ type: "drawer", tab: "packages" });
+  await p.settle();
+  assert.match(p.text(), /^Ready/);
+  assert.match(p.text(), /2 packages, all ready/);
+  assert.match(p.text(), /boto31\.43\.108/);
+});
+
+test("a Python notebook's failed install shows the failure box and the header's Package failed", async () => {
+  const p = await marimoPage();
+  const log = "  ╰─▶ Because endeavor-e2e-absent was not found in the package registry\nfailed to install endeavor_e2e_absent\n";
+  await p.packages(null, { packages: ["endeavor_e2e_absent"], log });
+  assert.equal(p.drawer(), "packages", "a failure opens Packages by itself, as an install does");
+  assert.match(p.text(), /^Package failed · endeavor_e2e_absent/);
+  assert.match(p.text(), /endeavor_e2e_absent couldn't be installed: it isn't in the package index/);
+  assert.equal(p.state().package_failed, "endeavor_e2e_absent");
+  p.window.document.querySelector("#endeavor-drawer .failure .fix").dispatchEvent(new p.window.MouseEvent("click", { bubbles: true }));
+  const fix = p.sent.find((m) => m.type === "fix_package");
+  assert.deepEqual([fix?.notebook, fix?.name], ["0f381e2e-b8ca-11f1-b549-49cf0ce82801", "endeavor_e2e_absent"]);
+});
+
+const operation = (status, packages, logs = {}, log_mode = "append") => ({
+  operation_id: "2cc80a17", action: "install", source: "kernel", status, packages, logs, log_mode,
+});
+
+test("an install marimo runs itself, from its own popup or for Endeavor's card, shows in Packages and the header however short it is", async () => {
+  const p = await marimoPage();
+  await p.packages(null);
+  const popup = p.window.document.createElement("div");
+  popup.className = "flex flex-col gap-4 mb-5 fixed top-5 left-12";
+  popup.innerHTML = "<div><span>Missing packages</span><button>Install</button></div>";
+  p.window.document.body.append(popup);
+  await p.marimoSays("environment-operation", operation({ kind: "running" }, { humanize: "running" }));
+  assert.equal(p.drawer(), "packages");
+  assert.match(p.text(), /^Installing packages/);
+  assert.match(p.text(), /humanizeinstalling/);
+  assert.deepEqual([p.state().installing, p.state().busy], [true, "Installing packages"]);
+  popup.innerHTML = "<div><svg></svg><span>Installing packages</span></div>";
+  await p.settle();
+  assert.equal(popup.style.display, "none", "marimo's own progress popup would only repeat Packages");
+  await p.marimoSays("environment-operation", operation({ kind: "succeeded" }, { humanize: "succeeded" }));
+  assert.equal(p.state().installing, false, "the app asks for the new package list when this turns false");
+  assert.equal(p.drawer(), undefined, "it closes by itself once done");
+});
+
+test("marimo's missing-packages popup stays, since its Install button is the user's own way in", async () => {
+  const p = await marimoPage();
+  const popup = p.window.document.createElement("div");
+  popup.className = "fixed top-5 left-12";
+  popup.innerHTML = "<div><span>Missing packages</span><button>Install</button></div>";
+  p.window.document.body.append(popup);
+  await p.settle();
+  assert.equal(popup.style.display, "");
+});
+
+test("an install marimo runs itself that fails shows uv's reason, and stays until a later install of it succeeds", async () => {
+  const p = await marimoPage();
+  await p.packages(null);
+  await p.marimoSays("environment-operation", operation({ kind: "running" }, { humanize: "running" }, { humanize: "Installing humanize...\n" }, "replace"));
+  const uv = "× No solution found when resolving dependencies:\n  ╰─▶ Because the requested Python version (>=3.10) does not satisfy\n      Python>=3.11 and humanize==4.17.0 depends on Python>=3.11, we can\n      conclude that humanize==4.17.0 cannot be used.\nFailed to install humanize\n";
+  await p.marimoSays("environment-operation", operation({ kind: "running" }, { humanize: "failed" }, { humanize: uv }));
+  await p.marimoSays("environment-operation", operation({ kind: "failed", error: "Could not apply changes to humanize." }, { humanize: "failed" }));
+  assert.equal(p.drawer(), "packages");
+  assert.match(p.text(), /^Package failed · humanize/);
+  assert.match(p.text(), /humanize couldn't be installed: the requested Python version \(>=3\.10\) does not satisfy Python>=3\.11 and humanize==4\.17\.0 depends on Python>=3\.11/);
+  assert.equal(p.state().package_failed, "humanize");
+  await p.packages(null);
+  assert.equal(p.state().package_failed, "humanize", "the runtime didn't run this install, so its list doesn't clear it");
+  await p.marimoSays("environment-operation", { ...operation({ kind: "succeeded" }, { humanize: "succeeded" }), operation_id: "later" });
+  assert.equal(p.state().package_failed, null);
+});
+
+test("after marimo's own install has settled, a later install or failure the runtime reports still shows", async () => {
+  const p = await marimoPage();
+  await p.packages(null);
+  await p.marimoSays("environment-operation", operation({ kind: "running" }, { humanize: "running" }));
+  await p.marimoSays("environment-operation", operation({ kind: "failed", error: "Could not apply changes to humanize." }, { humanize: "failed" }));
+  assert.equal(p.state().package_failed, "humanize");
+  await p.packages({ step: "installing", packages: ["polars"] });
+  assert.deepEqual([p.state().installing, p.state().busy, p.state().package_failed], [true, "Installing packages", null]);
+  assert.match(p.text(), /polarsinstalling/);
+  await p.packages(null, { packages: ["polars"], log: "  ╰─▶ Because polars was not found in the package registry\n" });
+  assert.equal(p.state().package_failed, "polars, humanize", "the runtime's failure first, and marimo's earlier one still");
+  assert.equal(p.drawer(), "packages");
+  await p.marimoSays("environment-operation", { ...operation({ kind: "succeeded" }, { six: "succeeded" }), operation_id: "later" });
+  await p.packages({ step: "installing", packages: ["boto3"] });
+  assert.equal(p.state().installing, true, "after a succeeded one too");
+});
+
+test("a page that reconnects mid-install picks it up from marimo's state", async () => {
+  const p = await marimoPage();
+  await p.packages(null);
+  await p.marimoSays("environment-state", { source: "kernel", state: { restart_required: false, operations: [
+    { operation_id: "a", action: "prepare", status: { kind: "succeeded" }, packages: {}, logs: {}, source: "kernel" },
+    { operation_id: "b", action: "install", status: { kind: "running" }, packages: { polars: "running" }, logs: {}, source: "kernel" },
+  ] } });
+  assert.equal(p.state().installing, true);
+  assert.match(p.text(), /polarsinstalling/);
+});
+
+test("on a Python notebook the drawer's own tab row has no Live docs, which is marimo's own panel", async () => {
+  const p = await marimoPage();
+  assert.equal(p.window.document.querySelector('#endeavor-drawer > header [data-tab="docs"]'), null);
+  assert.ok(p.window.document.querySelector('#endeavor-drawer > header [data-tab="packages"]'));
+});

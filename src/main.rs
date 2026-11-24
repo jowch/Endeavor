@@ -411,6 +411,7 @@ pub struct Workspace {
     next_key: u64,
     draft: Draft,
     locate: Option<new_session::Browser>,
+    packages_feed: notebook_pane::PackagesFeed,
     recent: Vec<Place>,
     records: records::Records,
     this_mac_was_ready: bool,
@@ -703,6 +704,7 @@ impl Workspace {
             let Ok(busy) = this.update(cx, |this, cx| {
                 this.check_opening(cx);
                 this.check_usage_limit(cx);
+                this.feed_packages(Instant::now(), cx);
                 !this.usage_limits.is_empty()
                     || this.app_update.percent().is_some()
                     || this.working()
@@ -739,6 +741,7 @@ impl Workspace {
             next_key: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_millis() as u64),
             draft,
             locate: None,
+            packages_feed: Default::default(),
             recent,
             records: load_records(),
             this_mac_was_ready: false,
@@ -1997,6 +2000,7 @@ impl Workspace {
                 self.page = annotate::PageState::default();
                 self.annotating = false;
                 self.page_context.clear();
+                self.packages_feed.page_reloaded();
                 self.push_cells(cx);
                 self.apply_look(cx);
                 self.sync_page_context(cx);

@@ -69,6 +69,15 @@ impl Version {
         }
     }
 
+    pub fn reads_python_packages(self) -> bool {
+        const READS_PYTHON_PACKAGES: u32 = 51;
+        match self {
+            Version::Usable => endeavor_mcp::CORE_INTERFACE >= READS_PYTHON_PACKAGES,
+            Version::Other(interface) => interface.is_some_and(|i| i >= READS_PYTHON_PACKAGES),
+            Version::NoRunGate => false,
+        }
+    }
+
     pub fn has_r_status(self) -> bool {
         match self {
             Version::Usable => endeavor_mcp::CORE_INTERFACE >= 9,

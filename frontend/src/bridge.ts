@@ -1,3 +1,4 @@
+import type { MarimoEnvironment } from "./marimopackages";
 import type { Pick } from "./quote";
 
 export type ToApp =
@@ -68,6 +69,7 @@ export type ToPage =
   | { type: "code"; cell: string }
   | { type: "shot"; id: number }
   | { type: "drawer"; tab: "docs" | "packages" | null }
+  | { type: "packages"; environment: MarimoEnvironment }
   | {
       type: "context";
       host: string;
