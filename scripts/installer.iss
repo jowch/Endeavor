@@ -1,16 +1,3 @@
-; The Windows installer (Inno Setup 6): a per-user install under
-; %LOCALAPPDATA%\Programs\Endeavor that needs no administrator, a Start menu
-; entry, an uninstaller, and Microsoft's WebView2 Runtime when it's missing.
-; CI builds it from the package job's layout (.github/workflows/windows.yml):
-;
-;   ISCC /DVersion=0.1.0 /DBuild=<commit> /DDist=<folder holding Endeavor\>
-;        /DWebView2Setup=<MicrosoftEdgeWebview2Setup.exe> scripts\installer.iss
-;
-; The layout is the one install::resources() looks for: bin\endeavor.exe and
-; Resources\ beside bin. Julia, Node and the agents are installed on first
-; run into %LOCALAPPDATA%\Endeavor, which uninstalling leaves in place.
-; ponytail: not signed, so SmartScreen warns (#12).
-
 #ifndef Version
   #define Version "0.1.0"
 #endif
@@ -30,7 +17,6 @@ AppVerName=Endeavor {#Version} (build {#Build})
 AppPublisher=Endeavor
 AppPublisherURL=https://github.com/jowch/Endeavor
 VersionInfoVersion={#Version}
-; Per user, never elevated: {autopf} is %LOCALAPPDATA%\Programs.
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\Endeavor
 DisableDirPage=yes
@@ -39,10 +25,6 @@ UsePreviousAppDir=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-; PrepareToInstall asks to quit a running Endeavor; this is the fallback for
-; one opened after that. Don't reopen it. Silent, it closes any program
-; holding a file without asking, so the app's updates pass
-; /NOCLOSEAPPLICATIONS (src/updater.rs).
 CloseApplications=yes
 RestartApplications=no
 SetupIconFile=..\assets\icon\endeavor.ico
@@ -67,11 +49,8 @@ Name: "{autoprograms}\Endeavor"; Filename: "{app}\bin\endeavor.exe"; IconFilenam
 
 [Run]
 Filename: "{app}\bin\endeavor.exe"; Description: "Open Endeavor"; Flags: nowait postinstall skipifsilent
-; An update the app started with Restart (src/updater.rs) opens it again.
 Filename: "{app}\bin\endeavor.exe"; Flags: nowait; Check: HasParam('/RELAUNCH')
 
-; WebView2 keeps its data next to the exe. Resources.old is left only if
-; an install stopped partway and couldn't put the old one back.
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\Resources.old"
 Type: filesandordirs; Name: "{app}\bin\endeavor.exe.WebView2"
@@ -81,11 +60,8 @@ const
   WebView2Client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 
 var
-  { Setup got as far as installing (the install folder is known); it moved the old
-  Resources aside; and then it finished. }
   Prepared, Moved, Installed: Boolean;
 
-{ Installed for the machine or for this user, as Microsoft's docs say to check. }
 function HasWebView2: Boolean;
 var
   V: String;
@@ -94,9 +70,6 @@ begin
     or (RegQueryStringValue(HKCU, 'Software\' + WebView2Client, 'pv', V) and (V <> '') and (V <> '0.0.0.0'));
 end;
 
-{ A runtime kept running after Endeavor quit is the app's own exe, so it holds
-  bin\endeavor.exe open. Stop it the way Repair runtime does. Its notebooks are
-  already saved; the next launch starts a new one. }
 procedure StopRuntime;
 var
   Exe: String;
@@ -107,7 +80,6 @@ begin
     Exec(Exe, '--stop-runtime', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
-{ A switch on Setup's command line, such as /UPDATE. }
 function HasParam(const Name: String): Boolean;
 var
   I: Integer;
@@ -118,13 +90,6 @@ begin
       Result := True;
 end;
 
-{ The app holds this mutex while it's open (platform::init). Wait for it to
-  quit before stopping its runtime: an app set to keep its runtime starts a
-  new one when the old one stops, and Restart Manager then can't close that
-  one (it has no window) and says so. An update the app started (/UPDATE)
-  runs as the app quits, so it waits up to 30 seconds for that rather than
-  asking; after that, run silently, the question's answer is Cancel and the
-  install stops with the old app in place. }
 function AppQuit(const Action: String): Boolean;
 var
   Waited: Integer;
@@ -141,11 +106,6 @@ begin
     Result := SuppressibleMsgBox('Endeavor is open. Quit it, then click OK to ' + Action + '.', mbError, MB_OKCANCEL, IDCANCEL) = IDOK;
 end;
 
-{ An upgrade replaces Resources whole, so a file the new version dropped
-  can't linger. The old one is moved aside rather than deleted, so an install
-  that stops partway (a file held open, say) puts it back and the old app
-  still works. Moving it also fails at once, before anything changed, when
-  something holds a file in it. }
 function MoveResourcesAside: String;
 var
   Res: String;
@@ -182,7 +142,6 @@ begin
 #ifdef WebView2Setup
   WizardForm.StatusLabel.Caption := 'Installing Microsoft Edge WebView2 Runtime...';
   ExtractTemporaryFile('{#WebView2File}');
-  { Not elevated, the bootstrapper installs for this user only. }
   Exec(ExpandConstant('{tmp}\{#WebView2File}'), '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, Code);
 #endif
   if not HasWebView2 then
@@ -193,8 +152,6 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  { Again, in case Restart Manager closed an Endeavor that started between
-    PrepareToInstall and now, and it left its runtime running. }
   if CurStep = ssInstall then
     StopRuntime;
   if CurStep = ssPostInstall then
@@ -206,7 +163,6 @@ begin
   end;
 end;
 
-{ Setup is ending, installed or not. }
 procedure DeinitializeSetup;
 var
   Res, Exe: String;
@@ -215,30 +171,22 @@ begin
   if Installed or not Prepared then
     Exit;
   Res := ExpandConstant('{app}\Resources');
-  { Only a Resources this run moved: a Resources.old left by an earlier run
-    is older than the one in use. }
   if Moved then
   begin
     DelTree(Res, True, True, True);
     if not RenameFile(Res + '.old', Res) then
       Log('Couldn''t put the old Resources back.');
   end;
-  { Restart quit the app for this update; reopen the old one so the user
-    isn't left with nothing. Not when it's still open (the update waited for
-    it and gave up). }
   Exe := ExpandConstant('{app}\bin\endeavor.exe');
   if HasParam('/RELAUNCH') and FileExists(Exe) and not CheckForMutexes('{#AppMutex}') then
     Exec(Exe, '', '', SW_SHOW, ewNoWait, Code);
 end;
 
-{ An open exe can't be removed. }
 function InitializeUninstall: Boolean;
 begin
   Result := AppQuit('uninstall it');
 end;
 
-{ Once the user has confirmed: the "Are you sure?" question comes after
-  InitializeUninstall. }
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then

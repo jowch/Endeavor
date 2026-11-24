@@ -1,12 +1,6 @@
-# dmgbuild settings for the Mac disk image (.github/workflows/nightly.yml).
-# Run from the repository's root:
-#   dmgbuild -s assets/dmg/settings.py -D app=target/release/Endeavor.app Endeavor out.dmg
-# The window shows background.png (and background@2x.png on Retina screens,
-# which dmgbuild picks up by name), the app and a link to Applications.
-# build.py redraws the background; the icon positions below match its arrow.
 import os
 
-app = defines["app"]  # noqa: F821 (dmgbuild passes -D values in defines)
+app = defines["app"]  # noqa: F821
 
 format = "UDZO"
 filesystem = "HFS+"
@@ -15,9 +9,6 @@ symlinks = {"Applications": "/Applications"}
 icon = "assets/icon/Endeavor.icns"
 background = "assets/dmg/background.png"
 
-# The window's height counts its title bar, so the window shows a bit less
-# than the background (both 640 x 480): the plain ground at the bottom is cut,
-# whatever the title bar's height, and the icons' labels stay in view.
 window_rect = ((200, 120), (640, 480))
 default_view = "icon-view"
 show_status_bar = False

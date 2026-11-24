@@ -525,6 +525,16 @@ fn wait_runs_from(pid: u32, dir: &Path) {
 }
 
 #[cfg(all(test, unix))]
+fn wait_until_it_runs_its_script(pid: u32) {
+    let has_child = || {
+        Command::new("ps").args(["-A", "-o", "ppid="]).output().is_ok_and(|out| {
+            String::from_utf8_lossy(&out.stdout).lines().any(|line| line.trim().parse() == Ok(pid))
+        })
+    };
+    assert!((0..50).any(|_| has_child() || { std::thread::sleep(Duration::from_millis(100)); false }), "pid {pid} started no child: its shell isn't running the script");
+}
+
+#[cfg(all(test, unix))]
 #[test]
 fn only_a_runtime_started_with_the_old_folder_is_taken_for_it() {
     let old = std::env::temp_dir().join(format!("endeavor-runs-from-{}", std::process::id()));
@@ -567,6 +577,7 @@ fn the_old_folder_goes_only_once_its_runtime_is_gone() {
         .arg(&old).output().unwrap();
     let core: u32 = String::from_utf8_lossy(&spawn.stdout).trim().parse().unwrap();
     wait_runs_from(core, &old);
+    wait_until_it_runs_its_script(core);
     record(core);
     retire_old_state_in(&old, &stop_old);
     assert!(!old.exists(), "the folder goes with the runtime");

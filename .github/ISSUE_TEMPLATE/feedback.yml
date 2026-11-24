@@ -1,7 +1,3 @@
-# The same questions and details as the feedback form on the site (Tally), so
-# both are read the same way. The fields are listed in site/feedback-fields.md;
-# EndeavorMCP has a copy of this file. The app fills build, os, agent and source
-# through the link (?template=feedback.yml&build=...).
 name: Something got in your way
 description: Trying Endeavor or its plugin, and something stopped you, confused you or took too long.
 title: "Got in my way: "

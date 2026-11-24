@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""Regenerate the Mac disk image's window background from the splash scene.
-
-Writes, next to this script, background.png (640 x 480) and background@2x.png;
-dmgbuild combines them (settings.py, used by .github/workflows/nightly.yml).
-
-The top is the setup window's sky (src/splash.rs, src/turtle.rs): the turtle
-standing on the horizon looking up at the stars, with the name and tagline.
-The bottom is light ground where the app and the Applications link sit:
-Finder draws their labels in black whatever the background, so they need a
-light place to stand.
-
-Needs Chrome or Chromium (set CHROME to its binary if it isn't found).
-"""
 import glob
 import os
 import shutil
@@ -30,11 +17,9 @@ PAGE = """<!doctype html>
 html, body { margin: 0; background: #F3F3F5; }
 canvas { display: block; width: %(w)dpx; height: %(h)dpx; }
 </style></head><body><canvas width="%(cw)d" height="%(ch)d"></canvas><script>
-// Colors and turtle geometry from src/theme.rs and src/turtle.rs.
 const SKY = '#151517', SKY_TEXT = '#ECECEC', SKY_MUTED = '#8C8C8C', GROUND = '#F3F3F5', ARROW = '#B4B4BA';
 const SHELL = '#CC3F00', SKIN = '#E08A5E', EYE = '#151517', STAR = '#F2E6D0';
 const HEAD_R = 0.36, HEAD_X = 1.02, HEAD_Y = -0.14, FOOT_R = 0.21, FEET_X = [-0.6, 0.4];
-// The splash's "looking at the stars" gaze, and its stars (src/splash.rs).
 const GAZE = { eyeX: 1, look: 1, dx: 0.06, dy: -0.28 };
 const STARS = [[1.5, -2.7, 3.7], [2.4, -2.1, 2.8], [0.8, -3.2, 3], [3, -3, 4.6], [2, -3.6, 2.5], [-0.3, -2.9, 2.3], [3.6, -2.3, 2.5]];
 const HORIZON = 222, R = 34, ICON_Y = 300;
@@ -67,7 +52,6 @@ ctx.textAlign = 'center';
 document.fonts.load('600 26px EndeavorSans').then(() => document.fonts.load('400 13px EndeavorSans')).then(() => {
   ctx.fillStyle = SKY_TEXT; ctx.font = '600 26px EndeavorSans'; ctx.fillText('Endeavor', %(w)d / 2, 52);
   ctx.fillStyle = SKY_MUTED; ctx.font = '400 13px EndeavorSans'; ctx.fillText('Build our future', %(w)d / 2, 74);
-  // An arrow from the app (x 180) to Applications (x 460), between the icons.
   ctx.strokeStyle = ARROW; ctx.fillStyle = ARROW; ctx.lineWidth = 2; ctx.lineCap = 'round';
   ctx.beginPath(); ctx.moveTo(262, ICON_Y); ctx.lineTo(370, ICON_Y); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(380, ICON_Y); ctx.lineTo(368, ICON_Y - 7); ctx.lineTo(368, ICON_Y + 7); ctx.closePath(); ctx.fill();
