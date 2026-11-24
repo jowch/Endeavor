@@ -110,7 +110,7 @@ To wait for something, poll the dump. For example, loop until
   is `record` (from sessions.json, drawn at launch) until the agent has listed
   its folder this launch, then `listed`, or `missing` when that listing left it
   out (the row stays); an open row's is null. Also the "Show N more"
-  line, the Restart Julia row, the status line (`status`) and its mark
+  line, the Restart notebooks row, the status line (`status`) and its mark
   (`status_mark`: `offline`, `signed_out`, `spinner` while Claude restarts,
   `red_dot` when something needs the user, or null).
 - `new_session`, on the new-session screen. The chips (where, resources, folder,
@@ -118,8 +118,9 @@ To wait for something, poll the dump. For example, loop until
   `julia` or `r`, the new notebook's or the picked file's), the new notebooks
   the notebook chip offers (`new_notebook_kinds`), the notebooks it lists
   (`notebooks`: each one's `file` and `language`), the mode, the notice and
-  connection notice, and either `resume` (Pick up where you left off) or
-  `examples`.
+  connection notice, `agent_fallback` (the line saying the picked agent runs
+  on this computer only, so a server session uses Claude; else null), and
+  either `resume` (Pick up where you left off) or `examples`.
 - `session`, for the active session. `failed` is null unless it couldn't
   open; then the page in place of its transcript: `kind` (`in_cli` for one
   open in the Claude Code CLI, else `other`), `title`, `text`, `buttons` and
@@ -176,7 +177,7 @@ To wait for something, poll the dump. For example, loop until
     The runtime's notebook list says so (`exited`, with the cells that were
     running), and so does the page.
     (All of a host's Julia stopping shows as `host`, with `host_pane.kind`
-    `julia_crashed`, and the same page.)
+    `julia_crashed`, `r_crashed` in an R session, and the same page.)
 
   `crash` is null unless Julia stopped by itself under the notebook: its
   `state` (`stopped`, `rerunning` after Restart Julia until that run is
@@ -342,6 +343,10 @@ These are read by debug builds only.
 - `ENDEAVOR_TEST_PICK_JULIA`: a file path. While the file exists, Settings'
   Choose… for another Julia takes the path written in it instead of opening
   the file picker, through the same code as a real pick.
+- `ENDEAVOR_TEST_UPDATE_MANIFEST`: a manifest file that stands in for the
+  nightly release's, on any system. The app checks against it but never
+  replaces itself: a newer build is offered as a download.
+- `ENDEAVOR_TEST_PICK_R`: the same for Choose… for another R (its Rscript).
 - `ENDEAVOR_TEST_ADAPTER_UPDATE`: a file path. While the file exists, an
   update to the Claude Code adapter shows as available (About, Settings'
   About and the dot on the sidebar's gear). Don't press its Update.
@@ -395,6 +400,8 @@ These are read by debug builds only.
     through the dialect, with no model turn. Run it in a private `HOME` (the
     adapter installs into the app's folder there), with `CODEX_HOME` at a
     signed-in Codex and `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:9/mcp`.
+- `live_bridge` (in `src/pluto.rs`) calls a running runtime's tools
+  through its bridge, with the same two variables.
 - `cargo test -- --ignored live_die_and_restart --nocapture` (in
   `src/runtime.rs`) checks the recovery path through This Mac's helper: it
   kills the runtime as a crash or OOM kill would, and the same helper starts a

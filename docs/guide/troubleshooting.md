@@ -11,9 +11,9 @@ and what to try when the button doesn't help. Settings has a
 
 ## A notebook won't start or keeps failing
 
-1. **Restart Julia.** In Settings, under **Troubleshooting**, click
-   **Restart** next to **Restart Julia**. It stops your notebooks on this Mac
-   and starts them again. Their files are already saved.
+1. **Restart notebooks.** In Settings, under **Troubleshooting**, click
+   **Restart** next to **Restart notebooks**. It stops your notebooks on this
+   Mac, Julia and R, and starts them again. Their files are already saved.
 2. **Repair Julia.** If restarting doesn't help, click **Repair…** next to
    **Repair Julia**, then **Repair**. Endeavor clears what Julia saved and
    compiled, then starts it again. It takes a few minutes. Your notebooks,
@@ -63,7 +63,7 @@ it.
 To restart it, click **Restart…** under that note. It asks first, and lists
 the notebooks open there, since they stop. Their files are saved. You can also:
 
-- On your Mac, use **Restart Julia** in Settings, under **Troubleshooting**.
+- On your Mac, use **Restart notebooks** in Settings, under **Troubleshooting**.
 - On a server, click **Stop** next to the server in Settings, under **Where
   notebooks run**. Then click **Start on lab-server** in the notebook pane.
 

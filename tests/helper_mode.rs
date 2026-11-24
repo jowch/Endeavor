@@ -93,7 +93,7 @@ fn the_app_is_sshs_askpass() {
         let mut line = String::new();
         BufReader::new(&connection).read_line(&mut line).unwrap();
         let ask: Ask = serde_json::from_str(&line).unwrap();
-        (&connection).write_all(format!("{}\n", serde_json::to_string(&Answer { text: Some("hunter2".into()) }).unwrap()).as_bytes()).unwrap();
+        (&connection).write_all(format!("{}\n", serde_json::to_string(&Answer { text: Some("hunter2".into()), gave_up: false }).unwrap()).as_bytes()).unwrap();
         ask
     });
     let out = Command::new(env!("CARGO_BIN_EXE_endeavor")).arg("jc@lab's password: ").env(SOCKET_ENV, &socket).output().unwrap();
