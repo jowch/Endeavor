@@ -1,4 +1,5 @@
 import { on, send } from "./bridge";
+import { drawerTab, openDrawer } from "./drawer";
 
 const DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
 const PANEL = "[data-testid=helper]";
@@ -44,6 +45,7 @@ export async function setDocs(want: boolean, shown: () => boolean, press: () => 
 }
 
 let reported: boolean | null = null;
+let moving = 0;
 
 export function besideIconColumn(): { left: number; bottom: number } {
   const column = document.querySelector(ICON_COLUMN)?.getBoundingClientRect();
@@ -62,14 +64,14 @@ function endSidebarDrag(): void {
 
 function follow() {
   if (sidebarDragging()) endSidebarDrag();
+  if (moving) return;
+  const { left, bottom } = besideIconColumn();
+  const root = document.documentElement.style;
+  if (root.getPropertyValue("--endeavor-docs-left") !== `${left}px`) root.setProperty("--endeavor-docs-left", `${left}px`);
+  if (root.getPropertyValue("--endeavor-docs-bottom") !== `${bottom}px`) root.setProperty("--endeavor-docs-bottom", `${bottom}px`);
   const open = docsShown();
-  if (open) {
-    document.documentElement.dataset.endeavorDrawer = "docs";
-    const { left, bottom } = besideIconColumn();
-    document.documentElement.style.setProperty("--endeavor-docs-left", `${left}px`);
-    document.documentElement.style.setProperty("--endeavor-docs-bottom", `${bottom}px`);
-  }
-  else if (document.documentElement.dataset.endeavorDrawer === "docs") delete document.documentElement.dataset.endeavorDrawer;
+  if (open && drawerTab() !== "docs") openDrawer("docs");
+  else if (!open && drawerTab() === "docs") openDrawer(null);
   if (open === reported) return;
   reported = open;
   send({ type: "docs", open });
@@ -85,7 +87,13 @@ export function initMarimoDocs(): void {
     return !!option;
   };
   const wait = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
-  on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow));
+  on("drawer", (msg) => {
+    moving++;
+    void setDocs(msg.tab === "docs", docsShown, press, wait).finally(() => {
+      moving--;
+      follow();
+    });
+  });
   new MutationObserver(follow).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size", "inert"], childList: true, subtree: true, characterData: true });
   follow();
 }

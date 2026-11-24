@@ -12,6 +12,10 @@ const css = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
+  html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #endeavor-drawer { display: flex;
+    left: var(--endeavor-docs-left, 0px); bottom: var(--endeavor-docs-bottom, 0px); }
+  html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #App,
+  html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] [data-testid=chrome-body] { padding-bottom: var(--endeavor-drawer-pad); }
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
     font: 12.5px/1.45 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
@@ -93,7 +97,9 @@ let body: HTMLElement;
 let tab: Drawer = null;
 let auto = false;
 let autoDone = false;
+let failureSeen: string | null = null;
 let showLog = false;
+let modelOf = (): StatusModel | null => current()?.model ?? null;
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -122,6 +128,8 @@ function placeSide() {
 }
 
 let echoing = false;
+
+export const drawerTab = (): Drawer => tab;
 
 export function openDrawer(next: Drawer, byItself = false): void {
   tab = next;
@@ -188,13 +196,13 @@ let hostName = "This Mac";
 let lastHtml = "";
 
 function render() {
-  const now = current();
-  if (!now || tab !== "packages") return;
-  const html = packagesHtml(now.model);
+  const model = modelOf();
+  if (!model || tab !== "packages") return;
+  const html = packagesHtml(model);
   if (html === lastHtml) return;
   lastHtml = html;
   body.innerHTML = html;
-  const failure = now.model.failure;
+  const failure = model.failure;
   body.querySelector<HTMLButtonElement>(".showlog")!.onclick = () => {
     showLog = !showLog;
     render();
@@ -211,15 +219,26 @@ function render() {
   }
 }
 
-function follow(_: NotebookLike, m: StatusModel) {
+function follow(_: NotebookLike | null, m: StatusModel) {
+  const root = document.documentElement.dataset;
+  const ours = root.endeavorLook === "endeavor" || root.endeavorEngine === "marimo";
   if (!m.install) autoDone = false;
-  if (m.install && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
+  const newFailure = root.endeavorEngine === "marimo" && m.failure !== null && m.failure.name !== failureSeen;
+  failureSeen = m.failure?.name ?? null;
+  if (m.install && !autoDone && tab === null && ours) {
     autoDone = true;
+    openDrawer("packages", true);
+  } else if (newFailure && tab === null) {
     openDrawer("packages", true);
   } else if (auto && tab === "packages" && !m.install && !m.failure && !m.busy?.startsWith("Starting")) {
     openDrawer(null);
   }
   render();
+}
+
+export function showModel(source: () => StatusModel | null): (model: StatusModel) => void {
+  modelOf = source;
+  return (model) => follow(null, model);
 }
 
 export function initDrawer(): void {
@@ -237,6 +256,7 @@ export function initDrawer(): void {
     `<div class="grip"></div><header><button data-tab="docs">${book}Live docs</button><button data-tab="packages">${box}Packages</button>` +
     `<span class="grow"></span><button class="close" title="Close">×</button></header><section class="packages"></section>`;
   body = drawer.querySelector(".packages")!;
+  if (document.documentElement.dataset.endeavorEngine === "marimo") drawer.querySelector('header [data-tab="docs"]')!.remove();
   document.body.append(drawer);
 
   for (const b of drawer.querySelectorAll<HTMLElement>("header [data-tab]")) b.onclick = () => pick(b.dataset.tab as Drawer);

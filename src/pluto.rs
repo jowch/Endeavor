@@ -174,6 +174,10 @@ pub fn export_notebook(bridge: &Bridge, notebook_id: &str, format: &str) -> Resu
 
 const EXPORT_WAIT: Duration = Duration::from_secs(150);
 
+pub fn environment(bridge: &Bridge, notebook_id: &str) -> Result<Value, String> {
+    app_call(bridge, "endeavor/environment", json!({ "notebook_id": notebook_id }))
+}
+
 pub fn file_info(bridge: &Bridge, path: &str) -> Result<Option<f64>, String> {
     let result = app_call(bridge, "endeavor/file_info", json!({ "path": path }))?;
     Ok(if result["exists"] == true { Some(result["modified"].as_f64().unwrap_or(0.)) } else { None })

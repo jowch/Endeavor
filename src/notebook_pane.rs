@@ -208,8 +208,13 @@ pub enum HeaderTool {
     Packages,
 }
 
-pub fn header_tools(kind: Backend, endeavor_look: bool) -> &'static [HeaderTool] {
+fn install_ended(before: &PageState, after: &PageState) -> bool {
+    before.notebook == after.notebook && before.installing && !after.installing
+}
+
+pub fn header_tools(kind: Backend, endeavor_look: bool, python_packages: bool) -> &'static [HeaderTool] {
     match kind {
+        Backend::Marimo if python_packages => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Packages],
         Backend::Marimo => &[HeaderTool::Share, HeaderTool::Docs],
         Backend::Pluto | Backend::Ember if endeavor_look => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Packages],
         Backend::Pluto | Backend::Ember => &[],
@@ -267,6 +272,52 @@ pub enum PaneShows {
 }
 
 pub const OPENING_GRACE: Duration = Duration::from_secs(5);
+
+const PACKAGES_SETTLED: Duration = Duration::from_secs(5);
+const PACKAGES_INSTALLING: Duration = Duration::from_secs(1);
+const PACKAGES_RETRY: Duration = Duration::from_secs(10);
+
+#[derive(Default)]
+pub struct PackagesFeed {
+    latest: Option<(u64, serde_json::Value)>,
+    page_has_it: bool,
+    asking: bool,
+    next: Option<Instant>,
+}
+
+impl PackagesFeed {
+    pub fn page_reloaded(&mut self) {
+        self.page_has_it = false;
+        self.next = None;
+    }
+
+    pub fn ask_now(&mut self) {
+        self.next = None;
+    }
+
+    pub fn latest_for(&self, key: u64) -> Option<&serde_json::Value> {
+        self.latest.as_ref().filter(|(k, _)| *k == key).map(|(_, env)| env)
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        !self.asking && self.next.is_none_or(|at| now >= at)
+    }
+
+    fn arrived(&mut self, key: u64, got: Result<serde_json::Value, String>, now: Instant) -> Option<serde_json::Value> {
+        self.asking = false;
+        let Ok(env) = got else {
+            self.next = Some(now + PACKAGES_RETRY);
+            return None;
+        };
+        self.next = Some(now + if env["install"].is_null() { PACKAGES_SETTLED } else { PACKAGES_INSTALLING });
+        if self.page_has_it && self.latest_for(key) == Some(&env) {
+            return None;
+        }
+        self.latest = Some((key, env.clone()));
+        self.page_has_it = true;
+        Some(env)
+    }
+}
 
 #[derive(Default)]
 pub struct DrawerAsk {
@@ -759,7 +810,7 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
         let drawer = header_drawer(session.kind, shown, page, &self.page);
-        let tools = if shown { header_tools(session.kind, endeavor) } else { &[] };
+        let tools = if shown { header_tools(session.kind, endeavor, self.packages_feed.latest_for(session.key).is_some()) } else { &[] };
         let share = tools.contains(&HeaderTool::Share).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
@@ -840,6 +891,9 @@ impl Workspace {
         let same = self.page.notebook == state.notebook;
         let left_safe = same && self.page.safe && !state.safe && state.connected;
         let was_dead = same && self.page.dead;
+        if install_ended(&self.page, &state) {
+            self.packages_feed.ask_now();
+        }
         self.page = state;
         if let Some(key) = self.session_showing(&self.page.notebook) {
             if left_safe {
@@ -1007,6 +1061,30 @@ impl Workspace {
         if matches!(action, NotebookAction::Shortcuts | NotebookAction::Feedback | NotebookAction::Frontmatter) {
             let _ = self.webview.read(cx).raw().focus();
         }
+    }
+
+    pub(crate) fn feed_packages(&mut self, now: Instant, cx: &mut Context<Self>) {
+        if !self.packages_feed.due(now) {
+            return;
+        }
+        let Some(session) = self.active_session().filter(|s| s.kind == Backend::Marimo) else { return };
+        let (key, Some(id)) = (session.key, session.notebook.clone()) else { return };
+        let Some(runtime) = self.connection(&session.place.host).and_then(|c| c.runtime.as_ref()).filter(|r| r.version.reads_python_packages()) else { return };
+        let bridge = runtime.bridge.clone();
+        self.packages_feed.asking = true;
+        cx.spawn(async move |this, cx| {
+            let got = cx.background_executor().spawn(async move { pluto::environment(&bridge, &id) }).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.active != Some(key) {
+                    this.packages_feed.asking = false;
+                    return;
+                }
+                if let Some(env) = this.packages_feed.arrived(key, got, Instant::now()) {
+                    this.send_to_page(&serde_json::json!({ "type": "packages", "environment": env }), cx);
+                }
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn export(&mut self, key: u64, kind: &'static str, extension: &'static str, cx: &mut Context<Self>) {
@@ -1755,6 +1833,47 @@ mod tests {
     }
 
     #[test]
+    fn a_python_notebooks_packages_go_to_the_page_only_when_they_change_and_more_often_while_installing() {
+        use super::{PACKAGES_INSTALLING, PACKAGES_RETRY, PACKAGES_SETTLED, PackagesFeed};
+        let now = Instant::now();
+        let ready = serde_json::json!({ "packages": [{ "name": "boto3", "version": "1.43.108" }], "install": null, "failed": null });
+        let installing = serde_json::json!({ "packages": [], "install": { "step": "installing", "packages": ["boto3"] }, "failed": null });
+        let mut feed = PackagesFeed::default();
+        assert!(feed.due(now));
+        feed.asking = true;
+        assert!(!feed.due(now), "one call at a time");
+        assert_eq!(feed.arrived(7, Ok(installing.clone()), now), Some(installing.clone()));
+        assert!(!feed.due(now) && feed.due(now + PACKAGES_INSTALLING));
+        assert_eq!(feed.arrived(7, Ok(installing.clone()), now), None, "nothing new");
+        assert_eq!(feed.arrived(7, Ok(ready.clone()), now), Some(ready.clone()));
+        assert!(!feed.due(now + PACKAGES_INSTALLING) && feed.due(now + PACKAGES_SETTLED));
+        assert_eq!(feed.arrived(8, Ok(ready.clone()), now), Some(ready.clone()), "another notebook gets its own");
+        assert_eq!(feed.latest_for(7), None);
+        assert_eq!(feed.arrived(8, Err("lost".into()), now), None);
+        assert!(!feed.due(now + PACKAGES_SETTLED) && feed.due(now + PACKAGES_RETRY));
+        feed.page_reloaded();
+        assert!(feed.due(now));
+        assert_eq!(feed.latest_for(8), Some(&ready), "the header keeps its Packages button while the page reloads");
+        assert_eq!(feed.arrived(8, Ok(ready.clone()), now), Some(ready), "a reloaded page is sent them again");
+    }
+
+    #[test]
+    fn the_package_list_is_asked_for_again_as_soon_as_the_page_says_an_install_ended() {
+        use super::{PageState, install_ended};
+        let installing = PageState { notebook: "a".into(), installing: true, ..Default::default() };
+        let done = PageState { installing: false, ..installing.clone() };
+        assert!(install_ended(&installing, &done));
+        assert!(!install_ended(&done, &installing));
+        assert!(!install_ended(&installing, &PageState { notebook: "b".into(), ..done.clone() }), "another notebook's page");
+        let mut feed = super::PackagesFeed::default();
+        let now = Instant::now();
+        feed.arrived(7, Ok(serde_json::json!({ "install": null })), now);
+        assert!(!feed.due(now));
+        feed.ask_now();
+        assert!(feed.due(now));
+    }
+
+    #[test]
     fn a_drawer_asked_for_while_the_page_loads_opens_once_it_is_ready_and_never_on_a_later_page() {
         use super::DrawerAsk;
         let mut ask = DrawerAsk::default();
@@ -1788,12 +1907,13 @@ mod tests {
     }
 
     #[test]
-    fn python_notebooks_get_share_and_live_docs_whatever_the_look_and_no_packages() {
+    fn python_notebooks_get_share_live_docs_and_packages_whatever_the_look_once_the_runtime_has_given_their_packages() {
         use super::{HeaderTool::*, header_tools};
-        assert_eq!(header_tools(Backend::Pluto, true), [Share, Docs, Packages]);
-        assert_eq!(header_tools(Backend::Ember, true), [Share, Docs, Packages]);
-        assert!(header_tools(Backend::Pluto, false).is_empty(), "the classic look keeps Pluto's own buttons");
-        assert_eq!(header_tools(Backend::Marimo, true), [Share, Docs]);
-        assert_eq!(header_tools(Backend::Marimo, false), [Share, Docs], "marimo has no look of ours to switch off");
+        assert_eq!(header_tools(Backend::Pluto, true, false), [Share, Docs, Packages]);
+        assert_eq!(header_tools(Backend::Ember, true, false), [Share, Docs, Packages]);
+        assert!(header_tools(Backend::Pluto, false, false).is_empty(), "the classic look keeps Pluto's own buttons");
+        assert_eq!(header_tools(Backend::Marimo, true, true), [Share, Docs, Packages]);
+        assert_eq!(header_tools(Backend::Marimo, false, true), [Share, Docs, Packages], "marimo has no look of ours to switch off");
+        assert_eq!(header_tools(Backend::Marimo, true, false), [Share, Docs], "an older runtime gives no packages to show");
     }
 }
