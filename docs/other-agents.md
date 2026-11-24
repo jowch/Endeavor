@@ -44,8 +44,10 @@ Each of these works only because of how Claude Code or its adapter behaves.
   strict MCP config also leaves out the project's `.mcp.json`. Either way the
   user's own install of Endeavor's plugin (`endeavor@endeavor`) is off,
   through `enabledPlugins` in the flag settings; the app's own plugin loads
-  as `endeavor@inline`. A server the user added by hand as `endeavor` is off
-  through the `mcp__endeavor` rule in `disallowedTools`.
+  as `endeavor@inline`. A server the user added by hand as `endeavor` never
+  starts, through `deniedMcpServers` in the same flag settings, so neither its
+  process nor its instructions reach the session; the `mcp__endeavor` rule in
+  `disallowedTools` stays as a second guard on its tools.
 - **Modes.** Manual, Ask to run, Auto and Plan are Claude's `default`, `auto`
   and `plan` modes, plus Endeavor's run gate (`app_modes`, `src/session.rs`).
   Agents without `plan` and `auto` fall back to showing their own modes.

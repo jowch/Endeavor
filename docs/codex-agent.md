@@ -281,7 +281,8 @@ user's own `CODEX_CONFIG` stays, with Endeavor's key merged in. Endeavor
 added by hand as `[mcp_servers.endeavor]` is not turned off: a partial
 `mcp_servers.endeavor` table makes Codex refuse to start a thread for a user
 without that server ("invalid transport"), checked the same way. Claude's
-sessions turn that server off with a `mcp__endeavor` rule.
+sessions keep that server from starting with `deniedMcpServers` in the flag
+settings.
 
 ### 7. Modes, models and effort
 

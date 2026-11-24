@@ -486,7 +486,7 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool, notebook: 
             "settingSources": sources,
             "strictMcpConfig": !personal,
             "plugins": [{ "type": "local", "path": plugin_dir }],
-            "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false } },
+            "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false }, "deniedMcpServers": [{ "serverName": USERS_ENDEAVOR_SERVER_NAME }] },
             "disallowedTools": disallowed,
             "allowedTools": allowed,
             "mcpServers": { crate::celldiff::MCP_SERVER: notebook },
@@ -495,6 +495,8 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool, notebook: 
 }
 
 const USERS_ENDEAVOR_PLUGIN: &str = "endeavor@endeavor";
+
+const USERS_ENDEAVOR_SERVER_NAME: &str = "endeavor";
 
 const USERS_ENDEAVOR_SERVER: &str = "mcp__endeavor";
 
@@ -1274,11 +1276,11 @@ mod tests {
     }
 
     #[test]
-    fn the_users_own_endeavor_plugin_is_off_in_every_session() {
+    fn the_users_own_endeavor_plugin_and_hand_added_server_are_off_in_every_session() {
         for own in [false, true] {
             for on_server in [false, true] {
                 let settings = &session_options(own, "/p", on_server, serde_json::Value::Null)["claudeCode"]["options"]["settings"];
-                assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false } }));
+                assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false }, "deniedMcpServers": [{ "serverName": "endeavor" }] }));
             }
         }
         let codex = super::CODEX.env.iter().find(|(name, _)| *name == "CODEX_CONFIG").expect("Codex's adapter gets CODEX_CONFIG").1;
