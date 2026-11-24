@@ -50,6 +50,10 @@ fn kinds_on(host: &HostId, windows: bool) -> &'static [Backend] {
     }
 }
 
+pub fn lists_file(name: &str, kinds: &[Backend]) -> bool {
+    kinds.contains(&kind_of_path(name))
+}
+
 pub const OFFERS_OWN_UV: bool = cfg!(not(windows));
 
 pub fn kind_of_path(path: &str) -> Backend {
@@ -1095,6 +1099,10 @@ impl Workspace {
         let path = browser.path.clone();
         let host = browser.host.clone();
         let picking = browser.pick_for;
+        let kinds: Vec<Backend> = match picking {
+            Some(key) => self.sessions.iter().filter(|s| s.key == key).map(|s| s.kind).collect(),
+            None => new_kinds(&host).to_vec(),
+        };
         let mut crumbs: Vec<(String, String)> = host.ancestors(&path).into_iter().map(|p| (host.folder_name(&p), p)).collect();
         crumbs.reverse();
         let crumbs = crumbs.into_iter().enumerate().flat_map(|(i, (name, at))| {
@@ -1121,9 +1129,10 @@ impl Workspace {
                 .child(div().text_color(theme::text_muted()).child("Up"))
                 .on_click(cx.listener(move |this, _, _, cx| this.browse_to(parent.clone(), cx)))
         });
-        let rows: Vec<AnyElement> = match &browser.listing {
+        let listing = browser.listing.as_ref().map(|listing| listing.as_ref().map(|entries| entries.iter().filter(|entry| entry.dir || lists_file(&entry.name, &kinds)).collect::<Vec<_>>()));
+        let rows: Vec<AnyElement> = match &listing {
             None => vec![div().py(px(4.)).pl(px(28.)).text_color(theme::text_faint()).child("Loading…").into_any_element()],
-            Some(Err(e)) => vec![div().py(px(4.)).px(px(8.)).text_size(theme::size_meta()).text_color(theme::danger()).child(e.clone()).into_any_element()],
+            Some(Err(e)) => vec![div().py(px(4.)).px(px(8.)).text_size(theme::size_meta()).text_color(theme::danger()).child((*e).clone()).into_any_element()],
             Some(Ok(entries)) if entries.is_empty() => vec![div().py(px(4.)).pl(px(28.)).text_color(theme::text_faint()).child(if picking.is_some() { "No folders or notebooks here" } else { "No folders here" }).into_any_element()],
             Some(Ok(entries)) => entries
                 .iter()
@@ -1879,9 +1888,21 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
 
 #[cfg(test)]
 mod tests {
-    use super::{NotebookChoice, kind_of_path, kinds_on, short_of, tilde_of};
+    use super::{NotebookChoice, kind_of_path, kinds_on, lists_file, short_of, tilde_of};
     use crate::hosts::HostId;
     use wire::backend::Backend;
+
+    #[test]
+    fn a_picker_lists_only_notebooks_its_session_can_open() {
+        let windows_here = kinds_on(&HostId::ThisMac, true);
+        assert!(lists_file("fit.jl", windows_here) && lists_file("fit.py", windows_here));
+        assert!(!lists_file("counts.R", windows_here) && !lists_file("counts.r", windows_here));
+        assert!(lists_file("counts.R", kinds_on(&HostId::Server("lab".into()), true)));
+        let julia = [Backend::Pluto];
+        assert!(lists_file("decay.jl", &julia) && !lists_file("fit.py", &julia) && !lists_file("counts.R", &julia));
+        assert!(lists_file("fit.py", &[Backend::Marimo]) && !lists_file("decay.jl", &[Backend::Marimo]));
+        assert!(lists_file("counts.R", &[Backend::Ember]));
+    }
 
     #[test]
     fn python_is_offered_everywhere_and_r_not_yet_on_windows() {
