@@ -5,14 +5,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.11" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["runtime_shaders", "font-kit"] }
+gpui = { package = "gpui-pre", version = "=0.3.14" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", features = ["runtime_shaders", "font-kit"] }
 gpui-wry = { path = "vendor/gpui-wry" }
 wry = { package = "lb-wry", version = "0.53.3" }
 url = "2.5"
 raw-window-handle = "0.6"
-gpui-component = "=0.9.0"
-gpui-base = "=0.9.0"
+gpui-component = "=0.11.0"
+gpui-base = "=0.11.0"
 agent-client-protocol = { version = "=2.2.0", features = ["unstable_session_fork", "unstable_session_notices"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -41,7 +41,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Console", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["x11"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", features = ["x11"] }
 gtk = "0.18"
 gdkx11 = "0.18"
 x11 = { version = "2.21", features = ["xlib"] }
