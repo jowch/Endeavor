@@ -1,9 +1,3 @@
-//! GTK's events, run from GPUI's main loop. The app can't add GLib's file
-//! descriptors to GPUI's own event loop, so it hosts GLib's main context the
-//! way GLib lets another loop do it: the main thread prepares, checks and
-//! dispatches, and a helper thread only waits in poll() on GLib's descriptors,
-//! so an idle app doesn't wake up.
-
 use std::future::Future;
 use std::os::fd::RawFd;
 use std::pin::Pin;
@@ -15,16 +9,10 @@ use futures::channel::oneshot;
 use gpui::App;
 use gtk::glib::ffi::{self, GPollFD};
 
-/// The longest a wait lasts, for work poll() can't see (see `wake`).
 const MAX_WAIT_MS: i32 = 250;
 
-/// An eventfd the helper's poll() also waits on.
 static WAKE: OnceLock<RawFd> = OnceLock::new();
 
-/// Stop the wait. GLib wakes its own poll when another thread adds work, but
-/// not when the main thread does, which is where GPUI's calls into GTK run
-/// (moving the web view, loading a page), and X events Xlib has already read
-/// don't make its descriptor readable. So the app calls this after each frame.
 pub fn wake() {
     if let Some(&fd) = WAKE.get() {
         let one: u64 = 1;
@@ -54,7 +42,6 @@ fn poll_forever(wake: RawFd, waits: mpsc::Receiver<Wait>) {
     }
 }
 
-/// Lets the rest of GPUI's main loop run between GLib iterations.
 struct YieldNow(bool);
 
 impl Future for YieldNow {
@@ -68,8 +55,6 @@ impl Future for YieldNow {
     }
 }
 
-/// Run GLib's default main context from now on. `gtk::init` has made the main
-/// thread its owner.
 pub fn start(cx: &mut App) {
     let wake = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
     if wake < 0 || WAKE.set(wake).is_err() {

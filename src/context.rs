@@ -1,8 +1,3 @@
-//! The composer's context ring and its popover: how much of the model's
-//! context the conversation uses, in words by level, and from 80% a way to
-//! summarize now. Hovering the ring (after `HOVER_DELAY`) or reaching it with
-//! Tab opens the popover; a click or Space pins it; Esc closes it.
-
 use std::time::{Duration, UNIX_EPOCH};
 
 use gpui::prelude::FluentBuilder as _;
@@ -18,15 +13,11 @@ pub const HOVER_DELAY: Duration = Duration::from_millis(400);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Level {
-    /// Under 50%.
     Plenty,
-    /// 50% to under 80%.
     Half,
-    /// 80% and over: the ring turns orange and the popover offers /compact.
     Full,
 }
 
-/// Percent used, rounded down.
 pub fn percent(used: u64, size: u64) -> u64 {
     if size == 0 { 0 } else { used.saturating_mul(100) / size }
 }
@@ -39,7 +30,6 @@ pub fn level(used: u64, size: u64) -> Level {
     }
 }
 
-/// Tokens in a few characters: 950, 68k, 1.2M (rounded down).
 pub fn tokens(n: u64) -> String {
     if n >= 1_000_000 {
         let tenths = n / 100_000;
@@ -51,8 +41,6 @@ pub fn tokens(n: u64) -> String {
     }
 }
 
-/// The popover's sentence. `summarized`: the last /compact's clock time and
-/// how full it was before, which replaces the under-50% sentence.
 pub fn sentence(usage: Option<(u64, u64)>, summarized: Option<(&str, Option<u64>)>, agent: Agent) -> String {
     let name = agent.name();
     let Some((used, size)) = usage else {
@@ -67,7 +55,6 @@ pub fn sentence(usage: Option<(u64, u64)>, summarized: Option<(&str, Option<u64>
     }
 }
 
-/// The popover's first line: "34% of context used". VoiceOver reads it as the ring's name.
 pub fn title(usage: Option<(u64, u64)>) -> String {
     match usage {
         Some((used, size)) => format!("{}% of context used", percent(used, size)),
@@ -75,17 +62,14 @@ pub fn title(usage: Option<(u64, u64)>) -> String {
     }
 }
 
-/// Whether the popover is open: hovered long enough, or pinned with a click.
 #[derive(Default)]
 pub struct RingPopover {
     pub hovered: bool,
-    /// Hovered for `HOVER_DELAY`.
     pub shown: bool,
     pub pinned: bool,
 }
 
 impl Workspace {
-    /// Esc: close a pinned or open context popover. False when none was open.
     pub fn close_context_popover(&mut self, cx: &mut Context<Self>) -> bool {
         let p = &mut self.composer.context;
         if !(p.pinned || p.shown) {
@@ -115,14 +99,12 @@ impl Workspace {
         .detach();
     }
 
-    /// "Summarize now…": "/compact " in the box with its hint, for the user to add what to keep.
     fn summarize_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.composer.context = RingPopover::default();
         self.set_composer_text("/compact ".into(), window, cx);
         cx.notify();
     }
 
-    /// The ring at the end of the composer's toolbar, greyed until Claude reports usage.
     pub fn render_context_ring(&self, session: Option<&Session>, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let usage = session.and_then(|s| s.usage).filter(|(_, size)| *size > 0);
         let focus = self.composer.focus_context.clone();

@@ -40,13 +40,24 @@ impl NotebookChoice {
 }
 
 pub fn new_kinds(host: &HostId) -> &'static [Backend] {
-    if cfg!(windows) && *host == HostId::ThisMac { &[Backend::Pluto] } else { &Backend::ALL }
+    match host {
+        HostId::ThisMac if cfg!(windows) => &[Backend::Pluto],
+        host if shows_python(host) => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
+        _ => &Backend::ALL,
+    }
+}
+
+pub const SHOWS_PYTHON: bool = cfg!(not(windows));
+
+pub fn shows_python(host: &HostId) -> bool {
+    SHOWS_PYTHON && *host == HostId::ThisMac
 }
 
 pub fn kind_of_path(path: &str) -> Backend {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     match name.rsplit_once('.') {
         Some((_, "R" | "r")) => Backend::Ember,
+        Some((_, "py")) => Backend::Marimo,
         _ => Backend::Pluto,
     }
 }
@@ -1895,6 +1906,7 @@ mod tests {
         assert_eq!(NotebookChoice::Existing("/home/jc/fits/decay.jl".into()).kind(), Backend::Pluto);
         assert_eq!(NotebookChoice::Existing("/home/jc/fits/counts.R".into()).kind(), Backend::Ember);
         assert_eq!(kind_of_path(r"C:\Users\jc\counts.r"), Backend::Ember);
+        assert_eq!(kind_of_path("/home/jc/fits/fit.py"), Backend::Marimo);
         assert_eq!(kind_of_path("/home/jc/my.R/decay.jl"), Backend::Pluto);
         assert_eq!(kind_of_path("/home/jc/R"), Backend::Pluto);
     }

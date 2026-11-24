@@ -1,8 +1,3 @@
-//! A session on its way to open: what it waits for, the wait line above the
-//! composer, and, for a past session whose history hasn't loaded and that has
-//! no copy of its transcript in Endeavor (`transcript_copy`), the summary the
-//! chat shows in place of its transcript.
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::*;
@@ -16,39 +11,25 @@ use crate::session::Session;
 use crate::theme;
 use crate::theme::TabStop as _;
 
-/// What a session waits for before it can open.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Waiting {
-    /// Its server dropped and Endeavor keeps trying to reach it.
     Unreachable(String),
-    /// Connecting to its server.
     Connecting(String),
-    /// Julia is starting: on This Mac, or on the named server.
     Julia(Option<String>),
-    /// The agent's process is restarting or stopped (its own line says so); `julia`: Julia is still starting too
-    /// (`here`: this computer's runtime, which starts without Julia).
     Agent { name: &'static str, julia: bool, here: bool },
-    /// The agent is installing or connecting.
     Starting(&'static str),
-    /// The user isn't signed in to the agent (its sign-in card says so).
     SignIn(&'static str),
-    /// The agent is loading the history.
     Conversation,
-    /// The agent is loading the history, and Endeavor's copy of it shows meanwhile.
     Copy,
 }
 
-/// The wait line shows the time so far after this long.
 const SHOW_TIME_AFTER: Duration = Duration::from_secs(5);
 
 impl Waiting {
-    /// The line above the composer, with the time so far once it's been a few
-    /// seconds; None where another line says it (the agent's own).
     pub fn line(&self, waited: Option<Duration>) -> Option<String> {
         let text = match self {
             Waiting::Unreachable(server) => return Some(format!("Can't reach {server}. Endeavor keeps trying.")),
             Waiting::Connecting(server) => format!("Connecting to {server}…"),
-            // This computer's runtime; Julia itself starts when a Julia notebook needs it.
             Waiting::Julia(None) => "Starting the notebook runtime…".to_owned(),
             Waiting::Julia(Some(server)) => format!("Starting Julia on {server}…"),
             Waiting::Agent { .. } | Waiting::SignIn(_) => return None,
@@ -62,7 +43,6 @@ impl Waiting {
         })
     }
 
-    /// The summary's one muted line on why there's no conversation to read yet.
     pub fn note(&self) -> String {
         match self {
             Waiting::Unreachable(server) => format!("The conversation is kept on {server}, so it shows once Endeavor can reach it."),
@@ -76,7 +56,6 @@ impl Waiting {
         }
     }
 
-    /// The composer's placeholder: a message waits and goes once the session is open.
     pub fn placeholder(&self) -> String {
         match self {
             Waiting::Unreachable(server) => format!("Write a message. It sends once {server} is back."),
@@ -85,7 +64,6 @@ impl Waiting {
     }
 }
 
-/// The summary's second line: "Last active yesterday at 16:40 · fit_decay.jl · lab-server".
 pub fn last_active(updated: Option<SystemTime>, notebook: Option<&str>, server: Option<&str>) -> Option<String> {
     let when = updated.map(|at| format!("Last active {}", crate::when::day_at(at)));
     let parts: Vec<String> = when.into_iter().chain(notebook.map(str::to_owned)).chain(server.map(str::to_owned)).collect();
@@ -93,10 +71,6 @@ pub fn last_active(updated: Option<SystemTime>, notebook: Option<&str>, server: 
 }
 
 impl Workspace {
-    /// What `session` waits for: its server, while Endeavor can't reach it;
-    /// otherwise what it waits for before it opens, while it's on its way.
-    /// None once it's open, when it failed, or when something else holds it
-    /// up that has its own place (offline, Julia stopped or failed).
     pub fn session_wait(&self, session: &Session) -> Option<Waiting> {
         if session.failed.is_some() || self.offline_since.is_some() {
             return None;
@@ -135,13 +109,10 @@ impl Workspace {
         }
     }
 
-    /// The wait line's words for `session`, if it shows one.
     pub fn runtime_wait(&self, session: &Session) -> Option<String> {
         self.session_wait(session)?.line(session.opening_since.map(|t| t.elapsed()))
     }
 
-    /// Above the composer while a session is on its way: muted, with a spinner,
-    /// or, for a server out of reach, its own mark and a quiet Try now.
     pub fn render_runtime_wait(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
         let waiting = self.session_wait(session)?;
         let text = waiting.line(session.opening_since.map(|t| t.elapsed()))?;
@@ -181,7 +152,6 @@ impl Workspace {
         Some(failure::wait_line(Lead::Spinner(ElementId::NamedInteger("runtime-wait".into(), session.key)), text, None, cx).into_any_element())
     }
 
-    /// The summary's lines under the title, while `session`'s history hasn't loaded.
     pub fn opening_summary(&self, session: &Session) -> Option<(Option<String>, String)> {
         if !session.opening() || session.showing_copy() {
             return None;
@@ -192,10 +162,6 @@ impl Workspace {
         Some((last_active(updated, notebook.as_deref(), session.server.as_deref()), note))
     }
 
-    /// The chat of a past session whose history hasn't loaded: its title, when
-    /// it was last active and its notebook, and one line on what it waits for.
-    /// Laid over the whole chat column, so its centre lines up with the
-    /// notebook pane's starting block.
     pub fn render_opening_summary(&self, session: &Session) -> Option<AnyElement> {
         let (meta, note) = self.opening_summary(session)?;
         Some(
@@ -219,7 +185,6 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: that brings in gpui's own `#[test]`.
     use super::{Waiting, last_active};
     use std::time::{Duration, SystemTime};
 

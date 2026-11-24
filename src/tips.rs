@@ -1,7 +1,3 @@
-//! One-time tips: "Two ways to add your file" over the new-session composer,
-//! and Point's tip under the notebook header's Point button. Each goes for good
-//! after Got it or the first use of what it explains (the settings remember).
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
@@ -16,7 +12,6 @@ fn point_tip_text(agent: &str) -> String {
     format!("Point lets you click a cell, or drag over part of a plot, and ask {agent} about just that.")
 }
 
-/// The tip's card: a popover, with a pointer.
 fn card() -> Div {
     div()
         .relative()
@@ -30,8 +25,6 @@ fn card() -> Div {
         .text_color(theme::text_row_active())
 }
 
-/// The card's pointer, a small triangle on its edge, outlined like the card.
-/// `down`: it hangs under the card, else it sits on top.
 fn arrow(down: bool) -> impl IntoElement {
     canvas(
         |_, _, _| (),
@@ -59,7 +52,6 @@ fn arrow(down: bool) -> impl IntoElement {
     .h(px(ARROW))
 }
 
-/// A key or button named in a tip's text: "@", "+".
 fn key(text: &'static str) -> Div {
     div()
         .min_w(px(16.))
@@ -98,7 +90,6 @@ fn got_it(id: &'static str) -> Stateful<Div> {
 }
 
 impl Workspace {
-    /// The file tip is done: Got it, or the user added a file.
     pub fn file_tip_done(&mut self) {
         self.file_tip = false;
         if !self.settings.file_tip_seen {
@@ -107,7 +98,6 @@ impl Workspace {
         }
     }
 
-    /// Point's tip is done: Got it, or Point was used.
     pub fn point_tip_done(&mut self) {
         if !self.settings.point_tip_seen {
             self.settings.point_tip_seen = true;
@@ -119,9 +109,6 @@ impl Workspace {
         self.file_tip && !self.settings.file_tip_seen
     }
 
-    /// "Two ways to add your file", laid over the chips above the composer
-    /// with its pointer at the box. The caller's element is `relative`, with
-    /// the chips at its top and 16px side padding.
     pub fn render_file_tip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.file_tip_shows() {
             return None;
@@ -162,17 +149,10 @@ impl Workspace {
         )
     }
 
-    /// Whether Point's tip shows, given that the notebook is on screen. Not
-    /// while a menu or the find bar is open: either would cover it.
     pub fn point_tip_shows(&self, notebook_shown: bool) -> bool {
         notebook_shown && !self.settings.point_tip_seen && self.menu.is_none() && self.find.is_none()
     }
 
-    /// Point's tip, hanging from the notebook header's Point button over the
-    /// notebook. The web view is a native view on top, so it gets a hole where
-    /// the tip is; the workspace closes it once the tip stops showing.
-    /// `trailing`: how far the header's buttons after Point reach past it, so
-    /// the tip lines up with the pane's edge as its pointer stays on Point.
     pub fn render_point_tip(&self, trailing: f32, agent: crate::agent::Agent, cx: &mut Context<Self>) -> AnyElement {
         const WIDTH: f32 = 400.;
         let webview = self.webview.read(cx);
