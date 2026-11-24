@@ -167,6 +167,13 @@ pub fn move_notebook(bridge: &Bridge, notebook_id: &str, path: &str) -> Result<S
     result["path"].as_str().map(str::to_owned).ok_or_else(|| "no path in reply".into())
 }
 
+pub fn export_notebook(bridge: &Bridge, notebook_id: &str, format: &str) -> Result<String, String> {
+    let result = app_call_waiting(bridge, "endeavor/export_notebook", json!({ "notebook_id": notebook_id, "format": format }), EXPORT_WAIT)?;
+    result["text"].as_str().map(str::to_owned).ok_or_else(|| "no text in reply".into())
+}
+
+const EXPORT_WAIT: Duration = Duration::from_secs(150);
+
 pub fn file_info(bridge: &Bridge, path: &str) -> Result<Option<f64>, String> {
     let result = app_call(bridge, "endeavor/file_info", json!({ "path": path }))?;
     Ok(if result["exists"] == true { Some(result["modified"].as_f64().unwrap_or(0.)) } else { None })
