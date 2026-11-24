@@ -300,9 +300,9 @@ pub fn render(
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(setup.step.failed(setup.agent_name()))
-                    .child(div().text_size(theme::size_meta()).text_color(muted).child(error.clone()))
-                    .child(div().text_size(theme::size_meta()).text_color(muted).child("Check your connection and retry, or see the logs.")),
+                    .child(theme::words("setup-failed", setup.step.failed(setup.agent_name())))
+                    .child(div().text_size(theme::size_meta()).text_color(muted).child(theme::words("setup-error", error.clone())))
+                    .child(div().text_size(theme::size_meta()).text_color(muted).child(theme::words("check-your-connection-and-retry", "Check your connection and retry, or see the logs."))),
             )
             .child(
                 div()

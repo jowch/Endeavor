@@ -5,6 +5,7 @@ use gpui::*;
 
 use crate::{Workspace, theme};
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 pub const WEBSITE: &str = "https://github.com/jowch/Endeavor";
 pub const HELP: &str = "https://github.com/jowch/Endeavor#readme";
@@ -223,6 +224,7 @@ impl About {
             let b = div()
                 .id(("notice", i))
                 .role(Role::Button)
+                .tab_stop_on(theme::bg_page())
                 .flex_shrink_0()
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| this.act(action, cx)));
@@ -248,7 +250,7 @@ impl About {
 }
 
 fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
-    div().id(id).role(Role::Link).cursor_pointer().text_color(theme::accent_text()).hover(|s| s.underline()).button_text(label)
+    div().id(id).role(Role::Link).tab_stop_on(theme::bg_page()).cursor_pointer().text_color(theme::accent_text()).hover(|s| s.underline()).button_text(label)
 }
 
 impl Render for About {

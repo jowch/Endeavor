@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
-use gpui::{App, BoxShadow, InteractiveElement, ParentElement, Pixels, Rgba, SharedString, StatefulInteractiveElement, Styled, point, px, rgb, rgba};
+use gpui::{App, BoxShadow, ElementId, InteractiveElement, MouseButton, ParentElement, Pixels, Rgba, SharedString, StatefulInteractiveElement, Styled, point, px, rgb, rgba};
 
 static LIGHT: AtomicBool = AtomicBool::new(false);
 
@@ -121,6 +121,35 @@ pub trait FocusRing: InteractiveElement + Sized {
 }
 
 impl<E: InteractiveElement> FocusRing for E {}
+
+pub fn words(id: impl Into<ElementId>, text: impl Into<SharedString>) -> gpui::Text {
+    gpui::Text::new(id.into(), text.into())
+}
+
+pub trait TabStop: StatefulInteractiveElement + FocusRing {
+    fn tab_stop_on(self, surface: Rgba) -> Self {
+        self.keyboard_stop().focus_ring_on(surface)
+    }
+
+    fn tab_stop_inside(self) -> Self {
+        let ring = BoxShadow { color: focus_ring().into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(2.), inset: true };
+        self.keyboard_stop().focus_visible(move |s| s.shadow(vec![ring]))
+    }
+
+    fn keyboard_stop(self) -> Self {
+        self.focusable().tab_stop(true).keeps_keyboard_on_click()
+    }
+}
+
+impl<E: StatefulInteractiveElement> TabStop for E {}
+
+pub trait KeepsKeyboard: InteractiveElement + Sized {
+    fn keeps_keyboard_on_click(self) -> Self {
+        self.on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+    }
+}
+
+impl<E: InteractiveElement> KeepsKeyboard for E {}
 
 pub trait TextButton: StatefulInteractiveElement + ParentElement + Sized {
     fn button_text(self, text: impl Into<SharedString>) -> Self {
