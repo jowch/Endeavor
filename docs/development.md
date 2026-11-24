@@ -61,8 +61,9 @@ Working in a Claude Code cloud session (no display, Linux) is in
 
 ## Other parts of the repo
 
-- App icon and logo: `python3 assets/icon/build.py` regenerates them from the
-  artwork in that script.
+- App icon, logo and the Mac disk image's background: scripts in `assets/`
+  draw them ([artwork.md](artwork.md)).
+- Fonts: `fonts/build.py` builds Endeavor Sans ([fonts/README.md](../fonts/README.md)).
 - Page script (the code injected into the notebook page): `frontend/`,
   TypeScript. After changing it, run `cd frontend && npm install && npm test`.
   That builds `dist/page.js`, which is committed so `cargo build` needs no

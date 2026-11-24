@@ -294,6 +294,34 @@ own, as on a user's first run. It runs on pull requests that change
 weekly, and by hand. The
 script runs on Linux and macOS too.
 
+`scripts/julia-smoke.py ENDEAVOR [--helper] [--server HOST]` runs it. It
+starts `ENDEAVOR [--helper] mcp` (`--helper` for the app's exe) and fails,
+with what the runtime said, if a step doesn't do what it should. Each step
+may take up to 20 minutes, since a first run starts Julia and installs Pluto
+into the depot. Along the way it behaves as an agent and its user would:
+
+- With `--server`, it tells the server it can show a form (MCP
+  elicitation), so the server asks about installs instead of refusing them,
+  and it answers yes to each.
+- When the answer says Julia is starting, R is installing or the notebook is
+  still opening, it makes the same call again, with a short pause in case
+  one answers at once.
+- It reads the new notebook's one empty cell before editing it, since an
+  edit needs a read first.
+- It reads the cell again until it is neither running nor queued, since the
+  first run precompiles before the cell runs.
+
+With `--server HOST` (an ssh alias), the notebook runs on that server, as
+after the app's "Add server". `windows-server.yml` runs it that way.
+
+- `add_machine` installs Endeavor's program there from the Helpers release.
+  Where the front didn't ask in a dialog itself, the script answers its
+  `needs_install` with `install`, as the app's Install button does.
+- `use_machine` may install Julia there too. Its `starting` is fine, since
+  the notebook tools wait for it.
+- The notebook's path is relative to the session's folder on the server.
+- At the end, it stops Endeavor on the server.
+
 ## What should carry over
 
 - **GPUI** has a Windows backend: `gpui-pre-platform` 0.3.6 depends on
