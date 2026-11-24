@@ -1987,6 +1987,7 @@ impl Workspace {
         let url = kind.notebook_url(&runtime.page_url, id, &path);
         #[cfg(debug_assertions)]
         let url = if notebook_pane::test_stuck_opening().is_some_and(|keep| keep) { "about:blank".to_owned() } else { url };
+        self.drawer_ask.page_loading();
         self.webview.update(cx, |w, _| w.load_url(&url));
     }
 
@@ -1999,7 +2000,7 @@ impl Workspace {
                 self.push_cells(cx);
                 self.apply_look(cx);
                 self.sync_page_context(cx);
-                if let Some(tab) = self.drawer_ask.still_wanted(Instant::now()) {
+                if let Some(tab) = self.drawer_ask.page_ready() {
                     self.open_drawer(Some(&tab), cx);
                 }
             }
