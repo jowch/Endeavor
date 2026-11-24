@@ -125,6 +125,7 @@ use settings::Settings;
 use splash::{Progress, Setup};
 use wire::backend::Backend;
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
 use crate::theme::TabStop as _;
 
 /// Notebook id from a notebook page's URL. Only the id is used: the URL may
@@ -334,6 +335,7 @@ fn sidebar_toggle(this: &Workspace, cx: &mut Context<Workspace>) -> impl IntoEle
         .border_color(gpui::transparent_black())
         .track_focus(&this.dialog_focus("sidebar-toggle", cx))
         .tab_stop(true)
+        .keeps_keyboard_on_click()
         .focus_ring_on(if this.settings.layout.sidebar_open { theme::bg_sidebar() } else { theme::bg_page() })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(&ToggleSidebar, window, cx)))
