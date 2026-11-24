@@ -2,7 +2,7 @@ import { on, send } from "./bridge";
 import { changedCells } from "./runguard";
 import { statusModel, type NotebookLike, type StatusModel } from "./status";
 
-export type Drawer = "docs" | "status" | null;
+export type Drawer = "docs" | "packages" | null;
 
 export interface Context {
   host: string;
@@ -44,6 +44,7 @@ export function report(): void {
     notebook: notebookId(),
     safe: last.process_status === "waiting_for_permission",
     busy: model.busy,
+    installing: model.install !== null,
     restart: model.restart,
     save_failed: model.saveFailed,
     package_failed: model.failure?.name ?? null,

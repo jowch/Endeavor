@@ -109,8 +109,8 @@ The header above the notebook shows:
 - where the notebook runs: **Local** for your Mac, or the server's name;
 - labels such as **Safe preview**, **Not saved** or **Package failed** when
   something needs your attention;
-- **Status**, which shows what Julia is doing, such as installing packages,
-  and the log behind it;
+- **Packages**, which lists the packages the notebook uses and their
+  versions, shows progress while they install, and keeps the installer's log;
 - **Live docs**, which shows help for the function under the cursor (in a
   Python notebook, it's marimo's own documentation panel);
 - the **⋮** menu, which includes **Copy path**, **Reveal in Finder**,
@@ -121,7 +121,8 @@ The header above the notebook shows:
 The **Share and export** button exports the notebook as a **Notebook file…**, **Static
 HTML…** or **PDF…**. On Julia notebooks it also has Pluto's **Present**,
 **Record…** and **Frontmatter…**. On a Python notebook, **Static HTML…** is
-marimo's own export, and it needs the notebook out of safe preview.
+marimo's own export. A Python notebook in safe preview shows a preview of its
+file instead of the notebook, so Share and export appears once you run it.
 
 To search the notebook's text, press ⌘F.
 

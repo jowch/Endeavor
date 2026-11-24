@@ -1507,7 +1507,7 @@ pub(crate) enum Glyph {
     ArrowUp,
     Share,
     Book,
-    Pulse,
+    Package,
     Shield,
     Restart,
     Play,
@@ -1671,7 +1671,11 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&[(6., 3.), (4.5, 2.), (1., 2.), (1., 9.5), (4.5, 9.5), (6., 10.5)]);
                     polyline(&[(6., 3.), (7.5, 2.), (11., 2.), (11., 9.5), (7.5, 9.5), (6., 10.5)]);
                 }
-                Glyph::Pulse => polyline(&[(0.5, 6.5), (3., 6.5), (4.5, 2.5), (7., 9.5), (8.5, 6.5), (11.5, 6.5)]),
+                Glyph::Package => {
+                    polyline(&[(6., 1.), (10.5, 3.3), (10.5, 8.7), (6., 11.), (1.5, 8.7), (1.5, 3.3), (6., 1.)]);
+                    polyline(&[(1.5, 3.3), (6., 5.6), (10.5, 3.3)]);
+                    polyline(&[(6., 5.6), (6., 11.)]);
+                }
                 Glyph::Shield => polyline(&[(6., 1.), (10.5, 2.8), (10.5, 6.), (9.5, 8.6), (6., 11.), (2.5, 8.6), (1.5, 6.), (1.5, 2.8), (6., 1.)]),
                 Glyph::Restart => {
                     let arc: Vec<(f32, f32)> = (0..=20)

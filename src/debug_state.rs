@@ -568,7 +568,7 @@ impl Workspace {
                 "file": file,
                 "host": info.host,
                 "tags": info.tags.iter().map(|t| t.label()).collect::<Vec<_>>(),
-                "busy": info.busy,
+                "busy": info.busy.as_ref().map(|b| &b.text),
                 "job_ends": self.job_end(&s.place.host).map(|(at, soon)| json!({ "at": crate::when::clock(at), "soon": soon })),
             })
         });
