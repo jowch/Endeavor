@@ -1,12 +1,3 @@
-//! Keys in the notebook's web view. WebKit handles arrow keys (and other function
-//! keys) as key equivalents, but two things keep them from it: GPUI's root view
-//! answers every key equivalent itself without asking its subviews, and wry makes
-//! a child web view refuse them all (so menu shortcuts fire). Refused, arrow keys
-//! fall through to text input and type private-use glyphs, breaking CodeMirror's
-//! cursor keys. So: while the keyboard is in the web view, GPUI's view first
-//! offers the key to it; the web view gives the app's menu first pick (⌘C, ⌘Q,
-//! ⌘B, …) and hands the rest to WebKit's own handling.
-
 use std::sync::OnceLock;
 
 use objc2::ffi::class_replaceMethod;
@@ -15,10 +6,8 @@ use objc2::{msg_send, sel};
 
 type KeyEquivalent = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool;
 
-/// GPUI's own handler, called for keys the web view doesn't take.
 static GPUI_HANDLER: OnceLock<KeyEquivalent> = OnceLock::new();
 
-/// Is the window's keyboard focus in a web view? Returns that view.
 unsafe fn focused_web_view(view: *mut AnyObject) -> Option<*mut AnyObject> {
     unsafe {
         let webkit = AnyClass::get(c"WKWebView")?;
@@ -67,14 +56,12 @@ unsafe extern "C-unwind" fn web_view_key_equivalent(this: *mut AnyObject, cmd: S
                 return Bool::YES;
             }
         }
-        // WKWebView's own implementation (what wry's override skips).
         let Some(method) = AnyClass::get(c"WKWebView").and_then(|c| c.instance_method(cmd)) else { return Bool::NO };
         let webkit: KeyEquivalent = std::mem::transmute(method.implementation());
         webkit(this, cmd, event)
     }
 }
 
-/// Call once the web view exists (wry registers its class then). Idempotent.
 pub fn fix_key_handling() {
     let (Some(gpui), Some(wry)) = (AnyClass::get(c"GPUIView"), AnyClass::get(c"WryWebView")) else { return };
     if GPUI_HANDLER.get().is_some() {
@@ -91,7 +78,6 @@ pub fn fix_key_handling() {
     }
 }
 
-/// Trackpad pinch zooms the notebook (WebKit's magnification, separate from ⌘=).
 pub fn allow_pinch_zoom(webview: &wry::WebView) {
     use wry::WebViewExtMacOS;
     let view = webview.webview();
@@ -100,12 +86,6 @@ pub fn allow_pinch_zoom(webview: &wry::WebView) {
     }
 }
 
-/// The page's right-click menu on macOS loses the items that would open a new
-/// window for an image, video or frame. The app opens no second window, and
-/// those URLs (a figure's `data:` or `blob:`) have no browser to go to, so the
-/// items did nothing (#151). "Open Link in New Window" stays: the new-window
-/// handler sends a web link to the browser. Linux does the same in
-/// `linux::no_new_windows`.
 pub fn no_new_windows() {
     type WillOpenMenu = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject);
     const DEAD: [&str; 3] = [
@@ -115,7 +95,6 @@ pub fn no_new_windows() {
     ];
     unsafe extern "C-unwind" fn will_open_menu(this: *mut AnyObject, cmd: Sel, menu: *mut AnyObject, event: *mut AnyObject) {
         unsafe {
-            // WKWebView's own first: it finishes the menu there.
             if let Some(method) = AnyClass::get(c"WKWebView").and_then(|c| c.instance_method(cmd)) {
                 let webkit: WillOpenMenu = std::mem::transmute(method.implementation());
                 webkit(this, cmd, menu, event);
@@ -123,7 +102,6 @@ pub fn no_new_windows() {
             if menu.is_null() {
                 return;
             }
-            // A copy, so removing as we go is safe.
             let items: *mut AnyObject = msg_send![menu, itemArray];
             let count: usize = msg_send![items, count];
             for i in 0..count {
@@ -138,7 +116,6 @@ pub fn no_new_windows() {
     let Some(wry) = AnyClass::get(c"WryWebView") else { return };
     unsafe {
         let ours: Imp = std::mem::transmute(will_open_menu as WillOpenMenu);
-        // wry's class has none of its own, so this adds one; again, it does nothing.
         objc2::ffi::class_addMethod(wry as *const AnyClass as *mut AnyClass, sel!(willOpenMenu:withEvent:), ours, c"v@:@@".as_ptr());
     }
 }

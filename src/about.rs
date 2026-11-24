@@ -1,8 +1,3 @@
-//! Endeavor ▸ About Endeavor: a small window with the icon, version and build,
-//! credits, Website, Send Feedback and Licences links, and, when there is an update to act
-//! on, a strip of update notices at the bottom. Licences opens a second window
-//! listing the parts Endeavor ships or installs and their licences.
-
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -13,25 +8,17 @@ use crate::theme::TextButton as _;
 
 pub const WEBSITE: &str = "https://github.com/jowch/Endeavor";
 pub const HELP: &str = "https://github.com/jowch/Endeavor#readme";
-/// The feedback issue form on GitHub (.github/ISSUE_TEMPLATE/feedback.yml): public,
-/// and needs an account.
 const GITHUB_FEEDBACK: &str = "https://github.com/jowch/Endeavor/issues/new?template=feedback.yml";
-/// The site's feedback page (site/src/pages/feedback.astro): a form that needs no
-/// account, or GitHub. The form's link lives on the site, so it changes without a release.
 const FEEDBACK_PAGE: &str = "https://jowch.github.io/Endeavor/feedback/";
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD: &str = env!("ENDEAVOR_BUILD");
 const ICON: &[u8] = include_bytes!("../assets/icon/endeavor-256.png");
 
-/// The feedback page, with what both feedback forms record about this copy
-/// (site/feedback-fields.md): the build, the platform and the agent new sessions
-/// start with. Nothing else goes in the link.
 pub fn feedback_url(agent: crate::agent::Agent) -> String {
     format!("{FEEDBACK_PAGE}?{}", feedback_fields(agent))
 }
 
-/// The feedback issue form on GitHub, with the same fields filled in.
 pub fn github_feedback_url(agent: crate::agent::Agent) -> String {
     format!("{GITHUB_FEEDBACK}&{}", feedback_fields(agent))
 }
@@ -40,50 +27,35 @@ fn feedback_fields(agent: crate::agent::Agent) -> String {
     format!("source=app&build={VERSION}-{BUILD}&os={}&agent={}", std::env::consts::OS, agent.name().to_lowercase())
 }
 
-/// What the app knows about updates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Updates {
     pub app: AppUpdate,
     pub adapter: Adapter,
 }
 
-/// Endeavor's own update (src/updater.rs). Builds are named by their short
-/// hash, as About shows them: nightlies share a version number.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppUpdate {
-    /// This copy doesn't check: a build from source, Windows, Linux.
     Off,
-    /// It checks, but hasn't yet.
     Unchecked,
-    /// Checking; with a percentage once a newer build is downloading.
     Checking(Option<u8>),
     UpToDate,
-    /// Downloaded and checked; it installs when Endeavor restarts.
     Ready(String),
-    /// Ready, but an agent is working: Restart waits until it's done.
     ReadyAfterTurn(String),
-    /// Newer, but Endeavor can't replace itself where it is.
     Manual { build: String, protected: bool },
     Failed(String),
 }
 
 impl AppUpdate {
-    /// Something for the user to do about it.
     pub fn actionable(&self) -> bool {
         matches!(self, AppUpdate::Ready(_) | AppUpdate::ReadyAfterTurn(_) | AppUpdate::Manual { .. })
     }
 }
 
-/// The Claude Code adapter the app pins: a new app version can pin a new one,
-/// which the app installs when it starts the agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Adapter {
     Current,
-    /// Being installed now (or about to be, once Julia is up).
     Installing(String),
-    /// Not installed, and Claude isn't in use: it installs when Claude first starts.
     Later,
-    /// Not installed because starting the agent failed; Update tries again.
     Available(String),
 }
 
@@ -92,20 +64,15 @@ pub enum Action {
     Restart,
     UpdateAdapter,
     CheckNow,
-    /// Open the nightly's page, to download a build by hand.
     Download,
 }
 
-/// One row of the update strip: its text, and its button (primary or not).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notice {
     pub text: String,
     pub button: Option<(&'static str, Action, bool)>,
 }
 
-/// The strip's rows, top to bottom; none when there's nothing to act on. The
-/// app update comes first and gets the orange button because it needs a
-/// restart; the adapter's button is then secondary.
 pub fn notices(updates: &Updates) -> Vec<Notice> {
     let mut rows = Vec::new();
     match &updates.app {
@@ -126,19 +93,15 @@ pub fn notices(updates: &Updates) -> Vec<Notice> {
     rows
 }
 
-/// One part that updates, as Settings' About lists it: Endeavor, then the adapter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateRow {
     pub key: &'static str,
     pub name: &'static str,
     pub state: String,
-    /// Its button: label, action, and whether it's the primary one.
     pub button: Option<(&'static str, Action, bool)>,
-    /// Something to do (orange words).
     pub attention: bool,
 }
 
-/// "Works with Claude, Codex and Antigravity.": the assistants this computer can use.
 pub fn works_with() -> String {
     let names: Vec<&str> = crate::agent::Agent::ALL.into_iter().filter(|a| a.available()).map(|a| a.name()).collect();
     works_with_these(&names)
@@ -152,7 +115,6 @@ fn works_with_these(names: &[&str]) -> String {
     }
 }
 
-/// The same updates as `notices`, one row per part.
 pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
     let check = Some(("Check now", Action::CheckNow, false));
     let (state, button, attention) = match &updates.app {
@@ -186,7 +148,6 @@ pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
     [app, UpdateRow { key: "update-adapter", name: "Claude Code adapter", state, button, attention }]
 }
 
-/// The About and Licences windows, so each opens once and comes forward after.
 #[derive(Default)]
 struct Windows {
     about: Option<AnyWindowHandle>,
@@ -195,10 +156,8 @@ struct Windows {
 
 impl Global for Windows {}
 
-/// Bring `handle` forward if it's still open.
 fn raise(handle: Option<AnyWindowHandle>, cx: &mut App) -> bool {
     let Some(h) = handle.filter(|h| cx.windows().iter().any(|w| w.window_id() == h.window_id())) else { return false };
-    // Chosen from this window's own menu, the window is busy until the action returns.
     cx.defer(move |cx| drop(h.update(cx, |_, window, _| window.activate_window())));
     true
 }
@@ -365,8 +324,6 @@ impl Render for About {
     }
 }
 
-/// A part Endeavor ships or installs, and its licence: the full text when the
-/// repo has it, else a link to it.
 struct Part {
     name: &'static str,
     note: &'static str,
@@ -436,7 +393,6 @@ const PARTS: &[Part] = &[
 ];
 
 struct Licences {
-    /// The part whose full licence text is showing.
     shown: Option<usize>,
 }
 
@@ -521,7 +477,6 @@ mod tests {
         let keys = |url: &str| -> Vec<String> { url.split_once('?').unwrap().1.split('&').map(|kv| kv.split_once('=').unwrap().0.to_string()).collect() };
         assert_eq!(keys(&url), ["source", "build", "os", "agent"]);
         assert!(!url.contains(' '), "{url}");
-        // The GitHub form's field ids are the same (.github/ISSUE_TEMPLATE/feedback.yml).
         let github = super::github_feedback_url(crate::agent::Agent::Claude);
         assert_eq!(keys(&github), ["template", "source", "build", "os", "agent"]);
         let form = include_str!("../.github/ISSUE_TEMPLATE/feedback.yml");
@@ -548,7 +503,6 @@ mod tests {
         assert_eq!((both[0].button, both[1].button), (Some(("Restart", Action::Restart, true)), Some(("Update", Action::UpdateAdapter, false))));
     }
 
-    /// With nothing to act on the strip is empty, checking or not.
     #[test]
     fn nothing_to_act_on_shows_no_notice() {
         for app in [AppUpdate::Off, AppUpdate::Unchecked, AppUpdate::Checking(Some(40)), AppUpdate::UpToDate, AppUpdate::Failed("offline".into())] {

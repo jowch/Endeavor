@@ -1,19 +1,6 @@
-//! Saving an image from the notebook page: "Save Image As" in its menu on
-//! Linux, "Download Image" on macOS. WebKit starts a download for either, and
-//! the web view handled neither: on macOS nothing happened, and on Linux
-//! WebKitGTK wrote the file, unasked, into the app's working folder under a
-//! name made from the image's data. Now a Save dialog asks where it goes.
-//!
-//! Windows isn't here: WebView2 shows its own Save dialog.
-
-/// A download the page started, waiting for the Save dialog's answer.
 pub struct Ask {
-    /// What the download fetches: for a figure, a `data:` or `blob:` URL.
     url: String,
-    /// The file name WebKit suggested.
     suggested: String,
-    /// macOS: WebKit's completion handler, which must be called once, even
-    /// when the ask is dropped unanswered (WebKit raises otherwise).
     #[cfg(target_os = "macos")]
     done: Option<block2::RcBlock<dyn Fn(*mut objc2::runtime::AnyObject)>>,
 }
@@ -28,16 +15,11 @@ impl Drop for Ask {
 }
 
 impl Ask {
-    /// The name the Save dialog offers.
     pub fn file_name(&self) -> String {
         file_name(&self.url, &self.suggested)
     }
 }
 
-/// WebKit's suggestion, unless it isn't a name: empty, "Unknown", or made
-/// from the URL itself, as WebKitGTK does for a `data:` or `blob:` figure (the
-/// end of its data). Those are "figure" with the image's extension. A link
-/// that names its file (PlutoUI's DownloadButton) keeps that name.
 fn file_name(url: &str, suggested: &str) -> String {
     let suggested = suggested.trim();
     let stem = suggested.rsplit_once('.').map_or(suggested, |(stem, _)| stem);
@@ -63,10 +45,6 @@ fn file_name(url: &str, suggested: &str) -> String {
     format!("figure.{}", ext.to_ascii_lowercase())
 }
 
-/// The user said "Replace" in the Save dialog, but WebKit won't write over a
-/// file: it fails the download.
-/// ponytail: the old file goes before the download has succeeded, so a failed
-/// save loses it. Writing to a temporary name and renaming would keep it.
 fn make_room(path: &std::path::Path) {
     if path.is_file()
         && let Err(e) = std::fs::remove_file(path)
@@ -85,16 +63,10 @@ mod imp {
 
     use super::Ask;
 
-    /// The download started again once the Save dialog answered, where it
-    /// goes, and when it was started.
     static CHOSEN: Mutex<Option<(String, PathBuf, Instant)>> = Mutex::new(None);
 
-    /// A restarted download begins at once. One that didn't (a `blob:` the page
-    /// has let go of) mustn't send a later download of that URL there unasked.
     const RESTART: Duration = Duration::from_secs(10);
 
-    /// wry's download handler. It must say at once where a download goes, so a
-    /// new download is cancelled and asked about; `save` starts it again.
     pub fn started(asks: UnboundedSender<Ask>) -> impl FnMut(String, &mut PathBuf) -> bool + 'static {
         move |url, path| {
             let mut chosen = CHOSEN.lock().unwrap_or_else(|e| e.into_inner());
@@ -143,8 +115,6 @@ mod imp {
         static ASKS: RefCell<Option<UnboundedSender<Ask>>> = const { RefCell::new(None) };
     }
 
-    /// The menu's "Download Image" made a download. With no delegate it goes
-    /// nowhere; the navigation delegate takes it.
     unsafe extern "C-unwind" fn menu_did_create_download(this: *mut AnyObject, _: Sel, _: *mut AnyObject, download: *mut AnyObject) {
         unsafe {
             let _: () = msg_send![download, setDelegate: this];
@@ -165,7 +135,6 @@ mod imp {
             let url: *mut AnyObject = if request.is_null() { std::ptr::null_mut() } else { msg_send![request, URL] };
             let url = if url.is_null() { String::new() } else { string_of(msg_send![url, absoluteString]) };
             let ask = Ask { url, suggested: string_of(suggested), done: Some(done) };
-            // Unsent, the ask is dropped here, which cancels the download.
             ASKS.with(|a| {
                 if let Some(tx) = a.borrow().as_ref() {
                     let _ = tx.unbounded_send(ask);
@@ -179,7 +148,6 @@ mod imp {
             if error.is_null() {
                 return;
             }
-            // NSURLErrorCancelled: the user pressed Cancel.
             let code: isize = msg_send![error, code];
             if code == -999 {
                 return;
@@ -188,8 +156,6 @@ mod imp {
         }
     }
 
-    /// Let the page's image downloads ask where to go. The methods go on wry's
-    /// navigation delegate's class, as in `webcontent::on_process_ended`.
     pub fn attach(webview: &wry::WebView, asks: UnboundedSender<Ask>) {
         use wry::WebViewExtMacOS;
         ASKS.with(|a| *a.borrow_mut() = Some(asks));
@@ -202,7 +168,6 @@ mod imp {
             }
             let class = object_getClass(delegate) as *mut AnyClass;
             let methods: [(Sel, Imp, &std::ffi::CStr); 3] = [
-                // WebKit's private navigation delegate method (macOS 11.3+) for the menu's downloads.
                 (sel!(_webView:contextMenuDidCreateDownload:), std::mem::transmute::<MenuDownload, Imp>(menu_did_create_download), c"v@:@@"),
                 (
                     sel!(download:decideDestinationUsingResponse:suggestedFilename:completionHandler:),
@@ -216,13 +181,11 @@ mod imp {
                     eprintln!("wry's navigation delegate already has {}; saving images may not work", sel.name().to_string_lossy());
                 }
             }
-            // WebKit reads which methods a delegate has when it's set.
             let _: () = msg_send![&*view, setNavigationDelegate: delegate];
         }
     }
 
     pub fn save(_: &wry::WebView, mut ask: Ask, to: Option<PathBuf>) {
-        // Dropping an unanswered ask cancels the download.
         let Some(to) = to else { return };
         let Some(done) = ask.done.take() else { return };
         super::make_room(&to);
@@ -235,11 +198,8 @@ mod imp {
 
 pub use imp::*;
 
-/// The folder the last image was saved in, where the next Save dialog opens.
-/// Only for this run of the app.
 static LAST_FOLDER: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
 
-/// Where the Save dialog opens: the last folder used, else Downloads, else home.
 fn start_folder() -> std::path::PathBuf {
     let last = LAST_FOLDER.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let home = wire::files::home();
@@ -247,7 +207,6 @@ fn start_folder() -> std::path::PathBuf {
 }
 
 impl crate::Workspace {
-    /// Ask where the image `ask` goes, then save it there (or drop it).
     pub(crate) fn save_image(&mut self, ask: Ask, cx: &mut gpui::Context<Self>) {
         let picked = cx.prompt_for_new_path(&start_folder(), Some(&ask.file_name()));
         let webview = self.webview.clone();
@@ -279,7 +238,6 @@ mod tests {
     fn named_images_keep_their_name() {
         assert_eq!(file_name("http://127.0.0.1:1234/plot.png", "plot.png"), "plot.png");
         assert_eq!(file_name("http://127.0.0.1:1234/plot", ""), "figure.png");
-        // PlutoUI's DownloadButton: a data: or blob: link with download="…".
         assert_eq!(file_name("data:text/csv;base64,YSxiCjEsMg==", "results.csv"), "results.csv");
         assert_eq!(file_name("blob:http://127.0.0.1:1234/8c1e", "plot.png"), "plot.png");
     }

@@ -1,18 +1,5 @@
-//! "Claude is waiting for you": a notification when a prompt arrives while
-//! Endeavor is in the background. Clicking it brings Endeavor forward, and the
-//! workspace then opens the session it named (`take_clicked`).
-//!
-//! - macOS: the notification center. It only serves an app bundle with an
-//!   identifier, so a bare development binary sends nothing, and macOS refuses
-//!   one run from a temporary folder.
-//! - Linux: the desktop's notification server over D-Bus
-//!   (`org.freedesktop.Notifications`). Its click comes back as a signal, and
-//!   the workspace raises its window (`clicks`).
-//! - Windows: the taskbar button flashes until Endeavor is in front.
-
 use std::sync::Mutex;
 
-/// The session whose notification was clicked, until the workspace takes it.
 static CLICKED: Mutex<Option<u64>> = Mutex::new(None);
 
 #[cfg(target_os = "macos")]
@@ -81,10 +68,7 @@ mod mac {
         }
         let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(mtm), init] };
         center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-        // The center holds its delegate weakly; this one lives as long as the app.
         std::mem::forget(delegate);
-        // A request added while macOS is still asking for permission is dropped,
-        // so the first one goes once the answer is in.
         let asked = RcBlock::new(move |granted: Bool, _: *mut NSError| {
             if granted.as_bool() {
                 UNUserNotificationCenter::currentNotificationCenter().addNotificationRequest_withCompletionHandler(&request, None);
@@ -108,20 +92,16 @@ mod linux {
 
     thread_local! {
         static BUS: OnceCell<Option<DBusConnection>> = const { OnceCell::new() };
-        /// The server's id for the last notification, and the session it named.
         static SHOWN: Cell<Option<(u32, u64)>> = const { Cell::new(None) };
         static CLICKS: RefCell<Option<UnboundedSender<()>>> = const { RefCell::new(None) };
     }
 
-    /// A click on a notification, for the workspace to raise its window.
-    /// Call once, on the main thread.
     pub fn clicks() -> UnboundedReceiver<()> {
         let (tx, rx) = unbounded();
         CLICKS.with(|c| *c.borrow_mut() = Some(tx));
         rx
     }
 
-    /// The session bus, with the click signal subscribed. None without one.
     fn bus() -> Option<DBusConnection> {
         BUS.with(|bus| {
             bus.get_or_init(|| {
@@ -147,14 +127,12 @@ mod linux {
         })
     }
 
-    /// The body may be read as markup, so its text is escaped.
     fn escape(text: &str) -> String {
         text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
     }
 
     pub fn send(title: &str, body: &str, key: u64) {
         let Some(bus) = bus() else { return };
-        // The "default" action is a click on the notification itself.
         let actions = vec!["default".to_string(), "Open".to_string()];
         let hints: HashMap<String, Variant> = HashMap::new();
         let replaces = SHOWN.get().map_or(0, |(id, _)| id);
@@ -181,7 +159,6 @@ mod windows {
 
     static WINDOW: AtomicUsize = AtomicUsize::new(0);
 
-    /// The window whose taskbar button flashes.
     pub fn set_window(window: &gpui::Window) {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
@@ -190,9 +167,6 @@ mod windows {
         }
     }
 
-    // ponytail: a taskbar flash, not a toast. A toast needs the app's
-    // AppUserModelID on its Start menu shortcut, and coming back by the
-    // taskbar button doesn't open the session that asked.
     pub fn flash() {
         let hwnd = WINDOW.load(Ordering::Relaxed);
         if hwnd == 0 {
@@ -206,7 +180,6 @@ mod windows {
 #[cfg(windows)]
 pub use windows::set_window;
 
-/// Post "<agent> is waiting for you" with the question and the session's title.
 pub fn waiting(agent: &str, question: &str, session: &str, key: u64) {
     let body = format!("{} · {session}", question.replace('`', ""));
     #[cfg(target_os = "macos")]
@@ -220,8 +193,6 @@ pub fn waiting(agent: &str, question: &str, session: &str, key: u64) {
     }
 }
 
-/// Runs against a stand-in notification server on a private bus:
-/// `dbus-run-session -- cargo test --locked --bin endeavor notify -- --ignored`.
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::sync::Arc;
@@ -275,7 +246,6 @@ mod tests {
         assert_eq!(*body.lock().unwrap(), "Run x &lt;now&gt; &amp; then? · My session");
 
         let click = |id: u32| server.emit_signal(None, "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "ActionInvoked", Some(&(id, "default").to_variant())).unwrap();
-        // A click on another app's notification is ignored.
         click(8);
         spin(&ctx);
         assert_eq!(super::take_clicked(), None);
