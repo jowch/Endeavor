@@ -148,4 +148,10 @@ test("the rail's states: running, not run yet, failed and ran, with Ember's own 
   cell(C).classList.add("stale");
   await redraw();
   assert.deepEqual(states(), ["ran", "pending", "pending"]);
+  window.__endeavor.receive(cellsMsg([{ cell_id: A, unrun: true, author: "agent" }, { cell_id: B }, { cell_id: C }]));
+  await redraw();
+  assert.equal(states()[0], "claude", "Claude's edit, not run");
+  cell(A).classList.add("running");
+  await redraw();
+  assert.equal(states()[0], "running", "Claude's cell pulses while it runs, like any other");
 });

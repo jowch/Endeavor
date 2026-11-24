@@ -30,16 +30,17 @@ const css = `
 `;
 
 export function runState(cell: Element): RunState {
-  if (cell.hasAttribute("data-endeavor-bar")) return "claude";
   const has = (name: string) => cell.classList.contains(name);
   if (onMarimo()) {
     const status = cell.querySelector("[data-testid=cell-status][data-status], [data-status]")?.getAttribute("data-status");
     if (status === "running") return "running";
-    if (status === "queued" || has("needs-run") || has("stale")) return "pending";
-    if (has("has-error") || has("stopped")) return "failed";
+    if (cell.hasAttribute("data-endeavor-bar")) return "claude";
+    if (status === "queued" || has("needs-run") || has("stale") || has("stopped")) return "pending";
+    if (has("has-error")) return "failed";
     return "ran";
   }
   if (has("running")) return "running";
+  if (cell.hasAttribute("data-endeavor-bar")) return "claude";
   const rail = cell.getAttribute("data-rail");
   if (has("queued") || has("code_differs") || has("not_run_yet") || has("stale") || rail === "due" || cell.getAttribute("data-endeavor") === "unrun") return "pending";
   if (has("errored")) return "failed";
@@ -171,9 +172,11 @@ function wire() {
     if (dragging && Math.abs(y(e) - downY) > 4) scrollToFraction(y(e), false);
     showTip(markAt(y(e)));
   });
-  rail.addEventListener("pointerup", () => {
-    dragging = false;
-  });
+  for (const end of ["pointerup", "pointercancel", "lostpointercapture"]) {
+    rail.addEventListener(end, () => {
+      dragging = false;
+    });
+  }
   rail.addEventListener("pointerleave", () => {
     if (!dragging) showTip(null);
   });
