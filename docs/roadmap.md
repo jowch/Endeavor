@@ -39,8 +39,8 @@ it is announced is tracked in [#156](https://github.com/jowch/Endeavor/issues/15
   Slurm clusters the user installs uv. Left: Endeavor's other page tools on
   marimo's page.
 - **R notebooks on Windows.** R notebooks (Ember) run in the app on Macs and
-  Linux, and on servers and clusters. On Windows the chip offers only Julia
-  and lists no `.R` files, until Ember runs there (Ember #48, #49).
+  Linux, and on servers and clusters. On Windows the chip offers Julia and
+  Python, not R, and lists no `.R` files, until Ember runs there (Ember #48, #49).
 - **Checking the agent loop.** The smoke suite in EndeavorMCP
   ([smoke.md](https://github.com/jowch/EndeavorMCP/blob/main/docs/smoke.md))
   runs fixed notebook tasks through Claude Code, and runs before a skill or

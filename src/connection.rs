@@ -2019,6 +2019,10 @@ impl Workspace {
                         let words = format!("Python notebooks need uv. Endeavor can download its own, just for Endeavor. It changes nothing else on {name}.");
                         resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Install uv", Some(Backend::Marimo)))
                     }
+                    RFailedShows::NoUv => {
+                        let words = format!("Python notebooks need uv. Install it on {name} (docs.astral.sh/uv), then try again.");
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Try again", None))
+                    }
                     RFailedShows::PythonFailed(why) => {
                         let heading = if *why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("Python notebooks couldn't start on {name}.") };
                         resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", None))
@@ -2114,6 +2118,7 @@ fn is_python_failure(error: &str) -> bool {
 #[derive(Debug, PartialEq)]
 pub enum RFailedShows<'a> {
     InstallUv,
+    NoUv,
     PythonFailed(&'a str),
     InstallR(wire::Item),
     RFailed(&'a str),
@@ -2123,6 +2128,7 @@ impl RFailedShows<'_> {
     pub fn button(&self) -> &'static str {
         match self {
             RFailedShows::InstallUv => "uv-install",
+            RFailedShows::NoUv => "python-retry",
             RFailedShows::PythonFailed(_) => "python-retry",
             RFailedShows::InstallR(_) => "r-install",
             RFailedShows::RFailed(_) => "r-retry",
@@ -2132,8 +2138,8 @@ impl RFailedShows<'_> {
 
 pub fn r_failed_shows<'a>(host: &HostId, error: &'a str, own_uv_there: bool, own_r: Option<wire::Item>) -> RFailedShows<'a> {
     let here = *host == HostId::ThisMac;
-    if own_uv_there && error.starts_with("python_not_found::") {
-        return RFailedShows::InstallUv;
+    if error.starts_with("python_not_found::") {
+        return if own_uv_there { RFailedShows::InstallUv } else { RFailedShows::NoUv };
     }
     if let Some(why) = pluto::python_failed(error) {
         return RFailedShows::PythonFailed(why);
@@ -2538,16 +2544,18 @@ mod tests {
     fn a_missing_uv_offers_endeavors_own_only_where_there_is_one() {
         use super::{RFailedShows, r_failed_shows};
         use crate::hosts::HostId;
-        let no_uv = "python_not_found::Python notebooks need uv, which isn't installed on this computer. Install uv (https://docs.astral.sh/uv/getting-started/installation/).";
+        let offer = "python_not_found::Python notebooks need uv, which isn't installed here, and Endeavor may download its own only if the user agrees: uv 0.11.32 (about 26 MB, into /home/u/.cache/endeavor/uv-0.11.32). Ask the user; only if they agree, call `use_machine` with `machine` \"local\" and `install: true`, then make this call again. The user can also install uv themselves: https://docs.astral.sh/uv/getting-started/installation/.";
+        let offer_in_app = "python_not_found::Python notebooks need uv, which isn't installed on this computer. Endeavor can download its own uv if the user agrees: uv 0.11.32 (about 26 MB). Tell the user to start a new Python session in Endeavor and click Install uv in its notebook pane, or to install uv themselves (https://docs.astral.sh/uv/getting-started/installation/). Once it's installed, open the notebook again.";
+        let no_uv = "python_not_found::Python notebooks need uv, which isn't installed. Install it (https://docs.astral.sh/uv/getting-started/installation/), then try again.";
         let here = HostId::ThisMac;
         let lab = HostId::Server("lab".into());
-        assert_eq!(r_failed_shows(&here, no_uv, true, None), RFailedShows::InstallUv);
-        assert_eq!(r_failed_shows(&lab, no_uv, true, None).button(), "uv-install");
-        let without_own_uv = r_failed_shows(&here, no_uv, false, None);
-        assert_eq!(without_own_uv.button(), "python-retry");
-        let RFailedShows::PythonFailed(words) = without_own_uv else { panic!("{without_own_uv:?}") };
-        assert!(words.starts_with("Python notebooks need uv") && words.contains("docs.astral.sh/uv"));
-        assert!(matches!(r_failed_shows(&lab, no_uv, false, None), RFailedShows::PythonFailed(_)));
+        for said in [offer, offer_in_app, no_uv] {
+            assert_eq!(r_failed_shows(&here, said, true, None), RFailedShows::InstallUv);
+            assert_eq!(r_failed_shows(&lab, said, true, None).button(), "uv-install");
+            assert_eq!(r_failed_shows(&here, said, false, None), RFailedShows::NoUv, "Windows: {said}");
+            assert_eq!(r_failed_shows(&lab, said, false, None), RFailedShows::NoUv, "a Slurm job: {said}");
+        }
+        assert_eq!(RFailedShows::NoUv.button(), "python-retry");
         assert_eq!(r_failed_shows(&here, "python_failed::Couldn't download uv: offline", true, None), RFailedShows::PythonFailed("Couldn't download uv: offline"));
     }
 
