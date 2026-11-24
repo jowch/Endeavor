@@ -165,12 +165,13 @@
     return "waiting";
   }
   var ansi = /\x1b\[[0-9;]*m/g;
+  var plain = (log) => (log ?? "").replace(ansi, "");
   function parsePkgLog(log) {
     const precompiled = [];
     const failed = [];
     const added = [];
     let inManifest = false;
-    for (const raw of log.replace(ansi, "").split("\n")) {
+    for (const raw of plain(log).split("\n")) {
       const line = raw.trimEnd();
       const mark = line.match(/^\s*(?:[\d.]+\s*ms)?\s*([✓✗])\s+([\w.]+)/);
       if (mark) (mark[1] === "\u2713" ? precompiled : failed).push(mark[2]);
@@ -199,14 +200,6 @@
     }
     return names2;
   }
-  function prettyTime(ns) {
-    if (ns < 1e3) return `${Math.round(ns)} ns`;
-    if (ns < 1e6) return `${Math.round(ns / 1e3)} \xB5s`;
-    if (ns < 1e9) return `${Math.round(ns / 1e6)} ms`;
-    const s = ns / 1e9;
-    if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
-    return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
-  }
   function definedNames(map) {
     return Object.keys(map ?? {}).filter((n) => !n.startsWith("__ExprExpl_anon__"));
   }
@@ -217,79 +210,126 @@
     if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
     return cellName(nb.cell_inputs[id]?.code ?? "");
   }
+  var failedCells = (nb) => nb.cell_order.filter((id) => nb.cell_results[id]?.errored).map((id) => cellName2(nb, id));
+  function restartOf(nb) {
+    return nb.nbpkg?.restart_required_msg ? "required" : nb.nbpkg?.restart_recommended_msg ? "recommended" : null;
+  }
+  function headlineOf(nb, language, failure, busy, restart) {
+    if (nb.process_status === "waiting_for_permission") return "Safe preview \xB7 nothing has run";
+    if (failure) return `Package failed \xB7 ${failure.name}`;
+    if (busy && !busy.startsWith("Running")) return busy;
+    if (restart === "required") return "Restart needed";
+    if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") return `${language} stopped`;
+    return "Ready";
+  }
   function statusModel(nb) {
+    return nb.ember?.packages ? emberModel(nb, nb.ember.packages) : plutoModel(nb);
+  }
+  function plutoModel(nb) {
     const tree = nb.status_tree?.subtasks ?? {};
     const pkgTask = tree.pkg;
     const pkgPhase = phaseOf(pkgTask);
-    const runTask = tree.run;
-    const workspace = phaseOf(tree.workspace);
-    const running = nb.process_status === "ready" || nb.process_status === "starting";
-    const steps = [
-      { name: "Start Julia", phase: tree.workspace ? workspace : running ? "done" : "waiting" },
-      { name: "Packages", phase: pkgTask ? pkgPhase : running ? "done" : "waiting" },
-      { name: "Run cells", phase: phaseOf(runTask) }
-    ];
     const nbpkg = nb.nbpkg ?? {};
     const installed2 = nbpkg.installed_versions ?? {};
-    const busy = new Set(nbpkg.busy_packages ?? []);
-    const log = parsePkgLog(nbpkg.terminal_outputs?.nbpkg_sync ?? "");
+    const busySet = new Set(nbpkg.busy_packages ?? []);
+    const fullLog = plain(nbpkg.terminal_outputs?.nbpkg_sync);
+    const log = parsePkgLog(fullLog);
     const precompiled = new Set(log.precompiled);
     const failedSet = new Set(log.failed);
     const precompiling = phaseOf(pkgTask?.subtasks?.precompile) === "busy";
-    const codes = nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? "");
-    const direct = importedPackages(codes);
-    for (const name of [...Object.keys(installed2), ...busy].sort()) {
+    const direct = importedPackages(nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? ""));
+    for (const name of [...Object.keys(installed2), ...busySet].sort()) {
       if (!name.startsWith("__internal") && name !== "nbpkg_sync" && !direct.includes(name)) direct.push(name);
     }
     const packages = direct.map((name) => {
-      const version = installed2[name];
-      const detail = version === "stdlib" ? "standard library" : version ?? "";
+      const version2 = installed2[name];
+      const detail = version2 === "stdlib" ? "standard library" : version2 ?? "";
       let state2;
-      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busy.has(name))) state2 = "failed";
-      else if (busy.has(name) && pkgPhase === "busy") state2 = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
-      else if (version != null) state2 = "ready";
+      if (pkgPhase === "failed" && (failedSet.has(name) || failedSet.size === 0 && busySet.has(name))) state2 = "failed";
+      else if (busySet.has(name) && pkgPhase === "busy") state2 = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
+      else if (version2 != null) state2 = "ready";
       else if (pkgPhase === "done") state2 = Object.keys(installed2).length ? "failed" : "ready";
       else state2 = "waiting";
-      const notFound = state2 === "failed" && version == null && pkgPhase === "done";
+      const notFound = state2 === "failed" && version2 == null && pkgPhase === "done";
       return { name, state: state2, detail: state2 === "ready" ? detail : notFound ? "not found" : "" };
     });
-    const deps = log.added.filter((n) => !direct.includes(n));
-    const depsRow = deps.length ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length } : null;
-    const cells = nb.cell_order.map((id) => {
-      const r = nb.cell_results[id] ?? {};
-      const state2 = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
-      const time = (state2 === "done" || state2 === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
-      return { id, name: cellName2(nb, id), state: state2, time };
-    });
+    const added = log.added.filter((n) => !direct.includes(n));
+    const deps = added.length ? { count: added.length, done: added.filter((n) => precompiled.has(n)).length, failed: added.filter((n) => failedSet.has(n)).length } : null;
     const failedPkg = packages.find((p) => p.state === "failed");
-    const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
-    if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
+    const failure = failedPkg ? {
+      name: failedPkg.name,
+      why: failedPkg.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled.",
+      cells: failedCells(nb),
+      log: plain(nbpkg.terminal_outputs?.[failedPkg.name]) || fullLog
+    } : null;
     const readyPkgs = packages.filter((p) => p.state === "ready").length;
-    const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
+    const install = pkgPhase === "busy" ? { done: readyPkgs, total: packages.length } : null;
+    const evaluate = tree.run?.subtasks?.evaluate?.subtasks ?? {};
     const runTotal = Object.keys(evaluate).length;
     const runDone = Object.values(evaluate).filter((e) => e.finished_at != null).length;
-    let busyText = null;
-    if (steps[0].phase === "busy") busyText = "Starting Julia";
-    else if (pkgPhase === "busy") busyText = packages.length ? `Installing packages \xB7 ${readyPkgs} of ${packages.length}` : "Installing packages";
-    else if (steps[2].phase === "busy") busyText = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
-    const restart = nbpkg.restart_required_msg ? "required" : nbpkg.restart_recommended_msg ? "recommended" : null;
-    let headline;
-    if (nb.process_status === "waiting_for_permission") headline = "Safe preview \xB7 nothing has run";
-    else if (failure) headline = `Package failed \xB7 ${failure.name}`;
-    else if (busyText?.startsWith("Running")) headline = `Running cells \xB7 ${runDone} of ${runTotal}`;
-    else if (busyText) headline = busyText;
-    else if (restart === "required") headline = "Restart needed";
-    else if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") headline = "Julia stopped";
-    else headline = "Ready";
+    let busy = null;
+    if (phaseOf(tree.workspace) === "busy") busy = "Starting Julia";
+    else if (install) busy = packages.length ? `Installing packages \xB7 ${readyPkgs} of ${packages.length}` : "Installing packages";
+    else if (phaseOf(tree.run) === "busy") busy = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
+    const restart = restartOf(nb);
+    const version = String(nb.julia_version ?? "").replace(/^v/, "");
     return {
-      headline,
-      steps,
+      headline: headlineOf(nb, "Julia", failure, busy, restart),
+      runtime: version ? `Julia ${version}` : null,
       packages,
-      deps: depsRow,
-      cells,
+      deps,
+      install,
       failure,
-      busy: busyText,
+      log: fullLog,
+      busy,
       saveFailed: tree.saving?.success === false,
+      restart
+    };
+  }
+  var emberNotFound = /* @__PURE__ */ new Set(["not_found", "lookup_failed", "source_failed"]);
+  function emberRow(row, libraryFailed) {
+    if (row.status === "installed") return { name: row.name, state: "ready", detail: row.version ?? "" };
+    if (row.status === "installing") return { name: row.name, state: "installing", detail: "" };
+    if (emberNotFound.has(row.status)) return { name: row.name, state: "failed", detail: "not found" };
+    if (row.status === "failed" || libraryFailed) return { name: row.name, state: "failed", detail: "" };
+    return { name: row.name, state: "waiting", detail: "" };
+  }
+  function emberModel(nb, pkgs) {
+    const library = pkgs.library ?? {};
+    const libraryFailed = library.status === "failed";
+    const rows = pkgs.rows ?? [];
+    const packages = rows.filter((r2) => r2.direct).map((r2) => emberRow(r2, libraryFailed && r2.status !== "installed"));
+    const indirect = rows.filter((r2) => !r2.direct).map((r2) => emberRow(r2, libraryFailed && r2.status !== "installed"));
+    const deps = indirect.length ? { count: indirect.length, done: indirect.filter((r2) => r2.state === "ready").length, failed: indirect.filter((r2) => r2.state === "failed").length } : null;
+    const log = plain(library.log);
+    const firstFailure = library.failures?.[0];
+    const failedPkg = packages.find((p) => p.state === "failed") ?? (firstFailure ? { name: firstFailure.package, detail: "" } : null);
+    const failure = failedPkg ? {
+      name: failedPkg.name,
+      why: failedPkg.detail === "not found" ? "isn't a package R can find: a typo, or not on CRAN or Bioconductor." : `couldn't be installed${firstFailure?.detail ? `: ${firstFailure.detail}` : "."}`,
+      cells: failedCells(nb),
+      log
+    } : null;
+    const progress = library.progress;
+    const install = library.status === "installing" ? { done: progress?.done ?? 0, total: progress?.total ?? Math.max(packages.length, 1) } : null;
+    const waiting3 = nb.cell_order.filter((id) => nb.cell_results[id]?.running || nb.cell_results[id]?.queued).length;
+    let busy = null;
+    if (nb.process_status === "starting") busy = "Starting R";
+    else if (install) busy = progress?.total ? `Installing packages \xB7 ${install.done} of ${install.total}` : "Installing packages";
+    else if (library.status === "asking") busy = "Download waits for your OK";
+    else if (waiting3) busy = `Running \xB7 ${waiting3} cell${waiting3 === 1 ? "" : "s"} left`;
+    const restart = restartOf(nb);
+    const r = pkgs.r_version ? `R ${pkgs.r_version}` : "R";
+    return {
+      headline: headlineOf(nb, "R", failure, busy, restart),
+      runtime: pkgs.snapshot ? `${r} \xB7 CRAN snapshot ${pkgs.snapshot}` : r,
+      packages,
+      deps,
+      install,
+      failure,
+      log,
+      busy,
+      saveFailed: false,
       restart
     };
   }
@@ -495,6 +535,7 @@
       notebook: notebookId(),
       safe: last.process_status === "waiting_for_permission",
       busy: model.busy,
+      installing: model.install !== null,
       restart: model.restart,
       save_failed: model.saveFailed,
       package_failed: model.failure?.name ?? null,
@@ -1003,8 +1044,8 @@
     style2.textContent = css5();
     const frame2 = document.createElement("div");
     frame2.id = "annotate-frame";
-    const box = document.createElement("div");
-    box.id = "annotate-box";
+    const box2 = document.createElement("div");
+    box2.id = "annotate-box";
     const tag = document.createElement("div");
     tag.id = "annotate-tag";
     const hint = document.createElement("div");
@@ -1016,7 +1057,7 @@
     const text = field.text;
     bar2.append(field.root);
     document.head.append(style2);
-    document.body.append(frame2, box, tag, hint, bar2);
+    document.body.append(frame2, box2, tag, hint, bar2);
     state = { picks, status: () => active() ? field.what.textContent ?? "" : "", comment: () => text.value };
     on("context", () => {
       const label = `Comment for ${context.agent}`;
@@ -1025,9 +1066,9 @@
       text.setAttribute("aria-label", text.placeholder);
     });
     function drawBox(b) {
-      box.classList.toggle("shown", !!b);
+      box2.classList.toggle("shown", !!b);
       if (!b) return;
-      Object.assign(box.style, { left: `${b.left}px`, top: `${b.top}px`, width: `${b.right - b.left}px`, height: `${b.bottom - b.top}px` });
+      Object.assign(box2.style, { left: `${b.left}px`, top: `${b.top}px`, width: `${b.right - b.left}px`, height: `${b.bottom - b.top}px` });
     }
     function lastRect() {
       const last2 = picks.at(-1);
@@ -1659,12 +1700,12 @@ ${text.value}` : sent.comment;
     closeAsk(false);
     hidePill();
     const about = describe(t);
-    const box = askBox({ label: `Ask ${context.agent}`, placeholder: about.placeholder, quote: about.quote, done: (add, e) => open && sendAsk(open, add, e) });
-    box.root.classList.add("popover");
-    box.root.id = "endeavor-ask";
-    box.root.dataset.kind = t.kind;
-    box.setWhat(about.icon, about.name, about.detail);
-    box.root.addEventListener(
+    const box2 = askBox({ label: `Ask ${context.agent}`, placeholder: about.placeholder, quote: about.quote, done: (add, e) => open && sendAsk(open, add, e) });
+    box2.root.classList.add("popover");
+    box2.root.id = "endeavor-ask";
+    box2.root.dataset.kind = t.kind;
+    box2.setWhat(about.icon, about.name, about.detail);
+    box2.root.addEventListener(
       "keydown",
       (e) => {
         if (e.key !== "Escape") return;
@@ -1676,7 +1717,7 @@ ${text.value}` : sent.comment;
     );
     const key = draftKey(t);
     const draft = drafts.get(key);
-    if (draft) box.text.value = draft;
+    if (draft) box2.text.value = draft;
     let marked = null;
     let line = null;
     if (t.kind === "before" || t.kind === "after") {
@@ -1689,17 +1730,17 @@ ${text.value}` : sent.comment;
       marked = cellOf(t).querySelector(inOutput ? "pluto-output" : "pluto-input");
       marked?.classList.add("endeavor-asked");
     }
-    document.body.append(box.root);
-    box.text.dispatchEvent(new Event("input"));
-    const o = { target: t, box, draft: key, marked, line, below: true };
+    document.body.append(box2.root);
+    box2.text.dispatchEvent(new Event("input"));
+    const o = { target: t, box: box2, draft: key, marked, line, below: true };
     const pick2 = pickRect(o);
-    o.below = barPlace(pick2, window.innerWidth, window.innerHeight, box.root.offsetHeight).top === pick2.bottom + GAP;
+    o.below = barPlace(pick2, window.innerWidth, window.innerHeight, box2.root.offsetHeight).top === pick2.bottom + GAP;
     place(o);
     open = o;
-    box.text.addEventListener("input", () => open === o && place(o));
+    box2.text.addEventListener("input", () => open === o && place(o));
     requestAnimationFrame(() => {
-      box.text.focus();
-      if (draft) box.text.select();
+      box2.text.focus();
+      if (draft) box2.text.select();
     });
   }
   function askState() {
@@ -1772,7 +1813,7 @@ ${text.value}` : sent.comment;
         box: point.box,
         point_status: point.status,
         comment: point.comment,
-        drawer: drawer2 === "docs" || drawer2 === "status" ? drawer2 : null,
+        drawer: drawer2 === "docs" || drawer2 === "packages" ? drawer2 : null,
         callout: !!document.querySelector("#endeavor-safe.shown"),
         reply: askState()?.kind === "selection" ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
         prompt: askState(),
@@ -1970,25 +2011,15 @@ ${text.value}` : sent.comment;
   #endeavor-drawer > header button.active { background: var(--e-bg-raised); color: var(--e-text-primary); }
   #endeavor-drawer > header .grow { flex: 1; }
   #endeavor-drawer > header .close { font-size: 15px; padding: 0 6px; }
-  #endeavor-drawer .status { flex: 1; overflow-y: auto; padding: 2px 16px 12px; }
-  #endeavor-drawer[data-tab="docs"] .status { display: none; }
-  #endeavor-drawer .headline { font-size: 14px; font-weight: 600; color: var(--e-text-primary); margin: 4px 0 8px; }
+  #endeavor-drawer .packages { flex: 1; overflow-y: auto; padding: 2px 16px 12px; }
+  #endeavor-drawer[data-tab="docs"] .packages { display: none; }
+  #endeavor-drawer .headline { font-size: 14px; font-weight: 600; color: var(--e-text-primary); margin: 4px 0 6px; }
   #endeavor-drawer .headline.failed { color: var(--e-diff-del); }
-  #endeavor-drawer .steps { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  #endeavor-drawer .steps .step { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--e-text-muted); }
-  #endeavor-drawer .steps .step.busy { color: var(--e-text-primary); }
-  #endeavor-drawer .steps .step.failed { color: var(--e-diff-del); }
-  #endeavor-drawer .steps .step.waiting { color: var(--e-text-waiting); }
-  #endeavor-drawer .steps .line { flex: 1; height: 1px; background: var(--e-border); min-width: 12px; }
-  #endeavor-drawer .host { color: var(--e-text-dim); font-size: 11.5px; margin-bottom: 10px; }
-  #endeavor-drawer .group { margin-top: 6px; }
-  #endeavor-drawer .group > summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer;
-    color: var(--e-text-secondary); padding: 3px 0; }
-  #endeavor-drawer .group > summary::-webkit-details-marker { display: none; }
-  #endeavor-drawer .group > summary::before { content: "\u203A"; width: 10px; color: var(--e-text-dim); transition: transform 0.1s; }
-  #endeavor-drawer .group[open] > summary::before { transform: rotate(90deg); }
-  #endeavor-drawer .group > summary .right { margin-left: auto; color: var(--e-text-dim); font-size: 11.5px; }
-  #endeavor-drawer .row { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 16px; min-height: 22px; }
+  #endeavor-drawer .progress { height: 3px; border-radius: 2px; background: var(--e-bg-raised); margin: 0 0 8px; overflow: hidden; }
+  #endeavor-drawer .progress > i { display: block; height: 100%; background: var(--e-accent); }
+  #endeavor-drawer .host { color: var(--e-text-dim); font-size: 11.5px; margin-bottom: 4px; }
+  #endeavor-drawer .summary { color: var(--e-text-dim); font-size: 11.5px; margin-bottom: 8px; }
+  #endeavor-drawer .row { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 4px; min-height: 22px; }
   #endeavor-drawer .row .name { font: 12px JuliaMono, ui-monospace, monospace; color: var(--e-text-code); }
   #endeavor-drawer .row.waiting .name { color: var(--e-text-dim); }
   #endeavor-drawer .row .note { color: var(--e-text-waiting); font-size: 11px; }
@@ -2002,7 +2033,7 @@ ${text.value}` : sent.comment;
     border-right-color: transparent; animation: endeavor-spin 0.9s linear infinite; }
   @media (prefers-reduced-motion: reduce) { #endeavor-drawer .mark.busy::before { animation: none; } }
   @keyframes endeavor-spin { to { transform: rotate(360deg); } }
-  #endeavor-drawer .failure { margin: 8px 0 8px 16px; padding: 10px 12px; border: 1px solid var(--e-danger-edge);
+  #endeavor-drawer .failure { margin: 8px 0 8px 4px; padding: 10px 12px; border: 1px solid var(--e-danger-edge);
     border-radius: 8px; background: var(--e-danger-bg); color: var(--e-text-code); }
   #endeavor-drawer .failure code { font: 11.5px JuliaMono, ui-monospace, monospace; }
   #endeavor-drawer .failure .actions { display: flex; gap: 6px; margin-top: 8px; }
@@ -2030,14 +2061,13 @@ ${text.value}` : sent.comment;
   }
 `;
   var book = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M1 2.2h3.3c.9 0 1.7.7 1.7 1.6v6.4c0-.7-.6-1.2-1.3-1.2H1zM11 2.2H7.7c-.9 0-1.7.7-1.7 1.6v6.4c0-.7.6-1.2 1.3-1.2H11z"/></svg>`;
-  var pulse = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M.5 6.5h2.5l1.5-4 2.5 7 1.5-3h3"/></svg>`;
+  var box = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"><path d="M6 1 10.5 3.3v5.4L6 11 1.5 8.7V3.3zM1.5 3.3 6 5.6l4.5-2.3M6 5.6V11"/></svg>`;
   var drawer;
   var body;
   var tab = null;
   var auto = false;
   var autoDone = false;
   var showLog = false;
-  var folded = /* @__PURE__ */ new Map();
   var escape3 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   function height() {
     try {
@@ -2073,68 +2103,51 @@ ${text.value}` : sent.comment;
     if (next === "docs") setTimeout(() => document.querySelector("#live-docs-search")?.focus(), 50);
   }
   var markFor = (state2) => state2 === "done" || state2 === "ready" ? `<span class="mark">\u2713</span>` : state2 === "failed" ? `<span class="mark failed">\u2715</span>` : state2 === "waiting" ? `<span class="mark waiting"></span>` : `<span class="mark busy"></span>`;
-  function group(name, busy, summary, right, rows) {
-    const open3 = folded.get(name) ?? busy;
-    return `<details class="group" data-group="${name}"${open3 ? " open" : ""}><summary>${summary}<span class="right">${right}</span></summary>${rows}</details>`;
-  }
-  function statusHtml(nb, m) {
-    const steps = m.steps.map((s, i) => `${i ? `<span class="line"></span>` : ""}<span class="step ${s.phase}">${markFor(s.phase)}${s.name}</span>`).join("");
-    const version = String(nb.julia_version ?? "").replace(/^v/, "");
-    const julia = version ? `Julia ${escape3(version)} \xB7 ` : "";
-    const host2 = `<div class="host">${julia}${escape3(hostName)}</div>`;
-    const pkgBusy = m.steps[1].phase === "busy";
-    const readyCount = m.packages.filter((p) => p.state === "ready").length;
+  function packagesHtml(m) {
+    const failed = !!m.failure;
+    const headline = `<div class="headline${failed ? " failed" : ""}">${escape3(m.headline)}</div>`;
+    const progress = m.install && m.install.total ? `<div class="progress"><i style="width:${Math.round(100 * m.install.done / m.install.total)}%"></i></div>` : "";
+    const host2 = `<div class="host">${m.runtime ? `${escape3(m.runtime)} \xB7 ` : ""}${escape3(hostName)}</div>`;
+    const allReady = !m.install && !failed && m.packages.length > 0 && m.packages.every((p) => p.state === "ready") && !m.deps?.failed;
+    const counted = `${m.packages.length} package${m.packages.length === 1 ? "" : "s"}${m.deps ? ` and ${m.deps.count} dependenc${m.deps.count === 1 ? "y" : "ies"}` : ""}`;
+    const summary = allReady ? `<div class="summary">${counted}, all ready</div>` : m.packages.length ? "" : `<div class="summary">No packages</div>`;
     const stateText = { waiting: "waiting", installing: "installing", precompiling: "precompiling", ready: "", failed: "failed" };
-    const pkgRows = m.packages.map((p) => {
-      const note = p.detail === "standard library" ? `<span class="note">standard library</span>` : "";
-      const right = p.state === "ready" ? p.detail === "standard library" ? "built in" : escape3(p.detail) : stateText[p.state];
-      return `<div class="row ${p.state}">${markFor(p.state)}<span class="name">${escape3(p.name)}</span>${note}<span class="right">${right}</span></div>`;
+    const rows = m.packages.map((p) => {
+      const right = p.state === "ready" ? p.detail === "standard library" ? "built in" : escape3(p.detail) : p.detail === "not found" ? "not found" : stateText[p.state];
+      return `<div class="row ${p.state}">${markFor(p.state)}<span class="name">${escape3(p.name)}</span><span class="right">${right}</span></div>`;
     }).join("");
     let deps = "";
-    if (m.deps) {
+    if (m.deps && !allReady) {
       const d = m.deps;
-      const right = d.failed ? `${d.failed} failed` : pkgBusy ? `${d.precompiled} precompiled` : "ready";
-      deps = `<div class="row">${markFor(d.failed ? "failed" : pkgBusy ? "busy" : "done")}<span>and ${d.count} dependenc${d.count === 1 ? "y" : "ies"}</span><span class="right">${right}</span></div>`;
+      const right = d.failed ? `${d.failed} failed` : m.install ? `${d.done} done` : "ready";
+      deps = `<div class="row">${markFor(d.failed ? "failed" : m.install ? "busy" : "done")}<span>and ${d.count} dependenc${d.count === 1 ? "y" : "ies"}</span><span class="right">${right}</span></div>`;
     }
     let failure = "";
     if (m.failure) {
       const f = m.failure;
       const blocked = f.cells.length ? ` Cells that use it can't run: <code>${f.cells.map(escape3).join("</code>, <code>")}</code>.` : "";
-      failure = `<div class="failure"><code>${escape3(f.name)}</code> ${m.packages.find((p) => p.name === f.name)?.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled."}${blocked}<div class="actions"><button class="fix">\u2726 Fix with ${escape3(context.agent)}</button><button class="restart">\u21BB Restart notebook</button><button class="plain pkglog">Log for ${escape3(f.name)}</button></div></div>`;
+      failure = `<div class="failure"><code>${escape3(f.name)}</code> ${escape3(f.why)}${blocked}<div class="actions"><button class="fix">\u2726 Fix with ${escape3(context.agent)}</button><button class="restart">\u21BB Restart notebook</button><button class="plain pkglog">Log for ${escape3(f.name)}</button></div></div>`;
     }
-    const packages = m.packages.length ? group("packages", pkgBusy || !!m.failure, "Packages", m.packages.length ? `${readyCount} of ${m.packages.length} ready` : "", pkgRows + failure + deps) : failure;
-    const running = m.steps[2].phase === "busy";
-    const done = m.cells.filter((c) => c.state === "done").length;
-    const cellRows = m.cells.map((c) => {
-      const right = c.state === "running" ? "running" : c.time ? c.time : c.state === "waiting" ? "waiting" : "";
-      return `<div class="row ${c.state}">${markFor(c.state)}<span class="name">${escape3(c.name || "(empty)")}</span><span class="right${c.time ? " time" : ""}">${right}</span></div>`;
-    }).join("");
-    const cells = group("cells", running, "Cells", `${done} of ${m.cells.length} \xB7 notebook order`, cellRows);
-    const log = (nb.nbpkg?.terminal_outputs?.nbpkg_sync ?? "").replace(/\x1b\[[0-9;]*m/g, "");
-    const logBlock = showLog ? `<pre class="log">${escape3(log || "Nothing from Pkg yet.")}</pre>` : "";
+    const logBlock = showLog ? `<pre class="log">${escape3(m.log || "Nothing from the installer yet.")}</pre>` : "";
     const foot = `<div class="foot"><button class="showlog">\u2261 ${showLog ? "Hide log" : "Show log"}</button></div>${logBlock}`;
-    return `<div class="headline${m.failure ? " failed" : ""}">${escape3(m.headline)}</div><div class="steps">${steps}</div>${host2}${packages}${cells}${foot}`;
+    return headline + progress + host2 + summary + rows + failure + deps + foot;
   }
   var hostName = "This Mac";
   var lastHtml = "";
   function render() {
     const now = current();
-    if (!now || tab !== "status") return;
-    const html = statusHtml(now.nb, now.model);
+    if (!now || tab !== "packages") return;
+    const html = packagesHtml(now.model);
     if (html === lastHtml) return;
     lastHtml = html;
     body.innerHTML = html;
-    for (const d of body.querySelectorAll("details.group")) {
-      d.addEventListener("toggle", () => folded.set(d.dataset.group, d.open));
-    }
     const failure = now.model.failure;
     body.querySelector(".showlog").onclick = () => {
       showLog = !showLog;
       render();
     };
     if (failure) {
-      const pkgLog = () => now.nb.nbpkg?.terminal_outputs?.[failure.name] ?? now.nb.nbpkg?.terminal_outputs?.nbpkg_sync ?? "";
-      body.querySelector(".failure .fix").onclick = (e) => byUser(e) && send({ type: "fix_package", notebook: notebookId(), name: failure.name, log: pkgLog().replace(/\x1b\[[0-9;]*m/g, "").slice(-6e3) });
+      body.querySelector(".failure .fix").onclick = (e) => byUser(e) && send({ type: "fix_package", notebook: notebookId(), name: failure.name, log: failure.log.slice(-6e3) });
       body.querySelector(".failure .restart").onclick = (e) => byUser(e) && send({ type: "restart", notebook: notebookId() });
       body.querySelector(".failure .pkglog").onclick = () => {
         showLog = true;
@@ -2144,11 +2157,10 @@ ${text.value}` : sent.comment;
     }
   }
   function follow(_, m) {
-    const installing = m.steps[1].phase === "busy" && m.packages.some((p) => p.state === "installing" || p.state === "precompiling");
-    if (installing && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
+    if (m.install && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
       autoDone = true;
-      openDrawer("status", true);
-    } else if (auto && tab === "status" && !m.busy && !m.failure && m.steps[2].phase !== "waiting") {
+      openDrawer("packages", true);
+    } else if (auto && tab === "packages" && !m.install && !m.failure && !m.busy?.startsWith("Starting")) {
       openDrawer(null);
     }
     render();
@@ -2161,8 +2173,8 @@ ${text.value}` : sent.comment;
     drawer = document.createElement("div");
     drawer.id = "endeavor-drawer";
     drawer.dataset.endeavorUi = "";
-    drawer.innerHTML = `<div class="grip"></div><header><button data-tab="docs">${book}Live docs</button><button data-tab="status">${pulse}Status</button><span class="grow"></span><button class="close" title="Close">\xD7</button></header><section class="status"></section>`;
-    body = drawer.querySelector(".status");
+    drawer.innerHTML = `<div class="grip"></div><header><button data-tab="docs">${book}Live docs</button><button data-tab="packages">${box}Packages</button><span class="grow"></span><button class="close" title="Close">\xD7</button></header><section class="packages"></section>`;
+    body = drawer.querySelector(".packages");
     document.body.append(drawer);
     for (const b of drawer.querySelectorAll("header [data-tab]")) b.onclick = () => pick(b.dataset.tab);
     drawer.querySelector(".close").onclick = () => openDrawer(null);
@@ -2454,14 +2466,14 @@ ${text.value}` : sent.comment;
     if (!header) return;
     const names2 = Object.keys(causes);
     const key = `${names2.join()}|${body2(nb, cell.id)?.msg ?? ""}`;
-    let box = error.querySelector(":scope > .endeavor-upstream");
-    if (!box) {
-      box = el("div", "endeavor-upstream");
-      box.dataset.endeavorUi = "";
+    let box2 = error.querySelector(":scope > .endeavor-upstream");
+    if (!box2) {
+      box2 = el("div", "endeavor-upstream");
+      box2.dataset.endeavorUi = "";
     }
-    place2(header, box);
-    if (box.dataset.key === key) return;
-    box.dataset.key = key;
+    place2(header, box2);
+    if (box2.dataset.key === key) return;
+    box2.dataset.key = key;
     const why = el("div", "why");
     why.append("Fails because ");
     names2.forEach((name, i) => {
@@ -2473,7 +2485,7 @@ ${text.value}` : sent.comment;
       el("span", "dot", "\xB7"),
       link("Show \u203A", "show", () => document.getElementById(causes[names2[0]])?.scrollIntoView({ block: "center", behavior: "smooth" }))
     );
-    box.replaceChildren(el("div", "message", plainMessage(body2(nb, cell.id)?.msg ?? "")), why);
+    box2.replaceChildren(el("div", "message", plainMessage(body2(nb, cell.id)?.msg ?? "")), why);
   }
   function decorate2() {
     const nb = notebook();
@@ -2538,12 +2550,12 @@ ${text.value}` : sent.comment;
       if (edited && dismissed.has(id) && dismissed.get(id) !== state2?.version) dismissed.delete(id);
       if (!edited && !open2.has(id)) dismissed.delete(id);
       if (cell.getAttribute("data-endeavor-fold") === "closing") continue;
-      const folded2 = cell.classList.contains("code_folded");
-      if (edited && folded2 && !dismissed.has(id)) {
+      const folded = cell.classList.contains("code_folded");
+      if (edited && folded && !dismissed.has(id)) {
         const kept = open2.get(id);
         if (kept) kept.failed = false;
         else open2.set(id, { failed: false });
-      } else if (open2.has(id) && (!folded2 || dismissed.has(id))) {
+      } else if (open2.has(id) && (!folded || dismissed.has(id))) {
         open2.delete(id);
       } else if (open2.has(id) && state2 && !edited && !state2.running) {
         if (state2.errored) open2.get(id).failed = true;

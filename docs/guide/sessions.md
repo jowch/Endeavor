@@ -109,8 +109,8 @@ The header above the notebook shows:
 - where the notebook runs: **Local** for your Mac, or the server's name;
 - labels such as **Safe preview**, **Not saved** or **Package failed** when
   something needs your attention;
-- **Status**, which shows what Julia is doing, such as installing packages,
-  and the log behind it;
+- **Packages**, which lists the packages the notebook uses and their
+  versions, shows progress while they install, and keeps the installer's log;
 - **Live docs**, which shows help for the Julia function under the cursor;
 - the **⋮** menu, which includes **Copy path**, **Reveal in Finder**,
   **Rename…**, **Move to…**, the notebook look, **Keyboard shortcuts**,

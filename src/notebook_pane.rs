@@ -187,6 +187,12 @@ impl NotebookAction {
     }
 }
 
+pub fn header_busy(page: &PageState) -> Option<HeaderBusy> {
+    let text = page.busy.clone()?;
+    let packages_shown = page.drawer.as_deref() == Some("packages");
+    (!(page.installing && packages_shown)).then_some(HeaderBusy { text, opens_packages: page.installing })
+}
+
 pub const OUT_OF_STEP_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, PartialEq)]
@@ -298,7 +304,13 @@ fn stopped_text(stopped: Stopped) -> (String, Option<&'static str>) {
 pub struct HeaderInfo {
     pub host: String,
     pub tags: Vec<HeaderTag>,
-    pub busy: Option<String>,
+    pub busy: Option<HeaderBusy>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeaderBusy {
+    pub text: String,
+    pub opens_packages: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -549,7 +561,7 @@ impl Workspace {
         HeaderInfo {
             host: if reconnecting { format!("{host} · reconnecting") } else { host },
             tags,
-            busy: page.filter(|p| p.drawer.as_deref() != Some("status")).and_then(|p| p.busy.clone()),
+            busy: page.and_then(header_busy),
         }
     }
 
@@ -627,11 +639,11 @@ impl Workspace {
                 HeaderTag::PackageFailed => chip(Some(Glyph::Warning), label, theme::danger())
                     .id("package-failed")
                     .role(Role::Button)
-                    .aria_label(format!("{label}, show status"))
+                    .aria_label(format!("{label}, show packages"))
                     .cursor_pointer()
                     .tab_stop_on(theme::bg_page())
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("status"), cx)))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("packages"), cx)))
                     .into_any_element(),
                 HeaderTag::RestartNeeded | HeaderTag::RestartRecommended => chip(Some(Glyph::Restart), label, theme::accent_text())
                     .id("restart-needed")
@@ -647,23 +659,26 @@ impl Workspace {
         });
         let chips: Vec<AnyElement> = chips.collect();
 
-        let busy = header.busy.map(|text| {
+        let busy = header.busy.map(|busy| {
+            let text = busy.text;
             div()
                 .id("header-busy")
-                .role(Role::Button)
-                .aria_label(format!("{text}, show status"))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
                 .gap(px(6.))
                 .mr(px(4.))
-                .cursor_pointer()
-                .tab_stop_on(theme::bg_page())
                 .text_size(theme::size_meta())
                 .text_color(theme::text_muted())
-                .hover(|s| s.text_color(theme::text_primary()))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("status"), cx)))
+                .when(busy.opens_packages, |d| {
+                    d.role(Role::Button)
+                        .aria_label(format!("{text}, show packages"))
+                        .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
+                        .hover(|s| s.text_color(theme::text_primary()))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("packages"), cx)))
+                })
                 .child(div().size(px(6.)).rounded_full().bg(theme::accent()))
                 .child(text)
         });
@@ -691,8 +706,8 @@ impl Workspace {
                 tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
                     .into_any_element(),
-                tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
+                tip(header_button("header-packages", Glyph::Package, Some("Packages"), drawer.as_deref() == Some("packages"), compact), "Packages".into())
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("packages", cx)))
                     .into_any_element(),
             ]
         });
@@ -1562,6 +1577,18 @@ mod tests {
     use super::{OPENING_GRACE, OpeningStep, OpeningWatch};
     use wire::backend::Backend;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_busy_text_opens_packages_only_while_installing_and_hides_behind_packages_it_repeats() {
+        use super::{HeaderBusy, header_busy};
+        use crate::annotate::PageState;
+        let installing = PageState { busy: Some("Installing packages · 2 of 5".into()), installing: true, ..Default::default() };
+        assert_eq!(header_busy(&installing), Some(HeaderBusy { text: "Installing packages · 2 of 5".into(), opens_packages: true }));
+        assert_eq!(header_busy(&PageState { drawer: Some("packages".into()), ..installing.clone() }), None);
+        let running = PageState { busy: Some("Running 3 of 10".into()), drawer: Some("packages".into()), ..Default::default() };
+        assert_eq!(header_busy(&running), Some(HeaderBusy { text: "Running 3 of 10".into(), opens_packages: false }));
+        assert_eq!(header_busy(&PageState::default()), None);
+    }
 
     #[test]
     fn an_out_of_step_page_reloads_once_a_minute_then_asks_the_user() {

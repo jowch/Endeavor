@@ -2,7 +2,6 @@ import { cellName as cellLabel, commentName } from "./cellname";
 
 export type Phase = "waiting" | "busy" | "done" | "failed";
 export type PkgState = "waiting" | "installing" | "precompiling" | "ready" | "failed";
-export type CellState = "waiting" | "running" | "done" | "failed";
 
 export interface StatusEntry {
   success?: boolean | null;
@@ -11,9 +10,31 @@ export interface StatusEntry {
   subtasks: Record<string, StatusEntry>;
 }
 
+export interface EmberPackageRow {
+  name: string;
+  version?: string | null;
+  direct?: boolean;
+  status: string;
+  message?: string | null;
+}
+
+export interface EmberPackages {
+  snapshot?: string | null;
+  r_version?: string | null;
+  library?: {
+    status?: string;
+    message?: string | null;
+    progress?: { done?: number; total?: number; current?: string } | null;
+    log?: string | null;
+    failures?: Array<{ package: string; kind?: string; detail?: string | null }>;
+  };
+  rows?: EmberPackageRow[];
+}
+
 export interface NotebookLike {
   process_status: string;
   status_tree: StatusEntry | null;
+  julia_version?: string;
   nbpkg: {
     busy_packages?: string[];
     installed_versions?: Record<string, string>;
@@ -21,6 +42,7 @@ export interface NotebookLike {
     restart_required_msg?: string | null;
     restart_recommended_msg?: string | null;
   } | null;
+  ember?: { packages?: EmberPackages | null } | null;
   cell_order: string[];
   cell_inputs: Record<string, { code: string }>;
   cell_results: Record<string, { running?: boolean; queued?: boolean; errored?: boolean; runtime?: number | null }>;
@@ -33,20 +55,21 @@ export interface PkgRow {
   detail: string;
 }
 
-export interface CellRow {
-  id: string;
+export interface Failure {
   name: string;
-  state: CellState;
-  time: string | null;
+  why: string;
+  cells: string[];
+  log: string;
 }
 
 export interface StatusModel {
   headline: string;
-  steps: Array<{ name: "Start Julia" | "Packages" | "Run cells"; phase: Phase }>;
+  runtime: string | null;
   packages: PkgRow[];
-  deps: { count: number; precompiled: number; failed: number } | null;
-  cells: CellRow[];
-  failure: { name: string; cells: string[] } | null;
+  deps: { count: number; done: number; failed: number } | null;
+  install: { done: number; total: number } | null;
+  failure: Failure | null;
+  log: string;
   busy: string | null;
   saveFailed: boolean;
   restart: "required" | "recommended" | null;
@@ -61,13 +84,14 @@ export function phaseOf(entry: StatusEntry | null | undefined): Phase {
 }
 
 const ansi = /\x1b\[[0-9;]*m/g;
+const plain = (log: string | null | undefined) => (log ?? "").replace(ansi, "");
 
 export function parsePkgLog(log: string): { precompiled: string[]; failed: string[]; added: string[] } {
   const precompiled: string[] = [];
   const failed: string[] = [];
   const added: string[] = [];
   let inManifest = false;
-  for (const raw of log.replace(ansi, "").split("\n")) {
+  for (const raw of plain(log).split("\n")) {
     const line = raw.trimEnd();
     const mark = line.match(/^\s*(?:[\d.]+\s*ms)?\s*([✓✗])\s+([\w.]+)/);
     if (mark) (mark[1] === "✓" ? precompiled : failed).push(mark[2]);
@@ -119,38 +143,48 @@ function cellName(nb: NotebookLike, id: string): string {
   return cellLabel(nb.cell_inputs[id]?.code ?? "");
 }
 
+const failedCells = (nb: NotebookLike) => nb.cell_order.filter((id) => nb.cell_results[id]?.errored).map((id) => cellName(nb, id));
+
+function restartOf(nb: NotebookLike): StatusModel["restart"] {
+  return nb.nbpkg?.restart_required_msg ? "required" : nb.nbpkg?.restart_recommended_msg ? "recommended" : null;
+}
+
+function headlineOf(nb: NotebookLike, language: string, failure: Failure | null, busy: string | null, restart: StatusModel["restart"]): string {
+  if (nb.process_status === "waiting_for_permission") return "Safe preview · nothing has run";
+  if (failure) return `Package failed · ${failure.name}`;
+  if (busy && !busy.startsWith("Running")) return busy;
+  if (restart === "required") return "Restart needed";
+  if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") return `${language} stopped`;
+  return "Ready";
+}
+
 export function statusModel(nb: NotebookLike): StatusModel {
+  return nb.ember?.packages ? emberModel(nb, nb.ember.packages) : plutoModel(nb);
+}
+
+function plutoModel(nb: NotebookLike): StatusModel {
   const tree = nb.status_tree?.subtasks ?? {};
   const pkgTask = tree.pkg;
   const pkgPhase = phaseOf(pkgTask);
-  const runTask = tree.run;
-  const workspace = phaseOf(tree.workspace);
-  const running = nb.process_status === "ready" || nb.process_status === "starting";
-  const steps: StatusModel["steps"] = [
-    { name: "Start Julia", phase: tree.workspace ? workspace : running ? "done" : "waiting" },
-    { name: "Packages", phase: pkgTask ? pkgPhase : running ? "done" : "waiting" },
-    { name: "Run cells", phase: phaseOf(runTask) },
-  ];
-
   const nbpkg = nb.nbpkg ?? {};
   const installed = nbpkg.installed_versions ?? {};
-  const busy = new Set(nbpkg.busy_packages ?? []);
-  const log = parsePkgLog(nbpkg.terminal_outputs?.nbpkg_sync ?? "");
+  const busySet = new Set(nbpkg.busy_packages ?? []);
+  const fullLog = plain(nbpkg.terminal_outputs?.nbpkg_sync);
+  const log = parsePkgLog(fullLog);
   const precompiled = new Set(log.precompiled);
   const failedSet = new Set(log.failed);
   const precompiling = phaseOf(pkgTask?.subtasks?.precompile) === "busy";
 
-  const codes = nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? "");
-  const direct = importedPackages(codes);
-  for (const name of [...Object.keys(installed), ...busy].sort()) {
+  const direct = importedPackages(nb.cell_order.map((id) => nb.cell_inputs[id]?.code ?? ""));
+  for (const name of [...Object.keys(installed), ...busySet].sort()) {
     if (!name.startsWith("__internal") && name !== "nbpkg_sync" && !direct.includes(name)) direct.push(name);
   }
   const packages: PkgRow[] = direct.map((name) => {
     const version = installed[name];
     const detail = version === "stdlib" ? "standard library" : version ?? "";
     let state: PkgState;
-    if (pkgPhase === "failed" && (failedSet.has(name) || (failedSet.size === 0 && busy.has(name)))) state = "failed";
-    else if (busy.has(name) && pkgPhase === "busy") state = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
+    if (pkgPhase === "failed" && (failedSet.has(name) || (failedSet.size === 0 && busySet.has(name)))) state = "failed";
+    else if (busySet.has(name) && pkgPhase === "busy") state = precompiled.has(name) ? "ready" : precompiling ? "precompiling" : "installing";
     else if (version != null) state = "ready";
     else if (pkgPhase === "done") state = Object.keys(installed).length ? "failed" : "ready";
     else state = "waiting";
@@ -158,50 +192,104 @@ export function statusModel(nb: NotebookLike): StatusModel {
     return { name, state, detail: state === "ready" ? detail : notFound ? "not found" : "" };
   });
 
-  const deps = log.added.filter((n) => !direct.includes(n));
-  const depsRow = deps.length
-    ? { count: deps.length, precompiled: deps.filter((n) => precompiled.has(n)).length, failed: deps.filter((n) => failedSet.has(n)).length }
+  const added = log.added.filter((n) => !direct.includes(n));
+  const deps = added.length
+    ? { count: added.length, done: added.filter((n) => precompiled.has(n)).length, failed: added.filter((n) => failedSet.has(n)).length }
     : null;
 
-  const cells: CellRow[] = nb.cell_order.map((id) => {
-    const r = nb.cell_results[id] ?? {};
-    const state: CellState = r.running ? "running" : r.queued ? "waiting" : r.errored ? "failed" : r.runtime != null ? "done" : "waiting";
-    const time = (state === "done" || state === "failed") && r.runtime != null ? prettyTime(r.runtime) : null;
-    return { id, name: cellName(nb, id), state, time };
-  });
-
   const failedPkg = packages.find((p) => p.state === "failed");
-  const failure = failedPkg ? { name: failedPkg.name, cells: cells.filter((c) => c.state === "failed").map((c) => c.name) } : null;
+  const failure: Failure | null = failedPkg
+    ? {
+        name: failedPkg.name,
+        why: failedPkg.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled.",
+        cells: failedCells(nb),
+        log: plain(nbpkg.terminal_outputs?.[failedPkg.name]) || fullLog,
+      }
+    : null;
 
-  if (failedPkg && steps[1].phase === "done") steps[1].phase = "failed";
   const readyPkgs = packages.filter((p) => p.state === "ready").length;
-  const evaluate = runTask?.subtasks?.evaluate?.subtasks ?? {};
+  const install = pkgPhase === "busy" ? { done: readyPkgs, total: packages.length } : null;
+  const evaluate = tree.run?.subtasks?.evaluate?.subtasks ?? {};
   const runTotal = Object.keys(evaluate).length;
   const runDone = Object.values(evaluate).filter((e) => e.finished_at != null).length;
-  let busyText: string | null = null;
-  if (steps[0].phase === "busy") busyText = "Starting Julia";
-  else if (pkgPhase === "busy") busyText = packages.length ? `Installing packages · ${readyPkgs} of ${packages.length}` : "Installing packages";
-  else if (steps[2].phase === "busy") busyText = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
+  let busy: string | null = null;
+  if (phaseOf(tree.workspace) === "busy") busy = "Starting Julia";
+  else if (install) busy = packages.length ? `Installing packages · ${readyPkgs} of ${packages.length}` : "Installing packages";
+  else if (phaseOf(tree.run) === "busy") busy = runTotal ? `Running ${runDone} of ${runTotal}` : "Running";
 
-  const restart = nbpkg.restart_required_msg ? "required" : nbpkg.restart_recommended_msg ? "recommended" : null;
-  let headline: string;
-  if (nb.process_status === "waiting_for_permission") headline = "Safe preview · nothing has run";
-  else if (failure) headline = `Package failed · ${failure.name}`;
-  else if (busyText?.startsWith("Running")) headline = `Running cells · ${runDone} of ${runTotal}`;
-  else if (busyText) headline = busyText;
-  else if (restart === "required") headline = "Restart needed";
-  else if (nb.process_status === "no_process" || nb.process_status === "waiting_to_restart") headline = "Julia stopped";
-  else headline = "Ready";
-
+  const restart = restartOf(nb);
+  const version = String(nb.julia_version ?? "").replace(/^v/, "");
   return {
-    headline,
-    steps,
+    headline: headlineOf(nb, "Julia", failure, busy, restart),
+    runtime: version ? `Julia ${version}` : null,
     packages,
-    deps: depsRow,
-    cells,
+    deps,
+    install,
     failure,
-    busy: busyText,
+    log: fullLog,
+    busy,
     saveFailed: tree.saving?.success === false,
+    restart,
+  };
+}
+
+const emberNotFound = new Set(["not_found", "lookup_failed", "source_failed"]);
+
+function emberRow(row: EmberPackageRow, libraryFailed: boolean): PkgRow {
+  if (row.status === "installed") return { name: row.name, state: "ready", detail: row.version ?? "" };
+  if (row.status === "installing") return { name: row.name, state: "installing", detail: "" };
+  if (emberNotFound.has(row.status)) return { name: row.name, state: "failed", detail: "not found" };
+  if (row.status === "failed" || libraryFailed) return { name: row.name, state: "failed", detail: "" };
+  return { name: row.name, state: "waiting", detail: "" };
+}
+
+function emberModel(nb: NotebookLike, pkgs: EmberPackages): StatusModel {
+  const library = pkgs.library ?? {};
+  const libraryFailed = library.status === "failed";
+  const rows = pkgs.rows ?? [];
+  const packages = rows.filter((r) => r.direct).map((r) => emberRow(r, libraryFailed && r.status !== "installed"));
+  const indirect = rows.filter((r) => !r.direct).map((r) => emberRow(r, libraryFailed && r.status !== "installed"));
+  const deps = indirect.length
+    ? { count: indirect.length, done: indirect.filter((r) => r.state === "ready").length, failed: indirect.filter((r) => r.state === "failed").length }
+    : null;
+
+  const log = plain(library.log);
+  const firstFailure = library.failures?.[0];
+  const failedPkg = packages.find((p) => p.state === "failed") ?? (firstFailure ? { name: firstFailure.package, detail: "" } : null);
+  const failure: Failure | null = failedPkg
+    ? {
+        name: failedPkg.name,
+        why:
+          failedPkg.detail === "not found"
+            ? "isn't a package R can find: a typo, or not on CRAN or Bioconductor."
+            : `couldn't be installed${firstFailure?.detail ? `: ${firstFailure.detail}` : "."}`,
+        cells: failedCells(nb),
+        log,
+      }
+    : null;
+
+  const progress = library.progress;
+  const install =
+    library.status === "installing" ? { done: progress?.done ?? 0, total: progress?.total ?? Math.max(packages.length, 1) } : null;
+  const waiting = nb.cell_order.filter((id) => nb.cell_results[id]?.running || nb.cell_results[id]?.queued).length;
+  let busy: string | null = null;
+  if (nb.process_status === "starting") busy = "Starting R";
+  else if (install) busy = progress?.total ? `Installing packages · ${install.done} of ${install.total}` : "Installing packages";
+  else if (library.status === "asking") busy = "Download waits for your OK";
+  else if (waiting) busy = `Running · ${waiting} cell${waiting === 1 ? "" : "s"} left`;
+
+  const restart = restartOf(nb);
+  const r = pkgs.r_version ? `R ${pkgs.r_version}` : "R";
+  return {
+    headline: headlineOf(nb, "R", failure, busy, restart),
+    runtime: pkgs.snapshot ? `${r} · CRAN snapshot ${pkgs.snapshot}` : r,
+    packages,
+    deps,
+    install,
+    failure,
+    log,
+    busy,
+    saveFailed: false,
     restart,
   };
 }

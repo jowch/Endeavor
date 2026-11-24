@@ -14,12 +14,13 @@ export type ToApp =
       notebook: string;
       safe: boolean;
       busy: string | null;
+      installing: boolean;
       restart: "required" | "recommended" | null;
       save_failed: boolean;
       package_failed: string | null;
       dead: boolean;
       connected: boolean;
-      drawer: "docs" | "status" | null;
+      drawer: "docs" | "packages" | null;
     }
   | { type: "asked_visible"; visible: boolean }
   | { type: "run_notebook"; notebook: string }
@@ -37,7 +38,7 @@ export type ToApp =
       box: boolean;
       point_status: string;
       comment: string;
-      drawer: "docs" | "status" | null;
+      drawer: "docs" | "packages" | null;
       callout: boolean;
       reply: "pill" | "prompt" | null;
       prompt: { kind: string; about: string; text: string } | null;
@@ -65,7 +66,7 @@ export type ToPage =
   | { type: "reveal"; cells: string[] }
   | { type: "code"; cell: string }
   | { type: "shot"; id: number }
-  | { type: "drawer"; tab: "docs" | "status" | null }
+  | { type: "drawer"; tab: "docs" | "packages" | null }
   | {
       type: "context";
       host: string;

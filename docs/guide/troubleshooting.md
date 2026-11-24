@@ -93,7 +93,7 @@ them again for every notebook on your Mac.
 ## A package won't install
 
 When a package a notebook uses fails to install, the notebook's header shows
-**Package failed**. Click it to open **Status**, which names the package and
+**Package failed**. Click it to open **Packages**, which names the package and
 the cells that can't run without it. From there:
 
 - **✦ Fix with Claude** asks Claude to find out why and fix it.

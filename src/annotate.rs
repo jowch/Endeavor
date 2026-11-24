@@ -68,6 +68,7 @@ pub struct PageState {
     pub notebook: String,
     pub safe: bool,
     pub busy: Option<String>,
+    pub installing: bool,
     pub restart: Option<String>,
     pub save_failed: bool,
     pub package_failed: Option<String>,
@@ -174,13 +175,14 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
                 notebook: uuid("notebook")?,
                 safe: flag("safe"),
                 busy: text("busy"),
+                installing: flag("installing"),
                 restart: text("restart").filter(|r| r == "required" || r == "recommended"),
                 save_failed: flag("save_failed"),
                 package_failed: text("package_failed"),
                 dead: flag("dead"),
                 connected: v.get("connected").and_then(|b| b.as_bool()).unwrap_or(true),
                 unsaved: flag("unsaved"),
-                drawer: text("drawer").filter(|d| d == "docs" || d == "status"),
+                drawer: text("drawer").filter(|d| d == "docs" || d == "packages"),
             }))
         }
         #[cfg(debug_assertions)]
@@ -394,7 +396,7 @@ mod tests {
     #[test]
     fn parses_the_notebook_panes_messages() {
         let state = format!(
-            r#"{{"type":"state","notebook":"{NB}","safe":false,"busy":"Installing packages · 2 of 5","restart":"sometime","save_failed":true,"package_failed":"Plots","dead":false,"connected":false,"unsaved":true,"drawer":"status"}}"#
+            r#"{{"type":"state","notebook":"{NB}","safe":false,"busy":"Installing packages · 2 of 5","installing":true,"restart":"sometime","save_failed":true,"package_failed":"Plots","dead":false,"connected":false,"unsaved":true,"drawer":"packages"}}"#
         );
         assert_eq!(
             parse_with(&state, ""),
@@ -402,13 +404,14 @@ mod tests {
                 notebook: NB.into(),
                 safe: false,
                 busy: Some("Installing packages · 2 of 5".into()),
+                installing: true,
                 restart: None,
                 save_failed: true,
                 package_failed: Some("Plots".into()),
                 dead: false,
                 connected: false,
                 unsaved: true,
-                drawer: Some("status".into()),
+                drawer: Some("packages".into()),
             }))
         );
         assert_eq!(parse_with(&format!(r#"{{"type":"run_notebook","notebook":"{NB}"}}"#), ""), Some(Message::RunNotebook { notebook: NB.into() }));
