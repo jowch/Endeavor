@@ -207,6 +207,13 @@ impl Hosts {
         }
     }
 
+    pub fn downloads_own_uv(&self, host: &HostId) -> bool {
+        match host {
+            HostId::ThisMac => crate::new_session::OFFERS_OWN_UV,
+            HostId::Server(id) => self.server(id).is_some_and(|server| server.cluster.is_none()),
+        }
+    }
+
     pub fn mid_sentence_name(&self, host: &HostId) -> String {
         match host {
             HostId::ThisMac => crate::platform::this_computer!(lower).into(),
@@ -488,6 +495,17 @@ mod tests {
         hosts.put(Server { id: "a".into(), name: "GPU Lab".into(), ssh_host: "lab".into(), ..Default::default() });
         assert_eq!(hosts.mid_sentence_name(&HostId::ThisMac), crate::platform::this_computer!(lower));
         assert_eq!(hosts.mid_sentence_name(&HostId::Server("a".into())), "GPU Lab");
+    }
+
+    #[test]
+    fn endeavor_downloads_its_own_uv_where_it_has_one_but_not_into_a_slurm_job() {
+        let mut hosts = Hosts::default();
+        hosts.put(Server { id: "a".into(), name: "lab".into(), ssh_host: "lab".into(), ..Default::default() });
+        hosts.put(Server { id: "b".into(), name: "hpc".into(), ssh_host: "hpc".into(), cluster: Some(Cluster::default()), ..Default::default() });
+        assert_eq!(hosts.downloads_own_uv(&HostId::ThisMac), !cfg!(windows));
+        assert!(hosts.downloads_own_uv(&HostId::Server("a".into())));
+        assert!(!hosts.downloads_own_uv(&HostId::Server("b".into())));
+        assert!(!hosts.downloads_own_uv(&HostId::Server("gone".into())));
     }
 
     #[test]

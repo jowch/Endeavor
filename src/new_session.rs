@@ -44,16 +44,11 @@ pub fn new_kinds(host: &HostId) -> &'static [Backend] {
 fn kinds_on(host: &HostId, windows: bool) -> &'static [Backend] {
     match host {
         HostId::ThisMac if windows => &[Backend::Pluto, Backend::Marimo],
-        host if shows_python(host) => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
-        _ => &Backend::ALL,
+        _ => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
     }
 }
 
 pub const OFFERS_OWN_UV: bool = cfg!(not(windows));
-
-pub fn shows_python(host: &HostId) -> bool {
-    *host == HostId::ThisMac
-}
 
 pub fn kind_of_path(path: &str) -> Backend {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
@@ -1876,10 +1871,10 @@ mod tests {
     use wire::backend::Backend;
 
     #[test]
-    fn python_is_offered_on_this_computer_on_every_platform_and_r_not_yet_on_windows() {
+    fn python_is_offered_everywhere_and_r_not_yet_on_windows() {
         assert_eq!(kinds_on(&HostId::ThisMac, true), [Backend::Pluto, Backend::Marimo]);
         assert_eq!(kinds_on(&HostId::ThisMac, false), [Backend::Pluto, Backend::Ember, Backend::Marimo]);
-        assert!(!kinds_on(&HostId::Server("lab".into()), true).contains(&Backend::Marimo));
+        assert_eq!(kinds_on(&HostId::Server("lab".into()), true), [Backend::Pluto, Backend::Ember, Backend::Marimo]);
     }
 
     #[test]

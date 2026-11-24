@@ -72,7 +72,8 @@ Everything goes in `~/.cache/endeavor/` in your home folder on the server:
   Endeavor's version;
 - the notebook's state, in `state/`;
 - Julia's packages, in `depot/`;
-- Julia itself, only if Endeavor has to download it.
+- Julia itself, only if Endeavor has to download it;
+- uv, only if a Python notebook needs it and you click **Install uv**.
 
 Endeavor installs over the same SSH connection it uses to connect, so you
 sign in once. Nothing needs administrator rights.
@@ -97,6 +98,14 @@ login shell finds. It also takes the path to an `Rscript` program, or a shell
 line such as `module load R`. Endeavor never installs R on a server. The first R notebook
 installs Ember, the R package that runs R notebooks, which takes a few minutes
 that one time.
+
+## Python on the server
+
+Python notebooks use the server's own uv when it has one. uv gets Python and each
+notebook's packages the first time. With no uv on the server, the notebook
+pane offers **Install uv**, which downloads Endeavor's own uv into
+`~/.cache/endeavor/` there. On a cluster, install uv yourself first
+([uv's installer](https://docs.astral.sh/uv/getting-started/installation/)).
 
 ## What Claude can do on a server
 

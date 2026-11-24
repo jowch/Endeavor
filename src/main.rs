@@ -128,6 +128,20 @@ fn viewed_notebook(url: &str) -> Option<(Backend, &str)> {
     Backend::ALL.into_iter().find_map(|kind| Some((kind, kind.notebook_id(url).filter(|id| annotate::is_uuid(id))?)))
 }
 
+fn chosen_kind_note(kind: Backend) -> Option<&'static str> {
+    match kind {
+        Backend::Pluto => None,
+        Backend::Ember => Some(
+            "[Endeavor] The user chose an R notebook for this session. Make the notebook an R notebook \
+             (a .R path, or new_notebook without a path, which makes one).",
+        ),
+        Backend::Marimo => Some(
+            "[Endeavor] The user chose a Python notebook for this session. Make the notebook a Python (marimo) notebook \
+             (a .py path, or new_notebook without a path, which makes one).",
+        ),
+    }
+}
+
 fn viewed_kind(url: &str) -> Option<Backend> {
     viewed_notebook(url).map(|(kind, _)| kind).or_else(|| Backend::Marimo.notebook_path(url).map(|_| Backend::Marimo))
 }
@@ -929,26 +943,22 @@ impl Workspace {
         if let (Some(server), HostId::Server(id)) = (&server, &host) {
             let ssh = self.hosts.server(id).map(|s| s.ssh_host.clone()).unwrap_or_default();
             context.push(format!(
-                "[Endeavor] This session works on the server {server} (ssh host {ssh}), in the folder {}. Julia, Pluto, \
-                 the notebook and the files are all on that server; your own file and shell tools are off because \
+                "[Endeavor] This session works on the server {server} (ssh host {ssh}), in the folder {}. The notebooks, \
+                 what runs them and the files are all on that server; your own file and shell tools are off because \
                  they'd see the user's computer instead. Use the notebook tools list_folder, read_file and run_shell (the user \
                  approves each command), with the server's paths.",
                 folder
             ));
             if let Some(resources) = &session.resources {
                 context.push(format!(
-                    "[Endeavor] {server} is a Slurm cluster: Julia runs in a batch job ({}) on a compute node, and \
+                    "[Endeavor] {server} is a Slurm cluster: the notebooks run in a batch job ({}) on a compute node, and \
                      run_shell runs there too, inside that job. The notebooks stop when the job's time limit is reached.",
                     resources.summary()
                 ));
             }
         }
-        if existing.is_none() && session.kind == Backend::Ember {
-            context.push(
-                "[Endeavor] The user chose an R notebook for this session. Make the notebook an R notebook \
-                 (a .R path, or new_notebook without a path, which makes one)."
-                    .into(),
-            );
+        if let Some(chosen) = existing.is_none().then(|| chosen_kind_note(session.kind)).flatten() {
+            context.push(chosen.into());
         }
         if let Some(path) = &existing {
             context.push(format!(
@@ -1264,7 +1274,7 @@ impl Workspace {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some((host, folder, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.place.path.clone(), s.kind)) else { return };
         self.note_session_kind(&host, key, kind);
-        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind, &host) }).detach();
+        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
     }
 
     fn send_binding(&self, key: u64, path: String, cx: &mut Context<Self>) {
@@ -3062,6 +3072,13 @@ mod tests {
         assert_eq!(super::viewed_kind("http://127.0.0.1:1234/marimo/?file=/w/fit.py&token=t"), Some(Backend::Marimo));
         assert_eq!(viewed_notebook("http://127.0.0.1:1234/marimo/?file=/w/fit.py"), None, "its id comes from the runtime's list, by path");
         assert_eq!(super::viewed_kind("http://127.0.0.1:1234/edit?id=6a1b2c3d-0000-4000-8000-1234567890ab"), Some(Backend::Pluto));
+    }
+
+    #[test]
+    fn a_new_r_or_python_session_tells_the_agent_which_notebook_to_make() {
+        assert_eq!(super::chosen_kind_note(Backend::Pluto), None);
+        assert!(super::chosen_kind_note(Backend::Ember).is_some_and(|note| note.contains("R notebook") && note.contains(".R path")));
+        assert!(super::chosen_kind_note(Backend::Marimo).is_some_and(|note| note.contains("Python (marimo) notebook") && note.contains(".py path")));
     }
 
     #[test]

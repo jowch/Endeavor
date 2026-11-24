@@ -1151,8 +1151,7 @@ impl Workspace {
         for (key, folder, kind) in folders {
             self.note_session_kind(host, key, kind);
             let bridge = bridge.clone();
-            let on = host.clone();
-            cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind, &on) }).detach();
+            cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
         }
         for (key, policy, edits) in policies {
             self.send_policy(key, policy, edits, cx);
@@ -2000,7 +1999,7 @@ impl Workspace {
             }
             HostPane::RFailed(error) => {
                 let host_id = host.clone();
-                let shows = r_failed_shows(host, &error, crate::new_session::OFFERS_OWN_UV, own_r_offered());
+                let shows = r_failed_shows(host, &error, self.hosts.downloads_own_uv(host), own_r_offered());
                 let button = |label: &'static str, install: Option<Backend>| {
                     let host = host_id.clone();
                     div()
@@ -2017,7 +2016,7 @@ impl Workspace {
                 };
                 match &shows {
                     RFailedShows::InstallUv => {
-                        let words = format!("Python notebooks need uv. Endeavor can download its own, just for Endeavor. It changes nothing else on {}.", crate::platform::this_computer!(lower));
+                        let words = format!("Python notebooks need uv. Endeavor can download its own, just for Endeavor. It changes nothing else on {name}.");
                         resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Install uv", Some(Backend::Marimo)))
                     }
                     RFailedShows::PythonFailed(why) => {
@@ -2131,9 +2130,9 @@ impl RFailedShows<'_> {
     }
 }
 
-pub fn r_failed_shows<'a>(host: &HostId, error: &'a str, offers_own_uv: bool, own_r: Option<wire::Item>) -> RFailedShows<'a> {
+pub fn r_failed_shows<'a>(host: &HostId, error: &'a str, own_uv_there: bool, own_r: Option<wire::Item>) -> RFailedShows<'a> {
     let here = *host == HostId::ThisMac;
-    if offers_own_uv && here && error.starts_with("python_not_found::") {
+    if own_uv_there && error.starts_with("python_not_found::") {
         return RFailedShows::InstallUv;
     }
     if let Some(why) = pluto::python_failed(error) {
@@ -2541,16 +2540,15 @@ mod tests {
         use crate::hosts::HostId;
         let no_uv = "python_not_found::Python notebooks need uv, which isn't installed on this computer. Install uv (https://docs.astral.sh/uv/getting-started/installation/).";
         let here = HostId::ThisMac;
-        let server = HostId::Server("lab".into());
+        let lab = HostId::Server("lab".into());
         assert_eq!(r_failed_shows(&here, no_uv, true, None), RFailedShows::InstallUv);
-        assert_eq!(r_failed_shows(&here, no_uv, true, None).button(), "uv-install");
+        assert_eq!(r_failed_shows(&lab, no_uv, true, None).button(), "uv-install");
         let without_own_uv = r_failed_shows(&here, no_uv, false, None);
         assert_eq!(without_own_uv.button(), "python-retry");
         let RFailedShows::PythonFailed(words) = without_own_uv else { panic!("{without_own_uv:?}") };
         assert!(words.starts_with("Python notebooks need uv") && words.contains("docs.astral.sh/uv"));
-        assert!(matches!(r_failed_shows(&server, no_uv, true, None), RFailedShows::PythonFailed(_)));
+        assert!(matches!(r_failed_shows(&lab, no_uv, false, None), RFailedShows::PythonFailed(_)));
         assert_eq!(r_failed_shows(&here, "python_failed::Couldn't download uv: offline", true, None), RFailedShows::PythonFailed("Couldn't download uv: offline"));
-        assert_eq!(cfg!(windows), !crate::new_session::OFFERS_OWN_UV);
     }
 
     #[test]
