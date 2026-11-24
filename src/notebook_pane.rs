@@ -188,6 +188,12 @@ impl NotebookAction {
     }
 }
 
+pub fn header_busy(page: &PageState) -> Option<HeaderBusy> {
+    let text = page.busy.clone()?;
+    let packages_shown = page.drawer.as_deref() == Some("packages");
+    (!(page.installing && packages_shown)).then_some(HeaderBusy { text, opens_packages: page.installing })
+}
+
 pub fn header_drawer(kind: Backend, shown: bool, reported: Option<&PageState>, page: &PageState) -> Option<String> {
     match kind {
         Backend::Marimo => page.drawer.clone().filter(|_| shown),
@@ -199,13 +205,13 @@ pub fn header_drawer(kind: Backend, shown: bool, reported: Option<&PageState>, p
 pub enum HeaderTool {
     Share,
     Docs,
-    Status,
+    Packages,
 }
 
 pub fn header_tools(kind: Backend, endeavor_look: bool) -> &'static [HeaderTool] {
     match kind {
         Backend::Marimo => &[HeaderTool::Share, HeaderTool::Docs],
-        Backend::Pluto | Backend::Ember if endeavor_look => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Status],
+        Backend::Pluto | Backend::Ember if endeavor_look => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Packages],
         Backend::Pluto | Backend::Ember => &[],
     }
 }
@@ -366,7 +372,13 @@ fn stopped_text(stopped: Stopped) -> (String, Option<&'static str>) {
 pub struct HeaderInfo {
     pub host: String,
     pub tags: Vec<HeaderTag>,
-    pub busy: Option<String>,
+    pub busy: Option<HeaderBusy>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeaderBusy {
+    pub text: String,
+    pub opens_packages: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -617,7 +629,7 @@ impl Workspace {
         HeaderInfo {
             host: if reconnecting { format!("{host} · reconnecting") } else { host },
             tags,
-            busy: page.filter(|p| p.drawer.as_deref() != Some("status")).and_then(|p| p.busy.clone()),
+            busy: page.and_then(header_busy),
         }
     }
 
@@ -695,11 +707,11 @@ impl Workspace {
                 HeaderTag::PackageFailed => chip(Some(Glyph::Warning), label, theme::danger())
                     .id("package-failed")
                     .role(Role::Button)
-                    .aria_label(format!("{label}, show status"))
+                    .aria_label(format!("{label}, show packages"))
                     .cursor_pointer()
                     .tab_stop_on(theme::bg_page())
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("status"), cx)))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("packages"), cx)))
                     .into_any_element(),
                 HeaderTag::RestartNeeded | HeaderTag::RestartRecommended => chip(Some(Glyph::Restart), label, theme::accent_text())
                     .id("restart-needed")
@@ -715,23 +727,26 @@ impl Workspace {
         });
         let chips: Vec<AnyElement> = chips.collect();
 
-        let busy = header.busy.map(|text| {
+        let busy = header.busy.map(|busy| {
+            let text = busy.text;
             div()
                 .id("header-busy")
-                .role(Role::Button)
-                .aria_label(format!("{text}, show status"))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
                 .gap(px(6.))
                 .mr(px(4.))
-                .cursor_pointer()
-                .tab_stop_on(theme::bg_page())
                 .text_size(theme::size_meta())
                 .text_color(theme::text_muted())
-                .hover(|s| s.text_color(theme::text_primary()))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("status"), cx)))
+                .when(busy.opens_packages, |d| {
+                    d.role(Role::Button)
+                        .aria_label(format!("{text}, show packages"))
+                        .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
+                        .hover(|s| s.text_color(theme::text_primary()))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, _, cx| this.open_drawer(Some("packages"), cx)))
+                })
                 .child(div().size(px(6.)).rounded_full().bg(theme::accent()))
                 .child(text)
         });
@@ -761,9 +776,9 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
                 .into_any_element()
         });
-        let status = tools.contains(&HeaderTool::Status).then(|| {
-            tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status".into())
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
+        let packages = tools.contains(&HeaderTool::Packages).then(|| {
+            tip(header_button("header-packages", Glyph::Package, Some("Packages"), drawer.as_deref() == Some("packages"), compact), "Packages".into())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("packages", cx)))
                 .into_any_element()
         });
 
@@ -783,7 +798,7 @@ impl Workspace {
             .when(shown, |d| d.child(point))
             .children(share)
             .children(docs)
-            .children(status)
+            .children(packages)
             .when(session.notebook_path.is_some(), |d| d.child(self.notebook_more(key, cx)))
             .into_any_element()
     }
@@ -949,8 +964,8 @@ impl Workspace {
 
     pub fn fix_package(&mut self, notebook: String, name: String, log: String, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
-        let text = format!("The package {name} failed to install or precompile, so the cells that use it can't run. Find out why and fix it.");
-        let context = format!("[Endeavor] Pkg's log for {name} (its end), from the notebook's Status:\n```\n{log}\n```");
+        let text = format!("The package {name} failed to install, so the cells that use it can't run. Find out why and fix it.");
+        let context = format!("[Endeavor] The package installer's log (its end), from the notebook's Packages:\n```\n{log}\n```");
         use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
         let blocks = vec![ContentBlock::Text(TextContent::new(context)), ContentBlock::Text(TextContent::new(text.clone()))];
         let effects = self.submit_for(key, crate::outbox::Queued::new(text, Vec::new(), blocks), false);
@@ -1644,6 +1659,18 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    fn the_busy_text_opens_packages_only_while_installing_and_hides_behind_packages_it_repeats() {
+        use super::{HeaderBusy, header_busy};
+        use crate::annotate::PageState;
+        let installing = PageState { busy: Some("Installing packages · 2 of 5".into()), installing: true, ..Default::default() };
+        assert_eq!(header_busy(&installing), Some(HeaderBusy { text: "Installing packages · 2 of 5".into(), opens_packages: true }));
+        assert_eq!(header_busy(&PageState { drawer: Some("packages".into()), ..installing.clone() }), None);
+        let running = PageState { busy: Some("Running 3 of 10".into()), drawer: Some("packages".into()), ..Default::default() };
+        assert_eq!(header_busy(&running), Some(HeaderBusy { text: "Running 3 of 10".into(), opens_packages: false }));
+        assert_eq!(header_busy(&PageState::default()), None);
+    }
+
+    #[test]
     fn an_out_of_step_page_reloads_once_a_minute_then_asks_the_user() {
         use super::{OUT_OF_STEP_WINDOW, OutOfStepAnswer, out_of_step_answer};
         let now = Instant::now() + Duration::from_secs(3600);
@@ -1761,10 +1788,10 @@ mod tests {
     }
 
     #[test]
-    fn python_notebooks_get_share_and_live_docs_whatever_the_look_and_no_status() {
+    fn python_notebooks_get_share_and_live_docs_whatever_the_look_and_no_packages() {
         use super::{HeaderTool::*, header_tools};
-        assert_eq!(header_tools(Backend::Pluto, true), [Share, Docs, Status]);
-        assert_eq!(header_tools(Backend::Ember, true), [Share, Docs, Status]);
+        assert_eq!(header_tools(Backend::Pluto, true), [Share, Docs, Packages]);
+        assert_eq!(header_tools(Backend::Ember, true), [Share, Docs, Packages]);
         assert!(header_tools(Backend::Pluto, false).is_empty(), "the classic look keeps Pluto's own buttons");
         assert_eq!(header_tools(Backend::Marimo, true), [Share, Docs]);
         assert_eq!(header_tools(Backend::Marimo, false), [Share, Docs], "marimo has no look of ours to switch off");

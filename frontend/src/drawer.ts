@@ -21,25 +21,18 @@ const css = `
   #endeavor-drawer > header button.active { background: var(--e-bg-raised); color: var(--e-text-primary); }
   #endeavor-drawer > header .grow { flex: 1; }
   #endeavor-drawer > header .close { font-size: 15px; padding: 0 6px; }
-  #endeavor-drawer .status { flex: 1; overflow-y: auto; padding: 2px 16px 12px; }
-  #endeavor-drawer[data-tab="docs"] .status { display: none; }
-  #endeavor-drawer .headline { font-size: 14px; font-weight: 600; color: var(--e-text-primary); margin: 4px 0 8px; }
+  #endeavor-drawer .packages { flex: 1; overflow-y: auto; padding: 2px 16px 12px; }
+  #endeavor-drawer[data-tab="docs"] .packages { display: none; }
+  #endeavor-drawer .headline { font-size: 14px; font-weight: 600; color: var(--e-text-primary); margin: 4px 0 6px; }
   #endeavor-drawer .headline.failed { color: var(--e-diff-del); }
-  #endeavor-drawer .steps { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  #endeavor-drawer .steps .step { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--e-text-muted); }
-  #endeavor-drawer .steps .step.busy { color: var(--e-text-primary); }
-  #endeavor-drawer .steps .step.failed { color: var(--e-diff-del); }
-  #endeavor-drawer .steps .step.waiting { color: var(--e-text-waiting); }
-  #endeavor-drawer .steps .line { flex: 1; height: 1px; background: var(--e-border); min-width: 12px; }
-  #endeavor-drawer .host { color: var(--e-text-dim); font-size: 11.5px; margin-bottom: 10px; }
-  #endeavor-drawer .group { margin-top: 6px; }
-  #endeavor-drawer .group > summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer;
-    color: var(--e-text-secondary); padding: 3px 0; }
-  #endeavor-drawer .group > summary::-webkit-details-marker { display: none; }
-  #endeavor-drawer .group > summary::before { content: "›"; width: 10px; color: var(--e-text-dim); transition: transform 0.1s; }
-  #endeavor-drawer .group[open] > summary::before { transform: rotate(90deg); }
-  #endeavor-drawer .group > summary .right { margin-left: auto; color: var(--e-text-dim); font-size: 11.5px; }
-  #endeavor-drawer .row { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 16px; min-height: 22px; }
+  #endeavor-drawer .progress { height: 3px; border-radius: 2px; background: var(--e-bg-raised); margin: 0 0 8px; overflow: hidden; }
+  #endeavor-drawer .progress > i { display: block; height: 100%; background: var(--e-accent); }
+  #endeavor-drawer .progress.unknown > i { width: 30%; animation: endeavor-sweep 1.4s ease-in-out infinite; }
+  @keyframes endeavor-sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+  @media (prefers-reduced-motion: reduce) { #endeavor-drawer .progress.unknown > i { animation: none; width: 100%; opacity: 0.4; } }
+  #endeavor-drawer .host { color: var(--e-text-dim); font-size: 11.5px; margin-bottom: 4px; }
+  #endeavor-drawer .summary { color: var(--e-text-dim); font-size: 11.5px; margin-bottom: 8px; }
+  #endeavor-drawer .row { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 4px; min-height: 22px; }
   #endeavor-drawer .row .name { font: 12px JuliaMono, ui-monospace, monospace; color: var(--e-text-code); }
   #endeavor-drawer .row.waiting .name { color: var(--e-text-dim); }
   #endeavor-drawer .row .note { color: var(--e-text-waiting); font-size: 11px; }
@@ -53,7 +46,7 @@ const css = `
     border-right-color: transparent; animation: endeavor-spin 0.9s linear infinite; }
   @media (prefers-reduced-motion: reduce) { #endeavor-drawer .mark.busy::before { animation: none; } }
   @keyframes endeavor-spin { to { transform: rotate(360deg); } }
-  #endeavor-drawer .failure { margin: 8px 0 8px 16px; padding: 10px 12px; border: 1px solid var(--e-danger-edge);
+  #endeavor-drawer .failure { margin: 8px 0 8px 4px; padding: 10px 12px; border: 1px solid var(--e-danger-edge);
     border-radius: 8px; background: var(--e-danger-bg); color: var(--e-text-code); }
   #endeavor-drawer .failure code { font: 11.5px JuliaMono, ui-monospace, monospace; }
   #endeavor-drawer .failure .actions { display: flex; gap: 6px; margin-top: 8px; }
@@ -82,7 +75,7 @@ const css = `
 `;
 
 const book = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M1 2.2h3.3c.9 0 1.7.7 1.7 1.6v6.4c0-.7-.6-1.2-1.3-1.2H1zM11 2.2H7.7c-.9 0-1.7.7-1.7 1.6v6.4c0-.7.6-1.2 1.3-1.2H11z"/></svg>`;
-const pulse = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M.5 6.5h2.5l1.5-4 2.5 7 1.5-3h3"/></svg>`;
+const box = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"><path d="M6 1 10.5 3.3v5.4L6 11 1.5 8.7V3.3zM1.5 3.3 6 5.6l4.5-2.3M6 5.6V11"/></svg>`;
 
 let drawer: HTMLElement;
 let body: HTMLElement;
@@ -90,7 +83,6 @@ let tab: Drawer = null;
 let auto = false;
 let autoDone = false;
 let showLog = false;
-const folded = new Map<string, boolean>();
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -134,67 +126,42 @@ function pick(next: Drawer): void {
 const markFor = (state: string) =>
   state === "done" || state === "ready" ? `<span class="mark">✓</span>` : state === "failed" ? `<span class="mark failed">✕</span>` : state === "waiting" ? `<span class="mark waiting"></span>` : `<span class="mark busy"></span>`;
 
-function group(name: string, busy: boolean, summary: string, right: string, rows: string): string {
-  const open = folded.get(name) ?? busy;
-  return `<details class="group" data-group="${name}"${open ? " open" : ""}><summary>${summary}<span class="right">${right}</span></summary>${rows}</details>`;
-}
+function packagesHtml(m: StatusModel): string {
+  const failed = !!m.failure;
+  const headline = `<div class="headline${failed ? " failed" : ""}">${escape(m.headline)}</div>`;
+  const progress = !m.install ? ""
+    : m.install.total ? `<div class="progress"><i style="width:${Math.round((100 * m.install.done) / m.install.total)}%"></i></div>`
+    : `<div class="progress unknown"><i></i></div>`;
+  const host = `<div class="host">${m.runtime ? `${escape(m.runtime)} · ` : ""}${escape(hostName)}</div>`;
+  const allReady = !m.install && !failed && m.packages.length > 0 && m.packages.every((p) => p.state === "ready") && !m.deps?.failed;
+  const counted = `${m.packages.length} package${m.packages.length === 1 ? "" : "s"}${m.deps ? ` and ${m.deps.count} dependenc${m.deps.count === 1 ? "y" : "ies"}` : ""}`;
+  const summary = allReady ? `<div class="summary">${counted}, all ready</div>` : m.packages.length ? "" : `<div class="summary">No packages</div>`;
 
-function statusHtml(nb: NotebookLike, m: StatusModel): string {
-  const steps = m.steps
-    .map((s, i) => `${i ? `<span class="line"></span>` : ""}<span class="step ${s.phase}">${markFor(s.phase)}${s.name}</span>`)
-    .join("");
-  const version = String((nb as any).julia_version ?? "").replace(/^v/, "");
-  const julia = version ? `Julia ${escape(version)} · ` : "";
-  const host = `<div class="host">${julia}${escape(hostName)}</div>`;
-
-  const pkgBusy = m.steps[1].phase === "busy";
-  const readyCount = m.packages.filter((p) => p.state === "ready").length;
   const stateText = { waiting: "waiting", installing: "installing", precompiling: "precompiling", ready: "", failed: "failed" };
-  const pkgRows = m.packages
+  const rows = m.packages
     .map((p) => {
-      const note = p.detail === "standard library" ? `<span class="note">standard library</span>` : "";
-      const right = p.state === "ready" ? (p.detail === "standard library" ? "built in" : escape(p.detail)) : stateText[p.state];
-      return `<div class="row ${p.state}">${markFor(p.state)}<span class="name">${escape(p.name)}</span>${note}<span class="right">${right}</span></div>`;
+      const right = p.state === "ready" ? (p.detail === "standard library" ? "built in" : escape(p.detail)) : p.state === "failed" && p.detail ? escape(p.detail) : stateText[p.state];
+      return `<div class="row ${p.state}">${markFor(p.state)}<span class="name">${escape(p.name)}</span><span class="right">${right}</span></div>`;
     })
     .join("");
   let deps = "";
-  if (m.deps) {
+  if (m.deps && !allReady) {
     const d = m.deps;
-    const right = d.failed ? `${d.failed} failed` : pkgBusy ? `${d.precompiled} precompiled` : "ready";
-    deps = `<div class="row">${markFor(d.failed ? "failed" : pkgBusy ? "busy" : "done")}<span>and ${d.count} dependenc${d.count === 1 ? "y" : "ies"}</span><span class="right">${right}</span></div>`;
+    const right = d.failed ? `${d.failed} failed` : m.install ? `${d.done} done` : "ready";
+    deps = `<div class="row">${markFor(d.failed ? "failed" : m.install ? "busy" : "done")}<span>and ${d.count} dependenc${d.count === 1 ? "y" : "ies"}</span><span class="right">${right}</span></div>`;
   }
   let failure = "";
   if (m.failure) {
     const f = m.failure;
     const blocked = f.cells.length ? ` Cells that use it can't run: <code>${f.cells.map(escape).join("</code>, <code>")}</code>.` : "";
     failure =
-      `<div class="failure"><code>${escape(f.name)}</code> ${
-        m.packages.find((p) => p.name === f.name)?.detail === "not found"
-          ? "isn't a package Pkg can find: a typo, or not in the registry."
-          : "couldn't be installed or precompiled."
-      }${blocked}` +
+      `<div class="failure"><code>${escape(f.name)}</code> ${escape(f.why)}${blocked}` +
       `<div class="actions"><button class="fix">✦ Fix with ${escape(context.agent)}</button><button class="restart">↻ Restart notebook</button>` +
       `<button class="plain pkglog">Log for ${escape(f.name)}</button></div></div>`;
   }
-  const packages = m.packages.length
-    ? group("packages", pkgBusy || !!m.failure, "Packages", m.packages.length ? `${readyCount} of ${m.packages.length} ready` : "", pkgRows + failure + deps)
-    : failure;
-
-  const running = m.steps[2].phase === "busy";
-  const done = m.cells.filter((c) => c.state === "done").length;
-  const cellRows = m.cells
-    .map((c) => {
-      const right = c.state === "running" ? "running" : c.time ? c.time : c.state === "waiting" ? "waiting" : "";
-      return `<div class="row ${c.state}">${markFor(c.state)}<span class="name">${escape(c.name || "(empty)")}</span><span class="right${c.time ? " time" : ""}">${right}</span></div>`;
-    })
-    .join("");
-  const cells = group("cells", running, "Cells", `${done} of ${m.cells.length} · notebook order`, cellRows);
-
-  const log = (nb.nbpkg?.terminal_outputs?.nbpkg_sync ?? "").replace(/\x1b\[[0-9;]*m/g, "");
-  const logBlock = showLog ? `<pre class="log">${escape(log || "Nothing from Pkg yet.")}</pre>` : "";
+  const logBlock = showLog ? `<pre class="log">${escape(m.log || "Nothing from the installer yet.")}</pre>` : "";
   const foot = `<div class="foot"><button class="showlog">≡ ${showLog ? "Hide log" : "Show log"}</button></div>${logBlock}`;
-
-  return `<div class="headline${m.failure ? " failed" : ""}">${escape(m.headline)}</div><div class="steps">${steps}</div>${host}${packages}${cells}${foot}`;
+  return headline + progress + host + summary + rows + failure + deps + foot;
 }
 
 let hostName = "This Mac";
@@ -202,23 +169,19 @@ let lastHtml = "";
 
 function render() {
   const now = current();
-  if (!now || tab !== "status") return;
-  const html = statusHtml(now.nb, now.model);
+  if (!now || tab !== "packages") return;
+  const html = packagesHtml(now.model);
   if (html === lastHtml) return;
   lastHtml = html;
   body.innerHTML = html;
-  for (const d of body.querySelectorAll<HTMLDetailsElement>("details.group")) {
-    d.addEventListener("toggle", () => folded.set(d.dataset.group!, d.open));
-  }
   const failure = now.model.failure;
   body.querySelector<HTMLButtonElement>(".showlog")!.onclick = () => {
     showLog = !showLog;
     render();
   };
   if (failure) {
-    const pkgLog = () => now.nb.nbpkg?.terminal_outputs?.[failure.name] ?? now.nb.nbpkg?.terminal_outputs?.nbpkg_sync ?? "";
     body.querySelector<HTMLButtonElement>(".failure .fix")!.onclick = (e) =>
-      byUser(e) && send({ type: "fix_package", notebook: notebookId(), name: failure.name, log: pkgLog().replace(/\x1b\[[0-9;]*m/g, "").slice(-6000) });
+      byUser(e) && send({ type: "fix_package", notebook: notebookId(), name: failure.name, log: failure.log.slice(-6000) });
     body.querySelector<HTMLButtonElement>(".failure .restart")!.onclick = (e) => byUser(e) && send({ type: "restart", notebook: notebookId() });
     body.querySelector<HTMLButtonElement>(".failure .pkglog")!.onclick = () => {
       showLog = true;
@@ -229,11 +192,11 @@ function render() {
 }
 
 function follow(_: NotebookLike, m: StatusModel) {
-  const installing = m.steps[1].phase === "busy" && m.packages.some((p) => p.state === "installing" || p.state === "precompiling");
-  if (installing && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
+  if (!m.install) autoDone = false;
+  if (m.install && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
     autoDone = true;
-    openDrawer("status", true);
-  } else if (auto && tab === "status" && !m.busy && !m.failure && m.steps[2].phase !== "waiting") {
+    openDrawer("packages", true);
+  } else if (auto && tab === "packages" && !m.install && !m.failure && !m.busy?.startsWith("Starting")) {
     openDrawer(null);
   }
   render();
@@ -249,9 +212,9 @@ export function initDrawer(): void {
   drawer.id = "endeavor-drawer";
   drawer.dataset.endeavorUi = "";
   drawer.innerHTML =
-    `<div class="grip"></div><header><button data-tab="docs">${book}Live docs</button><button data-tab="status">${pulse}Status</button>` +
-    `<span class="grow"></span><button class="close" title="Close">×</button></header><section class="status"></section>`;
-  body = drawer.querySelector(".status")!;
+    `<div class="grip"></div><header><button data-tab="docs">${book}Live docs</button><button data-tab="packages">${box}Packages</button>` +
+    `<span class="grow"></span><button class="close" title="Close">×</button></header><section class="packages"></section>`;
+  body = drawer.querySelector(".packages")!;
   document.body.append(drawer);
 
   for (const b of drawer.querySelectorAll<HTMLElement>("header [data-tab]")) b.onclick = () => pick(b.dataset.tab as Drawer);

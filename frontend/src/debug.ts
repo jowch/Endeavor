@@ -15,7 +15,7 @@ export function initDebug(): void {
       box: point.box,
       point_status: point.status,
       comment: point.comment,
-      drawer: drawer === "docs" || drawer === "status" ? drawer : null,
+      drawer: drawer === "docs" || drawer === "packages" ? drawer : null,
       callout: !!document.querySelector("#endeavor-safe.shown"),
       reply: askState()?.kind === "selection" ? "prompt" : document.querySelector("#endeavor-reply-pill") ? "pill" : null,
       prompt: askState(),
