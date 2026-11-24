@@ -335,15 +335,13 @@ fn stage(base: &str, dir: &Path, offer: &Offer, team: &str, progress: &dyn Fn(f3
 
     let mount = dir.join(format!("{}.mount", offer.commit));
     if mount.exists() {
-        let _ = run(Command::new("hdiutil").args(["detach", "-force"]).arg(&mount), "close the disk image");
+        close_image(&mount, true);
     }
     let _ = std::fs::remove_dir_all(staged.parent().unwrap());
     std::fs::create_dir_all(staged.parent().unwrap()).map_err(|e| e.to_string())?;
-    run(Command::new("hdiutil").args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint"]).arg(&mount).arg(&dmg), "open the disk image")?;
+    open_image(&dmg, &mount)?;
     let copied = run(Command::new("ditto").arg(mount.join(APP)).arg(&staged), "copy the app out of the disk image");
-    if run(Command::new("hdiutil").arg("detach").arg(&mount), "close the disk image").is_err() {
-        let _ = run(Command::new("hdiutil").args(["detach", "-force"]).arg(&mount), "close the disk image");
-    }
+    close_image(&mount, false);
     copied?;
     let _ = std::fs::remove_file(&dmg);
     if let Err(e) = verify(&staged, team) {
@@ -384,6 +382,39 @@ fn plist_string<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
     let rest = &plist[plist.find(&format!("<key>{key}</key>"))? + key.len() + 11..];
     let rest = rest.trim_start().strip_prefix("<string>")?;
     Some(&rest[..rest.find("</string>")?])
+}
+
+#[derive(Debug, PartialEq)]
+enum MountedBy {
+    Diskutil,
+    Hdiutil,
+}
+
+fn open_image(dmg: &Path, mount: &Path) -> Result<MountedBy, String> {
+    let first = match run(Command::new("diskutil").args(["image", "attach", "--mountOptions", "nobrowse", "--readOnly", "--mountPoint"]).arg(mount).arg(dmg), "open the disk image") {
+        Ok(()) => return Ok(MountedBy::Diskutil),
+        Err(e) => e,
+    };
+    eprintln!("diskutil image attach failed ({first}); using hdiutil");
+    run(Command::new("hdiutil").args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint"]).arg(mount).arg(dmg), "open the disk image")
+        .map(|()| MountedBy::Hdiutil)
+        .map_err(|e| format!("{e}; diskutil before it: {first}"))
+}
+
+fn close_image(mount: &Path, force: bool) {
+    if !force {
+        match run(Command::new("diskutil").arg("eject").arg(mount), "close the disk image") {
+            Ok(()) => return,
+            Err(e) => eprintln!("diskutil eject failed ({e}); using hdiutil detach"),
+        }
+        match run(Command::new("hdiutil").arg("detach").arg(mount), "close the disk image") {
+            Ok(()) => return,
+            Err(e) => eprintln!("hdiutil detach failed ({e}); forcing it"),
+        }
+    }
+    if let Err(e) = run(Command::new("hdiutil").args(["detach", "-force"]).arg(mount), "close the disk image") {
+        eprintln!("hdiutil detach -force failed ({e})");
+    }
 }
 
 fn run(cmd: &mut Command, what: &str) -> Result<(), String> {
@@ -683,9 +714,13 @@ mod tests {
         let apps = w.join("apps");
         std::fs::create_dir_all(&apps).unwrap();
         let mount = w.join("mnt");
-        run(Command::new("hdiutil").args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint"]).arg(&mount).arg(&dmg), "attach").unwrap();
+        let mounted_by = open_image(&dmg, &mount).unwrap();
+        let major: u32 = String::from_utf8(Command::new("sw_vers").arg("-productVersion").output().unwrap().stdout).unwrap().split('.').next().unwrap().trim().parse().unwrap();
+        if major >= 26 {
+            assert_eq!(mounted_by, MountedBy::Diskutil, "macOS {major} has diskutil image");
+        }
         run(Command::new("ditto").arg(mount.join(APP)).arg(apps.join(APP)), "copy").unwrap();
-        run(Command::new("hdiutil").arg("detach").arg(&mount), "detach").unwrap();
+        close_image(&mount, false);
         let installed = apps.join(APP);
         let team = team_of(&installed).expect("the nightly is Developer ID signed");
         assert!(run(Command::new("codesign").args(["--verify", "-R"]).arg(requirement(&team)).arg(&dmg), "check").is_ok(), "the disk image passes");
