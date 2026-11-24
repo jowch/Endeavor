@@ -215,7 +215,20 @@ test("Bioconductor couldn't be looked in: the row's own message, not \"a typo\""
   const m = status.statusModel(ember({ status: "ready" }, rows));
   assert.equal(m.failure.name, "limma");
   assert.equal(m.failure.why, "couldn't be looked up: Bioconductor didn't answer");
-  assert.deepEqual(m.packages.at(-1), { name: "limma", state: "failed", detail: "" });
+  assert.deepEqual(m.packages.at(-1), { name: "limma", state: "failed", detail: "couldn't look up" });
+});
+
+test("an R warning printed after Ember's lookup message stays out of the reason", () => {
+  const message = "limma isn't on CRAN at this date, and Ember couldn't look in Bioconductor (no index for that date (404)) In addition: Warning message:\npackage 'ember' was built under R version 4.6.2";
+  const rows = [...rRows("installed"), { name: "limma", direct: true, status: "lookup_failed", message }];
+  const m = status.statusModel(ember({ status: "ready" }, rows));
+  assert.equal(m.failure.why, "couldn't be looked up: limma isn't on CRAN at this date, and Ember couldn't look in Bioconductor (no index for that date (404))");
+});
+
+test("an R install Ember gives no progress for counts the notebook's packages that are in place, so the bar fills", () => {
+  const m = status.statusModel(ember({ status: "installing" }, rRows()));
+  assert.deepEqual(m.install, { done: 2, total: 4 });
+  assert.equal(m.busy, "Installing packages · 2 of 4");
 });
 
 test("run times read like Pluto's", () => {

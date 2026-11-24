@@ -73,3 +73,19 @@ test("an R notebook's first install opens Packages by itself and tells the app i
   assert.match(p.text(), /DESeq21\.46\.0/);
   assert.doesNotMatch(p.text(), /Start Julia|Cells/);
 });
+
+test("each new install opens Packages again, but one the user closed stays closed until that install ends", async () => {
+  const p = await page(rNotebook({ status: "installing" }, "installing"));
+  const drawer = () => p.window.document.documentElement.dataset.endeavorDrawer;
+  const install = async (status, deseq) => {
+    p.window.editor_state = { notebook: rNotebook({ status }, deseq), connected: true };
+    await p.settle();
+  };
+  assert.equal(drawer(), "packages");
+  p.window.__endeavor.receive({ type: "drawer", tab: null });
+  await install("installing", "installing");
+  assert.equal(drawer(), undefined, "closed by the user during this install");
+  await install("ready", "installed");
+  await install("installing", "not_installed");
+  assert.equal(drawer(), "packages", "a later install opens it again");
+});

@@ -239,19 +239,23 @@ function emberRow(row: EmberPackageRow): PkgRow {
   if (row.status === "installed") return { name: row.name, state: "ready", detail: row.version ?? "" };
   if (row.status === "installing") return { name: row.name, state: "installing", detail: "" };
   if (row.status === "not_found") return { name: row.name, state: "failed", detail: "not found" };
-  if (row.status === "failed" || emberCouldntLook.has(row.status)) return { name: row.name, state: "failed", detail: "" };
+  if (emberCouldntLook.has(row.status)) return { name: row.name, state: "failed", detail: "couldn't look up" };
+  if (row.status === "failed") return { name: row.name, state: "failed", detail: "" };
   return { name: row.name, state: "waiting", detail: "" };
 }
 
+export const withoutRWarnings = (message: string | null | undefined): string =>
+  plain(message).replace(/\s*In addition: Warning messages?:[\s\S]*$/, "").trim();
+
 export function installerReason(message: string | null | undefined): string {
-  const lines = plain(message).split("\n").map((l) => l.trim()).filter(Boolean);
+  const lines = withoutRWarnings(message).split("\n").map((l) => l.trim()).filter(Boolean);
   const first = (lines[0] ?? "").replace(/^install failed[:,]?\s*/, "");
   return first || lines[1] || "";
 }
 
 function emberWhy(row: EmberPackageRow | undefined, libraryMessage: string | null | undefined): string {
   if (row?.status === "not_found") return "isn't a package R can find: a typo, or not on CRAN or Bioconductor.";
-  if (row && emberCouldntLook.has(row.status)) return row.message ? `couldn't be looked up: ${row.message}` : "couldn't be looked up.";
+  if (row && emberCouldntLook.has(row.status)) return row.message ? `couldn't be looked up: ${withoutRWarnings(row.message)}` : "couldn't be looked up.";
   const reason = installerReason(row?.message ?? libraryMessage);
   return reason ? `couldn't be installed: ${reason}` : "couldn't be installed.";
 }
@@ -275,11 +279,13 @@ function emberModel(nb: NotebookLike, pkgs: EmberPackages): StatusModel {
 
   const progress = library.progress;
   const install =
-    library.status === "installing" ? { done: progress?.done ?? 0, total: progress?.total ?? Math.max(packages.length, 1) } : null;
+    library.status !== "installing" ? null
+    : progress?.total ? { done: progress.done ?? 0, total: progress.total }
+    : { done: rows.filter((r) => r.status === "installed").length, total: rows.length };
   const waiting = nb.cell_order.filter((id) => nb.cell_results[id]?.running || nb.cell_results[id]?.queued).length;
   let busy: string | null = null;
   if (nb.process_status === "starting") busy = "Starting R";
-  else if (install) busy = progress?.total ? `Installing packages · ${install.done} of ${install.total}` : "Installing packages";
+  else if (install) busy = install.total ? `Installing packages · ${install.done} of ${install.total}` : "Installing packages";
   else if (library.status === "asking") busy = "Download waits for your OK";
   else if (waiting) busy = `Running · ${waiting} cell${waiting === 1 ? "" : "s"} left`;
 

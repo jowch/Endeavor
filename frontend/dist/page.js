@@ -291,17 +291,19 @@
     if (row.status === "installed") return { name: row.name, state: "ready", detail: row.version ?? "" };
     if (row.status === "installing") return { name: row.name, state: "installing", detail: "" };
     if (row.status === "not_found") return { name: row.name, state: "failed", detail: "not found" };
-    if (row.status === "failed" || emberCouldntLook.has(row.status)) return { name: row.name, state: "failed", detail: "" };
+    if (emberCouldntLook.has(row.status)) return { name: row.name, state: "failed", detail: "couldn't look up" };
+    if (row.status === "failed") return { name: row.name, state: "failed", detail: "" };
     return { name: row.name, state: "waiting", detail: "" };
   }
+  var withoutRWarnings = (message) => plain(message).replace(/\s*In addition: Warning messages?:[\s\S]*$/, "").trim();
   function installerReason(message) {
-    const lines = plain(message).split("\n").map((l) => l.trim()).filter(Boolean);
+    const lines = withoutRWarnings(message).split("\n").map((l) => l.trim()).filter(Boolean);
     const first = (lines[0] ?? "").replace(/^install failed[:,]?\s*/, "");
     return first || lines[1] || "";
   }
   function emberWhy(row, libraryMessage) {
     if (row?.status === "not_found") return "isn't a package R can find: a typo, or not on CRAN or Bioconductor.";
-    if (row && emberCouldntLook.has(row.status)) return row.message ? `couldn't be looked up: ${row.message}` : "couldn't be looked up.";
+    if (row && emberCouldntLook.has(row.status)) return row.message ? `couldn't be looked up: ${withoutRWarnings(row.message)}` : "couldn't be looked up.";
     const reason = installerReason(row?.message ?? libraryMessage);
     return reason ? `couldn't be installed: ${reason}` : "couldn't be installed.";
   }
@@ -317,11 +319,11 @@
     const failedName = failedRow?.name ?? (library.status === "failed" ? library.failures?.[0]?.package : void 0);
     const failure = failedName ? { name: failedName, why: emberWhy(failedRow, library.message), cells: failedCells(nb), log } : null;
     const progress = library.progress;
-    const install = library.status === "installing" ? { done: progress?.done ?? 0, total: progress?.total ?? Math.max(packages.length, 1) } : null;
+    const install = library.status !== "installing" ? null : progress?.total ? { done: progress.done ?? 0, total: progress.total } : { done: rows.filter((r2) => r2.status === "installed").length, total: rows.length };
     const waiting3 = nb.cell_order.filter((id) => nb.cell_results[id]?.running || nb.cell_results[id]?.queued).length;
     let busy = null;
     if (nb.process_status === "starting") busy = "Starting R";
-    else if (install) busy = progress?.total ? `Installing packages \xB7 ${install.done} of ${install.total}` : "Installing packages";
+    else if (install) busy = install.total ? `Installing packages \xB7 ${install.done} of ${install.total}` : "Installing packages";
     else if (library.status === "asking") busy = "Download waits for your OK";
     else if (waiting3) busy = `Running \xB7 ${waiting3} cell${waiting3 === 1 ? "" : "s"} left`;
     const restart = restartOf(nb);
@@ -2119,7 +2121,7 @@ ${text.value}` : sent.comment;
     const summary = allReady ? `<div class="summary">${counted}, all ready</div>` : m.packages.length ? "" : `<div class="summary">No packages</div>`;
     const stateText = { waiting: "waiting", installing: "installing", precompiling: "precompiling", ready: "", failed: "failed" };
     const rows = m.packages.map((p) => {
-      const right = p.state === "ready" ? p.detail === "standard library" ? "built in" : escape3(p.detail) : p.detail === "not found" ? "not found" : stateText[p.state];
+      const right = p.state === "ready" ? p.detail === "standard library" ? "built in" : escape3(p.detail) : p.state === "failed" && p.detail ? escape3(p.detail) : stateText[p.state];
       return `<div class="row ${p.state}">${markFor(p.state)}<span class="name">${escape3(p.name)}</span><span class="right">${right}</span></div>`;
     }).join("");
     let deps = "";
@@ -2163,6 +2165,7 @@ ${text.value}` : sent.comment;
     }
   }
   function follow(_, m) {
+    if (!m.install) autoDone = false;
     if (m.install && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
       autoDone = true;
       openDrawer("packages", true);

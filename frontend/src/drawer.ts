@@ -135,7 +135,7 @@ function packagesHtml(m: StatusModel): string {
   const stateText = { waiting: "waiting", installing: "installing", precompiling: "precompiling", ready: "", failed: "failed" };
   const rows = m.packages
     .map((p) => {
-      const right = p.state === "ready" ? (p.detail === "standard library" ? "built in" : escape(p.detail)) : p.detail === "not found" ? "not found" : stateText[p.state];
+      const right = p.state === "ready" ? (p.detail === "standard library" ? "built in" : escape(p.detail)) : p.state === "failed" && p.detail ? escape(p.detail) : stateText[p.state];
       return `<div class="row ${p.state}">${markFor(p.state)}<span class="name">${escape(p.name)}</span><span class="right">${right}</span></div>`;
     })
     .join("");
@@ -187,6 +187,7 @@ function render() {
 }
 
 function follow(_: NotebookLike, m: StatusModel) {
+  if (!m.install) autoDone = false;
   if (m.install && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
     autoDone = true;
     openDrawer("packages", true);
