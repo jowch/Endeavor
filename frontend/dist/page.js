@@ -318,6 +318,7 @@
     const first = (lines[0] ?? "").replace(/^install failed[:,]?\s*/, "");
     return first || lines[1] || "";
   }
+  var sentence = (text) => /[.!?]$/.test(text) ? text : `${text}.`;
   function emberWhy(row, libraryMessage) {
     if (row?.status === "not_found") return "isn't a package R can find: a typo, or not on CRAN or Bioconductor.";
     if (row && emberCouldntLook.has(row.status)) return row.message ? `couldn't be looked up: ${withoutRWarnings(row.message)}` : "couldn't be looked up.";
@@ -334,7 +335,7 @@
     const log = plain(library.log);
     const failedRow = direct.find((r2) => r2.status === "failed" || r2.status === "not_found" || emberCouldntLook.has(r2.status));
     const failedName = failedRow?.name ?? (library.status === "failed" ? library.failures?.[0]?.package : void 0);
-    const failure = failedName ? { name: failedName, why: emberWhy(failedRow, library.message), cells: failedCells(nb, failedName), log } : null;
+    const failure = failedName ? { name: failedName, why: sentence(emberWhy(failedRow, library.message)), cells: failedCells(nb, failedName), log } : null;
     const progress = library.progress;
     const install = library.status !== "installing" ? null : progress?.total ? { done: progress.done ?? 0, total: progress.total } : { done: 0, total: 0 };
     const waiting3 = nb.cell_order.filter((id) => nb.cell_results[id]?.running || nb.cell_results[id]?.queued).length;

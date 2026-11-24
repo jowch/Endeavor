@@ -197,7 +197,7 @@ test("an R library that failed: the direct package Ember marked failed, with Emb
   };
   const m = status.statusModel(ember(library, rows));
   assert.equal(m.headline, "Package failed · DESeq2");
-  assert.equal(m.failure.why, "couldn't be installed: ERROR: compilation failed for package 'Rcpp'");
+  assert.equal(m.failure.why, "couldn't be installed: ERROR: compilation failed for package 'Rcpp'.");
   assert.equal(m.failure.log, "ERROR: compilation failed for package 'Rcpp'");
   assert.deepEqual(m.packages.map((p) => [p.name, p.state]), [["ggplot2", "waiting"], ["DESeq2", "failed"]], "a package that built but never landed isn't the cause");
   assert.deepEqual(m.deps, { count: 2, done: 0, failed: 1 });
@@ -207,14 +207,14 @@ test("an R library that failed: the direct package Ember marked failed, with Emb
 test("a failed library with no direct row marked: the first named failure, and an installer status line without its prefix", () => {
   const m = status.statusModel(ember({ status: "failed", message: "install failed, status 1", failures: [{ package: "Rcpp", kind: "compile" }] }, rRows("not_installed")));
   assert.equal(m.failure.name, "Rcpp");
-  assert.equal(m.failure.why, "couldn't be installed: status 1");
+  assert.equal(m.failure.why, "couldn't be installed: status 1.");
 });
 
 test("Bioconductor couldn't be looked in: the row's own message, not \"a typo\"", () => {
   const rows = [...rRows("installed"), { name: "limma", direct: true, status: "lookup_failed", message: "Bioconductor didn't answer" }];
   const m = status.statusModel(ember({ status: "ready" }, rows));
   assert.equal(m.failure.name, "limma");
-  assert.equal(m.failure.why, "couldn't be looked up: Bioconductor didn't answer");
+  assert.equal(m.failure.why, "couldn't be looked up: Bioconductor didn't answer.");
   assert.deepEqual(m.packages.at(-1), { name: "limma", state: "failed", detail: "couldn't look up" });
 });
 
@@ -222,7 +222,7 @@ test("an R warning Ember's lookup message carries stays out of the reason, and i
   const message = "notARealPkgZ isn't on CRAN at this date, and Ember couldn't look in Bioconductor (the package index bioc/2026-11-24/3.23 could not be fetched: no index for that date (404) In addition: Warning message: package 'ember' was built under R version 4.6.2); running again tries again";
   const rows = [...rRows("installed"), { name: "notARealPkgZ", direct: true, status: "lookup_failed", message }];
   const m = status.statusModel(ember({ status: "ready" }, rows));
-  assert.equal(m.failure.why, "couldn't be looked up: notARealPkgZ isn't on CRAN at this date, and Ember couldn't look in Bioconductor (the package index bioc/2026-11-24/3.23 could not be fetched: no index for that date (404)); running again tries again");
+  assert.equal(m.failure.why, "couldn't be looked up: notARealPkgZ isn't on CRAN at this date, and Ember couldn't look in Bioconductor (the package index bioc/2026-11-24/3.23 could not be fetched: no index for that date (404)); running again tries again.", "a sentence, so the cells after it read as the next one");
   assert.equal(status.withoutRWarnings("install failed:\nERROR: x\nIn addition: Warning messages:\n1: a\n2: b"), "install failed:\nERROR: x");
 });
 

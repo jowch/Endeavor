@@ -272,6 +272,8 @@ export function installerReason(message: string | null | undefined): string {
   return first || lines[1] || "";
 }
 
+const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
+
 function emberWhy(row: EmberPackageRow | undefined, libraryMessage: string | null | undefined): string {
   if (row?.status === "not_found") return "isn't a package R can find: a typo, or not on CRAN or Bioconductor.";
   if (row && emberCouldntLook.has(row.status)) return row.message ? `couldn't be looked up: ${withoutRWarnings(row.message)}` : "couldn't be looked up.";
@@ -293,7 +295,7 @@ function emberModel(nb: NotebookLike, pkgs: EmberPackages): StatusModel {
   const failedRow = direct.find((r) => r.status === "failed" || r.status === "not_found" || emberCouldntLook.has(r.status));
   const failedName = failedRow?.name ?? (library.status === "failed" ? library.failures?.[0]?.package : undefined);
   const failure: Failure | null = failedName
-    ? { name: failedName, why: emberWhy(failedRow, library.message), cells: failedCells(nb, failedName), log }
+    ? { name: failedName, why: sentence(emberWhy(failedRow, library.message)), cells: failedCells(nb, failedName), log }
     : null;
 
   const progress = library.progress;
