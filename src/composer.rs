@@ -997,7 +997,10 @@ impl Workspace {
                 .tab_stop(true)
                 .focus_ring_on(theme::composer_bg())
                 .child(div().size(px(8.)).rounded(px(1.5)).bg(theme::text_secondary()))
-                .on_click(cx.listener(|this, _, window, cx| this.interrupt(&crate::Interrupt, window, cx)))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.interrupt(&crate::Interrupt, window, cx);
+                    this.input.update(cx, |s, cx| s.focus(window, cx));
+                }))
                 .into_any_element();
         }
         if empty {
@@ -1019,6 +1022,7 @@ impl Workspace {
                 } else {
                     this.start_session(window, cx);
                 }
+                this.input.update(cx, |s, cx| s.focus(window, cx));
             }))
             .into_any_element()
     }
