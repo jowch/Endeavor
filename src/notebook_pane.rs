@@ -891,8 +891,8 @@ impl Workspace {
 
     pub fn fix_package(&mut self, notebook: String, name: String, log: String, cx: &mut Context<Self>) {
         let Some(key) = self.session_showing(&notebook) else { return };
-        let text = format!("The package {name} failed to install or precompile, so the cells that use it can't run. Find out why and fix it.");
-        let context = format!("[Endeavor] Pkg's log for {name} (its end), from the notebook's Status:\n```\n{log}\n```");
+        let text = format!("The package {name} failed to install, so the cells that use it can't run. Find out why and fix it.");
+        let context = format!("[Endeavor] The package installer's log (its end), from the notebook's Packages:\n```\n{log}\n```");
         use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
         let blocks = vec![ContentBlock::Text(TextContent::new(context)), ContentBlock::Text(TextContent::new(text.clone()))];
         let effects = self.submit_for(key, crate::outbox::Queued::new(text, Vec::new(), blocks), false);

@@ -179,16 +179,43 @@ test("an R notebook running cells, and a package R can't find", () => {
   assert.deepEqual(failed.packages.at(-1), { name: "DESeq3", state: "failed", detail: "not found" });
 });
 
-test("an R library that failed to install: the installer's reason and log", () => {
-  const nb = ember(
-    { status: "failed", message: "Installing failed", log: "\x1b[31mERROR\x1b[0m: compilation failed for package 'DESeq2'", failures: [{ package: "DESeq2", kind: "build", detail: "a compiler error" }] },
-    rRows("failed"),
-  );
-  const m = status.statusModel(nb);
+test("an R library that failed: the direct package Ember marked failed, with Ember's own reason, not a failure's detail", () => {
+  const rows = [
+    { name: "ggplot2", version: "3.5.1", direct: true, status: "not_installed" },
+    { name: "DESeq2", version: "1.46.0", direct: true, status: "failed" },
+    { name: "Rcpp", version: "1.0.13", direct: false, status: "failed" },
+    { name: "S4Vectors", version: "0.44.0", direct: false, status: "not_installed" },
+  ];
+  const library = {
+    status: "failed",
+    message: "install failed:\nERROR: compilation failed for package 'Rcpp'",
+    log: "\x1b[31mERROR\x1b[0m: compilation failed for package 'Rcpp'",
+    failures: [
+      { package: "S4Vectors", kind: "dependency", detail: "Rcpp" },
+      { package: "Rcpp", kind: "compile", detail: null, needed_by: ["DESeq2"] },
+    ],
+  };
+  const m = status.statusModel(ember(library, rows));
   assert.equal(m.headline, "Package failed · DESeq2");
-  assert.equal(m.failure.why, "couldn't be installed: a compiler error");
-  assert.equal(m.failure.log, "ERROR: compilation failed for package 'DESeq2'");
+  assert.equal(m.failure.why, "couldn't be installed: ERROR: compilation failed for package 'Rcpp'");
+  assert.equal(m.failure.log, "ERROR: compilation failed for package 'Rcpp'");
+  assert.deepEqual(m.packages.map((p) => [p.name, p.state]), [["ggplot2", "waiting"], ["DESeq2", "failed"]], "a package that built but never landed isn't the cause");
+  assert.deepEqual(m.deps, { count: 2, done: 0, failed: 1 });
   assert.equal(m.busy, null);
+});
+
+test("a failed library with no direct row marked: the first named failure, and an installer status line without its prefix", () => {
+  const m = status.statusModel(ember({ status: "failed", message: "install failed, status 1", failures: [{ package: "Rcpp", kind: "compile" }] }, rRows("not_installed")));
+  assert.equal(m.failure.name, "Rcpp");
+  assert.equal(m.failure.why, "couldn't be installed: status 1");
+});
+
+test("Bioconductor couldn't be looked in: the row's own message, not \"a typo\"", () => {
+  const rows = [...rRows("installed"), { name: "limma", direct: true, status: "lookup_failed", message: "Bioconductor didn't answer" }];
+  const m = status.statusModel(ember({ status: "ready" }, rows));
+  assert.equal(m.failure.name, "limma");
+  assert.equal(m.failure.why, "couldn't be looked up: Bioconductor didn't answer");
+  assert.deepEqual(m.packages.at(-1), { name: "limma", state: "failed", detail: "" });
 });
 
 test("run times read like Pluto's", () => {

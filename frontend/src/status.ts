@@ -233,39 +233,44 @@ function plutoModel(nb: NotebookLike): StatusModel {
   };
 }
 
-const emberNotFound = new Set(["not_found", "lookup_failed", "source_failed"]);
+const emberCouldntLook = new Set(["lookup_failed", "source_failed"]);
 
-function emberRow(row: EmberPackageRow, libraryFailed: boolean): PkgRow {
+function emberRow(row: EmberPackageRow): PkgRow {
   if (row.status === "installed") return { name: row.name, state: "ready", detail: row.version ?? "" };
   if (row.status === "installing") return { name: row.name, state: "installing", detail: "" };
-  if (emberNotFound.has(row.status)) return { name: row.name, state: "failed", detail: "not found" };
-  if (row.status === "failed" || libraryFailed) return { name: row.name, state: "failed", detail: "" };
+  if (row.status === "not_found") return { name: row.name, state: "failed", detail: "not found" };
+  if (row.status === "failed" || emberCouldntLook.has(row.status)) return { name: row.name, state: "failed", detail: "" };
   return { name: row.name, state: "waiting", detail: "" };
+}
+
+export function installerReason(message: string | null | undefined): string {
+  const lines = plain(message).split("\n").map((l) => l.trim()).filter(Boolean);
+  const first = (lines[0] ?? "").replace(/^install failed[:,]?\s*/, "");
+  return first || lines[1] || "";
+}
+
+function emberWhy(row: EmberPackageRow | undefined, libraryMessage: string | null | undefined): string {
+  if (row?.status === "not_found") return "isn't a package R can find: a typo, or not on CRAN or Bioconductor.";
+  if (row && emberCouldntLook.has(row.status)) return row.message ? `couldn't be looked up: ${row.message}` : "couldn't be looked up.";
+  const reason = installerReason(row?.message ?? libraryMessage);
+  return reason ? `couldn't be installed: ${reason}` : "couldn't be installed.";
 }
 
 function emberModel(nb: NotebookLike, pkgs: EmberPackages): StatusModel {
   const library = pkgs.library ?? {};
-  const libraryFailed = library.status === "failed";
   const rows = pkgs.rows ?? [];
-  const packages = rows.filter((r) => r.direct).map((r) => emberRow(r, libraryFailed && r.status !== "installed"));
-  const indirect = rows.filter((r) => !r.direct).map((r) => emberRow(r, libraryFailed && r.status !== "installed"));
+  const direct = rows.filter((r) => r.direct);
+  const packages = direct.map(emberRow);
+  const indirect = rows.filter((r) => !r.direct).map(emberRow);
   const deps = indirect.length
     ? { count: indirect.length, done: indirect.filter((r) => r.state === "ready").length, failed: indirect.filter((r) => r.state === "failed").length }
     : null;
 
   const log = plain(library.log);
-  const firstFailure = library.failures?.[0];
-  const failedPkg = packages.find((p) => p.state === "failed") ?? (firstFailure ? { name: firstFailure.package, detail: "" } : null);
-  const failure: Failure | null = failedPkg
-    ? {
-        name: failedPkg.name,
-        why:
-          failedPkg.detail === "not found"
-            ? "isn't a package R can find: a typo, or not on CRAN or Bioconductor."
-            : `couldn't be installed${firstFailure?.detail ? `: ${firstFailure.detail}` : "."}`,
-        cells: failedCells(nb),
-        log,
-      }
+  const failedRow = direct.find((r) => r.status === "failed" || r.status === "not_found" || emberCouldntLook.has(r.status));
+  const failedName = failedRow?.name ?? (library.status === "failed" ? library.failures?.[0]?.package : undefined);
+  const failure: Failure | null = failedName
+    ? { name: failedName, why: emberWhy(failedRow, library.message), cells: failedCells(nb), log }
     : null;
 
   const progress = library.progress;
