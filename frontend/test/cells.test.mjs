@@ -155,3 +155,18 @@ test("the rail's states: running, not run yet, failed and ran, with Ember's own 
   await redraw();
   assert.equal(states()[0], "running", "Claude's cell pulses while it runs, like any other");
 });
+
+test("the rail shows every cell as not run yet in safe preview, whatever its saved state", async () => {
+  const { doc } = await page();
+  const states = () => [...doc.querySelectorAll("#endeavor-rail a")].map((m) => m.dataset.state);
+  const editor = doc.querySelector("pluto-editor") ?? doc.body.appendChild(doc.createElement("pluto-editor"));
+  doc.getElementById(C).classList.add("errored");
+  editor.classList.add("process_waiting_for_permission");
+  doc.body.append(doc.createElement("div"));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(states(), ["pending", "pending", "pending"]);
+  editor.classList.remove("process_waiting_for_permission");
+  doc.body.append(doc.createElement("div"));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(states(), ["ran", "ran", "failed"]);
+});

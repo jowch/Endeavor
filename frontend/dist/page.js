@@ -1432,8 +1432,10 @@ ${text.value}` : sent.comment;
   #endeavor-rail-tip[hidden] { display: none; }
   @media print { #endeavor-rail, #endeavor-rail-tip { display: none !important; } }
 `;
+  var inSafePreview = () => document.querySelector("pluto-editor.process_waiting_for_permission") !== null;
   function runState(cell) {
     const has = (name) => cell.classList.contains(name);
+    if (inSafePreview()) return "pending";
     if (onMarimo()) {
       const status = cell.querySelector("[data-testid=cell-status][data-status], [data-status]")?.getAttribute("data-status");
       if (status === "running") return "running";
@@ -1477,13 +1479,11 @@ ${text.value}` : sent.comment;
     const outer = s === document.scrollingElement || s === document.documentElement ? 0 : s.getBoundingClientRect().top;
     return cell.getBoundingClientRect().top - outer + s.scrollTop;
   }
-  var PAGE_CONTROLS_ABOVE = "[data-testid=chrome-controls-top-right]";
+  var PAGE_CONTROLS_ABOVE = "[data-testid=chrome-controls-top-right], main > preamble #saveall-container";
   var PAGE_CONTROLS_BELOW = "[data-testid=chrome-controls-bottom-right]";
   var CLEAR_OF_CONTROLS = 8;
   function besideRail(selector, left) {
-    const el2 = document.querySelector(selector);
-    const r = el2?.getBoundingClientRect();
-    return r && r.height > 0 && r.right > left - CLEAR_OF_CONTROLS ? r : null;
+    return [...document.querySelectorAll(selector)].map((el2) => el2.getBoundingClientRect()).filter((r) => r.height > 0 && r.right > left - CLEAR_OF_CONTROLS);
   }
   function place() {
     const s = scroller();
@@ -1492,8 +1492,8 @@ ${text.value}` : sent.comment;
     const left = f.contentRight - gap - (WIDTH + 8);
     const above = besideRail(PAGE_CONTROLS_ABOVE, left);
     const below = besideRail(PAGE_CONTROLS_BELOW, left);
-    const top = Math.max(f.top + 10, above ? above.bottom + CLEAR_OF_CONTROLS : 0);
-    const bottom = Math.min(f.top + f.height - 10, below ? below.top - CLEAR_OF_CONTROLS : Infinity);
+    const top = Math.max(f.top + 10, ...above.map((r) => r.bottom + CLEAR_OF_CONTROLS));
+    const bottom = Math.min(f.top + f.height - 10, ...below.map((r) => r.top - CLEAR_OF_CONTROLS));
     const height2 = Math.max(bottom - top, 0);
     rail.style.left = `${left}px`;
     rail.style.top = `${top}px`;
