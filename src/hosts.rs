@@ -207,6 +207,13 @@ impl Hosts {
         }
     }
 
+    pub fn mid_sentence_name(&self, host: &HostId) -> String {
+        match host {
+            HostId::ThisMac => crate::platform::this_computer!(lower).into(),
+            HostId::Server(_) => self.name(host),
+        }
+    }
+
     pub fn name_for(&self, id: &str, typed: &str, ssh_host: &str, cluster: bool) -> Result<String, String> {
         let typed = typed.trim();
         if !typed.is_empty() {
@@ -473,6 +480,14 @@ mod tests {
         hosts.put(server("c", "Über"));
         assert!(hosts.name_for("new", "über", "lab", false).is_err());
         assert_eq!(hosts.free_name("", "lab (cluster)"), "lab (cluster) 2");
+    }
+
+    #[test]
+    fn only_this_computers_name_is_lowered_mid_sentence() {
+        let mut hosts = Hosts::default();
+        hosts.put(Server { id: "a".into(), name: "GPU Lab".into(), ssh_host: "lab".into(), ..Default::default() });
+        assert_eq!(hosts.mid_sentence_name(&HostId::ThisMac), crate::platform::this_computer!(lower));
+        assert_eq!(hosts.mid_sentence_name(&HostId::Server("a".into())), "GPU Lab");
     }
 
     #[test]

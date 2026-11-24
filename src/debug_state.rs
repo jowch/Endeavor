@@ -598,7 +598,7 @@ impl Workspace {
         json!({
             "shows": shows,
             "file": file,
-            "host_pane": match &shown { PaneShows::Host(pane) => Some(host_pane(pane, &self.hosts.name(&s.place.host), s.kind)), _ => None },
+            "host_pane": match &shown { PaneShows::Host(pane) => Some(host_pane(pane, &s.place.host, &self.hosts.name(&s.place.host), s.kind)), _ => None },
             "starting": (shown == PaneShows::NoNotebook).then(|| self.starting_ahead_line(s, cx)).flatten(),
             "stopped": match &shown { PaneShows::Stopped(st) => Some(json!({ "idle_hours": st.idle_hours, "safe_preview": st.safe_preview })), _ => None },
             "crash": self.notebook_at(s.key).and_then(|at| {
@@ -652,7 +652,7 @@ impl Workspace {
         let Some(folder) = self.draft_pane_folder() else {
             let pane = self.host_pane_state(&self.draft.host, self.draft.notebook.kind(), cx);
             let shows = if pane.is_some() { "host" } else { "empty" };
-            return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.hosts.name(&self.draft.host), self.draft.notebook.kind())), "header": header });
+            return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.draft.host, &self.hosts.name(&self.draft.host), self.draft.notebook.kind())), "header": header });
         };
         match (&self.draft.notebook, &self.draft.preview) {
             (NotebookChoice::New(_), _) => json!({ "shows": "new_notebook", "saved_in": self.draft_tilde(folder), "header": header }),
@@ -803,21 +803,34 @@ fn chip_label(a: &crate::attach::Attachment) -> String {
     a.label().text()
 }
 
-fn host_pane(pane: &HostPane, host: &str, kind: wire::backend::Backend) -> Value {
+fn host_pane(pane: &HostPane, host_id: &crate::hosts::HostId, host: &str, kind: wire::backend::Backend) -> Value {
     let (kind, reason) = match pane {
         HostPane::Lost => ("cant_reach", None),
         HostPane::Starting => ("starting", None),
         HostPane::JuliaStarting(step) => ("julia_starting", Some(step)),
         HostPane::JuliaFailed(reason) => ("julia_failed", Some(reason)),
+        HostPane::RStarting(step) if kind == wire::backend::Backend::Marimo => ("python_starting", Some(step)),
         HostPane::RStarting(step) => ("r_starting", Some(step)),
         HostPane::RFailed(reason) if kind == wire::backend::Backend::Marimo => ("python_failed", Some(reason)),
         HostPane::RFailed(reason) => ("r_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
-        HostPane::NotRunning(reason) => (if kind == wire::backend::Backend::Ember { "r_not_running" } else { "julia_not_running" }, Some(reason)),
-        HostPane::Crashed(reason) => (if kind == wire::backend::Backend::Ember { "r_crashed" } else { "julia_crashed" }, Some(reason)),
+        HostPane::NotRunning(reason) => (by_language(kind, ["julia_not_running", "r_not_running", "python_not_running"]), Some(reason)),
+        HostPane::Crashed(reason) => (by_language(kind, ["julia_crashed", "r_crashed", "python_crashed"]), Some(reason)),
         HostPane::NotConnected(reason) => ("not_connected", Some(reason)),
     };
-    json!({ "kind": kind, "host": host, "reason": reason.filter(|r| !r.is_empty()) })
+    let button = match pane {
+        HostPane::RFailed(error) => Some(crate::connection::r_failed_shows(host_id, error, crate::new_session::OFFERS_OWN_UV, crate::connection::own_r_offered()).button()),
+        _ => None,
+    };
+    json!({ "kind": kind, "host": host, "reason": reason.filter(|r| !r.is_empty()), "button": button })
+}
+
+fn by_language(kind: wire::backend::Backend, [julia, r, python]: [&'static str; 3]) -> &'static str {
+    match kind {
+        wire::backend::Backend::Pluto => julia,
+        wire::backend::Backend::Ember => r,
+        wire::backend::Backend::Marimo => python,
+    }
 }
 
 fn write(out: &Path, state: &Value) -> std::io::Result<()> {
@@ -834,9 +847,23 @@ mod tests {
 
     #[test]
     fn a_stopped_or_crashed_host_is_named_by_the_sessions_language() {
-        let kind = |pane: HostPane, backend| host_pane(&pane, "lab", backend)["kind"].as_str().unwrap().to_owned();
+        let kind = |pane: HostPane, backend| host_pane(&pane, &crate::hosts::HostId::Server("lab".into()), "lab", backend)["kind"].as_str().unwrap().to_owned();
         assert_eq!(kind(HostPane::Crashed("oom".into()), Backend::Pluto), "julia_crashed");
         assert_eq!(kind(HostPane::Crashed("oom".into()), Backend::Ember), "r_crashed");
         assert_eq!(kind(HostPane::NotRunning("idle".into()), Backend::Ember), "r_not_running");
+        assert_eq!(kind(HostPane::Crashed("oom".into()), Backend::Marimo), "python_crashed");
+        assert_eq!(kind(HostPane::NotRunning("idle".into()), Backend::Marimo), "python_not_running");
+        assert_eq!(kind(HostPane::RStarting("Downloading uv…".into()), Backend::Marimo), "python_starting");
+        assert_eq!(kind(HostPane::RStarting("Installing R".into()), Backend::Ember), "r_starting");
+    }
+
+    #[test]
+    fn a_failed_python_pane_names_its_button() {
+        let no_uv = HostPane::RFailed("python_not_found::Python notebooks need uv.".into());
+        let here = host_pane(&no_uv, &crate::hosts::HostId::ThisMac, "this computer", Backend::Marimo);
+        assert_eq!(here["button"], if crate::new_session::OFFERS_OWN_UV { "uv-install" } else { "python-retry" });
+        let lab = host_pane(&no_uv, &crate::hosts::HostId::Server("lab".into()), "lab", Backend::Marimo);
+        assert_eq!(lab["button"], "python-retry");
+        assert!(host_pane(&HostPane::Starting, &crate::hosts::HostId::ThisMac, "this computer", Backend::Marimo)["button"].is_null());
     }
 }
