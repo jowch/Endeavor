@@ -1,7 +1,3 @@
-//! The notebook's web view beyond what wry offers: hearing that WebKit's web
-//! content process (the one running the page) ended, WebKit's own find in the
-//! page, and whether the web view has the keyboard.
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -13,16 +9,11 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
 use objc2::{class, msg_send, sel};
 
 thread_local! {
-    /// Each web view's handler, by its WKWebView: the user's notebook view and
-    /// the second view for cell pictures share one delegate class, so the
-    /// handler must go by which view's process ended.
     static ENDED: RefCell<Vec<(usize, Rc<dyn Fn()>)>> = const { RefCell::new(Vec::new()) };
-    /// The text last found, so the same text goes on from its match.
     static FOUND: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 unsafe extern "C-unwind" fn process_did_terminate(_: *mut AnyObject, _: Sel, view: *mut AnyObject) {
-    // Taken out first: the handler may add or remove handlers.
     let ended = ENDED.with(|ended| ended.borrow().iter().find(|(v, _)| *v == view as usize).map(|(_, f)| f.clone()));
     match ended {
         Some(ended) => ended(),
@@ -35,14 +26,6 @@ fn key(webview: &wry::WebView) -> usize {
     Retained::as_ptr(&webview.webview()) as usize
 }
 
-/// Call `ended` when this web view's web content process ends (a crash, or
-/// macOS ending it for memory), which leaves the web view blank. Having this
-/// handler also stops WebKit reloading the page by itself; `ended` does that.
-/// Another web view's process ending doesn't call it.
-///
-/// wry's navigation delegate has no such method, so it's added to the
-/// delegate's class, and the delegate set again: WebKit reads which methods a
-/// delegate has when it's set.
 pub fn on_process_ended(webview: &wry::WebView, ended: impl Fn() + 'static) {
     use wry::WebViewExtMacOS;
     let id = key(webview);
@@ -61,22 +44,16 @@ pub fn on_process_ended(webview: &wry::WebView, ended: impl Fn() + 'static) {
         }
         let class = object_getClass(delegate) as *mut AnyClass;
         let imp: Imp = std::mem::transmute(process_did_terminate as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject));
-        // NO when the class has it already (a second web view): the handler above is shared.
         let _ = class_addMethod(class, sel!(webViewWebContentProcessDidTerminate:), imp, c"v@:@".as_ptr());
         let _: () = msg_send![&*view, setNavigationDelegate: delegate];
     }
 }
 
-/// The web view is going away: its handler goes with it.
 pub fn forget(webview: &wry::WebView) {
     let id = key(webview);
     ENDED.with(|slot| slot.borrow_mut().retain(|(v, _)| *v != id));
 }
 
-/// Find `text` in the page with WebKit's find (macOS 13+): it selects the
-/// match and scrolls to it. Searching the same text again goes on from the
-/// match; a new text starts from the top. The receiver gets whether there was
-/// a match. WebKit gives no count.
 pub fn find(webview: &wry::WebView, text: &str, backwards: bool) -> oneshot::Receiver<bool> {
     let new = FOUND.with(|f| f.replace(Some(text.to_owned())).as_deref() != Some(text));
     if new {
@@ -115,8 +92,6 @@ fn search(webview: &wry::WebView, text: &str, backwards: bool) -> oneshot::Recei
     rx
 }
 
-/// The page's address, or "" when WebKit has none: after the web content
-/// process ended, until the next load. wry's `url()` panics then.
 pub fn url(webview: &wry::WebView) -> String {
     use wry::WebViewExtMacOS;
     let view = webview.webview();
@@ -124,33 +99,26 @@ pub fn url(webview: &wry::WebView) -> String {
     if url.is_null() { String::new() } else { webview.url().unwrap_or_default() }
 }
 
-/// With no selection, WebKit's next find starts from the top.
 fn clear_selection(webview: &wry::WebView) {
     let _ = webview.evaluate_script("window.getSelection()?.removeAllRanges()");
 }
 
-/// Take away find's highlight and selection. WebKit has no public call to
-/// hide its highlight, but hides it when a search finds nothing: this
-/// searches for a character no page has.
 pub fn clear_find(webview: &wry::WebView) {
     FOUND.with(|f| f.take());
     drop(search(webview, "\u{FDD0}", false));
     clear_selection(webview);
 }
 
-/// Give the web view the keyboard.
 pub fn give_keyboard(webview: &wry::WebView) {
     let _ = webview.focus();
 }
 
-/// The menu bar's Edit items reach the web view by themselves on macOS: no app menu.
 pub fn had_keyboard(webview: &wry::WebView) -> bool {
     has_keyboard(webview)
 }
 
 pub fn edit(_: &wry::WebView, _: gpui::OsAction) {}
 
-/// The keyboard is in the web view: it, or a view inside it, is its window's first responder.
 pub fn has_keyboard(webview: &wry::WebView) -> bool {
     use wry::WebViewExtMacOS;
     let view = webview.webview();

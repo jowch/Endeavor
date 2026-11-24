@@ -1,8 +1,3 @@
-//! The notebook page's alert(), confirm() and prompt(). WebKit shows them only
-//! through its UI delegate, and wry's delegate doesn't implement them, so they
-//! did nothing (confirm() answered false, prompt() null): Pluto's "Delete these
-//! cells?" and its export warnings among them. They show as sheets on the window.
-
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
 
@@ -19,7 +14,6 @@ type Confirm = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, 
 type Prompt =
     unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject, *mut AnyObject, *mut AnyObject, *mut Block<dyn Fn(*mut AnyObject)>);
 
-/// NSAlertFirstButtonReturn.
 const FIRST_BUTTON: isize = 1000;
 
 pub(crate) unsafe fn string_of(ns: *mut AnyObject) -> String {
@@ -37,7 +31,6 @@ pub(crate) unsafe fn ns_string(text: &str) -> Retained<AnyObject> {
     unsafe { msg_send![class!(NSString), stringWithUTF8String: text.as_ptr()] }
 }
 
-/// An alert with the page's message (its first line as the heading) and `buttons`, the first the default.
 unsafe fn alert(message: *mut AnyObject, buttons: &[&str]) -> Retained<AnyObject> {
     unsafe {
         let text = string_of(message);
@@ -52,8 +45,6 @@ unsafe fn alert(message: *mut AnyObject, buttons: &[&str]) -> Retained<AnyObject
     }
 }
 
-/// Show `alert` as a sheet on the web view's window (or on its own when there's
-/// none), then call `answer` with whether its first button was chosen.
 unsafe fn show(web_view: *mut AnyObject, alert: Retained<AnyObject>, answer: impl Fn(bool) + 'static) {
     unsafe {
         let window: *mut AnyObject = msg_send![web_view, window];
@@ -66,7 +57,6 @@ unsafe fn show(web_view: *mut AnyObject, alert: Retained<AnyObject>, answer: imp
     }
 }
 
-/// WebKit's completion handler, to call once, later.
 unsafe fn keep<F: ?Sized>(handler: *mut Block<F>) -> Cell<Option<RcBlock<F>>> {
     Cell::new(unsafe { RcBlock::copy(handler) })
 }
@@ -120,8 +110,6 @@ unsafe extern "C-unwind" fn run_prompt(
     }
 }
 
-/// Answer the page's dialogs. Call once the web view exists (wry registers its
-/// delegate class then). Idempotent.
 pub fn show_page_dialogs(webview: &wry::WebView) {
     use wry::WebViewExtMacOS;
     let Some(class) = AnyClass::get(c"WryWebViewUIDelegate") else { return };
@@ -147,7 +135,6 @@ pub fn show_page_dialogs(webview: &wry::WebView) {
         for (sel, imp, types) in methods {
             class_addMethod(class, sel, imp, types.as_ptr());
         }
-        // WebKit reads which methods its delegate has when the delegate is set.
         let view = webview.webview();
         let delegate: *mut AnyObject = msg_send![&*view, UIDelegate];
         let _: () = msg_send![&*view, setUIDelegate: std::ptr::null_mut::<AnyObject>()];

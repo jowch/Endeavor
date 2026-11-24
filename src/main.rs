@@ -1,9 +1,3 @@
-//! Endeavor: app-owned Julia running Pluto + EndeavorRuntime, the live Pluto frontend in a
-//! child webview, and ACP agent sessions (a session bar, one chat pane) wired to the
-//! same Pluto session over MCP.
-
-// A GUI program on Windows: no console window of its own, and the console
-// programs it starts are given none either (`client::no_window`).
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -126,13 +120,10 @@ use splash::{Progress, Setup};
 use wire::backend::Backend;
 use crate::theme::FocusRing as _;
 
-/// Notebook id from a notebook page's URL. Only the id is used: the URL may
-/// also carry the runtime's token, which must never reach the agent.
 fn viewed_notebook_id(url: &str) -> Option<&str> {
     viewed_notebook(url).map(|(_, id)| id)
 }
 
-/// The kind and id of the notebook a notebook page's URL shows.
 fn viewed_notebook(url: &str) -> Option<(Backend, &str)> {
     Backend::ALL.into_iter().find_map(|kind| Some((kind, kind.notebook_id(url).filter(|id| annotate::is_uuid(id))?)))
 }
@@ -164,7 +155,6 @@ actions!(
     ]
 );
 
-/// A small JSON file in Endeavor's Application Support folder.
 fn app_file(name: &str) -> Option<PathBuf> {
     Some(install::app_dir().ok()?.join(name))
 }
@@ -179,13 +169,7 @@ fn save_json(name: &str, value: &impl serde::Serialize) {
     }
 }
 
-/// `load_json`'s read, by path (split out so the round trip is unit-testable
-/// without the real Application Support folder). A file that's there but
-/// doesn't parse reads as the default, and is first set aside (see `set_aside`)
-/// so the next save can't overwrite what's left of it.
 fn load_json_at<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
-    // Bytes, not a string: a file cut inside a multi-byte character must count
-    // as one that doesn't parse, not as no file.
     let Ok(bytes) = std::fs::read(path) else { return T::default() };
     serde_json::from_slice(&bytes).unwrap_or_else(|e| {
         set_aside(path, &e);
@@ -193,10 +177,7 @@ fn load_json_at<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
     })
 }
 
-/// `save_json`'s write, by path.
 fn save_json_at(path: &Path, value: &impl serde::Serialize) {
-    // ponytail: best effort. A failed save leaves the last good file in place
-    // (`write_atomic`), so it costs only the change since then.
     if let Ok(json) = serde_json::to_string_pretty(value)
         && let Err(e) = write_atomic(path, json.as_bytes())
     {
@@ -204,16 +185,8 @@ fn save_json_at(path: &Path, value: &impl serde::Serialize) {
     }
 }
 
-/// Replace `path` with `bytes` so that a crash or a full disk leaves either
-/// the old file or the new one, never half of one: write a file beside it,
-/// flush it to disk, then rename it over the old one.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    // One write at a time in this whole process (not per file, on purpose:
-    // these files are small), so two saves of one file can't share its
-    // `.partial`. ponytail: `sync_all` runs on the caller's thread, the UI
-    // thread for most saves; fine for user actions and turn ends, not for a
-    // hot path.
     static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(parent) = path.parent() {
@@ -233,26 +206,15 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     renamed
 }
 
-/// `std::fs::rename`, which replaces an existing file on every platform. On
-/// Windows it fails while another program (a virus scanner, the search
-/// indexer) has either file open without sharing it, most often the scanner
-/// checking the `.partial` just closed, so try a few more times.
 fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
     rename_held(from, to, &[20, 40, 60, 80, 100])
 }
 
-/// `std::fs::rename` for a folder just filled with many files (an adapter npm
-/// just installed, an unpacked Julia). On Windows the rename fails while any
-/// file under it is open, and a virus scanner checking thousands of new files
-/// can hold one for a few seconds, so keep trying for about 8 s (#246).
 pub fn rename_folder(from: &Path, to: &Path) -> std::io::Result<()> {
     rename_held(from, to, &[100, 200, 400, 800, 1000, 1000, 1000, 1000, 1000, 1000, 1000])
 }
 
-/// `std::fs::rename`, tried again after each wait (in ms) while Windows says
-/// another program holds the file.
 fn rename_held(from: &Path, to: &Path, waits: &[u64]) -> std::io::Result<()> {
-    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
     const HELD: [i32; 3] = [5, 32, 33];
     let mut waits = waits.iter();
     loop {
@@ -266,8 +228,6 @@ fn rename_held(from: &Path, to: &Path, waits: &[u64]) -> std::io::Result<()> {
     }
 }
 
-/// Move a file that doesn't parse to `<name>.bad` (replacing an older one),
-/// so a person can still look at it, and say so on stderr.
 pub fn set_aside(path: &Path, why: &dyn std::fmt::Display) {
     let mut bad = path.as_os_str().to_owned();
     bad.push(".bad");
@@ -277,33 +237,15 @@ pub fn set_aside(path: &Path, why: &dyn std::fmt::Display) {
     }
 }
 
-/// The range a divider can drag the panes to (defaults: settings::Layout).
 const SIDEBAR_RANGE: (f32, f32) = (180., 400.);
 const CHAT_MIN: f32 = 320.;
 const NOTEBOOK_MIN: f32 = 360.;
-/// The window can't shrink below every column at its minimum, plus the two dividers.
 const WINDOW_MIN: Size<Pixels> = Size { width: px(SIDEBAR_RANGE.0 + CHAT_MIN + NOTEBOOK_MIN + 2.), height: px(600.) };
 
-/// The chat column's content (the transcript and the whole composer area,
-/// including its cards and the chips row) sits in one centred column like
-/// Claude desktop's: at most this wide.
 const CHAT_CONTENT_MAX: f32 = 760.;
-/// The column's side margin once the chat pane is wide enough to show it in
-/// full (`CHAT_CONTENT_MAX` plus two of these).
 const CHAT_MARGIN_MAX: f32 = 50.;
-/// The chat pane's width at and above which the column sits at its max width
-/// with `CHAT_MARGIN_MAX` on each side.
 const CHAT_MARGIN_BREAK: f32 = CHAT_CONTENT_MAX + 2. * CHAT_MARGIN_MAX;
 
-/// The chat column's side margin for a pane this wide. At `CHAT_MARGIN_BREAK`
-/// (860 px) and above, the column centres at `CHAT_CONTENT_MAX` with
-/// `CHAT_MARGIN_MAX` (50 px) on each side. Below that, the margin holds at
-/// 50 px -- the column fills the pane, less the margins -- until the pane
-/// gets close to its minimum (`CHAT_MIN`, 320 px), where a flat 50 px would
-/// leave only 220 px for the content. There the margin shrinks in proportion
-/// to the pane's width (the same 50:860 ratio as the wide case), down to a
-/// floor of 16 px -- today's `px_4` padding -- so the column never loses more
-/// width to its margins than it did before this column existed.
 fn chat_margin(chat_width: f32) -> f32 {
     if chat_width >= CHAT_MARGIN_BREAK {
         (chat_width - CHAT_CONTENT_MAX) / 2.
@@ -318,8 +260,6 @@ enum Divider {
     Chat,
 }
 
-/// The ⌘B button: a small drawn sidebar glyph. It sits in a header, so it stops
-/// the mouse-down that would otherwise start a window move.
 fn sidebar_toggle(this: &Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
     div()
         .id("sidebar-toggle")
@@ -347,8 +287,6 @@ fn sidebar_toggle(this: &Workspace, cx: &mut Context<Workspace>) -> impl IntoEle
         )
 }
 
-/// The composer's context ring: a 14px circle filled clockwise by the share of
-/// the context window used; orange once it's nearly full.
 fn context_ring(fraction: f32) -> impl IntoElement {
     const SIZE: f32 = 14.;
     const WIDTH: f32 = 2.;
@@ -358,7 +296,6 @@ fn context_ring(fraction: f32) -> impl IntoElement {
         move |bounds, _, window, _| {
             let center = bounds.center();
             let r = px((SIZE - WIDTH) / 2.);
-            // ponytail: arcs as 48-segment polylines; arc_to if it ever looks faceted.
             let arc = |to: f32| {
                 let mut path = PathBuilder::stroke(px(WIDTH));
                 let steps = ((48. * to).ceil() as usize).max(1);
@@ -382,7 +319,6 @@ fn context_ring(fraction: f32) -> impl IntoElement {
     .size(px(SIZE))
 }
 
-/// A 24px composer-toolbar button.
 fn tool_button(id: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -394,12 +330,8 @@ fn tool_button(id: &'static str) -> Stateful<Div> {
         .cursor_pointer()
         .hover(|s| s.bg(theme::row_active()))
 }
-/// Room the traffic lights take at the start of a header. On Linux the window
-/// manager's title bar has the window's buttons, and on Windows its own title bar.
 const TRAFFIC_LIGHTS: f32 = 84.;
 
-/// A 44px column header: the window's drag area (the title bar is transparent),
-/// double-click zooms like a title bar.
 fn column_header(id: impl Into<ElementId>) -> Stateful<Div> {
     div()
         .id(id)
@@ -418,8 +350,6 @@ fn column_header(id: impl Into<ElementId>) -> Stateful<Div> {
         })
 }
 
-/// Recently used working folders on every host, most recent first, kept across
-/// launches. Only This Mac's can be checked for still being there.
 fn load_recent() -> Vec<Place> {
     load_json::<Vec<Place>>("recent.json").into_iter().filter(|p| p.here().is_none_or(Path::is_dir)).collect()
 }
@@ -428,7 +358,6 @@ fn load_records() -> records::Records {
     records::Records::parse(&app_file("sessions.json").and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default())
 }
 
-/// Where each agent's last config options are kept.
 fn agent_options_file(agent: agent::Agent) -> &'static str {
     match agent {
         agent::Agent::Claude => "agent-options.json",
@@ -451,200 +380,97 @@ fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-/// How long streamed agent updates wait for a redraw (`Workspace::redraw_soon`).
 const STREAM_FRAME: Duration = Duration::from_millis(50);
 
 pub struct Workspace {
     webview: Entity<WebView>,
-    /// The chat box; on the new-session screen it holds the optional first message.
     pub input: Entity<TextareaState>,
     sessions: Vec<Session>,
-    /// The session in the chat pane; None shows the new-session screen.
     active: Option<u64>,
     next_key: u64,
-    /// The new-session screen's choices.
     draft: Draft,
-    /// The folder browser picking a session's notebook on a server (Locate file…, Open the notebook only).
     locate: Option<new_session::Browser>,
-    /// Working folders on every host, most recent first (persisted).
     recent: Vec<Place>,
-    /// Every session's agent, place, title and last activity (persisted): the
-    /// sidebar's past sessions, kept up to date by the agent's listings.
     records: records::Records,
-    /// This Mac's Julia has been ready since launch.
     this_mac_was_ready: bool,
-    /// Session names the user gave, by session id (persisted).
     titles: HashMap<String, String>,
-    /// Ids of archived sessions (persisted): hidden from the sidebar's Active view.
     archived: HashSet<String>,
-    /// The sidebar's filter menu (Status, Where, Group by, Sort by…), while open.
     filter_menu: Option<FilterMenu>,
-    /// The sidebar's inline search field, in place of the "Sessions" heading, while open.
     sidebar_search: Option<Entity<InputState>>,
-    /// Each session's notebook file, by session id (persisted), for reopening it
-    /// with the session: one the app opened isn't in the agent's history.
     session_notebooks: HashMap<String, Place>,
-    /// A "notebook moved" note waiting to reach the agent, by session id
-    /// (persisted): set when the user locates or moves a session's notebook
-    /// file, and cleared once it's actually sent, so it survives a quit in between.
     pending_moved: HashMap<String, String>,
     renaming: Option<sidebar::Rename>,
     menu: Option<PopupMenu>,
-    /// Folders showing all their past sessions, not just the newest.
     expanded: HashSet<Place>,
     settings: Settings,
-    /// The divider being dragged.
     resizing: Option<Divider>,
-    /// The chat box's chips, mentions and menus (the box itself is `input`).
     composer: composer::Composer,
-    /// A sent chip's popover.
     chip_popover: Option<composer::ChipPopover>,
-    /// Reply on text selected in one of Claude's replies.
     reply: Option<quotes::Reply>,
-    /// Words left in Reply's prompt by Esc or a click elsewhere, per selection.
     reply_drafts: quotes::Drafts,
-    /// Each agent's config options (model, effort) as its last session offered
-    /// them (persisted), so the new-session screen can offer them too.
     agent_options: HashMap<agent::Agent, Vec<agent_client_protocol::schema::v1::SessionConfigOption>>,
-    /// The Settings panel, while open.
     settings_panel: Option<settings_panel::Panel>,
-    /// Where Settings was last left, to open there again.
     settings_page: settings_panel::Page,
-    /// What Settings found out: the account, the chosen Julia.
     settings_checks: settings_panel::Checks,
-    /// Endeavor's own Julia on this computer, for Settings.
     own_julia: own_julia::OwnJuliaState,
     own_r: own_r::OwnRState,
-    /// First launch: the setup screen covers the window until setup finishes.
     setup: Option<Setup>,
-    /// Claude Code's sign-in: checked when the agent starts and when the window
-    /// comes back to the front, and lost when a turn fails for want of it.
     account: signin::Account,
-    /// When the sign-in was last checked on coming to the front.
     sign_in_checked: Option<std::time::Instant>,
-    /// Since when the network has been unreachable (None: online).
     offline_since: Option<std::time::Instant>,
-    /// Try now is looking at the network.
     probing: bool,
-    /// Each agent's connection and process.
     links: agent_process::Links,
-    /// Endeavor's own update (a nightly Mac app updates itself; updater.rs).
     app_update: updater::Updater,
-    /// Codex's sign-in, once Codex has been started.
     codex_account: agent::Account,
-    /// Codex's browser sign-in under way: its attempt and `codex-acp login`'s pid, for Cancel.
     codex_login: Option<(u64, u32)>,
-    /// Antigravity's sign-in, kept the same way as Codex's.
     antigravity_account: agent::Account,
-    /// App-level status (Julia, agent connection), shown under the session bar.
     status: SharedString,
     annotating: bool,
-    /// Pictures the page asked for (`Shoot`), by id, until its quote takes them.
     shots: HashMap<u32, Arc<Vec<u8>>>,
-    /// Where the listeners ask for a picture of a cell's output for the agent (`cell_shot`).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     cell_shots: futures::channel::mpsc::UnboundedSender<cell_shot::Ask>,
-    /// Where the listeners hand on an agent's request to restart its runtime (`restart_ask`).
     restart_asks: futures::channel::mpsc::UnboundedSender<restart_ask::Ask>,
-    /// Those requests whose card is up, by the card's id: where the user's answer goes.
     restart_replies: HashMap<u64, restart_ask::Pending>,
-    /// The second web view those pictures are taken from.
     second: cell_shot::Second,
-    /// "Two ways to add your file" shows over the composer (a "Uses your file"
-    /// example was clicked and the tip isn't done yet).
     file_tip: bool,
-    /// Each host's connection and runtime.
     connections: HashMap<HostId, connection::Connection>,
-    /// Each host's loopback ports for the webview and the agent, relayed to its
-    /// runtime of the moment; kept for the whole launch.
     listeners: HashMap<HostId, Arc<runtime::Listener>>,
-    /// Each server's line to its helper and runtime (`client::Session`), while connected or connecting.
     lines: HashMap<HostId, connection::Line>,
-    /// The composer's placeholder as last set (it changes while Claude works).
     placeholder: SharedString,
-    /// Each agent's usage limit, while reached: its sessions' messages wait until it resets.
     usage_limits: offline::UsageLimits,
-    /// Notebooks whose Julia stopped by itself, and the runs after Restart Julia.
     crashes: crash::Crashes,
-    /// A one-off failure's notice, under the control that was used.
     notice: Option<notice::Notice>,
-    /// The app's own files aren't beside it (a release build run from inside a
-    /// zip): all the window shows is why, and nothing starts.
     missing_files: Option<String>,
-    /// Servers sessions can run on (persisted in hosts.json).
     hosts: hosts::Hosts,
-    /// Adding a server, or its settings.
     server_dialog: Option<server_dialog::ServerDialog>,
-    /// ssh's prompts waiting for an answer, the first on screen.
     asks: VecDeque<server_dialog::AskModal>,
-    /// Each cluster session's resources, by session id (persisted), for the
-    /// job that runs it after a reopen.
     session_resources: HashMap<String, wire::slurm::Resources>,
-    /// Each session's mode, by session id (persisted), to start it in again after a reopen.
     session_modes: HashMap<String, session::Mode>,
-    /// Starting a session on a server that looks like a cluster's login node
-    /// waits on this question (the server's id).
     login_node_warning: Option<String>,
-    /// Servers the user chose to use as plain servers anyway, this launch.
     login_node_ok: HashSet<String>,
     questions_tx: UnboundedSender<remote::Question>,
-    /// The shown notebook's state as its page reports it (safe preview, busy work, the drawer).
     page: annotate::PageState,
-    /// The last `context` message sent to the page (resent when it changes).
     page_context: String,
-    /// Endeavor's window is the active one (prompts arriving otherwise notify).
     window_active: bool,
-    /// When the last "Claude is waiting for you" notification went out.
     last_ask_notice: Option<std::time::Instant>,
-    /// The notebook being renamed in its header, and its name box.
     notebook_rename: Option<(u64, Entity<InputState>)>,
-    /// The session whose job resources are open from the Julia-not-running page's gear.
     pane_resources: Option<u64>,
     pane_partition_menu: bool,
-    /// A state dump waiting for the page's part (debug_state.rs).
     #[cfg(debug_assertions)]
     page_debug: Option<futures::channel::oneshot::Sender<serde_json::Value>>,
-    /// Tab-stop handles for controls that are rebuilt fresh each render (dialog
-    /// buttons in server_dialog.rs, new-session chips, the sidebar's static
-    /// rows, resume rows…), keyed by an id unique to the control.
     dialog_focus: std::cell::RefCell<HashMap<String, FocusHandle>>,
-    /// Past (not open) sidebar rows' Tab-stop handles, keyed by session id: unlike
-    /// an open session, a past row has no `Session` to hold its own handle.
     past_row_focus: std::cell::RefCell<HashMap<SessionId, FocusHandle>>,
-    /// Has the keyboard when no control does: at launch, and after the focused
-    /// control leaves the screen. Keys dispatch from the focused element; with
-    /// none they start outside Root, whose Tab and ⇧⇥ bindings then never match.
-    /// It's tracked on an empty child because a tracked element takes focus when
-    /// clicked, which would pull the keyboard out of the composer.
     keyboard_home: FocusHandle,
-    /// Tracked on the sidebar's outer element, so ⌘F can tell whether it
-    /// should open the sidebar search (focus is in the sidebar) or, when
-    /// Settings is open instead, its own search.
     sidebar_focus: FocusHandle,
-    /// The last click in the window was in the chat column, so ⌘= / ⌘− / ⌘0
-    /// size the chat's text, not the notebook (unless the notebook has the
-    /// keyboard since). A flag, not a focus handle: a tracked element takes
-    /// focus when clicked.
     zoom_chat: bool,
-    /// `zoom_chat` before the last click: the app menu's button is outside the chat, so its
-    /// click clears `zoom_chat`, but the menu's Zoom items size what was used before it.
     zoom_chat_before_click: bool,
-    /// The open confirm dialog (Stop a host, Cancel a job, Repair Julia, Sign
-    /// out, Delete session), if any.
     confirm: Option<confirm::Confirm>,
-    /// Find in the notebook, while its bar is open.
     find: Option<find_bar::FindBar>,
-    /// A queued message being edited in the composer.
     queue_edit: Option<queue::QueueEdit>,
-    /// Watches for the pane saying "Opening" for a notebook that's open (notebook_pane.rs).
     opening: notebook_pane::OpeningWatch,
-    /// ENDEAVOR_TEST_STUCK_OPENING's file was there at the last check.
     #[cfg(debug_assertions)]
     test_blanked: bool,
-    /// The session the last frame showed (None: the new-session screen); None
-    /// before the first frame. Showing another one draws it without motion.
     drawn: Option<Option<u64>>,
-    /// A redraw for streamed agent updates is due (`redraw_soon`).
     redraw_due: bool,
 }
 
@@ -658,11 +484,9 @@ impl Workspace {
         let webview = cx.new(|cx| {
             let handle = platform::webview_parent(window);
             let builder = wry::WebViewBuilder::new()
-                // wry's url() panics on a web view that has never loaded a page.
                 .with_url("about:blank")
                 .with_devtools(true)
                 .with_initialization_script(&annotate::script())
-                // The bundled JuliaMono for Pluto's page, which otherwise loads it from a CDN.
                 .with_custom_protocol("endeavor".into(), |_, request| {
                     let font = match request.uri().path() {
                         "/fonts/JuliaMono-Regular.ttf" => Some(theme::JULIA_MONO_REGULAR),
@@ -680,9 +504,6 @@ impl Workspace {
                 .with_ipc_handler(move |request| {
                     let _ = page_tx.unbounded_send(request.into_body());
                 })
-                // The app opens no second window. A web link the page would open in one ("Open
-                // Link in New Window", a link with target="_blank") opens in the browser instead;
-                // anything else (a figure's data: or blob: URL) has nowhere to go (#151).
                 .with_new_window_req_handler(move |url, _| {
                     if let Some(url) = outside_link(&url) {
                         let _ = new_window_tx.unbounded_send(url);
@@ -691,7 +512,6 @@ impl Workspace {
                 });
             #[cfg(target_os = "linux")]
             let builder = builder.with_download_started_handler(save_image::started(image_asks.clone()));
-            // F5, Ctrl+P and the like would act on Pluto's page, not the app.
             #[cfg(windows)]
             let builder = wry::WebViewBuilderExtWindows::with_browser_accelerator_keys(builder, false);
             #[cfg(not(windows))]
@@ -772,24 +592,19 @@ impl Workspace {
         })
         .detach();
 
-        // Enter sends (queued while Claude works), Cmd+Enter sends now, Shift+Enter is a newline.
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Type / for commands")
                 .submit_on_enter(true)
                 .auto_grow(1, 10)
-                // gpui-base 0.9 bounces a long draft at its ends on macOS; the chat stays still meanwhile.
                 .scroll_bounce(false)
         });
         composer::subscribe(&input, window, cx);
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { secondary, shift: false } = event {
-                // An empty box answers the sign-in card: ⏎ signs in again.
                 if input.read(cx).value().trim().is_empty() && this.sign_in_again(cx) {
                     return;
                 }
-                // An empty box answers a pending approval: ⏎ allow, ⌘⏎ always this session where the card offers it.
-                // With words in it, ⏎ queues them as it does while Claude works.
                 if input.read(cx).value().trim().is_empty()
                     && let Some(key) = this.active
                     && this.session_mut(key).is_some_and(|s| s.pending_permission().is_some())
@@ -809,16 +624,11 @@ impl Workspace {
         })
         .detach();
 
-        // A click on a "Claude is waiting for you" notification raises the
-        // window; its activation then opens the session (on a Mac, macOS raises it).
         #[cfg(target_os = "linux")]
         {
             let mut clicks = notify::clicks();
             cx.spawn_in(window, async move |this, cx| {
                 while clicks.next().await.is_some() {
-                    // Open its session now: if Endeavor is already in front, no
-                    // activation follows to do it, and it would happen on the
-                    // next return instead.
                     let opened = this.update_in(cx, |this, window, cx| {
                         window.activate_window();
                         this.open_clicked(cx);
@@ -842,19 +652,15 @@ impl Workspace {
             }
         })
         .detach();
-        // The helpers finish the job after the app is gone.
         cx.on_app_quit(|this, _| {
             eprintln!("Endeavor is quitting");
             this.quit_runtimes();
-            // A fetched update installs on any quit, as Settings says,
-            // except while Windows is logging off (install skips it then).
             if let Err(e) = this.app_update.install(false) {
                 eprintln!("Couldn't install the update: {e}");
             }
             async {}
         })
         .detach();
-        // A first check shortly after launch, then whenever one is due.
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(20)).await;
             loop {
@@ -870,7 +676,6 @@ impl Workspace {
         })
         .detach();
 
-        // Tick the "Working · 12s" and "Starting Julia · 0:12" timers once a second.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             let Ok(busy) = this.update(cx, |this, cx| {
@@ -893,7 +698,6 @@ impl Workspace {
             this.window_active = window.is_window_active();
             if window.is_window_active() {
                 this.recheck_sign_in(cx);
-                // Back from a "Claude is waiting for you" notification: its session.
                 this.open_clicked(cx);
             }
         })
@@ -910,8 +714,6 @@ impl Workspace {
             input,
             sessions: Vec::new(),
             active: None,
-            // Keys name sessions to the runtime, which can outlive a launch (Keep notebooks
-            // running): starting from the clock keeps them from matching an earlier launch's.
             next_key: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_millis() as u64),
             draft,
             locate: None,
@@ -1000,7 +802,6 @@ impl Workspace {
         window.focus(&this.keyboard_home, cx);
         cx.on_focus_lost(window, |this, window, cx| window.focus(&this.keyboard_home, cx)).detach();
         settings::set_webview_appearance(this.webview.read(cx).raw(), theme::is_light());
-        // Under Match macOS, follow the Mac's own switch while running.
         cx.observe_window_appearance(window, |this, _, cx| {
             if this.settings.appearance == settings::Appearance::System {
                 this.apply_look(cx);
@@ -1012,13 +813,7 @@ impl Workspace {
             this.watch_state_requests(cx);
             return this;
         }
-        // This Mac's Julia boots while the user picks a folder on the new-session screen.
         this.connect_host(&HostId::ThisMac, true, cx);
-        // The new-session screen's agent starts alongside it, for its sign-in and
-        // options, except on first launch, whose setup screen asks which
-        // assistant first and then goes step by step. Claude also starts when
-        // Endeavor has Claude sessions, so the sidebar's list of them stays
-        // current; otherwise it waits until something needs it.
         if this.setup.is_none() {
             this.ensure_agent(this.draft_agent(), cx);
             if this.records.any_of(agent::Agent::Claude) {
@@ -1034,15 +829,10 @@ impl Workspace {
         this
     }
 
-    // -----------------------------------------------------------------------
-    // Sessions
-    // -----------------------------------------------------------------------
-
     pub fn session_mut(&mut self, key: u64) -> Option<&mut Session> {
         self.sessions.iter_mut().find(|s| s.key == key)
     }
 
-    /// Run `f` on a session and repaint (for clicks in the transcript).
     pub fn with_session(&mut self, key: u64, cx: &mut Context<Self>, f: impl FnOnce(&mut Session)) {
         if let Some(session) = self.session_mut(key) {
             f(session);
@@ -1054,8 +844,6 @@ impl Workspace {
         self.active.and_then(|key| self.sessions.iter().find(|s| s.key == key))
     }
 
-    /// Keep session `key`'s mode, just picked, for new sessions: the
-    /// new-session screen shows it from now on, as remembered, not picked there.
     fn remember_mode(&mut self, key: u64) {
         let Some(mode) = self.sessions.iter().find(|s| s.key == key).and_then(Session::mode) else { return };
         if self.settings.remember_mode(&mode) {
@@ -1073,9 +861,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Start a session with the new-session screen's choices, and the input's
-    /// text (if any) as its first message. A chosen notebook opens in safe
-    /// preview. On a server, Julia starts now if it isn't running.
     fn start_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popover(window, cx);
         if self.composer_empty(cx) || self.run_own_command(window, cx) {
@@ -1098,7 +883,6 @@ impl Workspace {
             return cx.notify();
         }
         let place = Place { host: host.clone(), path: folder.clone() };
-        // A folder picked under the new sign-in: the server's recent folders are its own again.
         if let HostId::Server(id) = &host
             && let Some(server) = self.hosts.servers.iter_mut().find(|s| s.id == *id && s.fresh)
         {
@@ -1123,11 +907,9 @@ impl Workspace {
         let mut session = Session::new(key, place, server.clone());
         session.agent = agent;
         session.kind = self.draft.notebook.kind();
-        // As the job will ask for them (fitted to the partition), so the session's chip says what was submitted.
         session.resources = self.draft.resources.as_ref().filter(|_| self.is_cluster(&host)).map(|r| self.draft_cluster().map_or_else(|| r.clone(), |c| c.job(r).resources));
         let start = self.draft.start_mode();
         session.start_mode = session::app_modes().get(start).map(|choice| session::Mode {
-            // Settings' "Run notebook code without asking" is Manual's "Always this session".
             run_without_asking: choice.run_without_asking || (start == session::MANUAL && self.settings.run_without_asking),
             ..choice.mode()
         });
@@ -1157,7 +939,6 @@ impl Workspace {
                 ));
             }
         }
-        // The skill says Julia unless the user asks for R; picking New R notebook is that ask.
         if existing.is_none() && session.kind == Backend::Ember {
             context.push(
                 "[Endeavor] The user chose an R notebook for this session. Make the notebook an R notebook \
@@ -1177,10 +958,6 @@ impl Workspace {
             session.hold();
         }
         self.sessions.push(session);
-        // Now, not only once the agent opens the session (which can take a while just
-        // after launch, and never happens while it's signed out): Julia starts ahead
-        // from it, New notebook makes its notebook there, and the picked notebook opens,
-        // now if the runtime is up, else with its reopen (`reopen_notebooks`).
         self.send_session_folder(key, cx);
         if let Some(path) = existing {
             self.bind_notebook(key, path.clone(), cx);
@@ -1191,20 +968,14 @@ impl Workspace {
         self.request_agent(key, cx);
         self.draft.notebook = self.new_notebook_choice();
         self.draft.preview = None;
-        // A pick on the screen was for this session: the next starts from what Settings keeps.
         self.draft.mode = self.settings.start_mode();
         self.draft.mode_picked = false;
         self.activate(key, cx);
         self.send(key, None, false, window, cx);
     }
 
-    /// Open the agent side of a session (new, or its history reloaded) once its
-    /// host's runtime is ready, since its tools go to that runtime's bridge.
-    /// Until then it waits, and the host connects and starts Julia.
     pub fn request_agent(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(agent) = self.sessions.iter().find(|s| s.key == key).map(|s| s.agent) else { return };
-        // The agent isn't running yet, or is restarting or down: the session
-        // opens once it is (`agent_ready`).
         if self.ensure_agent(agent, cx) || !self.links.get(agent).ready || !self.links.get(agent).process.up() || self.signed_out_of_agent(agent) {
             return;
         }
@@ -1231,8 +1002,6 @@ impl Workspace {
         }
     }
 
-    /// A past session's title: the user's name for it, else the recorded one,
-    /// else its notebook's name; true when it only stands in for a title.
     fn past_title(&self, id: &SessionId) -> (String, bool) {
         let id = id.to_string();
         if let Some(title) = self.titles.get(&id).cloned().or_else(|| self.records.get(&id)?.title.clone()) {
@@ -1242,7 +1011,6 @@ impl Workspace {
         (notebook.unwrap_or_else(|| "Earlier session".into()), true)
     }
 
-    /// Reopen a past session (or switch to it if it's already open).
     fn open_past(&mut self, id: SessionId, place: Place, cx: &mut Context<Self>) {
         if let Some(key) = self.sessions.iter().find(|s| s.id.as_ref() == Some(&id)).map(|s| s.key) {
             return self.activate(key, cx);
@@ -1252,16 +1020,13 @@ impl Workspace {
         let named = self.titles.get(&id.to_string()).cloned();
         let resources = self.session_resources.get(&id.to_string()).cloned();
         let mode = self.session_modes.get(&id.to_string()).cloned();
-        // A "notebook moved" note that never reached the agent before the app quit.
         let pending = self.pending_moved.get(&id.to_string()).cloned();
         let (title, untitled) = self.past_title(&id);
         let notebook = self.session_notebooks.get(&id.to_string()).map(|p| p.path.clone());
         let server = (place.host != HostId::ThisMac).then(|| self.hosts.name(&place.host));
-        // The row keeps its handle as it turns from past to open, so keyboard focus stays on it.
         let row_focus = self.past_row_focus.get_mut().remove(&id);
         let copy = transcript_copy::load(&id.to_string());
         let agent = self.records.get(&id.to_string()).map_or(agent::Agent::Claude, |r| r.agent);
-        // Its notebook's kind, else the one it was started with.
         let kind = notebook.as_deref().map(new_session::kind_of_path).or_else(|| self.records.get(&id.to_string())?.kind).unwrap_or(Backend::Pluto);
         let mut session = Session::loading(key, id, place, server, title);
         session.agent = agent;
@@ -1271,7 +1036,6 @@ impl Workspace {
         }
         session.named = named.is_some();
         session.untitled = untitled;
-        // A session from before modes were saved keeps the agent's own mode.
         session.run_without_asking = self.settings.run_without_asking;
         session.start_mode = mode;
         session.resources = resources;
@@ -1282,12 +1046,7 @@ impl Workspace {
         *session.focus.get_mut() = row_focus;
         let host = session.place.host.clone();
         self.sessions.push(session);
-        // Now, not only once the agent opens it: Julia starts ahead from it (`send_session_folder`).
         self.send_session_folder(key, cx);
-        // The recorded notebook opens as soon as its Julia is ready, without
-        // waiting for the history: now if it's up, else with the runtime's
-        // reopen (`reopen_notebooks`). Without one, the history's last
-        // notebook opens once it has loaded (`Effect::ReopenNotebook`).
         if let Some(path) = notebook {
             self.bind_notebook(key, path.clone(), cx);
             if self.bridge(&host).is_some() {
@@ -1298,8 +1057,6 @@ impl Workspace {
         self.activate(key, cx);
     }
 
-    /// Save Endeavor's copy of a session's transcript (a turn ended, or it's
-    /// closing). Not while its history loads: then it shows the copy itself.
     fn keep_transcript(&self, key: u64) {
         let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
         if let Some(id) = session.id.as_ref().filter(|_| !session.opening() && session.failed.is_none()) {
@@ -1307,7 +1064,6 @@ impl Workspace {
         }
     }
 
-    /// Stop an open session; it goes back to its folder's history.
     fn close_session(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(ix) = self.sessions.iter().position(|s| s.key == key) else { return };
         self.keep_transcript(key);
@@ -1329,8 +1085,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Delete a session's history (Claude Code's transcript of it), closing it first
-    /// if it's open. A session the agent hasn't started yet just closes.
     fn delete_session(&mut self, row: Row, cx: &mut Context<Self>) {
         let id = match row {
             Row::Open(key) => {
@@ -1342,7 +1096,6 @@ impl Workspace {
         };
         let Some(id) = id else { return };
         let agent = self.records.get(&id.to_string()).map_or(agent::Agent::Claude, |r| r.agent);
-        // Deleting reaches an agent that isn't running once it starts.
         self.links.send(agent, Command::DeleteSession(id.clone()));
         if self.renaming.as_ref().is_some_and(|r| matches!(&r.row, Row::Past(p, _) if *p == id)) {
             self.renaming = None;
@@ -1352,7 +1105,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Everything Endeavor keeps for a deleted session; `known_ids` reads the same files.
     fn forget_session(&mut self, id: &str) {
         if self.records.remove(id) {
             self.save_records();
@@ -1377,10 +1129,6 @@ impl Workspace {
         }
     }
 
-    /// A menu or popover open that a click outside it, even on the web view,
-    /// or Esc should close: the session row / notebook ⋮ and Share menus, the
-    /// composer's Mode/Plus/Config menu, a sent chip's popover, the sidebar's
-    /// Active/All filter, a new-session chip's popover, and the notebook picker.
     fn dismissible_open(&self) -> bool {
         self.confirm.is_some()
             || self.locate.is_some()
@@ -1392,14 +1140,10 @@ impl Workspace {
             || self.settings_panel.is_some()
     }
 
-    /// Close whatever `dismissible_open` found, as a click outside it does.
     pub(crate) fn close_dismissible(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The confirm dialog is the topmost thing that can be open, even over
-        // Settings (Stop, Repair and Sign out all open it from a Settings page).
         if self.confirm.is_some() {
             return self.close_confirm(window, cx);
         }
-        // Settings closes on a click outside it only when nothing inside it was open.
         if let Some(panel) = &mut self.settings_panel {
             if panel.idle_menu {
                 panel.idle_menu = false;
@@ -1417,8 +1161,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A message for a session that couldn't open: open it first (a copy, for
-    /// one open in Claude Code's CLI), so the message goes once it is.
     fn open_before_sending(&mut self, key: u64, cx: &mut Context<Self>) {
         match self.sessions.iter().find(|s| s.key == key).and_then(|s| s.failed.as_ref()).map(|f| f.kind) {
             Some(session::OpenFailure::InCli) => self.open_copy(key, cx),
@@ -1427,7 +1169,6 @@ impl Workspace {
         }
     }
 
-    /// Try again on a session that couldn't open.
     fn retry_open(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(session) = self.session_mut(key) else { return };
         session.retry_open();
@@ -1435,7 +1176,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Continue a session that couldn't be reopened (e.g. live in the CLI) as a copy.
     fn open_copy(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some(session) = self.session_mut(key) else { return };
@@ -1448,13 +1188,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Open a session's notebook file in the current Pluto (reusing it if it's
-    /// already open; otherwise running it only if `run`) and point the session, the
-    /// pane if active, and any session whose copy was stopped, at it.
-    /// Julia starts first if it isn't running: the pane shows its steps meanwhile, or why it couldn't.
     fn open_for_session(&mut self, key: u64, path: String, run: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
-        // Tried again: a new failure says itself.
         if let Some(session) = self.session_mut(key) {
             session.open_failed = None;
         }
@@ -1479,8 +1214,6 @@ impl Workspace {
             let id = match opened {
                 Ok(id) => id,
                 Err(e) => {
-                    // A notebook file that's gone shows File not found. Julia's and R's failures
-                    // show in the pane; anything else would leave it on Opening, so it says why.
                     let unexplained = connection::pane_failure(kind, &e).is_none().then(|| (path.clone(), e));
                     let _ = this.update(cx, |this, cx| this.check_missing(key, unexplained, cx));
                     return;
@@ -1502,12 +1235,9 @@ impl Workspace {
         .detach();
     }
 
-    /// Record a session's one notebook file: the runtime holds the session to it,
-    /// and notebooks.json reopens it with the session.
     fn bind_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(session) = self.session_mut(key) else { return };
         session.notebook_path = Some(path.clone());
-        // The session's kind follows its notebook, so a restarted core is told the right one.
         session.kind = new_session::kind_of_path(&path);
         let kind = session.kind;
         let place = Place { host: session.place.host.clone(), path: path.clone() };
@@ -1526,7 +1256,6 @@ impl Workspace {
         self.send_binding(key, path, cx);
     }
 
-    /// Tell session `key`'s runtime the session's folder and notebook kind, if it's up.
     fn send_session_folder(&self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some((host, folder, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.place.path.clone(), s.kind)) else { return };
@@ -1536,12 +1265,9 @@ impl Workspace {
 
     fn send_binding(&self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
-        // ponytail: a failed send leaves the session unbound until its first open binds it.
         cx.background_executor().spawn(async move { pluto::set_notebook(&bridge, key, &path) }).detach();
     }
 
-    /// Stop session `key`'s notebook at `path` (Pluto shuts it down); every
-    /// session on it shows it stopped, with Start.
     pub(crate) fn stop_notebook(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
@@ -1553,7 +1279,6 @@ impl Workspace {
             let result = stop.await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    // Not open (already stopped elsewhere): Start reopens it in safe preview.
                     Ok(safe_preview) => {
                         let stopped = Stopped { safe_preview: safe_preview.unwrap_or(true), idle_hours: None, modified: None };
                         for session in this.sessions.iter_mut().filter(|s| s.place.host == host && s.notebook_path.as_deref() == Some(path.as_str())) {
@@ -1573,14 +1298,10 @@ impl Workspace {
         .detach();
     }
 
-    /// Session `key`'s agent closed notebook `id` at `path` (`close_notebook`): every
-    /// session on it, or on its file, shows it stopped, with Start, as after Stop notebook.
-    /// Start opens it in safe preview, since the app doesn't know whether it was let run.
     fn notebook_closed(&mut self, key: u64, id: &str, path: Option<&str>, cx: &mut Context<Self>) {
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| s.place.host.clone()) else { return };
         let stopped = Stopped { safe_preview: true, idle_hours: None, modified: None };
         let mut paths = Vec::new();
-        // The runtime names the file canonically; a session may have it spelled otherwise (case, links).
         let on_it = |s: &crate::session::Session| {
             s.notebook.as_deref() == Some(id) || path.zip(s.notebook_path.as_deref()).is_some_and(|(closed, own)| crate::connection::same_file(&host, own, closed))
         };
@@ -1597,16 +1318,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The session whose "Claude is waiting for you" notification was clicked, if
-    /// it's still open.
     fn open_clicked(&mut self, cx: &mut Context<Self>) {
         if let Some(key) = notify::take_clicked().filter(|key| self.sessions.iter().any(|s| s.key == *key)) {
             self.activate(key, cx);
         }
     }
 
-    /// Show a session; the notebook pane follows it to the notebook it last viewed
-    /// (without one, the pane draws a stand-in over the hidden web view).
     fn activate(&mut self, key: u64, cx: &mut Context<Self>) {
         if self.active != Some(key) && self.find.take().is_some() {
             webcontent::clear_find(self.webview.read(cx).raw());
@@ -1619,7 +1336,6 @@ impl Workspace {
         if let Some((host, notebook)) = self.active_session().and_then(|s| Some((s.place.host.clone(), s.notebook.clone()?))) {
             self.load_notebook(&host, &notebook, cx);
         }
-        // Another session's failed open isn't this one's; this one's, kept while it was off screen, shows now (#244).
         if self.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(notice::Retry::OpenNotebook(k, _)) if *k != key)) {
             self.notice = None;
         }
@@ -1627,17 +1343,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Pluto's new notebooks start unsaved; point its "Save notebook" suggestion
-    /// at the active session's folder (the page picks it up on its next load).
     pub fn follow_folder(&mut self, cx: &mut Context<Self>) {
         let Some((key, folder)) = self.active_session().map(|s| (s.key, s.place.path.clone())) else { return };
         let Some(bridge) = self.session_bridge(key) else { return };
-        // ponytail: a failed send leaves Pluto suggesting the previous folder.
         cx.background_executor().spawn(async move { pluto::set_folder(&bridge, &folder) }).detach();
     }
 
-    /// A prompt waits in session `key`: with Endeavor in the background, one
-    /// notification, then none from any session for `permits::NOTIFY_QUIET`.
     fn prompt_arrived(&mut self, key: u64, ix: usize) {
         let now = std::time::Instant::now();
         if self.window_active || !permits::may_notify(self.last_ask_notice, now) {
@@ -1664,7 +1375,6 @@ impl Workspace {
                     }
                 }
                 Effect::ShowNotebook { id, path } => {
-                    // It opened after all: a notice that its open failed goes.
                     if self.notice.as_ref().is_some_and(|n| matches!(&n.retry, Some(notice::Retry::OpenNotebook(k, _)) if *k == key)) {
                         self.notice = None;
                     }
@@ -1697,7 +1407,6 @@ impl Workspace {
                         Ok(preview) => {
                             let _ = this.update(cx, |this, cx| this.with_session(key, cx, |s| s.set_preview(ix, preview)));
                         }
-                        // The card falls back to "Run code?".
                         Err(e) => eprintln!("run preview: {e}"),
                     })
                     .detach();
@@ -1723,7 +1432,6 @@ impl Workspace {
                     let Some(bridge) = self.session_bridge(key) else { continue };
                     cx.background_executor()
                         .spawn(async move {
-                            // The ask may have gone meanwhile (the agent gave up on the call).
                             if let Err(e) = pluto::answer_run(&bridge, ask, allow, &user_ran, packages.as_deref()) {
                                 eprintln!("answer run {ask}: {e}");
                             }
@@ -1750,7 +1458,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Save a session's mode when it changed, for its reopening.
     fn save_mode(&mut self, key: u64) {
         let Some((id, mode)) = self.session_mut(key).and_then(|s| Some((s.id.as_ref()?.to_string(), s.mode()?))) else { return };
         if self.session_modes.get(&id) != Some(&mode) {
@@ -1759,10 +1466,7 @@ impl Workspace {
         }
     }
 
-    /// Which notebook the user is looking at, so "the notebook" is unambiguous.
-    /// Also remembered as the active session's notebook.
     fn viewing_context(&mut self, cx: &mut Context<Self>) -> Option<ContentBlock> {
-        // Hidden under a drawn pane, the web view can still hold another session's notebook.
         if !self.webview.read(cx).visible() {
             return None;
         }
@@ -1774,7 +1478,6 @@ impl Workspace {
             edits = std::mem::take(&mut session.user_edits);
             restored = std::mem::take(&mut session.restored);
         }
-        // The copy keeps restores the agent hasn't heard of; now it has, so a reopen doesn't tell it twice.
         if let Some(key) = self.active.filter(|_| !restored.is_empty()) {
             self.keep_transcript(key);
         }
@@ -1797,19 +1500,11 @@ impl Workspace {
         if self.composer_empty(cx) || self.run_own_command(window, cx) {
             return;
         }
-        // Claude Code reads a command only at the start of the message.
         let context = if slash::is_command(self.input.read(cx).value().trim()) { None } else { self.viewing_context(cx) };
         self.send(key, context, now, window, cx);
     }
 
-    /// Send what's in the composer (if anything) to a session, after `context`.
-    /// Files added from outside the session's folder are copied into it first
-    /// (off the main thread; to a server, through its helper, with progress
-    /// under the box for a big one), so a chip removed before sending leaves
-    /// nothing.
-    /// Meanwhile the message waits in the queue, and what's sent after it waits behind it.
     fn send(&mut self, key: u64, context: Option<ContentBlock>, now: bool, window: &mut Window, cx: &mut Context<Self>) {
-        /// Smaller files are sent before progress would be worth reading.
         const SHOW_PROGRESS: u64 = 4_000_000;
         self.open_before_sending(key, cx);
         let Some(place) = self.session_mut(key).map(|s| s.place.clone()) else { return };
@@ -1875,7 +1570,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Submit a message as `take_composer` gives it: words, chips, mentions.
     fn submit_message(&mut self, key: u64, context: Option<ContentBlock>, message: (String, Vec<attach::Attachment>, Vec<String>), now: bool, edit: bool, cx: &mut Context<Self>) {
         let (text, attachments, mentioned) = message;
         let mut blocks: Vec<_> = context.into_iter().collect();
@@ -1884,9 +1578,6 @@ impl Workspace {
         self.apply_effects(key, effects, cx);
     }
 
-    /// `session.submit`, plus: once its message carries away a pending
-    /// "notebook moved" note (`notebook_moved`'s `start_context`), the
-    /// persisted copy goes too, so a later restart doesn't resend it.
     fn submit_for(&mut self, key: u64, queued: Queued, now: bool) -> Vec<Effect> {
         let Some(session) = self.session_mut(key) else { return Vec::new() };
         let had_context = session.start_context.is_some();
@@ -1901,8 +1592,6 @@ impl Workspace {
         effects
     }
 
-    /// Stop also ends the runs the session's agent started without waiting, which go on after
-    /// its turn otherwise (`endeavor/stop_session`).
     fn stop_session_runs(&self, key: u64, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         cx.background_executor()
@@ -1916,20 +1605,13 @@ impl Workspace {
 
     pub fn send_policy(&self, key: u64, policy: &'static str, edits: bool, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
-        // ponytail: a failed send leaves the runtime's policy stale until the next change.
         cx.background_executor().spawn(async move { pluto::set_policy(&bridge, key, policy, edits) }).detach();
     }
 
-    /// ⇧⇥: the active session's next mode (e.g. default → plan → auto).
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         self.open_settings_last(window, cx);
     }
 
-    /// ⌘F: Settings' own search while it's open; else find in the notebook,
-    /// while it has the keyboard (a click in the page gives it the keyboard)
-    /// or its find bar is open; else the sidebar search, while the sidebar has
-    /// focus. The notebook comes before the sidebar: while the web view has the
-    /// keyboard, GPUI's focus stays wherever it was last.
     fn find_setting(&mut self, _: &FindSetting, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_panel.is_some() {
             return self.focus_settings_search(window, cx);
@@ -1943,7 +1625,6 @@ impl Workspace {
         }
     }
 
-    /// ⌘G and ⇧⌘G: the next and previous match, while the find bar is open.
     fn find_next(&mut self, _: &FindNext, _: &mut Window, cx: &mut Context<Self>) {
         self.find_in_page(false, cx);
     }
@@ -1952,18 +1633,12 @@ impl Workspace {
         self.find_in_page(true, cx);
     }
 
-    /// ⌘= / ⌘− / ⌘0: zoom by `step` (or back to 100%) whichever pane was used
-    /// last: the notebook while it has the keyboard, else the chat after a
-    /// click in it, else the notebook. Both sizes are kept in settings.
-    /// `menu`: from the app menu's Zoom items, where the keyboard was when the menu opened
-    /// (`menu::Before`), since the menu took it.
     pub(crate) fn zoom(&mut self, step: f64, reset: bool, menu: Option<menu::Before>, cx: &mut Context<Self>) {
         if self.zooms_chat(menu, cx) {
             let current = if self.settings.chat_zoom > 0. { self.settings.chat_zoom } else { 1. };
             self.settings.chat_zoom = if reset { 1. } else { theme::chat_scale_step(current as f32, step > 1.) as f64 };
             self.settings.save();
             theme::set_chat_scale(self.settings.chat_zoom as f32);
-            // Every row's height changed, including rows out of view and other sessions'.
             for session in &self.sessions {
                 session.list.remeasure();
             }
@@ -1978,12 +1653,7 @@ impl Workspace {
         let _ = self.webview.read(cx).raw().zoom(self.settings.zoom);
     }
 
-    /// Whether ⌘= / ⌘− / ⌘0 size the chat's text now (see `zoom`).
-    /// The notebook's keyboard as it is now, not as it was at the last click (#237): a click
-    /// from the notebook into the chat moves the text size to the chat at once. While the
-    /// app menu is open, or for its Zoom items, the keyboard as it was when the menu opened.
     pub(crate) fn zooms_chat(&self, menu: Option<menu::Before>, cx: &App) -> bool {
-        // Settings covers the chat: sizing it there would happen out of sight.
         if self.settings_panel.is_some() {
             return false;
         }
@@ -2000,15 +1670,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌘N, and a click on the sidebar's "New session" row.
     fn new_session(&mut self, _: &NewSession, _: &mut Window, cx: &mut Context<Self>) {
         self.active = None;
         self.scan_notebooks(cx);
         cx.notify();
     }
 
-    /// A 1px column divider with a wider invisible grip for dragging. The grip
-    /// sits left of the line: the notebook's web view covers anything to its right.
     fn divider(&self, which: Divider, color: Rgba, cx: &mut Context<Self>) -> impl IntoElement {
         let id = if which == Divider::Sidebar { "sidebar-divider" } else { "chat-divider" };
         div().w(px(1.)).h_full().flex_shrink_0().bg(color).relative().child(
@@ -2030,8 +1697,6 @@ impl Workspace {
         )
     }
 
-    /// Drags go on reaching us over the notebook: AppKit sends them to the view
-    /// that got the mouse-down.
     fn drag_divider(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(which) = self.resizing else { return };
         if e.pressed_button != Some(MouseButton::Left) {
@@ -2040,7 +1705,6 @@ impl Workspace {
         }
         let x = e.position.x.as_f32();
         match which {
-            // Dragging well past the minimum collapses the sidebar, like ⌘B.
             Divider::Sidebar if x < SIDEBAR_RANGE.0 / 2. => self.settings.layout.sidebar_open = false,
             Divider::Sidebar => (self.settings.layout.sidebar_open, self.settings.layout.sidebar_width) = (true, x.clamp(SIDEBAR_RANGE.0, SIDEBAR_RANGE.1)),
             Divider::Chat => {
@@ -2080,9 +1744,6 @@ impl Workspace {
         if self.cancel_queue_edit(window, cx) || self.close_context_popover(cx) {
             return;
         }
-        // The filter menu closes itself (a submenu first) through its own
-        // `on_action`, like the row ⋮ menu; only the sidebar search needs a
-        // fallback here, the way the folder popover's search box does.
         if self.sidebar_search.is_some() {
             self.close_sidebar_search(window, cx);
             return;
@@ -2094,7 +1755,6 @@ impl Workspace {
             return;
         }
         let Some(key) = self.active else { return };
-        // Esc closes the card's ⌄ menu, then denies a pending approval, before it stops the turn.
         if let Some(s) = self.session_mut(key)
             && s.asks.always_menu
         {
@@ -2117,8 +1777,6 @@ impl Workspace {
         let mut streamed = false;
         match event {
             AgentEvent::Ready => {
-                // Only the assistant in use names itself: another one starting
-                // in the background doesn't take the line.
                 if self.agent_in_use(agent) {
                     self.status = self.connected_status(agent).into();
                 }
@@ -2135,9 +1793,7 @@ impl Workspace {
                     }
                 }
             }
-            // On the setup screen, only the assistant picked moves the steps.
             AgentEvent::Setup(_) if self.setup.as_ref().is_some_and(|s| s.agent.is_some_and(|a| a != agent)) => {}
-            // Nor does another assistant's start, after setup: it would take the status line.
             AgentEvent::Setup(_) if self.setup.is_none() && !self.agent_in_use(agent) => {}
             AgentEvent::Setup(p) => self.on_progress(p, cx),
             AgentEvent::SignedIn(method) => self.on_signed_in(method, cx),
@@ -2145,14 +1801,12 @@ impl Workspace {
             AgentEvent::AntigravitySignedIn(signed_in) => self.on_antigravity_signed_in(signed_in, cx),
             AgentEvent::SignInEnded(result) => self.on_antigravity_sign_in_ended(result, cx),
             AgentEvent::Listed { cwd, sessions: Ok(sessions), complete } => self.on_listed(agent, &cwd, sessions, complete),
-            // The sidebar keeps what the record has.
             AgentEvent::Listed { cwd, sessions: Err(e), .. } => eprintln!("Couldn't list the sessions in {}: {e}", cwd.display()),
             AgentEvent::Forked { key, id } => {
                 if let Some(session) = self.session_mut(key) {
                     session.id = Some(id);
                 }
             }
-            // First launch: the setup screen says why, with Retry.
             AgentEvent::Failed(e) if self.setup.as_ref().is_some_and(|s| s.agent == Some(agent)) => {
                 self.links.get_mut(agent).failed = true;
                 if let Some(setup) = &mut self.setup {
@@ -2166,7 +1820,6 @@ impl Workspace {
                     Ok(started) => {
                         let id = started.id.clone();
                         let (place, kind) = (session.place.clone(), session.kind);
-                        // `|`, not `||`: both have to update.
                         if self.records.started(&id.to_string(), agent, &place, unix_now()) | self.records.set_kind(&id.to_string(), kind) {
                             self.save_records();
                         }
@@ -2175,7 +1828,6 @@ impl Workspace {
                         {
                             save_json("resources.json", &self.session_resources);
                         }
-                        // Renamed before the agent assigned an id.
                         if let Some(name) = self.session_mut(key).filter(|s| s.named).map(|s| s.title.clone()) {
                             self.titles.insert(id.to_string(), name);
                             save_json("titles.json", &self.titles);
@@ -2186,12 +1838,8 @@ impl Workspace {
                         }
                         let picked = self.settings.config_picks(agent).clone();
                         let Some(session) = self.session_mut(key) else { return };
-                        // A notebook bound before the session had an id, the one it was started on,
-                        // is recorded under that id now (notebooks.json, its kind).
                         let bound = session.notebook_path.clone();
                         let queued = session.started(started);
-                        // The user's last picks, ahead of a queued first message; the model
-                        // first, since effort's choices depend on it.
                         let mut effects = Vec::new();
                         for &(id, _) in agent.facts().config {
                             let Some(value) = picked.get(id) else { continue };
@@ -2228,7 +1876,6 @@ impl Workspace {
                 self.apply_effects(key, effects, cx);
             }
         }
-        // A reply in the open session is seen as it arrives.
         if let Some(s) = self.active.and_then(|key| self.session_mut(key)) {
             s.unseen = false;
         }
@@ -2239,10 +1886,6 @@ impl Workspace {
         }
     }
 
-    /// Redraw within `STREAM_FRAME`, once however many updates arrive meanwhile.
-    /// A reply streams in many small updates, and each redraw lays out the
-    /// whole window, transcript included; so the window redraws at most 20
-    /// times a second for them.
     fn redraw_soon(&mut self, cx: &mut Context<Self>) {
         if std::mem::replace(&mut self.redraw_due, true) {
             return;
@@ -2257,9 +1900,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Ids Endeavor keeps something for besides sessions.json, so a session an
-    /// older Endeavor dropped from it comes back when its agent lists it. Only
-    /// Delete clears these (`forget_session`), so a deleted session can't.
     fn known_ids(&self) -> HashSet<String> {
         (self.titles.keys())
             .chain(self.session_notebooks.keys())
@@ -2275,8 +1915,6 @@ impl Workspace {
         save_json("sessions.json", self.records.saved());
     }
 
-    /// An agent's listing of a folder, or of a server's whole agent folder;
-    /// `complete` when the agent had no further page.
     fn on_listed(&mut self, agent: records::Agent, cwd: &Path, sessions: Vec<SessionInfo>, complete: bool) {
         let scope = match HostId::of_agent_cwd(cwd) {
             Some(host) => records::Scope::Host(host),
@@ -2296,28 +1934,19 @@ impl Workspace {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Notebook pane and annotation mode
-    // -----------------------------------------------------------------------
-
-    /// Session `key`'s notebook kind, which its attachments' cell links name.
     fn session_kind(&self, key: u64) -> Backend {
         self.sessions.iter().find(|s| s.key == key).map_or(Backend::Pluto, |s| s.kind)
     }
 
-    /// Whose notebook `id` of `host` is, from its file's name: a session's file, else the runtime's
-    /// last list of open notebooks, else Julia's.
     pub fn notebook_kind(&self, host: &HostId, id: &str) -> Backend {
         let session = self.sessions.iter().filter(|s| &s.place.host == host && s.notebook.as_deref() == Some(id)).find_map(|s| s.notebook_path.clone());
         let listed = || self.connection(host)?.last_notebooks.iter().find(|(nb, _)| nb == id).map(|(_, path)| path.clone());
         session.or_else(listed).map_or(Backend::Pluto, |path| new_session::kind_of_path(&path))
     }
 
-    /// Show notebook `id` of `host` in the pane: Pluto's page, or Ember's for an R notebook.
     pub fn load_notebook(&mut self, host: &HostId, id: &str, cx: &mut Context<Self>) {
         let kind = self.notebook_kind(host, id);
         let Some(runtime) = self.connection(host).and_then(|c| c.runtime.as_ref()) else { return };
-        // page_url carries the runtime's token; keep it app-side.
         let url = kind.notebook_url(&runtime.page_url, id);
         #[cfg(debug_assertions)]
         let url = if notebook_pane::test_stuck_opening().is_some_and(|keep| keep) { "about:blank".to_owned() } else { url };
@@ -2327,7 +1956,6 @@ impl Workspace {
     fn on_page_message(&mut self, body: &str, window: &mut Window, cx: &mut Context<Self>) {
         match annotate::parse(body) {
             Some(annotate::Message::Ready) => {
-                // A fresh page: it gets its context again, and reports its own state.
                 self.page = annotate::PageState::default();
                 self.annotating = false;
                 self.page_context.clear();
@@ -2367,7 +1995,6 @@ impl Workspace {
                 }
             }
             Some(annotate::Message::Ask(ask)) if ask.add => {
-                // A new cell asked for with ⌘↩: its chip and the words join the composer's message.
                 self.composer.attachments.push(ask.attachment);
                 let typed = self.input.read(cx).value().trim_end().to_string();
                 let text = if typed.is_empty() { ask.text } else { format!("{typed}\n{}", ask.text) };
@@ -2392,10 +2019,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Take a picture of part of the page for a quote to come. The page hides
-    /// Point's dimming and outlines until told "shot".
     fn shoot(&mut self, id: u32, rect: [f64; 4], cx: &mut Context<Self>) {
-        /// Pictures a page asked for and never used don't pile up.
         const KEPT: usize = 16;
         let zoom = if self.settings.zoom > 0. { self.settings.zoom } else { 1. };
         let shot = snapshot::png(self.webview.read(cx).raw(), rect.map(|n| n * zoom));
@@ -2414,8 +2038,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Quotes picked in the page, each with its picture; the comment goes on
-    /// the last. A picture that couldn't be taken leaves the quote without one.
     fn take_picks(&mut self, picks: annotate::Picks, cx: &mut Context<Self>) {
         let annotate::Picks { quotes, comment, add } = picks;
         let last = quotes.len().saturating_sub(1);
@@ -2434,8 +2056,6 @@ impl Workspace {
         self.use_quotes(quotes, add, cx);
     }
 
-    /// Quotes from Reply or Point: sent now as their own message (queued while
-    /// Claude works), or added to the composer's message as cards.
     pub fn use_quotes(&mut self, quotes: Vec<attach::Quote>, add: bool, cx: &mut Context<Self>) {
         let quotes: Vec<_> = quotes.into_iter().map(attach::Attachment::Quote).collect();
         if add {
@@ -2454,27 +2074,18 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌘⇧E, wherever the keyboard is, and the Point buttons.
     fn toggle_annotation(&mut self, _: &ToggleAnnotation, _: &mut Window, cx: &mut Context<Self>) {
         let enable = !self.annotating;
         if enable {
-            // Move keyboard focus into the notebook so the comment box takes typing.
             let _ = self.webview.read(cx).raw().focus();
         }
         self.send_to_page(&serde_json::json!({ "type": "annotate", "on": enable }), cx);
     }
 
-    /// A message to the page script (frontend/src/bridge.ts, `ToPage`).
     fn send_to_page(&self, msg: &serde_json::Value, cx: &mut Context<Self>) {
-        // JSON is a JS expression, so the message goes in as a literal.
         let _ = self.webview.read(cx).raw().evaluate_script(&format!("window.__endeavor && window.__endeavor.receive({msg})"));
     }
 
-    // -----------------------------------------------------------------------
-    // Julia runtime
-    // -----------------------------------------------------------------------
-
-    /// Setup is under way: the status line, and the setup screen on first launch.
     pub fn on_progress(&mut self, p: Progress, cx: &mut Context<Self>) {
         if !p.log {
             self.status = p.detail.clone().into();
@@ -2485,8 +2096,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Setup is done once the assistant picked is up and, for Claude, signed
-    /// in. Codex and Antigravity sign in from their card afterwards.
     fn finish_setup(&mut self, cx: &mut Context<Self>) {
         let Some(agent) = self.setup.as_ref().and_then(|s| s.agent) else { return };
         if self.links.get(agent).ready && (agent != agent::Agent::Claude || !self.account.signed_out()) {
@@ -2496,28 +2105,22 @@ impl Workspace {
         }
     }
 
-    /// Retry the failed setup step: start Julia again, or the agent once Julia is up.
     pub fn retry_setup(&mut self, cx: &mut Context<Self>) {
         let Some(setup) = &mut self.setup else { return };
         setup.clear_error();
         match setup.agent {
             Some(agent) => self.restart_agent(agent, cx),
-            // Nothing picked yet: the step that failed is the runtime's (Julia's on Windows).
             None => self.ensure_runtime(&HostId::ThisMac, cx),
         }
     }
 
-    /// What About Endeavor shows in its update strip.
     pub fn updates(&self) -> about::Updates {
         let adapter = match agent::adapter_status(agent::Agent::Claude) {
             Ok((version, false)) if self.links.get(agent::Agent::Claude).failed => about::Adapter::Available(version),
-            // Claude isn't started, nor about to be (the setup screen's pick): nothing is installing.
             Ok((_, false)) if self.links.get(agent::Agent::Claude).rx.is_some() && self.setup.as_ref().and_then(|s| s.agent) != Some(agent::Agent::Claude) => about::Adapter::Later,
             Ok((version, false)) => about::Adapter::Installing(version),
             _ => about::Adapter::Current,
         };
-        // Debug builds: while the file `ENDEAVOR_TEST_ADAPTER_UPDATE` names exists,
-        // an adapter update shows as available (About, Settings, the gear's dot).
         #[cfg(debug_assertions)]
         if std::env::var_os("ENDEAVOR_TEST_ADAPTER_UPDATE").is_some_and(|f| Path::new(&f).exists()) {
             return about::Updates { app: self.app_update_state(), adapter: about::Adapter::Available("0.4".into()) };
@@ -2533,13 +2136,11 @@ impl Workspace {
             updater::State::UpToDate => about::AppUpdate::UpToDate,
             updater::State::Ready { build, .. } if self.working() => about::AppUpdate::ReadyAfterTurn(build.clone()),
             updater::State::Ready { build, .. } => about::AppUpdate::Ready(build.clone()),
-            updater::State::Manual { build } => about::AppUpdate::Manual(build.clone()),
+            updater::State::Manual { build } => about::AppUpdate::Manual { build: build.clone(), protected: self.app_update.place.as_ref().is_ok_and(|p| p.protected) },
             updater::State::Failed(e) => about::AppUpdate::Failed(e.clone()),
         }
     }
 
-    /// Check for a newer nightly now, and fetch it when there is one. Does
-    /// nothing when this copy doesn't update or a check is already running.
     pub fn check_for_update(&mut self, cx: &mut Context<Self>) {
         let Some(place) = self.app_update.start(Instant::now()) else { return };
         let progress = self.app_update.progress.clone();
@@ -2560,13 +2161,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// An agent is in the middle of a turn, in any session.
     fn working(&self) -> bool {
         self.sessions.iter().any(|s| s.busy_since.is_some())
     }
 
-    /// Restart: swap in the fetched build once Endeavor has quit, and open it.
-    /// Not while an agent is working: About holds Restart back until it's done.
     pub fn install_update(&mut self, cx: &mut Context<Self>) {
         if self.working() {
             return;
@@ -2581,7 +2179,6 @@ impl Workspace {
         }
     }
 
-    /// About's Update: start Claude again, which installs the pinned adapter.
     pub fn update_adapter(&mut self, cx: &mut Context<Self>) {
         let link = self.links.get_mut(agent::Agent::Claude);
         if !link.failed {
@@ -2595,28 +2192,22 @@ impl Workspace {
     }
 
     pub(crate) fn restart_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) {
-        // A new command channel: a failed thread dropped its own, and a running
-        // one ends when this drops (its process with it); `start_agent` ignores its last events.
         let link = self.links.get_mut(agent);
         let commands = link.renew();
         link.ready = false;
         if self.setup.as_ref().and_then(|s| s.agent) != Some(agent) || self.bridge(&HostId::ThisMac).is_some() {
             self.start_agent(agent, commands, cx);
         } else {
-            // First launch: started once This Mac's Julia is up (`on_ready`).
             self.links.get_mut(agent).rx = Some(commands);
             self.ensure_runtime(&HostId::ThisMac, cx);
         }
         cx.notify();
     }
 
-    /// The new-session screen's agent, or the agent of the session in view.
     fn agent_in_use(&self, agent: agent::Agent) -> bool {
         agent == self.draft_agent() || self.active_session().is_some_and(|s| s.agent == agent)
     }
 
-    /// Start an agent that isn't running yet. True if it starts now: its
-    /// sessions open once it's connected (`agent_ready`).
     pub fn ensure_agent(&mut self, agent: agent::Agent, cx: &mut Context<Self>) -> bool {
         let Some(commands) = self.links.get_mut(agent).rx.take() else { return false };
         self.start_agent(agent, commands, cx);
@@ -2624,7 +2215,6 @@ impl Workspace {
     }
 
     pub fn start_agent(&mut self, agent: agent::Agent, commands: UnboundedReceiver<Command>, cx: &mut Context<Self>) {
-        // Nothing starts while the app's own files are missing.
         if self.missing_files.is_some() {
             self.links.get_mut(agent).rx = Some(commands);
             return;
@@ -2633,8 +2223,6 @@ impl Workspace {
         let mut events = agent::start(agent, commands);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
-                // A start replaced by a restart: its last words (the sign-in it was
-                // waiting for, "connection closed") are about a process already gone.
                 let current = |this: &Self| this.links.get(agent).generation == generation;
                 if this.update(cx, |this, cx| if current(this) { this.on_event(agent, event, cx) }).is_err() {
                     break;
@@ -2644,7 +2232,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The notebook's appearance and theme, from Settings.
     fn apply_look(&self, cx: &mut Context<Self>) {
         let light = apply_appearance(self.settings.appearance, cx);
         settings::set_webview_appearance(self.webview.read(cx).raw(), light);
@@ -2654,7 +2241,6 @@ impl Workspace {
         self.send_to_page(&serde_json::json!({ "type": "theme", "name": self.settings.notebook_theme.name() }), cx);
     }
 
-    /// Mark the shown notebook's cells in the page (unrun, author).
     pub fn push_cells(&self, cx: &mut Context<Self>) {
         let url = crate::webcontent::url(self.webview.read(cx).raw());
         let Some(id) = viewed_notebook_id(&url) else { return };
@@ -2662,28 +2248,16 @@ impl Workspace {
         self.send_to_page(&serde_json::json!({ "type": "cells", "cells": cells }), cx);
     }
 
-    /// After a session goes idle, say if it left edited cells unrun or still
-    /// running. Each `/events` update then cuts the note back to what's still true.
     fn check_run_state(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(host) = self.sessions.iter().find(|s| s.key == key).map(|s| &s.place.host) else { return };
-        // ponytail: warns about every open notebook on the host, not only the ones this session touched.
         let warnings = self.connection(host).map(|c| pluto::run_warnings(&c.notebooks)).unwrap_or_default();
         self.with_session(key, cx, |s| s.note_run_state(warnings));
     }
 
-    // -----------------------------------------------------------------------
-    // Rendering
-    // -----------------------------------------------------------------------
-
-    /// A rebuilt-every-render control's Tab-stop handle, keyed by an id unique
-    /// to it and cached across renders.
     pub(crate) fn dialog_focus(&self, id: impl Into<String>, cx: &App) -> FocusHandle {
         self.dialog_focus.borrow_mut().entry(id.into()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// The app's menu button, where there's no menu bar (Linux and Windows):
-    /// the macOS menu bar's commands, and its menu while open. Beside the ⌘B
-    /// button, wherever that is.
     pub(crate) fn app_menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let menu = self.menu.as_ref().filter(|menu| menu.target == MenuTarget::App);
         let line = || div().w(px(13.)).h(px(1.5)).rounded(px(1.)).bg(if menu.is_some() { theme::text_primary() } else { theme::text_muted() });
@@ -2706,7 +2280,6 @@ impl Workspace {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                // Opened from the keyboard, no click cleared `zoom_chat`.
                 if event.is_keyboard() {
                     this.zoom_chat_before_click = this.zoom_chat;
                 }
@@ -2723,7 +2296,6 @@ impl Workspace {
             .children(menu.map(|menu| self.render_menu(menu, cx)))
     }
 
-    /// The notebook's ⋮ button in its header, and its menu while open.
     fn notebook_more(&self, key: u64, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let menu = self.menu.as_ref().filter(|menu| menu.target == MenuTarget::Notebook(key));
         div()
@@ -2753,7 +2325,6 @@ impl Workspace {
             .children(menu.map(|menu| self.render_menu(menu, cx)))
     }
 
-    /// In place of the transcript of a session that couldn't open: why, and the ways on.
     fn render_open_failure(&self, session: &Session, failure: &session::Failure, cx: &mut Context<Self>) -> AnyElement {
         let key = session.key;
         let try_again = |look| {
@@ -2775,7 +2346,6 @@ impl Workspace {
                     let _ = entity.update(cx, |this, cx| this.with_session(key, cx, Session::toggle_failure_details));
                 });
                 let mut buttons = vec![try_again(signin::Look::Primary).into_any_element()];
-                // Only its history knows its notebook: pick it, and it opens beside this page.
                 if session.notebook_beside() == session::Beside::Unknown {
                     buttons.push(
                         div()
@@ -2795,8 +2365,6 @@ impl Workspace {
         failure::page(new_session::Glyph::Bubble, failure.title(session.id.is_none()), body, buttons, details).into_any_element()
     }
 
-    /// A session's chat: the transcript, then what waits above the composer, then the composer.
-    /// `notebook_open`: its notebook shows in the pane (Point needs it).
     fn render_chat(&self, session: &Session, notebook_open: bool, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let margin = px(chat_margin(self.settings.layout.chat_width));
         let scroll_top = session.list.logical_scroll_top();
@@ -2821,7 +2389,6 @@ impl Workspace {
                 .bg(linear_gradient(180., linear_color_stop(theme::bg_page().opacity(0.), 0.), linear_color_stop(theme::bg_page(), 1.)))
         });
         let summary = self.render_opening_summary(session);
-        // What shows above the composer rises from it as it appears.
         let key = session.key;
         let card = |name: &'static str, card: Option<_>| card.map(|card| motion::arriving(div().child(card), ElementId::NamedInteger(name.into(), key), false));
         div()
@@ -2830,13 +2397,10 @@ impl Workspace {
             .flex()
             .flex_col()
             .min_h_0()
-            // Chat text that sets no line height of its own scales with the
-            // chat's text size (19.5 px at 100%, as elsewhere in the window).
             .line_height(theme::chat_px(19.5))
             .children(summary)
             .map(|d| match &session.failed {
                 Some(failure) => d.child(div().flex_1().min_h_0().child(self.render_open_failure(session, failure, cx))),
-                // The history shows whole once it has loaded, not growing as it arrives.
                 None if session.opening() && !session.showing_copy() => d.child(div().flex_1().min_h_0()),
                 None => d.child(
                     div()
@@ -2845,7 +2409,6 @@ impl Workspace {
                         .min_h_0()
                         .flex()
                         .flex_col()
-                        // After the text view has settled the selection the pointer made.
                         .capture_any_mouse_up(cx.listener(|_, event: &MouseUpEvent, window, cx| {
                             let at = event.position;
                             cx.defer_in(window, move |this, _, cx| this.check_reply_selection(at, cx));
@@ -2884,22 +2447,18 @@ impl Render for Workspace {
             self.drawn = Some(self.active);
             motion::hush(window);
         }
-        // Another session was opened while one's queued message was in the box.
         if self.queue_edit.as_ref().is_some_and(|e| Some(e.key) != self.active) {
             self.cancel_queue_edit(window, cx);
         }
         let active = self.active.and_then(|key| self.sessions.iter().position(|s| s.key == key));
         let stand_in = active.and_then(|ix| self.notebook_page(&self.sessions[ix], cx));
         self.sync_page_context(cx);
-        // The web view is a native view over the window: hidden behind the setup
-        // screen, and wherever the notebook pane is drawn natively.
         let modal = self.server_dialog.is_some() || !self.asks.is_empty() || self.login_node_warning.is_some();
         let show_webview = self.setup.is_none() && active.is_some() && stand_in.is_none() && !modal;
         if self.webview.read(cx).visible() != show_webview {
             self.webview.update(cx, |w, _| if show_webview { w.show() } else { w.hide() });
         }
         overlay::set_dimmed(self.webview.read(cx).raw(), self.settings_panel.is_some() || self.confirm.is_some());
-        // The cell picture's second view, behind the user's, hides with it.
         self.second.follow_pane();
         let menu_over_notebook = self.menu.as_ref().is_some_and(|m| matches!(m.target, MenuTarget::Notebook(_) | MenuTarget::Share(_)));
         let point_tip = self.point_tip_shows(show_webview && active.is_some_and(|ix| self.sessions[ix].notebook_path.is_some()));
@@ -2938,10 +2497,8 @@ impl Render for Workspace {
                 None => splash::Below::Progress,
             };
             let retry = cx.listener(|this, _, _, cx| this.retry_setup(cx));
-            // The assistant's own install or connection failed: another may do.
             let change = (setup.agent.is_some() && setup.step() >= splash::Step::Agent).then(|| cx.listener(|this, _, _, cx| this.change_assistant(cx)));
             let settings = self.render_settings_panel(window, cx).map(|d| layer::place(Layer::Settings, d));
-            // Settings opens here too, and with it the server dialog and its Test connection's sign-in.
             let server_dialog = self.render_server_dialog(window, cx).map(|d| layer::place(Layer::ServerDialog, d));
             let askpass = self.render_askpass(cx).map(|d| layer::place(Layer::Askpass, d));
             let login_node = self.render_login_node_warning(cx).map(|d| layer::place(Layer::LoginNodeWarning, d));
@@ -2980,7 +2537,6 @@ impl Render for Workspace {
             Some(ix) => self.render_chat(&self.sessions[ix], stand_in.is_none(), window, cx).into_any_element(),
             None => self.render_new_session(window, cx).into_any_element(),
         };
-        // Chat header: the session and its folder; the notebook header: its file.
         let (title, folder) = match active {
             Some(ix) => (self.session_title(self.sessions[ix].key, self.sessions[ix].title.clone(), cx), Some(self.folder_heading(&self.sessions[ix].place))),
             None => (div().overflow_hidden().whitespace_nowrap().child("New session").into_any_element(), None),
@@ -3039,8 +2595,6 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::find_previous))
             .on_action(cx.listener(Self::add_files))
             .on_mouse_move(cx.listener(Self::drag_divider))
-            // Outside the chat column, ⌘= zooms the notebook again (the chat
-            // column's own capture runs after this one and sets it back).
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
                 this.zoom_chat_before_click = this.zoom_chat;
                 this.zoom_chat = false;
@@ -3073,9 +2627,6 @@ impl Render for Workspace {
                     .h_full()
                     .flex()
                     .flex_col()
-                    // Its own tab group, right after the sidebar's, so Tab
-                    // reaches the composer after the sidebar and not before it
-                    // (paint order alone doesn't put them in this order).
                     .tab_group()
                     .tab_index(1)
                     .capture_any_mouse_down(cx.listener(|this, _, _, _| this.zoom_chat = true))
@@ -3100,15 +2651,11 @@ impl Render for Workspace {
                     .children(self.render_notice(false, cx)),
             )
             .children(self.render_notice(true, cx))
-            // Deferred so they paint, and take clicks, above everything else, in layer.rs's order.
             .children(self.render_settings_panel(window, cx).map(|d| layer::place(Layer::Settings, d)))
             .children(self.render_server_dialog(window, cx).map(|d| layer::place(Layer::ServerDialog, d)))
             .children(self.render_askpass(cx).map(|d| layer::place(Layer::Askpass, d)))
             .children(self.render_login_node_warning(cx).map(|d| layer::place(Layer::LoginNodeWarning, d)))
             .children(self.render_confirm(cx).map(|d| layer::place(Layer::Confirm, d)))
-            // A click outside a menu or popover closes it, like a native menu;
-            // set_dismiss_on_click makes the web view forward its own clicks
-            // here too, while one is open (overlay.rs).
             .when(self.dismissible_open(), |d| {
                 d.child(
                     div()
@@ -3125,11 +2672,6 @@ impl Render for Workspace {
 }
 
 fn main() {
-    // X11 only, through XWayland on a Wayland desktop: wry embeds the notebook
-    // only in an X11 window, and GPUI is built without its Wayland client, so
-    // seeing WAYLAND_DISPLAY it would choose Wayland and panic. Kept aside for
-    // the programs that open links (platform::opener). GTK is told in
-    // platform::init, so nothing the app starts inherits an X11-only GTK.
     #[cfg(target_os = "linux")]
     if let Some(display) = std::env::var_os("WAYLAND_DISPLAY") {
         // SAFETY: first thing in main, before any other thread exists.
@@ -3141,24 +2683,19 @@ fn main() {
         // SAFETY: first thing in main, before any other thread exists.
         unsafe { std::env::set_var("WAYLAND_DISPLAY", display) };
     }
-    // `claude auth login` opens its page through this app (signin::Login).
     signin::browser_shim();
-    // An agent's adapter, in a job that ends its whole tree (agent_job).
     #[cfg(windows)]
     if std::env::args().nth(1).as_deref() == Some(agent_job::FLAG) {
         agent_job::run(std::env::args().skip(2).collect());
     }
-    // This Mac's runtime helper (runtime::connect), and ssh's askpass (remote::asker).
     if std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG) {
         endeavor_mcp::run_as(&[runtime::HELPER_FLAG], std::env::args().skip(2).collect());
     }
-    // The Windows installer stopping a runtime kept running (runtime::stop_recorded).
     if std::env::args().nth(1).as_deref() == Some(runtime::STOP_FLAG) {
         runtime::stop_recorded();
         std::process::exit(0);
     }
     if [wire::askpass::ADDRESS_ENV, wire::askpass::SOCKET_ENV].iter().any(|v| std::env::var_os(v).is_some()) {
-        // Ends the askpass if the server gives up on the sign-in meanwhile.
         askpass_watch::start();
         endeavor_mcp::run(std::env::args().skip(1).collect());
     }
@@ -3177,17 +2714,13 @@ fn main() {
             }
         })
         .detach();
-        // Input consumes Escape only when it has something to dismiss; otherwise it reaches us.
         cx.bind_keys([
             KeyBinding::new("escape", Interrupt, None),
             KeyBinding::new(crate::platform::keys!("shift-e"), ToggleAnnotation, None),
-            // ⌘E on text selected in a reply; ⌘J is the older key for it.
             KeyBinding::new(crate::platform::keys!("e"), ReplyToSelection, Some("Input")),
             KeyBinding::new(crate::platform::keys!("e"), ReplyToSelection, None),
             KeyBinding::new(crate::platform::keys!("j"), ReplyToSelection, Some("Input")),
             KeyBinding::new(crate::platform::keys!("j"), ReplyToSelection, None),
-            // Registered after gpui-component's, so it beats the text box's own ⇧⇥ (outdent).
-            // Only in the composer's box: everywhere else ⇧⇥ moves focus back.
             KeyBinding::new("shift-tab", CycleMode, Some("Composer > Input")),
             KeyBinding::new("shift-tab", CycleMode, Some("ModeMenu > Input")),
             KeyBinding::new("shift-tab", CycleMode, Some("MentionList > Input")),
@@ -3212,8 +2745,6 @@ fn main() {
         cx.on_action(|_: &SendFeedback, cx| crate::platform::open_url(&about::feedback_url(crate::settings::Settings::load().agent), cx));
         cx.on_action(|_: &ReportIssue, cx| crate::platform::open_url(&about::github_feedback_url(crate::settings::Settings::load().agent), cx));
         cx.on_action(|_: &BringAllToFront, cx| platform::bring_all_to_front(cx));
-        // Deferred: from a focused view the action runs inside the active window,
-        // which can't be updated until it returns.
         cx.on_action(|_: &Minimize, cx| {
             cx.defer(|cx| {
                 if let Some(window) = cx.active_window() {
@@ -3228,9 +2759,6 @@ fn main() {
                 }
             })
         });
-        // Edit's items send the native cut:/copy:/paste:/selectAll: selectors, which
-        // the notebook's web view needs for the clipboard; in our own text boxes
-        // they become the input's actions.
         use gpui_component::input::{Copy, Cut, Paste, SelectAll};
         let menu = |name: &str, items| Menu { name: name.to_string().into(), items, disabled: false };
         cx.set_menus(vec![
@@ -3251,8 +2779,6 @@ fn main() {
                     MenuItem::os_action("Copy", Copy, OsAction::Copy),
                     MenuItem::os_action("Paste", Paste, OsAction::Paste),
                     MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
-                    // Menu items, so their keys reach the app while the notebook has the
-                    // keyboard: the web view offers keys to the menu first (webkeys.rs).
                     MenuItem::separator(),
                     MenuItem::action("Find…", FindSetting),
                     MenuItem::action("Find Next", FindNext),
@@ -3263,7 +2789,6 @@ fn main() {
                 "View",
                 vec![
                     MenuItem::action("Toggle Sidebar", ToggleSidebar),
-                    // A menu item, so ⌘⇧E reaches the app while the notebook has the keyboard.
                     MenuItem::action("Point", ToggleAnnotation),
                     MenuItem::separator(),
                     MenuItem::action("Zoom In", ZoomIn),
@@ -3271,7 +2796,6 @@ fn main() {
                     MenuItem::action("Actual Size", ZoomReset),
                 ],
             ),
-            // GPUI makes the menu named "Window" the app's windows menu, so macOS adds the window list.
             menu(
                 "Window",
                 vec![
@@ -3288,15 +2812,11 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(WINDOW_MIN),
-                // No title bar: each column has its own 44px header, the traffic
-                // lights sit in the sidebar's. Windows keeps its own title bar,
-                // which has the window's buttons (the app draws none).
                 titlebar: Some(TitlebarOptions {
                     title: Some("Endeavor".into()),
                     appears_transparent: !cfg!(windows),
                     traffic_light_position: Some(point(px(16.), px(16.))),
                 }),
-                // X11's WM_CLASS, which a dock matches to endeavor.desktop.
                 app_id: cfg!(target_os = "linux").then(|| "endeavor".into()),
                 ..Default::default()
             },
@@ -3306,24 +2826,17 @@ fn main() {
                     return cx.new(|cx| Root::new(preview, window, cx));
                 }
                 let workspace = cx.new(|cx| Workspace::new(window, cx));
-                // Closing this window quits while it is still open. GPUI holds
-                // the quit handlers (the update install, quit_runtimes) by a
-                // weak handle, and the window's views, the workspace among
-                // them, go once it has closed.
                 window.on_window_should_close(cx, |_, cx| {
                     cx.quit();
                     false
                 });
                 let ws = workspace.downgrade();
                 cx.on_action(move |_: &ShowAbout, cx| about::open_about(ws.clone(), cx));
-                // Menu items and shortcuts pressed while the notebook has the keyboard reach
-                // no focused GPUI element; these app-wide handlers forward them.
                 let (ws, handle) = (workspace.downgrade(), window.window_handle());
                 cx.on_action(move |_: &OpenSettings, cx| {
                     let ws = ws.clone();
                     cx.defer(move |cx| drop(handle.update(cx, |_, window, cx| ws.update(cx, |this, cx| this.open_settings_last(window, cx)))));
                 });
-                // The notebook's zoom, from anywhere (the notebook usually has the keyboard).
                 let ws = workspace.downgrade();
                 cx.on_action(move |_: &ZoomIn, cx| drop(ws.update(cx, |this, cx| this.zoom(1.1, false, None, cx))));
                 let ws = workspace.downgrade();
@@ -3333,7 +2846,6 @@ fn main() {
                 let ws = workspace.downgrade();
                 cx.on_action(move |_: &ToggleSidebar, cx| {
                     ws.update(cx, |this, cx| {
-                        // The missing-files screen has no sidebar to show.
                         if this.missing_files.is_some() {
                             return;
                         }
@@ -3348,7 +2860,6 @@ fn main() {
         )
         .unwrap()
         .window_id();
-        // About and Licences can close without quitting.
         cx.on_window_closed(move |cx, closed| {
             if closed == main_window {
                 cx.quit();
@@ -3359,9 +2870,6 @@ fn main() {
     });
 }
 
-/// Resolve Settings → Appearance to light or dark and apply it everywhere
-/// native: the windows' own chrome, every token in `theme`, and the component
-/// library's theme. Returns whether it's light; the caller sets the notebook's.
 fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
     use settings::Appearance;
     cx.set_window_appearance(match appearance {
@@ -3375,26 +2883,20 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
         Appearance::System => matches!(cx.window_appearance(), WindowAppearance::Light | WindowAppearance::VibrantLight),
     };
     theme::set_light(light);
-    // Theme::change applies these before building the component defaults from them.
     let ui = Theme::global_mut(cx);
     let base = if light { &ui.light_theme } else { &ui.dark_theme };
     let mut colors = base.colors.clone();
-    // What agent replies' markdown is drawn with: hairlines, link colour,
-    // code block and table header backgrounds.
     colors.border = Some(theme::hex(theme::border()));
     colors.link = Some(theme::hex(theme::accent_text()));
     colors.muted = Some(theme::hex(theme::bg_card()));
     colors.table_head = Some(theme::hex(theme::bg_card()));
     colors.table_head_foreground = Some(theme::hex(theme::text_muted()));
-    // The library's own focus ring (Input, Textarea, and anything else built
-    // from it), so a tabbed-to text box matches our own focus rings.
     colors.ring = Some(theme::hex(theme::focus_ring()));
     colors.foreground = Some(theme::hex(theme::text_primary()));
     colors.popover_foreground = Some(theme::hex(theme::text_primary()));
     if light {
         colors.popover = Some(theme::hex(theme::popover_bg()));
     }
-    // ThemeConfig is non_exhaustive since gpui-component 0.9: copy, then set.
     let mut config: ThemeConfig = (**base).clone();
     config.font_family = Some(theme::SANS.into());
     config.mono_font_family = Some(theme::MONO.into());
@@ -3411,12 +2913,6 @@ fn apply_appearance(appearance: settings::Appearance, cx: &mut App) -> bool {
     light
 }
 
-/// A link the browser can open: http, https or mailto, parsed the way a
-/// browser parses it, and returned in that normal form. Never a loopback
-/// address in any spelling (`localhost.`, `x.localhost`, `0.0.0.0`, all of
-/// 127/8, `[::ffff:127.0.0.1]`): the notebook's own page carries Pluto's
-/// secret, which must not land in the browser's history. Nor a figure's
-/// `data:` or `blob:` URL.
 fn outside_link(url: &str) -> Option<String> {
     use url::Host;
     let url = url::Url::parse(url).ok()?;
@@ -3479,8 +2975,6 @@ mod tests {
     use wire::backend::Backend;
     use std::collections::HashMap;
 
-    /// A folder moves with what's in it, and one that isn't there fails at once
-    /// rather than after the waits meant for a held file.
     #[test]
     fn a_folder_is_renamed_and_a_missing_one_fails_at_once() {
         let dir = std::env::temp_dir().join(format!("endeavor-test-folder-{}", std::process::id()));
@@ -3496,8 +2990,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// On Windows a folder with a file open under it can't be renamed until the
-    /// file is let go, as a virus scanner lets go of what it checked (#246).
     #[cfg(windows)]
     #[test]
     fn a_held_folder_is_renamed_once_it_is_let_go() {
@@ -3538,9 +3030,6 @@ mod tests {
         assert_eq!(viewed_notebook("http://127.0.0.1:1234/ember/edit?id=../x"), None);
     }
 
-    /// `pending_moved` (the "notebook moved" note waiting to reach the agent,
-    /// by session id): a move saves it, a restart's fresh load still has it,
-    /// and once it's sent, clearing and saving again leaves it gone for good.
     #[test]
     fn pending_moved_note_survives_a_restart_and_clears_once_sent() {
         let dir = std::env::temp_dir().join(format!("endeavor-test-{}-{:?}", std::process::id(), std::thread::current().id()));
@@ -3550,11 +3039,9 @@ mod tests {
         pending.insert("session-1".into(), "[Endeavor] The session's notebook file moved from a.jl to b.jl.".into());
         save_json_at(&file, &pending);
 
-        // The app quit before the note went out; reopening the session loads it fresh.
         let restored: HashMap<String, String> = load_json_at(&file);
         assert_eq!(restored.get("session-1").map(String::as_str), Some("[Endeavor] The session's notebook file moved from a.jl to b.jl."));
 
-        // A later message carries it to the agent: it's cleared and the clear is saved.
         let mut after_send = restored;
         after_send.remove("session-1");
         save_json_at(&file, &after_send);
@@ -3564,7 +3051,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A save replaces the file whole and leaves nothing beside it.
     #[test]
     fn a_save_replaces_the_file_and_leaves_no_partial() {
         let dir = std::env::temp_dir().join(format!("endeavor-test-atomic-{}-{:?}", std::process::id(), std::thread::current().id()));
@@ -3577,8 +3063,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A file torn by an old crash reads as empty, but is kept as `.bad`, so
-    /// the next save doesn't overwrite what's left of it.
     #[test]
     fn a_file_that_doesnt_parse_is_set_aside_not_overwritten() {
         let dir = std::env::temp_dir().join(format!("endeavor-test-torn-{}-{:?}", std::process::id(), std::thread::current().id()));
@@ -3596,8 +3080,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A cut inside a multi-byte character (an é in a title) leaves bytes that
-    /// aren't UTF-8; that file is set aside too, not read as missing.
     #[test]
     fn a_file_cut_mid_character_is_set_aside_too() {
         let dir = std::env::temp_dir().join(format!("endeavor-test-torn-utf8-{}-{:?}", std::process::id(), std::thread::current().id()));

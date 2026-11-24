@@ -1,15 +1,5 @@
-//! What the app does differently on macOS, Linux and Windows, outside GPUI and
-//! wry: showing a file, reading system settings, and hosting the notebook's web
-//! view. On Linux the web view is WebKitGTK in an X11 child window, so GTK has
-//! to be started and its events run. `src/linux/` has the Linux versions of the
-//! macOS-only fixes. Windows has most of them (`src/overlay_windows.rs`,
-//! `src/webview_windows.rs`); the rest are stubs (docs/windows.md).
-
 use std::path::Path;
 
-/// The computer the app runs on, as the app names it: "This Mac" on macOS,
-/// "This computer" on Linux. `this_computer!(lower)` is the same inside a
-/// sentence ("on this Mac"). A macro, so `concat!` can put it in fixed text.
 #[cfg(target_os = "macos")]
 macro_rules! this_computer {
     () => {
@@ -32,8 +22,6 @@ macro_rules! this_computer {
 
 pub(crate) use this_computer;
 
-/// A `secondary-` shortcut as the app shows it: "⌘N" on macOS, "Ctrl+N" on
-/// Linux. `shortcut!(shift "K")` adds Shift.
 #[cfg(target_os = "macos")]
 macro_rules! shortcut {
     ($key:literal) => {
@@ -56,10 +44,6 @@ macro_rules! shortcut {
 
 pub(crate) use shortcut;
 
-/// A `secondary-` key binding: `cmd-` on macOS, `ctrl-` elsewhere. GPUI's
-/// `KeyBinding::new` and `Keystroke::parse` stopped resolving `secondary-` in
-/// gpui-pre 0.3.11 (it panics or fails), so the app spells it out at build time.
-/// `keys!("shift-e")` is `cmd-shift-e` on macOS.
 #[cfg(target_os = "macos")]
 macro_rules! keys {
     ($key:literal) => {
@@ -76,10 +60,8 @@ macro_rules! keys {
 
 pub(crate) use keys;
 
-/// The menu item that runs `reveal` on a notebook, and on a session's folder.
 pub const REVEAL: &str = if cfg!(target_os = "macos") { "Reveal in Finder" } else if cfg!(windows) { "Show in File Explorer" } else { "Show in Files" };
 pub const REVEAL_FOLDER: &str = if cfg!(target_os = "macos") { "Reveal folder in Finder" } else if cfg!(windows) { "Show folder in File Explorer" } else { "Show folder in Files" };
-/// The button that shows the log files' folder, and its accessible name.
 pub const SHOW_LOGS: (&str, &str) = if cfg!(target_os = "macos") {
     ("Show in Finder", "Show log files in Finder")
 } else if cfg!(windows) {
@@ -88,15 +70,11 @@ pub const SHOW_LOGS: (&str, &str) = if cfg!(target_os = "macos") {
     ("Show in Files", "Show log files in Files")
 };
 
-/// Settings' Appearance choice that follows the system's light or dark setting.
 pub const MATCH_SYSTEM: &str = if cfg!(target_os = "macos") { "Match macOS" } else { "Match system" };
 
-/// Show `path` in Finder, selected; on Linux, open its folder in the file
-/// manager; on Windows, show it selected in Explorer.
 pub fn reveal(path: &Path) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
-    // Explorer reads `/select,` and the quoted path as one argument, which std's quoting would break.
     #[cfg(windows)]
     if let Err(e) = std::os::windows::process::CommandExt::raw_arg(&mut std::process::Command::new("explorer"), format!("/select,\"{}\"", path.display())).spawn() {
         eprintln!("Couldn't show {} in File Explorer: {e}", path.display());
@@ -107,7 +85,6 @@ pub fn reveal(path: &Path) {
     }
 }
 
-/// Where main keeps the WAYLAND_DISPLAY it hides from GPUI.
 #[cfg(target_os = "linux")]
 pub const WAYLAND_DISPLAY_KEPT: &str = "ENDEAVOR_WAYLAND_DISPLAY";
 
@@ -116,9 +93,6 @@ pub fn wayland_display() -> Option<String> {
     std::env::var(WAYLAND_DISPLAY_KEPT).ok().filter(|display| !display.is_empty())
 }
 
-/// `program`, to open a link or folder, with the desktop's own display: a
-/// browser already running on Wayland takes a link only from an opener that
-/// can reach it there, so without WAYLAND_DISPLAY the link is lost.
 #[cfg(unix)]
 pub fn opener(program: &str) -> std::process::Command {
     #[allow(unused_mut)]
@@ -130,8 +104,6 @@ pub fn opener(program: &str) -> std::process::Command {
     command
 }
 
-/// Open a link in the default browser. GPUI's own xdg-open on Linux runs
-/// without WAYLAND_DISPLAY (main hides it), so Linux goes through `opener`.
 pub fn open_url(url: &str, cx: &gpui::App) {
     #[cfg(target_os = "linux")]
     if let Ok(mut child) = opener("xdg-open").arg(url).spawn() {
@@ -141,7 +113,6 @@ pub fn open_url(url: &str, cx: &gpui::App) {
     cx.open_url(url);
 }
 
-/// Accessibility's Reduce motion, which GPUI doesn't read itself.
 #[cfg(target_os = "macos")]
 pub fn reduces_motion() -> bool {
     use objc2::runtime::{AnyObject, Bool};
@@ -153,20 +124,17 @@ pub fn reduces_motion() -> bool {
     }
 }
 
-/// GTK's "enable animations" setting, turned off.
 #[cfg(target_os = "linux")]
 pub fn reduces_motion() -> bool {
     use gtk::prelude::GtkSettingsExt;
     gtk::Settings::default().is_some_and(|s| !s.is_gtk_enable_animations())
 }
 
-/// Not ported: Windows needs SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION).
 #[cfg(windows)]
 pub fn reduces_motion() -> bool {
     false
 }
 
-/// `reduces_motion` again each time the setting changes, for the life of the app.
 #[cfg(target_os = "macos")]
 pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> {
     use block2::RcBlock;
@@ -184,7 +152,6 @@ pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> 
         let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
         let center: *mut AnyObject = msg_send![workspace, notificationCenter];
         let main: *mut AnyObject = msg_send![class!(NSOperationQueue), mainQueue];
-        // The center keeps the observer for as long as the app runs.
         let _: *mut AnyObject = msg_send![center, addObserverForName: NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification, object: std::ptr::null_mut::<AnyObject>(), queue: main, usingBlock: &*changed];
     }
     rx
@@ -202,14 +169,11 @@ pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> 
     rx
 }
 
-/// Not ported: Windows needs WM_SETTINGCHANGE for SPI_SETCLIENTAREAANIMATION.
 #[cfg(windows)]
 pub fn watch_reduce_motion() -> futures::channel::mpsc::UnboundedReceiver<bool> {
     futures::channel::mpsc::unbounded().1
 }
 
-/// Run from source (`cargo run`), the app has no bundle to take its Dock icon
-/// from, so it sets the icon itself.
 #[cfg(target_os = "macos")]
 pub fn init(_: &mut gpui::App) {
     use objc2::runtime::AnyObject;
@@ -231,7 +195,6 @@ pub fn init(_: &mut gpui::App) {
     }
 }
 
-/// Window ▸ Bring All to Front.
 #[cfg(target_os = "macos")]
 pub fn bring_all_to_front(_: &mut gpui::App) {
     use objc2::runtime::AnyObject;
@@ -247,21 +210,14 @@ pub fn bring_all_to_front(cx: &mut gpui::App) {
     cx.activate(true);
 }
 
-/// On macOS AppKit keeps the web view in step with the window by itself.
 #[cfg(target_os = "macos")]
 pub fn web_view_hooks() -> impl gpui::IntoElement {
     gpui::Empty
 }
 
-/// Whether GPUI's window had the pointer in the last frame `web_view_hooks` drew.
 #[cfg(windows)]
 static WAS_HOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Drawn in the workspace every frame. A click GPUI gets was outside the web
-/// view (or in a hole cut in it), so the keyboard goes to GPUI's window, as on
-/// Linux. gpui-wry does this only outside the web view's bounds, so without it
-/// a click in Settings over the notebook left the keyboard in the notebook.
-/// The app's shortcuts reach GPUI from the web view in `webcontent::attach`.
 #[cfg(windows)]
 pub fn web_view_hooks() -> impl gpui::IntoElement {
     use gpui::Styled;
@@ -278,10 +234,6 @@ pub fn web_view_hooks() -> impl gpui::IntoElement {
                     unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(hwnd as _) };
                 }
             });
-            // The pointer moving from GPUI onto the web view (a child window)
-            // leaves GPUI's window, but GPUI gets no last mouse move, so a
-            // tooltip stayed up until the pointer came back. Send it one from
-            // outside the window, which closes tooltips and clears hovers.
             let hovered = window.is_window_hovered();
             if !hovered && WAS_HOVERED.swap(false, std::sync::atomic::Ordering::Relaxed) {
                 window.defer(cx, |window, cx| {
@@ -298,10 +250,8 @@ pub fn web_view_hooks() -> impl gpui::IntoElement {
 #[cfg(target_os = "linux")]
 pub use crate::linux::web_view_hooks;
 
-/// Start GTK and keep its events flowing from GPUI's main loop.
 #[cfg(target_os = "linux")]
 pub fn init(cx: &mut gpui::App) {
-    // wry embeds the web view only in an X11 window (main hides WAYLAND_DISPLAY from GPUI).
     gtk::gdk::set_allowed_backends("x11");
     if let Err(e) = gtk::init() {
         eprintln!("GTK didn't start, so the notebook can't show: {e}");
@@ -310,9 +260,6 @@ pub fn init(cx: &mut gpui::App) {
     crate::linux::gtk_loop::start(cx);
 }
 
-/// Hold the named mutex the Windows uninstaller checks for (`APP_MUTEX` in
-/// scripts/installer.iss), so it asks to quit Endeavor first instead of
-/// leaving the open exe behind. Windows frees it when the app exits.
 #[cfg(windows)]
 pub fn init(_: &mut gpui::App) {
     let name: Vec<u16> = "EndeavorApp\0".encode_utf16().collect();
@@ -320,10 +267,6 @@ pub fn init(_: &mut gpui::App) {
     unsafe { windows_sys::Win32::System::Threading::CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
 }
 
-/// The notebook's web view couldn't be made: most often the WebView2 runtime
-/// is missing (the installer adds it), or its data folder next to the exe
-/// can't be written. Say so and quit, rather than end with a panic the user
-/// never sees.
 #[cfg(windows)]
 pub fn no_web_view(error: &wry::Error) -> ! {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
@@ -338,9 +281,6 @@ pub fn no_web_view(error: &wry::Error) -> ! {
     std::process::exit(1)
 }
 
-/// GPUI's application. On Windows it draws without DirectComposition: GPUI
-/// makes its composition target topmost, which covers child windows, so the
-/// notebook's WebView2 window would be there but never seen.
 #[cfg(not(windows))]
 pub fn application() -> gpui::Application {
     gpui_platform::application()
@@ -348,8 +288,6 @@ pub fn application() -> gpui::Application {
 
 #[cfg(windows)]
 pub fn application() -> gpui::Application {
-    // Read once, while GPUI's Windows platform starts; set only for that, so
-    // Julia, Node and the agent don't inherit it. A value already set wins.
     const VAR: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
     let ours = std::env::var_os(VAR).is_none();
     // SAFETY: on Windows, std's set_var and remove_var are safe even with other
@@ -364,7 +302,6 @@ pub fn application() -> gpui::Application {
     app
 }
 
-/// The window the notebook's web view goes in, as wry wants it.
 #[cfg(not(target_os = "linux"))]
 pub fn webview_parent(window: &gpui::Window) -> raw_window_handle::WindowHandle<'_> {
     raw_window_handle::HasWindowHandle::window_handle(window).expect("window handle")
@@ -381,8 +318,6 @@ impl raw_window_handle::HasWindowHandle for XlibParent {
     }
 }
 
-/// wry takes only an Xlib window handle, and GPUI gives an XCB one: the same
-/// X window either way.
 #[cfg(target_os = "linux")]
 pub fn webview_parent(window: &gpui::Window) -> XlibParent {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle, XlibWindowHandle};
@@ -393,9 +328,6 @@ pub fn webview_parent(window: &gpui::Window) -> XlibParent {
     })
 }
 
-/// Put `message` above the file picker that is opening (GPUI's picker takes
-/// only its button's label). The panel opens on the next turn of the main
-/// loop, so this looks for it shortly after.
 #[cfg(target_os = "macos")]
 pub fn set_open_panel_message(message: &'static str, cx: &mut gpui::App) {
     use objc2::runtime::AnyObject;
@@ -431,14 +363,12 @@ pub fn set_open_panel_message(message: &'static str, cx: &mut gpui::App) {
 #[cfg(not(target_os = "macos"))]
 pub fn set_open_panel_message(_: &'static str, _: &mut gpui::App) {}
 
-/// A PNG of part of the notebook, from WebView2.
 #[cfg(windows)]
 #[path = "snapshot_windows.rs"]
 pub mod snapshot;
 
 #[cfg(not(target_os = "macos"))]
 pub mod dialogs {
-    /// The page's alert(), confirm() and prompt(): WebKitGTK's own dialogs, untested (docs/linux.md).
     pub fn show_page_dialogs(_: &wry::WebView) {}
 }
 
@@ -446,7 +376,6 @@ pub mod dialogs {
 #[path = "overlay_windows.rs"]
 pub mod overlay;
 
-/// WebView2's side of the notebook: its process ending, find, the keyboard.
 #[cfg(windows)]
 #[path = "webview_windows.rs"]
 pub mod webcontent;
